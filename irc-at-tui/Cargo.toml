@@ -17,7 +17,10 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
-ratatui = "0.29"
-crossterm = "0.28"
+ratatui = "0.30"
+crossterm = "0.29"
 hex = "0.4"
 dirs = { workspace = true }
+ratatui-image = "10"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+reqwest = { workspace = true }

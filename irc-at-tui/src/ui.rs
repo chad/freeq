@@ -3,12 +3,12 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Tabs, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, ImageState, IMAGE_ROWS};
 
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -75,26 +75,91 @@ fn draw_tab_bar(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(tabs, area);
 }
 
-fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
-    let buffer = match app.buffers.get(&app.active_buffer) {
-        Some(b) => b,
-        None => return,
+fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
+    let title = {
+        let buffer = match app.buffers.get(&app.active_buffer) {
+            Some(b) => b,
+            None => return,
+        };
+        match &buffer.topic {
+            Some(topic) => format!(" {} — {} ", buffer.name, topic),
+            None => format!(" {} ", buffer.name),
+        }
     };
 
-    let inner_height = area.height.saturating_sub(2) as usize;
-    let total = buffer.messages.len();
+    // Draw the block border first, then work inside it
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
 
-    // Calculate visible range
+    let has_picker = app.picker.is_some();
+
+    let buffer = app.buffers.get(&app.active_buffer).unwrap();
+    let inner_height = inner.height as usize;
+
+    // Calculate height of each message: 1 line for text, + IMAGE_ROWS if image is ready
+    let msg_heights: Vec<usize> = buffer.messages.iter().map(|msg| {
+        let mut h = 1usize;
+        if has_picker && let Some(ref url) = msg.image_url {
+            let cache = app.image_cache.lock().unwrap();
+            if matches!(cache.get(url.as_str()), Some(ImageState::Ready(_))) {
+                h += IMAGE_ROWS as usize;
+            }
+        }
+        h
+    }).collect();
+
     let scroll = buffer.scroll as usize;
-    let end = total.saturating_sub(scroll);
-    let start = end.saturating_sub(inner_height);
 
-    let lines: Vec<Line> = buffer.messages
-        .iter()
-        .skip(start)
-        .take(end - start)
-        .map(|msg| {
-            if msg.is_system {
+    // Find the range of messages to display, working backwards from the end
+    let mut remaining = inner_height + scroll;
+    let mut start_idx = msg_heights.len();
+    for (i, &h) in msg_heights.iter().enumerate().rev() {
+        if remaining == 0 {
+            break;
+        }
+        start_idx = i;
+        remaining = remaining.saturating_sub(h);
+    }
+
+    // Skip the scroll offset from the bottom
+    let mut visible_msgs: Vec<(usize, usize)> = Vec::new(); // (msg_index, height)
+    let mut total_visible: usize = 0;
+    for (i, &h) in msg_heights.iter().enumerate().skip(start_idx) {
+        visible_msgs.push((i, h));
+        total_visible += h;
+    }
+
+    // Trim from top if we overshoot
+    let mut rows_to_skip_top = if total_visible > inner_height + scroll {
+        total_visible - inner_height - scroll
+    } else {
+        0
+    };
+
+    // Render messages top-down within the inner area
+    let mut y = inner.y;
+    let max_y = inner.y + inner.height;
+
+    // Collect image URLs that need protocol state created
+    let mut needs_proto: Vec<String> = Vec::new();
+
+    for &(msg_idx, msg_h) in &visible_msgs {
+        // Skip messages consumed by top overflow
+        if rows_to_skip_top >= msg_h {
+            rows_to_skip_top -= msg_h;
+            continue;
+        }
+
+        if y >= max_y {
+            break;
+        }
+
+        let msg = &buffer.messages[msg_idx];
+
+        // Render the text line
+        if y < max_y {
+            let line = if msg.is_system {
                 Line::from(vec![
                     Span::styled(
                         format!("{} ", msg.timestamp),
@@ -117,19 +182,48 @@ fn draw_messages(frame: &mut Frame, app: &App, area: Rect) {
                     ),
                     Span::raw(&msg.text),
                 ])
+            };
+            let line_area = Rect::new(inner.x, y, inner.width, 1);
+            frame.render_widget(Paragraph::new(line), line_area);
+            y += 1;
+        }
+
+        // Render image if present and ready
+        if has_picker && y < max_y && let Some(ref url) = msg.image_url {
+            let cache = app.image_cache.lock().unwrap();
+            if matches!(cache.get(url.as_str()), Some(ImageState::Ready(_))) {
+                let img_h = IMAGE_ROWS.min(max_y - y);
+                needs_proto.push(url.clone());
+                drop(cache);
+
+                let img_area = Rect::new(inner.x + 2, y, inner.width.saturating_sub(4), img_h);
+                y += img_h;
+
+                // Create protocol state if needed, then render
+                if !app.image_protos.contains_key(url)
+                    && let Some(ref mut picker) = app.picker
+                {
+                    let cache = app.image_cache.lock().unwrap();
+                    if let Some(ImageState::Ready(img)) = cache.get(url.as_str()) {
+                        let proto = picker.new_resize_protocol(img.clone());
+                        drop(cache);
+                        app.image_protos.insert(url.clone(), proto);
+                    }
+                }
+                if let Some(proto) = app.image_protos.get_mut(url) {
+                    let widget = ratatui_image::StatefulImage::<ratatui_image::protocol::StatefulProtocol>::default();
+                    frame.render_stateful_widget(widget, img_area, proto);
+                }
+            } else if matches!(cache.get(url.as_str()), Some(ImageState::Loading)) {
+                drop(cache);
+                let loading = Paragraph::new("  ⏳ Loading image...")
+                    .style(Style::default().fg(Color::DarkGray));
+                let load_area = Rect::new(inner.x, y, inner.width, 1);
+                frame.render_widget(loading, load_area);
+                y += 1;
             }
-        })
-        .collect();
-
-    let title = match &buffer.topic {
-        Some(topic) => format!(" {} — {} ", buffer.name, topic),
-        None => format!(" {} ", buffer.name),
-    };
-    let messages = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .wrap(Wrap { trim: false });
-
-    frame.render_widget(messages, area);
+        }
+    }
 }
 
 fn draw_nicklist(frame: &mut Frame, app: &App, area: Rect) {

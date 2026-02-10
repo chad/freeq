@@ -161,6 +161,8 @@ pub async fn upload_media_to_pds(
     content_type: &str,
     data: &[u8],
     alt_text: Option<&str>,
+    channel: Option<&str>,
+    cross_post: bool,
 ) -> Result<MediaUploadResult> {
     let client = reqwest::Client::new();
     let base = pds_url.trim_end_matches('/');
@@ -182,30 +184,64 @@ pub async fn upload_media_to_pds(
     let mime = blob["mimeType"].as_str().unwrap_or(content_type).to_string();
 
     // Step 2: Create a record that references the blob to prevent GC.
-    // We create a minimal Bluesky post with the image embedded.
-    let post_text = alt_text.unwrap_or("📎").to_string();
-    let record_body = serde_json::json!({
+    //
+    // We use a custom lexicon `blue.irc.media` to store the blob reference
+    // without polluting the user's Bluesky feed. This collection:
+    // - Pins the blob so the PDS won't garbage-collect it
+    // - Provides the CDN URL via the standard blob CID
+    // - Can be enumerated to list a user's shared IRC media
+    //
+    // If cross_post is true, we ALSO create an app.bsky.feed.post so
+    // the image appears in the user's Bluesky feed with a channel reference.
+    let now = chrono::Utc::now().to_rfc3339();
+    let irc_record = serde_json::json!({
         "repo": did,
-        "collection": "app.bsky.feed.post",
+        "collection": "blue.irc.media",
         "record": {
-            "$type": "app.bsky.feed.post",
-            "text": post_text,
-            "createdAt": chrono::Utc::now().to_rfc3339(),
-            "embed": {
-                "$type": "app.bsky.embed.images",
-                "images": [{
-                    "alt": alt_text.unwrap_or(""),
-                    "image": blob.clone(),
-                }]
-            }
+            "$type": "blue.irc.media",
+            "blob": blob.clone(),
+            "mimeType": mime,
+            "alt": alt_text.unwrap_or(""),
+            "channel": channel,
+            "createdAt": now,
         }
     });
 
     let _record_result = dpop_post(
         &client, base, "com.atproto.repo.createRecord",
         dpop_key, access_token, &mut current_nonce,
-        None, serde_json::to_vec(&record_body)?,
-    ).await.context("Record creation failed")?;
+        None, serde_json::to_vec(&irc_record)?,
+    ).await.context("Record creation failed (blue.irc.media)")?;
+
+    // Optional cross-post to Bluesky feed
+    if cross_post {
+        let feed_text = if let Some(chan) = channel {
+            format!("{} [shared in {chan}]", alt_text.unwrap_or("📎"))
+        } else {
+            alt_text.unwrap_or("📎").to_string()
+        };
+        let feed_record = serde_json::json!({
+            "repo": did,
+            "collection": "app.bsky.feed.post",
+            "record": {
+                "$type": "app.bsky.feed.post",
+                "text": feed_text,
+                "createdAt": now,
+                "embed": {
+                    "$type": "app.bsky.embed.images",
+                    "images": [{
+                        "alt": alt_text.unwrap_or(""),
+                        "image": blob.clone(),
+                    }]
+                }
+            }
+        });
+        let _ = dpop_post(
+            &client, base, "com.atproto.repo.createRecord",
+            dpop_key, access_token, &mut current_nonce,
+            None, serde_json::to_vec(&feed_record)?,
+        ).await; // Best-effort; don't fail the upload if cross-post fails
+    }
 
     // Step 3: Build CDN URL (works now that blob is referenced by a record)
     let ext = match mime.as_str() {

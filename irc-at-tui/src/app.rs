@@ -1,6 +1,7 @@
 //! Application state for the TUI.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 
 use crate::editor::{LineEditor, Mode};
 
@@ -14,7 +15,26 @@ pub struct BufferLine {
     pub from: String,
     pub text: String,
     pub is_system: bool,
+    /// If this message has an associated image, its URL (key into ImageCache).
+    pub image_url: Option<String>,
 }
+
+/// State of a cached image.
+pub enum ImageState {
+    /// Image is being fetched.
+    Loading,
+    /// Image is ready to render.
+    Ready(image::DynamicImage),
+    /// Fetch failed.
+    #[allow(dead_code)]
+    Failed(String),
+}
+
+/// Thread-safe cache of fetched images, keyed by URL.
+pub type ImageCache = Arc<Mutex<HashMap<String, ImageState>>>;
+
+/// How many terminal rows an image takes up in the message area.
+pub const IMAGE_ROWS: u16 = 10;
 
 /// A named message buffer (channel, PM, or status).
 #[derive(Debug)]
@@ -54,6 +74,7 @@ impl Buffer {
             from: String::new(),
             text: text.to_string(),
             is_system: true,
+            image_url: None,
         });
     }
 }
@@ -92,6 +113,12 @@ pub struct App {
     pub history_saved: String,
     /// Media uploader (present when authenticated with PDS session).
     pub media_uploader: Option<MediaUploader>,
+    /// Cache of fetched images for inline rendering.
+    pub image_cache: ImageCache,
+    /// Image protocol picker (detects terminal capabilities).
+    pub picker: Option<ratatui_image::picker::Picker>,
+    /// Prepared image protocol states for rendering, keyed by URL.
+    pub image_protos: HashMap<String, ratatui_image::protocol::StatefulProtocol>,
 }
 
 impl App {
@@ -116,6 +143,9 @@ impl App {
             history_pos: None,
             history_saved: String::new(),
             media_uploader: None,
+            image_cache: Arc::new(Mutex::new(HashMap::new())),
+            picker: None,
+            image_protos: HashMap::new(),
         }
     }
 
@@ -150,6 +180,7 @@ impl App {
             from: from.to_string(),
             text: text.to_string(),
             is_system: false,
+            image_url: None,
         });
     }
 

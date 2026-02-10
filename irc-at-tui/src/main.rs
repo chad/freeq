@@ -100,6 +100,18 @@ async fn main() -> Result<()> {
 
     let (handle, mut events) = client::connect(config, signer);
 
+    // Detect terminal image capabilities BEFORE entering raw mode
+    let picker = match ratatui_image::picker::Picker::from_query_stdio() {
+        Ok(p) => {
+            eprintln!("Terminal image support: {:?}", p.capabilities());
+            Some(p)
+        }
+        Err(_) => {
+            eprintln!("No terminal image support; using text-only mode");
+            None
+        }
+    };
+
     // Setup terminal
     enable_raw_mode()?;
     std::io::stdout().execute(EnterAlternateScreen)?;
@@ -108,6 +120,7 @@ async fn main() -> Result<()> {
 
     let mut app = App::new(&cli.nick, cli.vi);
     app.media_uploader = media_uploader;
+    app.picker = picker;
 
     let result = run_app(&mut terminal, &mut app, &handle, &mut events).await;
 
@@ -256,6 +269,12 @@ async fn run_app(
 ) -> Result<()> {
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
+        // Check for encoding errors from image rendering
+        for proto in app.image_protos.values_mut() {
+            if let Some(Err(e)) = proto.last_encoding_result() {
+                tracing::warn!("Image encoding error: {e}");
+            }
+        }
 
         let has_crossterm_event =
             tokio::task::block_in_place(|| event::poll(Duration::from_millis(16)))?;
@@ -365,6 +384,7 @@ fn process_irc_event(app: &mut App, event: Event) {
                         from: String::new(),
                         text: format!("* {from} {action}"),
                         is_system: true,
+                        image_url: None,
                     });
                 }
             } else if let Some(ref media) = media {
@@ -375,11 +395,21 @@ fn process_irc_event(app: &mut App, event: Event) {
                     target.clone()
                 };
                 let display = format_media_display(media);
+                let img_url = if media.content_type.starts_with("image/") {
+                    Some(media.url.clone())
+                } else {
+                    None
+                };
+                // Trigger background fetch if it's an image
+                if let Some(ref url) = img_url {
+                    fetch_image_if_needed(&app.image_cache, url);
+                }
                 app.buffer_mut(&buf_name).push(crate::app::BufferLine {
                     timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
                     from: from.clone(),
                     text: display,
                     is_system: false,
+                    image_url: img_url,
                 });
             } else {
                 app.chat_msg(&target, &from, &text);
@@ -529,6 +559,7 @@ async fn process_input(
                             from: String::new(),
                             text: format!("* {nick} {arg}"),
                             is_system: true,
+                            image_url: None,
                         });
                     }
                 }
@@ -660,30 +691,40 @@ async fn process_input(
                     app.status_msg("Usage: /whois <nick>");
                 }
             }
-            "/media" | "/img" | "/upload" => {
+            "/media" | "/img" | "/upload" | "/crosspost" => {
+                let cross_post = cmd == "/crosspost";
                 if arg.is_empty() {
                     app.status_msg("Usage: /media <file path> [alt text]");
+                    if cross_post {
+                        app.status_msg("  /crosspost also shares to your Bluesky feed");
+                    }
                 } else {
                     let target = app.active_buffer.clone();
                     if target == "status" {
                         app.status_msg("Switch to a channel or PM first.");
                     } else {
-                        // Parse: /media path [alt text]
+                        // Parse: /media [--post] path [alt text]
+                        // --post flag cross-posts to Bluesky feed
                         // Path can be quoted: /media "my file.jpg" alt text here
-                        let (path, alt) = if let Some(after_quote) = arg.strip_prefix('"') {
+                        let (effective_arg, cross_post) = if let Some(rest) = arg.strip_prefix("--post ") {
+                            (rest, true)
+                        } else {
+                            (arg, cross_post)
+                        };
+                        let (path, alt) = if let Some(after_quote) = effective_arg.strip_prefix('"') {
                             if let Some(end) = after_quote.find('"') {
                                 let p = &after_quote[..end];
                                 let rest = after_quote[end + 1..].trim();
                                 (p.to_string(), if rest.is_empty() { None } else { Some(rest.to_string()) })
                             } else {
-                                (arg.to_string(), None)
+                                (effective_arg.to_string(), None)
                             }
                         } else {
-                            let parts: Vec<&str> = arg.splitn(2, ' ').collect();
+                            let parts: Vec<&str> = effective_arg.splitn(2, ' ').collect();
                             (parts[0].to_string(), parts.get(1).map(|s| s.to_string()))
                         };
 
-                        upload_and_send_media(app, handle, &target, &path, alt.as_deref()).await?;
+                        upload_and_send_media(app, handle, &target, &path, alt.as_deref(), cross_post).await?;
                     }
                 }
             }
@@ -717,6 +758,8 @@ async fn process_input(
                 app.status_msg("  /me <action>      - Send action message");
                 app.status_msg("  /whois nick       - Show user info + DID");
                 app.status_msg("  /media <path> [alt] - Upload and share a file");
+                app.status_msg("  /media --post <path> [alt] - Upload + cross-post to Bluesky");
+                app.status_msg("  /crosspost <path> [alt] - Same as /media --post");
                 app.status_msg("  /quit [message]   - Disconnect");
                 app.status_msg("  /raw <line>       - Send raw IRC");
                 app.status_msg("  Tab               - Nick completion (or switch buffers if empty)");
@@ -751,6 +794,7 @@ async fn upload_and_send_media(
     target: &str,
     path: &str,
     alt: Option<&str>,
+    cross_post: bool,
 ) -> Result<()> {
     let uploader = match &app.media_uploader {
         Some(u) => u.clone(),
@@ -803,6 +847,9 @@ async fn upload_and_send_media(
         &format!("Uploading {filename} ({})...", format_file_size(data.len() as u64))
     );
 
+    // Channel name for the record (if target is a channel)
+    let channel = if target.starts_with('#') { Some(target) } else { None };
+
     match irc_at_sdk::media::upload_media_to_pds(
         &uploader.pds_url,
         &uploader.did,
@@ -812,6 +859,8 @@ async fn upload_and_send_media(
         content_type,
         &data,
         alt,
+        channel,
+        cross_post,
     ).await {
         Ok(result) => {
             let media = irc_at_sdk::media::MediaAttachment {
@@ -829,16 +878,26 @@ async fn upload_and_send_media(
 
             // Show in our own buffer
             let display = format_media_display(&media);
+            let img_url = if media.content_type.starts_with("image/") {
+                Some(media.url.clone())
+            } else {
+                None
+            };
+            if let Some(ref url) = img_url {
+                fetch_image_if_needed(&app.image_cache, url);
+            }
             let nick = app.nick.clone();
             app.buffer_mut(target).push(crate::app::BufferLine {
                 timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
                 from: nick,
                 text: display,
                 is_system: false,
+                image_url: img_url,
             });
 
+            let suffix = if cross_post { " (also posted to Bluesky)" } else { "" };
             app.buffer_mut(&buf_name).push_system(
-                &format!("Shared {filename} (CID: {})", result.cid)
+                &format!("Shared {filename}{suffix}")
             );
         }
         Err(e) => {
@@ -847,6 +906,39 @@ async fn upload_and_send_media(
     }
 
     Ok(())
+}
+
+/// Kick off a background fetch for an image URL if not already cached.
+fn fetch_image_if_needed(cache: &crate::app::ImageCache, url: &str) {
+    let mut guard = cache.lock().unwrap();
+    if guard.contains_key(url) {
+        return;
+    }
+    guard.insert(url.to_string(), crate::app::ImageState::Loading);
+    drop(guard);
+
+    let cache = cache.clone();
+    let url = url.to_string();
+    tokio::spawn(async move {
+        match reqwest::get(&url).await {
+            Ok(resp) => match resp.bytes().await {
+                Ok(bytes) => match image::load_from_memory(&bytes) {
+                    Ok(img) => {
+                        cache.lock().unwrap().insert(url, crate::app::ImageState::Ready(img));
+                    }
+                    Err(e) => {
+                        cache.lock().unwrap().insert(url, crate::app::ImageState::Failed(e.to_string()));
+                    }
+                },
+                Err(e) => {
+                    cache.lock().unwrap().insert(url, crate::app::ImageState::Failed(e.to_string()));
+                }
+            },
+            Err(e) => {
+                cache.lock().unwrap().insert(url, crate::app::ImageState::Failed(e.to_string()));
+            }
+        }
+    });
 }
 
 /// Format a media attachment for display in the TUI.
