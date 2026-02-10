@@ -265,10 +265,15 @@ pub async fn login(handle: &str) -> Result<OAuthSession> {
     let port = listener.local_addr()?.port();
 
     // AT Protocol loopback OAuth:
-    // - client_id must be "http://localhost" (magic value, not fetched)
-    // - redirect_uri must use 127.0.0.1 IP (not "localhost"), no path
-    let client_id = "http://localhost".to_string();
-    let redirect_uri = format!("http://127.0.0.1:{port}");
+    // client_id = http://localhost with query params declaring scopes and redirect_uri
+    // The auth server infers metadata from these params for loopback clients.
+    let redirect_uri = format!("http://127.0.0.1:{port}/callback");
+    let scope = "atproto transition:generic";
+    let client_id = format!(
+        "http://localhost?redirect_uri={}&scope={}",
+        urlencod(&redirect_uri),
+        urlencod(scope),
+    );
 
     // 4. Generate PKCE and DPoP key
     let (code_verifier, code_challenge) = generate_pkce();
