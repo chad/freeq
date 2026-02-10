@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Build signer before entering the TUI
-    let signer = build_signer(&cli).await?;
+    let (signer, media_uploader) = build_signer(&cli).await?;
 
     let auth_status = if signer.is_some() {
         "authenticating"
@@ -107,6 +107,7 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(&cli.nick, cli.vi);
+    app.media_uploader = media_uploader;
 
     let result = run_app(&mut terminal, &mut app, &handle, &mut events).await;
 
@@ -117,7 +118,19 @@ async fn main() -> Result<()> {
     result
 }
 
-async fn build_signer(cli: &Cli) -> Result<Option<Arc<dyn ChallengeSigner>>> {
+type SignerResult = (Option<Arc<dyn ChallengeSigner>>, Option<app::MediaUploader>);
+
+fn make_oauth_uploader(session: &oauth::OAuthSession) -> app::MediaUploader {
+    app::MediaUploader {
+        did: session.did.clone(),
+        pds_url: session.pds_url.clone(),
+        access_token: session.access_token.clone(),
+        dpop_key: Some(session.dpop_key.clone()),
+        dpop_nonce: session.dpop_nonce.clone(),
+    }
+}
+
+async fn build_signer(cli: &Cli) -> Result<SignerResult> {
     // Option 1: Bluesky login via handle
     if let Some(ref handle) = cli.handle {
         if let Some(ref password) = cli.app_password {
@@ -128,11 +141,17 @@ async fn build_signer(cli: &Cli) -> Result<Option<Arc<dyn ChallengeSigner>>> {
             eprintln!("  DID: {}", session.did);
             eprintln!("  Handle: {}", session.handle);
             eprintln!("  PDS: {pds_url}");
-            return Ok(Some(Arc::new(PdsSessionSigner::new(
-                session.did,
-                session.access_jwt,
-                pds_url,
-            ))));
+            let uploader = app::MediaUploader {
+                did: session.did.clone(),
+                pds_url: pds_url.clone(),
+                access_token: session.access_jwt.clone(),
+                dpop_key: None,
+                dpop_nonce: None,
+            };
+            return Ok((
+                Some(Arc::new(PdsSessionSigner::new(session.did, session.access_jwt, pds_url))),
+                Some(uploader),
+            ));
         } else {
             // Try cached session first
             let cache_path = oauth::default_session_path(handle);
@@ -142,15 +161,15 @@ async fn build_signer(cli: &Cli) -> Result<Option<Arc<dyn ChallengeSigner>>> {
                     Ok(cached) => match cached.validate().await {
                         Ok(session) => {
                             eprintln!("  Cached session valid for {}", session.did);
-                            // Re-save with fresh nonce
                             let _ = session.save(&cache_path);
-                            return Ok(Some(Arc::new(PdsSessionSigner::new_oauth(
-                                session.did,
-                                session.access_token,
-                                session.pds_url,
-                                session.dpop_key,
-                                session.dpop_nonce,
-                            ))));
+                            let uploader = make_oauth_uploader(&session);
+                            return Ok((
+                                Some(Arc::new(PdsSessionSigner::new_oauth(
+                                    session.did, session.access_token, session.pds_url,
+                                    session.dpop_key, session.dpop_nonce,
+                                ))),
+                                Some(uploader),
+                            ));
                         }
                         Err(e) => {
                             eprintln!("  Cached session expired: {e}");
@@ -171,20 +190,20 @@ async fn build_signer(cli: &Cli) -> Result<Option<Arc<dyn ChallengeSigner>>> {
             eprintln!("  Handle: {}", session.handle);
             eprintln!("  PDS: {}", session.pds_url);
 
-            // Cache the session
             if let Err(e) = session.save(&cache_path) {
                 eprintln!("  Warning: failed to cache session: {e}");
             } else {
                 eprintln!("  Session cached to {}", cache_path.display());
             }
 
-            return Ok(Some(Arc::new(PdsSessionSigner::new_oauth(
-                session.did,
-                session.access_token,
-                session.pds_url,
-                session.dpop_key,
-                session.dpop_nonce,
-            ))));
+            let uploader = make_oauth_uploader(&session);
+            return Ok((
+                Some(Arc::new(PdsSessionSigner::new_oauth(
+                    session.did, session.access_token, session.pds_url,
+                    session.dpop_key, session.dpop_nonce,
+                ))),
+                Some(uploader),
+            ));
         }
     }
 
@@ -202,7 +221,7 @@ async fn build_signer(cli: &Cli) -> Result<Option<Arc<dyn ChallengeSigner>>> {
         eprintln!("Generated {} keypair:", cli.key_type);
         eprintln!("  DID: {did}");
         eprintln!("  Public key (multibase): {multibase}");
-        return Ok(Some(Arc::new(KeySigner::new(did, private_key))));
+        return Ok((Some(Arc::new(KeySigner::new(did, private_key))), None));
     }
 
     // Option 3: Crypto auth with DID + key file
@@ -222,11 +241,11 @@ async fn build_signer(cli: &Cli) -> Result<Option<Arc<dyn ChallengeSigner>>> {
                 _ => PrivateKey::generate_secp256k1(),
             }
         };
-        return Ok(Some(Arc::new(KeySigner::new(did.clone(), private_key))));
+        return Ok((Some(Arc::new(KeySigner::new(did.clone(), private_key))), None));
     }
 
     // No auth — guest mode
-    Ok(None)
+    Ok((None, None))
 }
 
 async fn run_app(
@@ -641,6 +660,33 @@ async fn process_input(
                     app.status_msg("Usage: /whois <nick>");
                 }
             }
+            "/media" | "/img" | "/upload" => {
+                if arg.is_empty() {
+                    app.status_msg("Usage: /media <file path> [alt text]");
+                } else {
+                    let target = app.active_buffer.clone();
+                    if target == "status" {
+                        app.status_msg("Switch to a channel or PM first.");
+                    } else {
+                        // Parse: /media path [alt text]
+                        // Path can be quoted: /media "my file.jpg" alt text here
+                        let (path, alt) = if let Some(after_quote) = arg.strip_prefix('"') {
+                            if let Some(end) = after_quote.find('"') {
+                                let p = &after_quote[..end];
+                                let rest = after_quote[end + 1..].trim();
+                                (p.to_string(), if rest.is_empty() { None } else { Some(rest.to_string()) })
+                            } else {
+                                (arg.to_string(), None)
+                            }
+                        } else {
+                            let parts: Vec<&str> = arg.splitn(2, ' ').collect();
+                            (parts[0].to_string(), parts.get(1).map(|s| s.to_string()))
+                        };
+
+                        upload_and_send_media(app, handle, &target, &path, alt.as_deref()).await?;
+                    }
+                }
+            }
             "/quit" | "/q" => {
                 handle
                     .quit(Some(if arg.is_empty() { "bye" } else { arg }))
@@ -670,6 +716,7 @@ async fn process_input(
                 app.status_msg("  /mode +i / -i     - Set/unset invite-only");
                 app.status_msg("  /me <action>      - Send action message");
                 app.status_msg("  /whois nick       - Show user info + DID");
+                app.status_msg("  /media <path> [alt] - Upload and share a file");
                 app.status_msg("  /quit [message]   - Disconnect");
                 app.status_msg("  /raw <line>       - Send raw IRC");
                 app.status_msg("  Tab               - Nick completion (or switch buffers if empty)");
@@ -691,6 +738,113 @@ async fn process_input(
         } else {
             handle.privmsg(&target, input).await?;
             app.chat_msg(&target, &app.nick.clone(), input);
+        }
+    }
+
+    Ok(())
+}
+
+/// Upload a file to PDS and send as a tagged media message.
+async fn upload_and_send_media(
+    app: &mut App,
+    handle: &client::ClientHandle,
+    target: &str,
+    path: &str,
+    alt: Option<&str>,
+) -> Result<()> {
+    let uploader = match &app.media_uploader {
+        Some(u) => u.clone(),
+        None => {
+            app.status_msg("Media upload requires Bluesky authentication (--handle)");
+            return Ok(());
+        }
+    };
+
+    // Expand ~ in path
+    let path: std::path::PathBuf = if path.starts_with("~/") {
+        dirs::home_dir()
+            .map(|h: std::path::PathBuf| h.join(&path[2..]))
+            .unwrap_or_else(|| std::path::PathBuf::from(path))
+    } else {
+        std::path::PathBuf::from(path)
+    };
+
+    if !path.exists() {
+        app.status_msg(&format!("File not found: {}", path.display()));
+        return Ok(());
+    }
+
+    let data = std::fs::read(&path)?;
+    let filename = path.file_name()
+        .and_then(|n: &std::ffi::OsStr| n.to_str())
+        .unwrap_or("file");
+
+    // Guess content type from extension
+    let content_type = match path.extension()
+        .and_then(|e: &std::ffi::OsStr| e.to_str())
+        .unwrap_or("")
+    {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        "mp3" => "audio/mpeg",
+        "ogg" => "audio/ogg",
+        "pdf" => "application/pdf",
+        _ => "application/octet-stream",
+    };
+
+    app.status_msg(&format!("Uploading {filename} ({})...", format_file_size(data.len() as u64)));
+
+    // Generate DPoP proof if needed
+    let dpop_proof = if let Some(ref dpop_key) = uploader.dpop_key {
+        let url = format!(
+            "{}/xrpc/com.atproto.repo.uploadBlob",
+            uploader.pds_url.trim_end_matches('/')
+        );
+        Some(dpop_key.proof("POST", &url, uploader.dpop_nonce.as_deref(), Some(&uploader.access_token))?)
+    } else {
+        None
+    };
+
+    match irc_at_sdk::media::upload_blob_to_pds(
+        &uploader.pds_url,
+        &uploader.access_token,
+        dpop_proof.as_deref(),
+        content_type,
+        &data,
+    ).await {
+        Ok(result) => {
+            let cdn_url = result.cdn_url(&uploader.did);
+            let media = irc_at_sdk::media::MediaAttachment {
+                content_type: content_type.to_string(),
+                url: cdn_url,
+                alt: alt.map(|s| s.to_string()),
+                width: None,  // Could detect from image headers
+                height: None,
+                blurhash: None,
+                size: Some(result.size),
+                filename: Some(filename.to_string()),
+            };
+
+            handle.send_media(target, &media).await?;
+
+            // Show in our own buffer
+            let display = format_media_display(&media);
+            let nick = app.nick.clone();
+            app.buffer_mut(target).push(crate::app::BufferLine {
+                timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                from: nick,
+                text: display,
+                is_system: false,
+            });
+
+            app.status_msg(&format!("Uploaded {filename} (CID: {})", result.cid));
+        }
+        Err(e) => {
+            app.status_msg(&format!("Upload failed: {e}"));
         }
     }
 

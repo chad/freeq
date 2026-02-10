@@ -59,6 +59,16 @@ impl Buffer {
 }
 
 /// Top-level application state.
+/// Holds PDS credentials for media upload.
+#[derive(Clone)]
+pub struct MediaUploader {
+    pub did: String,
+    pub pds_url: String,
+    pub access_token: String,
+    pub dpop_key: Option<irc_at_sdk::oauth::DpopKey>,
+    pub dpop_nonce: Option<String>,
+}
+
 pub struct App {
     /// Named buffers, keyed by lowercase name. "status" is always present.
     pub buffers: BTreeMap<String, Buffer>,
@@ -80,6 +90,8 @@ pub struct App {
     pub history_pos: Option<usize>,
     /// Saved input line when browsing history.
     pub history_saved: String,
+    /// Media uploader (present when authenticated with PDS session).
+    pub media_uploader: Option<MediaUploader>,
 }
 
 impl App {
@@ -103,6 +115,7 @@ impl App {
             history: Vec::new(),
             history_pos: None,
             history_saved: String::new(),
+            media_uploader: None,
         }
     }
 
