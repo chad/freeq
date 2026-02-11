@@ -21,6 +21,10 @@ ratatui = "0.30"
 crossterm = "0.29"
 hex = "0.4"
 dirs = { workspace = true }
-ratatui-image = "10"
+ratatui-image = { version = "10", optional = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 reqwest = { workspace = true }
+
+[features]
+default = []
+inline-images = ["ratatui-image"]

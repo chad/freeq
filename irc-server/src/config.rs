@@ -27,6 +27,10 @@ pub struct ServerConfig {
     /// Challenge validity window in seconds.
     #[arg(long, default_value = "60")]
     pub challenge_timeout_secs: u64,
+
+    /// Path to SQLite database file. If not set, uses in-memory storage (no persistence).
+    #[arg(long)]
+    pub db_path: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -38,6 +42,7 @@ impl Default for ServerConfig {
             tls_key: None,
             server_name: "irc-reboot".to_string(),
             challenge_timeout_secs: 60,
+            db_path: None,
         }
     }
 }

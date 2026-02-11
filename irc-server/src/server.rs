@@ -15,6 +15,7 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::config::ServerConfig;
 use crate::connection;
+use crate::db::Db;
 use crate::sasl::ChallengeStore;
 
 /// State for a single channel.
@@ -160,6 +161,29 @@ pub struct SharedState {
     pub channels: Mutex<HashMap<String, ChannelState>>,
     /// Sessions that have negotiated message-tags capability.
     pub cap_message_tags: Mutex<HashSet<String>>,
+    /// Database handle for persistence (None = in-memory only).
+    pub db: Option<Mutex<Db>>,
+}
+
+impl SharedState {
+    /// Run a closure with the database, if persistence is enabled.
+    /// Logs errors but does not propagate them — persistence failures
+    /// should not break the IRC server.
+    pub fn with_db<F, R>(&self, f: F) -> Option<R>
+    where
+        F: FnOnce(&Db) -> rusqlite::Result<R>,
+    {
+        self.db.as_ref().and_then(|db| {
+            let db = db.lock().unwrap();
+            match f(&db) {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    tracing::error!("Database error: {e}");
+                    None
+                }
+            }
+        })
+    }
 }
 
 pub struct Server {
@@ -180,23 +204,71 @@ impl Server {
         Self { config, resolver }
     }
 
-    /// Run the server, blocking forever.
-    pub async fn run(self) -> Result<()> {
-        let tls_acceptor = self.build_tls_acceptor()?;
+    /// Build SharedState, opening the database and loading persisted data.
+    fn build_state(&self) -> Result<Arc<SharedState>> {
+        let db = match &self.config.db_path {
+            Some(path) => {
+                tracing::info!("Opening database: {path}");
+                Some(Db::open(path).map_err(|e| anyhow::anyhow!("Failed to open database: {e}"))?)
+            }
+            None => None,
+        };
 
-        let state = Arc::new(SharedState {
+        // Load persisted state from DB
+        let mut channels = HashMap::new();
+        let mut did_nicks = HashMap::new();
+        let mut nick_owners = HashMap::new();
+
+        if let Some(ref db) = db {
+            // Load channels (metadata + bans)
+            channels = db.load_channels()
+                .map_err(|e| anyhow::anyhow!("Failed to load channels: {e}"))?;
+            tracing::info!("Loaded {} channels from database", channels.len());
+
+            // Load message history into each channel
+            for (name, ch) in channels.iter_mut() {
+                let messages = db.get_messages(name, crate::server::MAX_HISTORY, None)
+                    .map_err(|e| anyhow::anyhow!("Failed to load messages for {name}: {e}"))?;
+                for msg in messages {
+                    ch.history.push_back(HistoryMessage {
+                        from: msg.sender,
+                        text: msg.text,
+                        timestamp: msg.timestamp,
+                        tags: msg.tags,
+                    });
+                }
+            }
+
+            // Load DID-nick bindings
+            let identities = db.load_identities()
+                .map_err(|e| anyhow::anyhow!("Failed to load identities: {e}"))?;
+            tracing::info!("Loaded {} identity bindings from database", identities.len());
+            for id in identities {
+                nick_owners.insert(id.nick.clone(), id.did.clone());
+                did_nicks.insert(id.did, id.nick);
+            }
+        }
+
+        Ok(Arc::new(SharedState {
             server_name: self.config.server_name.clone(),
             challenge_store: ChallengeStore::new(self.config.challenge_timeout_secs),
-            did_resolver: self.resolver,
+            did_resolver: self.resolver.clone(),
             connections: Mutex::new(HashMap::new()),
             nick_to_session: Mutex::new(HashMap::new()),
             session_dids: Mutex::new(HashMap::new()),
-            channels: Mutex::new(HashMap::new()),
-            did_nicks: Mutex::new(HashMap::new()),
-            nick_owners: Mutex::new(HashMap::new()),
+            channels: Mutex::new(channels),
+            did_nicks: Mutex::new(did_nicks),
+            nick_owners: Mutex::new(nick_owners),
             session_handles: Mutex::new(HashMap::new()),
             cap_message_tags: Mutex::new(HashSet::new()),
-        });
+            db: db.map(Mutex::new),
+        }))
+    }
+
+    /// Run the server, blocking forever.
+    pub async fn run(self) -> Result<()> {
+        let tls_acceptor = self.build_tls_acceptor()?;
+        let state = self.build_state()?;
 
         // Start plain listener
         let plain_listener = TcpListener::bind(&self.config.listen_addr).await?;
@@ -254,19 +326,7 @@ impl Server {
         let addr = listener.local_addr()?;
         tracing::info!("Listening on {addr}");
 
-        let state = Arc::new(SharedState {
-            server_name: self.config.server_name.clone(),
-            challenge_store: ChallengeStore::new(self.config.challenge_timeout_secs),
-            did_resolver: self.resolver,
-            connections: Mutex::new(HashMap::new()),
-            nick_to_session: Mutex::new(HashMap::new()),
-            session_dids: Mutex::new(HashMap::new()),
-            channels: Mutex::new(HashMap::new()),
-            did_nicks: Mutex::new(HashMap::new()),
-            nick_owners: Mutex::new(HashMap::new()),
-            session_handles: Mutex::new(HashMap::new()),
-            cap_message_tags: Mutex::new(HashSet::new()),
-        });
+        let state = self.build_state()?;
 
         let handle = tokio::spawn(async move {
             loop {
@@ -297,19 +357,7 @@ impl Server {
 
         tracing::info!("Plain on {plain_addr}, TLS on {tls_addr}");
 
-        let state = Arc::new(SharedState {
-            server_name: self.config.server_name.clone(),
-            challenge_store: ChallengeStore::new(self.config.challenge_timeout_secs),
-            did_resolver: self.resolver,
-            connections: Mutex::new(HashMap::new()),
-            nick_to_session: Mutex::new(HashMap::new()),
-            session_dids: Mutex::new(HashMap::new()),
-            channels: Mutex::new(HashMap::new()),
-            did_nicks: Mutex::new(HashMap::new()),
-            nick_owners: Mutex::new(HashMap::new()),
-            session_handles: Mutex::new(HashMap::new()),
-            cap_message_tags: Mutex::new(HashSet::new()),
-        });
+        let state = self.build_state()?;
 
         let handle = tokio::spawn(async move {
             let tls_state = Arc::clone(&state);

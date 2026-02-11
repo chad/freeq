@@ -1439,6 +1439,7 @@ async fn tls_connection() {
         tls_key: Some(key_path.to_str().unwrap().to_string()),
         server_name: "test-tls".to_string(),
         challenge_timeout_secs: 60,
+        db_path: None,
     };
 
     let server = irc_server::server::Server::with_resolver(config, empty_resolver());
@@ -1604,4 +1605,263 @@ async fn tagmsg_and_reactions() {
     handle1.quit(None).await.unwrap();
     handle2.quit(None).await.unwrap();
     server_handle.abort();
+}
+
+// ── Persistence tests ───────────────────────────────────────────────
+
+/// Helper: start a server with persistence enabled (SQLite file).
+async fn start_test_server_with_db(
+    resolver: DidResolver,
+    db_path: &str,
+) -> (std::net::SocketAddr, tokio::task::JoinHandle<anyhow::Result<()>>) {
+    let config = irc_server::config::ServerConfig {
+        listen_addr: "127.0.0.1:0".to_string(),
+        server_name: "test-server".to_string(),
+        challenge_timeout_secs: 60,
+        db_path: Some(db_path.to_string()),
+        ..Default::default()
+    };
+    let server = irc_server::server::Server::with_resolver(config, resolver);
+    server.start().await.unwrap()
+}
+
+#[tokio::test]
+async fn persistence_messages_survive_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let db_str = db_path.to_str().unwrap();
+
+    // First server instance: send a message
+    {
+        let (addr, server_handle) = start_test_server_with_db(empty_resolver(), db_str).await;
+
+        let config = ConnectConfig {
+            server_addr: addr.to_string(),
+            nick: "alice".to_string(),
+            user: "alice".to_string(),
+            realname: "Alice".to_string(),
+            ..Default::default()
+        };
+        let (handle, mut events) = client::connect(config, None);
+        expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
+        expect_event(&mut events, 2000, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+
+        handle.join("#persist").await.unwrap();
+        expect_event(&mut events, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#persist"), "Joined").await;
+
+        handle.privmsg("#persist", "hello from first server").await.unwrap();
+        // Give time for the message to be stored
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        handle.quit(None).await.unwrap();
+        server_handle.abort();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Second server instance: join channel, should see history
+    {
+        let (addr, server_handle) = start_test_server_with_db(empty_resolver(), db_str).await;
+
+        let config = ConnectConfig {
+            server_addr: addr.to_string(),
+            nick: "bob".to_string(),
+            user: "bob".to_string(),
+            realname: "Bob".to_string(),
+            ..Default::default()
+        };
+        let (handle, mut events) = client::connect(config, None);
+        expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
+        expect_event(&mut events, 2000, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+
+        handle.join("#persist").await.unwrap();
+        expect_event(&mut events, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#persist"), "Joined").await;
+
+        // Should receive the replayed message from the first server instance
+        let msg = expect_event(
+            &mut events, 2000,
+            |e| matches!(e, Event::Message { text, .. } if text == "hello from first server"),
+            "History replay from persisted DB",
+        ).await;
+
+        if let Event::Message { from, target, text, .. } = msg {
+            assert!(from.contains("alice"), "Message should be from alice, got: {from}");
+            assert_eq!(target, "#persist");
+            assert_eq!(text, "hello from first server");
+        }
+
+        handle.quit(None).await.unwrap();
+        server_handle.abort();
+    }
+}
+
+#[tokio::test]
+async fn persistence_topic_survives_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let db_str = db_path.to_str().unwrap();
+
+    // First instance: set a topic
+    {
+        let (addr, server_handle) = start_test_server_with_db(empty_resolver(), db_str).await;
+
+        let config = ConnectConfig {
+            server_addr: addr.to_string(),
+            nick: "alice".to_string(),
+            user: "alice".to_string(),
+            realname: "Alice".to_string(),
+            ..Default::default()
+        };
+        let (handle, mut events) = client::connect(config, None);
+        expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
+        expect_event(&mut events, 2000, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+
+        handle.join("#topictest").await.unwrap();
+        expect_event(&mut events, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#topictest"), "Joined").await;
+
+        handle.raw("TOPIC #topictest :Persistent topic!").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        handle.quit(None).await.unwrap();
+        server_handle.abort();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Second instance: join, should see persisted topic
+    {
+        let (addr, server_handle) = start_test_server_with_db(empty_resolver(), db_str).await;
+
+        let config = ConnectConfig {
+            server_addr: addr.to_string(),
+            nick: "bob".to_string(),
+            user: "bob".to_string(),
+            realname: "Bob".to_string(),
+            ..Default::default()
+        };
+        let (handle, mut events) = client::connect(config, None);
+        expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
+        expect_event(&mut events, 2000, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+
+        handle.join("#topictest").await.unwrap();
+        expect_event(&mut events, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#topictest"), "Joined").await;
+
+        // Should receive the topic on join
+        let _topic = expect_event(
+            &mut events, 2000,
+            |e| matches!(e, Event::TopicChanged { channel, topic, .. } if channel == "#topictest" && topic == "Persistent topic!"),
+            "Persisted topic on join",
+        ).await;
+
+        handle.quit(None).await.unwrap();
+        server_handle.abort();
+    }
+}
+
+#[tokio::test]
+async fn persistence_bans_survive_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let db_str = db_path.to_str().unwrap();
+
+    // First instance: set a ban
+    {
+        let (addr, server_handle) = start_test_server_with_db(empty_resolver(), db_str).await;
+
+        let config = ConnectConfig {
+            server_addr: addr.to_string(),
+            nick: "op".to_string(),
+            user: "op".to_string(),
+            realname: "Op".to_string(),
+            ..Default::default()
+        };
+        let (handle, mut events) = client::connect(config, None);
+        expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
+        expect_event(&mut events, 2000, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+
+        handle.join("#btest").await.unwrap();
+        expect_event(&mut events, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#btest"), "Joined").await;
+
+        // As channel creator, we're op — set a ban
+        handle.raw("MODE #btest +b bad!*@*").await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        handle.quit(None).await.unwrap();
+        server_handle.abort();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Verify the ban is in the database directly
+    {
+        let db = irc_server::db::Db::open(db_str).unwrap();
+        let channels = db.load_channels().unwrap();
+        let ch = channels.get("#btest").unwrap();
+        assert_eq!(ch.bans.len(), 1);
+        assert_eq!(ch.bans[0].mask, "bad!*@*");
+    }
+}
+
+
+#[tokio::test]
+async fn persistence_nick_ownership_survives_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let db_str = db_path.to_str().unwrap();
+
+    let private_key = PrivateKey::generate_secp256k1();
+    let did_str = "did:plc:testpersist";
+    let doc = did::make_test_did_document(did_str, &private_key.public_key_multibase());
+
+    let mut docs = HashMap::new();
+    docs.insert(did_str.to_string(), doc);
+    let resolver = DidResolver::static_map(docs.clone());
+
+    // First instance: authenticate and claim nick
+    {
+        let (addr, server_handle) = start_test_server_with_db(resolver, db_str).await;
+
+        let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(did_str.to_string(), private_key));
+        let config = ConnectConfig {
+            server_addr: addr.to_string(),
+            nick: "claimed".to_string(),
+            user: "claimed".to_string(),
+            realname: "Claimed".to_string(),
+            ..Default::default()
+        };
+        let (handle, mut events) = client::connect(config, Some(signer));
+        expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
+        expect_event(&mut events, 3000, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+
+        handle.quit(None).await.unwrap();
+        server_handle.abort();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Second instance: guest tries to use claimed nick — should be renamed
+    {
+        let resolver2 = DidResolver::static_map(docs);
+        let (addr, server_handle) = start_test_server_with_db(resolver2, db_str).await;
+
+        let config = ConnectConfig {
+            server_addr: addr.to_string(),
+            nick: "claimed".to_string(),
+            user: "claimed".to_string(),
+            realname: "Guest".to_string(),
+            ..Default::default()
+        };
+        let (handle, mut events) = client::connect(config, None);
+        expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
+
+        // The registered event should show a different nick (Guest*)
+        let reg = expect_event(
+            &mut events, 2000,
+            |e| matches!(e, Event::Registered { .. }),
+            "Registered",
+        ).await;
+
+        if let Event::Registered { nick, .. } = reg {
+            assert!(nick.starts_with("Guest"), "Guest should be renamed, got: {nick}");
+        }
+
+        handle.quit(None).await.unwrap();
+        server_handle.abort();
+    }
 }

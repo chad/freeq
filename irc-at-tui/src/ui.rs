@@ -6,7 +6,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
 use ratatui::Frame;
 
-use crate::app::{App, ImageState, IMAGE_ROWS};
+#[cfg(feature = "inline-images")]
+use crate::app::{ImageState, IMAGE_ROWS};
+use crate::app::App;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
@@ -92,20 +94,28 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    #[cfg(feature = "inline-images")]
     let has_picker = app.picker.is_some();
+    #[cfg(not(feature = "inline-images"))]
+    let has_picker = false;
 
     let buffer = app.buffers.get(&app.active_buffer).unwrap();
     let inner_height = inner.height as usize;
 
     // Calculate height of each message: 1 line for text, + IMAGE_ROWS if image is ready
     let msg_heights: Vec<usize> = buffer.messages.iter().map(|msg| {
+        #[allow(unused_mut)]
         let mut h = 1usize;
-        if has_picker && let Some(ref url) = msg.image_url {
-            let cache = app.image_cache.lock().unwrap();
-            if matches!(cache.get(url.as_str()), Some(ImageState::Ready(_))) {
-                h += IMAGE_ROWS as usize;
+        #[cfg(feature = "inline-images")]
+        if has_picker {
+            if let Some(ref url) = msg.image_url {
+                let cache = app.image_cache.lock().unwrap();
+                if matches!(cache.get(url.as_str()), Some(ImageState::Ready(_))) {
+                    h += IMAGE_ROWS as usize;
+                }
             }
         }
+        let _ = (has_picker, &msg.image_url); // suppress unused warnings
         h
     }).collect();
 
@@ -142,6 +152,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let max_y = inner.y + inner.height;
 
     // Collect image URLs that need protocol state created
+    #[allow(unused_mut, unused_variables)]
     let mut needs_proto: Vec<String> = Vec::new();
 
     for &(msg_idx, msg_h) in &visible_msgs {
@@ -189,38 +200,41 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
         }
 
         // Render image if present and ready
-        if has_picker && y < max_y && let Some(ref url) = msg.image_url {
-            let cache = app.image_cache.lock().unwrap();
-            if matches!(cache.get(url.as_str()), Some(ImageState::Ready(_))) {
-                let img_h = IMAGE_ROWS.min(max_y - y);
-                needs_proto.push(url.clone());
-                drop(cache);
+        #[cfg(feature = "inline-images")]
+        if has_picker && y < max_y {
+            if let Some(ref url) = msg.image_url {
+                let cache = app.image_cache.lock().unwrap();
+                if matches!(cache.get(url.as_str()), Some(ImageState::Ready(_))) {
+                    let img_h = IMAGE_ROWS.min(max_y - y);
+                    needs_proto.push(url.clone());
+                    drop(cache);
 
-                let img_area = Rect::new(inner.x + 2, y, inner.width.saturating_sub(4), img_h);
-                y += img_h;
+                    let img_area = Rect::new(inner.x + 2, y, inner.width.saturating_sub(4), img_h);
+                    y += img_h;
 
-                // Create protocol state if needed, then render
-                if !app.image_protos.contains_key(url)
-                    && let Some(ref mut picker) = app.picker
-                {
-                    let cache = app.image_cache.lock().unwrap();
-                    if let Some(ImageState::Ready(img)) = cache.get(url.as_str()) {
-                        let proto = picker.new_resize_protocol(img.clone());
-                        drop(cache);
-                        app.image_protos.insert(url.clone(), proto);
+                    // Create protocol state if needed, then render
+                    if !app.image_protos.contains_key(url) {
+                        if let Some(ref mut picker) = app.picker {
+                            let cache = app.image_cache.lock().unwrap();
+                            if let Some(ImageState::Ready(img)) = cache.get(url.as_str()) {
+                                let proto = picker.new_resize_protocol(img.clone());
+                                drop(cache);
+                                app.image_protos.insert(url.clone(), proto);
+                            }
+                        }
                     }
+                    if let Some(proto) = app.image_protos.get_mut(url) {
+                        let widget = ratatui_image::StatefulImage::<ratatui_image::protocol::StatefulProtocol>::default();
+                        frame.render_stateful_widget(widget, img_area, proto);
+                    }
+                } else if matches!(cache.get(url.as_str()), Some(ImageState::Loading)) {
+                    drop(cache);
+                    let loading = Paragraph::new("  ⏳ Loading image...")
+                        .style(Style::default().fg(Color::DarkGray));
+                    let load_area = Rect::new(inner.x, y, inner.width, 1);
+                    frame.render_widget(loading, load_area);
+                    y += 1;
                 }
-                if let Some(proto) = app.image_protos.get_mut(url) {
-                    let widget = ratatui_image::StatefulImage::<ratatui_image::protocol::StatefulProtocol>::default();
-                    frame.render_stateful_widget(widget, img_area, proto);
-                }
-            } else if matches!(cache.get(url.as_str()), Some(ImageState::Loading)) {
-                drop(cache);
-                let loading = Paragraph::new("  ⏳ Loading image...")
-                    .style(Style::default().fg(Color::DarkGray));
-                let load_area = Rect::new(inner.x, y, inner.width, 1);
-                frame.render_widget(loading, load_area);
-                y += 1;
             }
         }
     }

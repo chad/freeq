@@ -600,6 +600,7 @@ async fn handle_authenticate(
                                 let nick_lower = nick.to_lowercase();
                                 state.did_nicks.lock().unwrap().insert(did.clone(), nick_lower.clone());
                                 state.nick_owners.lock().unwrap().insert(nick_lower, did.clone());
+                                state.with_db(|db| db.save_identity(&did, &nick.to_lowercase()));
                             }
 
                             // Resolve handle from DID document for WHOIS display
@@ -840,6 +841,9 @@ fn handle_join(
         ch.members.insert(session_id.to_string());
         if is_new_channel {
             ch.ops.insert(session_id.to_string());
+            let ch_clone = ch.clone();
+            drop(channels);
+            state.with_db(|db| db.save_channel(channel, &ch_clone));
         }
     }
 
@@ -1125,7 +1129,9 @@ fn handle_mode(
                     if let Some(chan) = channels.get_mut(channel) {
                         // Don't duplicate
                         if !chan.bans.iter().any(|b| b.mask == mask) {
-                            chan.bans.push(entry);
+                            chan.bans.push(entry.clone());
+                            drop(channels);
+                            state.with_db(|db| db.add_ban(channel, &entry));
                         }
                     }
                 } else {
@@ -1133,6 +1139,8 @@ fn handle_mode(
                     if let Some(chan) = channels.get_mut(channel) {
                         chan.bans.retain(|b| b.mask != mask);
                     }
+                    drop(channels);
+                    state.with_db(|db| db.remove_ban(channel, mask));
                 }
 
                 let sign = if adding { "+" } else { "-" };
@@ -1148,6 +1156,9 @@ fn handle_mode(
                         if !adding {
                             chan.invites.clear();
                         }
+                        let ch_clone = chan.clone();
+                        drop(channels);
+                        state.with_db(|db| db.save_channel(channel, &ch_clone));
                     }
                 }
                 let sign = if adding { "+" } else { "-" };
@@ -1160,6 +1171,9 @@ fn handle_mode(
                     let mut channels = state.channels.lock().unwrap();
                     if let Some(chan) = channels.get_mut(channel) {
                         chan.topic_locked = adding;
+                        let ch_clone = chan.clone();
+                        drop(channels);
+                        state.with_db(|db| db.save_channel(channel, &ch_clone));
                     }
                 }
                 let sign = if adding { "+" } else { "-" };
@@ -1182,6 +1196,9 @@ fn handle_mode(
                         let mut channels = state.channels.lock().unwrap();
                         if let Some(chan) = channels.get_mut(channel) {
                             chan.key = Some(key.to_string());
+                            let ch_clone = chan.clone();
+                            drop(channels);
+                            state.with_db(|db| db.save_channel(channel, &ch_clone));
                         }
                     }
                     let hostmask = conn.hostmask();
@@ -1191,7 +1208,11 @@ fn handle_mode(
                     let old_key = {
                         let mut channels = state.channels.lock().unwrap();
                         if let Some(chan) = channels.get_mut(channel) {
-                            chan.key.take()
+                            let k = chan.key.take();
+                            let ch_clone = chan.clone();
+                            drop(channels);
+                            state.with_db(|db| db.save_channel(channel, &ch_clone));
+                            k
                         } else {
                             None
                         }
@@ -1482,6 +1503,16 @@ fn handle_topic(
                     ch.topic = Some(topic);
                 });
 
+            // Persist channel state
+            {
+                let channels = state.channels.lock().unwrap();
+                if let Some(ch) = channels.get(channel) {
+                    let ch_clone = ch.clone();
+                    drop(channels);
+                    state.with_db(|db| db.save_channel(channel, &ch_clone));
+                }
+            }
+
             // Broadcast TOPIC change to all channel members
             let hostmask = conn.hostmask();
             let topic_msg = format!(":{hostmask} TOPIC {channel} :{text}\r\n");
@@ -1750,15 +1781,16 @@ fn handle_privmsg(
         // Store in channel history
         if command == "PRIVMSG" {
             use crate::server::{HistoryMessage, MAX_HISTORY};
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
             let mut channels = state.channels.lock().unwrap();
             if let Some(ch) = channels.get_mut(target) {
                 ch.history.push_back(HistoryMessage {
                     from: hostmask.clone(),
                     text: text.to_string(),
-                    timestamp: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs(),
+                    timestamp,
                     tags: tags.clone(),
                 });
                 while ch.history.len() > MAX_HISTORY {
@@ -1766,6 +1798,7 @@ fn handle_privmsg(
                 }
             }
             drop(channels);
+            state.with_db(|db| db.insert_message(target, &hostmask, text, timestamp, tags));
         }
 
         let members: Vec<String> = state

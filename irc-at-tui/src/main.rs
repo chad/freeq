@@ -105,6 +105,7 @@ async fn main() -> Result<()> {
     let (handle, mut events) = client::connect(config, signer);
 
     // Detect terminal image capabilities BEFORE entering raw mode
+    #[cfg(feature = "inline-images")]
     let picker = match ratatui_image::picker::Picker::from_query_stdio() {
         Ok(p) => {
             eprintln!("Terminal image support: {:?}", p.capabilities());
@@ -124,7 +125,8 @@ async fn main() -> Result<()> {
 
     let mut app = App::new(&cli.nick, cli.vi);
     app.media_uploader = media_uploader;
-    app.picker = picker;
+    #[cfg(feature = "inline-images")]
+    { app.picker = picker; }
 
     let result = run_app(&mut terminal, &mut app, &handle, &mut events).await;
 
@@ -278,9 +280,12 @@ async fn run_app(
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
         // Check for encoding errors from image rendering
-        for proto in app.image_protos.values_mut() {
-            if let Some(Err(e)) = proto.last_encoding_result() {
-                tracing::warn!("Image encoding error: {e}");
+        #[cfg(feature = "inline-images")]
+        {
+            for proto in app.image_protos.values_mut() {
+                if let Some(Err(e)) = proto.last_encoding_result() {
+                    tracing::warn!("Image encoding error: {e}");
+                }
             }
         }
 

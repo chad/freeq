@@ -118,6 +118,7 @@ impl DidDocument {
 /// DID resolver — resolves DIDs to DID documents.
 ///
 /// Use `DidResolver::http()` for production, `DidResolver::static_map()` for tests.
+#[derive(Clone)]
 pub enum DidResolver {
     Http(HttpResolver),
     Static(StaticResolver),
@@ -154,6 +155,7 @@ impl DidResolver {
     }
 }
 
+#[derive(Clone)]
 pub struct HttpResolver {
     client: reqwest::Client,
     plc_directory: String,
@@ -238,6 +240,7 @@ impl HttpResolver {
     }
 }
 
+#[derive(Clone)]
 pub struct StaticResolver {
     documents: HashMap<String, DidDocument>,
 }

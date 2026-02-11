@@ -24,6 +24,7 @@ pub enum ImageState {
     /// Image is being fetched.
     Loading,
     /// Image is ready to render.
+    #[allow(dead_code)]
     Ready(image::DynamicImage),
     /// Fetch failed.
     #[allow(dead_code)]
@@ -34,6 +35,7 @@ pub enum ImageState {
 pub type ImageCache = Arc<Mutex<HashMap<String, ImageState>>>;
 
 /// How many terminal rows an image takes up in the message area.
+#[cfg(feature = "inline-images")]
 pub const IMAGE_ROWS: u16 = 10;
 
 /// A named message buffer (channel, PM, or status).
@@ -116,8 +118,10 @@ pub struct App {
     /// Cache of fetched images for inline rendering.
     pub image_cache: ImageCache,
     /// Image protocol picker (detects terminal capabilities).
+    #[cfg(feature = "inline-images")]
     pub picker: Option<ratatui_image::picker::Picker>,
     /// Prepared image protocol states for rendering, keyed by URL.
+    #[cfg(feature = "inline-images")]
     pub image_protos: HashMap<String, ratatui_image::protocol::StatefulProtocol>,
     /// Channel for background tasks to send results back to the main loop.
     pub bg_result_tx: tokio::sync::mpsc::Sender<BgResult>,
@@ -155,7 +159,9 @@ impl App {
             history_saved: String::new(),
             media_uploader: None,
             image_cache: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(feature = "inline-images")]
             picker: None,
+            #[cfg(feature = "inline-images")]
             image_protos: HashMap::new(),
             bg_result_tx: tx,
             bg_result_rx: Some(rx),

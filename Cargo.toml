@@ -35,3 +35,4 @@ p256 = { version = "0.13", features = ["ecdsa"] }
 sha2 = "0.10"
 open = "5"
 dirs = "5"
+rusqlite = { version = "0.31", features = ["bundled"] }

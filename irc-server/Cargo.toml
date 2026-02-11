@@ -29,6 +29,7 @@ rand = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 reqwest = { workspace = true }
+rusqlite = { workspace = true }
 
 [dev-dependencies]
 irc-at-sdk = { path = "../irc-at-sdk" }

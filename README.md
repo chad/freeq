@@ -29,11 +29,19 @@ cargo build --release
 ### Run the Server
 
 ```sh
-# Plain text only (port 6667)
+# Plain text only (port 6667), in-memory (no persistence)
 cargo run --release --bin irc-server
+
+# With persistence (SQLite)
+cargo run --release --bin irc-server -- --db-path data/irc.db
 
 # With TLS (port 6667 + 6697)
 cargo run --release --bin irc-server -- \
+  --tls-cert certs/cert.pem --tls-key certs/key.pem
+
+# All options
+cargo run --release --bin irc-server -- \
+  --db-path data/irc.db \
   --tls-cert certs/cert.pem --tls-key certs/key.pem
 ```
 
@@ -275,7 +283,22 @@ Options:
   --tls-key <PATH>                TLS private key PEM file
   --server-name <NAME>            Server name [default: irc-reboot]
   --challenge-timeout-secs <N>    SASL challenge validity [default: 60]
+  --db-path <PATH>                SQLite database path (omit for in-memory only)
 ```
+
+### Persistence
+
+When `--db-path` is set, the server persists:
+
+- **Message history** — all channel messages, queryable with pagination
+- **Channel state** — topics, modes (+t, +i, +k), channel keys
+- **Bans** — hostmask and DID bans survive restarts
+- **DID-nick bindings** — nick ownership persists across server restarts
+
+Without `--db-path`, the server runs entirely in-memory (same as before).
+The database uses SQLite with WAL mode for good concurrent read performance.
+Persistence failures are logged but do not crash the server — the in-memory
+state remains authoritative.
 
 ## Tests
 
@@ -283,20 +306,22 @@ Options:
 cargo test
 ```
 
-**61 tests** covering:
+**Tests** covering:
 
 - SDK: IRC parsing (with tag support), tag escaping roundtrip, DID document
   parsing, key generation/signing/verification, multibase/multicodec, challenge
   response encoding, SASL signer variants, media attachment roundtrip, link
   preview roundtrip, media type detection
 - Server: message parsing (with tags), tag escaping, SASL challenge store
-  (create, take, replay, expiry, forged nonce), channel state
+  (create, take, replay, expiry, forged nonce), channel state, database
+  roundtrips (channels, bans, messages, identities)
 - Integration: guest connection, secp256k1 auth, ed25519 auth, wrong key
   rejection, unknown DID rejection, expired challenge rejection, replayed nonce
   rejection, channel messaging, mixed auth/guest, nick collision, channel topic,
   topic lock, channel ops/kick, hostmask bans, DID bans, invite-only, message
   history replay, nick ownership, quit broadcast, channel key (+k), TLS
-  connection, rich media tag passthrough
+  connection, rich media tag passthrough, persistence (messages survive restart,
+  topics survive restart, bans survive restart, nick ownership survives restart)
 
 ## Protocol Notes
 
@@ -319,7 +344,7 @@ cargo test
 ## Known Limitations
 
 - No server-to-server federation (single server only)
-- No channel persistence across server restarts
+- No message pruning/rotation (database grows unbounded when `--db-path` is set)
 - No MOTD, LIST, WHO, AWAY, or OPER commands
 - No flood protection beyond basic rate limiting
 - No hostname cloaking or reverse DNS
