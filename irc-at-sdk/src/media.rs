@@ -539,7 +539,7 @@ mod tests {
         };
 
         let tags = reaction.to_tags();
-        assert!(tags.get("+reply").is_none());
+        assert!(!tags.contains_key("+reply"));
 
         let parsed = Reaction::from_tags(&tags).unwrap();
         assert_eq!(parsed.emoji, "❤️");

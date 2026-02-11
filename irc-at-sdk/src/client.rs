@@ -139,11 +139,7 @@ impl ClientHandle {
         target: &str,
         reaction: &crate::media::Reaction,
     ) -> Result<()> {
-        // Send as TAGMSG for rich clients
-        self.send_tagmsg(target, reaction.to_tags()).await?;
-        // Also send as PRIVMSG fallback so plain clients see it
-        let fallback = format!("\x01ACTION reacted with {}\x01", reaction.emoji);
-        self.privmsg(target, &fallback).await
+        self.send_tagmsg(target, reaction.to_tags()).await
     }
 
     /// Send a link preview as a tagged message.
