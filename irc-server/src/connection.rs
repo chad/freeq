@@ -1681,7 +1681,13 @@ fn handle_tagmsg(
     };
     let tagged_line = format!("{tag_msg}\r\n");
 
-    // Only send to clients that support message-tags
+    // Generate a PRIVMSG fallback for plain clients (server-side downgrade).
+    // Only for known tag types — unknown TAGMSGs are silently dropped for plain clients.
+    let plain_fallback = tags.get("+react").map(|emoji| {
+        format!(":{hostmask} PRIVMSG {target} :\x01ACTION reacted with {emoji}\x01\r\n")
+    });
+
+    // Rich clients get TAGMSG, plain clients get fallback PRIVMSG (if any)
     if target.starts_with('#') || target.starts_with('&') {
         let members: Vec<String> = state
             .channels.lock().unwrap()
@@ -1693,19 +1699,25 @@ fn handle_tagmsg(
         let conns = state.connections.lock().unwrap();
         for member_session in &members {
             if member_session != &conn.id
-                && tag_caps.contains(member_session)
                 && let Some(tx) = conns.get(member_session)
             {
-                let _ = tx.try_send(tagged_line.clone());
+                if tag_caps.contains(member_session) {
+                    let _ = tx.try_send(tagged_line.clone());
+                } else if let Some(ref fallback) = plain_fallback {
+                    let _ = tx.try_send(fallback.clone());
+                }
             }
         }
     } else {
         let target_session = state.nick_to_session.lock().unwrap().get(target).cloned();
         if let Some(ref session) = target_session
-            && state.cap_message_tags.lock().unwrap().contains(session)
             && let Some(tx) = state.connections.lock().unwrap().get(session)
         {
-            let _ = tx.try_send(tagged_line.clone());
+            if state.cap_message_tags.lock().unwrap().contains(session) {
+                let _ = tx.try_send(tagged_line.clone());
+            } else if let Some(ref fallback) = plain_fallback {
+                let _ = tx.try_send(fallback.clone());
+            }
         }
     }
 }
