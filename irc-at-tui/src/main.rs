@@ -70,6 +70,11 @@ struct Cli {
     #[arg(long)]
     gen_key: bool,
 
+    /// Connect via iroh (QUIC, encrypted, NAT-traversing).
+    /// Provide the server's iroh endpoint address instead of host:port.
+    #[arg(long)]
+    iroh_addr: Option<String>,
+
     /// Use vi keybindings for input editing (default: emacs).
     #[arg(long)]
     vi: bool,
@@ -91,26 +96,37 @@ async fn main() -> Result<()> {
     } else {
         "guest"
     };
-    eprintln!("Connecting to {} as {} ({auth_status})...", cli.server, cli.nick);
+    // Establish connection BEFORE entering the TUI so errors are visible on stderr.
+    let conn = if let Some(ref iroh_addr) = cli.iroh_addr {
+        eprintln!("Connecting via iroh to {} as {} ({auth_status})...", iroh_addr, cli.nick);
+        client::establish_iroh_connection(iroh_addr).await?
+    } else {
+        eprintln!("Connecting to {} as {} ({auth_status})...", cli.server, cli.nick);
 
-    // Auto-detect TLS from port 6697
-    let use_tls = cli.tls || cli.server.ends_with(":6697");
-    if use_tls && !cli.tls {
-        eprintln!("  (auto-enabling TLS for port 6697)");
-    }
+        // Auto-detect TLS from port 6697
+        let use_tls = cli.tls || cli.server.ends_with(":6697");
+        if use_tls && !cli.tls {
+            eprintln!("  (auto-enabling TLS for port 6697)");
+        }
+
+        client::establish_connection(&ConnectConfig {
+            server_addr: cli.server.clone(),
+            nick: cli.nick.clone(),
+            user: cli.nick.clone(),
+            realname: "IRC AT TUI Client".to_string(),
+            tls: use_tls,
+            tls_insecure: cli.tls_insecure,
+        }).await?
+    };
 
     let config = ConnectConfig {
-        server_addr: cli.server.clone(),
+        server_addr: cli.iroh_addr.as_deref().unwrap_or(&cli.server).to_string(),
         nick: cli.nick.clone(),
         user: cli.nick.clone(),
         realname: "IRC AT TUI Client".to_string(),
-        tls: use_tls,
+        tls: cli.tls || cli.server.ends_with(":6697"),
         tls_insecure: cli.tls_insecure,
     };
-
-    // Establish TCP+TLS connection BEFORE entering the TUI.
-    // This way connection errors are visible on stderr.
-    let conn = client::establish_connection(&config).await?;
 
     let (handle, mut events) = client::connect_with_stream(conn, config, signer);
 
@@ -342,6 +358,19 @@ async fn run_app(
             process_irc_event(app, evt, handle);
         }
 
+        // Drain P2P events
+        {
+            let mut p2p_evts = Vec::new();
+            if let Some(ref mut p2p_rx) = app.p2p_event_rx {
+                while let Ok(evt) = p2p_rx.try_recv() {
+                    p2p_evts.push(evt);
+                }
+            }
+            for evt in p2p_evts {
+                process_p2p_event(app, evt);
+            }
+        }
+
         // Drain background task results
         if let Some(mut bg_rx) = app.bg_result_rx.take() {
             while let Ok(result) = bg_rx.try_recv() {
@@ -362,6 +391,38 @@ async fn run_app(
     }
 
     Ok(())
+}
+
+fn process_p2p_event(app: &mut App, event: irc_at_sdk::p2p::P2pEvent) {
+    use irc_at_sdk::p2p::P2pEvent;
+    match event {
+        P2pEvent::EndpointReady { endpoint_id } => {
+            app.status_msg(&format!("P2P endpoint ready: {endpoint_id}"));
+        }
+        P2pEvent::PeerConnected { peer_id } => {
+            let short = &peer_id[..8.min(peer_id.len())];
+            let buffer_key = format!("p2p:{short}");
+            app.buffer_mut(&buffer_key).push_system(
+                &format!("🔗 Peer connected: {peer_id}"),
+            );
+            app.status_msg(&format!("P2P peer connected: {short}…"));
+        }
+        P2pEvent::PeerDisconnected { peer_id } => {
+            let short = &peer_id[..8.min(peer_id.len())];
+            let buffer_key = format!("p2p:{short}");
+            app.buffer_mut(&buffer_key).push_system(
+                &format!("🔌 Peer disconnected: {peer_id}"),
+            );
+        }
+        P2pEvent::DirectMessage { peer_id, text } => {
+            let short = &peer_id[..8.min(peer_id.len())];
+            let buffer_key = format!("p2p:{short}");
+            app.chat_msg(&buffer_key, &format!("{short}…"), &text);
+        }
+        P2pEvent::Error { message } => {
+            app.status_msg(&format!("P2P error: {message}"));
+        }
+    }
 }
 
 fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle) {
@@ -982,6 +1043,75 @@ async fn process_input(
                     app.status_msg("Encryption is not enabled for this channel.");
                 }
             }
+            "/p2p" => {
+                let p2p_parts: Vec<&str> = arg.splitn(3, ' ').collect();
+                let subcmd = p2p_parts.first().copied().unwrap_or("");
+                match subcmd {
+                    "start" => {
+                        if app.p2p_handle.is_some() {
+                            app.status_msg("P2P already running.");
+                        } else {
+                            app.status_msg("Starting P2P endpoint...");
+                            match irc_at_sdk::p2p::start().await {
+                                Ok((p2p_handle, rx)) => {
+                                    app.status_msg(&format!("✓ P2P ready! Your endpoint ID: {}", p2p_handle.endpoint_id));
+                                    app.p2p_handle = Some(p2p_handle);
+                                    app.p2p_event_rx = Some(rx);
+                                }
+                                Err(e) => {
+                                    app.status_msg(&format!("✗ P2P failed to start: {e}"));
+                                }
+                            }
+                        }
+                    }
+                    "connect" if p2p_parts.len() >= 2 => {
+                        if let Some(ref h) = app.p2p_handle {
+                            let h = h.clone();
+                            let peer_id = p2p_parts[1].to_string();
+                            app.status_msg(&format!("Connecting to peer {}...", &peer_id));
+                            tokio::spawn(async move {
+                                if let Err(e) = h.connect_peer(&peer_id).await {
+                                    tracing::error!("P2P connect error: {e}");
+                                }
+                            });
+                        } else {
+                            app.status_msg("P2P not started. Use /p2p start first.");
+                        }
+                    }
+                    "msg" if p2p_parts.len() >= 3 => {
+                        if let Some(ref h) = app.p2p_handle {
+                            let h = h.clone();
+                            let peer_id = p2p_parts[1].to_string();
+                            let text = p2p_parts[2].to_string();
+                            let short = &peer_id[..8.min(peer_id.len())];
+                            let buffer_key = format!("p2p:{short}");
+                            let nick = app.nick.clone();
+                            app.chat_msg(&buffer_key, &nick, &text);
+                            tokio::spawn(async move {
+                                if let Err(e) = h.send_message(&peer_id, &text).await {
+                                    tracing::error!("P2P send error: {e}");
+                                }
+                            });
+                        } else {
+                            app.status_msg("P2P not started. Use /p2p start first.");
+                        }
+                    }
+                    "id" => {
+                        if let Some(ref h) = app.p2p_handle {
+                            app.status_msg(&format!("Your P2P endpoint ID: {}", h.endpoint_id));
+                        } else {
+                            app.status_msg("P2P not started. Use /p2p start first.");
+                        }
+                    }
+                    _ => {
+                        app.status_msg("P2P commands:");
+                        app.status_msg("  /p2p start              - Start P2P endpoint");
+                        app.status_msg("  /p2p id                 - Show your endpoint ID");
+                        app.status_msg("  /p2p connect <id>       - Connect to a peer");
+                        app.status_msg("  /p2p msg <id> <message> - Send a direct message");
+                    }
+                }
+            }
             "/help" | "/h" => {
                 app.status_msg("Commands:");
                 app.status_msg("  /join #channel    - Join a channel");
@@ -1009,6 +1139,7 @@ async fn process_input(
                 app.status_msg("  /quit [message]   - Disconnect");
                 app.status_msg("  /encrypt <pass>   - Enable E2EE for current channel");
                 app.status_msg("  /decrypt          - Disable E2EE for current channel");
+                app.status_msg("  /p2p              - Peer-to-peer encrypted DMs (see /p2p help)");
                 app.status_msg("  /raw <line>       - Send raw IRC");
                 app.status_msg("  Tab               - Nick completion (or switch buffers if empty)");
                 app.status_msg("  Shift-Tab         - Previous buffer");

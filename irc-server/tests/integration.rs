@@ -1420,6 +1420,9 @@ async fn channel_key() {
 async fn tls_connection() {
     use std::io::Write;
 
+    // Ensure a crypto provider is installed (iroh may bring ring)
+    let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+
     // Generate self-signed cert using rcgen
     let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
     let cert_pem = cert.cert.pem();
@@ -1441,6 +1444,9 @@ async fn tls_connection() {
         challenge_timeout_secs: 60,
         db_path: None,
         web_addr: None,
+        iroh: false,
+        iroh_port: None,
+        s2s_peers: vec![],
     };
 
     let server = irc_server::server::Server::with_resolver(config, empty_resolver());

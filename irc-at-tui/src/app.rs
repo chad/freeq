@@ -130,6 +130,10 @@ pub struct App {
     pub bg_result_tx: tokio::sync::mpsc::Sender<BgResult>,
     /// Receiver end (held by main loop).
     pub bg_result_rx: Option<tokio::sync::mpsc::Receiver<BgResult>>,
+    /// P2P direct messaging handle (None if P2P not started).
+    pub p2p_handle: Option<irc_at_sdk::p2p::P2pHandle>,
+    /// P2P event receiver (moved to main loop on first use).
+    pub p2p_event_rx: Option<tokio::sync::mpsc::Receiver<irc_at_sdk::p2p::P2pEvent>>,
 }
 
 /// Results from background tasks that need to update the UI.
@@ -169,6 +173,8 @@ impl App {
             image_protos: HashMap::new(),
             bg_result_tx: tx,
             bg_result_rx: Some(rx),
+            p2p_handle: None,
+            p2p_event_rx: None,
         }
     }
 

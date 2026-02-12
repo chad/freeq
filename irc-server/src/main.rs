@@ -16,6 +16,9 @@ async fn main() -> Result<()> {
     if let Some(ref web_addr) = config.web_addr {
         tracing::info!("HTTP/WebSocket enabled on {web_addr}");
     }
+    if config.iroh {
+        tracing::info!("Iroh transport enabled");
+    }
 
     let server = irc_server::server::Server::new(config);
     server.run().await

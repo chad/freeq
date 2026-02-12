@@ -36,6 +36,20 @@ pub struct ServerConfig {
     /// If not set, no HTTP listener starts.
     #[arg(long)]
     pub web_addr: Option<String>,
+
+    /// Enable iroh transport (QUIC-based, encrypted, NAT-traversing).
+    /// The server's iroh endpoint address will be printed on startup.
+    #[arg(long)]
+    pub iroh: bool,
+
+    /// UDP port for iroh transport. If not set, a random port is used.
+    #[arg(long)]
+    pub iroh_port: Option<u16>,
+
+    /// S2S peer iroh endpoint IDs to connect to on startup.
+    /// Comma-separated list of hex endpoint IDs.
+    #[arg(long, value_delimiter = ',')]
+    pub s2s_peers: Vec<String>,
 }
 
 impl Default for ServerConfig {
@@ -49,6 +63,9 @@ impl Default for ServerConfig {
             challenge_timeout_secs: 60,
             db_path: None,
             web_addr: None,
+            iroh: false,
+            iroh_port: None,
+            s2s_peers: vec![],
         }
     }
 }

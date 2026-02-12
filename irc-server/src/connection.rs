@@ -28,6 +28,10 @@ pub struct Connection {
     pub authenticated_did: Option<String>,
     pub registered: bool,
 
+    /// Iroh endpoint ID of the remote peer (if connected via iroh).
+    /// This is a cryptographic public key, giving us verified identity.
+    pub iroh_endpoint_id: Option<String>,
+
     // CAP negotiation state
     cap_negotiating: bool,
     cap_sasl_requested: bool,
@@ -46,6 +50,7 @@ impl Connection {
             realname: None,
             authenticated_did: None,
             registered: false,
+            iroh_endpoint_id: None,
             cap_negotiating: false,
             cap_sasl_requested: false,
             cap_message_tags: false,
@@ -78,16 +83,31 @@ pub async fn handle_generic<S>(stream: S, state: Arc<SharedState>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
+    handle_generic_with_meta(stream, state, None).await
+}
+
+/// Handle a generic async stream with optional connection metadata.
+///
+/// `iroh_endpoint_id` is set when the connection comes via iroh transport,
+/// providing cryptographic identity for the remote peer.
+pub async fn handle_generic_with_meta<S>(
+    stream: S,
+    state: Arc<SharedState>,
+    iroh_endpoint_id: Option<String>,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let session_id = format!("stream-{id}");
-    tracing::info!(%session_id, "New connection (generic stream)");
+    tracing::info!(%session_id, iroh_id = ?iroh_endpoint_id, "New connection (generic stream)");
     let (reader, writer) = tokio::io::split(stream);
-    handle_io(BufReader::new(reader), writer, session_id, state).await
+    handle_io_with_meta(BufReader::new(reader), writer, session_id, state, iroh_endpoint_id).await
 }
 
 async fn handle_io<R, W>(
-    mut reader: BufReader<R>,
+    reader: BufReader<R>,
     writer: W,
     session_id: String,
     state: Arc<SharedState>,
@@ -96,7 +116,22 @@ where
     R: AsyncRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send + 'static,
 {
+    handle_io_with_meta(reader, writer, session_id, state, None).await
+}
+
+async fn handle_io_with_meta<R, W>(
+    mut reader: BufReader<R>,
+    writer: W,
+    session_id: String,
+    state: Arc<SharedState>,
+    iroh_endpoint_id: Option<String>,
+) -> Result<()>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
     let mut conn = Connection::new(session_id.clone());
+    conn.iroh_endpoint_id = iroh_endpoint_id;
 
     // Channel for sending messages TO this client
     let (tx, mut rx) = mpsc::channel::<String>(64);
@@ -477,6 +512,7 @@ where
     state.connections.lock().unwrap().remove(&session_id);
     state.session_dids.lock().unwrap().remove(&session_id);
     state.session_handles.lock().unwrap().remove(&session_id);
+    state.session_iroh_ids.lock().unwrap().remove(&session_id);
     state.cap_message_tags.lock().unwrap().remove(&session_id);
     {
         let mut channels = state.channels.lock().unwrap();
@@ -729,6 +765,12 @@ fn try_complete_registration(
 
     conn.registered = true;
     let nick = conn.nick.as_deref().unwrap();
+
+    // Store iroh endpoint ID in shared state for WHOIS lookups
+    if let Some(ref iroh_id) = conn.iroh_endpoint_id {
+        state.session_iroh_ids.lock().unwrap()
+            .insert(session_id.to_string(), iroh_id.clone());
+    }
 
     let auth_info = match &conn.authenticated_did {
         Some(did) => format!(" (authenticated as {did})"),
@@ -1682,6 +1724,22 @@ fn handle_whois(
             );
             send(state, session_id, format!("{notice}\r\n"));
         }
+    }
+
+    // Show iroh endpoint ID if connected via iroh
+    let iroh_id = state
+        .session_iroh_ids
+        .lock()
+        .unwrap()
+        .get(&target_session)
+        .cloned();
+    if let Some(iroh_id) = iroh_id {
+        let iroh_notice = Message::from_server(
+            server_name,
+            "672",  // Custom numeric for iroh info
+            vec![my_nick, target_nick, &format!("iroh endpoint: {iroh_id}")],
+        );
+        send(state, session_id, format!("{iroh_notice}\r\n"));
     }
 
     // 318 RPL_ENDOFWHOIS

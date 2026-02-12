@@ -1,3 +1,4 @@
 /target
 Cargo.lock
 irc.db*
+iroh-key.secret

@@ -26,5 +26,7 @@ p256 = { workspace = true }
 sha2 = { workspace = true }
 aes-gcm = { workspace = true }
 hkdf = { workspace = true }
+iroh = { workspace = true }
+iroh-quinn = { workspace = true }
 open = { workspace = true }
 dirs = { workspace = true }

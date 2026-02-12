@@ -32,8 +32,8 @@ use crate::server::SharedState;
 /// - **rx task:** reads WebSocket frames → appends `\r\n` → writes to bridge
 /// - **tx task:** reads from bridge → splits on `\r\n` → sends as WS text frames
 pub struct WsBridge {
-    reader: tokio::io::ReadHalf<tokio::io::DuplexStream>,
-    writer: tokio::io::WriteHalf<tokio::io::DuplexStream>,
+    pub reader: tokio::io::ReadHalf<tokio::io::DuplexStream>,
+    pub writer: tokio::io::WriteHalf<tokio::io::DuplexStream>,
 }
 
 /// Create a bridged stream from a WebSocket.
@@ -65,7 +65,7 @@ fn bridge_ws(socket: WebSocket) -> WsBridge {
                 frame = socket.recv() => {
                     match frame {
                         Some(Ok(WsMessage::Text(text))) => {
-                            let mut bytes = text.into_bytes();
+                            let mut bytes = text.as_bytes().to_vec();
                             bytes.extend_from_slice(b"\r\n");
                             if bridge_write.write_all(&bytes).await.is_err() {
                                 break;
@@ -99,7 +99,7 @@ fn bridge_ws(socket: WebSocket) -> WsBridge {
             }
         }
         let _ = bridge_write.shutdown().await;
-        let _ = socket.close().await;
+        let _ = socket.send(WsMessage::Close(None)).await;
     });
 
     // Task 2: reads from bridge (← IRC handler writes) → sends as WS text frames via channel
@@ -115,7 +115,7 @@ fn bridge_ws(socket: WebSocket) -> WsBridge {
                     while let Some(pos) = line_buf.windows(2).position(|w| w == b"\r\n") {
                         let line = String::from_utf8_lossy(&line_buf[..pos]).to_string();
                         line_buf.drain(..pos + 2);
-                        if ws_tx.send(WsMessage::Text(line)).await.is_err() {
+                        if ws_tx.send(WsMessage::Text(line.into())).await.is_err() {
                             return;
                         }
                     }
@@ -175,10 +175,10 @@ pub fn router(state: Arc<SharedState>) -> Router {
         // REST API (read-only, v1)
         .route("/api/v1/health", get(api_health))
         .route("/api/v1/channels", get(api_channels))
-        .route("/api/v1/channels/:name/history", get(api_channel_history))
-        .route("/api/v1/channels/:name/topic", get(api_channel_topic))
-        .route("/api/v1/users/:nick", get(api_user))
-        .route("/api/v1/users/:nick/whois", get(api_user_whois))
+        .route("/api/v1/channels/{name}/history", get(api_channel_history))
+        .route("/api/v1/channels/{name}/topic", get(api_channel_topic))
+        .route("/api/v1/users/{nick}", get(api_user))
+        .route("/api/v1/users/{nick}/whois", get(api_user_whois))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

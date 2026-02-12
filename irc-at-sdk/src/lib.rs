@@ -22,4 +22,5 @@ pub mod event;
 pub mod irc;
 pub mod media;
 pub mod oauth;
+pub mod p2p;
 pub mod pds;

@@ -203,6 +203,80 @@ pub async fn establish_connection(
 pub enum EstablishedConnection {
     Plain(TcpStream),
     Tls(tokio_rustls::client::TlsStream<TcpStream>),
+    /// Iroh QUIC connection (already encrypted, NAT-traversing).
+    Iroh(tokio::io::DuplexStream),
+}
+
+/// ALPN for IRC-over-iroh (must match server).
+pub const IROH_ALPN: &[u8] = b"irc-reboot/iroh/1";
+
+/// Establish a connection to an IRC server via iroh.
+///
+/// `addr` is the iroh endpoint address string (EndpointAddr format).
+pub async fn establish_iroh_connection(addr: &str) -> Result<EstablishedConnection> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    eprintln!("  Creating iroh endpoint...");
+    let endpoint = iroh::Endpoint::bind().await?;
+
+    eprintln!("  Connecting to iroh peer {addr}...");
+    // Parse the endpoint ID (public key) and create an address.
+    // Iroh's relay/discovery system handles finding the actual network path.
+    let endpoint_id: iroh::EndpointId = addr.parse()
+        .map_err(|e| anyhow::anyhow!("Invalid iroh endpoint ID '{addr}': {e}"))?;
+    let endpoint_addr = iroh::EndpointAddr::new(endpoint_id);
+    let conn = endpoint.connect(endpoint_addr, IROH_ALPN).await?;
+    eprintln!("  Iroh QUIC connection established (encrypted)");
+
+    let (send, recv) = conn.open_bi().await
+        .map_err(|e| anyhow::anyhow!("Failed to open bidirectional stream: {e}"))?;
+    eprintln!("  Bidirectional stream open, ready for IRC");
+
+    // Bridge QUIC send/recv to a DuplexStream that the IRC handler can use.
+    // irc_side goes to the IRC protocol handler.
+    // bridge_side is shuttled to/from QUIC by two background tasks.
+    let (irc_side, bridge_side) = tokio::io::duplex(16384);
+    let (mut bridge_read, mut bridge_write) = tokio::io::split(bridge_side);
+
+    // QUIC recv → bridge_write → IRC handler reads from irc_side
+    tokio::spawn(async move {
+        let mut recv = recv;
+        let mut buf = vec![0u8; 4096];
+        loop {
+            match recv.read(&mut buf).await {
+                Ok(Some(n)) => {
+                    if bridge_write.write_all(&buf[..n]).await.is_err() { break; }
+                }
+                Ok(None) | Err(_) => break,
+            }
+        }
+        let _ = bridge_write.shutdown().await;
+    });
+
+    // IRC handler writes to irc_side → bridge_read → QUIC send
+    tokio::spawn(async move {
+        let mut send = send;
+        let mut buf = vec![0u8; 4096];
+        loop {
+            match bridge_read.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    if send.write_all(&buf[..n]).await.is_err() { break; }
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = send.finish();
+    });
+
+    // Keep endpoint + connection alive for the lifetime of the session
+    tokio::spawn(async move {
+        let _endpoint = endpoint;
+        let _conn = conn;
+        loop { tokio::time::sleep(std::time::Duration::from_secs(3600)).await; }
+    });
+
+    Ok(EstablishedConnection::Iroh(irc_side))
 }
 
 /// Connect using an already-established connection.
@@ -230,6 +304,10 @@ pub fn connect_with_stream(
             }
             EstablishedConnection::Tls(tls) => {
                 let (reader, writer) = tokio::io::split(tls);
+                run_irc(BufReader::new(reader), writer, &config, signer, event_tx.clone(), cmd_rx).await
+            }
+            EstablishedConnection::Iroh(duplex) => {
+                let (reader, writer) = tokio::io::split(duplex);
                 run_irc(BufReader::new(reader), writer, &config, signer, event_tx.clone(), cmd_rx).await
             }
         };
@@ -291,6 +369,10 @@ async fn run_client(
         }
         EstablishedConnection::Tls(tls) => {
             let (reader, writer) = tokio::io::split(tls);
+            run_irc(BufReader::new(reader), writer, &config, signer, event_tx, cmd_rx).await
+        }
+        EstablishedConnection::Iroh(duplex) => {
+            let (reader, writer) = tokio::io::split(duplex);
             run_irc(BufReader::new(reader), writer, &config, signer, event_tx, cmd_rx).await
         }
     }

@@ -30,13 +30,16 @@ signature = "2"
 clap = { version = "4", features = ["derive", "env"] }
 tokio-rustls = "0.26"
 rustls-pemfile = "2"
-webpki-roots = "0.26"
+webpki-roots = "1"
 p256 = { version = "0.13", features = ["ecdsa"] }
 sha2 = "0.10"
 open = "5"
 dirs = "5"
-rusqlite = { version = "0.31", features = ["bundled"] }
-axum = { version = "0.7", features = ["ws"] }
-tower-http = { version = "0.5", features = ["cors"] }
+rusqlite = { version = "0.38", features = ["bundled"] }
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors"] }
 aes-gcm = "0.10"
 hkdf = "0.12"
+iroh = "0.96"
+iroh-quinn = "0.16"
+automerge = "0.5"

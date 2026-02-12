@@ -161,6 +161,8 @@ pub struct SharedState {
     pub channels: Mutex<HashMap<String, ChannelState>>,
     /// Sessions that have negotiated message-tags capability.
     pub cap_message_tags: Mutex<HashSet<String>>,
+    /// session_id -> iroh endpoint ID (for connections via iroh transport).
+    pub session_iroh_ids: Mutex<HashMap<String, String>>,
     /// Database handle for persistence (None = in-memory only).
     pub db: Option<Mutex<Db>>,
 }
@@ -261,6 +263,7 @@ impl Server {
             nick_owners: Mutex::new(nick_owners),
             session_handles: Mutex::new(HashMap::new()),
             cap_message_tags: Mutex::new(HashSet::new()),
+            session_iroh_ids: Mutex::new(HashMap::new()),
             db: db.map(Mutex::new),
         }))
     }
@@ -307,6 +310,71 @@ impl Server {
                     }
                 }
             });
+        }
+
+        // Start iroh transport if configured
+        let iroh_endpoint = if self.config.iroh || !self.config.s2s_peers.is_empty() {
+            let iroh_state = Arc::clone(&state);
+            let iroh_port = self.config.iroh_port;
+            match crate::iroh::start(iroh_state, iroh_port).await {
+                Ok(endpoint) => {
+                    // Wait for the endpoint to be online and print connection info
+                    endpoint.online().await;
+                    let id = endpoint.id();
+                    tracing::info!("Iroh ready. Connect with: --iroh-addr {id}");
+                    Some(endpoint)
+                }
+                Err(e) => {
+                    tracing::error!("Failed to start iroh endpoint: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Start S2S clustering if peers are configured
+        if !self.config.s2s_peers.is_empty() {
+            if let Some(ref endpoint) = iroh_endpoint {
+                let s2s_state = Arc::clone(&state);
+                match crate::s2s::start(s2s_state, endpoint.clone()).await {
+                    Ok((manager, mut s2s_rx)) => {
+                        // Connect to configured peers
+                        for peer_id in &self.config.s2s_peers {
+                            let event_tx = manager.event_tx.clone();
+                            if let Err(e) = crate::s2s::connect_peer(
+                                endpoint, peer_id, &manager, event_tx,
+                            ).await {
+                                tracing::error!("Failed to connect to S2S peer {peer_id}: {e}");
+                            }
+                        }
+
+                        // Spawn S2S event processor
+                        let s2s_state = Arc::clone(&state);
+                        let s2s_manager = Arc::clone(&manager);
+                        tokio::spawn(async move {
+                            while let Some(msg) = s2s_rx.recv().await {
+                                process_s2s_message(&s2s_state, &s2s_manager, msg).await;
+                            }
+                        });
+
+                        tracing::info!(
+                            "S2S clustering active with {} peer(s)",
+                            self.config.s2s_peers.len()
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to start S2S: {e}");
+                    }
+                }
+            } else {
+                tracing::error!("S2S requires iroh transport (--iroh)");
+            }
+        }
+
+        // Keep iroh endpoint alive
+        if let Some(endpoint) = iroh_endpoint {
+            std::mem::forget(endpoint);
         }
 
         // Start HTTP/WebSocket listener if configured
@@ -438,5 +506,152 @@ impl Server {
             .context("Invalid TLS configuration")?;
 
         Ok(Some(TlsAcceptor::from(Arc::new(config))))
+    }
+}
+
+/// Process an S2S message received from a peer server.
+///
+/// Delivers relayed messages to local clients. Currently handles
+/// PRIVMSG, JOIN, PART, QUIT, NICK, TOPIC, and sync.
+///
+/// Remote users are identified by nick (not session ID). We deliver
+/// to local sessions that are members of the target channel.
+async fn process_s2s_message(
+    state: &Arc<SharedState>,
+    manager: &Arc<crate::s2s::S2sManager>,
+    msg: crate::s2s::S2sMessage,
+) {
+    use crate::s2s::S2sMessage;
+
+    /// Deliver a raw IRC line to all local members of a channel.
+    fn deliver_to_channel(state: &SharedState, channel: &str, line: &str) {
+        let channel_key = channel.to_lowercase();
+        let channels = state.channels.lock().unwrap();
+        if let Some(ch) = channels.get(&channel_key) {
+            let conns = state.connections.lock().unwrap();
+            for session_id in &ch.members {
+                if let Some(tx) = conns.get(session_id) {
+                    let _ = tx.try_send(line.to_string());
+                }
+            }
+        }
+    }
+
+    match msg {
+        S2sMessage::Privmsg { from, target, text, origin } => {
+            if origin == manager.server_id { return; }
+
+            let line = format!(":{from} PRIVMSG {target} :{text}\r\n");
+
+            if target.starts_with('#') || target.starts_with('&') {
+                deliver_to_channel(state, &target, &line);
+            } else {
+                // PM — find target nick's session
+                let n2s = state.nick_to_session.lock().unwrap();
+                if let Some(sid) = n2s.get(&target) {
+                    let conns = state.connections.lock().unwrap();
+                    if let Some(tx) = conns.get(sid) {
+                        let _ = tx.try_send(line);
+                    }
+                }
+            }
+        }
+
+        S2sMessage::Join { nick, channel, origin } => {
+            if origin == manager.server_id { return; }
+            let line = format!(":{nick}!remote@s2s JOIN {channel}\r\n");
+            deliver_to_channel(state, &channel, &line);
+        }
+
+        S2sMessage::Part { nick, channel, origin } => {
+            if origin == manager.server_id { return; }
+            let line = format!(":{nick}!remote@s2s PART {channel}\r\n");
+            deliver_to_channel(state, &channel, &line);
+        }
+
+        S2sMessage::Quit { nick, reason, origin } => {
+            if origin == manager.server_id { return; }
+            // Notify all channels
+            let line = format!(":{nick}!remote@s2s QUIT :{reason}\r\n");
+            let channels = state.channels.lock().unwrap();
+            let conns = state.connections.lock().unwrap();
+            for (_name, ch) in channels.iter() {
+                for session_id in &ch.members {
+                    if let Some(tx) = conns.get(session_id) {
+                        let _ = tx.try_send(line.clone());
+                    }
+                }
+            }
+        }
+
+        S2sMessage::Topic { channel, topic, set_by, origin } => {
+            if origin == manager.server_id { return; }
+            let channel_key = channel.to_lowercase();
+            // Update our topic state
+            {
+                let mut channels = state.channels.lock().unwrap();
+                if let Some(ch) = channels.get_mut(&channel_key) {
+                    ch.topic = Some(TopicInfo::new(topic.clone(), set_by.clone()));
+                }
+            }
+            let line = format!(":{set_by}!remote@s2s TOPIC {channel} :{topic}\r\n");
+            deliver_to_channel(state, &channel, &line);
+        }
+
+        S2sMessage::SyncRequest => {
+            // Build channel list and respond
+            let response = {
+                let channels = state.channels.lock().unwrap();
+                let n2s = state.nick_to_session.lock().unwrap();
+                let s2n: HashMap<&String, &String> = n2s.iter().map(|(n, s)| (s, n)).collect();
+
+                let channel_info: Vec<crate::s2s::ChannelInfo> = channels.iter().map(|(name, ch)| {
+                    let nicks: Vec<String> = ch.members.iter()
+                        .filter_map(|sid| s2n.get(sid).map(|n| (*n).clone()))
+                        .collect();
+                    crate::s2s::ChannelInfo {
+                        name: name.clone(),
+                        topic: ch.topic.as_ref().map(|t| t.text.clone()),
+                        nicks,
+                    }
+                }).collect();
+
+                S2sMessage::SyncResponse {
+                    server_id: manager.server_id.clone(),
+                    channels: channel_info,
+                }
+            };
+            manager.broadcast(response).await;
+        }
+
+        S2sMessage::SyncResponse { server_id: _, channels: remote_channels } => {
+            tracing::info!(
+                "Received sync: {} channel(s) from peer",
+                remote_channels.len()
+            );
+            // For now, just log. Full state merging (remote user tracking)
+            // requires a more sophisticated model with virtual sessions.
+            for info in &remote_channels {
+                tracing::info!(
+                    "  Channel {}: {} user(s), topic: {:?}",
+                    info.name, info.nicks.len(), info.topic
+                );
+            }
+        }
+
+        S2sMessage::NickChange { old, new, origin } => {
+            if origin == manager.server_id { return; }
+            let line = format!(":{old}!remote@s2s NICK {new}\r\n");
+            // Notify all channels (broadcast to all local clients for simplicity)
+            let channels = state.channels.lock().unwrap();
+            let conns = state.connections.lock().unwrap();
+            for (_name, ch) in channels.iter() {
+                for session_id in &ch.members {
+                    if let Some(tx) = conns.get(session_id) {
+                        let _ = tx.try_send(line.clone());
+                    }
+                }
+            }
+        }
     }
 }
