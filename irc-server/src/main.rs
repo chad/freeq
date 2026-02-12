@@ -4,6 +4,9 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install the ring crypto provider before any TLS usage.
+    // Iroh brings in ring, but rustls needs an explicit provider selection.
+    let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("irc_server=info".parse()?))
         .init();
