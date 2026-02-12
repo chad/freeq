@@ -977,15 +977,16 @@ fn handle_join(
 
     let nick_list: Vec<String> = {
         let channels = state.channels.lock().unwrap();
-        let (member_sessions, ops, voiced) = match channels.get(channel) {
-            Some(ch) => (ch.members.clone(), ch.ops.clone(), ch.voiced.clone()),
+        let (member_sessions, remote_members, ops, voiced) = match channels.get(channel) {
+            Some(ch) => (ch.members.clone(), ch.remote_members.clone(), ch.ops.clone(), ch.voiced.clone()),
             None => Default::default(),
         };
         drop(channels);
+        // Local members: look up nick from session ID
         let nicks = state.nick_to_session.lock().unwrap();
         let reverse: std::collections::HashMap<&String, &String> =
             nicks.iter().map(|(n, s)| (s, n)).collect();
-        member_sessions
+        let mut list: Vec<String> = member_sessions
             .iter()
             .filter_map(|s| {
                 reverse.get(s).map(|n| {
@@ -999,7 +1000,12 @@ fn handle_join(
                     format!("{prefix}{n}")
                 })
             })
-            .collect()
+            .collect();
+        // Remote members from S2S peers
+        for (nick, _origin) in &remote_members {
+            list.push(nick.clone());
+        }
+        list
     };
 
     let names = Message::from_server(

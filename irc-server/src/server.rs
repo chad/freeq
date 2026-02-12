@@ -21,8 +21,10 @@ use crate::sasl::ChallengeStore;
 /// State for a single channel.
 #[derive(Debug, Clone, Default)]
 pub struct ChannelState {
-    /// Session IDs of members currently in the channel.
+    /// Session IDs of local members currently in the channel.
     pub members: HashSet<String>,
+    /// Remote members from S2S peers: nick → origin server ID.
+    pub remote_members: HashMap<String, String>,
     /// Session IDs of channel operators.
     pub ops: HashSet<String>,
     /// Session IDs of voiced users.
@@ -550,6 +552,51 @@ async fn process_s2s_message(
         }
     }
 
+    /// Send NAMES update to all local members of a channel (for nick list refresh).
+    fn send_names_update(state: &SharedState, channel: &str) {
+        let channels = state.channels.lock().unwrap();
+        let ch = match channels.get(channel) {
+            Some(ch) => ch,
+            None => return,
+        };
+
+        // Build nick list (local + remote)
+        let n2s = state.nick_to_session.lock().unwrap();
+        let reverse: HashMap<&String, &String> = n2s.iter().map(|(n, s)| (s, n)).collect();
+        let mut nick_list: Vec<String> = ch.members.iter()
+            .filter_map(|s| {
+                reverse.get(s).map(|n| {
+                    let prefix = if ch.ops.contains(s) { "@" }
+                        else if ch.voiced.contains(s) { "+" }
+                        else { "" };
+                    format!("{prefix}{n}")
+                })
+            })
+            .collect();
+        for (nick, _) in &ch.remote_members {
+            nick_list.push(nick.clone());
+        }
+        let nick_str = nick_list.join(" ");
+
+        // Send to each local member
+        let local_members: Vec<String> = ch.members.iter().cloned().collect();
+        drop(channels);
+
+        let conns = state.connections.lock().unwrap();
+        for session_id in &local_members {
+            // Look up this member's nick for the reply prefix
+            let member_nick = reverse.get(session_id).map(|n| n.as_str()).unwrap_or("*");
+            let names_line = format!(
+                ":{} 353 {} = {} :{}\r\n:{} 366 {} {} :End of /NAMES list\r\n",
+                state.server_name, member_nick, channel, nick_str,
+                state.server_name, member_nick, channel,
+            );
+            if let Some(tx) = conns.get(session_id) {
+                let _ = tx.try_send(names_line);
+            }
+        }
+    }
+
     match msg {
         S2sMessage::Privmsg { from, target, text, origin } => {
             if origin == manager.server_id { return; }
@@ -572,28 +619,62 @@ async fn process_s2s_message(
 
         S2sMessage::Join { nick, channel, origin } => {
             if origin == manager.server_id { return; }
-            let line = format!(":{nick}!remote@s2s JOIN {channel}\r\n");
+
+            // Ensure channel exists locally (create if needed, no ops granted)
+            {
+                let mut channels = state.channels.lock().unwrap();
+                channels.entry(channel.clone()).or_default();
+            }
+
+            // Track remote member
+            {
+                let mut channels = state.channels.lock().unwrap();
+                if let Some(ch) = channels.get_mut(&channel) {
+                    ch.remote_members.insert(nick.clone(), origin.clone());
+                }
+            }
+
+            let line = format!(":{nick}!{nick}@s2s JOIN {channel}\r\n");
             deliver_to_channel(state, &channel, &line);
+
+            // Send updated NAMES to local members so nick lists refresh
+            send_names_update(state, &channel);
         }
 
         S2sMessage::Part { nick, channel, origin } => {
             if origin == manager.server_id { return; }
-            let line = format!(":{nick}!remote@s2s PART {channel}\r\n");
+
+            // Remove remote member
+            {
+                let mut channels = state.channels.lock().unwrap();
+                if let Some(ch) = channels.get_mut(&channel) {
+                    ch.remote_members.remove(&nick);
+                }
+            }
+
+            let line = format!(":{nick}!{nick}@s2s PART {channel}\r\n");
             deliver_to_channel(state, &channel, &line);
+            send_names_update(state, &channel);
         }
 
         S2sMessage::Quit { nick, reason, origin } => {
             if origin == manager.server_id { return; }
-            // Notify all channels
-            let line = format!(":{nick}!remote@s2s QUIT :{reason}\r\n");
-            let channels = state.channels.lock().unwrap();
-            let conns = state.connections.lock().unwrap();
-            for (_name, ch) in channels.iter() {
-                for session_id in &ch.members {
-                    if let Some(tx) = conns.get(session_id) {
-                        let _ = tx.try_send(line.clone());
+
+            // Remove remote member from all channels
+            let mut affected_channels = Vec::new();
+            {
+                let mut channels = state.channels.lock().unwrap();
+                for (name, ch) in channels.iter_mut() {
+                    if ch.remote_members.remove(&nick).is_some() {
+                        affected_channels.push(name.clone());
                     }
                 }
+            }
+
+            let line = format!(":{nick}!{nick}@s2s QUIT :{reason}\r\n");
+            for ch_name in &affected_channels {
+                deliver_to_channel(state, ch_name, &line);
+                send_names_update(state, ch_name);
             }
         }
 
