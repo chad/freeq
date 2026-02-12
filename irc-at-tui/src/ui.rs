@@ -145,16 +145,17 @@ fn draw_net_popup(frame: &mut Frame, app: &App) {
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     use crate::app::Transport;
 
-    let transport_color = match app.transport {
-        Transport::Tcp => Color::Red,       // unencrypted = warning
-        Transport::Tls => Color::Green,     // encrypted = good
+    // Transport badge: colored background, white bold text
+    let badge_bg = match app.transport {
+        Transport::Tcp => Color::Red,
+        Transport::Tls => Color::Green,
         Transport::WebSocket => Color::Cyan,
-        Transport::Iroh => Color::Magenta,  // special = purple
+        Transport::Iroh => Color::Magenta,
     };
 
     let auth_str = match &app.authenticated_did {
-        Some(did) => format!(" | auth: {did}"),
-        None => " | guest".to_string(),
+        Some(did) => format!(" auth:{did}"),
+        None => " guest".to_string(),
     };
 
     let uptime = app.connected_at.map(|t| {
@@ -165,15 +166,14 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     }).unwrap_or_default();
 
     let spans = vec![
-        Span::styled(" [", Style::default().bg(Color::Blue).fg(Color::White)),
         Span::styled(
-            format!("{} {}", app.transport.icon(), app.transport.label()),
-            Style::default().bg(Color::Blue).fg(transport_color).add_modifier(Modifier::BOLD),
+            format!(" {} {} ", app.transport.icon(), app.transport.label()),
+            Style::default().bg(badge_bg).fg(Color::White).add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!("] {} | {}{} | {} ",
+            format!(" {} | {}{} | {} ",
                 app.connection_state, app.nick, auth_str, uptime),
-            Style::default().bg(Color::Blue).fg(Color::White),
+            Style::default().bg(Color::DarkGray).fg(Color::White),
         ),
     ];
 
