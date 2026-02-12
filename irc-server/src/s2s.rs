@@ -292,6 +292,10 @@ async fn handle_s2s_connection(
                     if send.write_all(line.as_bytes()).await.is_err() {
                         break;
                     }
+                    // Flush immediately — QUIC streams buffer aggressively
+                    if send.flush().await.is_err() {
+                        break;
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("S2S serialize error: {e}");
