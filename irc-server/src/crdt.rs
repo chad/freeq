@@ -100,7 +100,14 @@ impl ClusterDoc {
     //   "topic_by:{channel}"       → set_by nick     (LWW)
     //   "ban:{channel}:{mask}"     → set_by nick     (presence)
     //   "nick_owner:{nick}"        → DID             (LWW)
+    //   "founder:{channel}"        → DID             (first-write-wins via causal order)
+    //   "did_op:{channel}:{did}"   → "1"             (presence — add/remove)
     //
+    // Founder resolution: both servers may write "founder:#test" concurrently.
+    // Automerge resolves this as LWW by actor ID. But since founder should be
+    // first-write-wins (not last), we use a conditional write: only set founder
+    // if the key doesn't already exist. After sync, both servers see the same
+    // value because the one that was already present is never overwritten.
     // This is denormalized but conflict-free by construction.
 
     // ── Channel operations ──────────────────────────────────────────
@@ -145,6 +152,59 @@ impl ClusterDoc {
         let mut doc = self.doc.lock().unwrap();
         let key = format!("nick_owner:{nick}");
         let _ = doc.put(automerge::ROOT, &key, did);
+    }
+
+    // ── Channel authority operations ────────────────────────────────
+
+    /// Set the channel founder (first-write-wins).
+    /// Only writes if no founder exists yet. After sync, all servers
+    /// converge on the same founder because no server overwrites an
+    /// existing value. If two servers write concurrently before syncing,
+    /// Automerge's deterministic conflict resolution picks one — and
+    /// since neither side overwrites afterward, they converge.
+    pub fn set_founder(&self, channel: &str, did: &str) {
+        let mut doc = self.doc.lock().unwrap();
+        let key = format!("founder:{channel}");
+        // Only set if not already present
+        if doc.get(automerge::ROOT, &key).ok().flatten().is_none() {
+            let _ = doc.put(automerge::ROOT, &key, did);
+        }
+    }
+
+    /// Get the channel founder's DID.
+    pub fn founder(&self, channel: &str) -> Option<String> {
+        let doc = self.doc.lock().unwrap();
+        let (val, _) = doc.get(automerge::ROOT, format!("founder:{channel}")).ok()??;
+        value_to_string(&val)
+    }
+
+    /// Grant persistent operator status to a DID.
+    pub fn grant_op(&self, channel: &str, did: &str) {
+        let mut doc = self.doc.lock().unwrap();
+        let key = format!("did_op:{channel}:{did}");
+        let _ = doc.put(automerge::ROOT, &key, "1");
+    }
+
+    /// Revoke persistent operator status from a DID.
+    pub fn revoke_op(&self, channel: &str, did: &str) {
+        let mut doc = self.doc.lock().unwrap();
+        let key = format!("did_op:{channel}:{did}");
+        let _ = doc.delete(automerge::ROOT, &key);
+    }
+
+    /// Get all DIDs with persistent operator status in a channel.
+    pub fn channel_did_ops(&self, channel: &str) -> Vec<String> {
+        let doc = self.doc.lock().unwrap();
+        let prefix = format!("did_op:{channel}:");
+        doc.map_range(automerge::ROOT, ..)
+            .filter_map(|item| {
+                if item.key.starts_with(&prefix) {
+                    item.key.strip_prefix(&prefix).map(|d| d.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 
     // ── Read operations ─────────────────────────────────────────────
@@ -387,5 +447,111 @@ mod tests {
         }
         // doc2 should have only "bad!*@*" ban
         // (We'd need a read_bans method to verify, but the sync test validates the round-trip)
+    }
+
+    #[test]
+    fn founder_first_write_wins() {
+        let doc1 = ClusterDoc::new("server-1");
+        let doc2 = ClusterDoc::new("server-2");
+
+        // Server 1 sets founder first
+        doc1.set_founder("#test", "did:plc:alice");
+        // Server 2 tries to set a different founder
+        doc2.set_founder("#test", "did:plc:bob");
+
+        // Before sync: each sees their own founder
+        assert_eq!(doc1.founder("#test"), Some("did:plc:alice".to_string()));
+        assert_eq!(doc2.founder("#test"), Some("did:plc:bob".to_string()));
+
+        // Sync
+        for _ in 0..10 {
+            if let Some(msg) = doc1.generate_sync_message("server-2") {
+                doc2.receive_sync_message("server-1", &msg).unwrap();
+            }
+            if let Some(msg) = doc2.generate_sync_message("server-1") {
+                doc1.receive_sync_message("server-2", &msg).unwrap();
+            }
+        }
+
+        // After sync: both must agree on the SAME founder
+        // (Automerge picks deterministically — we don't care which one,
+        // just that they converge)
+        let f1 = doc1.founder("#test");
+        let f2 = doc2.founder("#test");
+        assert_eq!(f1, f2, "Founders must converge: {f1:?} vs {f2:?}");
+        assert!(f1.is_some(), "Founder must not be lost");
+    }
+
+    #[test]
+    fn founder_not_overwritten_after_sync() {
+        let doc1 = ClusterDoc::new("server-1");
+        let doc2 = ClusterDoc::new("server-2");
+
+        // Server 1 creates the channel with a founder
+        doc1.set_founder("#test", "did:plc:alice");
+
+        // Sync to server 2
+        for _ in 0..10 {
+            if let Some(msg) = doc1.generate_sync_message("server-2") {
+                doc2.receive_sync_message("server-1", &msg).unwrap();
+            }
+            if let Some(msg) = doc2.generate_sync_message("server-1") {
+                doc1.receive_sync_message("server-2", &msg).unwrap();
+            }
+        }
+
+        // Server 2 now has alice as founder
+        assert_eq!(doc2.founder("#test"), Some("did:plc:alice".to_string()));
+
+        // Server 2 tries to set a different founder (late entrant attack)
+        doc2.set_founder("#test", "did:plc:evil");
+
+        // set_founder is conditional: won't overwrite existing
+        assert_eq!(doc2.founder("#test"), Some("did:plc:alice".to_string()));
+    }
+
+    #[test]
+    fn did_ops_sync() {
+        let doc1 = ClusterDoc::new("server-1");
+        let doc2 = ClusterDoc::new("server-2");
+
+        doc1.set_founder("#test", "did:plc:alice");
+        doc1.grant_op("#test", "did:plc:bob");
+        doc2.grant_op("#test", "did:plc:charlie");
+
+        // Sync
+        for _ in 0..10 {
+            if let Some(msg) = doc1.generate_sync_message("server-2") {
+                doc2.receive_sync_message("server-1", &msg).unwrap();
+            }
+            if let Some(msg) = doc2.generate_sync_message("server-1") {
+                doc1.receive_sync_message("server-2", &msg).unwrap();
+            }
+        }
+
+        // Both should see both DID ops
+        let ops1 = doc1.channel_did_ops("#test");
+        let ops2 = doc2.channel_did_ops("#test");
+        assert_eq!(ops1.len(), 2, "doc1 ops: {ops1:?}");
+        assert_eq!(ops2.len(), 2, "doc2 ops: {ops2:?}");
+
+        // Revoke bob on server 1
+        doc1.revoke_op("#test", "did:plc:bob");
+
+        // Sync again
+        for _ in 0..10 {
+            if let Some(msg) = doc1.generate_sync_message("server-2") {
+                doc2.receive_sync_message("server-1", &msg).unwrap();
+            }
+            if let Some(msg) = doc2.generate_sync_message("server-1") {
+                doc1.receive_sync_message("server-2", &msg).unwrap();
+            }
+        }
+
+        let ops1 = doc1.channel_did_ops("#test");
+        let ops2 = doc2.channel_did_ops("#test");
+        assert_eq!(ops1.len(), 1, "After revoke, doc1 ops: {ops1:?}");
+        assert_eq!(ops2.len(), 1, "After revoke, doc2 ops: {ops2:?}");
+        assert_eq!(ops1[0], "did:plc:charlie");
     }
 }

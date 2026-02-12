@@ -33,13 +33,15 @@ pub struct ChannelState {
     // ── DID-based persistent authority ──────────────────────────
     /// Channel founder's DID. Set once on channel creation.
     /// Founder always has ops and can't be de-opped.
+    /// In S2S: resolved by CRDT (first-write-wins in Automerge causal order),
+    /// NOT by timestamps — timestamps can be spoofed by rogue servers.
     pub founder_did: Option<String>,
     /// DIDs with persistent operator status.
     /// Survives reconnects, works across servers.
     /// Granted by founder or other DID-ops.
     pub did_ops: HashSet<String>,
-    /// Timestamp (unix secs) when the channel was created.
-    /// Used to resolve founder conflicts in S2S (earliest wins).
+    /// Timestamp (unix secs) when the channel was created (informational only).
+    /// NOT used for authority resolution — the CRDT handles that.
     pub created_at: u64,
 
     /// Ban list: hostmasks (nick!user@host patterns) and/or DIDs.
@@ -717,37 +719,37 @@ async fn process_s2s_message(
             deliver_to_channel(state, &channel, &line);
         }
 
-        S2sMessage::ChannelCreated { channel, founder_did, did_ops, created_at, origin } => {
+        S2sMessage::ChannelCreated { channel, founder_did, did_ops, created_at: _, origin } => {
             if origin == manager.server_id { return; }
 
             let mut channels = state.channels.lock().unwrap();
             let ch = channels.entry(channel.clone()).or_default();
 
-            // Resolve founder conflict: earliest creation timestamp wins.
-            // If timestamps are equal, compare origin strings for determinism.
-            let dominated = if ch.founder_did.is_some() && founder_did.is_some() {
-                if created_at < ch.created_at {
-                    true // Remote is older → adopt
-                } else if created_at == ch.created_at {
-                    origin < manager.server_id // Tie-break by origin
-                } else {
-                    false // Local is older → keep
+            // Founder resolution: first-write-wins.
+            // We don't trust timestamps (spoofable). Instead:
+            // - If we have no founder, adopt the remote one
+            // - If we have a founder, keep ours (first-write-wins locally)
+            // - The CRDT (ClusterDoc) handles global convergence:
+            //   both servers write "founder:{channel}" only if absent,
+            //   and Automerge's deterministic conflict resolution
+            //   ensures they converge after sync.
+            if ch.founder_did.is_none() {
+                if let Some(ref did) = founder_did {
+                    tracing::info!(
+                        channel = %channel,
+                        "Adopting remote founder {did} (no local founder)"
+                    );
+                    ch.founder_did = Some(did.clone());
                 }
             } else {
-                ch.founder_did.is_none() && founder_did.is_some()
-            };
-
-            if dominated {
-                tracing::info!(
+                tracing::debug!(
                     channel = %channel,
-                    "Adopting remote founder {:?} (created_at {created_at} < local {})",
-                    founder_did, ch.created_at
+                    "Keeping local founder {:?} (ignoring remote {:?})",
+                    ch.founder_did, founder_did
                 );
-                ch.founder_did = founder_did;
-                ch.created_at = created_at;
             }
 
-            // Merge DID ops — union of both sets
+            // Merge DID ops — union of both sets (additive, safe)
             for did in did_ops {
                 ch.did_ops.insert(did);
             }
@@ -802,15 +804,9 @@ async fn process_s2s_message(
             for info in remote_channels {
                 let ch = channels.entry(info.name.clone()).or_default();
 
-                // Merge founder: earliest created_at wins
+                // Merge founder: first-write-wins (no timestamp comparison)
                 if ch.founder_did.is_none() && info.founder_did.is_some() {
                     ch.founder_did = info.founder_did.clone();
-                    ch.created_at = info.created_at;
-                } else if let (Some(_), Some(_)) = (&ch.founder_did, &info.founder_did) {
-                    if info.created_at < ch.created_at {
-                        ch.founder_did = info.founder_did.clone();
-                        ch.created_at = info.created_at;
-                    }
                 }
 
                 // Merge DID ops (union)
