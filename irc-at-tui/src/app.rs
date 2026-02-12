@@ -92,6 +92,44 @@ pub struct MediaUploader {
     pub dpop_nonce: Option<String>,
 }
 
+/// Transport type for the current connection.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Transport {
+    Tcp,
+    Tls,
+    WebSocket,
+    Iroh,
+}
+
+impl Transport {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Transport::Tcp => "TCP",
+            Transport::Tls => "TLS",
+            Transport::WebSocket => "WS",
+            Transport::Iroh => "IROH",
+        }
+    }
+
+    pub fn icon(&self) -> &'static str {
+        match self {
+            Transport::Tcp => "⚡",       // unencrypted, fast
+            Transport::Tls => "🔒",       // encrypted
+            Transport::WebSocket => "🌐", // web
+            Transport::Iroh => "🕳️",      // hole-punching / p2p
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            Transport::Tcp => "Plain TCP (unencrypted)",
+            Transport::Tls => "TLS 1.3 (encrypted)",
+            Transport::WebSocket => "WebSocket (browser-compatible)",
+            Transport::Iroh => "Iroh QUIC (encrypted, NAT-traversing, P2P-capable)",
+        }
+    }
+}
+
 pub struct App {
     /// Per-channel E2EE keys, keyed by lowercase channel name.
     /// Derived from passphrase via HKDF-SHA256.
@@ -104,8 +142,18 @@ pub struct App {
     pub editor: LineEditor,
     /// Connection state display.
     pub connection_state: String,
+    /// Transport type for the current connection.
+    pub transport: Transport,
+    /// Server address we connected to.
+    pub server_addr: String,
+    /// Iroh endpoint ID (if connected via iroh).
+    pub iroh_endpoint_id: Option<String>,
+    /// Time of connection establishment.
+    pub connected_at: Option<std::time::Instant>,
     /// Authenticated DID (if any).
     pub authenticated_did: Option<String>,
+    /// Whether to show the /net stats popup.
+    pub show_net_popup: bool,
     /// Our nick.
     pub nick: String,
     /// Whether the app should quit.
@@ -130,6 +178,8 @@ pub struct App {
     pub bg_result_tx: tokio::sync::mpsc::Sender<BgResult>,
     /// Receiver end (held by main loop).
     pub bg_result_rx: Option<tokio::sync::mpsc::Receiver<BgResult>>,
+    /// Show raw IRC lines in the status buffer (toggled by /debug).
+    pub debug_raw: bool,
     /// P2P direct messaging handle (None if P2P not started).
     pub p2p_handle: Option<irc_at_sdk::p2p::P2pHandle>,
     /// P2P event receiver (moved to main loop on first use).
@@ -159,7 +209,13 @@ impl App {
             active_buffer: "status".to_string(),
             editor: LineEditor::new(mode),
             connection_state: "connecting".to_string(),
+            transport: Transport::Tcp,
+            server_addr: String::new(),
+            iroh_endpoint_id: None,
+            connected_at: None,
             authenticated_did: None,
+            show_net_popup: false,
+            debug_raw: false,
             nick: nick.to_string(),
             should_quit: false,
             history: Vec::new(),

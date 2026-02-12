@@ -41,21 +41,143 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     draw_input(frame, app, chunks[3]);
+
+    // Overlay: network stats popup
+    if app.show_net_popup {
+        draw_net_popup(frame, app);
+    }
+}
+
+fn draw_net_popup(frame: &mut Frame, app: &App) {
+    use ratatui::widgets::Clear;
+
+    let area = frame.area();
+    // Center a box, 60 wide, 14 tall (or fit to screen)
+    let w = 60u16.min(area.width.saturating_sub(4));
+    let h = 16u16.min(area.height.saturating_sub(4));
+    let x = (area.width.saturating_sub(w)) / 2;
+    let y = (area.height.saturating_sub(h)) / 2;
+    let popup_area = Rect::new(x, y, w, h);
+
+    // Clear background
+    frame.render_widget(Clear, popup_area);
+
+    let uptime = app.connected_at.map(|t| {
+        let d = t.elapsed();
+        let secs = d.as_secs();
+        format!("{}h {:02}m {:02}s", secs / 3600, (secs % 3600) / 60, secs % 60)
+    }).unwrap_or_else(|| "—".to_string());
+
+    let mut lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Transport:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} {}", app.transport.icon(), app.transport.description()),
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  Server:     ", Style::default().fg(Color::DarkGray)),
+            Span::raw(&app.server_addr),
+        ]),
+        Line::from(vec![
+            Span::styled("  State:      ", Style::default().fg(Color::DarkGray)),
+            Span::raw(&app.connection_state),
+        ]),
+        Line::from(vec![
+            Span::styled("  Uptime:     ", Style::default().fg(Color::DarkGray)),
+            Span::raw(&uptime),
+        ]),
+        Line::from(vec![
+            Span::styled("  Nick:       ", Style::default().fg(Color::DarkGray)),
+            Span::raw(&app.nick),
+        ]),
+        Line::from(vec![
+            Span::styled("  Auth:       ", Style::default().fg(Color::DarkGray)),
+            Span::raw(app.authenticated_did.as_deref().unwrap_or("guest (unauthenticated)")),
+        ]),
+    ];
+
+    if let Some(ref id) = app.iroh_endpoint_id {
+        lines.push(Line::from(vec![
+            Span::styled("  Iroh ID:    ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&id[..16.min(id.len())], Style::default().fg(Color::Magenta)),
+            Span::styled("…", Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+
+    // E2EE status
+    let e2ee_channels: Vec<&String> = app.channel_keys.keys().collect();
+    let e2ee_str = if e2ee_channels.is_empty() {
+        "none".to_string()
+    } else {
+        e2ee_channels.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+    };
+    lines.push(Line::from(vec![
+        Span::styled("  E2EE:       ", Style::default().fg(Color::DarkGray)),
+        Span::raw(e2ee_str),
+    ]));
+
+    // P2P status
+    let p2p_str = if app.p2p_handle.is_some() { "active" } else { "inactive" };
+    lines.push(Line::from(vec![
+        Span::styled("  P2P DMs:    ", Style::default().fg(Color::DarkGray)),
+        Span::raw(p2p_str),
+    ]));
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Press Esc or /net to close",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Network Info ")
+        .style(Style::default().bg(Color::Black).fg(Color::White))
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let popup = Paragraph::new(lines).block(block);
+    frame.render_widget(popup, popup_area);
 }
 
 fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
+    use crate::app::Transport;
+
+    let transport_color = match app.transport {
+        Transport::Tcp => Color::Red,       // unencrypted = warning
+        Transport::Tls => Color::Green,     // encrypted = good
+        Transport::WebSocket => Color::Cyan,
+        Transport::Iroh => Color::Magenta,  // special = purple
+    };
+
     let auth_str = match &app.authenticated_did {
         Some(did) => format!(" | auth: {did}"),
         None => " | guest".to_string(),
     };
 
-    let status_text = format!(
-        " [{}] nick: {}{}",
-        app.connection_state, app.nick, auth_str
-    );
+    let uptime = app.connected_at.map(|t| {
+        let d = t.elapsed();
+        if d.as_secs() < 60 { format!("{}s", d.as_secs()) }
+        else if d.as_secs() < 3600 { format!("{}m", d.as_secs() / 60) }
+        else { format!("{}h{}m", d.as_secs() / 3600, (d.as_secs() % 3600) / 60) }
+    }).unwrap_or_default();
 
-    let status = Paragraph::new(status_text)
-        .style(Style::default().bg(Color::Blue).fg(Color::White));
+    let spans = vec![
+        Span::styled(" [", Style::default().bg(Color::Blue).fg(Color::White)),
+        Span::styled(
+            format!("{} {}", app.transport.icon(), app.transport.label()),
+            Style::default().bg(Color::Blue).fg(transport_color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("] {} | {}{} | {} ",
+                app.connection_state, app.nick, auth_str, uptime),
+            Style::default().bg(Color::Blue).fg(Color::White),
+        ),
+    ];
+
+    let status = Paragraph::new(Line::from(spans));
     frame.render_widget(status, area);
 }
 

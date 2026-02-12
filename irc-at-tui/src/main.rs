@@ -173,6 +173,17 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(&cli.nick, cli.vi);
+    // Set transport info
+    if iroh_addr.is_some() {
+        app.transport = app::Transport::Iroh;
+        app.iroh_endpoint_id = iroh_addr.clone();
+    } else if cli.tls || cli.server.ends_with(":6697") {
+        app.transport = app::Transport::Tls;
+    } else {
+        app.transport = app::Transport::Tcp;
+    }
+    app.server_addr = cli.server.clone();
+    app.connected_at = Some(std::time::Instant::now());
     app.media_uploader = media_uploader;
     #[cfg(feature = "inline-images")]
     { app.picker = picker; }
@@ -344,6 +355,14 @@ async fn run_app(
         if has_crossterm_event {
             let evt = tokio::task::block_in_place(event::read)?;
             if let CrosstermEvent::Key(key) = evt {
+                // Close net popup on Escape
+                if app.show_net_popup {
+                    use crossterm::event::KeyCode;
+                    if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) {
+                        app.show_net_popup = false;
+                        continue;
+                    }
+                }
                 let action = app.editor.handle_key(key);
                 match action {
                     EditAction::Submit => {
@@ -452,7 +471,7 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
     match event {
         Event::Connected => {
             app.connection_state = "connected".to_string();
-            app.status_msg("Connected to server");
+            app.status_msg(&format!("Connected to server via {}", app.transport.description()));
         }
         Event::Registered { nick } => {
             app.connection_state = "registered".to_string();
@@ -738,7 +757,11 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
                 });
             }
         }
-        Event::RawLine(_) => {}
+        Event::RawLine(ref line) => {
+            if app.debug_raw {
+                app.buffer_mut("status").push_system(&format!("← {line}"));
+            }
+        }
     }
 }
 
@@ -1135,6 +1158,14 @@ async fn process_input(
                     }
                 }
             }
+            "/net" | "/stats" => {
+                app.show_net_popup = !app.show_net_popup;
+            }
+            "/debug" => {
+                app.debug_raw = !app.debug_raw;
+                let state = if app.debug_raw { "ON" } else { "OFF" };
+                app.status_msg(&format!("Debug mode {state} — raw IRC lines will be shown in status buffer"));
+            }
             "/help" | "/h" => {
                 app.status_msg("Commands:");
                 app.status_msg("  /join #channel    - Join a channel");
@@ -1163,6 +1194,8 @@ async fn process_input(
                 app.status_msg("  /encrypt <pass>   - Enable E2EE for current channel");
                 app.status_msg("  /decrypt          - Disable E2EE for current channel");
                 app.status_msg("  /p2p              - Peer-to-peer encrypted DMs (see /p2p help)");
+                app.status_msg("  /net              - Show/hide network info popup");
+                app.status_msg("  /debug            - Toggle raw IRC line display");
                 app.status_msg("  /raw <line>       - Send raw IRC");
                 app.status_msg("  Tab               - Nick completion (or switch buffers if empty)");
                 app.status_msg("  Shift-Tab         - Previous buffer");
