@@ -511,6 +511,16 @@ where
         state.nick_to_session.lock().unwrap().remove(nick);
     }
 
+    // Broadcast QUIT to S2S peers
+    if let Some(ref nick) = conn.nick {
+        let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+        s2s_broadcast(&state, crate::s2s::S2sMessage::Quit {
+            nick: nick.clone(),
+            reason: "Connection closed".to_string(),
+            origin,
+        });
+    }
+
     tracing::info!(%session_id, "Connection closed");
     state.connections.lock().unwrap().remove(&session_id);
     state.session_dids.lock().unwrap().remove(&session_id);
@@ -913,6 +923,14 @@ fn handle_join(
         }
     }
     drop(conns);
+
+    // Broadcast JOIN to S2S peers
+    let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+    s2s_broadcast(state, crate::s2s::S2sMessage::Join {
+        nick: nick.to_string(),
+        channel: channel.to_string(),
+        origin,
+    });
 
     // Send topic if set (332 + 333)
     {
@@ -1472,6 +1490,17 @@ fn handle_invite(
     }
 }
 
+/// Broadcast an S2S message to all peer servers (if S2S is active).
+/// This is fire-and-forget: spawns a task so we don't block the caller.
+fn s2s_broadcast(state: &Arc<SharedState>, msg: crate::s2s::S2sMessage) {
+    let manager = state.s2s_manager.lock().unwrap().clone();
+    if let Some(manager) = manager {
+        tokio::spawn(async move {
+            manager.broadcast(msg).await;
+        });
+    }
+}
+
 fn broadcast_to_channel(state: &Arc<SharedState>, channel: &str, msg: &str) {
     let members: Vec<String> = state
         .channels
@@ -1581,6 +1610,15 @@ fn handle_topic(
                     let _ = tx.try_send(topic_msg.clone());
                 }
             }
+
+            // Broadcast TOPIC to S2S peers
+            let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+            s2s_broadcast(state, crate::s2s::S2sMessage::Topic {
+                channel: channel.to_string(),
+                topic: text.to_string(),
+                set_by: conn.nick.as_deref().unwrap_or("*").to_string(),
+                origin,
+            });
         }
         None => {
             // Query the topic
@@ -1646,6 +1684,14 @@ fn handle_part(
         .and_modify(|ch| {
             ch.members.remove(session_id);
         });
+
+    // Broadcast PART to S2S peers
+    let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+    s2s_broadcast(state, crate::s2s::S2sMessage::Part {
+        nick: conn.nick.as_deref().unwrap_or("*").to_string(),
+        channel: channel.to_string(),
+        origin,
+    });
 }
 
 fn handle_whois(
@@ -1887,6 +1933,17 @@ fn handle_privmsg(
                 };
                 let _ = tx.try_send(line.clone());
             }
+        }
+
+        // Broadcast channel PRIVMSG to S2S peers
+        if command == "PRIVMSG" {
+            let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+            s2s_broadcast(state, crate::s2s::S2sMessage::Privmsg {
+                from: conn.nick.as_deref().unwrap_or("*").to_string(),
+                target: target.to_string(),
+                text: text.to_string(),
+                origin,
+            });
         }
     } else {
         let target_session = state.nick_to_session.lock().unwrap().get(target).cloned();
