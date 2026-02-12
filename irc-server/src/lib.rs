@@ -6,3 +6,4 @@ pub mod db;
 pub mod irc;
 pub mod sasl;
 pub mod server;
+pub mod web;

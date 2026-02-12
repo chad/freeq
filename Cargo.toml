@@ -36,3 +36,5 @@ sha2 = "0.10"
 open = "5"
 dirs = "5"
 rusqlite = { version = "0.31", features = ["bundled"] }
+axum = { version = "0.7", features = ["ws"] }
+tower-http = { version = "0.5", features = ["cors"] }

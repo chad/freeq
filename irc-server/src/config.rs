@@ -31,6 +31,11 @@ pub struct ServerConfig {
     /// Path to SQLite database file. If not set, uses in-memory storage (no persistence).
     #[arg(long)]
     pub db_path: Option<String>,
+
+    /// HTTP/WebSocket listener address. Enables WebSocket IRC transport and REST API.
+    /// If not set, no HTTP listener starts.
+    #[arg(long)]
+    pub web_addr: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -43,6 +48,7 @@ impl Default for ServerConfig {
             server_name: "irc-reboot".to_string(),
             challenge_timeout_secs: 60,
             db_path: None,
+            web_addr: None,
         }
     }
 }

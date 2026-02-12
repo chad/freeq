@@ -30,6 +30,8 @@ chrono = { workspace = true }
 clap = { workspace = true }
 reqwest = { workspace = true }
 rusqlite = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true }
 
 [dev-dependencies]
 irc-at-sdk = { path = "../irc-at-sdk" }

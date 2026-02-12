@@ -268,6 +268,7 @@ impl Server {
     /// Run the server, blocking forever.
     pub async fn run(self) -> Result<()> {
         let tls_acceptor = self.build_tls_acceptor()?;
+        let web_addr = self.config.web_addr.clone();
         let state = self.build_state()?;
 
         // Start plain listener
@@ -304,6 +305,19 @@ impl Server {
                         }
                         Err(e) => tracing::error!("TLS accept error: {e}"),
                     }
+                }
+            });
+        }
+
+        // Start HTTP/WebSocket listener if configured
+        if let Some(ref addr) = web_addr {
+            let web_state = Arc::clone(&state);
+            let router = crate::web::router(web_state);
+            let listener = tokio::net::TcpListener::bind(addr).await?;
+            tracing::info!("HTTP/WebSocket listener on {addr}");
+            tokio::spawn(async move {
+                if let Err(e) = axum::serve(listener, router).await {
+                    tracing::error!("HTTP server error: {e}");
                 }
             });
         }

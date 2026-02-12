@@ -13,6 +13,9 @@ async fn main() -> Result<()> {
     if config.tls_enabled() {
         tracing::info!("TLS enabled on {}", config.tls_listen_addr);
     }
+    if let Some(ref web_addr) = config.web_addr {
+        tracing::info!("HTTP/WebSocket enabled on {web_addr}");
+    }
 
     let server = irc_server::server::Server::new(config);
     server.run().await

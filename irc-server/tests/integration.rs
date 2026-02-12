@@ -1440,6 +1440,7 @@ async fn tls_connection() {
         server_name: "test-tls".to_string(),
         challenge_timeout_secs: 60,
         db_path: None,
+        web_addr: None,
     };
 
     let server = irc_server::server::Server::with_resolver(config, empty_resolver());

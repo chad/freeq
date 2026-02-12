@@ -73,15 +73,15 @@ pub async fn handle(stream: TcpStream, state: Arc<SharedState>) -> Result<()> {
     handle_io(BufReader::new(reader), writer, session_id, state).await
 }
 
-/// Handle a generic async stream (for TLS or other wrappers).
+/// Handle a generic async stream (for TLS, WebSocket, or other wrappers).
 pub async fn handle_generic<S>(stream: S, state: Arc<SharedState>) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let session_id = format!("tls-{id}");
-    tracing::info!(%session_id, "New connection (TLS)");
+    let session_id = format!("stream-{id}");
+    tracing::info!(%session_id, "New connection (generic stream)");
     let (reader, writer) = tokio::io::split(stream);
     handle_io(BufReader::new(reader), writer, session_id, state).await
 }
