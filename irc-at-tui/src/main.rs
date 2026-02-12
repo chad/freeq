@@ -82,6 +82,11 @@ struct Cli {
     /// Force re-authentication (clears cached OAuth session).
     #[arg(long)]
     reauth: bool,
+
+    /// Auto-join channels on connect (comma-separated).
+    /// Example: -c '#hello,#general'
+    #[arg(short = 'c', long = "channel")]
+    channels: Option<String>,
 }
 
 #[tokio::main]
@@ -152,6 +157,16 @@ async fn main() -> Result<()> {
     };
 
     let (handle, mut events) = client::connect_with_stream(conn, config, signer);
+
+    // Auto-join channels (queued until registration completes)
+    if let Some(ref channels) = cli.channels {
+        for ch in channels.split(',') {
+            let ch = ch.trim();
+            if !ch.is_empty() {
+                let _ = handle.join(ch).await;
+            }
+        }
+    }
 
     // Detect terminal image capabilities BEFORE entering raw mode
     #[cfg(feature = "inline-images")]

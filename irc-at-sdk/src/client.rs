@@ -531,6 +531,8 @@ where
         .await?;
 
     let mut sasl_in_progress = false;
+    let mut registered = false;
+    let mut pending_commands: Vec<Command> = Vec::new();
     let mut line_buf = String::new();
     let mut last_activity = tokio::time::Instant::now();
     let ping_interval = tokio::time::Duration::from_secs(60);
@@ -576,8 +578,12 @@ where
                         }
                         "001" => {
                             let nick = msg.params.first().cloned().unwrap_or_default();
-                            // eprintln!("  Registered as {nick}");
                             let _ = event_tx.send(Event::Registered { nick }).await;
+                            registered = true;
+                            // Flush any commands that were queued before registration
+                            for cmd in pending_commands.drain(..) {
+                                execute_command(&mut writer, cmd).await?;
+                            }
                         }
                         "353" => {
                             if msg.params.len() >= 4 {
@@ -777,24 +783,14 @@ where
                 line_buf.clear();
             }
             Some(cmd) = cmd_rx.recv() => {
-                match cmd {
-                    Command::Join(channel) => {
-                        writer.write_all(format!("JOIN {channel}\r\n").as_bytes()).await?;
+                if registered || matches!(cmd, Command::Quit(_)) {
+                    execute_command(&mut writer, cmd).await?;
+                    if !registered {
+                        break; // Quit before registration
                     }
-                    Command::Privmsg { target, text } => {
-                        writer.write_all(format!("PRIVMSG {target} :{text}\r\n").as_bytes()).await?;
-                    }
-                    Command::Raw(line) => {
-                        writer.write_all(format!("{line}\r\n").as_bytes()).await?;
-                    }
-                    Command::Quit(msg) => {
-                        let quit_line = match msg {
-                            Some(m) => format!("QUIT :{m}\r\n"),
-                            None => "QUIT\r\n".to_string(),
-                        };
-                        writer.write_all(quit_line.as_bytes()).await?;
-                        break;
-                    }
+                } else {
+                    // Queue until registered — commands silently wait
+                    pending_commands.push(cmd);
                 }
             }
             // Periodic client-to-server PING and timeout detection
@@ -808,6 +804,29 @@ where
         }
     }
 
+    Ok(())
+}
+
+/// Execute a single IRC command on the wire.
+async fn execute_command<W: AsyncWrite + Unpin>(writer: &mut W, cmd: Command) -> Result<()> {
+    match cmd {
+        Command::Join(channel) => {
+            writer.write_all(format!("JOIN {channel}\r\n").as_bytes()).await?;
+        }
+        Command::Privmsg { target, text } => {
+            writer.write_all(format!("PRIVMSG {target} :{text}\r\n").as_bytes()).await?;
+        }
+        Command::Raw(line) => {
+            writer.write_all(format!("{line}\r\n").as_bytes()).await?;
+        }
+        Command::Quit(msg) => {
+            let quit_line = match msg {
+                Some(m) => format!("QUIT :{m}\r\n"),
+                None => "QUIT\r\n".to_string(),
+            };
+            writer.write_all(quit_line.as_bytes()).await?;
+        }
+    }
     Ok(())
 }
 
