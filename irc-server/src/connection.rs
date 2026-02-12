@@ -36,6 +36,8 @@ pub struct Connection {
     cap_negotiating: bool,
     cap_sasl_requested: bool,
     cap_message_tags: bool,
+    /// Client understands E2EE messages (won't get synthetic notices instead).
+    cap_e2ee: bool,
 
     // SASL state
     sasl_in_progress: bool,
@@ -54,6 +56,7 @@ impl Connection {
             cap_negotiating: false,
             cap_sasl_requested: false,
             cap_message_tags: false,
+            cap_e2ee: false,
             sasl_in_progress: false,
         }
     }

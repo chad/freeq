@@ -379,6 +379,10 @@ async fn run_client(
 }
 
 fn rustls_default_config() -> rustls::ClientConfig {
+    // Ensure ring crypto provider is installed (iroh brings in ring,
+    // which can conflict with rustls auto-detection).
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     let root_store =
         rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     rustls::ClientConfig::builder()
@@ -387,7 +391,7 @@ fn rustls_default_config() -> rustls::ClientConfig {
 }
 
 fn rustls_insecure_config() -> rustls::ClientConfig {
-    
+    let _ = rustls::crypto::ring::default_provider().install_default();
     rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(InsecureVerifier))
