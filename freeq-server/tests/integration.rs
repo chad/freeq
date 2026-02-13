@@ -1442,11 +1442,7 @@ async fn tls_connection() {
         tls_key: Some(key_path.to_str().unwrap().to_string()),
         server_name: "test-tls".to_string(),
         challenge_timeout_secs: 60,
-        db_path: None,
-        web_addr: None,
-        iroh: false,
-        iroh_port: None,
-        s2s_peers: vec![],
+        ..Default::default()
     };
 
     let server = freeq_server::server::Server::with_resolver(config, empty_resolver());

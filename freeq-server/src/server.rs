@@ -56,6 +56,10 @@ pub struct ChannelState {
     pub topic: Option<TopicInfo>,
     /// Channel modes: +t = only ops can set topic.
     pub topic_locked: bool,
+    /// Channel mode: +n = no external messages (only members can send).
+    pub no_ext_msg: bool,
+    /// Channel mode: +m = moderated (only voiced/ops can send).
+    pub moderated: bool,
     /// Channel key (+k) — password required to join.
     pub key: Option<String>,
 }
@@ -185,18 +189,32 @@ pub struct SharedState {
     pub nick_owners: Mutex<HashMap<String, String>>,
     /// session_id -> resolved Bluesky handle (for WHOIS display).
     pub session_handles: Mutex<HashMap<String, String>>,
-    /// channel name -> channel state
+    /// channel name -> channel state (keys are always lowercase)
     pub channels: Mutex<HashMap<String, ChannelState>>,
     /// Sessions that have negotiated message-tags capability.
     pub cap_message_tags: Mutex<HashSet<String>>,
+    /// Sessions that have negotiated multi-prefix capability.
+    pub cap_multi_prefix: Mutex<HashSet<String>>,
+    /// Sessions that have negotiated echo-message capability.
+    pub cap_echo_message: Mutex<HashSet<String>>,
+    /// Sessions that have negotiated server-time capability.
+    pub cap_server_time: Mutex<HashSet<String>>,
+    /// Sessions that have negotiated batch capability.
+    pub cap_batch: Mutex<HashSet<String>>,
     /// session_id -> iroh endpoint ID (for connections via iroh transport).
     pub session_iroh_ids: Mutex<HashMap<String, String>>,
+    /// session_id -> away message (None = not away).
+    pub session_away: Mutex<HashMap<String, String>>,
     /// This server's own iroh endpoint ID (advertised in CAP LS).
     pub server_iroh_id: Mutex<Option<String>>,
+    /// Iroh endpoint handle (kept alive for the server's lifetime).
+    pub iroh_endpoint: Mutex<Option<iroh::Endpoint>>,
     /// S2S manager (if clustering is active).
     pub s2s_manager: Mutex<Option<Arc<crate::s2s::S2sManager>>>,
     /// Database handle for persistence (None = in-memory only).
     pub db: Option<Mutex<Db>>,
+    /// Server configuration (for MOTD, max messages, etc.).
+    pub config: ServerConfig,
 }
 
 impl SharedState {
@@ -295,10 +313,17 @@ impl Server {
             nick_owners: Mutex::new(nick_owners),
             session_handles: Mutex::new(HashMap::new()),
             cap_message_tags: Mutex::new(HashSet::new()),
+            cap_multi_prefix: Mutex::new(HashSet::new()),
+            cap_echo_message: Mutex::new(HashSet::new()),
+            cap_server_time: Mutex::new(HashSet::new()),
+            cap_batch: Mutex::new(HashSet::new()),
             session_iroh_ids: Mutex::new(HashMap::new()),
+            session_away: Mutex::new(HashMap::new()),
             server_iroh_id: Mutex::new(None),
+            iroh_endpoint: Mutex::new(None),
             s2s_manager: Mutex::new(None),
             db: db.map(Mutex::new),
+            config: self.config.clone(),
         }))
     }
 
@@ -377,14 +402,15 @@ impl Server {
                     // Store manager in shared state so iroh accept loop can route S2S
                     *state.s2s_manager.lock().unwrap() = Some(Arc::clone(&manager));
 
-                    // Connect to configured peers (if any)
+                    // Connect to configured peers with auto-reconnection
                     for peer_id in &self.config.s2s_peers {
                         let event_tx = manager.event_tx.clone();
-                        if let Err(e) = crate::s2s::connect_peer(
-                            endpoint, peer_id, &manager, event_tx,
-                        ).await {
-                            tracing::error!("Failed to connect to S2S peer {peer_id}: {e}");
-                        }
+                        crate::s2s::connect_peer_with_retry(
+                            endpoint.clone(),
+                            peer_id.clone(),
+                            Arc::clone(&manager),
+                            event_tx,
+                        );
                     }
 
                     // Spawn S2S event processor
@@ -413,9 +439,9 @@ impl Server {
             tracing::error!("S2S requires iroh transport (--iroh)");
         }
 
-        // Keep iroh endpoint alive
+        // Store iroh endpoint in shared state to keep it alive
         if let Some(endpoint) = iroh_endpoint {
-            std::mem::forget(endpoint);
+            *state.iroh_endpoint.lock().unwrap() = Some(endpoint);
         }
 
         // Start HTTP/WebSocket listener if configured
@@ -830,7 +856,6 @@ async fn process_s2s_message(
                     }
 
                     // Add remote nicks
-                    let had_remote = !ch.remote_members.is_empty();
                     for nick in &info.nicks {
                         // SyncResponse doesn't include per-user DIDs/handles yet
                         ch.remote_members.entry(nick.clone()).or_insert_with(|| RemoteMember {
@@ -881,7 +906,7 @@ async fn process_s2s_message(
                 let topic_info = state.channels.lock().unwrap()
                     .get(channel)
                     .and_then(|ch| ch.topic.as_ref().map(|t| (t.text.clone(), t.set_by.clone())));
-                if let Some((topic, set_by)) = topic_info {
+                if let Some((topic, _set_by)) = topic_info {
                     let line = format!(
                         ":{} 332 * {} :{}\r\n",
                         state.server_name, channel, topic,
@@ -903,15 +928,27 @@ async fn process_s2s_message(
 
         S2sMessage::NickChange { old, new, origin } => {
             if origin == manager.server_id { return; }
-            let line = format!(":{old}!remote@s2s NICK {new}\r\n");
-            // Notify all channels (broadcast to all local clients for simplicity)
-            let channels = state.channels.lock().unwrap();
-            let conns = state.connections.lock().unwrap();
-            for (_name, ch) in channels.iter() {
-                for session_id in &ch.members {
-                    if let Some(tx) = conns.get(session_id) {
-                        let _ = tx.try_send(line.clone());
+            let line = format!(":{old}!remote@s2s NICK :{new}\r\n");
+
+            // Update remote_members: rename old → new in all channels
+            let mut channels = state.channels.lock().unwrap();
+            let mut affected_sessions = std::collections::HashSet::new();
+            for ch in channels.values_mut() {
+                if let Some(rm) = ch.remote_members.remove(&old) {
+                    ch.remote_members.insert(new.clone(), rm);
+                    // Collect local members to notify
+                    for s in &ch.members {
+                        affected_sessions.insert(s.clone());
                     }
+                }
+            }
+            drop(channels);
+
+            // Notify affected local clients and send updated NAMES
+            let conns = state.connections.lock().unwrap();
+            for session_id in &affected_sessions {
+                if let Some(tx) = conns.get(session_id) {
+                    let _ = tx.try_send(line.clone());
                 }
             }
         }

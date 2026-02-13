@@ -231,12 +231,32 @@ pub const RPL_WHOISSPECIAL: &str = "320";
 pub const RPL_WHOISACCOUNT: &str = "330";
 pub const RPL_ENDOFWHOIS: &str = "318";
 
+// MOTD numerics
+pub const RPL_MOTDSTART: &str = "375";
+pub const RPL_MOTD: &str = "372";
+pub const RPL_ENDOFMOTD: &str = "376";
+pub const ERR_NOMOTD: &str = "422";
+
+// LIST numerics
+pub const RPL_LIST: &str = "322";
+pub const RPL_LISTEND: &str = "323";
+
+// WHO numerics
+pub const RPL_WHOREPLY: &str = "352";
+pub const RPL_ENDOFWHO: &str = "315";
+
+// AWAY numerics
+pub const RPL_AWAY: &str = "301";
+pub const RPL_UNAWAY: &str = "305";
+pub const RPL_NOWAWAY: &str = "306";
+
 // Errors
 pub const ERR_UNKNOWNCOMMAND: &str = "421";
 pub const ERR_NONICKNAMEGIVEN: &str = "431";
 pub const ERR_NICKNAMEINUSE: &str = "433";
 pub const ERR_NOSUCHNICK: &str = "401";
 pub const ERR_NOTREGISTERED: &str = "451";
+pub const ERR_CANNOTSENDTOCHAN: &str = "404";
 
 #[cfg(test)]
 mod tests {

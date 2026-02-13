@@ -30,7 +30,7 @@
 use std::sync::Mutex;
 
 use automerge::{
-    AutoCommit, ObjType, ReadDoc,
+    AutoCommit, ReadDoc,
     transaction::Transactable,
     sync::{self, SyncDoc},
 };

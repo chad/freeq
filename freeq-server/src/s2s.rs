@@ -206,6 +206,9 @@ pub async fn handle_incoming_s2s(
 }
 
 /// Connect to a peer server by iroh endpoint ID.
+///
+/// Makes a single connection attempt. Use `connect_peer_with_retry` for
+/// production use with auto-reconnection.
 pub async fn connect_peer(
     endpoint: &iroh::Endpoint,
     peer_id: &str,
@@ -228,6 +231,56 @@ pub async fn connect_peer(
     });
 
     Ok(())
+}
+
+/// Connect to a peer with automatic reconnection on failure.
+///
+/// Spawns a background task that retries with exponential backoff
+/// (1s → 2s → 4s → ... → 60s cap). Runs forever until the endpoint is closed.
+pub fn connect_peer_with_retry(
+    endpoint: iroh::Endpoint,
+    peer_id: String,
+    manager: Arc<S2sManager>,
+    event_tx: mpsc::Sender<S2sMessage>,
+) {
+    tokio::spawn(async move {
+        let mut backoff = std::time::Duration::from_secs(1);
+        let max_backoff = std::time::Duration::from_secs(60);
+
+        loop {
+            let endpoint_id: iroh::EndpointId = match peer_id.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!(peer = %peer_id, "Invalid peer endpoint ID (not retrying): {e}");
+                    return;
+                }
+            };
+            let addr = iroh::EndpointAddr::new(endpoint_id);
+
+            tracing::info!(peer = %peer_id, "Connecting to S2S peer");
+            match endpoint.connect(addr, S2S_ALPN).await {
+                Ok(conn) => {
+                    backoff = std::time::Duration::from_secs(1); // reset on success
+                    let peers = Arc::clone(&manager.peers);
+                    let server_id = manager.server_id.clone();
+                    tracing::info!(peer = %peer_id, "S2S peer connected, entering link handler");
+                    // This blocks until the link drops
+                    handle_s2s_connection(conn, peers, event_tx.clone(), server_id, false).await;
+                    tracing::warn!(peer = %peer_id, "S2S link dropped, will reconnect");
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        peer = %peer_id,
+                        backoff_secs = backoff.as_secs(),
+                        "S2S connect failed: {e}"
+                    );
+                }
+            }
+
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(max_backoff);
+        }
+    });
 }
 
 /// Handle an S2S connection (both incoming and outgoing).
@@ -273,16 +326,27 @@ async fn handle_s2s_connection(
     tokio::spawn(async move {
         let mut recv = recv;
         let mut buf = vec![0u8; 4096];
+        let mut bytes_received: u64 = 0;
         loop {
             match recv.read(&mut buf).await {
                 Ok(Some(n)) => {
-                    if bridge_write.write_all(&buf[..n]).await.is_err() { break; }
+                    bytes_received += n as u64;
+                    if bridge_write.write_all(&buf[..n]).await.is_err() {
+                        tracing::warn!(peer = %recv_peer, "S2S recv bridge write failed after {bytes_received} bytes");
+                        break;
+                    }
                 }
-                Ok(None) | Err(_) => break,
+                Ok(None) => {
+                    tracing::info!(peer = %recv_peer, "S2S recv stream finished (EOF) after {bytes_received} bytes");
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!(peer = %recv_peer, "S2S recv error after {bytes_received} bytes: {e}");
+                    break;
+                }
             }
         }
         let _ = bridge_write.shutdown().await;
-        tracing::debug!(peer = %recv_peer, "S2S recv ended");
     });
 
     // Read JSON lines from the peer
@@ -291,40 +355,62 @@ async fn handle_s2s_connection(
     let read_handle = tokio::spawn(async move {
         let reader = BufReader::new(irc_side);
         let mut lines = reader.lines();
-        while let Ok(Some(line)) = lines.next_line().await {
-            match serde_json::from_str::<S2sMessage>(&line) {
-                Ok(msg) => {
-                    if read_event_tx.send(msg).await.is_err() {
-                        break;
+        let mut msg_count: u64 = 0;
+        loop {
+            match lines.next_line().await {
+                Ok(Some(line)) => {
+                    match serde_json::from_str::<S2sMessage>(&line) {
+                        Ok(msg) => {
+                            msg_count += 1;
+                            tracing::debug!(peer = %read_peer, msg_count, "S2S received: {}", line.chars().take(120).collect::<String>());
+                            if read_event_tx.send(msg).await.is_err() {
+                                tracing::warn!(peer = %read_peer, "S2S event_tx closed after {msg_count} messages");
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(peer = %read_peer, "S2S invalid JSON: {e} — line: {}", line.chars().take(200).collect::<String>());
+                        }
                     }
                 }
+                Ok(None) => {
+                    tracing::info!(peer = %read_peer, "S2S read EOF after {msg_count} messages");
+                    break;
+                }
                 Err(e) => {
-                    tracing::warn!(peer = %read_peer, "S2S invalid message: {e}");
+                    tracing::warn!(peer = %read_peer, "S2S read error after {msg_count} messages: {e}");
+                    break;
                 }
             }
         }
     });
 
     // Write JSON lines to the peer
+    let write_peer = peer_id.clone();
     let write_handle = tokio::spawn(async move {
         let mut send = send;
+        let mut msg_count: u64 = 0;
         while let Some(msg) = write_rx.recv().await {
             match serde_json::to_string(&msg) {
                 Ok(json) => {
+                    msg_count += 1;
                     let line = format!("{json}\n");
-                    if send.write_all(line.as_bytes()).await.is_err() {
+                    tracing::debug!(peer = %write_peer, msg_count, "S2S sending: {}", json.chars().take(120).collect::<String>());
+                    if let Err(e) = send.write_all(line.as_bytes()).await {
+                        tracing::warn!(peer = %write_peer, "S2S write error after {msg_count} messages: {e}");
                         break;
                     }
-                    // Flush immediately — QUIC streams buffer aggressively
-                    if send.flush().await.is_err() {
+                    if let Err(e) = send.flush().await {
+                        tracing::warn!(peer = %write_peer, "S2S flush error after {msg_count} messages: {e}");
                         break;
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("S2S serialize error: {e}");
+                    tracing::warn!(peer = %write_peer, "S2S serialize error: {e}");
                 }
             }
         }
+        tracing::info!(peer = %write_peer, "S2S write channel closed after {msg_count} messages");
         let _ = send.finish();
     });
 
@@ -337,10 +423,13 @@ async fn handle_s2s_connection(
     }
 
     // Wait for either direction to end
-    tokio::select! {
-        _ = read_handle => {}
-        _ = write_handle => {}
-    }
+    let mut read_handle = read_handle;
+    let mut write_handle = write_handle;
+    let which = tokio::select! {
+        _ = &mut read_handle => "read",
+        _ = &mut write_handle => "write",
+    };
+    tracing::warn!(peer = %peer_id, side = which, "S2S link ending — {which} task finished first");
 
     peers.lock().await.remove(&peer_id);
     tracing::info!(peer = %peer_id, "S2S link closed");

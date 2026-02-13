@@ -105,6 +105,36 @@ pub async fn create_session(
     Ok((session, pds_url))
 }
 
+/// Refresh a PDS session using its refresh token.
+///
+/// Returns a new session with fresh access and refresh JWTs.
+/// The old refresh token is invalidated.
+pub async fn refresh_session(pds_url: &str, refresh_jwt: &str) -> Result<PdsSession> {
+    let client = reqwest::Client::new();
+    let url = format!("{pds_url}/xrpc/com.atproto.server.refreshSession");
+
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {refresh_jwt}"))
+        .send()
+        .await
+        .context("Failed to connect to PDS for session refresh")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        bail!("PDS session refresh failed ({status}): {text}");
+    }
+
+    let session: PdsSession = resp
+        .json()
+        .await
+        .context("Failed to parse PDS refresh response")?;
+
+    tracing::info!(did = %session.did, "PDS session refreshed");
+    Ok(session)
+}
+
 /// Verify a PDS session by calling getSession.
 ///
 /// Used by the server to verify a client's PDS session token.
@@ -175,12 +205,18 @@ pub async fn fetch_profile(actor: &str) -> Result<BlueskyProfile> {
 }
 
 fn percent_encode(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' | ':' => c.to_string(),
-            _ => format!("%{:02X}", c as u8),
-        })
-        .collect()
+    let mut result = String::with_capacity(s.len() * 2);
+    for byte in s.as_bytes() {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b':' => {
+                result.push(*byte as char);
+            }
+            _ => {
+                result.push_str(&format!("%{:02X}", byte));
+            }
+        }
+    }
+    result
 }
 
 /// Format a profile for display in WHOIS-style output.

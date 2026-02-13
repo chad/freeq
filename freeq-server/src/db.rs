@@ -62,7 +62,11 @@ impl Db {
                 topic_set_at INTEGER,
                 topic_locked INTEGER NOT NULL DEFAULT 0,
                 invite_only  INTEGER NOT NULL DEFAULT 0,
-                key          TEXT
+                no_ext_msg   INTEGER NOT NULL DEFAULT 0,
+                moderated    INTEGER NOT NULL DEFAULT 0,
+                key          TEXT,
+                founder_did  TEXT,
+                did_ops_json TEXT NOT NULL DEFAULT '[]'
             );
 
             CREATE TABLE IF NOT EXISTS bans (
@@ -92,6 +96,20 @@ impl Db {
             );
             ",
         )?;
+
+        // Migrate existing databases: add columns that may not exist yet.
+        // ALTER TABLE ADD COLUMN is idempotent-safe via error suppression.
+        let migrations = [
+            "ALTER TABLE channels ADD COLUMN no_ext_msg INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE channels ADD COLUMN moderated INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE channels ADD COLUMN founder_did TEXT",
+            "ALTER TABLE channels ADD COLUMN did_ops_json TEXT NOT NULL DEFAULT '[]'",
+        ];
+        for sql in &migrations {
+            // Ignore "duplicate column name" errors — means column already exists
+            let _ = self.conn.execute(sql, []);
+        }
+
         Ok(())
     }
 
@@ -99,16 +117,23 @@ impl Db {
 
     /// Save or update a channel's metadata (topic, modes, key).
     pub fn save_channel(&self, name: &str, ch: &ChannelState) -> SqlResult<()> {
+        let did_ops_json = serde_json::to_string(
+            &ch.did_ops.iter().collect::<Vec<_>>()
+        ).unwrap_or_else(|_| "[]".to_string());
         self.conn.execute(
-            "INSERT INTO channels (name, topic_text, topic_set_by, topic_set_at, topic_locked, invite_only, key)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO channels (name, topic_text, topic_set_by, topic_set_at, topic_locked, invite_only, no_ext_msg, moderated, key, founder_did, did_ops_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(name) DO UPDATE SET
                 topic_text=excluded.topic_text,
                 topic_set_by=excluded.topic_set_by,
                 topic_set_at=excluded.topic_set_at,
                 topic_locked=excluded.topic_locked,
                 invite_only=excluded.invite_only,
-                key=excluded.key",
+                no_ext_msg=excluded.no_ext_msg,
+                moderated=excluded.moderated,
+                key=excluded.key,
+                founder_did=excluded.founder_did,
+                did_ops_json=excluded.did_ops_json",
             params![
                 name,
                 ch.topic.as_ref().map(|t| &t.text),
@@ -116,7 +141,11 @@ impl Db {
                 ch.topic.as_ref().map(|t| t.set_at as i64),
                 ch.topic_locked as i32,
                 ch.invite_only as i32,
+                ch.no_ext_msg as i32,
+                ch.moderated as i32,
                 ch.key.as_deref(),
+                ch.founder_did.as_deref(),
+                did_ops_json,
             ],
         )?;
         Ok(())
@@ -135,7 +164,7 @@ impl Db {
         let mut channels = HashMap::new();
 
         let mut stmt = self.conn.prepare(
-            "SELECT name, topic_text, topic_set_by, topic_set_at, topic_locked, invite_only, key
+            "SELECT name, topic_text, topic_set_by, topic_set_at, topic_locked, invite_only, key, no_ext_msg, moderated, founder_did, did_ops_json
              FROM channels"
         )?;
         let rows = stmt.query_map([], |row| {
@@ -146,6 +175,10 @@ impl Db {
             let topic_locked: bool = row.get::<_, i32>(4)? != 0;
             let invite_only: bool = row.get::<_, i32>(5)? != 0;
             let key: Option<String> = row.get(6)?;
+            let no_ext_msg: bool = row.get::<_, Option<i32>>(7)?.unwrap_or(0) != 0;
+            let moderated: bool = row.get::<_, Option<i32>>(8)?.unwrap_or(0) != 0;
+            let founder_did: Option<String> = row.get(9)?;
+            let did_ops_json: String = row.get::<_, Option<String>>(10)?.unwrap_or_else(|| "[]".to_string());
 
             let topic = match (topic_text, topic_set_by, topic_set_at) {
                 (Some(text), Some(set_by), Some(set_at)) => Some(TopicInfo {
@@ -156,11 +189,18 @@ impl Db {
                 _ => None,
             };
 
+            let did_ops: std::collections::HashSet<String> =
+                serde_json::from_str(&did_ops_json).unwrap_or_default();
+
             let mut ch = ChannelState::default();
             ch.topic = topic;
             ch.topic_locked = topic_locked;
             ch.invite_only = invite_only;
+            ch.no_ext_msg = no_ext_msg;
+            ch.moderated = moderated;
             ch.key = key;
+            ch.founder_did = founder_did;
+            ch.did_ops = did_ops;
             Ok((name, ch))
         })?;
 
@@ -262,6 +302,17 @@ impl Db {
         // Reverse to oldest-first order
         rows_vec.reverse();
         Ok(rows_vec)
+    }
+
+    /// Prune old messages for a channel, keeping only the most recent `max_keep`.
+    pub fn prune_messages(&self, channel: &str, max_keep: usize) -> SqlResult<()> {
+        self.conn.execute(
+            "DELETE FROM messages WHERE channel = ?1 AND id NOT IN (
+                SELECT id FROM messages WHERE channel = ?1 ORDER BY timestamp DESC, id DESC LIMIT ?2
+            )",
+            params![channel, max_keep as i64],
+        )?;
+        Ok(())
     }
 
     // ── Identities (DID-nick bindings) ─────────────────────────────────

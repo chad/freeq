@@ -50,6 +50,20 @@ pub struct ServerConfig {
     /// Comma-separated list of hex endpoint IDs.
     #[arg(long, value_delimiter = ',')]
     pub s2s_peers: Vec<String>,
+
+    /// Data directory for server state files (iroh key, etc.).
+    /// Defaults to the directory containing --db-path, or current directory.
+    #[arg(long)]
+    pub data_dir: Option<String>,
+
+    /// Maximum messages to retain per channel in the database.
+    /// When exceeded, oldest messages are pruned. 0 = unlimited.
+    #[arg(long, default_value = "10000")]
+    pub max_messages_per_channel: usize,
+
+    /// Message of the Day text. If not set, no MOTD is sent.
+    #[arg(long)]
+    pub motd: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -66,6 +80,9 @@ impl Default for ServerConfig {
             iroh: false,
             iroh_port: None,
             s2s_peers: vec![],
+            data_dir: None,
+            max_messages_per_channel: 10000,
+            motd: None,
         }
     }
 }
@@ -74,5 +91,20 @@ impl ServerConfig {
     /// Returns true if TLS is configured.
     pub fn tls_enabled(&self) -> bool {
         self.tls_cert.is_some() && self.tls_key.is_some()
+    }
+
+    /// Resolve the data directory for state files.
+    /// Priority: --data-dir > parent of --db-path > current directory.
+    pub fn data_dir(&self) -> std::path::PathBuf {
+        if let Some(ref dir) = self.data_dir {
+            std::path::PathBuf::from(dir)
+        } else if let Some(ref db_path) = self.db_path {
+            std::path::Path::new(db_path)
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+        } else {
+            std::path::PathBuf::from(".")
+        }
     }
 }

@@ -100,12 +100,17 @@ impl ChallengeSigner for KeySigner {
 /// Supports two modes:
 /// - App-password sessions (plain Bearer token, no DPoP)
 /// - OAuth sessions (DPoP-bound token, includes proof for server to forward)
+///
+/// Token refresh: call `refresh()` to obtain a new access token using
+/// the stored refresh JWT. This is useful for long-lived IRC sessions
+/// where the access token may expire (typically ~2 hours).
 pub struct PdsSessionSigner {
     did: String,
-    access_token: String,
+    access_token: std::sync::RwLock<String>,
+    refresh_token: std::sync::RwLock<Option<String>>,
     pds_url: String,
     dpop_key: Option<DpopKey>,
-    dpop_nonce: Option<String>,
+    dpop_nonce: std::sync::RwLock<Option<String>>,
 }
 
 impl PdsSessionSigner {
@@ -113,10 +118,28 @@ impl PdsSessionSigner {
     pub fn new(did: String, access_token: String, pds_url: String) -> Self {
         Self {
             did,
-            access_token,
+            access_token: std::sync::RwLock::new(access_token),
+            refresh_token: std::sync::RwLock::new(None),
             pds_url,
             dpop_key: None,
-            dpop_nonce: None,
+            dpop_nonce: std::sync::RwLock::new(None),
+        }
+    }
+
+    /// Create a signer for an app-password session, with refresh token.
+    pub fn new_with_refresh(
+        did: String,
+        access_token: String,
+        refresh_token: String,
+        pds_url: String,
+    ) -> Self {
+        Self {
+            did,
+            access_token: std::sync::RwLock::new(access_token),
+            refresh_token: std::sync::RwLock::new(Some(refresh_token)),
+            pds_url,
+            dpop_key: None,
+            dpop_nonce: std::sync::RwLock::new(None),
         }
     }
 
@@ -130,11 +153,38 @@ impl PdsSessionSigner {
     ) -> Self {
         Self {
             did,
-            access_token,
+            access_token: std::sync::RwLock::new(access_token),
+            refresh_token: std::sync::RwLock::new(None),
             pds_url,
             dpop_key: Some(dpop_key),
-            dpop_nonce,
+            dpop_nonce: std::sync::RwLock::new(dpop_nonce),
         }
+    }
+
+    /// Get the current access token.
+    pub fn access_token(&self) -> String {
+        self.access_token.read().unwrap().clone()
+    }
+
+    /// Get the PDS URL.
+    pub fn pds_url(&self) -> &str {
+        &self.pds_url
+    }
+
+    /// Refresh the session using the stored refresh token.
+    ///
+    /// Returns `Ok(())` if the token was refreshed, `Err` if no refresh
+    /// token is stored or the PDS rejected it.
+    pub async fn refresh(&self) -> anyhow::Result<()> {
+        let refresh_jwt = self.refresh_token.read().unwrap().clone()
+            .ok_or_else(|| anyhow::anyhow!("No refresh token available"))?;
+
+        let new_session = crate::pds::refresh_session(&self.pds_url, &refresh_jwt).await?;
+
+        *self.access_token.write().unwrap() = new_session.access_jwt;
+        *self.refresh_token.write().unwrap() = Some(new_session.refresh_jwt);
+
+        Ok(())
     }
 }
 
@@ -144,26 +194,25 @@ impl ChallengeSigner for PdsSessionSigner {
     }
 
     fn respond(&self, _challenge_bytes: &[u8]) -> anyhow::Result<ChallengeResponse> {
+        let access_token = self.access_token.read().unwrap().clone();
+
         if let Some(ref dpop_key) = self.dpop_key {
             // OAuth mode: create a DPoP proof targeting the PDS getSession endpoint.
-            // The PDS requires a DPoP nonce, so we probe first to get it.
             let get_session_url = format!(
                 "{}/xrpc/com.atproto.server.getSession",
                 self.pds_url.trim_end_matches('/')
             );
 
-            // Discover the DPoP nonce by checking the nonce we stored during token exchange,
-            // or generate a proof without nonce and let the server handle the retry.
-            // For robustness, we try to get the nonce via a pre-flight.
-            let dpop_proof = if let Some(ref nonce) = self.dpop_nonce {
-                dpop_key.proof("GET", &get_session_url, Some(nonce), Some(&self.access_token))?
+            let dpop_nonce = self.dpop_nonce.read().unwrap().clone();
+            let dpop_proof = if let Some(ref nonce) = dpop_nonce {
+                dpop_key.proof("GET", &get_session_url, Some(nonce), Some(&access_token))?
             } else {
-                dpop_key.proof("GET", &get_session_url, None, Some(&self.access_token))?
+                dpop_key.proof("GET", &get_session_url, None, Some(&access_token))?
             };
 
             Ok(ChallengeResponse {
                 did: self.did.clone(),
-                signature: self.access_token.clone(),
+                signature: access_token,
                 method: Some("pds-oauth".to_string()),
                 pds_url: Some(self.pds_url.clone()),
                 dpop_proof: Some(dpop_proof),
@@ -172,7 +221,7 @@ impl ChallengeSigner for PdsSessionSigner {
             // App-password mode: plain Bearer token
             Ok(ChallengeResponse {
                 did: self.did.clone(),
-                signature: self.access_token.clone(),
+                signature: access_token,
                 method: Some("pds-session".to_string()),
                 pds_url: Some(self.pds_url.clone()),
                 dpop_proof: None,

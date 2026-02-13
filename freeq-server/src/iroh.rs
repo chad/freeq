@@ -27,6 +27,12 @@ pub const ALPN: &[u8] = b"freeq/iroh/1";
 /// Waits for the client to open a bidirectional stream, bridges it via
 /// a DuplexStream (same pattern as WebSocket), and passes it to the
 /// generic IRC connection handler.
+///
+/// The iroh `Connection` is held alive for the entire duration so QUIC
+/// keep-alives work and we detect disconnects promptly. When the QUIC
+/// connection drops, the recv bridge task gets EOF/error, shuts down
+/// the bridge, and the IRC handler's read loop breaks — triggering full
+/// session cleanup (QUIT broadcast, channel removal, etc.).
 pub async fn handle_connection(conn: Connection, state: Arc<SharedState>) {
     let remote_id = conn.remote_id();
     tracing::info!(%remote_id, "Iroh connection accepted");
@@ -40,14 +46,13 @@ pub async fn handle_connection(conn: Connection, state: Arc<SharedState>) {
     };
 
     // Bridge QUIC streams to a DuplexStream that handle_generic() can use.
-    // Same pattern as the WebSocket bridge in web.rs.
     let (irc_side, bridge_side) = tokio::io::duplex(16384);
     let (irc_read, irc_write) = tokio::io::split(irc_side);
     let (mut bridge_read, mut bridge_write) = tokio::io::split(bridge_side);
 
     // Task: QUIC recv → bridge_write → IRC handler reads
     let rx_remote = remote_id;
-    tokio::spawn(async move {
+    let rx_handle = tokio::spawn(async move {
         let mut recv = recv;
         let mut buf = vec![0u8; 4096];
         loop {
@@ -64,12 +69,13 @@ pub async fn handle_connection(conn: Connection, state: Arc<SharedState>) {
                 }
             }
         }
+        tracing::debug!(remote = %rx_remote, "Iroh recv bridge ended, shutting down");
         let _ = bridge_write.shutdown().await;
     });
 
     // Task: IRC handler writes → bridge_read → QUIC send
     let tx_remote = remote_id;
-    tokio::spawn(async move {
+    let tx_handle = tokio::spawn(async move {
         let mut send = send;
         let mut buf = vec![0u8; 4096];
         loop {
@@ -89,13 +95,24 @@ pub async fn handle_connection(conn: Connection, state: Arc<SharedState>) {
         let _ = send.finish();
     });
 
-    // Now the IRC handler sees a normal AsyncRead + AsyncWrite stream,
-    // with the iroh endpoint ID passed through for identity binding.
+    // The IRC handler sees a normal AsyncRead + AsyncWrite stream.
+    // This blocks until the client disconnects (EOF, error, or ping timeout).
     let stream = crate::web::WsBridge { reader: irc_read, writer: irc_write };
     let iroh_id = remote_id.to_string();
-    if let Err(e) = crate::connection::handle_generic_with_meta(stream, state, Some(iroh_id)).await {
-        tracing::error!(%remote_id, "Iroh connection error: {e}");
+    match crate::connection::handle_generic_with_meta(stream, state, Some(iroh_id)).await {
+        Ok(()) => tracing::info!(%remote_id, "Iroh client disconnected (clean)"),
+        Err(e) => tracing::warn!(%remote_id, "Iroh client disconnected with error: {e}"),
     }
+
+    // Clean up bridge tasks — the IRC handler has already run session cleanup
+    // (QUIT broadcast, channel removal, nick release, etc.).
+    rx_handle.abort();
+    tx_handle.abort();
+
+    // Explicitly close the QUIC connection so the remote side gets
+    // a CONNECTION_CLOSE frame instead of a silent timeout.
+    conn.close(0u32.into(), b"session ended");
+    tracing::debug!(%remote_id, "Iroh QUIC connection closed");
 }
 
 /// Load or generate a persistent secret key for stable endpoint identity.
@@ -126,8 +143,9 @@ pub async fn start(
     state: Arc<SharedState>,
     bind_port: Option<u16>,
 ) -> Result<iroh::Endpoint> {
-    // Use a persistent secret key so the endpoint ID is stable across restarts
-    let key_path = std::path::PathBuf::from("iroh-key.secret");
+    // Use a persistent secret key so the endpoint ID is stable across restarts.
+    // Store in data_dir (respects --data-dir / --db-path parent).
+    let key_path = state.config.data_dir().join("iroh-key.secret");
     let secret_key = load_or_create_secret_key(&key_path)?;
 
     let mut builder = iroh::Endpoint::builder()

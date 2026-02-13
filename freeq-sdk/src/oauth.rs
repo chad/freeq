@@ -652,10 +652,16 @@ async fn probe_dpop_nonce(pds_url: &str, access_token: &str, dpop_key: &DpopKey)
 }
 
 fn urlencod(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
-            _ => format!("%{:02X}", c as u8),
-        })
-        .collect()
+    let mut result = String::with_capacity(s.len() * 2);
+    for byte in s.as_bytes() {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                result.push(*byte as char);
+            }
+            _ => {
+                result.push_str(&format!("%{:02X}", byte));
+            }
+        }
+    }
+    result
 }

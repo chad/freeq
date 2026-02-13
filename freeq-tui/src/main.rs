@@ -243,7 +243,9 @@ async fn build_signer(cli: &Cli) -> Result<SignerResult> {
                 dpop_nonce: None,
             };
             return Ok((
-                Some(Arc::new(PdsSessionSigner::new(session.did, session.access_jwt, pds_url))),
+                Some(Arc::new(PdsSessionSigner::new_with_refresh(
+                    session.did, session.access_jwt, session.refresh_jwt, pds_url,
+                ))),
                 Some(uploader),
             ));
         } else {
