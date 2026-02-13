@@ -11,6 +11,7 @@ This document catalogs every feature implemented in Freeq, organized by category
 | Feature | Status | Notes |
 |---------|--------|-------|
 | NICK / USER registration | ✅ | Standard IRC registration flow |
+| NICK change after registration | ✅ | Broadcasts `:old NICK :new` to user + shared channels + S2S |
 | PING / PONG keepalive | ✅ | Both client→server and server→client |
 | QUIT with reason broadcast | ✅ | Broadcasts to all shared channels |
 | Connection timeout detection | ✅ | 90s ping interval, 180s timeout |
@@ -29,6 +30,10 @@ This document catalogs every feature implemented in Freeq, organized by category
 | CTCP ACTION (`/me`) | ✅ | Via `\x01ACTION ...\x01` |
 | TOPIC query and set | ✅ | RPL_TOPIC (332), RPL_TOPICWHOTIME (333), RPL_NOTOPIC (331) |
 | NAMES (353/366) | ✅ | With `@` and `+` prefixes for ops/voiced |
+| LIST (322/323) | ✅ | Channel list with member counts and topics |
+| WHO (352/315) | ✅ | Per-channel and global, shows DID/handle for authenticated users |
+| AWAY (301/305/306) | ✅ | Sets/clears away, RPL_AWAY on PM |
+| MOTD (375/372/376) | ✅ | On registration + standalone command |
 | KICK | ✅ | With reason, proper numeric errors |
 | INVITE | ✅ | RPL_INVITING (341), notifies target |
 
@@ -38,10 +43,12 @@ This document catalogs every feature implemented in Freeq, organized by category
 |------|--------|-------|
 | `+o` / `-o` (channel operator) | ✅ | |
 | `+v` / `-v` (voice) | ✅ | |
-| `+b` / `-b` (ban) | ✅ | Hostmask wildcard matching |
+| `+b` / `-b` (ban) | ✅ | Hostmask + DID wildcard matching |
 | `+i` / `-i` (invite-only) | ✅ | |
 | `+t` / `-t` (topic lock) | ✅ | Only ops can set topic when enabled |
 | `+k` / `-k` (channel key) | ✅ | Password required to join |
+| `+n` / `-n` (no external messages) | ✅ | Non-members can't send to channel |
+| `+m` / `-m` (moderated) | ✅ | Only ops/voiced can speak |
 | MODE query (324) | ✅ | Lists current channel modes |
 | Ban list query (`+b` no arg) | ✅ | RPL_BANLIST (367), RPL_ENDOFBANLIST (368) |
 
@@ -67,10 +74,6 @@ This document catalogs every feature implemented in Freeq, organized by category
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| LIST | ❌ | Not implemented |
-| WHO | ❌ | Not implemented |
-| AWAY | ❌ | Not implemented |
-| MOTD (375/372/376) | ❌ | Not implemented |
 | OPER (server operator) | ❌ | Not implemented |
 | WALLOPS | ❌ | Not implemented |
 | LUSERS | ❌ | Not implemented |
@@ -82,16 +85,11 @@ This document catalogs every feature implemented in Freeq, organized by category
 | STATS | ❌ | Not implemented |
 | TIME | ❌ | Not implemented |
 | VERSION | ❌ | Not implemented |
-| Channel modes: `+m` (moderated) | ❌ | Not implemented |
-| Channel modes: `+n` (no external) | ❌ | Not implemented (external msgs always allowed) |
 | Channel modes: `+s` / `+p` (secret/private) | ❌ | Not implemented |
 | Channel modes: `+l` (user limit) | ❌ | Not implemented |
-| SASL AUTHENTICATE `*` (abort) | ❌ | Not handled |
 | Hostname cloaking | ❌ | |
 | Reverse DNS lookup | ❌ | |
 | K-line / G-line (server bans) | ❌ | |
-| Nick change broadcast | Partial | Local clients see NICK change; S2S broadcasts NICK but remote_members map isn't fully updated |
-| NICK change after registration | Partial | Nick→session mapping updates but JOIN/channel membership doesn't re-broadcast |
 
 ---
 
@@ -102,20 +100,21 @@ This document catalogs every feature implemented in Freeq, organized by category
 | CAP LS / REQ / ACK / NAK / END | ✅ | IRCv3 capability negotiation |
 | `sasl` capability | ✅ | With ATPROTO-CHALLENGE mechanism |
 | `message-tags` capability | ✅ | Tag-aware routing per client |
+| `server-time` capability | ✅ | Timestamps on history replay |
+| `batch` capability | ✅ | History wrapped in `chathistory` batch |
+| `multi-prefix` capability | ✅ | Shows all prefix chars in NAMES |
+| `echo-message` capability | ✅ | Echoes own messages to negotiated clients |
 | TAGMSG (tags-only messages) | ✅ | With fallback for plain clients |
 | `iroh=<id>` CAP advertisement | 🆕 | Transport discovery via CAP LS |
+| SASL AUTHENTICATE `*` abort | ✅ | Cleanly aborts SASL negotiation |
 
 ### Missing IRCv3 Extensions
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `multi-prefix` | ❌ | |
 | `away-notify` | ❌ | |
 | `account-notify` | ❌ | |
 | `account-tag` | ❌ | |
-| `batch` | ❌ | History replay doesn't use batch |
-| `echo-message` | ❌ | |
-| `server-time` | ❌ | History replay has no timestamps |
 | `labeled-response` | ❌ | |
 | `invite-notify` | ❌ | |
 | `chghost` | ❌ | |
@@ -124,6 +123,7 @@ This document catalogs every feature implemented in Freeq, organized by category
 | `setname` | ❌ | |
 | `standard-replies` | ❌ | |
 | `msgid` (message IDs) | ❌ | |
+| `CHATHISTORY` command | ❌ | On-demand history (not just on join) |
 
 ---
 
@@ -179,10 +179,11 @@ This document catalogs every feature implemented in Freeq, organized by category
 | DID-based invites | ✅ | Stored by DID, survive reconnect |
 | Nick ownership (DID binding) | ✅ | Persisted across restarts |
 | Nick enforcement at registration | ✅ | Non-owners renamed to `GuestXXXX` |
-| Persistent DID-based channel ops | ✅ | Auto-op on rejoin by DID |
-| Channel founder (first authenticated user) | ✅ | Can't be de-opped |
+| Persistent DID-based channel ops | ✅ | Auto-op on rejoin by DID, persisted in DB |
+| Channel founder (first authenticated user) | ✅ | Can't be de-opped, persisted in DB |
 | DID in WHOIS output | ✅ | Numeric 330 |
 | AT handle in WHOIS output | ✅ | Resolved asynchronously from DID doc |
+| Auto-op on empty channel rejoin | ✅ | First user joining empty+zero-ops channel gets ops |
 
 ---
 
@@ -212,11 +213,14 @@ This document catalogs every feature implemented in Freeq, organized by category
 |---------|--------|-------|
 | Iroh endpoint for IRC connections | ✅ | ALPN: `freeq/iroh/1` |
 | Persistent secret key (`iroh-key.secret`) | ✅ | Stable endpoint ID across restarts |
+| Iroh endpoint stored in SharedState | ✅ | Proper lifetime (no `mem::forget`) |
 | NAT hole-punching + relay fallback | ✅ | Via iroh's infrastructure |
 | Transport-agnostic handler | ✅ | All transports → `handle_generic()` |
 | Iroh ID in CAP LS for auto-discovery | ✅ | `iroh=<endpoint-id>` |
 | Client auto-upgrade to iroh | ✅ | Probes CAP LS, reconnects via iroh |
 | Configurable iroh UDP port | ✅ | `--iroh-port` |
+| Connection held alive for session | ✅ | Explicit close with CONNECTION_CLOSE frame |
+| Bridge task abort on disconnect | ✅ | Clean cleanup |
 
 ---
 
@@ -257,21 +261,26 @@ This document catalogs every feature implemented in Freeq, organized by category
 | ALPN-based routing (client vs S2S) | ✅ | |
 | Origin tracking (loop prevention) | ✅ | `origin` field in S2S messages |
 | Newline-delimited JSON S2S protocol | ✅ | |
+| Auto-reconnection with exponential backoff | ✅ | 1s→60s cap, `connect_peer_with_retry()` |
+| Diagnostic logging (byte/message counts) | ✅ | Which side ended link, close reasons |
 
 ### What Syncs
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| PRIVMSG relay | ✅ | Channel messages |
+| PRIVMSG relay | ✅ | Channel messages, enforces +n/+m |
 | JOIN / PART / QUIT propagation | ✅ | Membership tracking per origin server |
-| NICK change propagation | ✅ | |
-| TOPIC sync | ✅ | |
-| Remote member tracking | ✅ | `remote_members` with DID + handle |
-| SyncRequest / SyncResponse | ✅ | Initial state exchange |
-| NAMES includes remote members | ✅ | With DID-based op prefixes |
+| NICK change propagation | ✅ | Updates remote_members map in all channels |
+| TOPIC sync | ✅ | Enforces +t on incoming S2S topics |
+| MODE sync (real-time) | ✅ | +t/+i/+n/+m/+k broadcast via S2S Mode message |
+| MODE sync (SyncResponse) | ✅ | Full state replacement (not additive) |
+| Remote member tracking | ✅ | `remote_members` with DID, handle, is_op |
+| SyncRequest / SyncResponse | ✅ | Initial state exchange with rich nick_info |
+| NAMES includes remote members | ✅ | With op status from home server + DID-based |
 | WHOIS for remote users | ✅ | Shows DID, handle, origin |
 | DID-based ops sync | ✅ | Union merge |
 | Founder sync (first-write-wins) | ✅ | No timestamp dependency |
+| ChannelCreated propagation | ✅ | Founder + DID ops + created_at |
 
 ### CRDT State Layer (Automerge)
 
@@ -287,15 +296,16 @@ This document catalogs every feature implemented in Freeq, organized by category
 | Sync message generation/receipt | ✅ | Automerge sync protocol |
 | Save/load from bytes | ✅ | |
 
-### S2S Limitations
+### S2S Limitations (see also docs/s2s-audit.md)
 
 | Limitation | Notes |
 |------------|-------|
 | No S2S authentication | Any server can join the mesh |
-| No partition healing | Lost peers don't auto-reconnect |
-| No conflict notification to users | Silent merge |
+| Bans not propagated cross-server | Only local bans enforced |
+| S2S Join doesn't check bans or +i | Remote server should enforce |
+| ChannelCreated race in narrow window | Both servers may create simultaneously |
+| CRDT not wired to live S2S | Two separate state systems |
 | Rogue server can add `did_ops` | Authorization-on-write not implemented |
-| S2S doesn't sync ban state | Only local bans enforced |
 
 ---
 
@@ -306,10 +316,14 @@ This document catalogs every feature implemented in Freeq, organized by category
 | `--db-path` opt-in | ✅ | In-memory by default |
 | WAL mode | ✅ | Good concurrent read performance |
 | Message history storage | ✅ | All channel messages |
-| Channel state persistence | ✅ | Topics, modes (+t/+i/+k), keys |
+| Channel state persistence | ✅ | Topics, modes (+t/+i/+k/+n/+m), keys |
 | Ban persistence | ✅ | Hostmask and DID bans |
 | DID-nick identity bindings | ✅ | Survive restarts |
-| History replay on JOIN | ✅ | Last 100 messages, with tag support |
+| DID-based ops persistence | ✅ | `did_ops_json` column |
+| Founder persistence | ✅ | `founder_did` column |
+| History replay on JOIN | ✅ | Last 100 messages with `server-time` + `batch` |
+| Message pruning | ✅ | `--max-messages-per-channel` config |
+| Idempotent DB migration | ✅ | `ALTER TABLE ADD COLUMN` on startup |
 | Graceful persistence failures | ✅ | Logged, don't crash server |
 | Load persisted state on startup | ✅ | Channels, bans, messages, identities |
 
@@ -317,10 +331,8 @@ This document catalogs every feature implemented in Freeq, organized by category
 
 | Gap | Notes |
 |-----|-------|
-| No message pruning/rotation | Database grows unbounded |
-| No DID-based ops persistence | Only in-memory + CRDT |
-| No founder persistence in DB | Only in-memory + CRDT |
-| History replay lacks timestamps | Messages appear as "just sent" |
+| No `--message-retention-days` | Only count-based pruning |
+| No full-text search | SQLite FTS5 not wired up |
 
 ---
 
@@ -344,7 +356,7 @@ This document catalogs every feature implemented in Freeq, organized by category
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Media attachment tags | ✅ | `content-type`, `media-url`, `media-alt`, etc. |
-| Multipart/alternative semantics | ✅ | Tags for rich clients, body for plain |
+| Multipart/alternative semantics | ✅ | Tags for rich clients, body for plain clients |
 | Link preview tags | ✅ | `text/x-link-preview` content type |
 | Reaction tags (`+react`) | ✅ | With TAGMSG, fallback ACTION for plain clients |
 | Media upload to AT Protocol PDS | ✅ | Blob upload + record pinning |
@@ -369,17 +381,11 @@ This document catalogs every feature implemented in Freeq, organized by category
 | DPoP proof creation (RFC 9449) | ✅ | With `ath` claim |
 | DPoP nonce discovery and retry | ✅ | |
 | Token exchange | ✅ | |
+| Token refresh | ✅ | `PdsSessionSigner` with `RwLock` interior mutability |
 | Session caching to disk | ✅ | `~/.config/freeq-tui/<handle>.session.json` |
 | Cached session validation | ✅ | Probes PDS on reuse |
 | Restrictive file permissions (0600) | ✅ | |
 | Handle → DID → PDS resolution | ✅ | |
-
-### OAuth Gaps
-
-| Gap | Notes |
-|-----|-------|
-| No token refresh | Re-auth via browser when expired |
-| No PKCE state persistence across crashes | |
 
 ---
 
@@ -421,9 +427,9 @@ This document catalogs every feature implemented in Freeq, organized by category
 | Rich media display (🖼 badge) | ✅ | Image/video/audio formatting |
 | E2EE status display | ✅ | 🔒 prefix on encrypted channels |
 
-### Commands (37 total)
+### Commands (45+ total)
 
-`/join`, `/part`, `/msg`, `/me`, `/topic`, `/mode`, `/op`, `/deop`, `/voice`, `/kick`, `/ban`, `/unban`, `/invite`, `/whois`, `/names`, `/raw`, `/encrypt`, `/decrypt`, `/p2p start`, `/p2p id`, `/p2p connect`, `/p2p msg`, `/net`, `/debug`, `/quit`, `/help`, plus MODE variants (+o/-o, +v/-v, +b/-b, +i/-i, +t/-t, +k/-k).
+`/join`, `/part`, `/msg`, `/me`, `/topic`, `/mode`, `/op`, `/deop`, `/voice`, `/kick`, `/ban`, `/unban`, `/invite`, `/whois`, `/names`, `/who`, `/list`, `/away`, `/motd`, `/nick`, `/raw`, `/encrypt`, `/decrypt`, `/p2p start`, `/p2p id`, `/p2p connect`, `/p2p msg`, `/net`, `/debug`, `/quit`, `/help`, `/commands`, plus MODE variants (+o/-o, +v/-v, +b/-b, +i/-i, +t/-t, +k/-k, +n/-n, +m/-m).
 
 ---
 
@@ -433,6 +439,7 @@ This document catalogs every feature implemented in Freeq, organized by category
 |---------|--------|-------|
 | `(ClientHandle, Receiver<Event>)` pattern | ✅ | Any UI/bot can consume |
 | Pluggable `ChallengeSigner` trait | ✅ | KeySigner, PdsSessionSigner, StubSigner |
+| `PdsSessionSigner` with token refresh | ✅ | `RwLock` interior mutability, `new_with_refresh()` |
 | `establish_connection()` pre-TUI | ✅ | Connection errors before UI starts |
 | Iroh auto-discovery (`discover_iroh_id`) | ✅ | Probe CAP LS for iroh upgrade |
 | Tagged message sending | ✅ | `send_tagged`, `send_media`, `send_reaction` |
@@ -455,8 +462,8 @@ This document catalogs every feature implemented in Freeq, organized by category
 | SDK unit tests | 35 | IRC parsing, crypto, DID, media, auth |
 | Server unit tests | 33 | Parsing, SASL, channel state, DB, CRDT |
 | Integration tests | 27 | End-to-end auth flows, channel ops, persistence |
-| S2S acceptance tests | 9 | Requires two live servers |
-| **Total** | **104** | |
+| S2S acceptance tests | 39 | 16 single-server + 14 S2S + 9 netsplit/reconnect |
+| **Total** | **134** | |
 
 ---
 
@@ -473,4 +480,5 @@ This document catalogs every feature implemented in Freeq, organized by category
 | `--web-addr` | None | Enables HTTP/WS |
 | `--iroh` | false | Enables iroh |
 | `--iroh-port` | random | |
-| `--s2s-peers` | empty | Comma-separated |
+| `--s2s-peers` | empty | Comma-separated endpoint IDs |
+| `--max-messages-per-channel` | None | Message pruning |
