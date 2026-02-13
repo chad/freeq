@@ -488,10 +488,18 @@ struct AuthLoginQuery {
 /// Initiates the AT Protocol OAuth flow. Resolves the handle, does PAR,
 /// and redirects the browser to the authorization server.
 async fn auth_login(
+    headers: axum::http::HeaderMap,
     Query(q): Query<AuthLoginQuery>,
     State(state): State<Arc<SharedState>>,
 ) -> Result<Redirect, (StatusCode, String)> {
     let handle = q.handle.trim().to_string();
+
+    // Derive the origin from the Host header so redirect_uri matches what the browser sees
+    let host = headers.get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("localhost:8080");
+    let scheme = if host.starts_with("localhost") || host.starts_with("127.") { "http" } else { "https" };
+    let web_origin = format!("{scheme}://{host}");
 
     // Resolve handle → DID → PDS
     let resolver = freeq_sdk::did::DidResolver::http();
@@ -527,8 +535,6 @@ async fn auth_login(
         .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No PAR endpoint".to_string()))?;
 
     // Build redirect URI and client_id
-    // We use the server's own web address as the callback
-    let web_origin = format!("http://{}", state.config.web_addr.as_deref().unwrap_or("localhost:8080"));
     let redirect_uri = format!("{web_origin}/auth/callback");
     let scope = "atproto transition:generic";
     let client_id = format!(
