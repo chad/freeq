@@ -86,6 +86,10 @@
   .msg .text { flex: 1; min-width: 0; }
   .msg .text a { color: var(--blue); text-decoration: none; }
   .msg .text a:hover { text-decoration: underline; }
+  .msg .text .embed-img { max-width: min(480px, 100%); max-height: 320px; border-radius: 6px; margin: 4px 0 2px; display: block; cursor: pointer; }
+  .msg .text .embed-img:hover { outline: 2px solid var(--blue); }
+  .msg .text .embed-video { max-width: min(480px, 100%); max-height: 360px; border-radius: 6px; margin: 4px 0 2px; display: block; }
+  .msg .text .embed-audio { max-width: min(400px, 100%); margin: 4px 0 2px; display: block; }
   .msg.action .text { font-style: italic; color: var(--fg2); }
   .msg.system { opacity: .6; }
   .msg.system .text { color: var(--fg3); font-style: italic; }
@@ -639,7 +643,26 @@ function rmUserFromBuf(b, n) { if (!b) return; b.users.delete(n); b.users.delete
 const COLORS = ['var(--red)','var(--green)','var(--yellow)','var(--blue)','var(--mauve)','var(--teal)','var(--pink)','var(--peach)','var(--sky)'];
 function ncolor(n) { let h = 0; for (let i = 0; i < n.length; i++) h = n.charCodeAt(i) + ((h << 5) - h); return COLORS[Math.abs(h) % COLORS.length]; }
 function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function linkify(s) { return esc(s).replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>'); }
+const IMG_RE = /\.(png|jpe?g|gif|webp|svg|avif|ico|bmp)(\?[^\s]*)?$/i;
+const VIDEO_RE = /\.(mp4|webm|mov)(\?[^\s]*)?$/i;
+const AUDIO_RE = /\.(mp3|ogg|wav|flac|m4a|aac)(\?[^\s]*)?$/i;
+
+function linkify(s) {
+  return esc(s).replace(/(https?:\/\/[^\s<]+)/g, (url) => {
+    const clean = url.replace(/[).,;:!?]+$/, ''); // strip trailing punctuation
+    const link = '<a href="' + clean + '" target="_blank" rel="noopener">' + clean + '</a>';
+    if (IMG_RE.test(clean)) {
+      return link + '<br><img class="embed-img" src="' + clean + '" loading="lazy" alt="">';
+    }
+    if (VIDEO_RE.test(clean)) {
+      return link + '<br><video class="embed-video" src="' + clean + '" controls preload="metadata"></video>';
+    }
+    if (AUDIO_RE.test(clean)) {
+      return link + '<br><audio class="embed-audio" src="' + clean + '" controls preload="metadata"></audio>';
+    }
+    return link;
+  });
+}
 function timeStr(d) { if (!d) d = new Date(); return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0'); }
 
 function sysMsg(buffer, text) { addMsg(buffer, null, '—', text, 'system'); }
@@ -672,6 +695,11 @@ function appendEl(e) {
   const nickH = e.cls.includes('action') ? '* ' + esc(e.sender) : esc(e.sender);
   div.innerHTML = '<span class="ts">' + e.time + '</span><span class="nick" style="color:' + color + '">' + nickH + '</span><span class="text">' + linkify(e.text) + '</span>';
   c.appendChild(div);
+  // Click embedded image → open full size
+  div.querySelectorAll('.embed-img').forEach(img => {
+    img.onclick = () => window.open(img.src, '_blank');
+    img.onerror = () => img.remove(); // hide broken images
+  });
   if (atBottom) c.scrollTop = c.scrollHeight;
 }
 
