@@ -2,3 +2,4 @@
 Cargo.lock
 irc.db*
 iroh-key.secret
+freeq.db*
