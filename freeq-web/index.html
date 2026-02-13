@@ -386,17 +386,26 @@ function handleLine(rawLine) {
 
     // ── SASL ──
     case 'AUTHENTICATE': {
-      if (p[0] === '+' && saslInProgress && atAccessJwt) {
-        // Server sent challenge. Build pds-session response.
-        const challengeB64 = p[0] === '+' ? '' : p[0];
-        // For pds-session, we send: did\0method\0token\0pds_url
-        const payload = atDid + '\0pds-session\0' + atAccessJwt + '\0' + atPdsUrl;
-        const encoded = btoa(payload);
-        // Send in 400-byte chunks
-        for (let i = 0; i < encoded.length; i += 400) {
-          raw('AUTHENTICATE ' + encoded.slice(i, i + 400));
+      if (saslInProgress && atAccessJwt && p[0] && p[0] !== '+') {
+        // Server sent base64url-encoded challenge JSON.
+        // We respond with a ChallengeResponse JSON (base64url-encoded).
+        const response = {
+          did: atDid,
+          method: 'pds-session',
+          signature: atAccessJwt,
+          pds_url: atPdsUrl,
+        };
+        const json = JSON.stringify(response);
+        // base64url encode (no padding)
+        const encoded = btoa(json).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        if (encoded.length <= 400) {
+          raw('AUTHENTICATE ' + encoded);
+        } else {
+          for (let i = 0; i < encoded.length; i += 400) {
+            raw('AUTHENTICATE ' + encoded.slice(i, i + 400));
+          }
+          raw('AUTHENTICATE +');
         }
-        if (encoded.length % 400 === 0) raw('AUTHENTICATE +');
       }
       break;
     }
