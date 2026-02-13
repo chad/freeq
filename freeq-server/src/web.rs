@@ -716,10 +716,19 @@ fn oauth_result_page(message: &str, result: Option<&crate::server::OAuthResult>)
         let json = serde_json::to_string(r).unwrap_or_default();
         format!(
             r#"<script>
+            // Use BroadcastChannel (works across redirects, unlike window.opener)
+            try {{
+                const bc = new BroadcastChannel('freeq-oauth');
+                bc.postMessage({{ type: 'freeq-oauth', result: {json} }});
+                bc.close();
+            }} catch(e) {{}}
+            // Also try window.opener as fallback
             if (window.opener) {{
-                window.opener.postMessage({{ type: 'freeq-oauth', result: {json} }}, '*');
-                setTimeout(() => window.close(), 2000);
+                try {{ window.opener.postMessage({{ type: 'freeq-oauth', result: {json} }}, '*'); }} catch(e) {{}}
             }}
+            // Also store in localStorage for polling fallback
+            try {{ localStorage.setItem('freeq-oauth-result', JSON.stringify({json})); }} catch(e) {{}}
+            setTimeout(() => window.close(), 1500);
             </script>"#
         )
     } else {

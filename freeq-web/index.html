@@ -264,23 +264,47 @@ function doOAuthConnect() {
   showErr('Opening Bluesky login…');
   const serverUrl = document.getElementById('f-server').value.trim().replace(/^ws/, 'http').replace(/\/irc$/, '');
   const authUrl = serverUrl + '/auth/login?handle=' + encodeURIComponent(atHandle);
+  startOAuthPoll();
   oauthPopup = window.open(authUrl, 'freeq-auth', 'width=500,height=600');
 }
 
-// Listen for OAuth result from popup
+// Listen for OAuth result via BroadcastChannel
+try {
+  const bc = new BroadcastChannel('freeq-oauth');
+  bc.onmessage = (e) => {
+    if (e.data && e.data.type === 'freeq-oauth' && e.data.result) handleOAuthResult(e.data.result);
+  };
+} catch(e) {}
+
+// Fallback: window.opener postMessage
 window.addEventListener('message', (e) => {
-  if (e.data && e.data.type === 'freeq-oauth' && e.data.result) {
-    const r = e.data.result;
-    atDid = r.did;
-    atAccessJwt = r.access_jwt;
-    atPdsUrl = r.pds_url;
-    atHandle = r.handle || atHandle;
-    showErr('OAuth successful! Connecting…');
-    if (oauthPopup) { oauthPopup.close(); oauthPopup = null; }
-    // Now connect with the OAuth token
-    doConnect();
-  }
+  if (e.data && e.data.type === 'freeq-oauth' && e.data.result) handleOAuthResult(e.data.result);
 });
+
+// Fallback: poll localStorage (for browsers without BroadcastChannel)
+let oauthPollTimer = null;
+function startOAuthPoll() {
+  localStorage.removeItem('freeq-oauth-result');
+  oauthPollTimer = setInterval(() => {
+    const raw = localStorage.getItem('freeq-oauth-result');
+    if (raw) {
+      localStorage.removeItem('freeq-oauth-result');
+      clearInterval(oauthPollTimer); oauthPollTimer = null;
+      try { handleOAuthResult(JSON.parse(raw)); } catch(e) {}
+    }
+  }, 500);
+}
+
+function handleOAuthResult(r) {
+  if (oauthPollTimer) { clearInterval(oauthPollTimer); oauthPollTimer = null; }
+  atDid = r.did;
+  atAccessJwt = r.access_jwt;
+  atPdsUrl = r.pds_url;
+  atHandle = r.handle || atHandle;
+  showErr('OAuth successful! Connecting…');
+  if (oauthPopup) { try { oauthPopup.close(); } catch(e) {} oauthPopup = null; }
+  doConnect();
+}
 
 // ── IRC send ─────────────────────────────────────────────────────
 
