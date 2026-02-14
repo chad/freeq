@@ -250,6 +250,26 @@ pub const RPL_AWAY: &str = "301";
 pub const RPL_UNAWAY: &str = "305";
 pub const RPL_NOWAWAY: &str = "306";
 
+// LUSERS numerics
+pub const RPL_LUSERCLIENT: &str = "251";
+pub const RPL_LUSEROP: &str = "252";
+pub const RPL_LUSERCHANNELS: &str = "254";
+pub const RPL_LUSERME: &str = "255";
+
+// VERSION / TIME / ADMIN / INFO
+pub const RPL_VERSION: &str = "351";
+pub const RPL_TIME: &str = "391";
+pub const RPL_ADMINME: &str = "256";
+pub const RPL_ADMINLOC1: &str = "257";
+pub const RPL_ADMINLOC2: &str = "258";
+pub const RPL_ADMINEMAIL: &str = "259";
+pub const RPL_INFO: &str = "371";
+pub const RPL_ENDOFINFO: &str = "374";
+
+// USERHOST / ISON
+pub const RPL_USERHOST: &str = "302";
+pub const RPL_ISON: &str = "303";
+
 // Errors
 pub const ERR_UNKNOWNCOMMAND: &str = "421";
 pub const ERR_NONICKNAMEGIVEN: &str = "431";

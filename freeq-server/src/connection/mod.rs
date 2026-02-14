@@ -1,0 +1,747 @@
+#![allow(clippy::too_many_arguments)]
+//! Per-client connection handler.
+//!
+//! Each TCP connection gets a [`Connection`] that manages:
+//! - IRC registration (NICK/USER)
+//! - CAP capability negotiation
+//! - SASL authentication flow
+//! - Message routing post-registration
+//! - WHOIS with DID information
+//!
+//! The handler is split into submodules for readability:
+//! - [`cap`] — CAP negotiation and SASL authentication
+//! - [`registration`] — IRC registration completion
+//! - [`channel`] — JOIN, PART, MODE, TOPIC, KICK, INVITE, NAMES, LIST
+//! - [`messaging`] — PRIVMSG, NOTICE, TAGMSG, CHATHISTORY
+//! - [`queries`] — WHOIS, WHO, LUSERS, AWAY
+//! - [`helpers`] — S2S broadcast, channel delivery, utility functions
+
+mod cap;
+mod channel;
+pub mod helpers;
+mod messaging;
+mod queries;
+mod registration;
+
+use std::sync::Arc;
+
+use anyhow::Result;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
+use tokio::sync::mpsc;
+
+use crate::irc::{self, Message};
+use crate::server::SharedState;
+
+use cap::{handle_authenticate, handle_cap};
+use channel::{
+    handle_invite, handle_join, handle_kick, handle_list, handle_mode, handle_names, handle_part,
+    handle_topic,
+};
+use helpers::{normalize_channel, s2s_broadcast};
+use messaging::{handle_chathistory, handle_privmsg, handle_tagmsg};
+use queries::{handle_away, handle_lusers, handle_who, handle_whois};
+use registration::try_complete_registration;
+
+// Re-export items used by other modules in the crate
+pub(crate) use helpers::{broadcast_account_notify, make_extended_join, make_standard_join};
+
+/// State of a single client connection.
+pub struct Connection {
+    pub id: String,
+    pub nick: Option<String>,
+    pub user: Option<String>,
+    pub realname: Option<String>,
+    pub authenticated_did: Option<String>,
+    pub registered: bool,
+
+    /// Iroh endpoint ID of the remote peer (if connected via iroh).
+    /// This is a cryptographic public key, giving us verified identity.
+    pub iroh_endpoint_id: Option<String>,
+
+    // CAP negotiation state
+    pub(crate) cap_negotiating: bool,
+    pub(crate) cap_sasl_requested: bool,
+    pub(crate) cap_message_tags: bool,
+    pub(crate) cap_multi_prefix: bool,
+    pub(crate) cap_echo_message: bool,
+    pub(crate) cap_server_time: bool,
+    pub(crate) cap_batch: bool,
+    pub(crate) cap_chathistory: bool,
+    pub(crate) cap_account_notify: bool,
+    pub(crate) cap_extended_join: bool,
+    /// Client understands E2EE messages (won't get synthetic notices instead).
+    #[allow(dead_code)]
+    pub(crate) cap_e2ee: bool,
+
+    // SASL state
+    pub(crate) sasl_in_progress: bool,
+}
+
+impl Connection {
+    fn new(id: String) -> Self {
+        Self {
+            id,
+            nick: None,
+            user: None,
+            realname: None,
+            authenticated_did: None,
+            registered: false,
+            iroh_endpoint_id: None,
+            cap_negotiating: false,
+            cap_sasl_requested: false,
+            cap_message_tags: false,
+            cap_multi_prefix: false,
+            cap_echo_message: false,
+            cap_server_time: false,
+            cap_batch: false,
+            cap_chathistory: false,
+            cap_account_notify: false,
+            cap_extended_join: false,
+            cap_e2ee: false,
+            sasl_in_progress: false,
+        }
+    }
+
+    pub(crate) fn nick_or_star(&self) -> &str {
+        self.nick.as_deref().unwrap_or("*")
+    }
+
+    pub(crate) fn hostmask(&self) -> String {
+        let nick = self.nick.as_deref().unwrap_or("*");
+        let user = self.user.as_deref().unwrap_or("~u");
+        format!("{nick}!{user}@host")
+    }
+}
+
+/// Handle a plain TCP connection.
+pub async fn handle(stream: TcpStream, state: Arc<SharedState>) -> Result<()> {
+    let peer = stream.peer_addr()?;
+    let session_id = format!("{peer}");
+    tracing::info!(%session_id, "New connection (plain)");
+    let (reader, writer) = tokio::io::split(stream);
+    handle_io(BufReader::new(reader), writer, session_id, state).await
+}
+
+/// Handle a generic async stream (for TLS, WebSocket, or other wrappers).
+pub async fn handle_generic<S>(stream: S, state: Arc<SharedState>) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    handle_generic_with_meta(stream, state, None).await
+}
+
+/// Handle a generic async stream with optional connection metadata.
+///
+/// `iroh_endpoint_id` is set when the connection comes via iroh transport,
+/// providing cryptographic identity for the remote peer.
+pub async fn handle_generic_with_meta<S>(
+    stream: S,
+    state: Arc<SharedState>,
+    iroh_endpoint_id: Option<String>,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let session_id = format!("stream-{id}");
+    tracing::info!(%session_id, iroh_id = ?iroh_endpoint_id, "New connection (generic stream)");
+    let (reader, writer) = tokio::io::split(stream);
+    handle_io_with_meta(BufReader::new(reader), writer, session_id, state, iroh_endpoint_id).await
+}
+
+async fn handle_io<R, W>(
+    reader: BufReader<R>,
+    writer: W,
+    session_id: String,
+    state: Arc<SharedState>,
+) -> Result<()>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
+    handle_io_with_meta(reader, writer, session_id, state, None).await
+}
+
+async fn handle_io_with_meta<R, W>(
+    mut reader: BufReader<R>,
+    writer: W,
+    session_id: String,
+    state: Arc<SharedState>,
+    iroh_endpoint_id: Option<String>,
+) -> Result<()>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
+    let mut conn = Connection::new(session_id.clone());
+    conn.iroh_endpoint_id = iroh_endpoint_id;
+
+    // Plugin on_connect hook
+    state.plugin_manager.on_connect(&crate::plugin::ConnectEvent {
+        session_id: session_id.clone(),
+        remote_addr: session_id.clone(),
+    });
+
+    // Channel for sending messages TO this client
+    let (tx, mut rx) = mpsc::channel::<String>(64);
+    state
+        .connections
+        .lock()
+        .unwrap()
+        .insert(session_id.clone(), tx);
+
+    let server_name = state.server_name.clone();
+
+    // Spawn writer task
+    let write_session_id = session_id.clone();
+    let mut write_half = writer;
+    let write_handle = tokio::spawn(async move {
+        while let Some(line) = rx.recv().await {
+            if let Err(e) = write_half.write_all(line.as_bytes()).await {
+                tracing::warn!(session_id = %write_session_id, "Write error: {e}");
+                break;
+            }
+        }
+    });
+
+    let send = |state: &Arc<SharedState>, session_id: &str, msg: String| {
+        if let Some(tx) = state.connections.lock().unwrap().get(session_id) {
+            let _ = tx.try_send(msg);
+        }
+    };
+
+    let mut line_buf = String::new();
+    let mut last_activity = tokio::time::Instant::now();
+    let ping_interval = tokio::time::Duration::from_secs(90);
+    let ping_timeout = tokio::time::Duration::from_secs(180);
+    let mut awaiting_pong = false;
+
+    // Rate limiting: max 10 commands per second, token bucket
+    let mut rate_tokens: f64 = 10.0;
+    let mut rate_last = tokio::time::Instant::now();
+    let rate_max: f64 = 10.0;
+    let rate_refill: f64 = 10.0; // tokens per second
+
+    loop {
+        line_buf.clear();
+        let read_result = tokio::time::timeout(
+            ping_interval,
+            reader.read_line(&mut line_buf),
+        ).await;
+
+        match read_result {
+            Ok(Ok(0)) | Ok(Err(_)) => break, // EOF or error
+            Err(_) => {
+                // Timeout — no data received, send PING or check PONG
+                if awaiting_pong {
+                    if last_activity.elapsed() > ping_timeout {
+                        tracing::info!(%session_id, "Ping timeout");
+                        break;
+                    }
+                } else {
+                    let ping = Message::from_server(&server_name, "PING", vec![&server_name]);
+                    send(&state, &session_id, format!("{ping}\r\n"));
+                    awaiting_pong = true;
+                }
+                continue;
+            }
+            Ok(Ok(_)) => {}
+        }
+
+        last_activity = tokio::time::Instant::now();
+
+        let Some(msg) = Message::parse(&line_buf) else {
+            continue;
+        };
+
+        // Rate limiting (skip during registration — clients burst on connect)
+        if conn.registered {
+            let now = tokio::time::Instant::now();
+            let elapsed = now.duration_since(rate_last).as_secs_f64();
+            rate_tokens = (rate_tokens + elapsed * rate_refill).min(rate_max);
+            rate_last = now;
+            if rate_tokens < 1.0 {
+                tracing::debug!(%session_id, "Rate limited");
+                continue;
+            }
+            rate_tokens -= 1.0;
+        }
+
+        tracing::debug!(%session_id, "<- {}", line_buf.trim());
+
+        match msg.command.as_str() {
+            "CAP" => {
+                handle_cap(&mut conn, &msg, &state, &server_name, &session_id, &send);
+            }
+            "AUTHENTICATE" => {
+                handle_authenticate(
+                    &mut conn,
+                    &msg,
+                    &state,
+                    &server_name,
+                    &session_id,
+                    &send,
+                )
+                .await;
+            }
+            "NICK" => {
+                if let Some(nick) = msg.params.first() {
+                    let nick_lower = nick.to_lowercase();
+                    let in_use = state.nick_to_session.lock().unwrap().contains_key(nick);
+
+                    let owner_did = state.nick_owners.lock().unwrap().get(&nick_lower).cloned();
+                    let my_did = conn.authenticated_did.as_deref();
+                    let nick_stolen = if conn.cap_negotiating || conn.sasl_in_progress {
+                        false
+                    } else {
+                        owner_did.as_ref().is_some_and(|owner| {
+                            my_did.is_none_or(|my| my != owner)
+                        })
+                    };
+
+                    if in_use {
+                        let reply = Message::from_server(
+                            &server_name,
+                            irc::ERR_NICKNAMEINUSE,
+                            vec![conn.nick_or_star(), nick, "Nickname is already in use"],
+                        );
+                        send(&state, &session_id, format!("{reply}\r\n"));
+                    } else if nick_stolen {
+                        let reply = Message::from_server(
+                            &server_name,
+                            irc::ERR_NICKNAMEINUSE,
+                            vec![conn.nick_or_star(), nick, "Nickname is registered to another identity"],
+                        );
+                        send(&state, &session_id, format!("{reply}\r\n"));
+                    } else {
+                        let old_nick = conn.nick.clone();
+                        if let Some(ref old) = old_nick {
+                            state.nick_to_session.lock().unwrap().remove(old);
+                        }
+                        state
+                            .nick_to_session
+                            .lock()
+                            .unwrap()
+                            .insert(nick.clone(), session_id.clone());
+                        conn.nick = Some(nick.clone());
+
+                        if conn.registered {
+                            let hostmask = if let Some(ref old) = old_nick {
+                                format!("{old}!~{}@host", conn.user.as_deref().unwrap_or("u"))
+                            } else {
+                                conn.hostmask()
+                            };
+                            let nick_msg = format!(":{hostmask} NICK :{nick}\r\n");
+                            send(&state, &session_id, nick_msg.clone());
+
+                            let mut notified = std::collections::HashSet::new();
+                            notified.insert(session_id.clone());
+                            let channels = state.channels.lock().unwrap();
+                            let conns = state.connections.lock().unwrap();
+                            for ch in channels.values() {
+                                if ch.members.contains(&session_id) {
+                                    for member in &ch.members {
+                                        if notified.insert(member.clone()) {
+                                            if let Some(tx) = conns.get(member) {
+                                                let _ = tx.try_send(nick_msg.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            drop(conns);
+                            drop(channels);
+
+                            // Plugin on_nick_change hook
+                            if let Some(ref old) = old_nick {
+                                state.plugin_manager.on_nick_change(&crate::plugin::NickChangeEvent {
+                                    old_nick: old.clone(),
+                                    new_nick: nick.clone(),
+                                    did: conn.authenticated_did.clone(),
+                                    session_id: session_id.clone(),
+                                });
+                            }
+
+                            // Broadcast to S2S
+                            if let Some(ref old) = old_nick {
+                                let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+                                s2s_broadcast(&state, crate::s2s::S2sMessage::NickChange {
+                                    old: old.clone(),
+                                    new: nick.clone(),
+                                    origin,
+                                });
+                            }
+                        } else {
+                            try_complete_registration(
+                                &mut conn,
+                                &state,
+                                &server_name,
+                                &session_id,
+                                &send,
+                            );
+                        }
+                    }
+                }
+            }
+            "USER" => {
+                if msg.params.len() >= 4 {
+                    conn.user = Some(msg.params[0].clone());
+                    conn.realname = Some(msg.params[3].clone());
+                    try_complete_registration(
+                        &mut conn,
+                        &state,
+                        &server_name,
+                        &session_id,
+                        &send,
+                    );
+                }
+            }
+            "PING" => {
+                let token = msg.params.first().map(|s| s.as_str()).unwrap_or("");
+                let reply =
+                    Message::from_server(&server_name, "PONG", vec![&server_name, token]);
+                send(&state, &session_id, format!("{reply}\r\n"));
+            }
+            "PONG" => {
+                awaiting_pong = false;
+            }
+            "JOIN" => {
+                if !conn.registered {
+                    let reply = Message::from_server(
+                        &server_name,
+                        irc::ERR_NOTREGISTERED,
+                        vec![conn.nick_or_star(), "You have not registered"],
+                    );
+                    send(&state, &session_id, format!("{reply}\r\n"));
+                    continue;
+                }
+                if let Some(channels) = msg.params.first() {
+                    let keys: Vec<&str> = msg.params.get(1)
+                        .map(|k| k.split(',').collect())
+                        .unwrap_or_default();
+                    for (i, channel) in channels.split(',').enumerate() {
+                        let key = keys.get(i).copied();
+                        let channel = normalize_channel(channel);
+                        handle_join(
+                            &conn,
+                            &channel,
+                            key,
+                            &state,
+                            &server_name,
+                            &session_id,
+                            &send,
+                        );
+                    }
+                }
+            }
+            "PART" => {
+                if !conn.registered { continue; }
+                if let Some(channels) = msg.params.first() {
+                    for channel in channels.split(',') {
+                        let channel = normalize_channel(channel);
+                        handle_part(&conn, &channel, &state, &session_id);
+                    }
+                }
+            }
+            "MODE" => {
+                if !conn.registered { continue; }
+                if let Some(target) = msg.params.first() {
+                    if target.starts_with('#') || target.starts_with('&') {
+                        let target = normalize_channel(target);
+                        let mode_str = msg.params.get(1).map(|s| s.as_str());
+                        let mode_arg = msg.params.get(2).map(|s| s.as_str());
+                        handle_mode(
+                            &conn, &target, mode_str, mode_arg,
+                            &state, &server_name, &session_id, &send,
+                        );
+                    } else {
+                        let reply = Message::from_server(
+                            &server_name, "221",
+                            vec![conn.nick_or_star(), "+"],
+                        );
+                        send(&state, &session_id, format!("{reply}\r\n"));
+                    }
+                }
+            }
+            "INVITE" => {
+                if !conn.registered { continue; }
+                if msg.params.len() >= 2 {
+                    let target_nick = &msg.params[0];
+                    let channel = normalize_channel(&msg.params[1]);
+                    handle_invite(
+                        &conn, target_nick, &channel,
+                        &state, &server_name, &session_id, &send,
+                    );
+                }
+            }
+            "KICK" => {
+                if !conn.registered { continue; }
+                if msg.params.len() >= 2 {
+                    let channel = normalize_channel(&msg.params[0]);
+                    let target_nick = &msg.params[1];
+                    let reason = msg.params.get(2).map(|s| s.as_str()).unwrap_or(conn.nick_or_star());
+                    handle_kick(
+                        &conn, &channel, target_nick, reason,
+                        &state, &server_name, &session_id, &send,
+                    );
+                }
+            }
+            "TOPIC" => {
+                if !conn.registered { continue; }
+                if let Some(channel) = msg.params.first() {
+                    let channel = normalize_channel(channel);
+                    let new_topic = msg.params.get(1).map(|s| s.as_str());
+                    handle_topic(
+                        &conn, &channel, new_topic,
+                        &state, &server_name, &session_id, &send,
+                    );
+                }
+            }
+            "NAMES" => {
+                if !conn.registered { continue; }
+                if let Some(channel) = msg.params.first() {
+                    let channel = normalize_channel(channel);
+                    handle_names(&conn, &channel, &state, &server_name, &session_id, &send);
+                }
+            }
+            "WHOIS" => {
+                if !conn.registered { continue; }
+                if let Some(target_nick) = msg.params.first() {
+                    handle_whois(
+                        &conn, target_nick,
+                        &state, &server_name, &session_id, &send,
+                    );
+                }
+            }
+            "PRIVMSG" | "NOTICE" => {
+                if !conn.registered { continue; }
+                if let (Some(target), Some(text)) = (msg.params.first(), msg.params.get(1)) {
+                    let target = if target.starts_with('#') || target.starts_with('&') {
+                        normalize_channel(target)
+                    } else {
+                        target.clone()
+                    };
+                    handle_privmsg(&conn, &msg.command, &target, text, &msg.tags, &state);
+                }
+            }
+            "TAGMSG" => {
+                if !conn.registered { continue; }
+                if let Some(target) = msg.params.first() {
+                    handle_tagmsg(&conn, target, &msg.tags, &state);
+                }
+            }
+            "LIST" => {
+                if !conn.registered { continue; }
+                handle_list(&conn, &state, &server_name, &session_id, &send);
+            }
+            "WHO" => {
+                if !conn.registered { continue; }
+                let target = msg.params.first().map(|s| s.as_str()).unwrap_or("*");
+                handle_who(&conn, target, &state, &server_name, &session_id, &send);
+            }
+            "AWAY" => {
+                if !conn.registered { continue; }
+                let away_msg = msg.params.first().map(|s| s.as_str());
+                handle_away(&conn, away_msg, &state, &server_name, &session_id, &send);
+            }
+            "MOTD" => {
+                if !conn.registered { continue; }
+                let nick = conn.nick_or_star();
+                if let Some(ref motd) = state.config.motd {
+                    let start = Message::from_server(
+                        &server_name, irc::RPL_MOTDSTART,
+                        vec![nick, &format!("- {} Message of the day -", server_name)],
+                    );
+                    send(&state, &session_id, format!("{start}\r\n"));
+                    for line in motd.lines() {
+                        let motd_line = Message::from_server(
+                            &server_name, irc::RPL_MOTD,
+                            vec![nick, &format!("- {line}")],
+                        );
+                        send(&state, &session_id, format!("{motd_line}\r\n"));
+                    }
+                    let end = Message::from_server(
+                        &server_name, irc::RPL_ENDOFMOTD,
+                        vec![nick, "End of /MOTD command"],
+                    );
+                    send(&state, &session_id, format!("{end}\r\n"));
+                } else {
+                    let no_motd = Message::from_server(
+                        &server_name, irc::ERR_NOMOTD,
+                        vec![nick, "MOTD File is missing"],
+                    );
+                    send(&state, &session_id, format!("{no_motd}\r\n"));
+                }
+            }
+            "CHATHISTORY" => {
+                if !conn.registered { continue; }
+                handle_chathistory(&conn, &msg, &state, &server_name, &session_id, &send);
+            }
+            "VERSION" => {
+                if !conn.registered { continue; }
+                let nick = conn.nick_or_star();
+                let reply = Message::from_server(
+                    &server_name, irc::RPL_VERSION,
+                    vec![nick, "freeq-0.1.0", &server_name, "AT Protocol SASL, IRCv3, iroh QUIC, S2S federation"],
+                );
+                send(&state, &session_id, format!("{reply}\r\n"));
+            }
+            "TIME" => {
+                if !conn.registered { continue; }
+                let nick = conn.nick_or_star();
+                let now = chrono::Utc::now().format("%a %b %d %Y %H:%M:%S UTC").to_string();
+                let reply = Message::from_server(
+                    &server_name, irc::RPL_TIME,
+                    vec![nick, &server_name, &now],
+                );
+                send(&state, &session_id, format!("{reply}\r\n"));
+            }
+            "LUSERS" => {
+                if !conn.registered { continue; }
+                handle_lusers(&conn, &state, &server_name, &session_id, &send);
+            }
+            "USERHOST" => {
+                if !conn.registered { continue; }
+                let mut replies = Vec::new();
+                for nick in msg.params.iter().take(5) {
+                    let n2s = state.nick_to_session.lock().unwrap();
+                    if let Some(sid) = n2s.get(nick) {
+                        let is_op = {
+                            let channels = state.channels.lock().unwrap();
+                            channels.values().any(|ch| ch.ops.contains(sid))
+                        };
+                        let prefix = if is_op { "*" } else { "" };
+                        replies.push(format!("{nick}{prefix}=+{nick}@host"));
+                    }
+                }
+                let reply = Message::from_server(
+                    &server_name, irc::RPL_USERHOST,
+                    vec![conn.nick_or_star(), &replies.join(" ")],
+                );
+                send(&state, &session_id, format!("{reply}\r\n"));
+            }
+            "ISON" => {
+                if !conn.registered { continue; }
+                let n2s = state.nick_to_session.lock().unwrap();
+                let online: Vec<&str> = msg.params.iter()
+                    .filter(|nick| n2s.contains_key(*nick))
+                    .map(|s| s.as_str())
+                    .collect();
+                let reply = Message::from_server(
+                    &server_name, irc::RPL_ISON,
+                    vec![conn.nick_or_star(), &online.join(" ")],
+                );
+                send(&state, &session_id, format!("{reply}\r\n"));
+            }
+            "ADMIN" => {
+                if !conn.registered { continue; }
+                let nick = conn.nick_or_star();
+                let r1 = Message::from_server(&server_name, irc::RPL_ADMINME, vec![nick, &server_name, "Administrative info"]);
+                let r2 = Message::from_server(&server_name, irc::RPL_ADMINLOC1, vec![nick, "freeq IRC server"]);
+                let r3 = Message::from_server(&server_name, irc::RPL_ADMINLOC2, vec![nick, "AT Protocol authenticated IRC"]);
+                let r4 = Message::from_server(&server_name, irc::RPL_ADMINEMAIL, vec![nick, "https://freeq.at"]);
+                for r in [r1, r2, r3, r4] {
+                    send(&state, &session_id, format!("{r}\r\n"));
+                }
+            }
+            "INFO" => {
+                if !conn.registered { continue; }
+                let nick = conn.nick_or_star();
+                let lines = [
+                    "freeq - IRC with AT Protocol identity",
+                    "",
+                    "https://freeq.at",
+                    "https://github.com/chad/freeq",
+                    "",
+                    "SASL ATPROTO-CHALLENGE authentication",
+                    "IRCv3 capabilities, E2EE channels, iroh QUIC transport",
+                    "Server-to-server federation with CRDT convergence",
+                ];
+                for line in &lines {
+                    let r = Message::from_server(&server_name, irc::RPL_INFO, vec![nick, line]);
+                    send(&state, &session_id, format!("{r}\r\n"));
+                }
+                let end = Message::from_server(&server_name, irc::RPL_ENDOFINFO, vec![nick, "End of /INFO list"]);
+                send(&state, &session_id, format!("{end}\r\n"));
+            }
+            "QUIT" => {
+                break;
+            }
+            _ => {
+                if conn.registered {
+                    let reply = Message::from_server(
+                        &server_name,
+                        irc::ERR_UNKNOWNCOMMAND,
+                        vec![conn.nick_or_star(), &msg.command, "Unknown command"],
+                    );
+                    send(&state, &session_id, format!("{reply}\r\n"));
+                }
+            }
+        }
+    }
+
+    // Cleanup — broadcast QUIT to all channels user was in
+    if let Some(ref nick) = conn.nick {
+        let hostmask = conn.hostmask();
+        let quit_msg = format!(":{hostmask} QUIT :Connection closed\r\n");
+        let channels = state.channels.lock().unwrap();
+        let conns = state.connections.lock().unwrap();
+        for ch in channels.values() {
+            if ch.members.contains(&session_id) {
+                for member in &ch.members {
+                    if member != &session_id
+                        && let Some(tx) = conns.get(member) {
+                            let _ = tx.try_send(quit_msg.clone());
+                        }
+                }
+            }
+        }
+        drop(conns);
+        drop(channels);
+        state.nick_to_session.lock().unwrap().remove(nick);
+    }
+
+    // Broadcast QUIT to S2S peers
+    if let Some(ref nick) = conn.nick {
+        let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+        s2s_broadcast(&state, crate::s2s::S2sMessage::Quit {
+            nick: nick.clone(),
+            reason: "Connection closed".to_string(),
+            origin,
+        });
+    }
+
+    tracing::info!(%session_id, "Connection closed");
+    state.connections.lock().unwrap().remove(&session_id);
+    state.session_dids.lock().unwrap().remove(&session_id);
+    state.session_handles.lock().unwrap().remove(&session_id);
+    state.session_iroh_ids.lock().unwrap().remove(&session_id);
+    state.session_away.lock().unwrap().remove(&session_id);
+    state.cap_message_tags.lock().unwrap().remove(&session_id);
+    state.cap_multi_prefix.lock().unwrap().remove(&session_id);
+    state.cap_echo_message.lock().unwrap().remove(&session_id);
+    state.cap_server_time.lock().unwrap().remove(&session_id);
+    state.cap_batch.lock().unwrap().remove(&session_id);
+    state.cap_account_notify.lock().unwrap().remove(&session_id);
+    state.cap_extended_join.lock().unwrap().remove(&session_id);
+    {
+        let mut channels = state.channels.lock().unwrap();
+        for ch in channels.values_mut() {
+            ch.members.remove(&session_id);
+            ch.ops.remove(&session_id);
+            ch.voiced.remove(&session_id);
+        }
+        channels.retain(|_, ch| {
+            !ch.members.is_empty()
+                || !ch.remote_members.is_empty()
+                || ch.founder_did.is_some()
+                || ch.topic.is_some()
+                || !ch.bans.is_empty()
+        });
+    }
+
+    write_handle.abort();
+    Ok(())
+}

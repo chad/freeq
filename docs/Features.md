@@ -70,21 +70,26 @@ This document catalogs every feature implemented in Freeq, organized by category
 | Custom 672: iroh endpoint | 🆕 | Shows P2P iroh endpoint ID |
 | RPL_WHOISCHANNELS (319) | ✅ | For remote S2S users |
 
+### Informational Commands
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| VERSION (351) | ✅ | Server version and feature summary |
+| TIME (391) | ✅ | Server UTC time |
+| LUSERS (251-255) | ✅ | User/channel/server counts, local + remote |
+| ADMIN (256-259) | ✅ | Server admin info |
+| INFO (371/374) | ✅ | Server description and links |
+| USERHOST (302) | ✅ | Up to 5 nicks, with op status |
+| ISON (303) | ✅ | Online presence check |
+
 ### Missing Standard IRC Commands
 
 | Feature | Status | Notes |
 |---------|--------|-------|
 | OPER (server operator) | ❌ | Not implemented |
 | WALLOPS | ❌ | Not implemented |
-| LUSERS | ❌ | Not implemented |
-| USERHOST | ❌ | Not implemented |
-| ISON | ❌ | Not implemented |
-| ADMIN | ❌ | Not implemented |
-| INFO | ❌ | Not implemented |
 | LINKS | ❌ | Not implemented |
 | STATS | ❌ | Not implemented |
-| TIME | ❌ | Not implemented |
-| VERSION | ❌ | Not implemented |
 | Channel modes: `+s` / `+p` (secret/private) | ❌ | Not implemented |
 | Channel modes: `+l` (user limit) | ❌ | Not implemented |
 | Hostname cloaking | ❌ | |
@@ -108,22 +113,23 @@ This document catalogs every feature implemented in Freeq, organized by category
 | `iroh=<id>` CAP advertisement | 🆕 | Transport discovery via CAP LS |
 | SASL AUTHENTICATE `*` abort | ✅ | Cleanly aborts SASL negotiation |
 
+| `account-notify` capability | ✅ | Broadcasts ACCOUNT on auth to shared channels |
+| `extended-join` capability | ✅ | JOIN includes account + realname |
+| `draft/chathistory` capability | ✅ | On-demand `CHATHISTORY LATEST/BEFORE/AFTER` |
+
 ### Missing IRCv3 Extensions
 
 | Feature | Status | Notes |
 |---------|--------|-------|
 | `away-notify` | ❌ | |
-| `account-notify` | ❌ | |
 | `account-tag` | ❌ | |
 | `labeled-response` | ❌ | |
 | `invite-notify` | ❌ | |
 | `chghost` | ❌ | |
 | `cap-notify` | ❌ | |
-| `extended-join` | ❌ | |
 | `setname` | ❌ | |
 | `standard-replies` | ❌ | |
 | `msgid` (message IDs) | ❌ | |
-| `CHATHISTORY` command | ❌ | On-demand history (not just on join) |
 
 ---
 
@@ -496,3 +502,20 @@ This document catalogs every feature implemented in Freeq, organized by category
 | `--iroh-port` | random | |
 | `--s2s-peers` | empty | Comma-separated endpoint IDs |
 | `--max-messages-per-channel` | None | Message pruning |
+| `--plugin` | None | Load a plugin by name (repeatable) |
+| `--plugin-dir` | None | Directory of `*.toml` plugin configs |
+
+---
+
+## 17. Plugin System 🆕
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| `Plugin` trait with event hooks | ✅ | Extensible server behavior |
+| `PluginManager` in SharedState | ✅ | Dispatches events to all loaded plugins |
+| CLI activation (`--plugin name:k=v`) | ✅ | Inline config via key=value pairs |
+| Directory loading (`--plugin-dir`) | ✅ | Each `*.toml` file = one plugin |
+| TOML config format | ✅ | Supports multi-rule plugins |
+| `on_auth` hook | ✅ | Override DID/handle after SASL auth |
+| `identity-override` built-in plugin | ✅ | Match by handle or DID, replace display ID |
+| Example: `examples/plugins/kurt.toml` | ✅ | TimeSync.bsky.social → 3\|337 |

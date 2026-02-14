@@ -546,22 +546,30 @@ LOCAL_SERVER=localhost:6667 REMOTE_SERVER=irc.freeq.at:6667 \
 - Server advertises `iroh=<endpoint-id>` in `CAP LS` for transport discovery
 - `ATPROTO-CHALLENGE` could be proposed as an IRCv3 WG mechanism
 
-## Known Limitations
+## Plugins
 
-- No message pruning/rotation (database grows unbounded when `--db-path` is set)
-- No MOTD, LIST, WHO, AWAY, or OPER commands
-- No flood protection beyond basic rate limiting
-- No hostname cloaking or reverse DNS
-- OAuth token refresh is not implemented — when the cached token expires,
-  you re-authenticate via browser
-- History replay doesn't indicate timestamps (messages appear as if just sent)
-- Channel keys are visible in MODE query output (standard IRC behavior)
-- No SASL `AUTHENTICATE *` (abort) handling
-- Only tested against Bluesky PDS infrastructure (not generic AT Protocol)
-- E2EE uses passphrase-based key derivation (no DID-based key exchange yet)
-- P2P DMs require manual endpoint ID exchange (auto-discovery via WHOIS planned)
-- S2S: rogue server can add itself to `did_ops` (authorization-on-write planned)
-- S2S: no partition healing or conflict notification
+Freeq supports a plugin system for custom server behavior. Plugins hook into
+events like authentication, message delivery, and channel joins.
+
+```sh
+# Load a plugin via CLI
+freeq-server --plugin "identity-override:handle=timesync.bsky.social,display_id=3|337"
+
+# Load plugins from a directory of TOML configs
+freeq-server --plugin-dir ./examples/plugins/
+```
+
+See `examples/plugins/` for example configurations and `docs/PROTOCOL.md`
+for the full plugin hook reference.
+
+## Documentation
+
+- [Features](docs/Features.md) — Complete feature catalog
+- [Protocol Notes](docs/PROTOCOL.md) — SASL mechanism, DID extensions, transport details
+- [Known Limitations](docs/KNOWN-LIMITATIONS.md) — Explicit list of gaps
+- [Architecture Decisions](docs/architecture-decisions.md) — Design rationale
+- [S2S Audit](docs/s2s-audit.md) — Federation protocol analysis
+- [Future Direction](docs/FutureDirection.md) — Roadmap
 
 ## License
 

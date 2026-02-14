@@ -40,6 +40,45 @@ pub struct AuthEvent {
     pub session_id: String,
 }
 
+/// Event emitted when a client connects (before registration).
+#[derive(Debug, Clone)]
+pub struct ConnectEvent {
+    pub session_id: String,
+    /// Remote address (e.g. "127.0.0.1:54321").
+    pub remote_addr: String,
+}
+
+/// Event emitted when a user joins a channel.
+#[derive(Debug, Clone)]
+pub struct JoinEvent {
+    pub nick: String,
+    pub channel: String,
+    pub did: Option<String>,
+    pub session_id: String,
+    /// True if this join created the channel.
+    pub is_new_channel: bool,
+}
+
+/// Event emitted when a PRIVMSG or NOTICE is sent.
+#[derive(Debug, Clone)]
+pub struct MessageEvent {
+    pub nick: String,
+    pub command: String, // "PRIVMSG" or "NOTICE"
+    pub target: String,
+    pub text: String,
+    pub did: Option<String>,
+    pub session_id: String,
+}
+
+/// Event emitted when a user changes their nick.
+#[derive(Debug, Clone)]
+pub struct NickChangeEvent {
+    pub old_nick: String,
+    pub new_nick: String,
+    pub did: Option<String>,
+    pub session_id: String,
+}
+
 /// Result of a plugin processing an auth event.
 /// Plugins can override what identity is displayed to other users.
 #[derive(Debug, Clone, Default)]
@@ -50,16 +89,47 @@ pub struct AuthResult {
     pub override_handle: Option<String>,
 }
 
+/// Result of a plugin processing a message event.
+#[derive(Debug, Clone, Default)]
+pub struct MessageResult {
+    /// If true, suppress the message (don't deliver it).
+    pub suppress: bool,
+    /// If set, replace the message text.
+    pub rewrite_text: Option<String>,
+}
+
 /// Trait that all plugins implement.
 pub trait Plugin: Send + Sync {
     /// Human-readable name of this plugin.
     fn name(&self) -> &str;
+
+    /// Called when a new client connects (before registration).
+    fn on_connect(&self, event: &ConnectEvent) {
+        let _ = event;
+    }
 
     /// Called after a user successfully authenticates.
     /// Return an `AuthResult` to override displayed identity.
     fn on_auth(&self, event: &AuthEvent) -> Option<AuthResult> {
         let _ = event;
         None
+    }
+
+    /// Called when a user joins a channel.
+    fn on_join(&self, event: &JoinEvent) {
+        let _ = event;
+    }
+
+    /// Called when a PRIVMSG or NOTICE is about to be delivered.
+    /// Return a `MessageResult` to suppress or rewrite the message.
+    fn on_message(&self, event: &MessageEvent) -> Option<MessageResult> {
+        let _ = event;
+        None
+    }
+
+    /// Called when a user changes their nick.
+    fn on_nick_change(&self, event: &NickChangeEvent) {
+        let _ = event;
     }
 }
 
@@ -146,6 +216,13 @@ impl PluginManager {
         mgr
     }
 
+    /// Dispatch a connect event to all plugins.
+    pub fn on_connect(&self, event: &ConnectEvent) {
+        for plugin in &self.plugins {
+            plugin.on_connect(event);
+        }
+    }
+
     /// Dispatch an auth event to all plugins. Returns the merged result.
     pub fn on_auth(&self, event: &AuthEvent) -> AuthResult {
         let mut result = AuthResult::default();
@@ -161,6 +238,36 @@ impl PluginManager {
             }
         }
         result
+    }
+
+    /// Dispatch a join event to all plugins.
+    pub fn on_join(&self, event: &JoinEvent) {
+        for plugin in &self.plugins {
+            plugin.on_join(event);
+        }
+    }
+
+    /// Dispatch a message event to all plugins. Returns the merged result.
+    pub fn on_message(&self, event: &MessageEvent) -> MessageResult {
+        let mut result = MessageResult::default();
+        for plugin in &self.plugins {
+            if let Some(r) = plugin.on_message(event) {
+                if r.suppress {
+                    result.suppress = true;
+                }
+                if r.rewrite_text.is_some() {
+                    result.rewrite_text = r.rewrite_text;
+                }
+            }
+        }
+        result
+    }
+
+    /// Dispatch a nick change event to all plugins.
+    pub fn on_nick_change(&self, event: &NickChangeEvent) {
+        for plugin in &self.plugins {
+            plugin.on_nick_change(event);
+        }
     }
 
     /// Returns true if any plugins are loaded.
