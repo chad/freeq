@@ -194,13 +194,18 @@
         <input id="f-channels" value="#freeq" placeholder="#chan1,#chan2">
       </div>
     </div>
-    <div class="section-label">Bluesky Login <span class="optional">(optional)</span></div>
+    <div class="section-label">Bluesky Identity <span class="optional">(optional — uses app password)</span></div>
     <div class="field">
       <label>Handle</label>
       <input id="f-at-handle" placeholder="you.bsky.social">
     </div>
+    <div class="field" id="app-password-field" style="display:none">
+      <label>App Password</label>
+      <input id="f-app-password" type="password" placeholder="xxxx-xxxx-xxxx-xxxx" autocomplete="off">
+      <div style="font-size:10px;color:var(--fg3);margin-top:4px">Generate at <a href="https://bsky.app/settings/app-passwords" target="_blank" style="color:var(--blue)">bsky.app/settings/app-passwords</a></div>
+    </div>
     <button class="btn-primary" onclick="doConnect()">Connect as Guest</button>
-    <button id="btn-oauth" class="btn-oauth" onclick="doOAuthConnect()" style="display:none">Sign in with Bluesky</button>
+    <button id="btn-at-login" class="btn-oauth" onclick="doAtLogin()" style="display:none">Sign in with Bluesky</button>
     <div id="connect-error"></div>
     <div class="connect-footer">
       <a href="https://freeq.at/connect/">Connection guide</a> ·
@@ -260,7 +265,6 @@ let ws = null, nick = '', registered = false;
 let atHandle = '', atDid = '', atAccessJwt = '', atPdsUrl = '';
 let capNegotiating = false, wantedCaps = [], ackedCaps = new Set();
 let saslInProgress = false;
-let oauthPopup = null;
 let reconnectTimer = null, reconnectUrl = '', reconnectAttempts = 0;
 const buffers = {};
 let activeBuffer = 'server';
@@ -371,48 +375,75 @@ function doDisconnect() {
 
 function showErr(t) { document.getElementById('connect-error').textContent = t; }
 
-// ── OAuth popup flow ─────────────────────────────────────────────
+// ── AT Protocol direct PDS login (app password) ─────────────────
 
-function doOAuthConnect() {
+async function doAtLogin() {
   atHandle = document.getElementById('f-at-handle').value.trim();
-  if (!atHandle) { showErr('Enter your Bluesky handle first'); return; }
-  showErr('Opening Bluesky login…');
-  const serverUrl = document.getElementById('f-server').value.trim().replace(/^ws/, 'http').replace(/\/irc$/, '');
-  const authUrl = serverUrl + '/auth/login?handle=' + encodeURIComponent(atHandle);
-  startOAuthPoll();
-  oauthPopup = window.open(authUrl, 'freeq-auth', 'width=500,height=600');
-}
+  const appPassword = document.getElementById('f-app-password').value.trim();
+  if (!atHandle) { showErr('Enter your Bluesky handle'); return; }
+  if (!appPassword) { showErr('Enter your app password'); return; }
 
-try {
-  const bc = new BroadcastChannel('freeq-oauth');
-  bc.onmessage = (e) => {
-    if (e.data && e.data.type === 'freeq-oauth' && e.data.result) handleOAuthResult(e.data.result);
-  };
-} catch(e) {}
-window.addEventListener('message', (e) => {
-  if (e.data && e.data.type === 'freeq-oauth' && e.data.result) handleOAuthResult(e.data.result);
-});
+  showErr('Resolving identity…');
 
-let oauthPollTimer = null;
-function startOAuthPoll() {
-  localStorage.removeItem('freeq-oauth-result');
-  oauthPollTimer = setInterval(() => {
-    const raw = localStorage.getItem('freeq-oauth-result');
-    if (raw) {
-      localStorage.removeItem('freeq-oauth-result');
-      clearInterval(oauthPollTimer); oauthPollTimer = null;
-      try { handleOAuthResult(JSON.parse(raw)); } catch(e) {}
+  try {
+    // Step 1: Resolve handle → DID and find PDS
+    let did = atHandle;
+    if (!did.startsWith('did:')) {
+      // Resolve handle via public API
+      const res = await fetch('https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=' + encodeURIComponent(atHandle));
+      if (!res.ok) throw new Error('Could not resolve handle "' + atHandle + '"');
+      const data = await res.json();
+      did = data.did;
     }
-  }, 500);
-}
+    atDid = did;
 
-function handleOAuthResult(r) {
-  if (oauthPollTimer) { clearInterval(oauthPollTimer); oauthPollTimer = null; }
-  atDid = r.did; atAccessJwt = r.access_jwt; atPdsUrl = r.pds_url;
-  atHandle = r.handle || atHandle;
-  showErr('Authenticated! Connecting…');
-  if (oauthPopup) { try { oauthPopup.close(); } catch(e) {} oauthPopup = null; }
-  doConnect();
+    // Step 2: Resolve DID document to find PDS URL
+    let pdsUrl = 'https://bsky.social'; // default fallback
+    try {
+      let didDoc;
+      if (did.startsWith('did:plc:')) {
+        const res = await fetch('https://plc.directory/' + did);
+        if (res.ok) didDoc = await res.json();
+      } else if (did.startsWith('did:web:')) {
+        const domain = did.slice(8);
+        const res = await fetch('https://' + domain + '/.well-known/did.json');
+        if (res.ok) didDoc = await res.json();
+      }
+      if (didDoc && didDoc.service) {
+        const atprotoService = didDoc.service.find(s => s.id === '#atproto_pds' || s.type === 'AtprotoPersonalDataServer');
+        if (atprotoService) pdsUrl = atprotoService.serviceEndpoint;
+      }
+    } catch(e) { /* use fallback */ }
+    atPdsUrl = pdsUrl;
+
+    showErr('Authenticating with PDS…');
+
+    // Step 3: Create session with app password
+    const sessionRes = await fetch(pdsUrl + '/xrpc/com.atproto.server.createSession', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ identifier: atHandle, password: appPassword })
+    });
+
+    if (!sessionRes.ok) {
+      const err = await sessionRes.json().catch(() => ({}));
+      throw new Error(err.message || 'Authentication failed (check handle and app password)');
+    }
+
+    const session = await sessionRes.json();
+    atDid = session.did;
+    atAccessJwt = session.accessJwt;
+    atHandle = session.handle || atHandle;
+
+    showErr('Authenticated as ' + atHandle + '! Connecting…');
+
+    // Clear the app password from the DOM immediately
+    document.getElementById('f-app-password').value = '';
+
+    doConnect();
+  } catch(e) {
+    showErr('Login failed: ' + e.message);
+  }
 }
 
 // ── IRC send ─────────────────────────────────────────────────────
@@ -1015,7 +1046,9 @@ document.addEventListener('keydown', (e) => {
 
   const handleInput = document.getElementById('f-at-handle');
   handleInput.addEventListener('input', () => {
-    document.getElementById('btn-oauth').style.display = handleInput.value.trim().length > 0 ? '' : 'none';
+    const show = handleInput.value.trim().length > 0;
+    document.getElementById('app-password-field').style.display = show ? '' : 'none';
+    document.getElementById('btn-at-login').style.display = show ? '' : 'none';
   });
 })();
 </script>
