@@ -25,7 +25,6 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
 
 /// Event emitted when a user successfully authenticates via SASL.
 #[derive(Debug, Clone)]

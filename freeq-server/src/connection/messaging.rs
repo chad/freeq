@@ -2,11 +2,10 @@
 //! Message handling: PRIVMSG, NOTICE, TAGMSG, CHATHISTORY.
 
 use std::sync::Arc;
-use std::collections::HashMap;
 use crate::irc::{self, Message};
 use crate::server::SharedState;
 use super::Connection;
-use super::helpers::{s2s_broadcast, normalize_channel};
+use super::helpers::{s2s_broadcast, s2s_next_event_id, normalize_channel};
 
 pub(super) fn handle_tagmsg(
     conn: &Connection,
@@ -204,6 +203,7 @@ pub(super) fn handle_privmsg(
         if command == "PRIVMSG" {
             let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
             s2s_broadcast(state, crate::s2s::S2sMessage::Privmsg {
+                event_id: s2s_next_event_id(state),
                 from: conn.nick.as_deref().unwrap_or("*").to_string(),
                 target: target.to_string(),
                 text: text.to_string(),
@@ -271,7 +271,7 @@ pub(super) fn handle_chathistory(
     session_id: &str,
     send: &dyn Fn(&Arc<SharedState>, &str, String),
 ) {
-    let nick = conn.nick_or_star();
+    let _nick = conn.nick_or_star();
 
     // CHATHISTORY <subcommand> <target> [<param1> [<param2>]] <limit>
     if msg.params.len() < 3 {

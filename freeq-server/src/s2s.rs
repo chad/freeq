@@ -4,32 +4,34 @@
 //! a mesh network. State is propagated via a simple message protocol
 //! on bidirectional streams.
 //!
+//! # Design (post-audit)
+//!
+//! - **Peer identity**: iroh endpoint ID is the root identity everywhere.
+//!   `server_name` is untrusted display metadata included for logging.
+//! - **Event dedup**: every S2S event carries an `event_id` (origin + counter).
+//!   A bounded LRU per peer prevents duplicate application on reconnect.
+//! - **Source of truth**: presence is S2S-event-only (not CRDT). Topic and
+//!   durable authority are CRDT-only (not also set via S2S events).
+//! - **CRDT sync keyed by iroh endpoint ID** (cryptographic identity).
+//!
 //! # Protocol
 //!
 //! Each S2S link uses a single bidirectional QUIC stream carrying
 //! newline-delimited JSON messages. Messages are typed:
 //!
 //! ```json
-//! {"type":"privmsg","from":"nick!user@host","target":"#channel","text":"hello"}
-//! {"type":"join","nick":"alice","channel":"#test"}
-//! {"type":"part","nick":"alice","channel":"#test"}
-//! {"type":"quit","nick":"alice","reason":"bye"}
-//! {"type":"nick_change","old":"alice","new":"alicex"}
-//! {"type":"topic","channel":"#test","topic":"new topic","set_by":"alice"}
-//! {"type":"sync_request"}
-//! {"type":"sync_response","channels":[...],"nicks":[...]}
+//! {"type":"hello","peer_id":"44f1415c...","server_name":"freeq"}
+//! {"type":"privmsg","event_id":"44f1415c:42","from":"nick!user@host","target":"#channel","text":"hello"}
 //! ```
 //!
 //! # Topology
 //!
-//! The current implementation uses a simple mesh: each server connects
-//! to all configured peers. Messages are forwarded with origin tracking
-//! to prevent loops.
-//!
-//! Future: gossip-based propagation, partial mesh, CRDTs for membership.
+//! Simple mesh: each server connects to all configured peers. Messages
+//! are forwarded with origin tracking to prevent loops.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -41,23 +43,43 @@ use crate::server::SharedState;
 /// ALPN for server-to-server links.
 pub const S2S_ALPN: &[u8] = b"freeq/s2s/1";
 
+/// Maximum number of event IDs to remember per peer for dedup.
+const DEDUP_CAPACITY: usize = 10_000;
+
 /// Messages exchanged between servers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum S2sMessage {
+    /// Identity handshake — sent immediately on link establishment.
+    /// Binds the transport identity (iroh endpoint ID) to the logical
+    /// server_name. The peer_id is verified against the QUIC connection's
+    /// remote_id() — spoofing is impossible.
+    #[serde(rename = "hello")]
+    Hello {
+        /// Iroh endpoint ID (must match connection's remote_id).
+        peer_id: String,
+        /// Human-readable server name (untrusted display metadata).
+        server_name: String,
+    },
+
     /// A PRIVMSG or NOTICE relayed between servers.
     #[serde(rename = "privmsg")]
     Privmsg {
+        /// Stable event ID for dedup: "{origin_peer_id}:{counter}".
+        #[serde(default)]
+        event_id: String,
         from: String,
         target: String,
         text: String,
-        /// Origin server ID (to prevent relay loops).
+        /// Origin iroh endpoint ID (to prevent relay loops).
         origin: String,
     },
 
     /// A user joined a channel.
     #[serde(rename = "join")]
     Join {
+        #[serde(default)]
+        event_id: String,
         nick: String,
         channel: String,
         /// Authenticated DID (if any) — used for DID-based ops.
@@ -73,12 +95,14 @@ pub enum S2sMessage {
     /// A channel was created (carries founder info for authority resolution).
     #[serde(rename = "channel_created")]
     ChannelCreated {
+        #[serde(default)]
+        event_id: String,
         channel: String,
         /// DID of the channel founder.
         founder_did: Option<String>,
         /// DIDs with operator status.
         did_ops: Vec<String>,
-        /// Unix timestamp of channel creation (earliest wins in conflicts).
+        /// Unix timestamp of channel creation (informational only).
         created_at: u64,
         origin: String,
     },
@@ -86,6 +110,8 @@ pub enum S2sMessage {
     /// A user left a channel.
     #[serde(rename = "part")]
     Part {
+        #[serde(default)]
+        event_id: String,
         nick: String,
         channel: String,
         origin: String,
@@ -94,6 +120,8 @@ pub enum S2sMessage {
     /// A user quit.
     #[serde(rename = "quit")]
     Quit {
+        #[serde(default)]
+        event_id: String,
         nick: String,
         reason: String,
         origin: String,
@@ -102,6 +130,8 @@ pub enum S2sMessage {
     /// A user changed nick.
     #[serde(rename = "nick_change")]
     NickChange {
+        #[serde(default)]
+        event_id: String,
         old: String,
         new: String,
         origin: String,
@@ -110,6 +140,8 @@ pub enum S2sMessage {
     /// Channel topic changed.
     #[serde(rename = "topic")]
     Topic {
+        #[serde(default)]
+        event_id: String,
         channel: String,
         topic: String,
         set_by: String,
@@ -119,6 +151,8 @@ pub enum S2sMessage {
     /// Channel mode changed.
     #[serde(rename = "mode")]
     Mode {
+        #[serde(default)]
+        event_id: String,
         channel: String,
         mode: String,
         arg: Option<String>,
@@ -144,6 +178,7 @@ pub enum S2sMessage {
     CrdtSync {
         /// Base64-encoded Automerge sync message.
         data: String,
+        /// Origin iroh endpoint ID (used to key sync state).
         origin: String,
     },
 }
@@ -187,17 +222,85 @@ pub struct ChannelInfo {
     pub key: Option<String>,
 }
 
+/// Bounded set for event dedup. Uses a ring buffer of seen event IDs
+/// per peer to prevent duplicate processing on reconnect/replay.
+pub struct DedupSet {
+    /// Per-peer seen event IDs. Key = origin peer_id.
+    seen: tokio::sync::Mutex<HashMap<String, HashSet<String>>>,
+    /// Per-peer insertion order for bounded eviction.
+    order: tokio::sync::Mutex<HashMap<String, Vec<String>>>,
+}
+
+impl DedupSet {
+    pub fn new() -> Self {
+        Self {
+            seen: tokio::sync::Mutex::new(HashMap::new()),
+            order: tokio::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Returns true if this event_id is new (not a duplicate).
+    /// Returns true for empty event_ids (backward compat with old peers).
+    pub async fn check_and_insert(&self, origin: &str, event_id: &str) -> bool {
+        if event_id.is_empty() {
+            return true; // No dedup for legacy messages
+        }
+
+        let mut seen = self.seen.lock().await;
+        let mut order = self.order.lock().await;
+
+        let peer_seen = seen.entry(origin.to_string()).or_default();
+        let peer_order = order.entry(origin.to_string()).or_default();
+
+        if peer_seen.contains(event_id) {
+            return false; // Duplicate
+        }
+
+        // Evict oldest if at capacity
+        if peer_seen.len() >= DEDUP_CAPACITY {
+            if let Some(oldest) = peer_order.first().cloned() {
+                peer_seen.remove(&oldest);
+                peer_order.remove(0);
+            }
+        }
+
+        peer_seen.insert(event_id.to_string());
+        peer_order.push(event_id.to_string());
+        true
+    }
+
+    /// Remove all state for a disconnected peer.
+    pub async fn remove_peer(&self, origin: &str) {
+        self.seen.lock().await.remove(origin);
+        self.order.lock().await.remove(origin);
+    }
+}
+
 /// State for managing S2S links.
 pub struct S2sManager {
-    /// Our server's iroh endpoint ID.
+    /// Our server's iroh endpoint ID (cryptographic identity).
     pub server_id: String,
-    /// Connected peer servers: peer_id → sender for writing messages.
+    /// Our server's human-readable name (for Hello messages).
+    pub server_name: String,
+    /// Connected peer servers: peer_id (iroh endpoint ID) → sender for writing messages.
     pub peers: Arc<tokio::sync::Mutex<HashMap<String, mpsc::Sender<S2sMessage>>>>,
+    /// Mapping: iroh endpoint ID → server_name (populated from Hello handshake).
+    pub peer_names: Arc<tokio::sync::Mutex<HashMap<String, String>>>,
     /// Channel for S2S events that need to be applied to server state.
     pub event_tx: mpsc::Sender<S2sMessage>,
+    /// Monotonic counter for generating unique event IDs.
+    pub event_counter: AtomicU64,
+    /// Event dedup set.
+    pub dedup: Arc<DedupSet>,
 }
 
 impl S2sManager {
+    /// Generate a unique event ID for outgoing messages.
+    pub fn next_event_id(&self) -> String {
+        let counter = self.event_counter.fetch_add(1, Ordering::Relaxed);
+        format!("{}:{}", self.server_id, counter)
+    }
+
     /// Broadcast a message to all peer servers.
     pub async fn broadcast(&self, msg: S2sMessage) {
         let peers = self.peers.lock().await;
@@ -207,15 +310,21 @@ impl S2sManager {
             }
         }
     }
+
+    /// Look up the human-readable name for a peer (from Hello handshake).
+    pub async fn peer_display_name(&self, peer_id: &str) -> String {
+        self.peer_names.lock().await
+            .get(peer_id)
+            .cloned()
+            .unwrap_or_else(|| peer_id[..8.min(peer_id.len())].to_string())
+    }
 }
 
 /// Start the S2S subsystem.
 ///
-/// Returns the manager + event receiver. Incoming S2S connections are
-/// handled by the iroh accept loop in iroh.rs (routed by ALPN), which
-/// calls `handle_incoming_s2s()`.
+/// Returns the manager + event receiver.
 pub async fn start(
-    _state: Arc<SharedState>,
+    state: Arc<SharedState>,
     endpoint: iroh::Endpoint,
 ) -> Result<(Arc<S2sManager>, mpsc::Receiver<S2sMessage>)> {
     let (event_tx, event_rx) = mpsc::channel(1024);
@@ -223,8 +332,12 @@ pub async fn start(
 
     let manager = Arc::new(S2sManager {
         server_id: server_id.clone(),
+        server_name: state.server_name.clone(),
         peers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        peer_names: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         event_tx: event_tx.clone(),
+        event_counter: AtomicU64::new(0),
+        dedup: Arc::new(DedupSet::new()),
     });
 
     Ok((manager, event_rx))
@@ -245,9 +358,7 @@ pub async fn handle_incoming_s2s(
     };
     let peer_id = conn.remote_id().to_string();
 
-    // Check allowlist: if --s2s-allowed-peers is set, only those peers can connect.
-    // The iroh endpoint provides cryptographic identity (public key), so this
-    // verification is tamper-proof — you can't spoof an endpoint ID.
+    // Check allowlist
     let allowed = &state.config.s2s_allowed_peers;
     if !allowed.is_empty() && !allowed.contains(&peer_id) {
         tracing::warn!(
@@ -260,15 +371,15 @@ pub async fn handle_incoming_s2s(
 
     tracing::info!(peer = %peer_id, "S2S incoming connection (routed by ALPN)");
     let peers = Arc::clone(&manager.peers);
+    let peer_names = Arc::clone(&manager.peer_names);
     let event_tx = manager.event_tx.clone();
     let server_id = manager.server_id.clone();
-    handle_s2s_connection(conn, peers, event_tx, server_id, true).await;
+    let server_name = manager.server_name.clone();
+    let dedup = Arc::clone(&manager.dedup);
+    handle_s2s_connection(conn, peers, peer_names, event_tx, server_id, server_name, dedup, true).await;
 }
 
 /// Connect to a peer server by iroh endpoint ID.
-///
-/// Makes a single connection attempt. Use `connect_peer_with_retry` for
-/// production use with auto-reconnection.
 pub async fn connect_peer(
     endpoint: &iroh::Endpoint,
     peer_id: &str,
@@ -284,19 +395,19 @@ pub async fn connect_peer(
     let _peer_id = conn.remote_id().to_string();
 
     let peers = Arc::clone(&manager.peers);
+    let peer_names = Arc::clone(&manager.peer_names);
     let server_id = manager.server_id.clone();
+    let server_name = manager.server_name.clone();
+    let dedup = Arc::clone(&manager.dedup);
 
     tokio::spawn(async move {
-        handle_s2s_connection(conn, peers, event_tx, server_id, false).await;
+        handle_s2s_connection(conn, peers, peer_names, event_tx, server_id, server_name, dedup, false).await;
     });
 
     Ok(())
 }
 
 /// Connect to a peer with automatic reconnection on failure.
-///
-/// Spawns a background task that retries with exponential backoff
-/// (1s → 2s → 4s → ... → 60s cap). Runs forever until the endpoint is closed.
 pub fn connect_peer_with_retry(
     endpoint: iroh::Endpoint,
     peer_id: String,
@@ -320,12 +431,14 @@ pub fn connect_peer_with_retry(
             tracing::info!(peer = %peer_id, "Connecting to S2S peer");
             match endpoint.connect(addr, S2S_ALPN).await {
                 Ok(conn) => {
-                    backoff = std::time::Duration::from_secs(1); // reset on success
+                    backoff = std::time::Duration::from_secs(1);
                     let peers = Arc::clone(&manager.peers);
+                    let peer_names = Arc::clone(&manager.peer_names);
                     let server_id = manager.server_id.clone();
+                    let server_name = manager.server_name.clone();
+                    let dedup = Arc::clone(&manager.dedup);
                     tracing::info!(peer = %peer_id, "S2S peer connected, entering link handler");
-                    // This blocks until the link drops
-                    handle_s2s_connection(conn, peers, event_tx.clone(), server_id, false).await;
+                    handle_s2s_connection(conn, peers, peer_names, event_tx.clone(), server_id, server_name, dedup, false).await;
                     tracing::warn!(peer = %peer_id, "S2S link dropped, will reconnect");
                 }
                 Err(e) => {
@@ -347,8 +460,11 @@ pub fn connect_peer_with_retry(
 async fn handle_s2s_connection(
     conn: iroh::endpoint::Connection,
     peers: Arc<tokio::sync::Mutex<HashMap<String, mpsc::Sender<S2sMessage>>>>,
+    peer_names: Arc<tokio::sync::Mutex<HashMap<String, String>>>,
     event_tx: mpsc::Sender<S2sMessage>,
-    _server_id: String,
+    server_id: String,
+    server_name: String,
+    dedup: Arc<DedupSet>,
     incoming: bool,
 ) {
     let peer_id = conn.remote_id().to_string();
@@ -474,7 +590,19 @@ async fn handle_s2s_connection(
         let _ = send.finish();
     });
 
-    // Both sides send sync request — each needs the other's state
+    // Send Hello handshake — binds transport identity to logical name.
+    // The receiver verifies peer_id matches connection's remote_id().
+    {
+        let hello = S2sMessage::Hello {
+            peer_id: server_id.clone(),
+            server_name: server_name.clone(),
+        };
+        if let Some(tx) = peers.lock().await.get(&peer_id) {
+            let _ = tx.send(hello).await;
+        }
+    }
+
+    // Both sides send sync request
     {
         let sync_req = S2sMessage::SyncRequest;
         if let Some(tx) = peers.lock().await.get(&peer_id) {
@@ -492,5 +620,7 @@ async fn handle_s2s_connection(
     tracing::warn!(peer = %peer_id, side = which, "S2S link ending — {which} task finished first");
 
     peers.lock().await.remove(&peer_id);
+    peer_names.lock().await.remove(&peer_id);
+    dedup.remove_peer(&peer_id).await;
     tracing::info!(peer = %peer_id, "S2S link closed");
 }

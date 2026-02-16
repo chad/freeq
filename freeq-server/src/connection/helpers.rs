@@ -2,7 +2,6 @@
 //! Helper functions for broadcasting, S2S relay, and utilities.
 
 use std::sync::Arc;
-use crate::irc::{self, Message};
 use crate::server::SharedState;
 use super::Connection;
 
@@ -20,6 +19,15 @@ pub(super) fn s2s_broadcast(state: &Arc<SharedState>, msg: crate::s2s::S2sMessag
     }
 }
 
+/// Generate a unique event ID for outgoing S2S messages.
+pub(super) fn s2s_next_event_id(state: &Arc<SharedState>) -> String {
+    let manager = state.s2s_manager.lock().unwrap().clone();
+    match manager {
+        Some(m) => m.next_event_id(),
+        None => String::new(),
+    }
+}
+
 /// Broadcast a channel mode change to S2S peers.
 pub(super) fn s2s_broadcast_mode(
     state: &Arc<SharedState>,
@@ -28,8 +36,10 @@ pub(super) fn s2s_broadcast_mode(
     mode: &str,
     arg: Option<&str>,
 ) {
+    let event_id = s2s_next_event_id(state);
     let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
     s2s_broadcast(state, crate::s2s::S2sMessage::Mode {
+        event_id,
         channel: channel.to_string(),
         mode: mode.to_string(),
         arg: arg.map(|s| s.to_string()),

@@ -2,11 +2,10 @@
 //! Channel operations: join, part, mode, topic, kick, invite, names, list.
 
 use std::sync::Arc;
-use std::collections::HashMap;
 use crate::irc::{self, Message};
 use crate::server::SharedState;
 use super::Connection;
-use super::helpers::{normalize_channel, s2s_broadcast, s2s_broadcast_mode, broadcast_to_channel, make_standard_join, make_extended_join};
+use super::helpers::{s2s_broadcast, s2s_broadcast_mode, s2s_next_event_id, broadcast_to_channel, make_standard_join, make_extended_join};
 
 pub(super) fn handle_join(
     conn: &Connection,
@@ -95,7 +94,8 @@ pub(super) fn handle_join(
         let mut channels = state.channels.lock().unwrap();
         let ch = channels.entry(channel.to_string()).or_default();
         ch.members.insert(session_id.to_string());
-        state.crdt_join(channel, nick);
+        // NOTE: Presence is NOT in CRDT (avoids ghost users on crash).
+        // It's tracked by S2S events + periodic resync only.
 
         if is_new_channel {
             // New channel: set founder if authenticated
@@ -107,8 +107,14 @@ pub(super) fn handle_join(
             if let Some(d) = did {
                 ch.founder_did = Some(d.to_string());
                 ch.did_ops.insert(d.to_string());
-                state.crdt_set_founder(channel, d);
-                state.crdt_grant_op(channel, d);
+                // CRDT updates (async) — spawn to avoid blocking
+                let state_c = Arc::clone(state);
+                let channel_c = channel.to_string();
+                let did_c = d.to_string();
+                tokio::spawn(async move {
+                    state_c.crdt_set_founder(&channel_c, &did_c).await;
+                    state_c.crdt_grant_op(&channel_c, &did_c, None).await;
+                });
             }
             ch.ops.insert(session_id.to_string());
             let ch_clone = ch.clone();
@@ -179,6 +185,7 @@ pub(super) fn handle_join(
         .map(|ch| ch.ops.contains(session_id))
         .unwrap_or(false);
     s2s_broadcast(state, crate::s2s::S2sMessage::Join {
+        event_id: s2s_next_event_id(state),
         nick: nick.to_string(),
         channel: channel.to_string(),
         did: did.map(|d| d.to_string()),
@@ -192,6 +199,7 @@ pub(super) fn handle_join(
         let channels = state.channels.lock().unwrap();
         if let Some(ch) = channels.get(channel) {
             s2s_broadcast(state, crate::s2s::S2sMessage::ChannelCreated {
+                event_id: s2s_next_event_id(state),
                 channel: channel.to_string(),
                 founder_did: ch.founder_did.clone(),
                 did_ops: ch.did_ops.iter().cloned().collect(),
@@ -940,7 +948,17 @@ pub(super) fn handle_topic(
                     ch.topic = Some(topic);
                 });
 
-            state.crdt_set_topic(channel, text, nick);
+            // CRDT update (async, source of truth for topic convergence)
+            {
+                let state_c = Arc::clone(state);
+                let channel_c = channel.to_string();
+                let text_c = text.to_string();
+                let nick_c = nick.to_string();
+                let did_c = state.session_dids.lock().unwrap().get(session_id).cloned();
+                tokio::spawn(async move {
+                    state_c.crdt_set_topic(&channel_c, &text_c, &nick_c, did_c.as_deref()).await;
+                });
+            }
 
             // Persist channel state
             {
@@ -974,6 +992,7 @@ pub(super) fn handle_topic(
             // Broadcast TOPIC to S2S peers
             let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
             s2s_broadcast(state, crate::s2s::S2sMessage::Topic {
+                event_id: s2s_next_event_id(state),
                 channel: channel.to_string(),
                 topic: text.to_string(),
                 set_by: conn.nick.as_deref().unwrap_or("*").to_string(),
@@ -1046,11 +1065,13 @@ pub(super) fn handle_part(
             ch.members.remove(session_id);
         });
 
-    state.crdt_part(channel, conn.nick.as_deref().unwrap_or("*"));
+    // NOTE: Presence is NOT in CRDT (avoids ghost users on crash)
 
     // Broadcast PART to S2S peers
+    let event_id = s2s_next_event_id(state);
     let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
     s2s_broadcast(state, crate::s2s::S2sMessage::Part {
+        event_id,
         nick: conn.nick.as_deref().unwrap_or("*").to_string(),
         channel: channel.to_string(),
         origin,

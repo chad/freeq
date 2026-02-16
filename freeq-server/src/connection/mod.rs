@@ -38,13 +38,12 @@ use channel::{
     handle_invite, handle_join, handle_kick, handle_list, handle_mode, handle_names, handle_part,
     handle_topic,
 };
-use helpers::{normalize_channel, s2s_broadcast};
+use helpers::{normalize_channel, s2s_broadcast, s2s_next_event_id};
 use messaging::{handle_chathistory, handle_privmsg, handle_tagmsg};
 use queries::{handle_away, handle_lusers, handle_who, handle_whois};
 use registration::try_complete_registration;
 
 // Re-export items used by other modules in the crate
-pub(crate) use helpers::{broadcast_account_notify, make_extended_join, make_standard_join};
 
 /// State of a single client connection.
 pub struct Connection {
@@ -368,6 +367,7 @@ where
                             if let Some(ref old) = old_nick {
                                 let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
                                 s2s_broadcast(&state, crate::s2s::S2sMessage::NickChange {
+                                    event_id: s2s_next_event_id(&state),
                                     old: old.clone(),
                                     new: nick.clone(),
                                     origin,
@@ -707,6 +707,7 @@ where
     if let Some(ref nick) = conn.nick {
         let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
         s2s_broadcast(&state, crate::s2s::S2sMessage::Quit {
+            event_id: s2s_next_event_id(&state),
             nick: nick.clone(),
             reason: "Connection closed".to_string(),
             origin,

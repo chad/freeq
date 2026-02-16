@@ -2,7 +2,6 @@
 //! Query commands: WHOIS, WHO, LUSERS, AWAY.
 
 use std::sync::Arc;
-use std::collections::HashMap;
 use crate::irc::{self, Message};
 use crate::server::SharedState;
 use super::Connection;

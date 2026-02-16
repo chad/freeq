@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="freeq.png" alt="freeq logo" width="200">
+</p>
+
 # freeq
 
 IRC server and client with AT Protocol (Bluesky) identity authentication,
@@ -252,11 +256,19 @@ automatically when `--iroh` is enabled.
 ### CRDT-Based State Convergence
 
 Channel authority (founder, DID-based ops) uses Automerge CRDTs for
-conflict-free convergence:
+conflict-free convergence. **Presence is NOT in the CRDT** — it's S2S
+event-driven to avoid ghost users when servers crash.
 
-- **Founder resolution**: First-write-wins — concurrent claims converge
-  deterministically, late entrants cannot overwrite after sync
+- **Founder resolution**: Deterministic min-actor-wins — concurrent claims
+  converge deterministically, late entrants cannot overwrite after sync
 - **DID ops**: Union merge — grants propagate, revocations propagate
+- **Provenance tracking**: All CRDT writes carry origin peer + authorizing DID
+- **Authority boundaries**: Soft enforcement validates who can write each key-space
+- **Event dedup**: S2S events carry unique IDs; bounded LRU prevents replay
+- **Peer identity**: CRDT sync keyed by iroh endpoint ID (cryptographic), not
+  server name (untrusted). Hello handshake binds transport to logical identity.
+- **Compaction**: Periodic snapshot + reload bounds doc growth in long-lived deployments
+- **Async-safe**: CRDT uses `tokio::sync::Mutex` — no runtime thread blocking
 - No timestamps in authority decisions (spoofable by rogue servers)
 
 ### S2S Acceptance Tests
@@ -499,7 +511,7 @@ Persistence failures are logged but do not crash the server.
 ## Tests
 
 ```sh
-# Unit + integration tests (104 tests)
+# Unit + integration tests
 cargo test
 
 # S2S federation acceptance tests (9 tests, requires two live servers)
@@ -507,16 +519,17 @@ LOCAL_SERVER=localhost:6667 REMOTE_SERVER=irc.freeq.at:6667 \
   cargo test -p freeq-server --test s2s_acceptance -- --nocapture --test-threads=1
 ```
 
-**104 tests** covering:
+**153 tests** covering:
 
-- **SDK (35)**: IRC parsing (with tag support), tag escaping roundtrip, DID
+- **SDK (44)**: IRC parsing (with tag support), tag escaping roundtrip, DID
   document parsing, key generation/signing/verification, multibase/multicodec,
   challenge response encoding, SASL signer variants, media attachment roundtrip,
   link preview roundtrip, media type detection
-- **Server unit (33)**: Message parsing (with tags), tag escaping, SASL challenge
+- **Server unit (33 + 12 CRDT)**: Message parsing (with tags), tag escaping, SASL challenge
   store (create, take, replay, expiry, forged nonce), channel state, database
   roundtrips (channels, bans, messages, identities), CRDT tests (founder
-  first-write-wins, founder not overwritten after sync, DID ops sync)
+  deterministic min-actor, founder not overwritten after sync, DID ops sync,
+  topic provenance, authority validation, compaction, metrics, ban provenance)
 - **Integration (27)**: Guest connection, secp256k1 auth, ed25519 auth, wrong key
   rejection, unknown DID rejection, expired challenge rejection, replayed nonce
   rejection, channel messaging, mixed auth/guest, nick collision, channel topic,
@@ -569,6 +582,7 @@ for the full plugin hook reference.
 - [Known Limitations](docs/KNOWN-LIMITATIONS.md) — Explicit list of gaps
 - [Architecture Decisions](docs/architecture-decisions.md) — Design rationale
 - [S2S Audit](docs/s2s-audit.md) — Federation protocol analysis
+- [CRDT Federation Audit](docs/crdt-federation-audit.md) — CRDT convergence issues & fix plan
 - [Future Direction](docs/FutureDirection.md) — Roadmap
 
 ## License

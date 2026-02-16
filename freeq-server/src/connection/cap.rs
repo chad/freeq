@@ -169,7 +169,12 @@ pub(super) async fn handle_authenticate(
                                 let nick_lower = nick.to_lowercase();
                                 state.did_nicks.lock().unwrap().insert(did.clone(), nick_lower.clone());
                                 state.nick_owners.lock().unwrap().insert(nick_lower.clone(), did.clone());
-                                state.crdt_set_nick_owner(&nick_lower, &did);
+                                let nick_l = nick_lower.clone();
+                                let did_c = did.clone();
+                                let state_c = Arc::clone(state);
+                                tokio::spawn(async move {
+                                    state_c.crdt_set_nick_owner(&nick_l, &did_c).await;
+                                });
                                 state.with_db(|db| db.save_identity(&did, &nick.to_lowercase()));
                             }
 
