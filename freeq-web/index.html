@@ -199,7 +199,7 @@
       <label>Handle</label>
       <input id="f-at-handle" placeholder="you.bsky.social">
     </div>
-    <button class="btn-primary" onclick="doConnect()">Connect as Guest</button>
+    <button id="btn-connect" class="btn-primary" onclick="doConnect()">Connect as Guest</button>
     <button id="btn-at-login" class="btn-oauth" onclick="startAtOAuth()" style="display:none">Sign in with Bluesky</button>
     <div id="connect-error"></div>
     <div class="connect-footer">
@@ -491,26 +491,37 @@ async function fetchAuthServerMeta(pdsUrl) {
   throw new Error('Could not find authorization server for ' + pdsUrl);
 }
 
-// POST with DPoP, retrying once if nonce is required
-async function dpopFetch(url, body, privateKey, publicJwk, dpopNonce) {
+// Compute JWK Thumbprint (RFC 7638) — needed for dpop_jkt parameter
+async function jwkThumbprint(jwk) {
+  // For EC keys: lexicographic order of required members
+  const canonical = JSON.stringify({ crv: jwk.crv, kty: jwk.kty, x: jwk.x, y: jwk.y });
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+  return b64u(hash);
+}
+
+// POST with DPoP, retrying once if server requires a nonce
+async function dpopFetch(url, body, privateKey, publicJwk) {
   async function attempt(nonce) {
-    const proof = await dpopProof(privateKey, publicJwk, 'POST', url, { nonce });
+    const proof = await dpopProof(privateKey, publicJwk, 'POST', url, nonce ? { nonce } : {});
     return fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'DPoP': proof },
       body
     });
   }
-  let res = await attempt(dpopNonce);
-  if (res.status === 400 || res.status === 401) {
-    const newNonce = res.headers.get('DPoP-Nonce');
-    if (newNonce) {
-      const body2 = await res.json().catch(() => ({}));
-      if (body2.error === 'use_dpop_nonce') {
-        res = await attempt(newNonce);
-      }
+
+  // First attempt (no nonce)
+  let res = await attempt(null);
+
+  // If the server wants a DPoP nonce, retry with it
+  if (!res.ok) {
+    const dpopNonce = res.headers.get('DPoP-Nonce');
+    if (dpopNonce) {
+      // Retry with nonce — don't consume body of first response
+      res = await attempt(dpopNonce);
     }
   }
+
   return res;
 }
 
@@ -543,26 +554,29 @@ async function startAtOAuth() {
       channels: document.getElementById('f-channels').value.trim(),
     }));
 
+    // Compute DPoP key thumbprint for binding
+    const jkt = await jwkThumbprint(dpop.publicJwk);
+
     // PAR (Pushed Authorization Request)
     const parBody = new URLSearchParams({
       client_id: OAUTH_CLIENT_ID, redirect_uri: OAUTH_REDIRECT_URI,
       response_type: 'code', scope: OAUTH_SCOPE, state,
       code_challenge: codeChallenge, code_challenge_method: 'S256',
-      login_hint: atHandle,
+      login_hint: atHandle, dpop_jkt: jkt,
     });
 
     showErr('Starting authorization…');
     const parRes = await dpopFetch(asMeta.pushed_authorization_request_endpoint, parBody, dpop.keyPair.privateKey, dpop.publicJwk);
 
-    if (!parRes.ok) {
-      const err = await parRes.json().catch(() => ({}));
-      throw new Error('Authorization request failed: ' + (err.error_description || err.error || parRes.status));
+    const parData = await parRes.json().catch(() => null);
+    if (!parRes.ok || !parData) {
+      const errMsg = parData ? (parData.error_description || parData.error || 'Unknown error') : ('HTTP ' + parRes.status);
+      throw new Error('Authorization request failed: ' + errMsg);
     }
-    const par = await parRes.json();
 
     // Redirect to authorization server
     window.location.href = asMeta.authorization_endpoint + '?' + new URLSearchParams({
-      client_id: OAUTH_CLIENT_ID, request_uri: par.request_uri,
+      client_id: OAUTH_CLIENT_ID, request_uri: parData.request_uri,
     });
   } catch(e) {
     showErr('OAuth failed: ' + e.message);
@@ -589,13 +603,14 @@ async function handleOAuthCallback(code, state, iss) {
     });
 
     const tokenRes = await dpopFetch(stored.tokenEndpoint, tokenBody, privateKey, publicJwk);
+    const tokenData = await tokenRes.json().catch(() => null);
 
-    if (!tokenRes.ok) {
-      const err = await tokenRes.json().catch(() => ({}));
-      throw new Error('Token exchange failed: ' + (err.error_description || err.error || tokenRes.status));
+    if (!tokenRes.ok || !tokenData) {
+      const errMsg = tokenData ? (tokenData.error_description || tokenData.error || 'Unknown error') : ('HTTP ' + tokenRes.status);
+      throw new Error('Token exchange failed: ' + errMsg);
     }
 
-    const tokens = await tokenRes.json();
+    const tokens = tokenData;
 
     // Set auth state
     atDid = tokens.sub || stored.did;
@@ -611,13 +626,14 @@ async function handleOAuthCallback(code, state, iss) {
     document.getElementById('f-channels').value = stored.channels;
     document.getElementById('f-at-handle').value = stored.handle;
 
-    showErr('Authenticated as ' + atHandle + '! Connecting…');
-
     // Clean URL
     history.replaceState(null, '', window.location.pathname);
 
-    // Auto-connect
-    doConnect();
+    // Update UI to show authenticated state
+    document.getElementById('btn-connect').textContent = 'Connect as ' + atHandle;
+    document.getElementById('btn-at-login').style.display = 'none';
+    showErr('✓ Signed in via Bluesky — click Connect');
+    document.getElementById('connect-error').style.color = 'var(--green)';
   } catch(e) {
     showErr('OAuth failed: ' + e.message);
   }
