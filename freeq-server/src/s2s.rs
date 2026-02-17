@@ -322,6 +322,11 @@ pub struct S2sManager {
     pub event_counter: AtomicU64,
     /// Event dedup set.
     pub dedup: Arc<DedupSet>,
+    /// Ordered broadcast queue: ensures messages are sent to peers in the
+    /// same order their event IDs were assigned.  Without this, independent
+    /// tokio::spawn tasks can reorder messages, causing the receiver's
+    /// monotonic high-water-mark dedup to reject out-of-order events.
+    pub broadcast_tx: mpsc::Sender<S2sMessage>,
 }
 
 impl S2sManager {
@@ -331,18 +336,23 @@ impl S2sManager {
         format!("{}:{}", self.server_id, counter)
     }
 
-    /// Broadcast a message to all peer servers.
-    pub async fn broadcast(&self, msg: S2sMessage) {
+    /// Queue a message for ordered broadcast to all peer servers.
+    /// Messages are processed by a single task to preserve event ID ordering.
+    pub fn broadcast(&self, msg: S2sMessage) {
+        if self.broadcast_tx.try_send(msg).is_err() {
+            tracing::warn!("S2S broadcast queue full or closed");
+        }
+    }
+
+    /// Internal: send a message directly to all connected peers (called by broadcast worker).
+    async fn broadcast_to_peers(&self, msg: S2sMessage) {
         let peers = self.peers.lock().await;
         if peers.is_empty() {
-            tracing::warn!("S2S broadcast: NO PEERS connected");
             return;
         }
         for (peer_id, tx) in peers.iter() {
             if tx.send(msg.clone()).await.is_err() {
-                tracing::warn!(peer = %peer_id, "Failed to send S2S message");
-            } else {
-                tracing::debug!(peer = %peer_id, "S2S broadcast sent to peer");
+                tracing::warn!(peer = %peer_id, "S2S broadcast: failed to send to peer");
             }
         }
     }
@@ -366,6 +376,8 @@ pub async fn start(
     let (event_tx, event_rx) = mpsc::channel(1024);
     let server_id = endpoint.id().to_string();
 
+    let (broadcast_tx, mut broadcast_rx) = mpsc::channel::<S2sMessage>(1024);
+
     let manager = Arc::new(S2sManager {
         server_id: server_id.clone(),
         server_name: state.server_name.clone(),
@@ -382,6 +394,17 @@ pub async fn start(
                 .as_micros() as u64
         ),
         dedup: Arc::new(DedupSet::new()),
+        broadcast_tx,
+    });
+
+    // Spawn the ordered broadcast worker.  All outbound S2S messages flow
+    // through this single task, guaranteeing they reach the QUIC writer in
+    // the same order their event IDs were assigned.
+    let bcast_manager = Arc::clone(&manager);
+    tokio::spawn(async move {
+        while let Some(msg) = broadcast_rx.recv().await {
+            bcast_manager.broadcast_to_peers(msg).await;
+        }
     });
 
     Ok((manager, event_rx))

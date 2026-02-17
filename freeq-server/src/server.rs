@@ -1158,7 +1158,7 @@ async fn process_s2s_message(
                     channels: channel_info,
                 }
             };
-            manager.broadcast(response).await;
+            manager.broadcast(response);
             state.crdt_broadcast_sync().await;
         }
 

@@ -13,9 +13,7 @@ pub(super) fn normalize_channel(name: &str) -> String {
 pub(super) fn s2s_broadcast(state: &Arc<SharedState>, msg: crate::s2s::S2sMessage) {
     let manager = state.s2s_manager.lock().unwrap().clone();
     if let Some(manager) = manager {
-        tokio::spawn(async move {
-            manager.broadcast(msg).await;
-        });
+        manager.broadcast(msg);
     }
 }
 
