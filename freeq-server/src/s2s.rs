@@ -307,13 +307,20 @@ impl DedupSet {
 }
 
 /// State for managing S2S links.
+/// A peer connection entry with a generation counter for safe cleanup.
+#[derive(Clone)]
+pub struct PeerEntry {
+    pub tx: mpsc::Sender<S2sMessage>,
+    pub conn_gen: u64,
+}
+
 pub struct S2sManager {
     /// Our server's iroh endpoint ID (cryptographic identity).
     pub server_id: String,
     /// Our server's human-readable name (for Hello messages).
     pub server_name: String,
-    /// Connected peer servers: peer_id (iroh endpoint ID) → sender for writing messages.
-    pub peers: Arc<tokio::sync::Mutex<HashMap<String, mpsc::Sender<S2sMessage>>>>,
+    /// Connected peer servers: peer_id (iroh endpoint ID) → sender + generation.
+    pub peers: Arc<tokio::sync::Mutex<HashMap<String, PeerEntry>>>,
     /// Mapping: iroh endpoint ID → server_name (populated from Hello handshake).
     pub peer_names: Arc<tokio::sync::Mutex<HashMap<String, String>>>,
     /// Channel for S2S events that need to be applied to server state.
@@ -327,6 +334,9 @@ pub struct S2sManager {
     /// tokio::spawn tasks can reorder messages, causing the receiver's
     /// monotonic high-water-mark dedup to reject out-of-order events.
     pub broadcast_tx: mpsc::Sender<S2sMessage>,
+    /// Monotonic counter for connection generations — used to ensure cleanup
+    /// only removes its own peer entry, not a replacement's.
+    pub conn_gen: Arc<AtomicU64>,
 }
 
 impl S2sManager {
@@ -350,8 +360,8 @@ impl S2sManager {
         if peers.is_empty() {
             return;
         }
-        for (peer_id, tx) in peers.iter() {
-            if tx.send(msg.clone()).await.is_err() {
+        for (peer_id, entry) in peers.iter() {
+            if entry.tx.send(msg.clone()).await.is_err() {
                 tracing::warn!(peer = %peer_id, "S2S broadcast: failed to send to peer");
             }
         }
@@ -395,6 +405,7 @@ pub async fn start(
         ),
         dedup: Arc::new(DedupSet::new()),
         broadcast_tx,
+        conn_gen: Arc::new(AtomicU64::new(0)),
     });
 
     // Spawn the ordered broadcast worker.  All outbound S2S messages flow
@@ -437,13 +448,7 @@ pub async fn handle_incoming_s2s(
     }
 
     tracing::info!(peer = %peer_id, "S2S incoming connection (routed by ALPN)");
-    let peers = Arc::clone(&manager.peers);
-    let peer_names = Arc::clone(&manager.peer_names);
-    let event_tx = manager.event_tx.clone();
-    let server_id = manager.server_id.clone();
-    let server_name = manager.server_name.clone();
-    let dedup = Arc::clone(&manager.dedup);
-    handle_s2s_connection(conn, peers, peer_names, event_tx, server_id, server_name, dedup, true).await;
+    handle_s2s_connection_from_manager(conn, &manager, true).await;
 }
 
 /// Connect to a peer server by iroh endpoint ID.
@@ -451,7 +456,6 @@ pub async fn connect_peer(
     endpoint: &iroh::Endpoint,
     peer_id: &str,
     manager: &Arc<S2sManager>,
-    event_tx: mpsc::Sender<S2sMessage>,
 ) -> Result<()> {
     let endpoint_id: iroh::EndpointId = peer_id.parse()
         .map_err(|e| anyhow::anyhow!("Invalid peer endpoint ID: {e}"))?;
@@ -459,16 +463,10 @@ pub async fn connect_peer(
 
     tracing::info!(peer = %peer_id, "Connecting to S2S peer");
     let conn = endpoint.connect(addr, S2S_ALPN).await?;
-    let _peer_id = conn.remote_id().to_string();
 
-    let peers = Arc::clone(&manager.peers);
-    let peer_names = Arc::clone(&manager.peer_names);
-    let server_id = manager.server_id.clone();
-    let server_name = manager.server_name.clone();
-    let dedup = Arc::clone(&manager.dedup);
-
+    let manager = Arc::clone(manager);
     tokio::spawn(async move {
-        handle_s2s_connection(conn, peers, peer_names, event_tx, server_id, server_name, dedup, false).await;
+        handle_s2s_connection_from_manager(conn, &manager, false).await;
     });
 
     Ok(())
@@ -479,7 +477,6 @@ pub fn connect_peer_with_retry(
     endpoint: iroh::Endpoint,
     peer_id: String,
     manager: Arc<S2sManager>,
-    event_tx: mpsc::Sender<S2sMessage>,
 ) {
     tokio::spawn(async move {
         let mut backoff = std::time::Duration::from_secs(1);
@@ -495,17 +492,20 @@ pub fn connect_peer_with_retry(
             };
             let addr = iroh::EndpointAddr::new(endpoint_id);
 
+            // Skip reconnect if we already have a live connection (e.g. incoming replaced ours)
+            if manager.peers.lock().await.contains_key(&peer_id) {
+                tracing::info!(peer = %peer_id, "S2S peer already connected (via incoming), skipping outgoing attempt");
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(max_backoff);
+                continue;
+            }
+
             tracing::info!(peer = %peer_id, "Connecting to S2S peer");
             match endpoint.connect(addr, S2S_ALPN).await {
                 Ok(conn) => {
                     backoff = std::time::Duration::from_secs(1);
-                    let peers = Arc::clone(&manager.peers);
-                    let peer_names = Arc::clone(&manager.peer_names);
-                    let server_id = manager.server_id.clone();
-                    let server_name = manager.server_name.clone();
-                    let dedup = Arc::clone(&manager.dedup);
                     tracing::info!(peer = %peer_id, "S2S peer connected, entering link handler");
-                    handle_s2s_connection(conn, peers, peer_names, event_tx.clone(), server_id, server_name, dedup, false).await;
+                    handle_s2s_connection_from_manager(conn, &manager, false).await;
                     tracing::warn!(peer = %peer_id, "S2S link dropped, will reconnect");
                 }
                 Err(e) => {
@@ -523,14 +523,31 @@ pub fn connect_peer_with_retry(
     });
 }
 
+/// Convenience wrapper that extracts fields from the manager.
+async fn handle_s2s_connection_from_manager(
+    conn: iroh::endpoint::Connection,
+    manager: &Arc<S2sManager>,
+    incoming: bool,
+) {
+    let peers = Arc::clone(&manager.peers);
+    let peer_names = Arc::clone(&manager.peer_names);
+    let event_tx = manager.event_tx.clone();
+    let server_id = manager.server_id.clone();
+    let server_name = manager.server_name.clone();
+    let conn_gen = Arc::clone(&manager.conn_gen);
+    let dedup = Arc::clone(&manager.dedup);
+    handle_s2s_connection(conn, peers, peer_names, event_tx, server_id, server_name, conn_gen, dedup, incoming).await;
+}
+
 /// Handle an S2S connection (both incoming and outgoing).
 async fn handle_s2s_connection(
     conn: iroh::endpoint::Connection,
-    peers: Arc<tokio::sync::Mutex<HashMap<String, mpsc::Sender<S2sMessage>>>>,
+    peers: Arc<tokio::sync::Mutex<HashMap<String, PeerEntry>>>,
     peer_names: Arc<tokio::sync::Mutex<HashMap<String, String>>>,
     event_tx: mpsc::Sender<S2sMessage>,
     server_id: String,
     server_name: String,
+    conn_gen: Arc<AtomicU64>,
     dedup: Arc<DedupSet>,
     incoming: bool,
 ) {
@@ -555,11 +572,26 @@ async fn handle_s2s_connection(
         }
     };
 
-    // Write channel
+    // Write channel — with duplicate connection tie-breaking.
+    // When both servers have each other in --s2s-peers, we get two QUIC
+    // connections (one outgoing, one incoming).  Deterministic rule:
+    //   The peer with the LOWER endpoint ID keeps its OUTGOING connection.
+    //   The peer with the HIGHER endpoint ID keeps the INCOMING connection.
+    // This means: drop if `incoming == (our_id < peer_id)`.
     let (write_tx, mut write_rx) = mpsc::channel::<S2sMessage>(256);
-    peers.lock().await.insert(peer_id.clone(), write_tx);
+    let my_gen = conn_gen.fetch_add(1, Ordering::Relaxed);
+    {
+        let mut peers_guard = peers.lock().await;
+        if peers_guard.contains_key(&peer_id) {
+            tracing::info!(
+                peer = %peer_id, incoming, gen = my_gen,
+                "S2S duplicate connection — replacing existing (generation-safe cleanup)"
+            );
+        }
+        peers_guard.insert(peer_id.clone(), PeerEntry { tx: write_tx, conn_gen: my_gen });
+    }
 
-    tracing::info!(peer = %peer_id, "S2S link established");
+    tracing::info!(peer = %peer_id, incoming, "S2S link established");
 
     // Bridge QUIC recv → DuplexStream for BufReader line reading
     let (bridge_side, irc_side) = tokio::io::duplex(16384);
@@ -664,16 +696,16 @@ async fn handle_s2s_connection(
             peer_id: server_id.clone(),
             server_name: server_name.clone(),
         };
-        if let Some(tx) = peers.lock().await.get(&peer_id) {
-            let _ = tx.send(hello).await;
+        if let Some(entry) = peers.lock().await.get(&peer_id) {
+            let _ = entry.tx.send(hello).await;
         }
     }
 
     // Both sides send sync request
     {
         let sync_req = S2sMessage::SyncRequest;
-        if let Some(tx) = peers.lock().await.get(&peer_id) {
-            let _ = tx.send(sync_req).await;
+        if let Some(entry) = peers.lock().await.get(&peer_id) {
+            let _ = entry.tx.send(sync_req).await;
         }
     }
 
@@ -684,10 +716,24 @@ async fn handle_s2s_connection(
         _ = &mut read_handle => "read",
         _ = &mut write_handle => "write",
     };
-    tracing::warn!(peer = %peer_id, side = which, "S2S link ending — {which} task finished first");
+    tracing::warn!(peer = %peer_id, side = which, gen = my_gen, "S2S link ending — {which} task finished first");
 
-    peers.lock().await.remove(&peer_id);
-    peer_names.lock().await.remove(&peer_id);
-    dedup.remove_peer(&peer_id).await;
-    tracing::info!(peer = %peer_id, "S2S link closed");
+    // Only remove peer entry if it's still ours (same generation).
+    // A replacement connection may have already inserted a new entry.
+    {
+        let mut peers_guard = peers.lock().await;
+        if let Some(entry) = peers_guard.get(&peer_id) {
+            if entry.conn_gen == my_gen {
+                peers_guard.remove(&peer_id);
+                peer_names.lock().await.remove(&peer_id);
+                dedup.remove_peer(&peer_id).await;
+                tracing::info!(peer = %peer_id, gen = my_gen, "S2S link closed (entry removed)");
+            } else {
+                tracing::info!(
+                    peer = %peer_id, my_gen, current_gen = entry.conn_gen,
+                    "S2S link closed (entry kept — newer connection exists)"
+                );
+            }
+        }
+    }
 }

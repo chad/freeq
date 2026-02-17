@@ -46,7 +46,7 @@ BINARY="$(pwd)/target/release/freeq-server"
 # ── Start Server A (iroh enabled, no peers yet — will accept incoming) ──
 echo ""
 echo "═══ Starting Server A on port $PORT_A ═══"
-RUST_LOG=freeq_server=debug "$BINARY" \
+RUST_LOG=freeq_server=info "$BINARY" \
     --listen-addr "127.0.0.1:$PORT_A" \
     --server-name "server-a" \
     --data-dir "$DIR_A" \
@@ -75,7 +75,7 @@ echo "Server A iroh ID: ${IROH_ID_A:0:16}..."
 # ── Start Server B (peers with A) ──
 echo ""
 echo "═══ Starting Server B on port $PORT_B (peered with A) ═══"
-RUST_LOG=freeq_server=debug "$BINARY" \
+RUST_LOG=freeq_server=info "$BINARY" \
     --listen-addr "127.0.0.1:$PORT_B" \
     --server-name "server-b" \
     --data-dir "$DIR_B" \

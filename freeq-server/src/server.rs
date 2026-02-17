@@ -349,8 +349,8 @@ impl SharedState {
                     // Use iroh endpoint ID as origin (not server_name)
                     origin: our_peer_id.clone(),
                 };
-                if let Some(tx) = manager.peers.lock().await.get(peer_id) {
-                    let _ = tx.send(sync_msg).await;
+                if let Some(entry) = manager.peers.lock().await.get(peer_id) {
+                    let _ = entry.tx.send(sync_msg).await;
                 }
             }
         }
@@ -546,12 +546,10 @@ impl Server {
 
                     // Connect to configured peers with auto-reconnection
                     for peer_id in &self.config.s2s_peers {
-                        let event_tx = manager.event_tx.clone();
                         crate::s2s::connect_peer_with_retry(
                             endpoint.clone(),
                             peer_id.clone(),
                             Arc::clone(&manager),
-                            event_tx,
                         );
                     }
 
