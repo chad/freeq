@@ -223,14 +223,23 @@ pub struct ChannelInfo {
     pub key: Option<String>,
 }
 
-/// Bounded set for event dedup. Uses a VecDeque ring buffer of seen event
-/// IDs per peer to prevent duplicate processing on reconnect/replay.
-/// Eviction is O(1) via `pop_front()`.
+/// Bounded set for event dedup. Uses two layers:
+/// 1. **Monotonic high-water mark** per peer: if the event_id counter
+///    portion is ≤ the highest seen, reject it outright. This survives
+///    beyond the ring buffer window.
+/// 2. **Ring buffer** (VecDeque + HashSet): for non-monotonic or
+///    near-duplicate IDs within the recent window.
+///
+/// Event ID format: `{origin_peer_id}:{counter}` where counter is
+/// microseconds-since-epoch (monotonically increasing per sender).
 pub struct DedupSet {
-    /// Per-peer seen event IDs. Key = origin peer_id.
+    /// Per-peer seen event IDs (ring buffer). Key = origin peer_id.
     seen: tokio::sync::Mutex<HashMap<String, HashSet<String>>>,
     /// Per-peer insertion order for bounded eviction (O(1) pop_front).
     order: tokio::sync::Mutex<HashMap<String, VecDeque<String>>>,
+    /// Per-peer monotonic high-water mark: highest counter value seen.
+    /// Any event with counter ≤ this is rejected, even outside the ring buffer.
+    high_water: tokio::sync::Mutex<HashMap<String, u64>>,
 }
 
 impl DedupSet {
@@ -238,7 +247,13 @@ impl DedupSet {
         Self {
             seen: tokio::sync::Mutex::new(HashMap::new()),
             order: tokio::sync::Mutex::new(HashMap::new()),
+            high_water: tokio::sync::Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Extract the counter portion from an event_id ("origin:counter" → counter).
+    fn parse_counter(event_id: &str) -> Option<u64> {
+        event_id.rsplit_once(':').and_then(|(_, c)| c.parse().ok())
     }
 
     /// Returns true if this event_id is new (not a duplicate).
@@ -248,6 +263,17 @@ impl DedupSet {
             return true; // No dedup for legacy messages
         }
 
+        // Layer 1: monotonic high-water mark check
+        if let Some(counter) = Self::parse_counter(event_id) {
+            let mut hw = self.high_water.lock().await;
+            let mark = hw.entry(origin.to_string()).or_insert(0);
+            if counter <= *mark {
+                return false; // Counter is ≤ highest seen — stale/replay
+            }
+            *mark = counter;
+        }
+
+        // Layer 2: ring buffer for exact-match dedup
         let mut seen = self.seen.lock().await;
         let mut order = self.order.lock().await;
 
@@ -255,7 +281,7 @@ impl DedupSet {
         let peer_order = order.entry(origin.to_string()).or_default();
 
         if peer_seen.contains(event_id) {
-            return false; // Duplicate
+            return false; // Exact duplicate in ring buffer
         }
 
         // Evict oldest if at capacity — O(1) with VecDeque
@@ -274,6 +300,9 @@ impl DedupSet {
     pub async fn remove_peer(&self, origin: &str) {
         self.seen.lock().await.remove(origin);
         self.order.lock().await.remove(origin);
+        // NOTE: we intentionally keep high_water on disconnect.
+        // On reconnect, the peer's counter will be higher (timestamp-based),
+        // so old events from before the disconnect stay rejected.
     }
 }
 
@@ -337,7 +366,15 @@ pub async fn start(
         peers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         peer_names: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         event_tx: event_tx.clone(),
-        event_counter: AtomicU64::new(0),
+        // Initialize counter from wall clock (microseconds since epoch) so
+        // restarts produce strictly increasing event IDs. Peers can use the
+        // counter portion for monotonic dedup even across our restarts.
+        event_counter: AtomicU64::new(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros() as u64
+        ),
         dedup: Arc::new(DedupSet::new()),
     });
 

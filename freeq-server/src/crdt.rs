@@ -424,11 +424,14 @@ impl ClusterDoc {
     /// Validate that a topic change is authorized.
     /// Returns true if the setter has authority (is founder, DID-op, or
     /// the channel isn't topic-locked).
-    pub async fn validate_topic_authority(&self, channel: &str, setter_did: Option<&str>) -> bool {
-        // If no DID, we can't validate — allow for backward compat
+    ///
+    /// If `require_did` is true (from `--require-did-for-ops`), rejects
+    /// writes without DID provenance. Otherwise, allows them for backward
+    /// compatibility with legacy peers.
+    pub async fn validate_topic_authority(&self, channel: &str, setter_did: Option<&str>, require_did: bool) -> bool {
         let did = match setter_did {
             Some(d) => d,
-            None => return true,
+            None => return !require_did, // No DID: reject if strict, allow if compat
         };
         // Founder always has authority
         if let Some(founder) = self.founder(channel).await {
@@ -443,10 +446,12 @@ impl ClusterDoc {
 
     /// Validate that an op grant is authorized.
     /// Only founder or existing DID-ops can grant ops.
-    pub async fn validate_op_grant_authority(&self, channel: &str, granter_did: Option<&str>) -> bool {
+    ///
+    /// If `require_did` is true, rejects grants without DID provenance.
+    pub async fn validate_op_grant_authority(&self, channel: &str, granter_did: Option<&str>, require_did: bool) -> bool {
         let did = match granter_did {
             Some(d) => d,
-            None => return true, // No DID info = trust (backward compat)
+            None => return !require_did,
         };
         if let Some(founder) = self.founder(channel).await {
             if founder == did {
@@ -730,17 +735,21 @@ mod tests {
         doc.grant_op("#test", "did:plc:bob", Some("did:plc:alice"), "peer-1").await;
 
         // Founder has authority
-        assert!(doc.validate_topic_authority("#test", Some("did:plc:alice")).await);
+        assert!(doc.validate_topic_authority("#test", Some("did:plc:alice"), false).await);
         // DID-op has authority
-        assert!(doc.validate_topic_authority("#test", Some("did:plc:bob")).await);
+        assert!(doc.validate_topic_authority("#test", Some("did:plc:bob"), false).await);
         // Random DID does not
-        assert!(!doc.validate_topic_authority("#test", Some("did:plc:evil")).await);
-        // No DID = allow (backward compat)
-        assert!(doc.validate_topic_authority("#test", None).await);
+        assert!(!doc.validate_topic_authority("#test", Some("did:plc:evil"), false).await);
+        // No DID = allow in compat mode
+        assert!(doc.validate_topic_authority("#test", None, false).await);
+        // No DID = reject in strict mode
+        assert!(!doc.validate_topic_authority("#test", None, true).await);
 
         // Op grant authority
-        assert!(doc.validate_op_grant_authority("#test", Some("did:plc:alice")).await);
-        assert!(doc.validate_op_grant_authority("#test", Some("did:plc:bob")).await);
-        assert!(!doc.validate_op_grant_authority("#test", Some("did:plc:nobody")).await);
+        assert!(doc.validate_op_grant_authority("#test", Some("did:plc:alice"), false).await);
+        assert!(doc.validate_op_grant_authority("#test", Some("did:plc:bob"), false).await);
+        assert!(!doc.validate_op_grant_authority("#test", Some("did:plc:nobody"), false).await);
+        // Strict mode: no DID = reject
+        assert!(!doc.validate_op_grant_authority("#test", None, true).await);
     }
 }

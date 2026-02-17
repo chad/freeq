@@ -86,6 +86,13 @@ pub struct ServerConfig {
     /// Each TOML file defines one plugin and its configuration.
     #[arg(long)]
     pub plugin_dir: Option<String>,
+
+    /// Require DID provenance for channel authority operations (founder, ops, bans).
+    /// When enabled, op grants/bans from peers without DID provenance are rejected.
+    /// This closes the "legacy peer auth bypass" but breaks backward compatibility
+    /// with peers that don't send DID metadata.
+    #[arg(long)]
+    pub require_did_for_ops: bool,
 }
 
 impl Default for ServerConfig {
@@ -109,6 +116,7 @@ impl Default for ServerConfig {
             web_static_dir: None,
             plugins: vec![],
             plugin_dir: None,
+            require_did_for_ops: false,
         }
     }
 }

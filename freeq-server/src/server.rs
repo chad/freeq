@@ -586,8 +586,9 @@ impl Server {
             *state.iroh_endpoint.lock().unwrap() = Some(endpoint);
         }
 
-        // Start periodic CRDT compaction task (every 30 minutes).
-        // Bounds memory/sync growth in long-lived deployments.
+        // Start periodic CRDT maintenance tasks:
+        // 1. Compaction (every 30 min) — bounds doc growth
+        // 2. CRDT→local reconciliation (every 60s) — ensures CRDT is source of truth
         {
             let compact_state = Arc::clone(&state);
             tokio::spawn(async move {
@@ -608,6 +609,22 @@ impl Server {
                     } else {
                         tracing::info!("CRDT compacted successfully");
                     }
+                }
+            });
+        }
+
+        // CRDT→local reconciliation: periodically apply CRDT state to local
+        // channel state. This ensures the CRDT is the single source of truth
+        // for topics, founder, and DID ops — even if S2S events and CRDT
+        // diverge due to timing/partitions.
+        {
+            let reconcile_state = Arc::clone(&state);
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                interval.tick().await; // skip first tick
+                loop {
+                    interval.tick().await;
+                    reconcile_crdt_to_local(&reconcile_state).await;
                 }
             });
         }
@@ -1039,9 +1056,8 @@ async fn process_s2s_message(
                     );
                 }
 
-                // DID ops: only accept DIDs that are plausibly valid.
-                // Authority check: ops should be granted by the founder
-                // or an existing op. Log if the granter is unknown.
+                // DID ops: validate format + authority before accepting.
+                let require_did = state.config.require_did_for_ops;
                 for did in &did_ops {
                     if !did.starts_with("did:") {
                         tracing::warn!(
@@ -1050,14 +1066,22 @@ async fn process_s2s_message(
                         );
                         continue;
                     }
-                    // Soft enforcement: accept but log if not granted by known authority
-                    let is_authorized = founder_did.as_ref().is_some()
+                    // Authority check: ops should be granted by founder or existing op
+                    let granter = founder_did.as_deref();
+                    let has_authority = granter.is_some()
                         || ch.founder_did.is_some()
                         || !ch.did_ops.is_empty();
-                    if !is_authorized {
+                    if !has_authority {
+                        if require_did {
+                            tracing::warn!(
+                                channel = %channel, origin = %origin,
+                                "Rejecting DID op {did}: no authority and --require-did-for-ops is set"
+                            );
+                            continue;
+                        }
                         tracing::warn!(
                             channel = %channel, origin = %origin,
-                            "DID op {did} granted without known authority (accepting but logging)"
+                            "DID op {did} granted without known authority (accepting, use --require-did-for-ops to reject)"
                         );
                     }
                     ch.did_ops.insert(did.clone());
@@ -1164,16 +1188,28 @@ async fn process_s2s_message(
                         }
                     }
 
-                    // DID ops: validate before accepting
+                    // DID ops: validate format before accepting.
+                    // If --require-did-for-ops and no founder context, reject.
+                    let require_did = state.config.require_did_for_ops;
                     for did in &info.did_ops {
-                        if did.starts_with("did:") {
-                            ch.did_ops.insert(did.clone());
-                        } else {
+                        if !did.starts_with("did:") {
                             tracing::warn!(
                                 channel = %info.name, peer = %peer_id,
                                 "Rejecting invalid DID op in sync: {did}"
                             );
+                            continue;
                         }
+                        let has_authority = info.founder_did.is_some()
+                            || ch.founder_did.is_some()
+                            || !ch.did_ops.is_empty();
+                        if !has_authority && require_did {
+                            tracing::warn!(
+                                channel = %info.name, peer = %peer_id,
+                                "Rejecting DID op {did} in sync: no authority (--require-did-for-ops)"
+                            );
+                            continue;
+                        }
+                        ch.did_ops.insert(did.clone());
                     }
 
                     // Presence: S2S-event-based (idempotent set-based merge)
@@ -1330,5 +1366,90 @@ async fn process_s2s_message(
                 }
             }
         }
+    }
+}
+
+/// Periodic CRDT→local reconciliation.
+///
+/// Reads CRDT state (topics, founder, DID ops) and applies to local channel
+/// state if divergent. This ensures the CRDT is the authoritative source of
+/// truth — even when S2S events and CRDT diverge due to timing or partitions.
+async fn reconcile_crdt_to_local(state: &Arc<SharedState>) {
+    // Get list of channels
+    let channel_names: Vec<String> = {
+        state.channels.lock().unwrap().keys().cloned().collect()
+    };
+
+    let mut reconciled = 0u32;
+
+    for channel_name in &channel_names {
+        // Reconcile topic: if CRDT has a topic and it differs from local, adopt CRDT's
+        if let Some((crdt_topic, crdt_setter)) = state.cluster_doc.channel_topic(channel_name).await {
+            let needs_update = {
+                let channels = state.channels.lock().unwrap();
+                channels.get(channel_name)
+                    .map(|ch| {
+                        ch.topic.as_ref()
+                            .map(|t| t.text != crdt_topic)
+                            .unwrap_or(true) // no local topic, CRDT has one → adopt
+                    })
+                    .unwrap_or(false)
+            };
+            if needs_update {
+                let mut channels = state.channels.lock().unwrap();
+                if let Some(ch) = channels.get_mut(channel_name) {
+                    ch.topic = Some(TopicInfo::new(crdt_topic, crdt_setter));
+                    reconciled += 1;
+                }
+            }
+        }
+
+        // Reconcile founder
+        if let Some(crdt_founder) = state.cluster_doc.founder(channel_name).await {
+            let needs_update = {
+                let channels = state.channels.lock().unwrap();
+                channels.get(channel_name)
+                    .map(|ch| ch.founder_did.as_deref() != Some(&crdt_founder))
+                    .unwrap_or(false)
+            };
+            if needs_update {
+                let mut channels = state.channels.lock().unwrap();
+                if let Some(ch) = channels.get_mut(channel_name) {
+                    tracing::info!(
+                        channel = %channel_name,
+                        "CRDT reconciliation: updating founder to {crdt_founder}"
+                    );
+                    ch.founder_did = Some(crdt_founder);
+                    reconciled += 1;
+                }
+            }
+        }
+
+        // Reconcile DID ops: CRDT is additive authority
+        let crdt_ops = state.cluster_doc.channel_did_ops(channel_name).await;
+        if !crdt_ops.is_empty() {
+            let mut channels = state.channels.lock().unwrap();
+            if let Some(ch) = channels.get_mut(channel_name) {
+                for did in &crdt_ops {
+                    if ch.did_ops.insert(did.clone()) {
+                        reconciled += 1;
+                    }
+                }
+                // Re-op local members whose DID now has ops
+                let dids = state.session_dids.lock().unwrap();
+                let members: Vec<String> = ch.members.iter().cloned().collect();
+                for session_id in &members {
+                    if let Some(did) = dids.get(session_id) {
+                        if ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did) {
+                            ch.ops.insert(session_id.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if reconciled > 0 {
+        tracing::info!("CRDT→local reconciliation: {reconciled} updates applied across {} channels", channel_names.len());
     }
 }
