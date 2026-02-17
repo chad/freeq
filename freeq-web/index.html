@@ -6,7 +6,8 @@
 <title>freeq</title>
 <meta name="description" content="IRC with AT Protocol identity — web client">
 <meta name="theme-color" content="#1e1e2e">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='80'>⚡</text></svg>">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="apple-touch-icon" href="freeq-180.png">
 <style>
   :root {
     --bg: #1e1e2e; --bg2: #181825; --bg3: #11111b;
@@ -40,7 +41,8 @@
     border-radius: 10px; padding: 36px; width: 440px; max-width: 95vw;
     box-shadow: 0 8px 32px rgba(0,0,0,.4);
   }
-  .connect-box h1 { font-size: 28px; color: var(--blue); text-align: center; margin-bottom: 0; letter-spacing: -0.5px; }
+  .connect-logo { display: block; width: 80px; height: 80px; margin: 0 auto 12px; border-radius: 16px; }
+  .connect-box h1 { font-size: 28px; color: var(--fg); text-align: center; margin-bottom: 0; letter-spacing: -0.5px; }
   .connect-box .sub { text-align: center; color: var(--fg3); font-size: 12px; margin-bottom: 24px; }
   .connect-box .sub a { color: var(--fg3); text-decoration: underline; }
   .connect-box .sub a:hover { color: var(--fg2); }
@@ -69,7 +71,9 @@
 
   /* ── Header ── */
   .topbar { background: var(--bg2); border-bottom: 1px solid var(--surface); padding: 0 12px; display: flex; align-items: center; gap: 8px; flex-shrink: 0; height: 40px; }
-  .topbar .logo { color: var(--blue); font-weight: 700; font-size: 14px; cursor: default; }
+  .topbar .logo { display: flex; align-items: center; gap: 6px; cursor: default; }
+  .topbar .logo img { width: 22px; height: 22px; border-radius: 4px; }
+  .topbar .logo span { color: var(--fg2); font-weight: 700; font-size: 13px; }
   .pill { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; white-space: nowrap; }
   .pill.ok { background: #1e3a2f; color: var(--green); }
   .pill.warn { background: #3a3a1e; color: var(--yellow); }
@@ -178,7 +182,8 @@
 <!-- Connect -->
 <div id="connect-screen">
   <div class="connect-box">
-    <h1>⚡ freeq</h1>
+    <img class="connect-logo" src="freeq-180.png" alt="freeq">
+    <h1>freeq</h1>
     <div class="sub">IRC with identity · <a href="https://freeq.at" target="_blank">freeq.at</a></div>
     <div class="field">
       <label>Server</label>
@@ -214,7 +219,7 @@
 <div id="app">
   <div class="topbar">
     <button class="btn-icon" id="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">☰</button>
-    <span class="logo">freeq</span>
+    <div class="logo"><img src="favicon.png" alt=""><span>freeq</span></div>
     <span id="status-pill" class="pill err">connecting</span>
     <span id="auth-pill" class="pill auth" style="display:none"></span>
     <span id="hdr-nick" class="nick"></span>
@@ -290,7 +295,7 @@ if ('Notification' in window && Notification.permission === 'default') {
 
 function notify(title, body) {
   if (!notificationsAllowed || document.hasFocus()) return;
-  try { new Notification(title, { body, icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="80">⚡</text></svg>' }); } catch(e) {}
+  try { new Notification(title, { body, icon: 'freeq-180.png' }); } catch(e) {}
 }
 
 // ── Connect ──────────────────────────────────────────────────────
