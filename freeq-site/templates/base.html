@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}freeq{% endblock %} — IRC with identity</title>
 <meta name="description" content="{% block description %}IRC server with AT Protocol (Bluesky) identity authentication. Connect with any IRC client, authenticate with your Bluesky account.{% endblock %}">
+<link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="apple-touch-icon" href="/static/freeq-180.png">
 <style>
 :root {
   --bg: #1e1e2e; --bg2: #181825; --bg3: #11111b;
@@ -33,7 +35,8 @@ nav {
   padding: 0 24px; display: flex; align-items: center; height: 48px;
   position: sticky; top: 0; z-index: 100;
 }
-nav .logo { color: var(--blue); font-weight: 700; font-size: 16px; margin-right: 32px; }
+nav .logo { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; margin-right: 32px; color: var(--fg); }
+nav .logo img { width: 24px; height: 24px; border-radius: 5px; }
 nav .logo span { color: var(--fg3); font-weight: 400; }
 nav .links { display: flex; gap: 20px; }
 nav .links a { color: var(--fg2); font-size: 13px; }
@@ -81,7 +84,7 @@ footer a:hover { color: var(--fg2); }
 </head>
 <body>
 <nav>
-  <a href="/" class="logo">freeq<span>.at</span></a>
+  <a href="/" class="logo"><img src="/static/favicon.png" alt="">freeq<span>.at</span></a>
   <div class="links">
     <a href="/connect/" {% if nav_active == 'connect' %}class="active"{% endif %}>Connect</a>
     <a href="/docs/" {% if nav_active == 'docs' %}class="active"{% endif %}>Docs</a>
