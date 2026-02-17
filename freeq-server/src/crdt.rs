@@ -82,7 +82,10 @@ pub struct Provenance {
 /// Sync state is keyed by iroh endpoint ID (cryptographic identity).
 pub struct ClusterDoc {
     doc: Mutex<AutoCommit>,
-    pub actor_id: String,
+    /// The actor identity used for CRDT operations.
+    /// Initially server_name; re-keyed to iroh endpoint ID at startup.
+    /// Behind a Mutex so `rekey_actor(&self)` works through Arc<SharedState>.
+    actor_id: Mutex<String>,
     /// Sync states keyed by **iroh endpoint ID** (not server_name).
     sync_states: Mutex<HashMap<String, sync::State>>,
     /// Observability metrics.
@@ -100,7 +103,7 @@ impl ClusterDoc {
 
         Self {
             doc: Mutex::new(doc),
-            actor_id: server_id.to_string(),
+            actor_id: Mutex::new(server_id.to_string()),
             sync_states: Mutex::new(HashMap::new()),
             metrics: Mutex::new(CrdtMetrics::default()),
         }
@@ -112,10 +115,50 @@ impl ClusterDoc {
         let doc = AutoCommit::load(data)?.with_actor(actor);
         Ok(Self {
             doc: Mutex::new(doc),
-            actor_id: server_id.to_string(),
+            actor_id: Mutex::new(server_id.to_string()),
             sync_states: Mutex::new(HashMap::new()),
             metrics: Mutex::new(CrdtMetrics::default()),
         })
+    }
+
+    /// Re-key the CRDT actor identity to the iroh endpoint ID.
+    ///
+    /// Must be called once the iroh endpoint is available, before any
+    /// federation activity. This ensures the Automerge actor_id matches
+    /// the cryptographic transport identity, which is critical for:
+    /// - Deterministic founder resolution (min-actor-wins)
+    /// - Consistent sync state keying
+    /// - Provenance that can be verified against transport identity
+    ///
+    /// Panics if called after changes have been made with the old actor_id
+    /// and those changes have been synced — in practice, call this at startup
+    /// before any S2S connections are established.
+    /// Re-key the CRDT actor identity.
+    ///
+    /// Since `actor_id` is used in `set_founder` comparisons, we store
+    /// the new value in a separate Mutex-protected cell so this can be
+    /// called through `&self` (SharedState is behind Arc).
+    pub async fn rekey_actor(&self, new_actor_id: &str) {
+        let actor = automerge::ActorId::from(new_actor_id.as_bytes());
+        let mut doc = self.doc.lock().await;
+        // Save and reload with new actor — pins all future changes to the new ID
+        let bytes = doc.save();
+        *doc = AutoCommit::load(&bytes)
+            .expect("rekey: reload from own save must succeed")
+            .with_actor(actor);
+        drop(doc);
+        *self.actor_id.lock().await = new_actor_id.to_string();
+        // Clear sync states — peers will re-sync with the new identity
+        self.sync_states.lock().await.clear();
+        tracing::info!(
+            actor_id = %new_actor_id,
+            "CRDT actor re-keyed to iroh endpoint ID"
+        );
+    }
+
+    /// Get the current actor ID.
+    pub async fn get_actor_id(&self) -> String {
+        self.actor_id.lock().await.clone()
     }
 
     /// Save to bytes (also updates metrics).
@@ -133,7 +176,8 @@ impl ClusterDoc {
             let mut doc = self.doc.lock().await;
             doc.save()
         };
-        let actor = automerge::ActorId::from(self.actor_id.as_bytes());
+        let current_actor_id = self.actor_id.lock().await.clone();
+        let actor = automerge::ActorId::from(current_actor_id.as_bytes());
         let new_doc = AutoCommit::load(&bytes)
             .map_err(|e| format!("Compaction load failed: {e}"))?
             .with_actor(actor);
@@ -284,12 +328,13 @@ impl ClusterDoc {
     /// stronger than "first-write-wins by check-if-absent" because it
     /// handles true concurrency correctly.
     pub async fn set_founder(&self, channel: &str, did: &str) {
+        let current_actor_id = self.actor_id.lock().await.clone();
         let mut doc = self.doc.lock().await;
         let key = format!("founder:{channel}");
 
         let value = serde_json::json!({
             "did": did,
-            "actor_id": self.actor_id,
+            "actor_id": current_actor_id,
         });
 
         // Check existing: only write if absent OR our actor_id is smaller
@@ -301,7 +346,7 @@ impl ClusterDoc {
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
                     // Only overwrite if our actor_id is strictly smaller
-                    if self.actor_id.as_str() >= existing_actor {
+                    if current_actor_id.as_str() >= existing_actor {
                         return; // Keep existing — they win
                     }
                 }

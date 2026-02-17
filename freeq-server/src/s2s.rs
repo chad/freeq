@@ -11,7 +11,8 @@
 //! - **Event dedup**: every S2S event carries an `event_id` (origin + counter).
 //!   A bounded LRU per peer prevents duplicate application on reconnect.
 //! - **Source of truth**: presence is S2S-event-only (not CRDT). Topic and
-//!   durable authority are CRDT-only (not also set via S2S events).
+//!   durable authority use CRDT as the convergent source of truth; S2S
+//!   events are notifications for immediate UX delivery.
 //! - **CRDT sync keyed by iroh endpoint ID** (cryptographic identity).
 //!
 //! # Protocol
@@ -29,7 +30,7 @@
 //! Simple mesh: each server connects to all configured peers. Messages
 //! are forwarded with origin tracking to prevent loops.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -222,13 +223,14 @@ pub struct ChannelInfo {
     pub key: Option<String>,
 }
 
-/// Bounded set for event dedup. Uses a ring buffer of seen event IDs
-/// per peer to prevent duplicate processing on reconnect/replay.
+/// Bounded set for event dedup. Uses a VecDeque ring buffer of seen event
+/// IDs per peer to prevent duplicate processing on reconnect/replay.
+/// Eviction is O(1) via `pop_front()`.
 pub struct DedupSet {
     /// Per-peer seen event IDs. Key = origin peer_id.
     seen: tokio::sync::Mutex<HashMap<String, HashSet<String>>>,
-    /// Per-peer insertion order for bounded eviction.
-    order: tokio::sync::Mutex<HashMap<String, Vec<String>>>,
+    /// Per-peer insertion order for bounded eviction (O(1) pop_front).
+    order: tokio::sync::Mutex<HashMap<String, VecDeque<String>>>,
 }
 
 impl DedupSet {
@@ -256,16 +258,15 @@ impl DedupSet {
             return false; // Duplicate
         }
 
-        // Evict oldest if at capacity
+        // Evict oldest if at capacity — O(1) with VecDeque
         if peer_seen.len() >= DEDUP_CAPACITY {
-            if let Some(oldest) = peer_order.first().cloned() {
+            if let Some(oldest) = peer_order.pop_front() {
                 peer_seen.remove(&oldest);
-                peer_order.remove(0);
             }
         }
 
         peer_seen.insert(event_id.to_string());
-        peer_order.push(event_id.to_string());
+        peer_order.push_back(event_id.to_string());
         true
     }
 

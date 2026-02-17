@@ -518,6 +518,12 @@ impl Server {
                     let id = endpoint.id();
                     tracing::info!("Iroh ready. Connect with: --iroh-addr {id}");
                     *state.server_iroh_id.lock().unwrap() = Some(id.to_string());
+
+                    // Re-key the CRDT actor to the iroh endpoint ID.
+                    // This MUST happen before any S2S connections, so founder
+                    // resolution (min-actor-wins) uses the cryptographic identity.
+                    state.cluster_doc.rekey_actor(&id.to_string()).await;
+
                     Some(endpoint)
                 }
                 Err(e) => {
@@ -954,28 +960,32 @@ async fn process_s2s_message(
         }
 
         S2sMessage::Topic { channel, topic, set_by, .. } => {
-            // Topic is set via S2S event AND CRDT (CRDT is source of truth
-            // for convergence; S2S event is for immediate delivery).
-            // Enforce +t locally.
+            // CRDT is the single source of truth for topic convergence.
+            // The S2S Topic event is a notification for immediate display —
+            // we apply it locally for UX responsiveness, then write to CRDT
+            // for convergent persistence. On any divergence, CRDT wins.
+
+            // Enforce +t locally
             {
-                let mut channels = state.channels.lock().unwrap();
-                let ch = channels.entry(channel.clone()).or_default();
-                if ch.topic_locked {
-                    let is_authorized = ch.remote_members.get(&set_by)
-                        .is_some_and(|rm| rm.is_op || rm.did.as_ref().is_some_and(|d| {
-                            ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
-                        }));
-                    if !is_authorized {
-                        tracing::info!(
-                            channel = %channel, set_by = %set_by,
-                            "Rejecting S2S topic change: channel is +t and setter is not authorized"
-                        );
-                        return;
+                let channels = state.channels.lock().unwrap();
+                if let Some(ch) = channels.get(&channel) {
+                    if ch.topic_locked {
+                        let is_authorized = ch.remote_members.get(&set_by)
+                            .is_some_and(|rm| rm.is_op || rm.did.as_ref().is_some_and(|d| {
+                                ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
+                            }));
+                        if !is_authorized {
+                            tracing::info!(
+                                channel = %channel, set_by = %set_by,
+                                "Rejecting S2S topic change: channel is +t and setter is not authorized"
+                            );
+                            return;
+                        }
                     }
                 }
-                ch.topic = Some(TopicInfo::new(topic.clone(), set_by.clone()));
             }
-            // Update CRDT (source of truth for topic convergence)
+
+            // Write to CRDT (source of truth)
             let setter_did = {
                 let channels = state.channels.lock().unwrap();
                 channels.get(&channel).and_then(|ch| {
@@ -983,29 +993,73 @@ async fn process_s2s_message(
                 })
             };
             state.crdt_set_topic(&channel, &topic, &set_by, setter_did.as_deref()).await;
+
+            // Apply locally for immediate UX (CRDT is authoritative if they diverge)
+            {
+                let mut channels = state.channels.lock().unwrap();
+                let ch = channels.entry(channel.clone()).or_default();
+                ch.topic = Some(TopicInfo::new(topic.clone(), set_by.clone()));
+            }
+
             let line = format!(":{set_by}!remote@s2s TOPIC {channel} :{topic}\r\n");
             deliver_to_channel(state, &channel, &line);
         }
 
-        S2sMessage::ChannelCreated { channel, founder_did, did_ops, origin: _, .. } => {
+        S2sMessage::ChannelCreated { channel, founder_did, did_ops, origin, .. } => {
             let has_local_members;
             {
                 let mut channels = state.channels.lock().unwrap();
                 let ch = channels.entry(channel.clone()).or_default();
 
-                // Founder: adopt if we don't have one; CRDT handles convergence
+                // ── Authority gating ───────────────────────────────────
+                // Founder: only adopt if we have no local founder.
+                // If we already have one, reject the remote claim — CRDT
+                // convergence will resolve via min-actor-wins.
                 if ch.founder_did.is_none() {
                     if let Some(ref did) = founder_did {
-                        tracing::info!(
-                            channel = %channel,
-                            "Adopting remote founder {did} (no local founder)"
-                        );
-                        ch.founder_did = Some(did.clone());
+                        // Validate: the DID must look plausible (starts with "did:")
+                        if did.starts_with("did:") {
+                            tracing::info!(
+                                channel = %channel, origin = %origin,
+                                "Adopting remote founder {did} (no local founder)"
+                            );
+                            ch.founder_did = Some(did.clone());
+                        } else {
+                            tracing::warn!(
+                                channel = %channel, origin = %origin,
+                                "Rejecting invalid founder claim: {did}"
+                            );
+                        }
                     }
+                } else {
+                    tracing::debug!(
+                        channel = %channel,
+                        "Keeping local founder {:?} (ignoring remote {:?} from {origin})",
+                        ch.founder_did, founder_did
+                    );
                 }
 
-                // Merge DID ops — union (additive, safe)
+                // DID ops: only accept DIDs that are plausibly valid.
+                // Authority check: ops should be granted by the founder
+                // or an existing op. Log if the granter is unknown.
                 for did in &did_ops {
+                    if !did.starts_with("did:") {
+                        tracing::warn!(
+                            channel = %channel, origin = %origin,
+                            "Rejecting invalid DID op: {did}"
+                        );
+                        continue;
+                    }
+                    // Soft enforcement: accept but log if not granted by known authority
+                    let is_authorized = founder_did.as_ref().is_some()
+                        || ch.founder_did.is_some()
+                        || !ch.did_ops.is_empty();
+                    if !is_authorized {
+                        tracing::warn!(
+                            channel = %channel, origin = %origin,
+                            "DID op {did} granted without known authority (accepting but logging)"
+                        );
+                    }
                     ch.did_ops.insert(did.clone());
                 }
 
@@ -1020,14 +1074,18 @@ async fn process_s2s_message(
                         }
                     }
                 }
-            } // All std::sync::MutexGuards dropped here
+            } // All MutexGuards dropped
 
-            // Update CRDT with provenance (async-safe now)
+            // Update CRDT with provenance
             if let Some(ref did) = founder_did {
-                state.crdt_set_founder(&channel, did).await;
+                if did.starts_with("did:") {
+                    state.crdt_set_founder(&channel, did).await;
+                }
             }
             for did in &did_ops {
-                state.crdt_grant_op(&channel, did, founder_did.as_deref()).await;
+                if did.starts_with("did:") {
+                    state.crdt_grant_op(&channel, did, founder_did.as_deref()).await;
+                }
             }
 
             if has_local_members {
@@ -1091,13 +1149,31 @@ async fn process_s2s_message(
                 for info in remote_channels {
                     let ch = channels.entry(info.name.clone()).or_default();
 
-                    // Merge founder: first-write-wins locally, CRDT converges globally
-                    if ch.founder_did.is_none() && info.founder_did.is_some() {
-                        ch.founder_did = info.founder_did.clone();
+                    // ── Authority gating on sync ──────────────────────
+                    // Merge founder: only adopt if we don't have one AND it's a valid DID
+                    if ch.founder_did.is_none() {
+                        if let Some(ref did) = info.founder_did {
+                            if did.starts_with("did:") {
+                                ch.founder_did = Some(did.clone());
+                            } else {
+                                tracing::warn!(
+                                    channel = %info.name, peer = %peer_id,
+                                    "Rejecting invalid founder DID in sync: {did}"
+                                );
+                            }
+                        }
                     }
 
+                    // DID ops: validate before accepting
                     for did in &info.did_ops {
-                        ch.did_ops.insert(did.clone());
+                        if did.starts_with("did:") {
+                            ch.did_ops.insert(did.clone());
+                        } else {
+                            tracing::warn!(
+                                channel = %info.name, peer = %peer_id,
+                                "Rejecting invalid DID op in sync: {did}"
+                            );
+                        }
                     }
 
                     // Presence: S2S-event-based (idempotent set-based merge)
