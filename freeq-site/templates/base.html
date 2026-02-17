@@ -9,12 +9,13 @@
 <link rel="apple-touch-icon" href="/static/freeq-180.png">
 <style>
 :root {
-  --bg: #1e1e2e; --bg2: #181825; --bg3: #11111b;
-  --surface: #313244; --overlay: #45475a;
-  --fg: #cdd6f4; --fg2: #a6adc8; --fg3: #6c7086;
-  --red: #f38ba8; --green: #a6e3a1; --yellow: #f9e2af;
-  --blue: #89b4fa; --mauve: #cba6f7; --teal: #94e2d5;
-  --pink: #f5c2e7; --peach: #fab387; --sky: #89dceb;
+  --bg: #000000; --bg2: #0a0a0a; --bg3: #050505;
+  --surface: #1a1a1a; --overlay: #2a2a2a;
+  --fg: #e8e8e8; --fg2: #999999; --fg3: #555555;
+  --cyan: #00e5ff; --purple: #a855f7; --pink: #f472b6;
+  --red: #ff5c8a; --green: #00e5a0; --yellow: #fbbf24;
+  --blue: #00e5ff; --mauve: #a855f7; --teal: #00e5a0;
+  --accent-gradient: linear-gradient(135deg, #00e5ff, #a855f7, #f472b6);
   --font: 'SF Mono','Menlo','Consolas','Liberation Mono',monospace;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -23,10 +24,10 @@ body {
   background: var(--bg); color: var(--fg);
   line-height: 1.7; min-height: 100vh;
 }
-a { color: var(--blue); text-decoration: none; }
-a:hover { text-decoration: underline; }
-code { background: var(--bg3); padding: 2px 6px; border-radius: 3px; font-size: 13px; }
-pre { background: var(--bg3); border: 1px solid var(--surface); border-radius: 6px; padding: 16px; overflow-x: auto; margin: 16px 0; }
+a { color: var(--cyan); text-decoration: none; }
+a:hover { color: var(--pink); text-decoration: none; }
+code { background: var(--surface); padding: 2px 6px; border-radius: 3px; font-size: 13px; color: var(--cyan); }
+pre { background: var(--surface); border: 1px solid var(--overlay); border-radius: 6px; padding: 16px; overflow-x: auto; margin: 16px 0; }
 pre code { background: none; padding: 0; }
 
 /* ── Nav ── */
@@ -41,7 +42,7 @@ nav .logo span { color: var(--fg3); font-weight: 400; }
 nav .links { display: flex; gap: 20px; }
 nav .links a { color: var(--fg2); font-size: 13px; }
 nav .links a:hover { color: var(--fg); text-decoration: none; }
-nav .links a.active { color: var(--blue); }
+nav .links a.active { color: var(--cyan); }
 nav .spacer { flex: 1; }
 nav .gh { color: var(--fg3); font-size: 12px; }
 nav .gh:hover { color: var(--fg2); }

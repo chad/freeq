@@ -5,17 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>freeq</title>
 <meta name="description" content="IRC with AT Protocol identity — web client">
-<meta name="theme-color" content="#1e1e2e">
+<meta name="theme-color" content="#000000">
 <link rel="icon" type="image/png" href="favicon.png">
 <link rel="apple-touch-icon" href="freeq-180.png">
 <style>
   :root {
-    --bg: #1e1e2e; --bg2: #181825; --bg3: #11111b;
-    --surface: #313244; --overlay: #45475a;
-    --fg: #cdd6f4; --fg2: #a6adc8; --fg3: #6c7086;
-    --red: #f38ba8; --green: #a6e3a1; --yellow: #f9e2af;
-    --blue: #89b4fa; --mauve: #cba6f7; --teal: #94e2d5;
-    --pink: #f5c2e7; --peach: #fab387; --sky: #89dceb;
+    --bg: #000000; --bg2: #0a0a0a; --bg3: #050505;
+    --surface: #1a1a1a; --overlay: #2a2a2a;
+    --fg: #e8e8e8; --fg2: #999999; --fg3: #555555;
+    --red: #ff5c8a; --green: #00e5a0; --yellow: #fbbf24;
+    --blue: #00e5ff; --mauve: #a855f7; --teal: #00e5a0;
+    --pink: #f472b6; --peach: #fbbf24; --sky: #00e5ff;
     --font: 'SF Mono','Menlo','Consolas','Liberation Mono',monospace;
     --radius: 6px;
   }
@@ -28,20 +28,21 @@
   ::-webkit-scrollbar { width: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--overlay); border-radius: 3px; }
-  ::selection { background: var(--blue); color: var(--bg3); }
+  ::selection { background: var(--blue); color: #000; }
 
   /* ── Connect screen ── */
   #connect-screen {
     display: flex; flex: 1; align-items: center; justify-content: center;
-    background: var(--bg3);
+    background: var(--bg);
+    background-image: radial-gradient(ellipse at 50% 30%, rgba(0,229,255,.04) 0%, transparent 60%);
     flex-direction: column;
   }
   .connect-box {
-    background: var(--bg); border: 1px solid var(--surface);
+    background: var(--bg2); border: 1px solid var(--surface);
     border-radius: 10px; padding: 36px; width: 440px; max-width: 95vw;
-    box-shadow: 0 8px 32px rgba(0,0,0,.4);
+    box-shadow: 0 8px 48px rgba(0,0,0,.6);
   }
-  .connect-logo { display: block; width: 80px; height: 80px; margin: 0 auto 12px; border-radius: 16px; }
+  .connect-logo { display: block; width: 88px; height: 88px; margin: 0 auto 12px; border-radius: 18px; filter: drop-shadow(0 0 24px rgba(0,229,255,.15)); }
   .connect-box h1 { font-size: 28px; color: var(--fg); text-align: center; margin-bottom: 0; letter-spacing: -0.5px; }
   .connect-box .sub { text-align: center; color: var(--fg3); font-size: 12px; margin-bottom: 24px; }
   .connect-box .sub a { color: var(--fg3); text-decoration: underline; }
@@ -58,8 +59,8 @@
   .connect-box button { width: 100%; border: none; border-radius: var(--radius); font-family: var(--font); font-size: 13px; font-weight: 700; padding: 11px; cursor: pointer; margin-top: 8px; transition: opacity .15s, transform .1s; }
   .connect-box button:hover { opacity: .9; }
   .connect-box button:active { transform: scale(.98); }
-  .connect-box .btn-primary { background: var(--blue); color: var(--bg3); }
-  .connect-box .btn-oauth { background: var(--mauve); color: var(--bg3); margin-top: 6px; }
+  .connect-box .btn-primary { background: var(--blue); color: #000; }
+  .connect-box .btn-oauth { background: var(--mauve); color: #000; margin-top: 6px; }
   #connect-error { color: var(--red); font-size: 12px; text-align: center; margin-top: 10px; min-height: 18px; }
   .connect-footer { text-align: center; margin-top: 16px; font-size: 11px; color: var(--fg3); }
   .connect-footer a { color: var(--fg3); text-decoration: none; }
@@ -75,10 +76,10 @@
   .topbar .logo img { width: 22px; height: 22px; border-radius: 4px; }
   .topbar .logo span { color: var(--fg2); font-weight: 700; font-size: 13px; }
   .pill { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; white-space: nowrap; }
-  .pill.ok { background: #1e3a2f; color: var(--green); }
-  .pill.warn { background: #3a3a1e; color: var(--yellow); }
-  .pill.err { background: #3a1e2f; color: var(--red); }
-  .pill.auth { background: #1e2a3a; color: var(--mauve); }
+  .pill.ok { background: rgba(0,229,160,.12); color: var(--green); }
+  .pill.warn { background: rgba(251,191,36,.12); color: var(--yellow); }
+  .pill.err { background: rgba(255,92,138,.12); color: var(--red); }
+  .pill.auth { background: rgba(168,85,247,.12); color: var(--mauve); }
   .topbar .nick { color: var(--mauve); font-weight: 600; font-size: 12px; }
   .topbar .topic-text { color: var(--fg3); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .topbar .spacer { flex: 1; }
@@ -123,7 +124,7 @@
   .msg.server .text { color: var(--teal); }
   .msg.self .nick { color: var(--mauve) !important; }
   .msg.history { opacity: .65; }
-  .msg.mention { background: rgba(137,180,250,.08); border-left: 2px solid var(--blue); padding-left: 14px; }
+  .msg.mention { background: rgba(0,229,255,.06); border-left: 2px solid var(--blue); padding-left: 14px; }
   .msg .day-sep { width: 100%; text-align: center; color: var(--fg3); font-size: 10px; padding: 6px 0 2px; }
   .unread-sep { text-align: center; color: var(--red); font-size: 10px; padding: 4px 16px; opacity: .7; border-bottom: 1px solid rgba(243,139,168,.3); margin: 4px 16px; }
 
@@ -943,7 +944,7 @@ function hasUser(b, n) { return b.users.has(n) || b.users.has('@' + n) || b.user
 function rmUser(chan, n) { rmUserFromBuf(buffers[chan.toLowerCase()], n); }
 function rmUserFromBuf(b, n) { if (!b) return; b.users.delete(n); b.users.delete('@' + n); b.users.delete('+' + n); }
 
-const COLORS = ['var(--red)','var(--green)','var(--yellow)','var(--blue)','var(--mauve)','var(--teal)','var(--pink)','var(--peach)','var(--sky)'];
+const COLORS = ['var(--red)','var(--green)','var(--yellow)','var(--blue)','var(--mauve)','var(--teal)','var(--pink)','#c084fc','#33ebff'];
 function ncolor(n) { let h = 0; for (let i = 0; i < n.length; i++) h = n.charCodeAt(i) + ((h << 5) - h); return COLORS[Math.abs(h) % COLORS.length]; }
 function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
