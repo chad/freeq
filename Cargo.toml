@@ -4,6 +4,7 @@ members = [
     "freeq-server",
     "freeq-sdk",
     "freeq-tui",
+    "freeq-bots",
 ]
 
 [workspace.package]

@@ -1,0 +1,26 @@
+[package]
+name = "freeq-bots"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AI agent bots for freeq IRC — software factory, auditor, prototyper"
+
+[[bin]]
+name = "freeq-bots"
+path = "src/main.rs"
+
+[dependencies]
+freeq-sdk = { path = "../freeq-sdk" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+clap = { workspace = true }
+chrono = { workspace = true }
+rusqlite = { workspace = true }
+base64 = { workspace = true }
+rand = { workspace = true }
+sha2 = { workspace = true }
