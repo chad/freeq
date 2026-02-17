@@ -334,9 +334,15 @@ impl S2sManager {
     /// Broadcast a message to all peer servers.
     pub async fn broadcast(&self, msg: S2sMessage) {
         let peers = self.peers.lock().await;
+        if peers.is_empty() {
+            tracing::warn!("S2S broadcast: NO PEERS connected");
+            return;
+        }
         for (peer_id, tx) in peers.iter() {
             if tx.send(msg.clone()).await.is_err() {
                 tracing::warn!(peer = %peer_id, "Failed to send S2S message");
+            } else {
+                tracing::debug!(peer = %peer_id, "S2S broadcast sent to peer");
             }
         }
     }
