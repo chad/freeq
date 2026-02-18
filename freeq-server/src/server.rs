@@ -1250,10 +1250,30 @@ async fn process_s2s_message(
 
                     let dids = state.session_dids.lock().unwrap();
                     let members: Vec<String> = ch.members.iter().cloned().collect();
+
+                    // First pass: grant ops to DID-backed users with authority
+                    let mut did_ops_granted = false;
                     for session_id in &members {
                         if let Some(did) = dids.get(session_id) {
                             if ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did) {
                                 ch.ops.insert(session_id.clone());
+                                did_ops_granted = true;
+                            }
+                        }
+                    }
+
+                    // Second pass: revoke guest/non-authority auto-ops, but ONLY if
+                    // someone with real authority now has ops (locally or remotely).
+                    // Don't orphan the channel by revoking everyone's ops.
+                    let has_authority_ops = did_ops_granted
+                        || ch.remote_members.values().any(|rm| rm.is_op);
+                    if has_authority_ops {
+                        for session_id in &members {
+                            let has_did_auth = dids.get(session_id).is_some_and(|did| {
+                                ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did)
+                            });
+                            if !has_did_auth {
+                                ch.ops.remove(session_id);
                             }
                         }
                     }
@@ -1419,6 +1439,33 @@ async fn reconcile_crdt_to_local(state: &Arc<SharedState>) {
                     );
                     ch.founder_did = Some(crdt_founder);
                     reconciled += 1;
+
+                    // Re-evaluate local ops: grant to DID-backed users with authority.
+                    // Only revoke guest auto-ops if an authority-backed user is now
+                    // opped (locally or remotely) — don't orphan the channel.
+                    let dids = state.session_dids.lock().unwrap();
+                    let members: Vec<String> = ch.members.iter().cloned().collect();
+                    let mut did_ops_granted = false;
+                    for session_id in &members {
+                        if let Some(did) = dids.get(session_id) {
+                            if ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did) {
+                                ch.ops.insert(session_id.clone());
+                                did_ops_granted = true;
+                            }
+                        }
+                    }
+                    let has_authority_ops = did_ops_granted
+                        || ch.remote_members.values().any(|rm| rm.is_op);
+                    if has_authority_ops {
+                        for session_id in &members {
+                            let has_did_auth = dids.get(session_id).is_some_and(|did| {
+                                ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did)
+                            });
+                            if !has_did_auth {
+                                ch.ops.remove(session_id);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1433,13 +1480,29 @@ async fn reconcile_crdt_to_local(state: &Arc<SharedState>) {
                         reconciled += 1;
                     }
                 }
-                // Re-op local members whose DID now has ops
+                // Re-evaluate local ops: grant to DID-backed users with authority.
+                // Revoke guest/non-authority auto-ops only if someone with real
+                // authority now has ops (don't orphan the channel).
                 let dids = state.session_dids.lock().unwrap();
                 let members: Vec<String> = ch.members.iter().cloned().collect();
+                let mut did_ops_granted = false;
                 for session_id in &members {
                     if let Some(did) = dids.get(session_id) {
                         if ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did) {
                             ch.ops.insert(session_id.clone());
+                            did_ops_granted = true;
+                        }
+                    }
+                }
+                let has_authority_ops = did_ops_granted
+                    || ch.remote_members.values().any(|rm| rm.is_op);
+                if has_authority_ops {
+                    for session_id in &members {
+                        let has_did_auth = dids.get(session_id).is_some_and(|did| {
+                            ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did)
+                        });
+                        if !has_did_auth {
+                            ch.ops.remove(session_id);
                         }
                     }
                 }
