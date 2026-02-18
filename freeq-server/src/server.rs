@@ -361,6 +361,35 @@ impl SharedState {
     pub async fn crdt_receive_sync(&self, peer_id: &str, data: &[u8]) -> Result<(), String> {
         self.cluster_doc.receive_sync_message(peer_id, data).await
     }
+
+    /// Send the next CRDT sync message to a specific peer only.
+    ///
+    /// This is the correct response after receiving a sync message from a peer:
+    /// generate the next Automerge sync message for that peer and send it back.
+    /// This avoids broadcast amplification storms where receiving from one peer
+    /// triggers messages to all peers, which all respond, etc.
+    pub async fn crdt_sync_with_peer(&self, peer_id: &str) {
+        let manager = self.s2s_manager.lock().unwrap().clone();
+        let manager = match manager {
+            Some(m) => m,
+            None => return,
+        };
+
+        let our_peer_id = manager.server_id.clone();
+
+        if let Some(msg_bytes) = self.cluster_doc.generate_sync_message(peer_id).await {
+            let sync_msg = crate::s2s::S2sMessage::CrdtSync {
+                data: {
+                    use base64::Engine;
+                    base64::engine::general_purpose::STANDARD.encode(&msg_bytes)
+                },
+                origin: our_peer_id,
+            };
+            if let Some(entry) = manager.peers.lock().await.get(peer_id) {
+                let _ = entry.tx.send(sync_msg).await;
+            }
+        }
+    }
 }
 
 pub struct Server {
@@ -557,8 +586,13 @@ impl Server {
                     let s2s_state = Arc::clone(&state);
                     let s2s_manager = Arc::clone(&manager);
                     tokio::spawn(async move {
-                        while let Some(msg) = s2s_rx.recv().await {
-                            process_s2s_message(&s2s_state, &s2s_manager, msg).await;
+                        while let Some(event) = s2s_rx.recv().await {
+                            process_s2s_message(
+                                &s2s_state,
+                                &s2s_manager,
+                                &event.authenticated_peer_id,
+                                event.msg,
+                            ).await;
                         }
                     });
 
@@ -769,6 +803,7 @@ impl Server {
 async fn process_s2s_message(
     state: &Arc<SharedState>,
     manager: &Arc<crate::s2s::S2sManager>,
+    authenticated_peer_id: &str,
     msg: crate::s2s::S2sMessage,
 ) {
     use crate::s2s::S2sMessage;
@@ -867,16 +902,23 @@ async fn process_s2s_message(
 
     match msg {
         S2sMessage::Hello { peer_id, server_name } => {
-            // Bind transport identity to logical name.
-            // We don't need to verify peer_id here — it comes over an
-            // authenticated QUIC connection, and the iroh endpoint provides
-            // cryptographic identity. But we log if it doesn't match for debugging.
+            // Verify the claimed peer_id matches the transport-authenticated identity.
+            // The iroh QUIC connection provides cryptographic identity via remote_id().
+            if peer_id != authenticated_peer_id {
+                tracing::warn!(
+                    authenticated = %authenticated_peer_id,
+                    claimed = %peer_id,
+                    server_name = %server_name,
+                    "S2S Hello: claimed peer_id doesn't match transport identity — using authenticated ID"
+                );
+            }
             tracing::info!(
-                peer = %peer_id,
+                peer = %authenticated_peer_id,
                 server_name = %server_name,
                 "S2S Hello received — binding transport identity to server name"
             );
-            manager.peer_names.lock().await.insert(peer_id, server_name);
+            // Always key by the authenticated peer ID, not the claimed one.
+            manager.peer_names.lock().await.insert(authenticated_peer_id.to_string(), server_name);
         }
 
         S2sMessage::Privmsg { from, target, text, origin: _, .. } => {
@@ -1368,19 +1410,36 @@ async fn process_s2s_message(
         }
 
         S2sMessage::CrdtSync { data, origin, .. } => {
-            // origin here should be the iroh endpoint ID (not server_name)
+            // SECURITY: Use authenticated_peer_id (from QUIC transport) to key
+            // the Automerge sync state, NOT the `origin` field from the JSON
+            // payload.  The payload origin is untrusted — a bug or malicious
+            // peer could set it to anything.  The authenticated_peer_id comes
+            // from conn.remote_id() which is cryptographically verified.
+            if origin != authenticated_peer_id {
+                tracing::warn!(
+                    authenticated = %authenticated_peer_id,
+                    claimed = %origin,
+                    "CRDT sync origin mismatch — using authenticated peer ID"
+                );
+            }
             use base64::Engine;
             match base64::engine::general_purpose::STANDARD.decode(&data) {
                 Ok(bytes) => {
-                    if let Err(e) = state.crdt_receive_sync(&origin, &bytes).await {
-                        tracing::warn!(peer = %origin, "CRDT sync receive error: {e}");
+                    if let Err(e) = state.crdt_receive_sync(authenticated_peer_id, &bytes).await {
+                        tracing::warn!(peer = %authenticated_peer_id, "CRDT sync receive error: {e}");
                     } else {
-                        tracing::debug!(peer = %origin, "CRDT sync message applied");
-                        state.crdt_broadcast_sync().await;
+                        tracing::debug!(peer = %authenticated_peer_id, "CRDT sync message applied");
+                        // Respond only to the sender — not all peers.
+                        // Broadcasting to all peers on every receive creates
+                        // amplification storms (A→B triggers A→all, they all
+                        // respond, etc.).  The correct Automerge sync pattern
+                        // is: receive from P → generate next message for P.
+                        // Periodic full-mesh sync is handled by a timer.
+                        state.crdt_sync_with_peer(authenticated_peer_id).await;
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(peer = %origin, "CRDT sync base64 decode error: {e}");
+                    tracing::warn!(peer = %authenticated_peer_id, "CRDT sync base64 decode error: {e}");
                 }
             }
         }

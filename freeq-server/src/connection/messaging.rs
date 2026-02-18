@@ -227,6 +227,7 @@ pub(super) fn handle_privmsg(
 
         let target_session = state.nick_to_session.lock().unwrap().get(target).cloned();
         if let Some(ref session) = target_session {
+            // Target is local — deliver directly
             // Send RPL_AWAY if target is away
             if let Some(away_msg) = state.session_away.lock().unwrap().get(session) {
                 let nick = conn.nick_or_star();
@@ -247,6 +248,34 @@ pub(super) fn handle_privmsg(
             };
             if let Some(tx) = state.connections.lock().unwrap().get(session) {
                 let _ = tx.try_send(line.clone());
+            }
+        } else if command == "PRIVMSG" {
+            // Target is not local — check if they're a remote user (S2S)
+            // and relay the PM so their home server can deliver it.
+            let is_remote = {
+                let channels = state.channels.lock().unwrap();
+                channels.values().any(|ch| ch.remote_members.contains_key(target))
+            };
+            if is_remote {
+                let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+                s2s_broadcast(state, crate::s2s::S2sMessage::Privmsg {
+                    event_id: s2s_next_event_id(state),
+                    from: conn.nick.as_deref().unwrap_or("*").to_string(),
+                    target: target.to_string(),
+                    text: text.to_string(),
+                    origin,
+                });
+            } else {
+                // Target doesn't exist locally or remotely
+                let nick = conn.nick_or_star();
+                let reply = Message::from_server(
+                    &state.server_name,
+                    irc::ERR_NOSUCHNICK,
+                    vec![nick, target, "No such nick/channel"],
+                );
+                if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+                    let _ = tx.try_send(format!("{reply}\r\n"));
+                }
             }
         }
     }

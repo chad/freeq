@@ -324,7 +324,7 @@ pub struct S2sManager {
     /// Mapping: iroh endpoint ID → server_name (populated from Hello handshake).
     pub peer_names: Arc<tokio::sync::Mutex<HashMap<String, String>>>,
     /// Channel for S2S events that need to be applied to server state.
-    pub event_tx: mpsc::Sender<S2sMessage>,
+    pub event_tx: mpsc::Sender<AuthenticatedS2sEvent>,
     /// Monotonic counter for generating unique event IDs.
     pub event_counter: AtomicU64,
     /// Event dedup set.
@@ -376,13 +376,25 @@ impl S2sManager {
     }
 }
 
+/// An S2S message annotated with the transport-authenticated peer identity.
+/// The `authenticated_peer_id` comes from `conn.remote_id()` (iroh's
+/// cryptographic endpoint ID) — it cannot be spoofed by the payload.
+#[derive(Debug, Clone)]
+pub struct AuthenticatedS2sEvent {
+    /// The iroh endpoint ID of the peer that sent this message,
+    /// verified by the QUIC transport layer.
+    pub authenticated_peer_id: String,
+    /// The deserialized S2S message from the peer.
+    pub msg: S2sMessage,
+}
+
 /// Start the S2S subsystem.
 ///
 /// Returns the manager + event receiver.
 pub async fn start(
     state: Arc<SharedState>,
     endpoint: iroh::Endpoint,
-) -> Result<(Arc<S2sManager>, mpsc::Receiver<S2sMessage>)> {
+) -> Result<(Arc<S2sManager>, mpsc::Receiver<AuthenticatedS2sEvent>)> {
     let (event_tx, event_rx) = mpsc::channel(1024);
     let server_id = endpoint.id().to_string();
 
@@ -531,7 +543,7 @@ async fn handle_s2s_connection_from_manager(
 ) {
     let peers = Arc::clone(&manager.peers);
     let peer_names = Arc::clone(&manager.peer_names);
-    let event_tx = manager.event_tx.clone();
+    let event_tx: mpsc::Sender<AuthenticatedS2sEvent> = manager.event_tx.clone();
     let server_id = manager.server_id.clone();
     let server_name = manager.server_name.clone();
     let conn_gen = Arc::clone(&manager.conn_gen);
@@ -544,7 +556,7 @@ async fn handle_s2s_connection(
     conn: iroh::endpoint::Connection,
     peers: Arc<tokio::sync::Mutex<HashMap<String, PeerEntry>>>,
     peer_names: Arc<tokio::sync::Mutex<HashMap<String, String>>>,
-    event_tx: mpsc::Sender<S2sMessage>,
+    event_tx: mpsc::Sender<AuthenticatedS2sEvent>,
     server_id: String,
     server_name: String,
     conn_gen: Arc<AtomicU64>,
@@ -624,8 +636,12 @@ async fn handle_s2s_connection(
         let _ = bridge_write.shutdown().await;
     });
 
-    // Read JSON lines from the peer
+    // Read JSON lines from the peer.
+    // Each message is wrapped with the transport-authenticated peer ID
+    // (from conn.remote_id()) so the event processor can trust the identity
+    // without relying on the `origin` field in the JSON payload.
     let read_peer = peer_id.clone();
+    let authenticated_peer_id = peer_id.clone(); // from conn.remote_id() — cryptographic
     let read_event_tx = event_tx.clone();
     let read_handle = tokio::spawn(async move {
         let reader = BufReader::new(irc_side);
@@ -638,7 +654,11 @@ async fn handle_s2s_connection(
                         Ok(msg) => {
                             msg_count += 1;
                             tracing::debug!(peer = %read_peer, msg_count, "S2S received: {}", line.chars().take(120).collect::<String>());
-                            if read_event_tx.send(msg).await.is_err() {
+                            let event = AuthenticatedS2sEvent {
+                                authenticated_peer_id: authenticated_peer_id.clone(),
+                                msg,
+                            };
+                            if read_event_tx.send(event).await.is_err() {
                                 tracing::warn!(peer = %read_peer, "S2S event_tx closed after {msg_count} messages");
                                 break;
                             }
