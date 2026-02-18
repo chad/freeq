@@ -884,6 +884,7 @@ async fn process_s2s_message(
         S2sMessage::Mode { event_id, origin, .. } => (event_id.clone(), origin.clone()),
         S2sMessage::ChannelCreated { event_id, origin, .. } => (event_id.clone(), origin.clone()),
         S2sMessage::CrdtSync { origin, .. } => (String::new(), origin.clone()),
+        S2sMessage::PeerDisconnected { .. } => (String::new(), String::new()),
         S2sMessage::Hello { .. } | S2sMessage::SyncRequest | S2sMessage::SyncResponse { .. } => {
             (String::new(), String::new())
         }
@@ -1210,6 +1211,23 @@ async fn process_s2s_message(
             let mut updated_channels = Vec::new();
             {
                 let mut channels = state.channels.lock().unwrap();
+
+                // Clear stale remote members from this peer before merging.
+                // SyncResponse is a full state snapshot — any remote members
+                // from this peer that aren't in the response are gone.
+                // This prevents ghost users after a peer restarts with fewer members.
+                let synced_channel_names: std::collections::HashSet<String> =
+                    remote_channels.iter().map(|i| i.name.clone()).collect();
+                for (name, ch) in channels.iter_mut() {
+                    if synced_channel_names.contains(name) {
+                        // Will be replaced below per-channel
+                        ch.remote_members.retain(|_nick, rm| rm.origin != peer_id);
+                    } else {
+                        // Peer didn't mention this channel — remove their members from it
+                        ch.remote_members.retain(|_nick, rm| rm.origin != peer_id);
+                    }
+                }
+
                 for info in remote_channels {
                     let ch = channels.entry(info.name.clone()).or_default();
 
@@ -1440,6 +1458,37 @@ async fn process_s2s_message(
                 }
                 Err(e) => {
                     tracing::warn!(peer = %authenticated_peer_id, "CRDT sync base64 decode error: {e}");
+                }
+            }
+        }
+
+        S2sMessage::PeerDisconnected { peer_id } => {
+            // Clean up all remote_members whose origin matches this peer.
+            // Without this, users from a disconnected server linger as ghosts
+            // in channel rosters until they individually Part/Quit.
+            let mut channels = state.channels.lock().unwrap();
+            let mut cleaned = 0usize;
+            let mut affected_channels = Vec::new();
+            for (name, ch) in channels.iter_mut() {
+                let before = ch.remote_members.len();
+                ch.remote_members.retain(|_nick, rm| rm.origin != peer_id);
+                let removed = before - ch.remote_members.len();
+                if removed > 0 {
+                    cleaned += removed;
+                    affected_channels.push(name.clone());
+                }
+            }
+            drop(channels);
+
+            if cleaned > 0 {
+                tracing::info!(
+                    peer = %peer_id,
+                    "Cleaned {cleaned} ghost remote member(s) from {} channel(s)",
+                    affected_channels.len()
+                );
+                // Update NAMES for affected channels so local users see the change
+                for channel in &affected_channels {
+                    send_names_update(state, channel);
                 }
             }
         }

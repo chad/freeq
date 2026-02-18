@@ -2447,3 +2447,637 @@ async fn s2s_inv12_sync_revokes_guest_autoops_when_founder_known() {
     let _ = ha.quit(Some("done")).await;
     let _ = hb.quit(Some("done")).await;
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// S2S Private Messages
+// ═══════════════════════════════════════════════════════════════════
+
+// ── PM-1: Cross-server private message delivery ──
+// A on local sends /msg B on remote. B should receive it.
+
+#[tokio::test]
+async fn s2s_pm1_cross_server_private_message() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("pm1");
+    let nick_a = test_nick("pm1", "a");
+    let nick_b = test_nick("pm1", "b");
+
+    // Both join the same channel so they're visible to each other
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    // Wait for S2S to propagate membership
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // Verify both see each other
+    let names = request_names(&ha, &mut ea, &channel).await;
+    assert!(nick_is_present(&names, &nick_b), "B should be visible to A: {names:?}");
+
+    // A sends PM to B
+    let pm_text = format!("hello-pm1-{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 100000);
+    ha.privmsg(&nick_b, &pm_text).await.unwrap();
+
+    // B should receive it
+    let (from, _target, text) = wait_message_containing(&mut eb, &pm_text).await;
+    assert_eq!(from, nick_a, "PM should be from A");
+    assert_eq!(text, pm_text);
+    eprintln!("  ✓ PM-1: A→B cross-server PM delivered");
+
+    // B sends PM back to A
+    let pm_text2 = format!("reply-pm1-{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 100000);
+    hb.privmsg(&nick_a, &pm_text2).await.unwrap();
+
+    let (from2, _target2, text2) = wait_message_containing(&mut ea, &pm_text2).await;
+    assert_eq!(from2, nick_b, "PM should be from B");
+    assert_eq!(text2, pm_text2);
+    eprintln!("  ✓ PM-1: B→A cross-server PM delivered (bidirectional)");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── PM-2: PM to nonexistent user returns error ──
+
+#[tokio::test]
+async fn single_server_pm2_nosuchnick_for_unknown_target() {
+    let Some(server) = get_single_server() else { return };
+    let nick = test_nick("pm2", "a");
+
+    let (h, mut e) = connect_guest(&server, &nick).await;
+    wait_registered(&mut e).await;
+
+    // Send PM to a nick that definitely doesn't exist
+    h.privmsg("_zq_nonexistent_user_99999", "hello?").await.unwrap();
+
+    // Should get a 401 ERR_NOSUCHNICK (surfaced as ServerNotice or RawLine)
+    let got = maybe_wait(
+        &mut e,
+        |evt| matches!(evt, Event::ServerNotice { text } if text.contains("401") || text.contains("No such nick"))
+            || matches!(evt, Event::RawLine(line) if line.contains("401")),
+        Duration::from_secs(5),
+    ).await;
+    assert!(got.is_some(), "Should get ERR_NOSUCHNICK for nonexistent target");
+    eprintln!("  ✓ PM-2: ERR_NOSUCHNICK returned for unknown PM target");
+
+    let _ = h.quit(Some("done")).await;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Ghost cleanup / membership consistency
+// ═══════════════════════════════════════════════════════════════════
+
+// ── GHOST-1: Remote user QUIT removes them from NAMES ──
+// A on local, B on remote join same channel.
+// B quits. A should see B disappear from NAMES.
+
+#[tokio::test]
+async fn s2s_ghost1_quit_removes_remote_from_names() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("gh1");
+    let nick_a = test_nick("gh1", "a");
+    let nick_b = test_nick("gh1", "b");
+
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // Verify B is visible
+    let names = request_names(&ha, &mut ea, &channel).await;
+    assert!(nick_is_present(&names, &nick_b), "B should be in NAMES: {names:?}");
+
+    // B quits
+    let _ = hb.quit(Some("ghost test")).await;
+    drop(hb);
+    drop(eb);
+
+    // Wait for S2S QUIT propagation
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B should no longer be in NAMES
+    let names = request_names(&ha, &mut ea, &channel).await;
+    assert!(!nick_is_present(&names, &nick_b), "B should NOT be in NAMES after quit: {names:?}");
+    eprintln!("  ✓ GHOST-1: Remote user removed from NAMES after QUIT");
+
+    let _ = ha.quit(Some("done")).await;
+}
+
+// ── GHOST-2: Remote user PART removes them from that channel ──
+
+#[tokio::test]
+async fn s2s_ghost2_part_removes_remote_from_channel() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("gh2");
+    let nick_a = test_nick("gh2", "a");
+    let nick_b = test_nick("gh2", "b");
+
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    let names = request_names(&ha, &mut ea, &channel).await;
+    assert!(nick_is_present(&names, &nick_b), "B should be in NAMES: {names:?}");
+
+    // B parts the channel (but stays connected)
+    hb.raw(&format!("PART {channel}")).await.unwrap();
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    let names = request_names(&ha, &mut ea, &channel).await;
+    assert!(!nick_is_present(&names, &nick_b), "B should NOT be in NAMES after part: {names:?}");
+    eprintln!("  ✓ GHOST-2: Remote user removed from NAMES after PART");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── GHOST-3: Nick change updates remote roster correctly ──
+
+#[tokio::test]
+async fn s2s_ghost3_nick_change_updates_remote_roster() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("gh3");
+    let nick_a = test_nick("gh3", "a");
+    let nick_b = test_nick("gh3", "b");
+    let nick_b2 = test_nick("gh3", "b2");
+
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    let names = request_names(&ha, &mut ea, &channel).await;
+    assert!(nick_is_present(&names, &nick_b), "B should be in NAMES: {names:?}");
+
+    // B changes nick
+    hb.raw(&format!("NICK {nick_b2}")).await.unwrap();
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // A should see the new nick, not the old one
+    let names = request_names(&ha, &mut ea, &channel).await;
+    assert!(nick_is_present(&names, &nick_b2), "New nick should be in NAMES: {names:?}");
+    assert!(!nick_is_present(&names, &nick_b), "Old nick should NOT be in NAMES: {names:?}");
+    eprintln!("  ✓ GHOST-3: Remote nick change reflected in NAMES");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Federated channel operations (MODE, KICK, INVITE on remote users)
+// ═══════════════════════════════════════════════════════════════════
+
+// ── FED-1: KICK remote user removes them from channel ──
+
+#[tokio::test]
+async fn s2s_fed1_kick_remote_user() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("fed1");
+    let nick_a = test_nick("fed1", "a");
+    let nick_b = test_nick("fed1", "b");
+
+    // A creates channel on local (gets ops as creator)
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    // B joins on remote
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // Verify A is op and B is visible
+    let names = request_names(&ha, &mut ea, &channel).await;
+    assert!(nick_is_op(&names, &nick_a), "A should be op: {names:?}");
+    assert!(nick_is_present(&names, &nick_b), "B should be present: {names:?}");
+
+    // A kicks B (remote user)
+    ha.raw(&format!("KICK {channel} {nick_b} :test kick")).await.unwrap();
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B should no longer be in NAMES on the local server
+    let names = request_names(&ha, &mut ea, &channel).await;
+    assert!(!nick_is_present(&names, &nick_b), "B should NOT be in NAMES after kick: {names:?}");
+    eprintln!("  ✓ FED-1: KICK on remote user removes from roster");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── FED-2: MODE +o on remote guest (no DID) should fail gracefully ──
+
+#[tokio::test]
+async fn s2s_fed2_mode_op_remote_guest_fails_gracefully() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("fed2");
+    let nick_a = test_nick("fed2", "a");
+    let nick_b = test_nick("fed2", "b");
+
+    // A creates channel on local (gets ops)
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    // B joins on remote
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // A tries to +o B (remote guest — no DID)
+    drain(&mut ea).await;
+    ha.raw(&format!("MODE {channel} +o {nick_b}")).await.unwrap();
+
+    // Should get an error (remote user has no DID for persistent ops)
+    let got = maybe_wait(
+        &mut ea,
+        |evt| matches!(evt, Event::ServerNotice { text } if text.contains("DID") || text.contains("401") || text.contains("No such nick"))
+            || matches!(evt, Event::RawLine(line) if line.contains("401") || line.contains("DID")),
+        Duration::from_secs(5),
+    ).await;
+    assert!(got.is_some(), "Should get an error when opping remote guest without DID");
+    eprintln!("  ✓ FED-2: MODE +o on remote guest fails gracefully (no DID)");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── FED-3: MODE +v on remote user should fail (voice is ephemeral/local) ──
+
+#[tokio::test]
+async fn s2s_fed3_mode_voice_remote_user_fails() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("fed3");
+    let nick_a = test_nick("fed3", "a");
+    let nick_b = test_nick("fed3", "b");
+
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    drain(&mut ea).await;
+    ha.raw(&format!("MODE {channel} +v {nick_b}")).await.unwrap();
+
+    // Should get an error (voice is ephemeral, can't be set on remote users)
+    let got = maybe_wait(
+        &mut ea,
+        |evt| matches!(evt, Event::ServerNotice { text } if text.contains("401") || text.contains("remote"))
+            || matches!(evt, Event::RawLine(line) if line.contains("401")),
+        Duration::from_secs(5),
+    ).await;
+    assert!(got.is_some(), "Should get an error when voicing remote user");
+    eprintln!("  ✓ FED-3: MODE +v on remote user fails (voice is local-only)");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── FED-4: KICK nonexistent nick returns proper error ──
+
+#[tokio::test]
+async fn single_server_fed4_kick_nonexistent_nick() {
+    let Some(server) = get_single_server() else { return };
+    let channel = test_channel("fed4");
+    let nick_a = test_nick("fed4", "a");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    drain(&mut ea).await;
+    ha.raw(&format!("KICK {channel} _zq_nobody_99999 :bye")).await.unwrap();
+
+    // Should get ERR_USERNOTINCHANNEL (441)
+    let got = maybe_wait(
+        &mut ea,
+        |evt| matches!(evt, Event::ServerNotice { text } if text.contains("441") || text.contains("aren't on that channel"))
+            || matches!(evt, Event::RawLine(line) if line.contains("441")),
+        Duration::from_secs(5),
+    ).await;
+    assert!(got.is_some(), "Should get ERR_USERNOTINCHANNEL for nonexistent kick target");
+    eprintln!("  ✓ FED-4: KICK nonexistent nick returns 441");
+
+    let _ = ha.quit(Some("done")).await;
+}
+
+// ── FED-5: MODE +o on nonexistent nick returns proper error ──
+
+#[tokio::test]
+async fn single_server_fed5_mode_op_nonexistent_nick() {
+    let Some(server) = get_single_server() else { return };
+    let channel = test_channel("fed5");
+    let nick_a = test_nick("fed5", "a");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    drain(&mut ea).await;
+    ha.raw(&format!("MODE {channel} +o _zq_nobody_99999")).await.unwrap();
+
+    // Should get ERR_USERNOTINCHANNEL (441)
+    let got = maybe_wait(
+        &mut ea,
+        |evt| matches!(evt, Event::ServerNotice { text } if text.contains("441") || text.contains("aren't on that channel"))
+            || matches!(evt, Event::RawLine(line) if line.contains("441")),
+        Duration::from_secs(5),
+    ).await;
+    assert!(got.is_some(), "Should get ERR_USERNOTINCHANNEL for nonexistent +o target");
+    eprintln!("  ✓ FED-5: MODE +o nonexistent nick returns 441");
+
+    let _ = ha.quit(Some("done")).await;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Cross-server message routing consistency
+// ═══════════════════════════════════════════════════════════════════
+
+// ── ROUTE-1: Channel message from remote user arrives at local user ──
+
+#[tokio::test]
+async fn s2s_route1_channel_msg_from_remote() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("rt1");
+    let nick_a = test_nick("rt1", "a");
+    let nick_b = test_nick("rt1", "b");
+
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B sends channel message
+    let msg_text = format!("route1-{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 100000);
+    hb.privmsg(&channel, &msg_text).await.unwrap();
+
+    // A should receive it
+    let (from, target, text) = wait_message_containing(&mut ea, &msg_text).await;
+    assert_eq!(from, nick_b);
+    assert_eq!(target, channel);
+    assert_eq!(text, msg_text);
+    eprintln!("  ✓ ROUTE-1: Channel msg from remote arrives at local");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── ROUTE-2: PM to user who left (not remote anymore) returns error ──
+
+#[tokio::test]
+async fn s2s_route2_pm_after_remote_leaves() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("rt2");
+    let nick_a = test_nick("rt2", "a");
+    let nick_b = test_nick("rt2", "b");
+
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B quits
+    let _ = hb.quit(Some("leaving")).await;
+    drop(hb);
+    drop(eb);
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // A tries to PM B (who's gone)
+    drain(&mut ea).await;
+    ha.privmsg(&nick_b, "hello?").await.unwrap();
+
+    // Should get ERR_NOSUCHNICK (401)
+    let got = maybe_wait(
+        &mut ea,
+        |evt| matches!(evt, Event::ServerNotice { text } if text.contains("401") || text.contains("No such nick"))
+            || matches!(evt, Event::RawLine(line) if line.contains("401")),
+        Duration::from_secs(5),
+    ).await;
+    assert!(got.is_some(), "Should get ERR_NOSUCHNICK for departed remote user");
+    eprintln!("  ✓ ROUTE-2: PM to departed remote user returns 401");
+
+    let _ = ha.quit(Some("done")).await;
+}
+
+// ── ROUTE-3: PM after nick change uses new nick ──
+
+#[tokio::test]
+async fn s2s_route3_pm_after_remote_nick_change() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("rt3");
+    let nick_a = test_nick("rt3", "a");
+    let nick_b = test_nick("rt3", "b");
+    let nick_b2 = test_nick("rt3", "b2");
+
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B changes nick
+    hb.raw(&format!("NICK {nick_b2}")).await.unwrap();
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // A sends PM to B's NEW nick — should arrive
+    let pm_text = format!("rt3-new-{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 100000);
+    ha.privmsg(&nick_b2, &pm_text).await.unwrap();
+
+    let (from, _target, text) = wait_message_containing(&mut eb, &pm_text).await;
+    assert_eq!(from, nick_a);
+    assert_eq!(text, pm_text);
+    eprintln!("  ✓ ROUTE-3: PM to new nick after remote nick change works");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SyncResponse / reconnect consistency
+// ═══════════════════════════════════════════════════════════════════
+
+// ── SYNC-1: Late joiner sees all members (local + remote) ──
+
+#[tokio::test]
+async fn s2s_sync1_late_joiner_sees_all_members() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("sy1");
+    let nick_a = test_nick("sy1", "a");
+    let nick_b = test_nick("sy1", "b");
+    let nick_c = test_nick("sy1", "c");
+
+    // A on local
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    // B on remote
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // C joins late on local — should see both A and B
+    let (hc, mut ec) = connect_guest(&local, &nick_c).await;
+    wait_registered(&mut ec).await;
+    hc.join(&channel).await.unwrap();
+    wait_joined(&mut ec, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    let names = request_names(&hc, &mut ec, &channel).await;
+    assert!(nick_is_present(&names, &nick_a), "A visible to late joiner: {names:?}");
+    assert!(nick_is_present(&names, &nick_b), "B (remote) visible to late joiner: {names:?}");
+    assert!(nick_is_present(&names, &nick_c), "C (self) visible: {names:?}");
+    eprintln!("  ✓ SYNC-1: Late joiner sees all members ({} total)", names.len());
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+    let _ = hc.quit(Some("done")).await;
+}
+
+// ── SYNC-2: Topic set on remote is visible on local ──
+
+#[tokio::test]
+async fn s2s_sync2_remote_topic_visible_locally() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("sy2");
+    let nick_a = test_nick("sy2", "a");
+    let nick_b = test_nick("sy2", "b");
+
+    // A on local creates channel
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    // B on remote joins
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B sets topic on remote
+    let topic_text = format!("sync2-topic-{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 100000);
+    hb.raw(&format!("TOPIC {channel} :{topic_text}")).await.unwrap();
+
+    // A should see topic change
+    let got = wait_topic(&mut ea, &channel).await;
+    assert_eq!(got, topic_text);
+    eprintln!("  ✓ SYNC-2: Topic set on remote visible locally");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── SYNC-3: Mode change on remote propagates to local ──
+
+#[tokio::test]
+async fn s2s_sync3_remote_mode_propagates() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("sy3");
+    let nick_a = test_nick("sy3", "a");
+    let nick_b = test_nick("sy3", "b");
+
+    // B creates channel on remote (gets ops)
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    // A joins on local
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B sets +t (topic lock) on remote
+    drain(&mut ea).await;
+    hb.raw(&format!("MODE {channel} +t")).await.unwrap();
+
+    // A should see mode change
+    let (mode, _arg) = wait_mode(&mut ea, &channel).await;
+    assert!(mode.contains('t'), "Should see +t mode: {mode}");
+    eprintln!("  ✓ SYNC-3: Mode change on remote propagates to local");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}

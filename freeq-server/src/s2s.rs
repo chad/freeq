@@ -182,6 +182,15 @@ pub enum S2sMessage {
         /// Origin iroh endpoint ID (used to key sync state).
         origin: String,
     },
+
+    /// Internal event: a peer's S2S link has disconnected.
+    /// Not sent over the wire — synthesized locally so the event processor
+    /// can clean up remote_members for that peer's origin.
+    #[serde(rename = "peer_disconnected")]
+    PeerDisconnected {
+        /// The iroh endpoint ID of the peer that disconnected.
+        peer_id: String,
+    },
 }
 
 /// Per-user info in a channel sync.
@@ -300,9 +309,13 @@ impl DedupSet {
     pub async fn remove_peer(&self, origin: &str) {
         self.seen.lock().await.remove(origin);
         self.order.lock().await.remove(origin);
-        // NOTE: we intentionally keep high_water on disconnect.
-        // On reconnect, the peer's counter will be higher (timestamp-based),
-        // so old events from before the disconnect stay rejected.
+        // Reset high-water mark on disconnect. The old rationale was that
+        // time-seeded counters always increase across restarts, but that
+        // assumption fails on NTP backward steps, VM resume, or clock skew.
+        // After a full disconnect+reconnect, the peer sends a SyncResponse
+        // anyway, so we don't need the high-water to protect against replays
+        // from the previous session — the ring buffer handles near-term dedup.
+        self.high_water.lock().await.remove(origin);
     }
 }
 
@@ -748,6 +761,14 @@ async fn handle_s2s_connection(
                 peer_names.lock().await.remove(&peer_id);
                 dedup.remove_peer(&peer_id).await;
                 tracing::info!(peer = %peer_id, gen = my_gen, "S2S link closed (entry removed)");
+
+                // Emit PeerDisconnected so the event processor can clean up
+                // remote_members for this peer's origin. This prevents ghost
+                // users lingering in channel rosters after a link drop.
+                let _ = event_tx.send(AuthenticatedS2sEvent {
+                    authenticated_peer_id: peer_id.clone(),
+                    msg: S2sMessage::PeerDisconnected { peer_id: peer_id.clone() },
+                }).await;
             } else {
                 tracing::info!(
                     peer = %peer_id, my_gen, current_gen = entry.conn_gen,
