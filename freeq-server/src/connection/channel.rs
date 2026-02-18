@@ -434,84 +434,142 @@ pub(super) fn handle_mode(
                     return;
                 };
 
-                // Resolve target nick to session
-                let target_session = state
-                    .nick_to_session
-                    .lock()
-                    .unwrap()
-                    .get(target_nick)
-                    .cloned();
-
-                let Some(target_session) = target_session else {
-                    let reply = Message::from_server(
-                        server_name,
-                        irc::ERR_NOSUCHNICK,
-                        vec![nick, target_nick, "No such nick"],
-                    );
-                    send(state, session_id, format!("{reply}\r\n"));
-                    return;
-                };
-
-                // Verify target is in the channel
-                let target_in_channel = state
-                    .channels
-                    .lock()
-                    .unwrap()
-                    .get(channel)
-                    .map(|c| c.members.contains(&target_session))
-                    .unwrap_or(false);
-
-                if !target_in_channel {
-                    let reply = Message::from_server(
-                        server_name,
-                        irc::ERR_USERNOTINCHANNEL,
-                        vec![nick, target_nick, channel, "They aren't on that channel"],
-                    );
-                    send(state, session_id, format!("{reply}\r\n"));
-                    return;
-                }
-
-                // Apply the mode
-                {
-                    let mut channels = state.channels.lock().unwrap();
-                    if let Some(chan) = channels.get_mut(channel) {
-                        let set = if ch == 'o' { &mut chan.ops } else { &mut chan.voiced };
-                        if adding {
-                            set.insert(target_session.clone());
-                        } else {
-                            set.remove(&target_session);
-                        }
-
-                        // DID-based persistent ops: +o/-o on an authenticated
-                        // user also updates did_ops, so ops survive reconnects
-                        // and work across S2S servers.
-                        if ch == 'o' {
-                            let target_did = state.session_dids.lock().unwrap()
-                                .get(&target_session).cloned();
-                            if let Some(did) = target_did {
-                                // Don't allow de-opping the founder
-                                if !adding && chan.founder_did.as_deref() == Some(&did) {
-                                    // Silently ignore — founder can't be de-opped
-                                } else if adding {
-                                    chan.did_ops.insert(did);
+                // Resolve target via federated channel roster (local + remote)
+                use super::helpers::{resolve_channel_target, ChannelTarget};
+                match resolve_channel_target(state, channel, target_nick) {
+                    ChannelTarget::Local { session_id: target_session } => {
+                        // Apply the mode locally
+                        {
+                            let mut channels = state.channels.lock().unwrap();
+                            if let Some(chan) = channels.get_mut(channel) {
+                                let set = if ch == 'o' { &mut chan.ops } else { &mut chan.voiced };
+                                if adding {
+                                    set.insert(target_session.clone());
                                 } else {
-                                    chan.did_ops.remove(&did);
+                                    set.remove(&target_session);
                                 }
-                                // Persist the updated DID ops
-                                let ch_clone = chan.clone();
-                                let channel_name = channel.to_string();
-                                drop(channels);
-                                state.with_db(|db| db.save_channel(&channel_name, &ch_clone));
+
+                                // DID-based persistent ops: +o/-o on an authenticated
+                                // user also updates did_ops, so ops survive reconnects
+                                // and work across S2S servers.
+                                if ch == 'o' {
+                                    let target_did = state.session_dids.lock().unwrap()
+                                        .get(&target_session).cloned();
+                                    if let Some(did) = target_did {
+                                        // Don't allow de-opping the founder
+                                        if !adding && chan.founder_did.as_deref() == Some(&did) {
+                                            // Silently ignore — founder can't be de-opped
+                                        } else if adding {
+                                            chan.did_ops.insert(did.clone());
+                                            // CRDT grant so it propagates across federation
+                                            let granter_did = state.session_dids.lock().unwrap()
+                                                .get(session_id).cloned();
+                                            let state_clone = Arc::clone(state);
+                                            let channel_name = channel.to_string();
+                                            tokio::spawn(async move {
+                                                state_clone.crdt_grant_op(&channel_name, &did, granter_did.as_deref()).await;
+                                                state_clone.crdt_broadcast_sync().await;
+                                            });
+                                        } else {
+                                            chan.did_ops.remove(&did);
+                                            let state_clone = Arc::clone(state);
+                                            let channel_name = channel.to_string();
+                                            let did_clone = did.clone();
+                                            tokio::spawn(async move {
+                                                state_clone.crdt_revoke_op(&channel_name, &did_clone).await;
+                                                state_clone.crdt_broadcast_sync().await;
+                                            });
+                                        }
+                                        // Persist the updated DID ops
+                                        let ch_clone = chan.clone();
+                                        let channel_name = channel.to_string();
+                                        drop(channels);
+                                        state.with_db(|db| db.save_channel(&channel_name, &ch_clone));
+                                    }
+                                }
                             }
                         }
+
+                        // Broadcast mode change to local channel + S2S
+                        let sign = if adding { "+" } else { "-" };
+                        let hostmask = conn.hostmask();
+                        let mode_msg = format!(":{hostmask} MODE {channel} {sign}{ch} {target_nick}\r\n");
+                        broadcast_to_channel(state, channel, &mode_msg);
+                        s2s_broadcast_mode(state, conn, channel, &format!("{sign}{ch}"), Some(target_nick));
+                    }
+
+                    ChannelTarget::Remote(rm) => {
+                        if ch == 'o' {
+                            // For remote users, ops must be DID-based to propagate.
+                            if let Some(ref did) = rm.did {
+                                let mut channels = state.channels.lock().unwrap();
+                                if let Some(chan) = channels.get_mut(channel) {
+                                    if !adding && chan.founder_did.as_deref() == Some(did.as_str()) {
+                                        // Silently ignore — founder can't be de-opped
+                                    } else if adding {
+                                        chan.did_ops.insert(did.clone());
+                                    } else {
+                                        chan.did_ops.remove(did);
+                                    }
+                                    let ch_clone = chan.clone();
+                                    let channel_name = channel.to_string();
+                                    drop(channels);
+                                    state.with_db(|db| db.save_channel(&channel_name, &ch_clone));
+                                }
+
+                                // CRDT propagation
+                                let granter_did = state.session_dids.lock().unwrap()
+                                    .get(session_id).cloned();
+                                let state_clone = Arc::clone(state);
+                                let channel_name = channel.to_string();
+                                let did_clone = did.clone();
+                                tokio::spawn(async move {
+                                    if adding {
+                                        state_clone.crdt_grant_op(&channel_name, &did_clone, granter_did.as_deref()).await;
+                                    } else {
+                                        state_clone.crdt_revoke_op(&channel_name, &did_clone).await;
+                                    }
+                                    state_clone.crdt_broadcast_sync().await;
+                                });
+                            } else {
+                                // Remote user without DID — can't grant persistent ops
+                                let reply = Message::from_server(
+                                    server_name,
+                                    irc::ERR_NOSUCHNICK,
+                                    vec![nick, target_nick, "Remote user has no DID — cannot set persistent ops"],
+                                );
+                                send(state, session_id, format!("{reply}\r\n"));
+                                return;
+                            }
+                        } else {
+                            // +v/-v on remote users — not supported (voice is ephemeral/local)
+                            let reply = Message::from_server(
+                                server_name,
+                                irc::ERR_NOSUCHNICK,
+                                vec![nick, target_nick, "Cannot set voice on remote user"],
+                            );
+                            send(state, session_id, format!("{reply}\r\n"));
+                            return;
+                        }
+
+                        // Broadcast mode change to local channel + S2S
+                        let sign = if adding { "+" } else { "-" };
+                        let hostmask = conn.hostmask();
+                        let mode_msg = format!(":{hostmask} MODE {channel} {sign}{ch} {target_nick}\r\n");
+                        broadcast_to_channel(state, channel, &mode_msg);
+                        s2s_broadcast_mode(state, conn, channel, &format!("{sign}{ch}"), Some(target_nick));
+                    }
+
+                    ChannelTarget::NotPresent => {
+                        let reply = Message::from_server(
+                            server_name,
+                            irc::ERR_USERNOTINCHANNEL,
+                            vec![nick, target_nick, channel, "They aren't on that channel"],
+                        );
+                        send(state, session_id, format!("{reply}\r\n"));
+                        return;
                     }
                 }
-
-                // Broadcast mode change
-                let sign = if adding { "+" } else { "-" };
-                let hostmask = conn.hostmask();
-                let mode_msg = format!(":{hostmask} MODE {channel} {sign}{ch} {target_nick}\r\n");
-                broadcast_to_channel(state, channel, &mode_msg);
             }
             'b' => {
                 use crate::server::BanEntry;
@@ -736,54 +794,57 @@ pub(super) fn handle_kick(
         return;
     }
 
-    // Resolve target
-    let target_session = state
-        .nick_to_session
-        .lock()
-        .unwrap()
-        .get(target_nick)
-        .cloned();
+    // Resolve target via federated channel roster
+    use super::helpers::{resolve_channel_target, ChannelTarget};
+    match resolve_channel_target(state, channel, target_nick) {
+        ChannelTarget::Local { session_id: target_session } => {
+            // Broadcast KICK, then remove from channel
+            let hostmask = conn.hostmask();
+            let kick_msg = format!(":{hostmask} KICK {channel} {target_nick} :{reason}\r\n");
+            broadcast_to_channel(state, channel, &kick_msg);
 
-    let Some(target_session) = target_session else {
-        let reply = Message::from_server(
-            server_name,
-            irc::ERR_NOSUCHNICK,
-            vec![nick, target_nick, "No such nick"],
-        );
-        send(state, session_id, format!("{reply}\r\n"));
-        return;
-    };
+            // Remove target from channel
+            {
+                let mut channels = state.channels.lock().unwrap();
+                if let Some(ch) = channels.get_mut(channel) {
+                    ch.members.remove(&target_session);
+                    ch.ops.remove(&target_session);
+                    ch.voiced.remove(&target_session);
+                }
+            }
+        }
 
-    let target_in_channel = state
-        .channels
-        .lock()
-        .unwrap()
-        .get(channel)
-        .map(|ch| ch.members.contains(&target_session))
-        .unwrap_or(false);
+        ChannelTarget::Remote(_rm) => {
+            // Broadcast KICK locally so local users see it
+            let hostmask = conn.hostmask();
+            let kick_msg = format!(":{hostmask} KICK {channel} {target_nick} :{reason}\r\n");
+            broadcast_to_channel(state, channel, &kick_msg);
 
-    if !target_in_channel {
-        let reply = Message::from_server(
-            server_name,
-            irc::ERR_USERNOTINCHANNEL,
-            vec![nick, target_nick, channel, "They aren't on that channel"],
-        );
-        send(state, session_id, format!("{reply}\r\n"));
-        return;
-    }
+            // Remove from our remote_members tracking
+            {
+                let mut channels = state.channels.lock().unwrap();
+                if let Some(ch) = channels.get_mut(channel) {
+                    ch.remote_members.remove(target_nick);
+                }
+            }
 
-    // Broadcast KICK, then remove from channel
-    let hostmask = conn.hostmask();
-    let kick_msg = format!(":{hostmask} KICK {channel} {target_nick} :{reason}\r\n");
-    broadcast_to_channel(state, channel, &kick_msg);
+            // Relay as a Part to S2S peers so the remote server removes the user
+            let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+            s2s_broadcast(state, crate::s2s::S2sMessage::Part {
+                event_id: s2s_next_event_id(state),
+                nick: target_nick.to_string(),
+                channel: channel.to_string(),
+                origin,
+            });
+        }
 
-    // Remove target from channel
-    {
-        let mut channels = state.channels.lock().unwrap();
-        if let Some(ch) = channels.get_mut(channel) {
-            ch.members.remove(&target_session);
-            ch.ops.remove(&target_session);
-            ch.voiced.remove(&target_session);
+        ChannelTarget::NotPresent => {
+            let reply = Message::from_server(
+                server_name,
+                irc::ERR_USERNOTINCHANNEL,
+                vec![nick, target_nick, channel, "They aren't on that channel"],
+            );
+            send(state, session_id, format!("{reply}\r\n"));
         }
     }
 }
@@ -835,15 +896,20 @@ pub(super) fn handle_invite(
         return;
     }
 
-    // Resolve target
-    let target_session = state
-        .nick_to_session
-        .lock()
-        .unwrap()
-        .get(target_nick)
-        .cloned();
+    // Resolve target — for INVITE the target doesn't need to be in the
+    // channel, but they do need to exist (locally or as a known remote user).
+    let target_session = state.nick_to_session.lock().unwrap().get(target_nick).cloned();
 
-    let Some(target_session) = target_session else {
+    // Check if the target is a known remote user (visible in any channel's remote_members)
+    let remote_did = if target_session.is_none() {
+        let channels = state.channels.lock().unwrap();
+        channels.values()
+            .find_map(|ch| ch.remote_members.get(target_nick).and_then(|rm| rm.did.clone()))
+    } else {
+        None
+    };
+
+    if target_session.is_none() && remote_did.is_none() {
         let reply = Message::from_server(
             server_name,
             irc::ERR_NOSUCHNICK,
@@ -851,15 +917,21 @@ pub(super) fn handle_invite(
         );
         send(state, session_id, format!("{reply}\r\n"));
         return;
-    };
+    }
 
-    // Add invite — by session ID and DID if available
+    // Add invite — by session ID, DID, or remote DID
     {
         let mut channels = state.channels.lock().unwrap();
         if let Some(ch) = channels.get_mut(channel) {
-            ch.invites.insert(target_session.clone());
-            // Also invite by DID so it survives reconnect
-            if let Some(did) = state.session_dids.lock().unwrap().get(&target_session) {
+            if let Some(ref sid) = target_session {
+                ch.invites.insert(sid.clone());
+                // Also invite by DID so it survives reconnect
+                if let Some(did) = state.session_dids.lock().unwrap().get(sid) {
+                    ch.invites.insert(did.clone());
+                }
+            }
+            if let Some(ref did) = remote_did {
+                // Remote user — invite by DID so they can join from their server
                 ch.invites.insert(did.clone());
             }
         }
@@ -873,11 +945,13 @@ pub(super) fn handle_invite(
     );
     send(state, session_id, format!("{reply}\r\n"));
 
-    // Notify the target
-    let hostmask = conn.hostmask();
-    let invite_msg = format!(":{hostmask} INVITE {target_nick} {channel}\r\n");
-    if let Some(tx) = state.connections.lock().unwrap().get(&target_session) {
-        let _ = tx.try_send(invite_msg);
+    // Notify the target (local only — remote users don't have a direct connection)
+    if let Some(ref sid) = target_session {
+        let hostmask = conn.hostmask();
+        let invite_msg = format!(":{hostmask} INVITE {target_nick} {channel}\r\n");
+        if let Some(tx) = state.connections.lock().unwrap().get(sid) {
+            let _ = tx.try_send(invite_msg);
+        }
     }
 }
 

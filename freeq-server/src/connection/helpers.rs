@@ -2,8 +2,56 @@
 //! Helper functions for broadcasting, S2S relay, and utilities.
 
 use std::sync::Arc;
-use crate::server::SharedState;
+use crate::server::{RemoteMember, SharedState};
 use super::Connection;
+
+/// Resolved target of a nick within a channel's roster.
+///
+/// This is the canonical way to resolve a nick for any operation that
+/// "acts on" a user in a channel (MODE +o/-o, +v/-v, KICK, INVITE).
+/// It consults both local session tables and S2S remote_members.
+pub(super) enum ChannelTarget {
+    /// Nick belongs to a user connected to this server.
+    Local { session_id: String },
+    /// Nick belongs to a user on a remote federated server.
+    Remote(RemoteMember),
+    /// Nick is not in the channel's roster (local or remote).
+    NotPresent,
+}
+
+/// Resolve a nick within a channel, checking both local members and
+/// remote members from S2S federation.
+///
+/// Returns `ChannelTarget::Local` if the nick maps to a local session
+/// that is a member of the channel, `ChannelTarget::Remote` if the nick
+/// is in `remote_members`, or `ChannelTarget::NotPresent` otherwise.
+pub(super) fn resolve_channel_target(
+    state: &SharedState,
+    channel: &str,
+    target_nick: &str,
+) -> ChannelTarget {
+    // Check local: nick → session, session ∈ channel.members
+    let local_session = state.nick_to_session.lock().unwrap().get(target_nick).cloned();
+    if let Some(ref sid) = local_session {
+        let in_channel = state.channels.lock().unwrap()
+            .get(channel)
+            .map(|ch| ch.members.contains(sid))
+            .unwrap_or(false);
+        if in_channel {
+            return ChannelTarget::Local { session_id: sid.clone() };
+        }
+    }
+
+    // Check remote: nick ∈ channel.remote_members
+    let remote = state.channels.lock().unwrap()
+        .get(channel)
+        .and_then(|ch| ch.remote_members.get(target_nick).cloned());
+    if let Some(rm) = remote {
+        return ChannelTarget::Remote(rm);
+    }
+
+    ChannelTarget::NotPresent
+}
 
 pub(super) fn normalize_channel(name: &str) -> String {
     name.to_lowercase()
