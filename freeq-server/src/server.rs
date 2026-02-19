@@ -883,6 +883,7 @@ async fn process_s2s_message(
         S2sMessage::Topic { event_id, origin, .. } => (event_id.clone(), origin.clone()),
         S2sMessage::Mode { event_id, origin, .. } => (event_id.clone(), origin.clone()),
         S2sMessage::ChannelCreated { event_id, origin, .. } => (event_id.clone(), origin.clone()),
+        S2sMessage::Kick { event_id, origin, .. } => (event_id.clone(), origin.clone()),
         S2sMessage::CrdtSync { origin, .. } => (String::new(), origin.clone()),
         S2sMessage::PeerDisconnected { .. } => (String::new(), String::new()),
         S2sMessage::Hello { .. } | S2sMessage::SyncRequest | S2sMessage::SyncResponse { .. } => {
@@ -1402,6 +1403,34 @@ async fn process_s2s_message(
                 format!(":{set_by}!remote@s2s MODE {channel} {mode}\r\n")
             };
             deliver_to_channel(state, &channel, &mode_line);
+        }
+
+        S2sMessage::Kick { nick, channel, by, reason, .. } => {
+            // A remote op kicked a user — if the user is local, remove them
+            // from the channel and notify them. If the user is a remote member
+            // from yet another server, remove from remote_members.
+            let kick_line = format!(":{by}!remote@s2s KICK {channel} {nick} :{reason}\r\n");
+
+            let target_session = state.nick_to_session.lock().unwrap().get(&nick).cloned();
+            if let Some(ref sid) = target_session {
+                // Target is local — broadcast KICK to channel, remove member
+                deliver_to_channel(state, &channel, &kick_line);
+                let mut channels = state.channels.lock().unwrap();
+                if let Some(ch) = channels.get_mut(&channel) {
+                    ch.members.remove(sid);
+                    ch.ops.remove(sid);
+                    ch.voiced.remove(sid);
+                }
+            } else {
+                // Target is a remote member from another peer — remove and notify locals
+                let mut channels = state.channels.lock().unwrap();
+                if let Some(ch) = channels.get_mut(&channel) {
+                    if ch.remote_members.remove(&nick).is_some() {
+                        drop(channels);
+                        deliver_to_channel(state, &channel, &kick_line);
+                    }
+                }
+            }
         }
 
         S2sMessage::NickChange { old, new, .. } => {

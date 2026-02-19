@@ -532,21 +532,23 @@ pub(super) fn handle_mode(
                                     state_clone.crdt_broadcast_sync().await;
                                 });
                             } else {
-                                // Remote user without DID — can't grant persistent ops
+                                // Remote user without DID — can't grant persistent ops.
+                                // Use 696 (custom) instead of 401 to avoid "no such nick" confusion.
                                 let reply = Message::from_server(
                                     server_name,
-                                    irc::ERR_NOSUCHNICK,
-                                    vec![nick, target_nick, "Remote user has no DID — cannot set persistent ops"],
+                                    "696",
+                                    vec![nick, channel, target_nick, "o", "Remote user has no DID — cannot set persistent ops"],
                                 );
                                 send(state, session_id, format!("{reply}\r\n"));
                                 return;
                             }
                         } else {
-                            // +v/-v on remote users — not supported (voice is ephemeral/local)
+                            // +v/-v on remote users — not supported (voice is ephemeral/local).
+                            // Use 696 (custom) instead of 401 to avoid "no such nick" confusion.
                             let reply = Message::from_server(
                                 server_name,
-                                irc::ERR_NOSUCHNICK,
-                                vec![nick, target_nick, "Cannot set voice on remote user"],
+                                "696",
+                                vec![nick, channel, target_nick, "v", "Cannot set voice on remote user"],
                             );
                             send(state, session_id, format!("{reply}\r\n"));
                             return;
@@ -828,12 +830,15 @@ pub(super) fn handle_kick(
                 }
             }
 
-            // Relay as a Part to S2S peers so the remote server removes the user
+            // Relay as a proper S2S Kick so remote server can enforce it
+            // (carries kick reason, kicker identity — not a generic Part)
             let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
-            s2s_broadcast(state, crate::s2s::S2sMessage::Part {
+            s2s_broadcast(state, crate::s2s::S2sMessage::Kick {
                 event_id: s2s_next_event_id(state),
                 nick: target_nick.to_string(),
                 channel: channel.to_string(),
+                by: conn.nick.as_deref().unwrap_or("*").to_string(),
+                reason: reason.to_string(),
                 origin,
             });
         }
@@ -896,61 +901,60 @@ pub(super) fn handle_invite(
         return;
     }
 
-    // Resolve target — for INVITE the target doesn't need to be in the
-    // channel, but they do need to exist (locally or as a known remote user).
-    let target_session = state.nick_to_session.lock().unwrap().get(target_nick).cloned();
-
-    // Check if the target is a known remote user (visible in any channel's remote_members)
-    let remote_did = if target_session.is_none() {
-        let channels = state.channels.lock().unwrap();
-        channels.values()
-            .find_map(|ch| ch.remote_members.get(target_nick).and_then(|rm| rm.did.clone()))
-    } else {
-        None
-    };
-
-    if target_session.is_none() && remote_did.is_none() {
-        let reply = Message::from_server(
-            server_name,
-            irc::ERR_NOSUCHNICK,
-            vec![nick, target_nick, "No such nick"],
-        );
-        send(state, session_id, format!("{reply}\r\n"));
-        return;
-    }
-
-    // Add invite — by session ID, DID, or remote DID
-    {
-        let mut channels = state.channels.lock().unwrap();
-        if let Some(ch) = channels.get_mut(channel) {
-            if let Some(ref sid) = target_session {
-                ch.invites.insert(sid.clone());
-                // Also invite by DID so it survives reconnect
-                if let Some(did) = state.session_dids.lock().unwrap().get(sid) {
-                    ch.invites.insert(did.clone());
+    // Resolve target via federated network roster.
+    // INVITE doesn't require the target to be in the channel — they just
+    // need to exist somewhere (locally or as a known remote user).
+    use super::helpers::{resolve_network_target, NetworkTarget};
+    match resolve_network_target(state, target_nick) {
+        NetworkTarget::Local { session_id: target_sid } => {
+            // Add invite by session ID + DID
+            {
+                let mut channels = state.channels.lock().unwrap();
+                if let Some(ch) = channels.get_mut(channel) {
+                    ch.invites.insert(target_sid.clone());
+                    if let Some(did) = state.session_dids.lock().unwrap().get(&target_sid) {
+                        ch.invites.insert(did.clone());
+                    }
                 }
             }
-            if let Some(ref did) = remote_did {
-                // Remote user — invite by DID so they can join from their server
-                ch.invites.insert(did.clone());
+
+            // Notify inviter
+            let reply = Message::from_server(server_name, "341", vec![nick, target_nick, channel]);
+            send(state, session_id, format!("{reply}\r\n"));
+
+            // Notify target
+            let hostmask = conn.hostmask();
+            let invite_msg = format!(":{hostmask} INVITE {target_nick} {channel}\r\n");
+            if let Some(tx) = state.connections.lock().unwrap().get(&target_sid) {
+                let _ = tx.try_send(invite_msg);
             }
         }
-    }
 
-    // Notify the inviter (341 RPL_INVITING)
-    let reply = Message::from_server(
-        server_name,
-        "341",
-        vec![nick, target_nick, channel],
-    );
-    send(state, session_id, format!("{reply}\r\n"));
+        NetworkTarget::Remote(rm) => {
+            // Add invite by DID if available (so it survives reconnect/rejoin)
+            {
+                let mut channels = state.channels.lock().unwrap();
+                if let Some(ch) = channels.get_mut(channel) {
+                    if let Some(ref did) = rm.did {
+                        ch.invites.insert(did.clone());
+                    }
+                    // Also store by nick as a fallback for guests without DID
+                    ch.invites.insert(format!("nick:{target_nick}"));
+                }
+            }
 
-    // Notify the target (local only — remote users don't have a direct connection)
-    if let Some(ref sid) = target_session {
-        let hostmask = conn.hostmask();
-        let invite_msg = format!(":{hostmask} INVITE {target_nick} {channel}\r\n");
-        if let Some(tx) = state.connections.lock().unwrap().get(sid) {
-            let _ = tx.try_send(invite_msg);
+            // Notify inviter (remote target can't be notified directly)
+            let reply = Message::from_server(server_name, "341", vec![nick, target_nick, channel]);
+            send(state, session_id, format!("{reply}\r\n"));
+        }
+
+        NetworkTarget::Unknown => {
+            let reply = Message::from_server(
+                server_name,
+                irc::ERR_NOSUCHNICK,
+                vec![nick, target_nick, "No such nick"],
+            );
+            send(state, session_id, format!("{reply}\r\n"));
         }
     }
 }

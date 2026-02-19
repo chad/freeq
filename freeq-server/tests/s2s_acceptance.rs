@@ -2727,15 +2727,14 @@ async fn s2s_fed2_mode_op_remote_guest_fails_gracefully() {
     drain(&mut ea).await;
     ha.raw(&format!("MODE {channel} +o {nick_b}")).await.unwrap();
 
-    // Should get an error (remote user has no DID for persistent ops)
+    // Should get 696 (custom numeric for "can't do this to remote user")
     let got = maybe_wait(
         &mut ea,
-        |evt| matches!(evt, Event::ServerNotice { text } if text.contains("DID") || text.contains("401") || text.contains("No such nick"))
-            || matches!(evt, Event::RawLine(line) if line.contains("401") || line.contains("DID")),
+        |evt| matches!(evt, Event::RawLine(line) if line.contains("696") || line.contains("DID")),
         Duration::from_secs(5),
     ).await;
-    assert!(got.is_some(), "Should get an error when opping remote guest without DID");
-    eprintln!("  ✓ FED-2: MODE +o on remote guest fails gracefully (no DID)");
+    assert!(got.is_some(), "Should get 696 when opping remote guest without DID");
+    eprintln!("  ✓ FED-2: MODE +o on remote guest fails gracefully (696, no DID)");
 
     let _ = ha.quit(Some("done")).await;
     let _ = hb.quit(Some("done")).await;
@@ -2765,15 +2764,14 @@ async fn s2s_fed3_mode_voice_remote_user_fails() {
     drain(&mut ea).await;
     ha.raw(&format!("MODE {channel} +v {nick_b}")).await.unwrap();
 
-    // Should get an error (voice is ephemeral, can't be set on remote users)
+    // Should get 696 (custom numeric for "can't do this to remote user")
     let got = maybe_wait(
         &mut ea,
-        |evt| matches!(evt, Event::ServerNotice { text } if text.contains("401") || text.contains("remote"))
-            || matches!(evt, Event::RawLine(line) if line.contains("401")),
+        |evt| matches!(evt, Event::RawLine(line) if line.contains("696") || line.contains("voice")),
         Duration::from_secs(5),
     ).await;
-    assert!(got.is_some(), "Should get an error when voicing remote user");
-    eprintln!("  ✓ FED-3: MODE +v on remote user fails (voice is local-only)");
+    assert!(got.is_some(), "Should get 696 when voicing remote user");
+    eprintln!("  ✓ FED-3: MODE +v on remote user fails (696, voice is local-only)");
 
     let _ = ha.quit(Some("done")).await;
     let _ = hb.quit(Some("done")).await;

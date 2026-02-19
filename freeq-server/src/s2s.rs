@@ -183,6 +183,20 @@ pub enum S2sMessage {
         origin: String,
     },
 
+    /// A user was kicked from a channel.
+    #[serde(rename = "kick")]
+    Kick {
+        #[serde(default)]
+        event_id: String,
+        /// Nick of the user being kicked.
+        nick: String,
+        channel: String,
+        /// Nick of the op who kicked them.
+        by: String,
+        reason: String,
+        origin: String,
+    },
+
     /// Internal event: a peer's S2S link has disconnected.
     /// Not sent over the wire — synthesized locally so the event processor
     /// can clean up remote_members for that peer's origin.

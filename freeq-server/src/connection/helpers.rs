@@ -53,6 +53,43 @@ pub(super) fn resolve_channel_target(
     ChannelTarget::NotPresent
 }
 
+/// Resolved target of a nick anywhere on the network.
+///
+/// Unlike `ChannelTarget`, this doesn't require the nick to be in a
+/// specific channel — it just checks if the nick exists at all (locally
+/// or as a known remote user in any channel).
+pub(super) enum NetworkTarget {
+    /// Nick belongs to a user connected to this server.
+    Local { session_id: String },
+    /// Nick belongs to a user on a remote federated server.
+    Remote(RemoteMember),
+    /// Nick is not known anywhere.
+    Unknown,
+}
+
+/// Resolve a nick across the entire network: local sessions + all
+/// channels' remote_members. Used for operations like INVITE where
+/// the target doesn't need to be in a specific channel.
+pub(super) fn resolve_network_target(
+    state: &SharedState,
+    target_nick: &str,
+) -> NetworkTarget {
+    // Check local first
+    if let Some(sid) = state.nick_to_session.lock().unwrap().get(target_nick).cloned() {
+        return NetworkTarget::Local { session_id: sid };
+    }
+
+    // Check all channels' remote_members
+    let channels = state.channels.lock().unwrap();
+    for ch in channels.values() {
+        if let Some(rm) = ch.remote_members.get(target_nick) {
+            return NetworkTarget::Remote(rm.clone());
+        }
+    }
+
+    NetworkTarget::Unknown
+}
+
 pub(super) fn normalize_channel(name: &str) -> String {
     name.to_lowercase()
 }
