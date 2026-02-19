@@ -22,6 +22,7 @@ pub mod helpers;
 mod messaging;
 mod queries;
 mod registration;
+pub(crate) mod routing;
 
 use std::sync::Arc;
 

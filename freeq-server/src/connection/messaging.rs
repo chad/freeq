@@ -54,14 +54,25 @@ pub(super) fn handle_tagmsg(
             }
         }
     } else {
-        let target_session = state.nick_to_session.lock().unwrap().get(target).cloned();
-        if let Some(ref session) = target_session
-            && let Some(tx) = state.connections.lock().unwrap().get(session)
-        {
-            if state.cap_message_tags.lock().unwrap().contains(session) {
-                let _ = tx.try_send(tagged_line.clone());
-            } else if let Some(ref fallback) = plain_fallback {
-                let _ = tx.try_send(fallback.clone());
+        // TAGMSG to a nick — route through federation layer.
+        use super::routing::{relay_to_nick, RouteResult};
+        // TAGMSG uses the same relay path as PRIVMSG.
+        // The text payload is empty for TAGMSG; tags ride in the from-line.
+        let from_nick = conn.nick.as_deref().unwrap_or("*").to_string();
+        let tag_text = plain_fallback.as_deref().unwrap_or("").to_string();
+        match relay_to_nick(state, &from_nick, target, &tag_text, super::helpers::s2s_next_event_id(state)) {
+            RouteResult::Local(ref session) => {
+                if let Some(tx) = state.connections.lock().unwrap().get(session) {
+                    if state.cap_message_tags.lock().unwrap().contains(session) {
+                        let _ = tx.try_send(tagged_line.clone());
+                    } else if let Some(ref fallback) = plain_fallback {
+                        let _ = tx.try_send(fallback.clone());
+                    }
+                }
+            }
+            RouteResult::Relayed | RouteResult::Unreachable => {
+                // TAGMSG to remote user — best-effort relay (or silently dropped).
+                // No error sent: TAGMSG has no delivery expectation.
             }
         }
     }
@@ -225,51 +236,41 @@ pub(super) fn handle_privmsg(
             Some(format!("{tag_msg}\r\n"))
         };
 
-        let target_session = state.nick_to_session.lock().unwrap().get(target).cloned();
-        if let Some(ref session) = target_session {
-            // Target is local — deliver directly
-            // Send RPL_AWAY if target is away
-            if let Some(away_msg) = state.session_away.lock().unwrap().get(session) {
-                let nick = conn.nick_or_star();
-                let reply = Message::from_server(
-                    &state.server_name,
-                    irc::RPL_AWAY,
-                    vec![nick, target, away_msg],
-                );
-                if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
-                    let _ = tx.try_send(format!("{reply}\r\n"));
+        // Route through the federation routing layer.
+        // See routing.rs for why we NEVER gate on remote_members here.
+        use super::routing::{relay_to_nick, RouteResult};
+        let from_nick = conn.nick.as_deref().unwrap_or("*").to_string();
+        match relay_to_nick(state, &from_nick, target, text, s2s_next_event_id(state)) {
+            RouteResult::Local(ref session) => {
+                // Target is local — deliver directly
+                // Send RPL_AWAY if target is away
+                if let Some(away_msg) = state.session_away.lock().unwrap().get(session) {
+                    let nick = conn.nick_or_star();
+                    let reply = Message::from_server(
+                        &state.server_name,
+                        irc::RPL_AWAY,
+                        vec![nick, target, away_msg],
+                    );
+                    if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+                        let _ = tx.try_send(format!("{reply}\r\n"));
+                    }
+                }
+
+                let has_tags = state.cap_message_tags.lock().unwrap().contains(session);
+                let line = match (&tagged_line, has_tags) {
+                    (Some(tagged), true) => tagged,
+                    _ => &plain_line,
+                };
+                if let Some(tx) = state.connections.lock().unwrap().get(session) {
+                    let _ = tx.try_send(line.clone());
                 }
             }
-
-            let has_tags = state.cap_message_tags.lock().unwrap().contains(session);
-            let line = match (&tagged_line, has_tags) {
-                (Some(tagged), true) => tagged,
-                _ => &plain_line,
-            };
-            if let Some(tx) = state.connections.lock().unwrap().get(session) {
-                let _ = tx.try_send(line.clone());
+            RouteResult::Relayed => {
+                // Sent to S2S peers — receiving server will deliver.
+                // No ERR_NOSUCHNICK: we can't know if it arrived (same as email).
             }
-        } else if command == "PRIVMSG" || command == "NOTICE" {
-            // Target is not local — relay to S2S peers if federation is active.
-            //
-            // We intentionally do NOT gate on remote_members here. The sending
-            // server may not have the target in any channel's remote_members
-            // (e.g. sync hasn't completed, or no shared channel exists) but the
-            // target's home server will deliver if they're connected. Gating on
-            // remote_members caused asymmetric PM failures: A→B works but B→A
-            // gets ERR_NOSUCHNICK if B's server hasn't synced A's presence yet.
-            let has_s2s = state.s2s_manager.lock().unwrap().is_some();
-            if has_s2s {
-                let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
-                s2s_broadcast(state, crate::s2s::S2sMessage::Privmsg {
-                    event_id: s2s_next_event_id(state),
-                    from: conn.nick.as_deref().unwrap_or("*").to_string(),
-                    target: target.to_string(),
-                    text: text.to_string(),
-                    origin,
-                });
-            } else {
-                // No federation — target truly doesn't exist
+            RouteResult::Unreachable => {
+                // No federation, nick doesn't exist locally
                 let nick = conn.nick_or_star();
                 let reply = Message::from_server(
                     &state.server_name,

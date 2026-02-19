@@ -3509,6 +3509,83 @@ async fn s2s_pmedge1_pm_no_shared_channel() {
     let _ = hb.quit(Some("done")).await;
 }
 
+/// PMEDGE-2: Bidirectional PMs — both directions must work.
+///
+/// This is the exact regression test for the asymmetric PM bug:
+/// A→B worked but B→A returned ERR_NOSUCHNICK because B's server
+/// hadn't synced A into remote_members yet. The fix: relay PMs to
+/// S2S peers without gating on remote_members.
+#[tokio::test]
+async fn s2s_pmedge2_bidirectional_pm() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("pe2");
+    let nick_a = test_nick("pe2", "a");
+    let nick_b = test_nick("pe2", "b");
+
+    // Both join the same channel so they can see each other
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+    drain(&mut ea).await;
+    drain(&mut eb).await;
+
+    // A → B: PM from local to remote
+    let msg_ab = format!("ab-{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 100000);
+    ha.privmsg(&nick_b, &msg_ab).await.unwrap();
+
+    let got_ab = maybe_wait(
+        &mut eb,
+        |evt| matches!(evt, Event::Message { text, .. } if text.contains(&msg_ab)),
+        Duration::from_secs(10),
+    ).await;
+    assert!(got_ab.is_some(), "A→B PM should be delivered");
+    drain(&mut ea).await;
+    drain(&mut eb).await;
+
+    // B → A: PM from remote to local (THIS IS THE DIRECTION THAT WAS BROKEN)
+    let msg_ba = format!("ba-{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 100000);
+    hb.privmsg(&nick_a, &msg_ba).await.unwrap();
+
+    let got_ba = maybe_wait(
+        &mut ea,
+        |evt| matches!(evt, Event::Message { text, .. } if text.contains(&msg_ba)),
+        Duration::from_secs(10),
+    ).await;
+    assert!(got_ba.is_some(), "B→A PM should be delivered (was broken: asymmetric relay)");
+
+    // Also verify no ERR_NOSUCHNICK on either side
+    drain(&mut ea).await;
+    let err_a = maybe_wait(
+        &mut ea,
+        |evt| matches!(evt, Event::RawLine(line) if line.contains("401")),
+        Duration::from_millis(500),
+    ).await;
+    assert!(err_a.is_none(), "A should not have received ERR_NOSUCHNICK");
+
+    drain(&mut eb).await;
+    let err_b = maybe_wait(
+        &mut eb,
+        |evt| matches!(evt, Event::RawLine(line) if line.contains("401")),
+        Duration::from_millis(500),
+    ).await;
+    assert!(err_b.is_none(), "B should not have received ERR_NOSUCHNICK");
+
+    eprintln!("  ✓ PMEDGE-2: Bidirectional PMs work (A→B and B→A)");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // Bidirectional consistency: both sides agree on state
 // ═══════════════════════════════════════════════════════════════════
