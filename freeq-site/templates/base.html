@@ -64,11 +64,45 @@ th { text-align: left; padding: 8px 12px; background: var(--bg2); color: var(--f
 td { padding: 8px 12px; border-bottom: 1px solid var(--surface); color: var(--fg2); font-size: 13px; }
 tr:hover td { background: var(--bg2); }
 
+/* ── Powered By ── */
+.powered-by {
+  border-top: 1px solid var(--surface);
+  padding: 32px 24px 0;
+  margin-top: 64px;
+  text-align: center;
+}
+.powered-by .label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 1.2px;
+  color: var(--fg3); margin-bottom: 16px;
+}
+.powered-by .logos {
+  display: flex; justify-content: center; align-items: center;
+  gap: 32px; flex-wrap: wrap;
+}
+.powered-by .logos a {
+  display: flex; align-items: center; gap: 8px;
+  opacity: 0.4; transition: opacity .25s;
+  text-decoration: none;
+}
+.powered-by .logos a:hover { opacity: 0.85; }
+.powered-by .logos a img,
+.powered-by .logos a svg {
+  height: 22px; width: auto;
+}
+.powered-by .logos a span {
+  font-size: 13px; font-weight: 600; color: var(--fg2);
+  letter-spacing: .3px;
+}
+@media (max-width: 640px) {
+  .powered-by .logos { gap: 24px; }
+  .powered-by .logos a span { font-size: 12px; }
+}
+
 /* ── Footer ── */
 footer {
-  border-top: 1px solid var(--surface); padding: 24px;
+  border-top: none; padding: 16px 24px 24px;
   text-align: center; color: var(--fg3); font-size: 12px;
-  margin-top: 64px;
+  margin-top: 0;
 }
 footer a { color: var(--fg3); }
 footer a:hover { color: var(--fg2); }
@@ -97,6 +131,22 @@ footer a:hover { color: var(--fg2); }
 </nav>
 
 {% block body %}{% endblock %}
+
+<div class="powered-by">
+  <div class="label">Powered by</div>
+  <div class="logos">
+    <a href="https://miren.dev" target="_blank" rel="noopener" title="Deployed on Miren">
+      <img src="/static/logo-miren.svg" alt="Miren" style="height:20px;">
+    </a>
+    <a href="https://iroh.computer" target="_blank" rel="noopener" title="P2P networking by iroh">
+      <img src="/static/logo-iroh.svg" alt="iroh" style="height:18px;">
+    </a>
+    <a href="https://automerge.org" target="_blank" rel="noopener" title="CRDT sync by Automerge">
+      <img src="/static/logo-automerge.svg" alt="Automerge" style="height:22px;">
+      <span>Automerge</span>
+    </a>
+  </div>
+</div>
 
 <footer>
   <a href="https://github.com/chad/freeq">GitHub</a> ·
