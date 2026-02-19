@@ -6,6 +6,7 @@ pub mod crdt;
 pub mod db;
 pub mod irc;
 pub mod iroh;
+pub mod msgid;
 pub mod plugin;
 pub mod s2s;
 pub mod sasl;

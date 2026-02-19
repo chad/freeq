@@ -141,19 +141,24 @@ pub(super) fn handle_privmsg(
         }
         let text = msg_result.rewrite_text.as_deref().unwrap_or(text);
 
+        // Generate msgid for every PRIVMSG/NOTICE
+        let msgid = crate::msgid::generate();
+
+        // Build tags with msgid injected (for tag-capable clients)
+        let mut full_tags = tags.clone();
+        full_tags.insert("msgid".to_string(), msgid.clone());
+
         // Plain line (no tags) for clients that don't support message-tags
         let plain_line = format!(":{hostmask} {command} {target} :{text}\r\n");
-        // Tagged line for clients that negotiated message-tags
-        let tagged_line = if tags.is_empty() {
-            None
-        } else {
+        // Tagged line for clients that negotiated message-tags (always has at least msgid)
+        let tagged_line = {
             let tag_msg = irc::Message {
-                tags: tags.clone(),
+                tags: full_tags.clone(),
                 prefix: Some(hostmask.clone()),
                 command: command.to_string(),
                 params: vec![target.to_string(), text.to_string()],
             };
-            Some(format!("{tag_msg}\r\n"))
+            format!("{tag_msg}\r\n")
         };
 
         // Store in channel history
@@ -169,14 +174,15 @@ pub(super) fn handle_privmsg(
                     from: hostmask.clone(),
                     text: text.to_string(),
                     timestamp,
-                    tags: tags.clone(),
+                    tags: full_tags.clone(),
+                    msgid: Some(msgid.clone()),
                 });
                 while ch.history.len() > MAX_HISTORY {
                     ch.history.pop_front();
                 }
             }
             drop(channels);
-            state.with_db(|db| db.insert_message(target, &hostmask, text, timestamp, tags));
+            state.with_db(|db| db.insert_message(target, &hostmask, text, timestamp, tags, Some(&msgid)));
 
             // Prune old messages if configured
             let max = state.config.max_messages_per_channel;
@@ -202,9 +208,10 @@ pub(super) fn handle_privmsg(
                 continue;
             }
             if let Some(tx) = conns.get(member_session) {
-                let line = match (&tagged_line, tag_caps.contains(member_session)) {
-                    (Some(tagged), true) => tagged,
-                    _ => &plain_line,
+                let line = if tag_caps.contains(member_session) {
+                    &tagged_line
+                } else {
+                    &plain_line
                 };
                 let _ = tx.try_send(line.clone());
             }
@@ -219,21 +226,24 @@ pub(super) fn handle_privmsg(
                 target: target.to_string(),
                 text: text.to_string(),
                 origin,
+                msgid: Some(msgid.clone()),
             });
         }
     } else {
         // Private message — check RPL_AWAY and deliver
+        let pm_msgid = crate::msgid::generate();
+        let mut pm_tags = tags.clone();
+        pm_tags.insert("msgid".to_string(), pm_msgid.clone());
+
         let plain_line = format!(":{hostmask} {command} {target} :{text}\r\n");
-        let tagged_line = if tags.is_empty() {
-            None
-        } else {
+        let tagged_line = {
             let tag_msg = irc::Message {
-                tags: tags.clone(),
+                tags: pm_tags,
                 prefix: Some(hostmask.clone()),
                 command: command.to_string(),
                 params: vec![target.to_string(), text.to_string()],
             };
-            Some(format!("{tag_msg}\r\n"))
+            format!("{tag_msg}\r\n")
         };
 
         // Route through the federation routing layer.
@@ -257,10 +267,7 @@ pub(super) fn handle_privmsg(
                 }
 
                 let has_tags = state.cap_message_tags.lock().unwrap().contains(session);
-                let line = match (&tagged_line, has_tags) {
-                    (Some(tagged), true) => tagged,
-                    _ => &plain_line,
-                };
+                let line = if has_tags { &tagged_line } else { &plain_line };
                 if let Some(tx) = state.connections.lock().unwrap().get(session) {
                     let _ = tx.try_send(line.clone());
                 }
@@ -406,6 +413,12 @@ pub(super) fn handle_chathistory(
 
     for row in &messages {
         let mut tags = if has_tags { row.tags.clone() } else { std::collections::HashMap::new() };
+        // Include msgid if available
+        if has_tags {
+            if let Some(ref mid) = row.msgid {
+                tags.insert("msgid".to_string(), mid.clone());
+            }
+        }
         if has_time {
             let ts = chrono::DateTime::from_timestamp(row.timestamp as i64, 0)
                 .unwrap_or_default()

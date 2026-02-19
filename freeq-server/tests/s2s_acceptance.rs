@@ -189,6 +189,20 @@ async fn wait_message_containing(
     }
 }
 
+/// Wait for a Message containing specific text and return the full event (including tags).
+async fn wait_message_event_containing(
+    rx: &mut mpsc::Receiver<Event>,
+    substr: &str,
+) -> Event {
+    let s = substr.to_string();
+    wait_for(
+        rx,
+        |e| matches!(e, Event::Message { text, .. } if text.contains(&s)),
+        &format!("Message event containing '{substr}'"),
+    )
+    .await
+}
+
 /// Wait for a Names event that includes a specific nick.
 async fn wait_names_containing(
     rx: &mut mpsc::Receiver<Event>,
@@ -4600,6 +4614,126 @@ async fn s2s_inv2_remote_guest_blocked_from_invite_only_without_invite() {
     );
 
     eprintln!("  ✓ INV-2: Remote guest correctly blocked from +i channel without invite");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── MSGID tests ─────────────────────────────────────────────────────
+
+/// MSGID-1: Messages include a unique msgid tag
+#[tokio::test]
+async fn single_server_msgid1_messages_have_msgid() {
+    let Some(server) = get_single_server() else { return };
+    let nick_a = test_nick("mid1", "a");
+    let nick_b = test_nick("mid1", "b");
+    let channel = test_channel("mid1");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut ea).await;
+    wait_registered(&mut eb).await;
+
+    ha.join(&channel).await.unwrap();
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+    wait_joined(&mut eb, &channel).await;
+    drain(&mut ea).await;
+
+    let test_text = format!("msgid test {}", chrono::Utc::now().timestamp_millis());
+    hb.privmsg(&channel, &test_text).await.unwrap();
+
+    let msg = wait_message_event_containing(&mut ea, &test_text).await;
+    match msg {
+        Event::Message { tags, .. } => {
+            let msgid = tags.get("msgid");
+            assert!(msgid.is_some(), "Message should have msgid tag, got tags: {tags:?}");
+            let id = msgid.unwrap();
+            assert_eq!(id.len(), 26, "msgid should be a 26-char ULID, got: {id}");
+            eprintln!("  ✓ MSGID-1: Message has msgid={id}");
+        }
+        other => panic!("Expected Message event, got: {other:?}"),
+    }
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+/// MSGID-2: Each message gets a unique msgid
+#[tokio::test]
+async fn single_server_msgid2_unique_ids() {
+    let Some(server) = get_single_server() else { return };
+    let nick_a = test_nick("mid2", "a");
+    let nick_b = test_nick("mid2", "b");
+    let channel = test_channel("mid2");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut ea).await;
+    wait_registered(&mut eb).await;
+
+    ha.join(&channel).await.unwrap();
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+    wait_joined(&mut eb, &channel).await;
+    drain(&mut ea).await;
+
+    hb.privmsg(&channel, "mid2msg1").await.unwrap();
+    hb.privmsg(&channel, "mid2msg2").await.unwrap();
+
+    let evt1 = wait_message_event_containing(&mut ea, "mid2msg1").await;
+    let evt2 = wait_message_event_containing(&mut ea, "mid2msg2").await;
+
+    let id1 = match evt1 {
+        Event::Message { ref tags, .. } => tags.get("msgid").cloned().expect("msg1 should have msgid"),
+        _ => panic!("Expected Message"),
+    };
+    let id2 = match evt2 {
+        Event::Message { ref tags, .. } => tags.get("msgid").cloned().expect("msg2 should have msgid"),
+        _ => panic!("Expected Message"),
+    };
+
+    assert_ne!(id1, id2, "Each message should have a unique msgid");
+    assert!(id1 < id2, "msgids should be chronologically ordered: {id1} < {id2}");
+    eprintln!("  ✓ MSGID-2: Messages have unique, ordered msgids: {id1}, {id2}");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+/// MSGID-3: Cross-server messages include msgid
+#[tokio::test]
+async fn s2s_msgid3_cross_server_messages_have_msgid() {
+    let Some((server_a, server_b)) = get_servers() else { return };
+    let nick_a = test_nick("mid3", "a");
+    let nick_b = test_nick("mid3", "b");
+    let channel = test_channel("mid3");
+
+    let (ha, mut ea) = connect_guest(&server_a, &nick_a).await;
+    let (hb, mut eb) = connect_guest(&server_b, &nick_b).await;
+    wait_registered(&mut ea).await;
+    wait_registered(&mut eb).await;
+
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+    wait_names_containing(&mut ea, &channel, &nick_b).await;
+
+    let test_text = format!("s2s msgid {}", chrono::Utc::now().timestamp_millis());
+    hb.privmsg(&channel, &test_text).await.unwrap();
+
+    let msg = wait_message_event_containing(&mut ea, &test_text).await;
+    match msg {
+        Event::Message { tags, .. } => {
+            let msgid = tags.get("msgid");
+            assert!(msgid.is_some(), "S2S message should have msgid tag, got tags: {tags:?}");
+            let id = msgid.unwrap();
+            assert_eq!(id.len(), 26, "msgid should be a 26-char ULID, got: {id}");
+            eprintln!("  ✓ MSGID-3: S2S message has msgid={id}");
+        }
+        other => panic!("Expected Message event, got: {other:?}"),
+    }
 
     let _ = ha.quit(Some("done")).await;
     let _ = hb.quit(Some("done")).await;

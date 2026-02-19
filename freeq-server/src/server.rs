@@ -143,6 +143,8 @@ pub struct HistoryMessage {
     pub timestamp: u64,
     /// IRCv3 tags from the original message (for rich media replay).
     pub tags: HashMap<String, String>,
+    /// ULID message ID (IRCv3 `msgid` tag).
+    pub msgid: Option<String>,
 }
 
 /// Maximum number of history messages to keep per channel.
@@ -475,6 +477,7 @@ impl Server {
                         text: msg.text,
                         timestamp: msg.timestamp,
                         tags: msg.tags,
+                        msgid: msg.msgid,
                     });
                 }
             }
@@ -957,8 +960,23 @@ async fn process_s2s_message(
             manager.peer_names.lock().await.insert(authenticated_peer_id.to_string(), server_name);
         }
 
-        S2sMessage::Privmsg { from, target, text, origin: _, .. } => {
-            let line = format!(":{from} PRIVMSG {target} :{text}\r\n");
+        S2sMessage::Privmsg { from, target, text, origin: _, msgid, .. } => {
+            // Generate a local msgid if the remote didn't send one
+            let msgid = msgid.unwrap_or_else(crate::msgid::generate);
+
+            // Plain line for non-tag clients, tagged line with msgid for tag clients
+            let plain_line = format!(":{from} PRIVMSG {target} :{text}\r\n");
+            let tagged_line = {
+                let mut tags = HashMap::new();
+                tags.insert("msgid".to_string(), msgid.clone());
+                let tag_msg = crate::irc::Message {
+                    tags,
+                    prefix: Some(from.clone()),
+                    command: "PRIVMSG".to_string(),
+                    params: vec![target.clone(), text.clone()],
+                };
+                format!("{tag_msg}\r\n")
+            };
 
             if target.starts_with('#') || target.starts_with('&') {
                 // Enforce +n and +m on incoming S2S messages
@@ -988,7 +1006,47 @@ async fn process_s2s_message(
                     }
                 }
                 drop(channels);
-                deliver_to_channel(state, &target, &line);
+
+                // Store in history + DB
+                {
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let mut tags = HashMap::new();
+                    tags.insert("msgid".to_string(), msgid.clone());
+                    let mut channels = state.channels.lock().unwrap();
+                    if let Some(ch) = channels.get_mut(&channel_key) {
+                        ch.history.push_back(HistoryMessage {
+                            from: from.clone(),
+                            text: text.clone(),
+                            timestamp,
+                            tags: tags.clone(),
+                            msgid: Some(msgid.clone()),
+                        });
+                        while ch.history.len() > MAX_HISTORY {
+                            ch.history.pop_front();
+                        }
+                    }
+                    drop(channels);
+                    let empty_tags = HashMap::new();
+                    state.with_db(|db| db.insert_message(&target, &from, &text, timestamp, &empty_tags, Some(&msgid)));
+                }
+
+                // Deliver to local members with tag-awareness
+                let members: Vec<String> = state
+                    .channels.lock().unwrap()
+                    .get(&channel_key)
+                    .map(|ch| ch.members.iter().cloned().collect())
+                    .unwrap_or_default();
+                let tag_caps = state.cap_message_tags.lock().unwrap();
+                let conns = state.connections.lock().unwrap();
+                for sid in &members {
+                    if let Some(tx) = conns.get(sid) {
+                        let line = if tag_caps.contains(sid) { &tagged_line } else { &plain_line };
+                        let _ = tx.try_send(line.clone());
+                    }
+                }
             } else {
                 // Case-insensitive nick lookup for PM delivery
                 let n2s = state.nick_to_session.lock().unwrap();
@@ -998,9 +1056,11 @@ async fn process_s2s_message(
                     .map(|(_, s)| s.clone());
                 drop(n2s);
                 if let Some(sid) = sid {
+                    let has_tags = state.cap_message_tags.lock().unwrap().contains(&sid);
+                    let line = if has_tags { &tagged_line } else { &plain_line };
                     let conns = state.connections.lock().unwrap();
                     if let Some(tx) = conns.get(&sid) {
-                        let _ = tx.try_send(line);
+                        let _ = tx.try_send(line.clone());
                     }
                 }
             }

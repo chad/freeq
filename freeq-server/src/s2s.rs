@@ -74,6 +74,9 @@ pub enum S2sMessage {
         text: String,
         /// Origin iroh endpoint ID (to prevent relay loops).
         origin: String,
+        /// ULID message ID (IRCv3 `msgid` tag).
+        #[serde(default)]
+        msgid: Option<String>,
     },
 
     /// A user joined a channel.

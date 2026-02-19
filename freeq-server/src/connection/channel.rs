@@ -258,6 +258,13 @@ pub(super) fn handle_join(
             for hist in &ch.history {
                 let mut msg_tags = if has_tags_cap { hist.tags.clone() } else { std::collections::HashMap::new() };
 
+                // Add msgid tag if available
+                if has_tags_cap {
+                    if let Some(ref mid) = hist.msgid {
+                        msg_tags.insert("msgid".to_string(), mid.clone());
+                    }
+                }
+
                 // Add server-time tag
                 if has_time_cap {
                     let ts = chrono::DateTime::from_timestamp(hist.timestamp as i64, 0)

@@ -24,6 +24,8 @@ pub struct MessageRow {
     pub text: String,
     pub timestamp: u64,
     pub tags: HashMap<String, String>,
+    /// ULID message ID (IRCv3 `msgid` tag).
+    pub msgid: Option<String>,
 }
 
 /// A persisted identity (DID-nick binding).
@@ -104,6 +106,7 @@ impl Db {
             "ALTER TABLE channels ADD COLUMN moderated INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE channels ADD COLUMN founder_did TEXT",
             "ALTER TABLE channels ADD COLUMN did_ops_json TEXT NOT NULL DEFAULT '[]'",
+            "ALTER TABLE messages ADD COLUMN msgid TEXT",
         ];
         for sql in &migrations {
             // Ignore "duplicate column name" errors — means column already exists
@@ -259,12 +262,13 @@ impl Db {
         text: &str,
         timestamp: u64,
         tags: &HashMap<String, String>,
+        msgid: Option<&str>,
     ) -> SqlResult<()> {
         let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "{}".to_string());
         self.conn.execute(
-            "INSERT INTO messages (channel, sender, text, timestamp, tags_json)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![channel, sender, text, timestamp as i64, tags_json],
+            "INSERT INTO messages (channel, sender, text, timestamp, tags_json, msgid)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![channel, sender, text, timestamp as i64, tags_json, msgid],
         )?;
         Ok(())
     }
@@ -280,7 +284,7 @@ impl Db {
     ) -> SqlResult<Vec<MessageRow>> {
         let mut rows_vec = if let Some(before_ts) = before {
             let mut stmt = self.conn.prepare(
-                "SELECT id, channel, sender, text, timestamp, tags_json
+                "SELECT id, channel, sender, text, timestamp, tags_json, msgid
                  FROM messages
                  WHERE channel = ?1 AND timestamp < ?2
                  ORDER BY timestamp DESC, id DESC
@@ -290,7 +294,7 @@ impl Db {
             rows.collect::<SqlResult<Vec<_>>>()?
         } else {
             let mut stmt = self.conn.prepare(
-                "SELECT id, channel, sender, text, timestamp, tags_json
+                "SELECT id, channel, sender, text, timestamp, tags_json, msgid
                  FROM messages
                  WHERE channel = ?1
                  ORDER BY timestamp DESC, id DESC
@@ -312,7 +316,7 @@ impl Db {
         limit: usize,
     ) -> SqlResult<Vec<MessageRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, channel, sender, text, timestamp, tags_json
+            "SELECT id, channel, sender, text, timestamp, tags_json, msgid
              FROM messages
              WHERE channel = ?1 AND timestamp > ?2
              ORDER BY timestamp ASC, id ASC
@@ -331,7 +335,7 @@ impl Db {
         limit: usize,
     ) -> SqlResult<Vec<MessageRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, channel, sender, text, timestamp, tags_json
+            "SELECT id, channel, sender, text, timestamp, tags_json, msgid
              FROM messages
              WHERE channel = ?1 AND timestamp > ?2 AND timestamp < ?3
              ORDER BY timestamp ASC, id ASC
@@ -414,6 +418,8 @@ fn map_message_row(row: &rusqlite::Row) -> SqlResult<MessageRow> {
     let tags_json: String = row.get(5)?;
     let tags: HashMap<String, String> =
         serde_json::from_str(&tags_json).unwrap_or_default();
+    // msgid column may not exist in old schemas — handle gracefully
+    let msgid: Option<String> = row.get(6).unwrap_or(None);
     Ok(MessageRow {
         id: row.get(0)?,
         channel: row.get(1)?,
@@ -421,6 +427,7 @@ fn map_message_row(row: &rusqlite::Row) -> SqlResult<MessageRow> {
         text: row.get(3)?,
         timestamp: row.get::<_, i64>(4)? as u64,
         tags,
+        msgid,
     })
 }
 
@@ -495,9 +502,9 @@ mod tests {
         let mut tags = HashMap::new();
         tags.insert("content-type".to_string(), "image/jpeg".to_string());
 
-        db.insert_message("#test", "alice!a@host", "hello", 1000, &HashMap::new()).unwrap();
-        db.insert_message("#test", "bob!b@host", "world", 1001, &tags).unwrap();
-        db.insert_message("#test", "alice!a@host", "third", 1002, &HashMap::new()).unwrap();
+        db.insert_message("#test", "alice!a@host", "hello", 1000, &HashMap::new(), Some("01TEST00000000000000000001")).unwrap();
+        db.insert_message("#test", "bob!b@host", "world", 1001, &tags, Some("01TEST00000000000000000002")).unwrap();
+        db.insert_message("#test", "alice!a@host", "third", 1002, &HashMap::new(), Some("01TEST00000000000000000003")).unwrap();
 
         // Get last 2
         let msgs = db.get_messages("#test", 2, None).unwrap();
@@ -555,8 +562,8 @@ mod tests {
     #[test]
     fn messages_different_channels() {
         let db = Db::open_memory().unwrap();
-        db.insert_message("#a", "u", "msg-a", 1000, &HashMap::new()).unwrap();
-        db.insert_message("#b", "u", "msg-b", 1001, &HashMap::new()).unwrap();
+        db.insert_message("#a", "u", "msg-a", 1000, &HashMap::new(), None).unwrap();
+        db.insert_message("#b", "u", "msg-b", 1001, &HashMap::new(), None).unwrap();
 
         let a = db.get_messages("#a", 100, None).unwrap();
         assert_eq!(a.len(), 1);
