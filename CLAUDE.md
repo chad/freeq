@@ -189,4 +189,72 @@ If something feels “too clever,” it’s probably wrong.
 
 ---
 
+## TODO
+
+### P0 — Critical (do next)
+
+- [ ] **Message signing by default** — All messages from DID-authenticated users should be cryptographically signed. This is the foundational trust property: if you have a DID, your messages are provably yours. Design:
+  - Authenticated users sign every PRIVMSG/NOTICE/TOPIC with their DID key
+  - Signature carried via IRCv3 message tag (e.g. `+freeq.at/sig=<base64url>`)
+  - Signed data: `{target}\0{text}\0{timestamp}` (canonical form)
+  - Server verifies signature on receipt (reject forged messages from peers)
+  - S2S relayed messages carry the original signature (end-to-end verifiable)
+  - Clients can verify signatures against the sender's DID document
+  - Guest (unauthenticated) messages are unsigned — clearly distinguishable
+  - Key types: secp256k1 (MUST), ed25519 (SHOULD) — same as SASL
+  - **Scope**: PRIVMSG, NOTICE, TOPIC, KICK (actions with attribution)
+  - **Non-goal for now**: signing JOIN/PART/MODE (low attribution value)
+
+### P1 — High priority
+
+- [ ] **S2S authorization on Kick/Mode** — Receiving server should verify the kicker/mode-setter has authority (is an op) before executing. Currently any peer can forge kicks/ops.
+- [ ] **S2S authorization on Topic** — Verify `set_by` belongs to the authenticated peer, not a spoofed nick.
+- [ ] **SyncResponse channel creation limit** — Cap channels created via sync to prevent a rogue peer from creating thousands of channels.
+- [ ] **ChannelCreated should propagate default modes** — Receiving side uses `or_default()` which sets all modes to false. Should inherit +nt defaults so remote channels have standard protections.
+- [ ] **Invites should sync via S2S** — Currently invites are local server state only. A user invited on server A can only join on server A. Relay invite tokens to peers.
+- [ ] **S2S rate limiting** — Connected peers can flood events without throttling.
+- [ ] **DPoP nonce retry for SASL verification** — PDS nonce rotation causes server-side verification to fail.
+
+### P2 — Important
+
+- [ ] **Topic merge consistency** — SyncResponse ignores remote topic if local is set, but CRDT reconciliation overwrites. Two systems with different merge strategies cause flapping.
+- [ ] **Channel key removal propagation** — `-k` can't propagate via SyncResponse (only additive). Needs protocol change or CRDT-backed key state.
+- [ ] **S2S authentication (allowlist enforcement)** — `--s2s-allowed-peers` only checks incoming. Formalize mutual auth.
+- [ ] **Ban sync + enforcement** — Bans are local-only despite CRDT support. Wire up S2S ban propagation.
+- [ ] **S2S Join enforcement** — Incoming S2S Joins don't check bans or +i.
+- [ ] **Hostname cloaking** — All users show `host` placeholder. Implement cloaking for public deployments.
+- [ ] **IRCv3: account-notify / extended-join** — Broadcast DID on auth and in JOIN.
+- [ ] **IRCv3: CHATHISTORY** — On-demand history retrieval (persistence layer supports it).
+- [ ] **Connection limits** — Per-IP connection limits.
+- [ ] **OPER command** — Server operator status for remote admin.
+- [ ] **TUI auto-reconnection** — Reconnect with backoff, rejoin channels.
+- [ ] **Normalize nick_to_session to lowercase keys** — Avoids O(n) linear scan on every case-insensitive nick lookup. Currently all nick lookups iterate the full map.
+
+### P3 — Future
+
+- [ ] Wire CRDT to live S2S (replace ad-hoc JSON for durable state)
+- [ ] DID-based key exchange for E2EE (replace passphrase-based)
+- [ ] Full-text search (SQLite FTS5)
+- [ ] Bot framework (formalize SDK pattern)
+- [ ] AT Protocol record-backed channels
+- [ ] Reputation/trust via social graph
+- [ ] Serverless P2P mode
+- [ ] IRCv3 WG proposal for ATPROTO-CHALLENGE
+- [ ] Web client (separate repo, PWA)
+- [ ] Moderation event log (CRDT-backed, ULID-keyed)
+- [ ] AT Protocol label integration for moderation
+
+### Done (this session)
+
+- [x] Case-insensitive remote_members helpers (`remote_member()`, `has_remote_member()`, `remove_remote_member()`)
+- [x] All S2S handlers use case-insensitive nick lookups (Privmsg +n/+m, Part, Quit, NickChange, Mode +o/+v, Kick, Topic)
+- [x] SyncResponse mode protection (never weakens local +n/+i/+t/+m)
+- [x] Topic flow fix (S2S Topic +t trusts peer authorization for unknown users)
+- [x] KICK sending-side case-insensitive remove
+- [x] 15 new edge case acceptance tests (96 total, all passing)
+- [x] Full S2S sync audit (`docs/SYNC-AUDIT.md`)
+- [x] Lint updated to catch raw remote_members access
+
+---
+
 **End of document**

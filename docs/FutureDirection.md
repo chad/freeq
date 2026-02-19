@@ -191,10 +191,17 @@ The `ATPROTO-CHALLENGE` SASL mechanism could be proposed as an IRCv3 spec:
 
 ## Priority Matrix (Updated)
 
-All P0 and P1 items from the original matrix are **done**. Here's what remains:
+All original P0/P1 items are **done**. The canonical TODO is in `CLAUDE.md`.
+Key addition: **message signing by default** is P0 — all messages from DID-authenticated
+users should be cryptographically signed (IRCv3 tag, end-to-end verifiable across S2S).
+
+Here's what remains:
 
 | Priority | Item | Effort | Impact |
 |----------|------|--------|--------|
+| **P0** | **Message signing by default** | Large | Critical — trust foundation |
+| **P1** | **S2S auth on Kick/Mode/Topic** | Medium | High — security |
+| **P1** | **S2S rate limiting** | Medium | High — operational |
 | **P2** | **S2S authentication** | Medium | High — security |
 | **P2** | **S2S ban sync + enforcement** | Medium | High — moderation |
 | **P2** | **Hostname cloaking** | Medium | Medium — privacy |

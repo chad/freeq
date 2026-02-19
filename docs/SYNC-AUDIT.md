@@ -214,14 +214,14 @@ After a local kick removes a user from ch.members, the user's nick may still app
 - **Kick handler**: refactored to use `remove_remote_member()` helper (was inline case-insensitive code)
 - **ChannelState helpers**: Added `remote_member()`, `remote_member_mut()`, `has_remote_member()`, `remove_remote_member()` — all case-insensitive. No more raw `remote_members.get()`/`contains_key()`/`remove()` in S2S handlers.
 
-### Remaining (design decisions needed)
+### Remaining (tracked in CLAUDE.md TODO)
 
-- **BUG 7**: Topic merge (SyncResponse ignores if set, CRDT overwrites) — needs design
-- **BUG 8**: Channel key removal can't propagate via SyncResponse — needs protocol change
-- **EDGE 2-3**: No auth on S2S Kick/Mode — needs authority verification
-- **EDGE 4**: Topic +t bypass via spoofed `set_by` — needs origin verification
-- **SEC 2**: No S2S rate limiting — needs design
-- **SEC 3**: SyncResponse creates arbitrary channels — needs limit
+- **BUG 7**: Topic merge inconsistency — P2 in TODO
+- **BUG 8**: Channel key removal can't propagate — P2 in TODO
+- **EDGE 2-3**: No auth on S2S Kick/Mode — P1 in TODO
+- **EDGE 4**: Topic +t bypass via spoofed `set_by` — P1 in TODO
+- **SEC 2**: No S2S rate limiting — P1 in TODO
+- **SEC 3**: SyncResponse creates arbitrary channels — P1 in TODO
 
 ## Recommended priority
 
