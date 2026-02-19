@@ -249,14 +249,17 @@ pub(super) fn handle_privmsg(
             if let Some(tx) = state.connections.lock().unwrap().get(session) {
                 let _ = tx.try_send(line.clone());
             }
-        } else if command == "PRIVMSG" {
-            // Target is not local — check if they're a remote user (S2S)
-            // and relay the PM so their home server can deliver it.
-            let is_remote = {
-                let channels = state.channels.lock().unwrap();
-                channels.values().any(|ch| ch.remote_members.contains_key(target))
-            };
-            if is_remote {
+        } else if command == "PRIVMSG" || command == "NOTICE" {
+            // Target is not local — relay to S2S peers if federation is active.
+            //
+            // We intentionally do NOT gate on remote_members here. The sending
+            // server may not have the target in any channel's remote_members
+            // (e.g. sync hasn't completed, or no shared channel exists) but the
+            // target's home server will deliver if they're connected. Gating on
+            // remote_members caused asymmetric PM failures: A→B works but B→A
+            // gets ERR_NOSUCHNICK if B's server hasn't synced A's presence yet.
+            let has_s2s = state.s2s_manager.lock().unwrap().is_some();
+            if has_s2s {
                 let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
                 s2s_broadcast(state, crate::s2s::S2sMessage::Privmsg {
                     event_id: s2s_next_event_id(state),
@@ -266,7 +269,7 @@ pub(super) fn handle_privmsg(
                     origin,
                 });
             } else {
-                // Target doesn't exist locally or remotely
+                // No federation — target truly doesn't exist
                 let nick = conn.nick_or_star();
                 let reply = Message::from_server(
                     &state.server_name,
