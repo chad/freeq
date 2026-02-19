@@ -324,6 +324,7 @@ pub(super) fn handle_away(
     send: &impl Fn(&Arc<SharedState>, &str, String),
 ) {
     let nick = conn.nick_or_star();
+    let hostmask = conn.hostmask();
 
     match away_msg {
         Some(msg) if !msg.is_empty() => {
@@ -335,6 +336,9 @@ pub(super) fn handle_away(
                 vec![nick, "You have been marked as being away"],
             );
             send(state, session_id, format!("{reply}\r\n"));
+
+            // away-notify: broadcast to shared channel members
+            broadcast_away(state, session_id, &hostmask, Some(msg));
         }
         _ => {
             state.session_away.lock().unwrap().remove(session_id);
@@ -344,6 +348,49 @@ pub(super) fn handle_away(
                 vec![nick, "You are no longer marked as being away"],
             );
             send(state, session_id, format!("{reply}\r\n"));
+
+            // away-notify: broadcast un-away to shared channel members
+            broadcast_away(state, session_id, &hostmask, None);
+        }
+    }
+}
+
+/// Broadcast AWAY change to all channel members who negotiated away-notify.
+fn broadcast_away(
+    state: &Arc<SharedState>,
+    session_id: &str,
+    hostmask: &str,
+    away_msg: Option<&str>,
+) {
+    let away_caps = state.cap_away_notify.lock().unwrap();
+    if away_caps.is_empty() {
+        return;
+    }
+
+    // Build the AWAY line: ":nick!user@host AWAY :reason" or ":nick!user@host AWAY"
+    let line = match away_msg {
+        Some(msg) => format!(":{hostmask} AWAY :{msg}\r\n"),
+        None => format!(":{hostmask} AWAY\r\n"),
+    };
+
+    // Find all channels this user is in, collect their members
+    let mut targets = std::collections::HashSet::new();
+    let channels = state.channels.lock().unwrap();
+    for ch in channels.values() {
+        if ch.members.contains(session_id) {
+            for member in &ch.members {
+                if member != session_id && away_caps.contains(member) {
+                    targets.insert(member.clone());
+                }
+            }
+        }
+    }
+    drop(channels);
+
+    let conns = state.connections.lock().unwrap();
+    for sid in &targets {
+        if let Some(tx) = conns.get(sid) {
+            let _ = tx.try_send(line.clone());
         }
     }
 }

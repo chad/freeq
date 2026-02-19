@@ -22,7 +22,7 @@ pub(super) fn handle_cap(
         Some("LS") => {
             conn.cap_negotiating = true;
             // Build capability list, including iroh endpoint ID if available
-            let mut caps = String::from("sasl message-tags multi-prefix echo-message server-time batch draft/chathistory account-notify extended-join");
+            let mut caps = String::from("sasl message-tags multi-prefix echo-message server-time batch draft/chathistory account-notify extended-join away-notify");
             if let Some(ref iroh_id) = *state.server_iroh_id.lock().unwrap() {
                 caps.push_str(&format!(" iroh={iroh_id}"));
             }
@@ -83,6 +83,11 @@ pub(super) fn handle_cap(
                             conn.cap_extended_join = true;
                             state.cap_extended_join.lock().unwrap().insert(session_id.to_string());
                             acked.push("extended-join");
+                        }
+                        "away-notify" => {
+                            conn.cap_away_notify = true;
+                            state.cap_away_notify.lock().unwrap().insert(session_id.to_string());
+                            acked.push("away-notify");
                         }
                         _ => { all_ok = false; }
                     }

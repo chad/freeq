@@ -661,6 +661,15 @@ where
                                 let _ = event_tx.send(Event::Invited { channel, by }).await;
                             }
                         }
+                        // AWAY (away-notify broadcast from shared channels)
+                        "AWAY" => {
+                            let nick = msg.prefix.as_deref()
+                                .and_then(|p| p.split('!').next())
+                                .unwrap_or("")
+                                .to_string();
+                            let away_msg = msg.params.first().cloned();
+                            let _ = event_tx.send(Event::AwayChanged { nick, away_msg }).await;
+                        }
                         // TOPIC (live change from another user)
                         "TOPIC" => {
                             if let Some(channel) = msg.params.first() {
@@ -844,6 +853,12 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
             let mut req_caps = Vec::new();
             if caps_str.contains("message-tags") {
                 req_caps.push("message-tags");
+            }
+            // Request additional IRCv3 capabilities the SDK understands
+            for cap in &["server-time", "batch", "echo-message", "away-notify", "account-notify", "extended-join"] {
+                if caps_str.contains(cap) {
+                    req_caps.push(cap);
+                }
             }
             if caps_str.contains("sasl") && signer.is_some() {
                 req_caps.push("sasl");

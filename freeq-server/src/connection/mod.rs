@@ -70,6 +70,7 @@ pub struct Connection {
     pub(crate) cap_chathistory: bool,
     pub(crate) cap_account_notify: bool,
     pub(crate) cap_extended_join: bool,
+    pub(crate) cap_away_notify: bool,
     /// Client understands E2EE messages (won't get synthetic notices instead).
     #[allow(dead_code)]
     pub(crate) cap_e2ee: bool,
@@ -98,6 +99,7 @@ impl Connection {
             cap_chathistory: false,
             cap_account_notify: false,
             cap_extended_join: false,
+            cap_away_notify: false,
             cap_e2ee: false,
             sasl_in_progress: false,
         }
@@ -729,6 +731,7 @@ where
     state.cap_batch.lock().unwrap().remove(&session_id);
     state.cap_account_notify.lock().unwrap().remove(&session_id);
     state.cap_extended_join.lock().unwrap().remove(&session_id);
+    state.cap_away_notify.lock().unwrap().remove(&session_id);
     {
         let mut channels = state.channels.lock().unwrap();
         for ch in channels.values_mut() {

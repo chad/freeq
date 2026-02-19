@@ -872,6 +872,25 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
                 });
             }
         }
+        Event::AwayChanged { nick, away_msg } => {
+            let msg = match &away_msg {
+                Some(reason) => format!("{nick} is now away: {reason}"),
+                None => format!("{nick} is no longer away"),
+            };
+            // Show in all shared buffers (channels where this nick might be)
+            let buf_names: Vec<String> = app.buffers.keys()
+                .filter(|name| *name != "status")
+                .filter(|name| {
+                    app.buffers.get(*name)
+                        .map(|b| b.nicks.iter().any(|m| m.trim_start_matches(&['@', '+'][..]) == nick))
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect();
+            for name in buf_names {
+                app.buffer_mut(&name).push_system(&msg);
+            }
+        }
         Event::RawLine(ref line) => {
             if app.debug_raw {
                 app.buffer_mut("status").push_system(&format!("← {line}"));

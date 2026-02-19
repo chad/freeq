@@ -265,6 +265,7 @@ pub struct SharedState {
     pub cap_batch: Mutex<HashSet<String>>,
     pub cap_account_notify: Mutex<HashSet<String>>,
     pub cap_extended_join: Mutex<HashSet<String>>,
+    pub cap_away_notify: Mutex<HashSet<String>>,
     /// Pending OAuth sessions: state → OAuthPending.
     pub oauth_pending: Mutex<HashMap<String, OAuthPending>>,
     /// Completed OAuth sessions: state → OAuthResult.
@@ -515,6 +516,7 @@ impl Server {
             cap_batch: Mutex::new(HashSet::new()),
             cap_account_notify: Mutex::new(HashSet::new()),
             cap_extended_join: Mutex::new(HashSet::new()),
+            cap_away_notify: Mutex::new(HashSet::new()),
             oauth_pending: Mutex::new(HashMap::new()),
             oauth_complete: Mutex::new(HashMap::new()),
             session_iroh_ids: Mutex::new(HashMap::new()),

@@ -57,6 +57,13 @@ pub enum Event {
         reason: String,
     },
 
+    /// A user's AWAY status changed (via away-notify cap).
+    /// `away_msg` is Some("reason") when going away, None when coming back.
+    AwayChanged {
+        nick: String,
+        away_msg: Option<String>,
+    },
+
     /// We were invited to a channel.
     Invited {
         channel: String,

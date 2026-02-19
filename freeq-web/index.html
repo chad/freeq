@@ -697,7 +697,7 @@ function handleLine(rawLine) {
         const available = p.slice(2).join(' ');
         wantedCaps = [];
         ['message-tags','server-time','batch','multi-prefix','echo-message',
-         'draft/chathistory','account-notify','extended-join'].forEach(c => {
+         'draft/chathistory','account-notify','extended-join','away-notify'].forEach(c => {
           if (available.includes(c)) wantedCaps.push(c);
         });
         if (atAccessJwt && available.includes('sasl')) wantedCaps.push('sasl');
@@ -898,6 +898,16 @@ function handleLine(rawLine) {
       const account = p[0];
       for (const [, b] of Object.entries(buffers)) {
         if (hasUser(b, from)) pushBufMsg(b, null, '*', from + ' is now authenticated as ' + account, 'system');
+      }
+      break;
+    }
+
+    // ── AWAY (away-notify) ──
+    case 'AWAY': {
+      const reason = p[0] || '';
+      const msg = reason ? from + ' is now away: ' + reason : from + ' is no longer away';
+      for (const [, b] of Object.entries(buffers)) {
+        if (hasUser(b, from)) pushBufMsg(b, null, '*', msg, 'system');
       }
       break;
     }
