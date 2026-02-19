@@ -3466,8 +3466,9 @@ async fn single_server_perm2_nonop_cannot_kick() {
 // ═══════════════════════════════════════════════════════════════════
 
 // ── PMEDGE-1: PM between users who share no channel ──
-// Users not in any shared channel are not visible via remote_members,
-// so cross-server PM should return ERR_NOSUCHNICK (expected limitation).
+// Users are in different channels but visible to each other via S2S sync.
+// The PM should still be delivered because remote_members is checked
+// across ALL channels, not just shared ones.
 
 #[tokio::test]
 async fn s2s_pmedge1_pm_no_shared_channel() {
@@ -3491,18 +3492,20 @@ async fn s2s_pmedge1_pm_no_shared_channel() {
 
     tokio::time::sleep(S2S_SETTLE).await;
 
-    // A tries to PM B — they share no channel, B is not in A's remote roster
-    drain(&mut ea).await;
-    ha.privmsg(&nick_b, "hello?").await.unwrap();
+    // A PMs B — they share no channel, but B is visible via S2S remote_members
+    let pm_text = format!("pe1-{}", std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 100000);
+    ha.privmsg(&nick_b, &pm_text).await.unwrap();
 
-    // Should get ERR_NOSUCHNICK since B isn't visible
+    // B should receive it — the PM is routed via S2S because B exists
+    // in remote_members of channel_b on server A
     let got = maybe_wait(
-        &mut ea,
-        |evt| matches!(evt, Event::RawLine(line) if line.contains("401")),
-        Duration::from_secs(5),
+        &mut eb,
+        |evt| matches!(evt, Event::Message { text, .. } if text.contains(&pm_text)),
+        Duration::from_secs(10),
     ).await;
-    assert!(got.is_some(), "PM to remote user in no shared channel should return 401");
-    eprintln!("  ✓ PMEDGE-1: PM with no shared channel returns 401 (expected)");
+    assert!(got.is_some(), "PM should be delivered even without shared channel");
+    eprintln!("  ✓ PMEDGE-1: PM delivered across servers without shared channel");
 
     let _ = ha.quit(Some("done")).await;
     let _ = hb.quit(Some("done")).await;
