@@ -17,6 +17,12 @@ pub(super) fn handle_tagmsg(
         return; // TAGMSG with no tags is meaningless
     }
 
+    // ── Message deletion (+draft/delete=<msgid>) ──
+    if let Some(original_msgid) = tags.get("+draft/delete") {
+        handle_delete(conn, target, original_msgid, state);
+        return;
+    }
+
     let hostmask = conn.hostmask();
     let tag_msg = irc::Message {
         tags: tags.clone(),
@@ -88,6 +94,12 @@ pub(super) fn handle_privmsg(
     state: &Arc<SharedState>,
 ) {
     let hostmask = conn.hostmask();
+
+    // ── Message editing (+draft/edit=<msgid>) ──
+    if let Some(original_msgid) = tags.get("+draft/edit") {
+        handle_edit(conn, target, text, original_msgid, tags, state);
+        return;
+    }
 
     if target.starts_with('#') || target.starts_with('&') {
         // Channel message — enforce +n (no external messages) and +m (moderated)
@@ -452,3 +464,226 @@ pub(super) fn handle_chathistory(
     }
 }
 
+
+// ── Message editing ─────────────────────────────────────────────────
+
+/// Handle a PRIVMSG with +draft/edit=<msgid> tag.
+/// Verifies authorship, stores the edit, and broadcasts to channel.
+fn handle_edit(
+    conn: &Connection,
+    target: &str,
+    new_text: &str,
+    original_msgid: &str,
+    tags: &std::collections::HashMap<String, String>,
+    state: &Arc<SharedState>,
+) {
+    let hostmask = conn.hostmask();
+    let nick = conn.nick_or_star();
+
+    // Only channel messages can be edited (for now)
+    if !target.starts_with('#') && !target.starts_with('&') {
+        return;
+    }
+
+    // Verify authorship: look up original message by msgid
+    let original = state.with_db(|db| db.get_message_by_msgid(target, original_msgid));
+    match original {
+        Some(Some(row)) => {
+            // Extract nick from the stored sender hostmask
+            let original_nick = row.sender.split('!').next().unwrap_or("");
+            let current_nick = nick;
+            if !original_nick.eq_ignore_ascii_case(current_nick) {
+                let reply = Message::from_server(
+                    &state.server_name,
+                    "FAIL",
+                    vec!["EDIT", "AUTHOR_MISMATCH", "You can only edit your own messages"],
+                );
+                if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+                    let _ = tx.try_send(format!("{reply}\r\n"));
+                }
+                return;
+            }
+            if row.deleted_at.is_some() {
+                return; // Can't edit a deleted message
+            }
+        }
+        _ => {
+            // Message not found — silently ignore (may be too old / pruned)
+            return;
+        }
+    }
+
+    // Generate new msgid for the edit
+    let edit_msgid = crate::msgid::generate();
+
+    // Build tags with edit reference + new msgid
+    let mut full_tags = tags.clone();
+    full_tags.insert("msgid".to_string(), edit_msgid.clone());
+    // Keep the +draft/edit tag so clients know this is an edit
+
+    // Plain line for non-tag clients (they see it as a new message)
+    let plain_line = format!(":{hostmask} PRIVMSG {target} :{new_text}\r\n");
+    // Tagged line with edit reference
+    let tagged_line = {
+        let tag_msg = irc::Message {
+            tags: full_tags.clone(),
+            prefix: Some(hostmask.clone()),
+            command: "PRIVMSG".to_string(),
+            params: vec![target.to_string(), new_text.to_string()],
+        };
+        format!("{tag_msg}\r\n")
+    };
+
+    // Store in DB
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let store_tags: std::collections::HashMap<String, String> = tags.iter()
+        .filter(|(k, _)| *k != "+draft/edit" && *k != "msgid")
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    state.with_db(|db| db.insert_edit(target, &hostmask, new_text, timestamp, &store_tags, &edit_msgid, original_msgid));
+
+    // Update in-memory history: replace the original message text
+    {
+        let mut channels = state.channels.lock().unwrap();
+        if let Some(ch) = channels.get_mut(target) {
+            // Find and update the original message in history
+            for hist in ch.history.iter_mut() {
+                if hist.msgid.as_deref() == Some(original_msgid) {
+                    hist.text = new_text.to_string();
+                    hist.tags.insert("msgid".to_string(), edit_msgid.clone());
+                    break;
+                }
+            }
+        }
+    }
+
+    // Deliver to channel members
+    let members: Vec<String> = state
+        .channels.lock().unwrap()
+        .get(target)
+        .map(|ch| ch.members.iter().cloned().collect())
+        .unwrap_or_default();
+
+    let tag_caps = state.cap_message_tags.lock().unwrap();
+    let echo_caps = state.cap_echo_message.lock().unwrap();
+    let conns = state.connections.lock().unwrap();
+    for sid in &members {
+        if sid == &conn.id && !echo_caps.contains(sid) {
+            continue;
+        }
+        if let Some(tx) = conns.get(sid) {
+            let line = if tag_caps.contains(sid) { &tagged_line } else { &plain_line };
+            let _ = tx.try_send(line.clone());
+        }
+    }
+
+    // Broadcast to S2S peers
+    let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+    s2s_broadcast(state, crate::s2s::S2sMessage::Privmsg {
+        event_id: s2s_next_event_id(state),
+        from: nick.to_string(),
+        target: target.to_string(),
+        text: new_text.to_string(),
+        origin,
+        msgid: Some(edit_msgid),
+    });
+}
+
+// ── Message deletion ────────────────────────────────────────────────
+
+/// Handle a TAGMSG with +draft/delete=<msgid> tag.
+/// Verifies authorship, soft-deletes the message, broadcasts to channel.
+fn handle_delete(
+    conn: &Connection,
+    target: &str,
+    original_msgid: &str,
+    state: &Arc<SharedState>,
+) {
+    let hostmask = conn.hostmask();
+    let nick = conn.nick_or_star();
+
+    // Only channel messages can be deleted (for now)
+    if !target.starts_with('#') && !target.starts_with('&') {
+        return;
+    }
+
+    // Verify authorship
+    let original = state.with_db(|db| db.get_message_by_msgid(target, original_msgid));
+    match original {
+        Some(Some(row)) => {
+            let original_nick = row.sender.split('!').next().unwrap_or("");
+            let current_nick = nick;
+            if !original_nick.eq_ignore_ascii_case(current_nick) {
+                // Also allow ops to delete messages
+                let is_op = state.channels.lock().unwrap()
+                    .get(target)
+                    .map(|ch| ch.ops.contains(&conn.id))
+                    .unwrap_or(false);
+                if !is_op {
+                    let reply = Message::from_server(
+                        &state.server_name,
+                        "FAIL",
+                        vec!["DELETE", "AUTHOR_MISMATCH", "You can only delete your own messages"],
+                    );
+                    if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+                        let _ = tx.try_send(format!("{reply}\r\n"));
+                    }
+                    return;
+                }
+            }
+            if row.deleted_at.is_some() {
+                return; // Already deleted
+            }
+        }
+        _ => {
+            return; // Message not found
+        }
+    }
+
+    // Soft-delete in DB
+    state.with_db(|db| db.soft_delete_message(target, original_msgid));
+
+    // Remove from in-memory history
+    {
+        let mut channels = state.channels.lock().unwrap();
+        if let Some(ch) = channels.get_mut(target) {
+            ch.history.retain(|h| h.msgid.as_deref() != Some(original_msgid));
+        }
+    }
+
+    // Build TAGMSG with +draft/delete for tag-capable clients
+    let mut del_tags = std::collections::HashMap::new();
+    del_tags.insert("+draft/delete".to_string(), original_msgid.to_string());
+    let tagged_line = {
+        let tag_msg = irc::Message {
+            tags: del_tags,
+            prefix: Some(hostmask.clone()),
+            command: "TAGMSG".to_string(),
+            params: vec![target.to_string()],
+        };
+        format!("{tag_msg}\r\n")
+    };
+
+    // Deliver to tag-capable channel members only (plain clients can't see deletes)
+    let members: Vec<String> = state
+        .channels.lock().unwrap()
+        .get(target)
+        .map(|ch| ch.members.iter().cloned().collect())
+        .unwrap_or_default();
+
+    let tag_caps = state.cap_message_tags.lock().unwrap();
+    let conns = state.connections.lock().unwrap();
+    for sid in &members {
+        if sid == &conn.id {
+            continue; // Don't echo delete back to sender
+        }
+        if tag_caps.contains(sid) {
+            if let Some(tx) = conns.get(sid) {
+                let _ = tx.try_send(tagged_line.clone());
+            }
+        }
+    }
+}

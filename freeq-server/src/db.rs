@@ -26,6 +26,10 @@ pub struct MessageRow {
     pub tags: HashMap<String, String>,
     /// ULID message ID (IRCv3 `msgid` tag).
     pub msgid: Option<String>,
+    /// If this is an edit, the msgid of the original message it replaces.
+    pub replaces_msgid: Option<String>,
+    /// Unix timestamp when this message was deleted (soft delete).
+    pub deleted_at: Option<u64>,
 }
 
 /// A persisted identity (DID-nick binding).
@@ -107,6 +111,8 @@ impl Db {
             "ALTER TABLE channels ADD COLUMN founder_did TEXT",
             "ALTER TABLE channels ADD COLUMN did_ops_json TEXT NOT NULL DEFAULT '[]'",
             "ALTER TABLE messages ADD COLUMN msgid TEXT",
+            "ALTER TABLE messages ADD COLUMN replaces_msgid TEXT",
+            "ALTER TABLE messages ADD COLUMN deleted_at INTEGER",
         ];
         for sql in &migrations {
             // Ignore "duplicate column name" errors — means column already exists
@@ -284,9 +290,9 @@ impl Db {
     ) -> SqlResult<Vec<MessageRow>> {
         let mut rows_vec = if let Some(before_ts) = before {
             let mut stmt = self.conn.prepare(
-                "SELECT id, channel, sender, text, timestamp, tags_json, msgid
+                "SELECT id, channel, sender, text, timestamp, tags_json, msgid, replaces_msgid, deleted_at
                  FROM messages
-                 WHERE channel = ?1 AND timestamp < ?2
+                 WHERE channel = ?1 AND deleted_at IS NULL AND timestamp < ?2
                  ORDER BY timestamp DESC, id DESC
                  LIMIT ?3"
             )?;
@@ -294,9 +300,9 @@ impl Db {
             rows.collect::<SqlResult<Vec<_>>>()?
         } else {
             let mut stmt = self.conn.prepare(
-                "SELECT id, channel, sender, text, timestamp, tags_json, msgid
+                "SELECT id, channel, sender, text, timestamp, tags_json, msgid, replaces_msgid, deleted_at
                  FROM messages
-                 WHERE channel = ?1
+                 WHERE channel = ?1 AND deleted_at IS NULL
                  ORDER BY timestamp DESC, id DESC
                  LIMIT ?2"
             )?;
@@ -316,9 +322,9 @@ impl Db {
         limit: usize,
     ) -> SqlResult<Vec<MessageRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, channel, sender, text, timestamp, tags_json, msgid
+            "SELECT id, channel, sender, text, timestamp, tags_json, msgid, replaces_msgid, deleted_at
              FROM messages
-             WHERE channel = ?1 AND timestamp > ?2
+             WHERE channel = ?1 AND deleted_at IS NULL AND timestamp > ?2
              ORDER BY timestamp ASC, id ASC
              LIMIT ?3"
         )?;
@@ -335,9 +341,9 @@ impl Db {
         limit: usize,
     ) -> SqlResult<Vec<MessageRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, channel, sender, text, timestamp, tags_json, msgid
+            "SELECT id, channel, sender, text, timestamp, tags_json, msgid, replaces_msgid, deleted_at
              FROM messages
-             WHERE channel = ?1 AND timestamp > ?2 AND timestamp < ?3
+             WHERE channel = ?1 AND deleted_at IS NULL AND timestamp > ?2 AND timestamp < ?3
              ORDER BY timestamp ASC, id ASC
              LIMIT ?4"
         )?;
@@ -355,6 +361,54 @@ impl Db {
                 SELECT id FROM messages WHERE channel = ?1 ORDER BY timestamp DESC, id DESC LIMIT ?2
             )",
             params![channel, max_keep as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Find a message by its msgid. Returns the sender (hostmask) for authorship check.
+    pub fn get_message_by_msgid(&self, channel: &str, msgid: &str) -> SqlResult<Option<MessageRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, channel, sender, text, timestamp, tags_json, msgid, replaces_msgid, deleted_at
+             FROM messages
+             WHERE channel = ?1 AND msgid = ?2
+             LIMIT 1"
+        )?;
+        let mut rows = stmt.query_map(params![channel, msgid], map_message_row)?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Soft-delete a message by setting deleted_at timestamp.
+    pub fn soft_delete_message(&self, channel: &str, msgid: &str) -> SqlResult<usize> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let changed = self.conn.execute(
+            "UPDATE messages SET deleted_at = ?1 WHERE channel = ?2 AND msgid = ?3 AND deleted_at IS NULL",
+            params![now as i64, channel, msgid],
+        )?;
+        Ok(changed)
+    }
+
+    /// Store an edit (a new message that replaces an old one).
+    pub fn insert_edit(
+        &self,
+        channel: &str,
+        sender: &str,
+        text: &str,
+        timestamp: u64,
+        tags: &HashMap<String, String>,
+        msgid: &str,
+        replaces_msgid: &str,
+    ) -> SqlResult<()> {
+        let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "{}".to_string());
+        self.conn.execute(
+            "INSERT INTO messages (channel, sender, text, timestamp, tags_json, msgid, replaces_msgid)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![channel, sender, text, timestamp as i64, tags_json, msgid, replaces_msgid],
         )?;
         Ok(())
     }
@@ -418,8 +472,12 @@ fn map_message_row(row: &rusqlite::Row) -> SqlResult<MessageRow> {
     let tags_json: String = row.get(5)?;
     let tags: HashMap<String, String> =
         serde_json::from_str(&tags_json).unwrap_or_default();
-    // msgid column may not exist in old schemas — handle gracefully
+    // New columns may not exist in old schemas — handle gracefully
     let msgid: Option<String> = row.get(6).unwrap_or(None);
+    let replaces_msgid: Option<String> = row.get(7).unwrap_or(None);
+    let deleted_at: Option<u64> = row.get::<_, Option<i64>>(8)
+        .unwrap_or(None)
+        .map(|v| v as u64);
     Ok(MessageRow {
         id: row.get(0)?,
         channel: row.get(1)?,
@@ -428,6 +486,8 @@ fn map_message_row(row: &rusqlite::Row) -> SqlResult<MessageRow> {
         timestamp: row.get::<_, i64>(4)? as u64,
         tags,
         msgid,
+        replaces_msgid,
+        deleted_at,
     })
 }
 
