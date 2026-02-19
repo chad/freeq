@@ -3618,3 +3618,119 @@ async fn s2s_bidir2_names_agree_after_part() {
     let _ = hb.quit(Some("done")).await;
     let _ = hc.quit(Some("done")).await;
 }
+
+// ── INV (Invite edge cases) ─────────────────────────────────────────
+
+/// INV-1: Invite a remote guest to a +i channel, then they can join.
+///
+/// This tests the nick:<nick> invite fallback for guests without DID.
+/// Before the fix, INVITE would store nick:<target> but JOIN never
+/// checked for it, so the remote guest would be blocked.
+#[tokio::test]
+async fn s2s_inv1_invite_remote_guest_to_invite_only_channel() {
+    use std::time::SystemTime;
+    let Some((local, remote)) = get_servers() else { return };
+    let ts = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let nick_a = format!("InvA{ts}");
+    let nick_b = format!("InvB{ts}");
+    let channel = format!("#inv1{ts}");
+
+    // A on local server — creates channel and sets +i
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_for(&mut ea, |evt| matches!(evt, Event::Joined { .. }), "A join").await;
+    drain(&mut ea).await;
+
+    // Set invite-only
+    ha.raw(&format!("MODE {channel} +i")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    drain(&mut ea).await;
+
+    // B on remote server — joins some other channel first so A can see them
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    // B joins a shared channel so they become visible across federation
+    let shared = format!("#inv1shared{ts}");
+    ha.join(&shared).await.unwrap();
+    wait_for(&mut ea, |evt| matches!(evt, Event::Joined { .. }), "A join shared").await;
+    drain(&mut ea).await;
+    hb.join(&shared).await.unwrap();
+    wait_for(&mut eb, |evt| matches!(evt, Event::Joined { .. }), "B join shared").await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    drain(&mut ea).await;
+    drain(&mut eb).await;
+
+    // A invites B to the +i channel
+    ha.raw(&format!("INVITE {nick_b} {channel}")).await.unwrap();
+    let invite_reply = maybe_wait(
+        &mut ea,
+        |evt| matches!(evt, Event::RawLine(line) if line.contains("341")),
+        Duration::from_secs(5),
+    ).await;
+    assert!(invite_reply.is_some(), "A should get RPL_INVITING (341)");
+
+    // B tries to join the +i channel
+    hb.join(&channel).await.unwrap();
+    let join_result = maybe_wait(
+        &mut eb,
+        |evt| matches!(evt, Event::Joined { .. }) || matches!(evt, Event::RawLine(line) if line.contains("473")),
+        Duration::from_secs(5),
+    ).await;
+    assert!(
+        matches!(join_result, Some(Event::Joined { .. })),
+        "B should be able to join +i channel after invite, got: {join_result:?}"
+    );
+
+    eprintln!("  ✓ INV-1: Remote guest can join +i channel after invite (nick: fallback works)");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+/// INV-2: Remote guest CANNOT join +i channel without an invite.
+#[tokio::test]
+async fn s2s_inv2_remote_guest_blocked_from_invite_only_without_invite() {
+    use std::time::SystemTime;
+    let Some((local, remote)) = get_servers() else { return };
+    let ts = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let nick_a = format!("InvC{ts}");
+    let nick_b = format!("InvD{ts}");
+    let channel = format!("#inv2{ts}");
+
+    // A creates +i channel on local
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_for(&mut ea, |evt| matches!(evt, Event::Joined { .. }), "A join").await;
+    drain(&mut ea).await;
+    ha.raw(&format!("MODE {channel} +i")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    drain(&mut ea).await;
+
+    // B on remote — try to join without invite
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    let result = maybe_wait(
+        &mut eb,
+        |evt| matches!(evt, Event::Joined { .. }) || matches!(evt, Event::RawLine(line) if line.contains("473")),
+        Duration::from_secs(5),
+    ).await;
+    // Should get 473 ERR_INVITEONLYCHAN, NOT a successful join
+    assert!(
+        matches!(result, Some(Event::RawLine(ref line)) if line.contains("473")),
+        "B should be blocked from +i channel without invite, got: {result:?}"
+    );
+
+    eprintln!("  ✓ INV-2: Remote guest correctly blocked from +i channel without invite");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}

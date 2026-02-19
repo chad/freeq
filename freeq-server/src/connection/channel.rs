@@ -67,7 +67,8 @@ pub(super) fn handle_join(
             // Check invite-only
             if ch.invite_only {
                 let has_invite = ch.invites.contains(session_id)
-                    || did.is_some_and(|d| ch.invites.contains(d));
+                    || did.is_some_and(|d| ch.invites.contains(d))
+                    || ch.invites.contains(&format!("nick:{nick}"));
                 if !has_invite {
                     let reply = Message::from_server(
                         server_name,
@@ -77,7 +78,7 @@ pub(super) fn handle_join(
                     send(state, session_id, format!("{reply}\r\n"));
                     return;
                 }
-                // Consume the invite
+                // Consume the invite (all forms: session, DID, nick)
                 drop(channels);
                 let mut channels = state.channels.lock().unwrap();
                 if let Some(ch) = channels.get_mut(channel) {
@@ -85,6 +86,7 @@ pub(super) fn handle_join(
                     if let Some(d) = did {
                         ch.invites.remove(d);
                     }
+                    ch.invites.remove(&format!("nick:{nick}"));
                 }
             }
         }
