@@ -3768,6 +3768,756 @@ async fn s2s_inv1_invite_remote_guest_to_invite_only_channel() {
     let _ = hb.quit(Some("done")).await;
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Edge case: case-insensitive nick handling across S2S
+// ═══════════════════════════════════════════════════════════════════
+
+/// CASE-1: Channel messages from remote user with different nick case.
+///
+/// If server A stores nick as "Alice" and server B sends messages
+/// as "alice", the +n check (is the sender a member?) must still pass.
+/// Before the fix, case-sensitive remote_members.contains_key() would
+/// reject the message.
+#[tokio::test]
+async fn s2s_case1_message_delivery_with_nick_case_mismatch() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("case1");
+    let nick_a = test_nick("case1", "a");
+    let nick_b = test_nick("case1", "B"); // Note: capital B in suffix
+
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B sends channel message — should arrive at A despite default +n
+    // (B is a member, but nick case might differ in remote_members)
+    let msg = format!("case1-{}", chrono::Utc::now().timestamp_millis());
+    hb.privmsg(&channel, &msg).await.unwrap();
+
+    let got = maybe_wait(
+        &mut ea,
+        |evt| matches!(evt, Event::Message { text, .. } if text == &msg),
+        Duration::from_secs(10),
+    ).await;
+    assert!(got.is_some(), "Message from remote user should arrive despite nick case");
+    eprintln!("  ✓ CASE-1: Message delivery works with different nick case");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+/// CASE-2: KICK with different nick case still removes remote user.
+///
+/// If local op kicks "alice" but remote_members has "Alice",
+/// the kick must still find and remove the user.
+#[tokio::test]
+async fn s2s_case2_kick_with_nick_case_mismatch() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("case2");
+    let nick_a = test_nick("case2", "a");
+    let nick_b = test_nick("case2", "B");
+
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    let names = request_names(&ha, &mut ea, &channel).await;
+    assert!(nick_is_present(&names, &nick_b), "B should be present: {names:?}");
+
+    // Kick using lowercase version of B's nick
+    let nick_b_lower = nick_b.to_lowercase();
+    ha.raw(&format!("KICK {channel} {nick_b_lower} :case test")).await.unwrap();
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    let names = request_names(&ha, &mut ea, &channel).await;
+    assert!(!nick_is_present(&names, &nick_b), "B should be gone after case-insensitive kick: {names:?}");
+    eprintln!("  ✓ CASE-2: KICK with different nick case removes remote user");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+/// CASE-3: Channel names are case-insensitive across S2S.
+///
+/// If A joins #TestChan and B joins #testchan, they should be in
+/// the same channel and able to message each other.
+#[tokio::test]
+async fn s2s_case3_channel_case_insensitive_cross_server() {
+    let Some((local, remote)) = get_servers() else { return };
+    let base = test_channel("CASE3");
+    let channel_upper = base.clone();
+    let channel_lower = base.to_lowercase();
+    let nick_a = test_nick("case3", "a");
+    let nick_b = test_nick("case3", "b");
+
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel_upper).await.unwrap();
+    wait_joined(&mut ea, &channel_lower).await;
+
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel_lower).await.unwrap();
+    wait_joined(&mut eb, &channel_lower).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // Should be in the same channel
+    let msg = format!("case3-{}", chrono::Utc::now().timestamp_millis());
+    ha.privmsg(&channel_upper, &msg).await.unwrap();
+
+    let got = maybe_wait(
+        &mut eb,
+        |evt| matches!(evt, Event::Message { text, .. } if text == &msg),
+        Duration::from_secs(10),
+    ).await;
+    assert!(got.is_some(), "Users in same channel (different case) should see messages");
+    eprintln!("  ✓ CASE-3: Channel case normalization works across S2S");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Edge case: topic changes across federation
+// ═══════════════════════════════════════════════════════════════════
+
+/// TOPIC-1: Remote op can set topic on +t channel.
+///
+/// Channels default to +t. The channel creator (op) is on the remote
+/// server. They should be able to set the topic, and local users should
+/// see the change. Before the fix, the +t enforcement used case-sensitive
+/// lookup and rejected legitimate remote topic changes.
+#[tokio::test]
+async fn s2s_topic1_remote_op_sets_topic_on_plus_t() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("top1");
+    let nick_a = test_nick("top1", "a");
+    let nick_b = test_nick("top1", "b");
+
+    // A creates channel on remote (gets ops, channel defaults to +t)
+    let (ha, mut ea) = connect_guest(&remote, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B joins on local
+    let (hb, mut eb) = connect_guest(&local, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // A (remote op) sets topic — should propagate to B
+    let topic = format!("remote op topic {}", chrono::Utc::now().timestamp_millis());
+    ha.raw(&format!("TOPIC {channel} :{topic}")).await.unwrap();
+
+    let got = wait_topic(&mut eb, &channel).await;
+    assert_eq!(got, topic, "Topic from remote op should be accepted on +t channel");
+    eprintln!("  ✓ TOPIC-1: Remote op can set topic on +t channel");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+/// TOPIC-2: Remote non-op CANNOT set topic on +t channel.
+///
+/// B is a non-op on the remote server. B's topic change should be
+/// rejected by B's local server (482 ERR_CHANOPRIVSNEEDED) before
+/// it even reaches the S2S layer.
+#[tokio::test]
+async fn s2s_topic2_remote_nonop_cannot_set_topic_plus_t() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("top2");
+    let nick_a = test_nick("top2", "a");
+    let nick_b = test_nick("top2", "b");
+
+    // A creates channel on local (gets ops, +t default)
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    // Set a known topic
+    ha.raw(&format!("TOPIC {channel} :original")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B joins on remote (not op)
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B tries to set topic — should fail with 482
+    hb.raw(&format!("TOPIC {channel} :hacked")).await.unwrap();
+
+    let err = maybe_wait(
+        &mut eb,
+        |evt| matches!(evt, Event::RawLine(line) if line.contains("482")),
+        Duration::from_secs(5),
+    ).await;
+    assert!(err.is_some(), "Non-op should get 482 when setting topic on +t channel");
+
+    // Verify topic didn't change on local
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    drain(&mut ea).await;
+    ha.raw(&format!("TOPIC {channel}")).await.unwrap();
+    let got = wait_topic(&mut ea, &channel).await;
+    assert_eq!(got, "original", "Topic should not have changed");
+    eprintln!("  ✓ TOPIC-2: Remote non-op cannot set topic on +t channel");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+/// TOPIC-3: Topic set before remote user joins is visible on join.
+///
+/// A creates channel, sets topic. B joins later from remote.
+/// B should see the topic on join (via 332 numeric or SyncResponse).
+#[tokio::test]
+async fn s2s_topic3_topic_visible_to_late_joiner() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("top3");
+    let nick_a = test_nick("top3", "a");
+    let nick_b = test_nick("top3", "b");
+
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let topic = format!("early topic {}", chrono::Utc::now().timestamp_millis());
+    ha.raw(&format!("TOPIC {channel} :{topic}")).await.unwrap();
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B joins on remote — should see the topic
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+
+    // Should receive topic either via 332 on join or TopicChanged event
+    let got = maybe_wait(
+        &mut eb,
+        |evt| matches!(evt, Event::TopicChanged { topic: t, .. } if t == &topic),
+        Duration::from_secs(10),
+    ).await;
+    assert!(got.is_some(), "Late joiner should see topic set before they joined");
+    eprintln!("  ✓ TOPIC-3: Topic visible to late remote joiner");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Edge case: SyncResponse mode protection
+// ═══════════════════════════════════════════════════════════════════
+
+/// SYNC-4: +i set locally survives SyncResponse from peer.
+///
+/// A creates channel on local and sets +i. Remote peer syncs back
+/// with invite_only=false (stale state). The local +i should NOT
+/// be overwritten. Before the fix, SyncResponse unconditionally
+/// overwrote channel modes.
+#[tokio::test]
+async fn s2s_sync4_local_plus_i_survives_sync() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("sy4");
+    let nick_a = test_nick("sy4", "a");
+    let nick_b = test_nick("sy4", "b");
+    let nick_c = test_nick("sy4", "c");
+
+    // A creates channel on local
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    // Set +i
+    ha.raw(&format!("MODE {channel} +i")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // B joins on remote (to trigger SyncResponse exchange)
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    // B needs invite... but the channel is +i. Let's invite B first.
+    // Actually B joining a DIFFERENT channel triggers sync exchange too.
+    let other_ch = test_channel("sy4other");
+    hb.join(&other_ch).await.unwrap();
+    wait_joined(&mut eb, &other_ch).await;
+
+    // Wait for sync exchange to complete
+    tokio::time::sleep(S2S_SETTLE * 2).await;
+
+    // C tries to join the +i channel on local WITHOUT invite — should be blocked
+    let (hc, mut ec) = connect_guest(&local, &nick_c).await;
+    wait_registered(&mut ec).await;
+    hc.join(&channel).await.unwrap();
+
+    let result = maybe_wait(
+        &mut ec,
+        |evt| matches!(evt, Event::Joined { .. }) || matches!(evt, Event::RawLine(line) if line.contains("473")),
+        Duration::from_secs(5),
+    ).await;
+    assert!(
+        matches!(result, Some(Event::RawLine(ref line)) if line.contains("473")),
+        "+i should survive SyncResponse — uninvited user should be blocked, got: {result:?}"
+    );
+    eprintln!("  ✓ SYNC-4: +i survives SyncResponse from peer");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+    let _ = hc.quit(Some("done")).await;
+}
+
+/// SYNC-5: Default +nt modes survive SyncResponse.
+///
+/// Channels default to +nt on creation. After S2S sync exchange,
+/// these modes should still be set.
+#[tokio::test]
+async fn s2s_sync5_default_modes_survive_sync() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("sy5");
+    let nick_a = test_nick("sy5", "a");
+    let nick_b = test_nick("sy5", "b");
+    let nick_c = test_nick("sy5", "c");
+
+    // A creates channel on local (gets +nt by default)
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    // B joins on remote to trigger sync
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE * 2).await;
+
+    // Verify +n is still active: C (on local) tries to send without joining
+    let (hc, mut ec) = connect_guest(&local, &nick_c).await;
+    wait_registered(&mut ec).await;
+
+    hc.privmsg(&channel, "should fail").await.unwrap();
+
+    let err = maybe_wait(
+        &mut ec,
+        |evt| matches!(evt, Event::RawLine(line) if line.contains("404")),
+        Duration::from_secs(5),
+    ).await;
+    assert!(err.is_some(), "+n should still be active after sync (ERR_CANNOTSENDTOCHAN)");
+    eprintln!("  ✓ SYNC-5: Default +nt modes survive SyncResponse");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+    let _ = hc.quit(Some("done")).await;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Edge case: kicked user can't send after kick
+// ═══════════════════════════════════════════════════════════════════
+
+/// KICK-2: Kicked user cannot send to channel (+n enforcement).
+///
+/// After being kicked, the user is no longer a member. With +n
+/// (default), they should get ERR_CANNOTSENDTOCHAN if they try
+/// to send without rejoining.
+#[tokio::test]
+async fn single_server_kick2_kicked_user_cannot_send() {
+    let Some(server) = get_single_server() else { return };
+    let channel = test_channel("kick2");
+    let nick_a = test_nick("kick2", "a");
+    let nick_b = test_nick("kick2", "b");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    // A kicks B
+    ha.raw(&format!("KICK {channel} {nick_b} :go away")).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    drain(&mut eb).await;
+
+    // B tries to send to channel — should fail (not a member, +n active)
+    hb.privmsg(&channel, "I was kicked but still talking").await.unwrap();
+
+    let err = maybe_wait(
+        &mut eb,
+        |evt| matches!(evt, Event::RawLine(line) if line.contains("404")),
+        Duration::from_secs(5),
+    ).await;
+    assert!(err.is_some(), "Kicked user should get 404 when trying to send to +n channel");
+
+    // A should NOT receive the message
+    let msg = maybe_wait(
+        &mut ea,
+        |evt| matches!(evt, Event::Message { from, .. } if from == &nick_b),
+        Duration::from_secs(2),
+    ).await;
+    assert!(msg.is_none(), "Kicked user's message should not arrive at channel");
+    eprintln!("  ✓ KICK-2: Kicked user cannot send to channel (+n enforcement)");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+/// KICK-3: Kicked remote user cannot send via S2S.
+///
+/// After remote user is kicked, their home server should have
+/// removed them from the channel. Messages from that user should
+/// no longer arrive at the kicking server.
+#[tokio::test]
+async fn s2s_kick3_kicked_remote_user_cannot_send() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("kick3");
+    let nick_a = test_nick("kick3", "a");
+    let nick_b = test_nick("kick3", "b");
+
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // Verify B can send initially
+    let msg1 = format!("before-kick-{}", chrono::Utc::now().timestamp_millis());
+    hb.privmsg(&channel, &msg1).await.unwrap();
+    let got = maybe_wait(
+        &mut ea,
+        |evt| matches!(evt, Event::Message { text, .. } if text == &msg1),
+        Duration::from_secs(10),
+    ).await;
+    assert!(got.is_some(), "B should be able to send before kick");
+    drain(&mut ea).await;
+
+    // A kicks B
+    ha.raw(&format!("KICK {channel} {nick_b} :kicked")).await.unwrap();
+    tokio::time::sleep(S2S_SETTLE).await;
+    drain(&mut ea).await;
+
+    // B tries to send after kick — should be blocked by their home server
+    hb.privmsg(&channel, "after kick").await.unwrap();
+
+    let msg2 = maybe_wait(
+        &mut ea,
+        |evt| matches!(evt, Event::Message { from, .. } if from == &nick_b),
+        Duration::from_secs(5),
+    ).await;
+    assert!(msg2.is_none(), "Kicked remote user's message should not arrive after kick");
+    eprintln!("  ✓ KICK-3: Kicked remote user cannot send via S2S");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Edge case: MODE +o on remote user, then remote user sends on +m
+// ═══════════════════════════════════════════════════════════════════
+
+/// MODOP-1: Remote user opped via S2S can send on +m channel.
+///
+/// A creates channel, sets +m (moderated). B joins on remote.
+/// A ops B. B should be able to send (ops can send on +m).
+#[tokio::test]
+async fn s2s_modop1_remote_opped_user_can_send_on_plus_m() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("modop1");
+    let nick_a = test_nick("modop1", "a");
+    let nick_b = test_nick("modop1", "b");
+
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // Set +m (moderated)
+    ha.raw(&format!("MODE {channel} +m")).await.unwrap();
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B (non-op) tries to send — should be blocked
+    drain(&mut ea).await;
+    hb.privmsg(&channel, "should fail").await.unwrap();
+    let blocked = maybe_wait(
+        &mut ea,
+        |evt| matches!(evt, Event::Message { from, .. } if from == &nick_b),
+        Duration::from_secs(3),
+    ).await;
+    assert!(blocked.is_none(), "Non-op B should be blocked on +m");
+    eprintln!("  Phase 1: B blocked on +m ✓");
+
+    // A ops B via S2S
+    ha.raw(&format!("MODE {channel} +o {nick_b}")).await.unwrap();
+    tokio::time::sleep(S2S_SETTLE).await;
+    drain(&mut ea).await;
+
+    // B (now op) sends — should succeed
+    let msg = format!("modop1-{}", chrono::Utc::now().timestamp_millis());
+    hb.privmsg(&channel, &msg).await.unwrap();
+
+    let got = maybe_wait(
+        &mut ea,
+        |evt| matches!(evt, Event::Message { text, .. } if text == &msg),
+        Duration::from_secs(10),
+    ).await;
+    assert!(got.is_some(), "Opped remote user should be able to send on +m channel");
+    eprintln!("  ✓ MODOP-1: Remote opped user can send on +m channel");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Edge case: rapid join/part cycles don't leave ghosts
+// ═══════════════════════════════════════════════════════════════════
+
+/// GHOST-4: Rapid join/part on remote doesn't leave ghost entries.
+///
+/// B joins and parts a channel several times rapidly on the remote
+/// server. After settling, A should see only B's current state
+/// (present or absent), with no duplicate entries.
+#[tokio::test]
+async fn s2s_ghost4_rapid_join_part_no_ghosts() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("gh4");
+    let nick_a = test_nick("gh4", "a");
+    let nick_b = test_nick("gh4", "b");
+
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+
+    // Rapid join/part cycle
+    for _ in 0..3 {
+        hb.join(&channel).await.unwrap();
+        wait_joined(&mut eb, &channel).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        hb.raw(&format!("PART {channel}")).await.unwrap();
+        wait_parted(&mut eb, &channel, &nick_b).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+
+    // Final: B joins and stays
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // A should see B exactly once in NAMES (no duplicates, no ghosts)
+    let names = request_names(&ha, &mut ea, &channel).await;
+    let b_count = names.iter().filter(|n| n.trim_start_matches(&['@', '+'][..]) == nick_b).count();
+    assert_eq!(b_count, 1, "B should appear exactly once in NAMES: {names:?}");
+    eprintln!("  ✓ GHOST-4: No ghost entries after rapid join/part cycle");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+/// GHOST-5: Rapid disconnect/reconnect doesn't leave ghost entries.
+///
+/// B connects, joins channel, then drops connection abruptly.
+/// After B reconnects with a new nick and joins, the old nick
+/// should not appear in NAMES.
+#[tokio::test]
+async fn s2s_ghost5_reconnect_no_ghosts() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("gh5");
+    let nick_a = test_nick("gh5", "a");
+    let nick_b1 = test_nick("gh5", "b1");
+    let nick_b2 = test_nick("gh5", "b2");
+
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    // B1 joins and quits
+    let (hb1, mut eb1) = connect_guest(&remote, &nick_b1).await;
+    wait_registered(&mut eb1).await;
+    hb1.join(&channel).await.unwrap();
+    wait_joined(&mut eb1, &channel).await;
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    let names = request_names(&ha, &mut ea, &channel).await;
+    assert!(nick_is_present(&names, &nick_b1), "B1 should be present: {names:?}");
+
+    let _ = hb1.quit(Some("leaving")).await;
+    drop(hb1);
+    drop(eb1);
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // B2 joins (same user, new nick)
+    let (hb2, mut eb2) = connect_guest(&remote, &nick_b2).await;
+    wait_registered(&mut eb2).await;
+    hb2.join(&channel).await.unwrap();
+    wait_joined(&mut eb2, &channel).await;
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    let names = request_names(&ha, &mut ea, &channel).await;
+    assert!(nick_is_present(&names, &nick_b2), "B2 should be present: {names:?}");
+    assert!(!nick_is_present(&names, &nick_b1), "B1 (old nick) should NOT be present: {names:?}");
+    eprintln!("  ✓ GHOST-5: No ghost after disconnect/reconnect with new nick");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb2.quit(Some("done")).await;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Edge case: message ordering / dedup
+// ═══════════════════════════════════════════════════════════════════
+
+/// DEDUP-1: Same message doesn't arrive twice.
+///
+/// Send a message from A to B via channel. B should receive it
+/// exactly once, not duplicated by resync or re-relay.
+#[tokio::test]
+async fn s2s_dedup1_no_duplicate_messages() {
+    let Some((local, remote)) = get_servers() else { return };
+    let channel = test_channel("dup1");
+    let nick_a = test_nick("dup1", "a");
+    let nick_b = test_nick("dup1", "b");
+
+    let (ha, mut ea) = connect_guest(&local, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    let (hb, mut eb) = connect_guest(&remote, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+    wait_joined(&mut eb, &channel).await;
+
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // Send a unique message
+    let unique = format!("dedup-{}", chrono::Utc::now().timestamp_millis());
+    ha.privmsg(&channel, &unique).await.unwrap();
+
+    // Wait for first copy
+    let first = maybe_wait(
+        &mut eb,
+        |evt| matches!(evt, Event::Message { text, .. } if text == &unique),
+        Duration::from_secs(10),
+    ).await;
+    assert!(first.is_some(), "Should receive the message");
+
+    // Check that NO second copy arrives within 5 seconds
+    let second = maybe_wait(
+        &mut eb,
+        |evt| matches!(evt, Event::Message { text, .. } if text == &unique),
+        Duration::from_secs(5),
+    ).await;
+    assert!(second.is_none(), "Should NOT receive duplicate message");
+    eprintln!("  ✓ DEDUP-1: No duplicate messages across S2S");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Edge case: ban enforcement across S2S
+// ═══════════════════════════════════════════════════════════════════
+
+/// BAN-1: Banned user on local server can't join channel.
+///
+/// A creates channel, bans B's mask. B tries to join — should fail.
+/// (Single server, but tests the foundation for S2S ban sync.)
+#[tokio::test]
+async fn single_server_ban1_banned_user_cant_join() {
+    let Some(server) = get_single_server() else { return };
+    let channel = test_channel("ban1");
+    let nick_a = test_nick("ban1", "a");
+    let nick_b = test_nick("ban1", "b");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&channel).await.unwrap();
+    wait_joined(&mut ea, &channel).await;
+
+    // Ban B's mask
+    ha.raw(&format!("MODE {channel} +b {nick_b}!*@*")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // B tries to join
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&channel).await.unwrap();
+
+    let result = maybe_wait(
+        &mut eb,
+        |evt| matches!(evt, Event::Joined { .. }) || matches!(evt, Event::RawLine(line) if line.contains("474")),
+        Duration::from_secs(5),
+    ).await;
+    assert!(
+        matches!(result, Some(Event::RawLine(ref line)) if line.contains("474")),
+        "Banned user should get 474, got: {result:?}"
+    );
+    eprintln!("  ✓ BAN-1: Banned user can't join channel");
+
+    // Unban and verify B can now join
+    ha.raw(&format!("MODE {channel} -b {nick_b}!*@*")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    hb.join(&channel).await.unwrap();
+    let joined = maybe_wait(
+        &mut eb,
+        |evt| matches!(evt, Event::Joined { .. }),
+        Duration::from_secs(5),
+    ).await;
+    assert!(joined.is_some(), "Unbanned user should be able to join");
+    eprintln!("  ✓ BAN-1: Unbanned user can join");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
 /// INV-2: Remote guest CANNOT join +i channel without an invite.
 #[tokio::test]
 async fn s2s_inv2_remote_guest_blocked_from_invite_only_without_invite() {
