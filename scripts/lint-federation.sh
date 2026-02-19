@@ -96,7 +96,22 @@ else
 fi
 echo ""
 
-# ── Pattern 4: ERR_NOSUCHNICK in paths that have S2S peers ───────────
+# ── Pattern 4: case-sensitive channel/nick lookups in S2S handlers ────
+# S2S messages carry channel names and nicks from remote servers.
+# All lookups must be case-insensitive (IRC is case-insensitive).
+echo "── Case-sensitive lookups in S2S handler (server.rs) ──"
+HITS=$(rg -n '\.get\(&channel\)|\.get_mut\(&channel\)|\.entry\(channel' \
+    freeq-server/src/server.rs \
+    2>/dev/null | grep -v "to_lowercase\|channel_key" || true)
+
+if [ -n "$HITS" ]; then
+    echo -e "${YELLOW}WARNING: raw channel lookup in server.rs (may need to_lowercase):${NC}"
+    echo "$HITS"
+    echo ""
+fi
+echo ""
+
+# ── Pattern 5: ERR_NOSUCHNICK in paths that have S2S peers ───────────
 # If we have S2S peers, returning "no such nick" is almost always wrong
 # for PRIVMSG — the nick might exist on a peer we haven't synced with.
 echo "── ERR_NOSUCHNICK usage audit ──"

@@ -289,7 +289,8 @@ where
             "NICK" => {
                 if let Some(nick) = msg.params.first() {
                     let nick_lower = nick.to_lowercase();
-                    let in_use = state.nick_to_session.lock().unwrap().contains_key(nick);
+                    let in_use = state.nick_to_session.lock().unwrap()
+                        .keys().any(|k| k.to_lowercase() == nick_lower);
 
                     let owner_did = state.nick_owners.lock().unwrap().get(&nick_lower).cloned();
                     let my_did = conn.authenticated_did.as_deref();

@@ -57,8 +57,14 @@ pub(crate) fn relay_to_nick(
     text: &str,
     event_id: String,
 ) -> RouteResult {
-    // 1. Local delivery
-    let local_session = state.nick_to_session.lock().unwrap().get(target).cloned();
+    // 1. Local delivery (case-insensitive nick lookup)
+    let target_lower = target.to_lowercase();
+    let local_session = {
+        let n2s = state.nick_to_session.lock().unwrap();
+        n2s.iter()
+            .find(|(n, _)| n.to_lowercase() == target_lower)
+            .map(|(_, sid)| sid.clone())
+    };
     if let Some(sid) = local_session {
         return RouteResult::Local(sid);
     }

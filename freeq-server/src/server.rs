@@ -956,10 +956,16 @@ async fn process_s2s_message(
                 drop(channels);
                 deliver_to_channel(state, &target, &line);
             } else {
+                // Case-insensitive nick lookup for PM delivery
                 let n2s = state.nick_to_session.lock().unwrap();
-                if let Some(sid) = n2s.get(&target) {
+                let target_lower = target.to_lowercase();
+                let sid = n2s.iter()
+                    .find(|(n, _)| n.to_lowercase() == target_lower)
+                    .map(|(_, s)| s.clone());
+                drop(n2s);
+                if let Some(sid) = sid {
                     let conns = state.connections.lock().unwrap();
-                    if let Some(tx) = conns.get(sid) {
+                    if let Some(tx) = conns.get(&sid) {
                         let _ = tx.try_send(line);
                     }
                 }
@@ -967,6 +973,8 @@ async fn process_s2s_message(
         }
 
         S2sMessage::Join { nick, channel, did, handle, is_op, origin, .. } => {
+            // Normalize channel name — IRC channels are case-insensitive
+            let channel = channel.to_lowercase();
             // Presence is S2S-event-only (NOT in CRDT — avoids ghost users)
             // Idempotent: set-based, don't assume not present
             {
@@ -986,6 +994,7 @@ async fn process_s2s_message(
         }
 
         S2sMessage::Part { nick, channel, .. } => {
+            let channel = channel.to_lowercase();
             // Presence is S2S-event-only. Idempotent: remove if present.
             {
                 let mut channels = state.channels.lock().unwrap();
@@ -1019,6 +1028,7 @@ async fn process_s2s_message(
         }
 
         S2sMessage::Topic { channel, topic, set_by, .. } => {
+            let channel = channel.to_lowercase();
             // CRDT is the single source of truth for topic convergence.
             // The S2S Topic event is a notification for immediate display —
             // we apply it locally for UX responsiveness, then write to CRDT
@@ -1065,6 +1075,7 @@ async fn process_s2s_message(
         }
 
         S2sMessage::ChannelCreated { channel, founder_did, did_ops, origin, .. } => {
+            let channel = channel.to_lowercase();
             let has_local_members;
             {
                 let mut channels = state.channels.lock().unwrap();
@@ -1376,6 +1387,7 @@ async fn process_s2s_message(
         }
 
         S2sMessage::Mode { channel, mode, arg, set_by, .. } => {
+            let channel = channel.to_lowercase();
             {
                 let mut channels = state.channels.lock().unwrap();
                 if let Some(ch) = channels.get_mut(&channel) {
@@ -1464,25 +1476,50 @@ async fn process_s2s_message(
             // A remote op kicked a user — if the user is local, remove them
             // from the channel and notify them. If the user is a remote member
             // from yet another server, remove from remote_members.
+            let channel_key = channel.to_lowercase();
             let kick_line = format!(":{by}!remote@s2s KICK {channel} {nick} :{reason}\r\n");
 
-            let target_session = state.nick_to_session.lock().unwrap().get(&nick).cloned();
+            // Case-insensitive nick lookup: IRC nicks are case-insensitive
+            // but nick_to_session stores them in original case.
+            let target_session = {
+                let n2s = state.nick_to_session.lock().unwrap();
+                let nick_lower = nick.to_lowercase();
+                n2s.iter()
+                    .find(|(n, _)| n.to_lowercase() == nick_lower)
+                    .map(|(_, sid)| sid.clone())
+            };
+
             if let Some(ref sid) = target_session {
                 // Target is local — broadcast KICK to channel, remove member
-                deliver_to_channel(state, &channel, &kick_line);
+                deliver_to_channel(state, &channel_key, &kick_line);
                 let mut channels = state.channels.lock().unwrap();
-                if let Some(ch) = channels.get_mut(&channel) {
-                    ch.members.remove(sid);
+                if let Some(ch) = channels.get_mut(&channel_key) {
+                    let removed = ch.members.remove(sid);
                     ch.ops.remove(sid);
                     ch.voiced.remove(sid);
+                    tracing::info!(
+                        nick = %nick, channel = %channel_key, removed = removed,
+                        "S2S Kick: removed local user from channel"
+                    );
+                } else {
+                    tracing::warn!(
+                        nick = %nick, channel = %channel_key,
+                        "S2S Kick: channel not found for member removal"
+                    );
                 }
             } else {
                 // Target is a remote member from another peer — remove and notify locals
                 let mut channels = state.channels.lock().unwrap();
-                if let Some(ch) = channels.get_mut(&channel) {
-                    if ch.remote_members.remove(&nick).is_some() {
+                if let Some(ch) = channels.get_mut(&channel_key) {
+                    // Case-insensitive remote member lookup
+                    let nick_lower = nick.to_lowercase();
+                    let rm_nick = ch.remote_members.keys()
+                        .find(|n| n.to_lowercase() == nick_lower)
+                        .cloned();
+                    if let Some(ref rn) = rm_nick {
+                        ch.remote_members.remove(rn);
                         drop(channels);
-                        deliver_to_channel(state, &channel, &kick_line);
+                        deliver_to_channel(state, &channel_key, &kick_line);
                     }
                 }
             }
