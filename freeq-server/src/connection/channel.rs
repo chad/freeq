@@ -828,11 +828,11 @@ pub(super) fn handle_kick(
             let kick_msg = format!(":{hostmask} KICK {channel} {target_nick} :{reason}\r\n");
             broadcast_to_channel(state, channel, &kick_msg);
 
-            // Remove from our remote_members tracking
+            // Remove from our remote_members tracking (case-insensitive)
             {
                 let mut channels = state.channels.lock().unwrap();
                 if let Some(ch) = channels.get_mut(channel) {
-                    ch.remote_members.remove(target_nick);
+                    ch.remove_remote_member(target_nick);
                 }
             }
 
