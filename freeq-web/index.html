@@ -817,7 +817,7 @@ function handleLine(rawLine) {
 
     case 'KICK': {
       const chan = p[0], kicked = p[1], reason = p[2] || '';
-      if (kicked === nick) {
+      if (kicked.toLowerCase() === nick.toLowerCase()) {
         pushChanMsg(chan, null, '!', 'Kicked by ' + from + (reason ? ': ' + reason : ''), 'error');
         delete buffers[chan.toLowerCase()];
         if (activeBuffer === chan.toLowerCase()) switchBuffer('server');

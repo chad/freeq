@@ -775,11 +775,24 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
             }
         }
         Event::Kicked { channel, nick, by, reason } => {
-            let msg = format!("{nick} was kicked by {by} ({reason})");
-            app.buffer_mut(&channel).push_system(&msg);
-            // If we were kicked, note it
-            if nick == app.nick {
-                app.status_msg(&format!("You were kicked from {channel} by {by} ({reason})"));
+            // Case-insensitive nick comparison (IRC nicks are case-insensitive)
+            if nick.to_lowercase() == app.nick.to_lowercase() {
+                // WE were kicked — show message and leave the channel
+                app.buffer_mut(&channel).push_system(
+                    &format!("You were kicked by {by} ({reason})")
+                );
+                app.status_msg(&format!("Kicked from {channel} by {by} ({reason})"));
+                // Remove the channel buffer so we stop showing it
+                app.remove_buffer(&channel);
+            } else {
+                // Someone else was kicked — just remove them from nick list
+                let msg = format!("{nick} was kicked by {by} ({reason})");
+                let buf = app.buffer_mut(&channel);
+                buf.nicks.retain(|n| {
+                    let bare = n.trim_start_matches(['@', '+']);
+                    bare.to_lowercase() != nick.to_lowercase()
+                });
+                buf.push_system(&msg);
             }
         }
         Event::Invited { channel, by } => {

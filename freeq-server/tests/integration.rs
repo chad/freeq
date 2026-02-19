@@ -702,7 +702,16 @@ async fn topic_lock_mode() {
     handle2.join("#lock-test").await.unwrap();
     expect_event(&mut events2, 2000, |e| matches!(e, Event::Joined { .. }), "Bob joined").await;
 
-    // Bob can set topic (no +t yet)
+    // Channel now has +nt by default. Alice removes +t so Bob can test topic setting.
+    handle1.raw("MODE #lock-test -t").await.unwrap();
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::ModeChanged { mode, .. } if mode == "-t"),
+        "Alice removes +t",
+    ).await;
+
+    // Bob can set topic (no +t now)
     handle2.raw("TOPIC #lock-test :Bob's topic").await.unwrap();
     expect_event(
         &mut events2,
@@ -711,7 +720,7 @@ async fn topic_lock_mode() {
         "Bob sets topic",
     ).await;
 
-    // Alice locks topic (+t)
+    // Alice re-locks topic (+t)
     handle1.raw("MODE #lock-test +t").await.unwrap();
     expect_event(
         &mut events1,

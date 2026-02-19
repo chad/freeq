@@ -119,6 +119,11 @@ pub(super) fn handle_join(
                 });
             }
             ch.ops.insert(session_id.to_string());
+            // Default channel modes: +nt (standard IRC behavior)
+            // +n = no external messages (only members can send)
+            // +t = only ops can change topic
+            ch.no_ext_msg = true;
+            ch.topic_locked = true;
             let ch_clone = ch.clone();
             drop(channels);
             state.with_db(|db| db.save_channel(channel, &ch_clone));

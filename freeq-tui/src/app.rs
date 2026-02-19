@@ -280,6 +280,19 @@ impl App {
     }
 
     /// Switch to the next buffer.
+    /// Remove a buffer (e.g. after being kicked from a channel).
+    /// Switches to the previous buffer if the removed one was active.
+    pub fn remove_buffer(&mut self, name: &str) {
+        let key = name.to_lowercase();
+        self.buffers.remove(&key);
+        if self.active_buffer == key {
+            // Switch to first available buffer, or "status"
+            self.active_buffer = self.buffers.keys().next()
+                .cloned()
+                .unwrap_or_else(|| "status".to_string());
+        }
+    }
+
     pub fn next_buffer(&mut self) {
         let keys: Vec<String> = self.buffers.keys().cloned().collect();
         if let Some(pos) = keys.iter().position(|k| k == &self.active_buffer) {
