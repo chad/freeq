@@ -2700,10 +2700,10 @@ async fn s2s_fed1_kick_remote_user() {
     let _ = hb.quit(Some("done")).await;
 }
 
-// ── FED-2: MODE +o on remote guest (no DID) should fail gracefully ──
+// ── FED-2: MODE +o on remote guest (no DID) — ephemeral ops now work ──
 
 #[tokio::test]
-async fn s2s_fed2_mode_op_remote_guest_fails_gracefully() {
+async fn s2s_fed2_mode_op_remote_guest_works() {
     let Some((local, remote)) = get_servers() else { return };
     let channel = test_channel("fed2");
     let nick_a = test_nick("fed2", "a");
@@ -2723,27 +2723,27 @@ async fn s2s_fed2_mode_op_remote_guest_fails_gracefully() {
 
     tokio::time::sleep(S2S_SETTLE).await;
 
-    // A tries to +o B (remote guest — no DID)
+    // A +o B (remote guest — no DID but ephemeral ops work)
     drain(&mut ea).await;
     ha.raw(&format!("MODE {channel} +o {nick_b}")).await.unwrap();
 
-    // Should get 696 (custom numeric for "can't do this to remote user")
+    // Should see the MODE echoed back (not a 696 error)
     let got = maybe_wait(
         &mut ea,
-        |evt| matches!(evt, Event::RawLine(line) if line.contains("696") || line.contains("DID")),
+        |evt| matches!(evt, Event::RawLine(line) if line.contains("MODE") && line.contains("+o")),
         Duration::from_secs(5),
     ).await;
-    assert!(got.is_some(), "Should get 696 when opping remote guest without DID");
-    eprintln!("  ✓ FED-2: MODE +o on remote guest fails gracefully (696, no DID)");
+    assert!(got.is_some(), "Should see MODE +o echoed (ephemeral op on remote guest)");
+    eprintln!("  ✓ FED-2: MODE +o on remote guest works (ephemeral)");
 
     let _ = ha.quit(Some("done")).await;
     let _ = hb.quit(Some("done")).await;
 }
 
-// ── FED-3: MODE +v on remote user should fail (voice is ephemeral/local) ──
+// ── FED-3: MODE +v on remote user — now works (relayed via S2S) ──
 
 #[tokio::test]
-async fn s2s_fed3_mode_voice_remote_user_fails() {
+async fn s2s_fed3_mode_voice_remote_user_works() {
     let Some((local, remote)) = get_servers() else { return };
     let channel = test_channel("fed3");
     let nick_a = test_nick("fed3", "a");
@@ -2764,14 +2764,14 @@ async fn s2s_fed3_mode_voice_remote_user_fails() {
     drain(&mut ea).await;
     ha.raw(&format!("MODE {channel} +v {nick_b}")).await.unwrap();
 
-    // Should get 696 (custom numeric for "can't do this to remote user")
+    // Should see the MODE echoed back (relayed to remote server)
     let got = maybe_wait(
         &mut ea,
-        |evt| matches!(evt, Event::RawLine(line) if line.contains("696") || line.contains("voice")),
+        |evt| matches!(evt, Event::RawLine(line) if line.contains("MODE") && line.contains("+v")),
         Duration::from_secs(5),
     ).await;
-    assert!(got.is_some(), "Should get 696 when voicing remote user");
-    eprintln!("  ✓ FED-3: MODE +v on remote user fails (696, voice is local-only)");
+    assert!(got.is_some(), "Should see MODE +v echoed (relayed via S2S)");
+    eprintln!("  ✓ FED-3: MODE +v on remote user works (relayed via S2S)");
 
     let _ = ha.quit(Some("done")).await;
     let _ = hb.quit(Some("done")).await;

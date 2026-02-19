@@ -501,25 +501,41 @@ pub(super) fn handle_mode(
                     }
 
                     ChannelTarget::Remote(rm) => {
-                        if ch == 'o' {
-                            // For remote users, ops must be DID-based to propagate.
-                            if let Some(ref did) = rm.did {
-                                let mut channels = state.channels.lock().unwrap();
-                                if let Some(chan) = channels.get_mut(channel) {
-                                    if !adding && chan.founder_did.as_deref() == Some(did.as_str()) {
-                                        // Silently ignore — founder can't be de-opped
-                                    } else if adding {
-                                        chan.did_ops.insert(did.clone());
-                                    } else {
-                                        chan.did_ops.remove(did);
+                        // Apply ephemeral op/voice on the remote member locally
+                        {
+                            let mut channels = state.channels.lock().unwrap();
+                            if let Some(chan) = channels.get_mut(channel) {
+                                if ch == 'o' {
+                                    if let Some(remote) = chan.remote_members.get_mut(target_nick) {
+                                        remote.is_op = adding;
                                     }
-                                    let ch_clone = chan.clone();
-                                    let channel_name = channel.to_string();
-                                    drop(channels);
-                                    state.with_db(|db| db.save_channel(&channel_name, &ch_clone));
+                                }
+                                // +v: no is_voiced on RemoteMember, but we still
+                                // broadcast the mode so the remote server can apply it.
+                            }
+                        }
+
+                        // If the user has a DID, also update did_ops for persistence + CRDT
+                        if ch == 'o' {
+                            if let Some(ref did) = rm.did {
+                                {
+                                    let mut channels = state.channels.lock().unwrap();
+                                    if let Some(chan) = channels.get_mut(channel) {
+                                        if !adding && chan.founder_did.as_deref() == Some(did.as_str()) {
+                                            // Founder can't be de-opped
+                                        } else if adding {
+                                            chan.did_ops.insert(did.clone());
+                                        } else {
+                                            chan.did_ops.remove(did);
+                                        }
+                                        let ch_clone = chan.clone();
+                                        let channel_name = channel.to_string();
+                                        drop(channels);
+                                        state.with_db(|db| db.save_channel(&channel_name, &ch_clone));
+                                    }
                                 }
 
-                                // CRDT propagation
+                                // CRDT propagation (persistent)
                                 let granter_did = state.session_dids.lock().unwrap()
                                     .get(session_id).cloned();
                                 let state_clone = Arc::clone(state);
@@ -533,27 +549,10 @@ pub(super) fn handle_mode(
                                     }
                                     state_clone.crdt_broadcast_sync().await;
                                 });
-                            } else {
-                                // Remote user without DID — can't grant persistent ops.
-                                // Use 696 (custom) instead of 401 to avoid "no such nick" confusion.
-                                let reply = Message::from_server(
-                                    server_name,
-                                    "696",
-                                    vec![nick, channel, target_nick, "o", "Remote user has no DID — cannot set persistent ops"],
-                                );
-                                send(state, session_id, format!("{reply}\r\n"));
-                                return;
                             }
-                        } else {
-                            // +v/-v on remote users — not supported (voice is ephemeral/local).
-                            // Use 696 (custom) instead of 401 to avoid "no such nick" confusion.
-                            let reply = Message::from_server(
-                                server_name,
-                                "696",
-                                vec![nick, channel, target_nick, "v", "Cannot set voice on remote user"],
-                            );
-                            send(state, session_id, format!("{reply}\r\n"));
-                            return;
+                            // Guest without DID: ephemeral op still applied above
+                            // (is_op flag on remote_members). Won't survive reconnect
+                            // but works for the session — same as regular IRC.
                         }
 
                         // Broadcast mode change to local channel + S2S

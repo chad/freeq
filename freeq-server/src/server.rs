@@ -1393,6 +1393,61 @@ async fn process_s2s_message(
                                 ch.key = None;
                             }
                         }
+                        'o' | 'v' => {
+                            // Remote op/voice targeting a user on this server.
+                            // Find the target by nick and apply the mode.
+                            if let Some(ref target_nick) = arg {
+                                let target_sid = state.nick_to_session.lock().unwrap()
+                                    .get(target_nick).cloned();
+                                if let Some(ref sid) = target_sid {
+                                    let set = if mode_char == 'o' {
+                                        &mut ch.ops
+                                    } else {
+                                        &mut ch.voiced
+                                    };
+                                    if adding {
+                                        set.insert(sid.clone());
+                                    } else {
+                                        set.remove(sid);
+                                    }
+
+                                    // +o/-o with DID: also update did_ops for persistence
+                                    if mode_char == 'o' {
+                                        if let Some(did) = state.session_dids.lock().unwrap()
+                                            .get(sid).cloned()
+                                        {
+                                            if !adding && ch.founder_did.as_deref() == Some(&did) {
+                                                // Founder can't be de-opped
+                                            } else if adding {
+                                                ch.did_ops.insert(did);
+                                            } else {
+                                                ch.did_ops.remove(&did);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    // Target is a remote member from another peer
+                                    // (3-server scenario) — update remote member's is_op flag
+                                    if mode_char == 'o' {
+                                        if let Some(rm) = ch.remote_members.get_mut(target_nick) {
+                                            rm.is_op = adding;
+                                        }
+                                        // Also update did_ops if we know their DID
+                                        if let Some(rm) = ch.remote_members.get(target_nick) {
+                                            if let Some(ref did) = rm.did {
+                                                if !adding && ch.founder_did.as_deref() == Some(did.as_str()) {
+                                                    // Founder can't be de-opped
+                                                } else if adding {
+                                                    ch.did_ops.insert(did.clone());
+                                                } else {
+                                                    ch.did_ops.remove(did);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
