@@ -193,6 +193,7 @@ If something feels “too clever,” it’s probably wrong.
 
 ### P0 — Critical (do next)
 
+- [ ] **`msgid` on all messages** — Server assigns ULID to every PRIVMSG/NOTICE, carried in IRCv3 `msgid` tag, stored in DB, included in CHATHISTORY replay. **Unlocks:** editing, deletion, replies, reactions-to-specific-message, read markers. ~30 lines. (See `docs/WEB-APP-PLAN.md` §2.1)
 - [ ] **Message signing by default** — All messages from DID-authenticated users should be cryptographically signed. This is the foundational trust property: if you have a DID, your messages are provably yours. Design:
   - Authenticated users sign every PRIVMSG/NOTICE/TOPIC with their DID key
   - Signature carried via IRCv3 message tag (e.g. `+freeq.at/sig=<base64url>`)
@@ -207,6 +208,9 @@ If something feels “too clever,” it’s probably wrong.
 
 ### P1 — High priority
 
+- [ ] **Message editing** — `+draft/edit` TAGMSG referencing original `msgid`. Server enforces authorship (match DID or session), stores as new message with `replaces` field. CHATHISTORY returns edits correctly. ~100 lines. (See `docs/WEB-APP-PLAN.md` §2.4)
+- [ ] **Message deletion** — `+draft/delete` TAGMSG referencing `msgid`. Soft delete (mark deleted, clients hide). Same authorship check. ~50 lines.
+- [ ] **`away-notify` cap** — Broadcast AWAY changes to shared channel members who negotiated the cap. Server already tracks AWAY state. ~20 lines.
 - [ ] **S2S authorization on Kick/Mode** — Receiving server should verify the kicker/mode-setter has authority (is an op) before executing. Currently any peer can forge kicks/ops.
 - [ ] **S2S authorization on Topic** — Verify `set_by` belongs to the authenticated peer, not a spoofed nick.
 - [ ] **SyncResponse channel creation limit** — Cap channels created via sync to prevent a rogue peer from creating thousands of channels.
@@ -229,6 +233,12 @@ If something feels “too clever,” it’s probably wrong.
 - [ ] **OPER command** — Server operator status for remote admin.
 - [ ] **TUI auto-reconnection** — Reconnect with backoff, rejoin channels.
 - [ ] **Normalize nick_to_session to lowercase keys** — Avoids O(n) linear scan on every case-insensitive nick lookup. Currently all nick lookups iterate the full map.
+
+### P2.5 — Web App Prerequisites (see `docs/WEB-APP-PLAN.md`)
+
+- [ ] **Web app (Phase 1)** — React+TS+Vite+Tailwind. IRC-over-WebSocket adapter, Zustand store, AT Protocol profile resolution, basic channel/message/member UX. Separate repo (`freeq-app`).
+- [ ] **Search (FTS5)** — SQLite FTS5 for message search. REST endpoint or IRC SEARCH command.
+- [ ] **Pinned messages** — Channel metadata via TAGMSG or MODE variant.
 
 ### P3 — Future
 
