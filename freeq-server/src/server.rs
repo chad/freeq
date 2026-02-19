@@ -65,6 +65,40 @@ pub struct ChannelState {
     pub key: Option<String>,
 }
 
+impl ChannelState {
+    /// Case-insensitive lookup in remote_members.
+    /// IRC nicks are case-insensitive, but HashMap keys preserve original case.
+    pub fn remote_member(&self, nick: &str) -> Option<&RemoteMember> {
+        let lower = nick.to_lowercase();
+        self.remote_members.iter()
+            .find(|(k, _)| k.to_lowercase() == lower)
+            .map(|(_, v)| v)
+    }
+
+    /// Case-insensitive mutable lookup in remote_members.
+    pub fn remote_member_mut(&mut self, nick: &str) -> Option<&mut RemoteMember> {
+        let lower = nick.to_lowercase();
+        self.remote_members.iter_mut()
+            .find(|(k, _)| k.to_lowercase() == lower)
+            .map(|(_, v)| v)
+    }
+
+    /// Case-insensitive check if nick is in remote_members.
+    pub fn has_remote_member(&self, nick: &str) -> bool {
+        let lower = nick.to_lowercase();
+        self.remote_members.keys().any(|k| k.to_lowercase() == lower)
+    }
+
+    /// Case-insensitive removal from remote_members. Returns the removed entry.
+    pub fn remove_remote_member(&mut self, nick: &str) -> Option<RemoteMember> {
+        let lower = nick.to_lowercase();
+        let key = self.remote_members.keys()
+            .find(|k| k.to_lowercase() == lower)
+            .cloned();
+        key.and_then(|k| self.remote_members.remove(&k))
+    }
+}
+
 /// Pending OAuth authorization: stored between /auth/login and /auth/callback.
 #[derive(Debug, Clone)]
 pub struct OAuthPending {
@@ -933,10 +967,10 @@ async fn process_s2s_message(
                 if let Some(ch) = channels.get(&channel_key) {
                     if ch.no_ext_msg {
                         let nick = from.split('!').next().unwrap_or(&from);
-                        let is_member = ch.remote_members.contains_key(nick)
+                        let is_member = ch.has_remote_member(nick)
                             || ch.members.iter().any(|sid| {
                                 state.nick_to_session.lock().unwrap()
-                                    .iter().any(|(n, s)| n == nick && s == sid)
+                                    .iter().any(|(n, s)| n.to_lowercase() == nick.to_lowercase() && s == sid)
                             });
                         if !is_member {
                             tracing::debug!(channel = %target, from = %from, "S2S PRIVMSG blocked by +n");
@@ -945,7 +979,7 @@ async fn process_s2s_message(
                     }
                     if ch.moderated {
                         let nick = from.split('!').next().unwrap_or(&from);
-                        let is_privileged = ch.remote_members.get(nick)
+                        let is_privileged = ch.remote_member(nick)
                             .is_some_and(|rm| rm.is_op);
                         if !is_privileged {
                             tracing::debug!(channel = %target, from = %from, "S2S PRIVMSG blocked by +m");
@@ -999,7 +1033,7 @@ async fn process_s2s_message(
             {
                 let mut channels = state.channels.lock().unwrap();
                 if let Some(ch) = channels.get_mut(&channel) {
-                    ch.remote_members.remove(&nick);
+                    ch.remove_remote_member(&nick);
                 }
             }
 
@@ -1014,7 +1048,7 @@ async fn process_s2s_message(
             {
                 let mut channels = state.channels.lock().unwrap();
                 for (name, ch) in channels.iter_mut() {
-                    if ch.remote_members.remove(&nick).is_some() {
+                    if ch.remove_remote_member(&nick).is_some() {
                         affected_channels.push(name.clone());
                     }
                 }
@@ -1039,11 +1073,24 @@ async fn process_s2s_message(
                 let channels = state.channels.lock().unwrap();
                 if let Some(ch) = channels.get(&channel) {
                     if ch.topic_locked {
-                        let is_authorized = ch.remote_members.get(&set_by)
+                        // The remote server already checked +t authorization before
+                        // broadcasting. Trust the peer's authorization decision —
+                        // the sending server verified the user was an op before
+                        // emitting the S2S Topic event. We only reject if the
+                        // setter is completely unknown to us (not in remote_members).
+                        let is_known = ch.has_remote_member(&set_by);
+                        let is_authorized = ch.remote_member(&set_by)
                             .is_some_and(|rm| rm.is_op || rm.did.as_ref().is_some_and(|d| {
                                 ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
                             }));
-                        if !is_authorized {
+                        if !is_known {
+                            tracing::info!(
+                                channel = %channel, set_by = %set_by,
+                                "Accepting S2S topic change from unknown remote user (trusting peer authorization)"
+                            );
+                            // Accept: the remote server authorized this. We may not
+                            // have the user in our remote_members yet (race with Join).
+                        } else if !is_authorized {
                             tracing::info!(
                                 channel = %channel, set_by = %set_by,
                                 "Rejecting S2S topic change: channel is +t and setter is not authorized"
@@ -1058,7 +1105,7 @@ async fn process_s2s_message(
             let setter_did = {
                 let channels = state.channels.lock().unwrap();
                 channels.get(&channel).and_then(|ch| {
-                    ch.remote_members.get(&set_by).and_then(|rm| rm.did.clone())
+                    ch.remote_member(&set_by).and_then(|rm| rm.did.clone())
                 })
             };
             state.crdt_set_topic(&channel, &topic, &set_by, setter_did.as_deref()).await;
@@ -1312,12 +1359,29 @@ async fn process_s2s_message(
                         }
                     }
 
-                    ch.topic_locked = info.topic_locked;
-                    ch.invite_only = info.invite_only;
-                    ch.no_ext_msg = info.no_ext_msg;
-                    ch.moderated = info.moderated;
-                    if info.key.is_some() {
-                        ch.key = info.key.clone();
+                    // Only adopt remote channel modes if channel has no local
+                    // members. If locals are present, they set modes authoritatively
+                    // and a SyncResponse shouldn't overwrite them (e.g., a peer
+                    // syncing stale state could disable +n/+i protection).
+                    if ch.members.is_empty() {
+                        ch.topic_locked = info.topic_locked;
+                        ch.invite_only = info.invite_only;
+                        ch.no_ext_msg = info.no_ext_msg;
+                        ch.moderated = info.moderated;
+                        if info.key.is_some() {
+                            ch.key = info.key.clone();
+                        }
+                    } else {
+                        // Merge: only adopt modes that are MORE restrictive
+                        // (remote turns ON a protection the local doesn't have).
+                        // Never weaken local protections from a sync.
+                        if info.topic_locked { ch.topic_locked = true; }
+                        if info.invite_only { ch.invite_only = true; }
+                        if info.no_ext_msg { ch.no_ext_msg = true; }
+                        if info.moderated { ch.moderated = true; }
+                        if info.key.is_some() && ch.key.is_none() {
+                            ch.key = info.key.clone();
+                        }
                     }
 
                     let dids = state.session_dids.lock().unwrap();
@@ -1409,8 +1473,14 @@ async fn process_s2s_message(
                             // Remote op/voice targeting a user on this server.
                             // Find the target by nick and apply the mode.
                             if let Some(ref target_nick) = arg {
-                                let target_sid = state.nick_to_session.lock().unwrap()
-                                    .get(target_nick).cloned();
+                                // Case-insensitive local nick lookup
+                                let target_sid = {
+                                    let n2s = state.nick_to_session.lock().unwrap();
+                                    let lower = target_nick.to_lowercase();
+                                    n2s.iter()
+                                        .find(|(n, _)| n.to_lowercase() == lower)
+                                        .map(|(_, s)| s.clone())
+                                };
                                 if let Some(ref sid) = target_sid {
                                     let set = if mode_char == 'o' {
                                         &mut ch.ops
@@ -1441,19 +1511,20 @@ async fn process_s2s_message(
                                     // Target is a remote member from another peer
                                     // (3-server scenario) — update remote member's is_op flag
                                     if mode_char == 'o' {
-                                        if let Some(rm) = ch.remote_members.get_mut(target_nick) {
+                                        // Extract DID before mutating, to avoid borrow conflict
+                                        let remote_did = ch.remote_member(target_nick)
+                                            .and_then(|rm| rm.did.clone());
+                                        if let Some(rm) = ch.remote_member_mut(target_nick) {
                                             rm.is_op = adding;
                                         }
                                         // Also update did_ops if we know their DID
-                                        if let Some(rm) = ch.remote_members.get(target_nick) {
-                                            if let Some(ref did) = rm.did {
-                                                if !adding && ch.founder_did.as_deref() == Some(did.as_str()) {
-                                                    // Founder can't be de-opped
-                                                } else if adding {
-                                                    ch.did_ops.insert(did.clone());
-                                                } else {
-                                                    ch.did_ops.remove(did);
-                                                }
+                                        if let Some(did) = remote_did {
+                                            if !adding && ch.founder_did.as_deref() == Some(did.as_str()) {
+                                                // Founder can't be de-opped
+                                            } else if adding {
+                                                ch.did_ops.insert(did);
+                                            } else {
+                                                ch.did_ops.remove(&did);
                                             }
                                         }
                                     }
@@ -1509,18 +1580,14 @@ async fn process_s2s_message(
                 }
             } else {
                 // Target is a remote member from another peer — remove and notify locals
-                let mut channels = state.channels.lock().unwrap();
-                if let Some(ch) = channels.get_mut(&channel_key) {
-                    // Case-insensitive remote member lookup
-                    let nick_lower = nick.to_lowercase();
-                    let rm_nick = ch.remote_members.keys()
-                        .find(|n| n.to_lowercase() == nick_lower)
-                        .cloned();
-                    if let Some(ref rn) = rm_nick {
-                        ch.remote_members.remove(rn);
-                        drop(channels);
-                        deliver_to_channel(state, &channel_key, &kick_line);
-                    }
+                let removed = {
+                    let mut channels = state.channels.lock().unwrap();
+                    channels.get_mut(&channel_key)
+                        .and_then(|ch| ch.remove_remote_member(&nick))
+                        .is_some()
+                };
+                if removed {
+                    deliver_to_channel(state, &channel_key, &kick_line);
                 }
             }
         }
@@ -1531,7 +1598,7 @@ async fn process_s2s_message(
             let mut channels = state.channels.lock().unwrap();
             let mut affected_sessions = std::collections::HashSet::new();
             for ch in channels.values_mut() {
-                if let Some(rm) = ch.remote_members.remove(&old) {
+                if let Some(rm) = ch.remove_remote_member(&old) {
                     ch.remote_members.insert(new.clone(), rm);
                     for s in &ch.members {
                         affected_sessions.insert(s.clone());

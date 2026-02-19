@@ -111,6 +111,34 @@ if [ -n "$HITS" ]; then
 fi
 echo ""
 
+# ── Pattern 6: raw remote_members.get/contains_key in server.rs ──────
+# All remote_members lookups in S2S handlers must use case-insensitive
+# helpers: has_remote_member(), remote_member(), remote_member_mut(),
+# remove_remote_member(). Raw HashMap methods are case-sensitive.
+echo "── Raw remote_members access in S2S handlers (server.rs) ──"
+HITS=$(rg -n 'remote_members\.(contains_key|get\b|get_mut|remove)\(' \
+    freeq-server/src/server.rs \
+    2>/dev/null | grep -v "// inside helper\|impl ChannelState" || true)
+
+if [ -n "$HITS" ]; then
+    # Filter to only lines outside impl ChannelState (the helpers themselves)
+    REAL_HITS=$(echo "$HITS" | grep -v "key.and_then" || true)
+    if [ -n "$REAL_HITS" ]; then
+        echo -e "${YELLOW}WARNING: raw remote_members access (use case-insensitive helpers):${NC}"
+        echo "$REAL_HITS"
+        echo ""
+        echo "  → Use ch.has_remote_member() instead of ch.remote_members.contains_key()"
+        echo "  → Use ch.remote_member() instead of ch.remote_members.get()"
+        echo "  → Use ch.remove_remote_member() instead of ch.remote_members.remove()"
+        echo ""
+    else
+        echo -e "${GREEN}  ✓ No raw remote_members access in S2S handlers${NC}"
+    fi
+else
+    echo -e "${GREEN}  ✓ No raw remote_members access in S2S handlers${NC}"
+fi
+echo ""
+
 # ── Pattern 5: ERR_NOSUCHNICK in paths that have S2S peers ───────────
 # If we have S2S peers, returning "no such nick" is almost always wrong
 # for PRIVMSG — the nick might exist on a peer we haven't synced with.
