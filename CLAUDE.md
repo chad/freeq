@@ -208,8 +208,8 @@ If something feels “too clever,” it’s probably wrong.
 
 ### P1 — High priority
 
-- [ ] **Message editing** — `+draft/edit` TAGMSG referencing original `msgid`. Server enforces authorship (match DID or session), stores as new message with `replaces` field. CHATHISTORY returns edits correctly. ~100 lines. (See `docs/WEB-APP-PLAN.md` §2.4)
-- [ ] **Message deletion** — `+draft/delete` TAGMSG referencing `msgid`. Soft delete (mark deleted, clients hide). Same authorship check. ~50 lines.
+- [x] **Message editing** — ✅ DONE. `+draft/edit=<msgid>` on PRIVMSG. Server verifies authorship, stores with `replaces_msgid`, updates in-memory history, broadcasts to channel.
+- [x] **Message deletion** — ✅ DONE. `+draft/delete=<msgid>` on TAGMSG. Soft delete (deleted_at). Author or ops can delete. Excluded from CHATHISTORY/history.
 - [x] **`away-notify` cap** — ✅ DONE. Broadcast AWAY changes to shared channel members. Server, SDK, TUI, and web client all support it.
 - [ ] **S2S authorization on Kick/Mode** — Receiving server should verify the kicker/mode-setter has authority (is an op) before executing. Currently any peer can forge kicks/ops.
 - [ ] **S2S authorization on Topic** — Verify `set_by` belongs to the authenticated peer, not a spoofed nick.
