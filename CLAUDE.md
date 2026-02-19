@@ -193,7 +193,7 @@ If something feels “too clever,” it’s probably wrong.
 
 ### P0 — Critical (do next)
 
-- [ ] **`msgid` on all messages** — Server assigns ULID to every PRIVMSG/NOTICE, carried in IRCv3 `msgid` tag, stored in DB, included in CHATHISTORY replay. **Unlocks:** editing, deletion, replies, reactions-to-specific-message, read markers. ~30 lines. (See `docs/WEB-APP-PLAN.md` §2.1)
+- [x] **`msgid` on all messages** — ✅ DONE. ULID on every PRIVMSG/NOTICE, carried in IRCv3 `msgid` tag, stored in DB + history, included in CHATHISTORY replay and JOIN history. S2S preserves msgid across federation.
 - [ ] **Message signing by default** — All messages from DID-authenticated users should be cryptographically signed. This is the foundational trust property: if you have a DID, your messages are provably yours. Design:
   - Authenticated users sign every PRIVMSG/NOTICE/TOPIC with their DID key
   - Signature carried via IRCv3 message tag (e.g. `+freeq.at/sig=<base64url>`)
