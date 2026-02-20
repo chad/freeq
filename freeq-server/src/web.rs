@@ -175,6 +175,7 @@ pub fn router(state: Arc<SharedState>) -> Router {
         // OAuth endpoints for web client
         .route("/auth/login", get(auth_login))
         .route("/auth/callback", get(auth_callback))
+        .route("/client-metadata.json", get(client_metadata))
         // REST API (read-only, v1)
         .route("/api/v1/health", get(api_health))
         .route("/api/v1/channels", get(api_channels))
@@ -479,6 +480,65 @@ async fn api_user_whois(
     }))
 }
 
+// ── OAuth client metadata ──────────────────────────────────────────────
+
+/// Serves the AT Protocol OAuth client-metadata.json document.
+/// The client_id for non-localhost origins is `{origin}/client-metadata.json`.
+async fn client_metadata(
+    headers: axum::http::HeaderMap,
+) -> Json<serde_json::Value> {
+    let (web_origin, _) = derive_web_origin(&headers);
+    let redirect_uri = format!("{web_origin}/auth/callback");
+    let client_id = build_client_id(&web_origin, &redirect_uri);
+
+    Json(serde_json::json!({
+        "client_id": client_id,
+        "client_name": "freeq",
+        "client_uri": web_origin,
+        "logo_uri": format!("{web_origin}/freeq.png"),
+        "tos_uri": format!("{web_origin}"),
+        "policy_uri": format!("{web_origin}"),
+        "redirect_uris": [redirect_uri],
+        "scope": "atproto transition:generic",
+        "grant_types": ["authorization_code"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+        "application_type": "web",
+        "dpop_bound_access_tokens": true
+    }))
+}
+
+/// Derive web origin and scheme from Host header.
+fn derive_web_origin(headers: &axum::http::HeaderMap) -> (String, String) {
+    let raw_host = headers.get("host")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("127.0.0.1:8080");
+    let host = raw_host.replace("localhost", "127.0.0.1");
+    let scheme = if host.starts_with("127.") || host.starts_with("192.168.") || host.starts_with("10.") {
+        "http"
+    } else {
+        "https"
+    };
+    let origin = format!("{scheme}://{host}");
+    (origin, scheme.to_string())
+}
+
+/// Build OAuth client_id. Loopback uses http://localhost?... form;
+/// production uses {origin}/client-metadata.json.
+fn build_client_id(web_origin: &str, redirect_uri: &str) -> String {
+    if web_origin.starts_with("http://127.") || web_origin.starts_with("http://192.168.") || web_origin.starts_with("http://10.") {
+        // Loopback client — use http://localhost form per AT Protocol spec
+        let scope = "atproto transition:generic";
+        format!(
+            "http://localhost?redirect_uri={}&scope={}",
+            urlencod(redirect_uri), urlencod(scope),
+        )
+    } else {
+        // Production — client_id is the URL of the client-metadata.json document
+        format!("{web_origin}/client-metadata.json")
+    }
+}
+
 // ── OAuth endpoints for web client ─────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -498,13 +558,7 @@ async fn auth_login(
     let handle = q.handle.trim().to_string();
 
     // Derive the origin from the Host header so redirect_uri matches what the browser sees
-    let raw_host = headers.get("host")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("127.0.0.1:8080");
-    // AT Protocol OAuth forbids "localhost" (RFC 8252) — use loopback IP instead
-    let host = raw_host.replace("localhost", "127.0.0.1");
-    let scheme = if host.starts_with("127.") || host.starts_with("192.168.") || host.starts_with("10.") { "http" } else { "https" };
-    let web_origin = format!("{scheme}://{host}");
+    let (web_origin, _scheme) = derive_web_origin(&headers);
 
     // Resolve handle → DID → PDS
     let resolver = freeq_sdk::did::DidResolver::http();
@@ -542,10 +596,7 @@ async fn auth_login(
     // Build redirect URI and client_id
     let redirect_uri = format!("{web_origin}/auth/callback");
     let scope = "atproto transition:generic";
-    let client_id = format!(
-        "http://localhost?redirect_uri={}&scope={}",
-        urlencod(&redirect_uri), urlencod(scope),
-    );
+    let client_id = build_client_id(&web_origin, &redirect_uri);
 
     // Generate PKCE + DPoP key + state
     let dpop_key = freeq_sdk::oauth::DpopKey::generate();
