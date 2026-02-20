@@ -75,27 +75,27 @@ export function ConnectScreen() {
     }
   }, [handle]);
 
-  // Check for OAuth result on mount (same-window redirect flow for Tauri/desktop)
+  // Check for OAuth result on mount (same-window redirect flow for Tauri/desktop).
+  // The callback page stores the result in localStorage and redirects to /.
+  // No "pending" flag needed — if a result exists, consume it.
   useEffect(() => {
-    const pending = localStorage.getItem('freeq-oauth-pending');
     const raw = localStorage.getItem('freeq-oauth-result');
-    if (pending && raw) {
-      localStorage.removeItem('freeq-oauth-pending');
-      localStorage.removeItem('freeq-oauth-result');
-      try {
-        const result = JSON.parse(raw) as OAuthResultData;
-        if (result?.did) {
-          const h = localStorage.getItem(LS_HANDLE) || '';
-          const ch = (localStorage.getItem(LS_CHANNELS) || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
-          const finalNick = nickFromHandle(result.handle || h);
-          setSaslCredentials(result.web_token || result.access_jwt, result.did, result.pds_url, 'web-token');
-          const loc = window.location;
-          const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
-          const host = loc.host.replace('localhost', '127.0.0.1');
-          connect(`${proto}//${host}/irc`, finalNick, ch);
-        }
-      } catch { /* ignore parse errors */ }
-    }
+    if (!raw) return;
+    localStorage.removeItem('freeq-oauth-result');
+    localStorage.removeItem('freeq-oauth-pending');
+    try {
+      const result = JSON.parse(raw) as OAuthResultData;
+      if (result?.did) {
+        const h = localStorage.getItem(LS_HANDLE) || result.handle || '';
+        const ch = (localStorage.getItem(LS_CHANNELS) || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
+        const finalNick = nickFromHandle(result.handle || h);
+        setSaslCredentials(result.web_token || result.access_jwt, result.did, result.pds_url, 'web-token');
+        const loc = window.location;
+        const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+        const host = loc.host.replace('localhost', '127.0.0.1');
+        connect(`${proto}//${host}/irc`, finalNick, ch);
+      }
+    } catch { /* ignore parse errors */ }
   }, []);
 
   if (registered) return null;
