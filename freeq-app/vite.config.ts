@@ -8,6 +8,7 @@ const FREEQ_WEB = process.env.FREEQ_WEB || 'http://127.0.0.1:8080'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
+    host: '127.0.0.1',
     proxy: {
       '/irc': {
         target: FREEQ_WEB,
