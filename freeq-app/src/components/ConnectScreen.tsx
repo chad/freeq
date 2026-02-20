@@ -44,14 +44,13 @@ export function ConnectScreen() {
   const [channels, setChannels] = useState(() => localStorage.getItem(LS_CHANNELS) || '#freeq');
   const [server, setServer] = useState(() => {
     const loc = window.location;
-    if (loc.hostname === 'app.freeq.at') return 'wss://irc.freeq.at/irc';
     const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+    // In dev, replace localhost with 127.0.0.1 for OAuth compliance
     const host = loc.host.replace('localhost', '127.0.0.1');
     return `${proto}//${host}/irc`;
   });
   const [webOrigin, setWebOrigin] = useState(() => {
     const loc = window.location;
-    if (loc.hostname === 'app.freeq.at') return 'https://irc.freeq.at';
     const host = loc.host.replace('localhost', '127.0.0.1');
     return `${loc.protocol}//${host}`;
   });

@@ -190,10 +190,12 @@ pub fn router(state: Arc<SharedState>) -> Router {
         let dir = std::path::PathBuf::from(web_dir);
         if dir.exists() {
             tracing::info!("Serving web client from {}", dir.display());
-            app = app.fallback_service(
-                tower_http::services::ServeDir::new(dir)
-                    .append_index_html_on_directories(true)
-            );
+            // SPA fallback: serve index.html for any path not matching a static file
+            let index_path = dir.join("index.html");
+            let serve = tower_http::services::ServeDir::new(&dir)
+                .append_index_html_on_directories(true)
+                .fallback(tower_http::services::ServeFile::new(index_path));
+            app = app.fallback_service(serve);
         } else {
             tracing::warn!("Web static dir not found: {}", dir.display());
         }
