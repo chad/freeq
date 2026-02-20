@@ -187,7 +187,7 @@ where
     });
 
     // Channel for sending messages TO this client
-    let (tx, mut rx) = mpsc::channel::<String>(64);
+    let (tx, mut rx) = mpsc::channel::<String>(512);
     state
         .connections
         .lock()
