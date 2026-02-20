@@ -195,8 +195,8 @@ pub struct App {
 
 /// Results from background tasks that need to update the UI.
 pub enum BgResult {
-    /// Profile lines to display in a buffer.
-    ProfileLines(String, Vec<String>),
+    /// Profile lines to display in a buffer, with optional avatar URL for the last line.
+    ProfileLines(String, Vec<String>, Option<String>),
 }
 
 impl App {

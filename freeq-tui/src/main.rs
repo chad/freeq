@@ -457,9 +457,21 @@ async fn run_app(
         if let Some(mut bg_rx) = app.bg_result_rx.take() {
             while let Ok(result) = bg_rx.try_recv() {
                 match result {
-                    crate::app::BgResult::ProfileLines(buf, lines) => {
-                        for line in lines {
+                    crate::app::BgResult::ProfileLines(buf, lines, avatar_url) => {
+                        for line in &lines {
+                            // Skip the 🖼 avatar-URL line — we render it as inline image below
+                            if avatar_url.is_some() && line.starts_with("  🖼") {
+                                continue;
+                            }
                             app.buffer_mut(&buf).push_system(&format!("*** {line}"));
+                        }
+                        // Add avatar as inline image if available
+                        if let Some(ref url) = avatar_url {
+                            app.buffer_mut(&buf).push_system("***");
+                            // Set image_url on the message we just pushed
+                            if let Some(last) = app.buffer_mut(&buf).messages.back_mut() {
+                                last.image_url = Some(url.clone());
+                            }
                         }
                     }
                 }
@@ -863,11 +875,12 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
                 let avatar_cache = app.image_cache.clone();
                 tokio::spawn(async move {
                     if let Ok(profile) = freeq_sdk::pds::fetch_profile(&actor).await {
-                        if let Some(ref avatar_url) = profile.avatar {
-                            fetch_image_if_needed_direct(&avatar_cache, avatar_url);
+                        let avatar_url = profile.avatar.clone();
+                        if let Some(ref url) = avatar_url {
+                            fetch_image_if_needed_direct(&avatar_cache, url);
                         }
                         let lines = profile.format_lines();
-                        let _ = bg_tx.send(crate::app::BgResult::ProfileLines(buf_clone, lines)).await;
+                        let _ = bg_tx.send(crate::app::BgResult::ProfileLines(buf_clone, lines, avatar_url)).await;
                     }
                 });
             }
