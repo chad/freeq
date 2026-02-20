@@ -50,8 +50,10 @@ export function ConnectScreen() {
     setOauthPending(true);
 
     try {
+      // Clear any stale OAuth result
+      try { localStorage.removeItem('freeq-oauth-result'); } catch { /* ignore */ }
+
       // Open OAuth popup — use current page origin so it goes through Vite proxy
-      // (which forwards /auth to the freeq server)
       const popupOrigin = window.location.origin.replace('localhost', '127.0.0.1');
       const authUrl = `${popupOrigin}/auth/login?handle=${encodeURIComponent(h)}`;
       const popup = window.open(authUrl, 'freeq-auth', 'width=500,height=700');
@@ -315,13 +317,27 @@ function waitForOAuthResult(popup: Window | null): Promise<OAuthResultData | nul
       } catch { /* ignore */ }
     }, 500);
 
-    // Check if popup closed without result
+    // Check if popup closed without result — wait a moment for messages to arrive
     const closedCheck = setInterval(() => {
       if (popup && popup.closed) {
-        cleanup();
-        resolve(null);
+        // Give BroadcastChannel/localStorage a moment to deliver
+        setTimeout(() => {
+          // Final localStorage check
+          try {
+            const stored = localStorage.getItem('freeq-oauth-result');
+            if (stored) {
+              localStorage.removeItem('freeq-oauth-result');
+              cleanup();
+              resolve(JSON.parse(stored));
+              return;
+            }
+          } catch { /* ignore */ }
+          cleanup();
+          resolve(null);
+        }, 1500);
+        clearInterval(closedCheck); // stop checking, we're in the final wait
       }
-    }, 1000);
+    }, 500);
 
     function cleanup() {
       clearTimeout(timeout);
