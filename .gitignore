@@ -11,3 +11,4 @@ tests.log
 freeq-app/node_modules/
 freeq-app/dist/
 freeq-app/src-tauri/target/
+freeq-app/src-tauri/target/

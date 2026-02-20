@@ -6,6 +6,9 @@ members = [
     "freeq-tui",
     "freeq-bots",
 ]
+exclude = [
+    "freeq-app/src-tauri",
+]
 
 [workspace.package]
 version = "0.1.0"
