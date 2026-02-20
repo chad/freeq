@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useStore } from '../store';
 import { joinChannel, disconnect } from '../irc/client';
+import { fetchProfile, getCachedProfile } from '../lib/profiles';
 
 interface SidebarProps {
   onOpenSettings: () => void;
@@ -105,9 +106,7 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
       {/* User footer */}
       <div className="border-t border-border px-3 py-2.5 shrink-0">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-full bg-surface flex items-center justify-center text-accent font-bold text-sm shrink-0">
-            {(nick || '?')[0].toUpperCase()}
-          </div>
+          <SelfAvatar nick={nick} did={authDid} />
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium truncate">{nick}</div>
             {authDid && (
@@ -139,6 +138,28 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
         </div>
       </div>
     </aside>
+  );
+}
+
+function SelfAvatar({ nick, did }: { nick: string; did: string | null }) {
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(() => {
+    if (!did) return null;
+    return getCachedProfile(did)?.avatar || null;
+  });
+
+  useEffect(() => {
+    if (did && !avatarUrl) {
+      fetchProfile(did).then((p) => p?.avatar && setAvatarUrl(p.avatar));
+    }
+  }, [did]);
+
+  if (avatarUrl) {
+    return <img src={avatarUrl} alt="" className="w-8 h-8 rounded-full object-cover shrink-0" />;
+  }
+  return (
+    <div className="w-8 h-8 rounded-full bg-surface flex items-center justify-center text-accent font-bold text-sm shrink-0">
+      {(nick || '?')[0].toUpperCase()}
+    </div>
   );
 }
 

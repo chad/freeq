@@ -9,6 +9,7 @@ import { parse, prefixNick, format, type IRCMessage } from './parser';
 import { Transport, type TransportState } from './transport';
 import { useStore, type Message } from '../store';
 import { notify } from '../lib/notifications';
+import { prefetchProfiles } from '../lib/profiles';
 
 // ── State ──
 
@@ -24,6 +25,9 @@ let saslMethod = '';
 
 // Auto-join channels after registration
 let autoJoinChannels: string[] = [];
+
+// Background WHOIS lookups (suppress output for these)
+const backgroundWhois = new Set<string>();
 
 // ── Public API (called by UI) ──
 
@@ -170,6 +174,7 @@ function handleLine(rawLine: string) {
       break;
     case '900':
       store.setAuth(saslDid, msg.params[msg.params.length - 1]);
+      if (saslDid) prefetchProfiles([saslDid]);
       break;
     case '903':
       raw('CAP END');
@@ -216,12 +221,14 @@ function handleLine(rawLine: string) {
         store.addChannel(channel);
         store.setActiveChannel(channel);
       }
+      const joinDid = account && account !== '*' ? account : undefined;
       store.addMember(channel, {
         nick: from,
-        did: account && account !== '*' ? account : undefined,
+        did: joinDid,
         isOp: false,
         isVoiced: false,
       });
+      if (joinDid) prefetchProfiles([joinDid]);
       store.addSystemMessage(channel, `${from} joined`);
       break;
     }
@@ -351,8 +358,19 @@ function handleLine(rawLine: string) {
       }
       break;
     }
-    case '366': // End of NAMES
+    case '366': { // End of NAMES — WHOIS members to get DIDs for avatars
+      const namesChannel = msg.params[1];
+      const ch = store.channels.get(namesChannel?.toLowerCase());
+      if (ch) {
+        for (const m of ch.members.values()) {
+          if (!m.did && m.nick !== nick) {
+            backgroundWhois.add(m.nick.toLowerCase());
+            raw(`WHOIS ${m.nick}`);
+          }
+        }
+      }
       break;
+    }
 
     // ── MODE ──
     case 'MODE': {
@@ -400,21 +418,45 @@ function handleLine(rawLine: string) {
 
     // ── WHOIS ──
     case '311': {
-      if (msg.params.length >= 5) {
-        const whoisNick = msg.params[1];
+      const whoisNick = msg.params[1] || '';
+      if (!backgroundWhois.has(whoisNick.toLowerCase())) {
         store.addSystemMessage('server', `WHOIS ${whoisNick}: ${msg.params[2]}@${msg.params[3]} (${msg.params[5] || msg.params[4]})`);
       }
       break;
     }
-    case '330': // RPL_WHOISACCOUNT (DID)
-      store.addSystemMessage('server', `  DID: ${msg.params[2]}`);
-      if (msg.params[1]) {
-        store.updateMemberDid(msg.params[1], msg.params[2]);
+    case '312': { // RPL_WHOISSERVER
+      const whoisNick = msg.params[1] || '';
+      if (!backgroundWhois.has(whoisNick.toLowerCase())) {
+        store.addSystemMessage('server', `  Server: ${msg.params[2]}`);
       }
       break;
-    case '671': // AT handle
-      store.addSystemMessage('server', `  Handle: ${msg.params[2]}`);
+    }
+    case '318': { // RPL_ENDOFWHOIS
+      const whoisNick = msg.params[1] || '';
+      backgroundWhois.delete(whoisNick.toLowerCase());
       break;
+    }
+    case '330': { // RPL_WHOISACCOUNT (DID)
+      const whoisNick = msg.params[1] || '';
+      const did = msg.params[2] || '';
+      if (!backgroundWhois.has(whoisNick.toLowerCase())) {
+        store.addSystemMessage('server', `  DID: ${did}`);
+      }
+      if (whoisNick) {
+        store.updateMemberDid(whoisNick, did);
+      }
+      if (did) {
+        prefetchProfiles([did]);
+      }
+      break;
+    }
+    case '671': { // AT handle
+      const whoisNick = msg.params[1] || '';
+      if (!backgroundWhois.has(whoisNick.toLowerCase())) {
+        store.addSystemMessage('server', `  Handle: ${msg.params[2]}`);
+      }
+      break;
+    }
 
     // ── Channel list ──
     case '322': // RPL_LIST
