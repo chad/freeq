@@ -50,29 +50,33 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
       {/* Separator */}
       {isChannel && <div className="w-px h-5 bg-border" />}
 
-      {/* Topic */}
+      {/* Topic (channels only) */}
       <div className="flex-1 min-w-0">
-        {editing ? (
-          <input
-            value={topicDraft}
-            onChange={(e) => setTopicDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') submitTopic();
-              if (e.key === 'Escape') setEditing(false);
-            }}
-            onBlur={() => setEditing(false)}
-            autoFocus
-            className="w-full bg-transparent text-xs text-fg outline-none"
-            placeholder="Set a topic..."
-          />
+        {isChannel ? (
+          editing ? (
+            <input
+              value={topicDraft}
+              onChange={(e) => setTopicDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submitTopic();
+                if (e.key === 'Escape') setEditing(false);
+              }}
+              onBlur={() => setEditing(false)}
+              autoFocus
+              className="w-full bg-transparent text-xs text-fg outline-none"
+              placeholder="Set a topic..."
+            />
+          ) : (
+            <button
+              onClick={startEdit}
+              className="text-xs text-fg-dim hover:text-fg-muted truncate block w-full text-left"
+              title={topic || 'Click to set topic'}
+            >
+              {topic || 'Set a topic'}
+            </button>
+          )
         ) : (
-          <button
-            onClick={startEdit}
-            className="text-xs text-fg-dim hover:text-fg-muted truncate block w-full text-left"
-            title={topic || 'Click to set topic'}
-          >
-            {topic || (isChannel ? 'Set a topic' : '')}
-          </button>
+          <span className="flex-1" />
         )}
       </div>
 

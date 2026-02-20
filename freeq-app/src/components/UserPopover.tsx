@@ -15,33 +15,42 @@ export function UserPopover({ nick, did, position, onClose }: UserPopoverProps) 
   const [loading, setLoading] = useState(false);
   const setActive = useStore((s) => s.setActiveChannel);
   const addChannel = useStore((s) => s.addChannel);
+  const whois = useStore((s) => s.whoisCache.get(nick.toLowerCase()));
 
   useEffect(() => {
-    if (did) {
+    // Always trigger WHOIS to get latest info
+    sendWhois(nick);
+  }, [nick]);
+
+  // Fetch AT profile when we have a DID (from prop or whois)
+  const effectiveDid = did || whois?.did;
+  useEffect(() => {
+    if (effectiveDid && !profile) {
       setLoading(true);
-      fetchProfile(did).then((p) => {
+      fetchProfile(effectiveDid).then((p) => {
         setProfile(p);
         setLoading(false);
       });
     }
-    // Also trigger WHOIS to get latest info
-    sendWhois(nick);
-  }, [did, nick]);
+  }, [effectiveDid]);
 
   const startDM = () => {
-    // Create a DM buffer for this nick and switch to it
     addChannel(nick);
     setActive(nick);
     onClose();
   };
 
-  // Position the popover, keeping it on screen
+  // Position keeping on screen
   const style: React.CSSProperties = {
     position: 'fixed',
     left: Math.min(position.x, window.innerWidth - 300),
-    top: Math.min(position.y, window.innerHeight - 350),
+    top: Math.min(position.y, window.innerHeight - 400),
     zIndex: 100,
   };
+
+  const displayName = profile?.displayName || whois?.realname || nick;
+  const handle = profile?.handle || whois?.handle;
+  const avatarUrl = profile?.avatar;
 
   return (
     <>
@@ -49,9 +58,9 @@ export function UserPopover({ nick, did, position, onClose }: UserPopoverProps) 
       <div style={style} className="z-50 bg-bg-secondary border border-border rounded-xl shadow-2xl w-72 animate-fadeIn overflow-hidden">
         {/* Header */}
         <div className="h-16 bg-gradient-to-r from-accent/20 to-purple/20 relative">
-          {profile?.avatar ? (
+          {avatarUrl ? (
             <img
-              src={profile.avatar}
+              src={avatarUrl}
               alt=""
               className="absolute -bottom-6 left-4 w-14 h-14 rounded-full border-4 border-bg-secondary object-cover"
             />
@@ -64,33 +73,27 @@ export function UserPopover({ nick, did, position, onClose }: UserPopoverProps) 
 
         <div className="pt-8 px-4 pb-4">
           {/* Display name */}
-          <div className="font-semibold text-fg">
-            {profile?.displayName || nick}
-          </div>
-          {/* Nick (if different from display name) */}
-          {profile?.displayName && profile.displayName !== nick && (
-            <div className="text-sm text-fg-muted">{nick}</div>
-          )}
-          {!profile?.displayName && (
+          <div className="font-semibold text-fg">{displayName}</div>
+          {displayName !== nick && (
             <div className="text-sm text-fg-muted">{nick}</div>
           )}
 
           {/* AT Handle */}
-          {profile?.handle && (
+          {handle && (
             <div className="text-xs text-accent mt-1 flex items-center gap-1">
-              <span>@{profile.handle}</span>
-              <span className="text-success text-[10px]" title="Verified AT Protocol identity">✓</span>
+              <span>@{handle}</span>
+              <span className="text-success text-[10px]" title="AT Protocol identity">✓</span>
             </div>
           )}
 
           {/* DID */}
-          {did && (
+          {effectiveDid && (
             <div
               className="text-[10px] text-fg-dim mt-1 font-mono break-all cursor-pointer hover:text-fg-muted"
-              onClick={() => navigator.clipboard.writeText(did)}
+              onClick={() => navigator.clipboard.writeText(effectiveDid)}
               title="Click to copy DID"
             >
-              {did}
+              {effectiveDid}
             </div>
           )}
 
@@ -101,13 +104,41 @@ export function UserPopover({ nick, did, position, onClose }: UserPopoverProps) 
             </div>
           )}
 
-          {loading && !profile && (
+          {/* WHOIS info (for guests or extra detail) */}
+          {whois && (
+            <div className="mt-2 space-y-0.5">
+              {whois.user && whois.host && (
+                <div className="text-[11px] text-fg-dim font-mono">
+                  {whois.user}@{whois.host}
+                </div>
+              )}
+              {whois.channels && (
+                <div className="text-[11px] text-fg-dim">
+                  <span className="text-fg-dim">Channels:</span> {whois.channels}
+                </div>
+              )}
+              {whois.server && (
+                <div className="text-[11px] text-fg-dim">
+                  <span className="text-fg-dim">Server:</span> {whois.server}
+                </div>
+              )}
+            </div>
+          )}
+
+          {loading && !profile && !whois && (
             <div className="text-xs text-fg-dim mt-2 flex items-center gap-1">
               <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
-              Loading profile...
+              Loading...
+            </div>
+          )}
+
+          {/* No identity badge for guests */}
+          {!effectiveDid && !loading && whois && (
+            <div className="text-[10px] text-fg-dim mt-2 bg-bg-tertiary rounded px-2 py-1">
+              Guest — no AT Protocol identity
             </div>
           )}
 
@@ -119,9 +150,9 @@ export function UserPopover({ nick, did, position, onClose }: UserPopoverProps) 
             >
               Message
             </button>
-            {profile?.handle && (
+            {handle && (
               <a
-                href={`https://bsky.app/profile/${profile.handle}`}
+                href={`https://bsky.app/profile/${handle}`}
                 target="_blank"
                 rel="noopener"
                 className="flex-1 bg-bg-tertiary hover:bg-surface text-fg-muted hover:text-fg text-xs py-1.5 rounded-lg text-center"

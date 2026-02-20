@@ -380,11 +380,16 @@ function handleLine(rawLine: string) {
       const namesChannel = msg.params[1];
       const ch = store.channels.get(namesChannel?.toLowerCase());
       if (ch) {
+        const toWhois: string[] = [];
         for (const m of ch.members.values()) {
-          if (!m.did && m.nick !== nick) {
-            backgroundWhois.add(m.nick.toLowerCase());
-            raw(`WHOIS ${m.nick}`);
+          if (!m.did && m.nick.toLowerCase() !== nick.toLowerCase()) {
+            toWhois.push(m.nick);
           }
+        }
+        // Stagger WHOIS to avoid flooding
+        for (const n of toWhois) {
+          backgroundWhois.add(n.toLowerCase());
+          raw(`WHOIS ${n}`);
         }
       }
       break;
@@ -435,8 +440,13 @@ function handleLine(rawLine: string) {
     case '482': store.addSystemMessage(msg.params[1] || 'server', msg.params[2] || 'Not operator'); break;
 
     // ── WHOIS ──
-    case '311': {
+    case '311': { // RPL_WHOISUSER: nick user host * :realname
       const whoisNick = msg.params[1] || '';
+      store.updateWhois(whoisNick, {
+        user: msg.params[2],
+        host: msg.params[3],
+        realname: msg.params[5] || msg.params[4],
+      });
       if (!backgroundWhois.has(whoisNick.toLowerCase())) {
         store.addSystemMessage('server', `WHOIS ${whoisNick}: ${msg.params[2]}@${msg.params[3]} (${msg.params[5] || msg.params[4]})`);
       }
@@ -444,6 +454,7 @@ function handleLine(rawLine: string) {
     }
     case '312': { // RPL_WHOISSERVER
       const whoisNick = msg.params[1] || '';
+      store.updateWhois(whoisNick, { server: msg.params[2] });
       if (!backgroundWhois.has(whoisNick.toLowerCase())) {
         store.addSystemMessage('server', `  Server: ${msg.params[2]}`);
       }
@@ -454,9 +465,18 @@ function handleLine(rawLine: string) {
       backgroundWhois.delete(whoisNick.toLowerCase());
       break;
     }
+    case '319': { // RPL_WHOISCHANNELS
+      const whoisNick = msg.params[1] || '';
+      store.updateWhois(whoisNick, { channels: msg.params[2] });
+      if (!backgroundWhois.has(whoisNick.toLowerCase())) {
+        store.addSystemMessage('server', `  Channels: ${msg.params[2]}`);
+      }
+      break;
+    }
     case '330': { // RPL_WHOISACCOUNT (DID)
       const whoisNick = msg.params[1] || '';
       const did = msg.params[2] || '';
+      store.updateWhois(whoisNick, { did });
       if (!backgroundWhois.has(whoisNick.toLowerCase())) {
         store.addSystemMessage('server', `  DID: ${did}`);
       }
@@ -470,8 +490,10 @@ function handleLine(rawLine: string) {
     }
     case '671': { // AT handle
       const whoisNick = msg.params[1] || '';
+      const handle = msg.params[2] || '';
+      store.updateWhois(whoisNick, { handle });
       if (!backgroundWhois.has(whoisNick.toLowerCase())) {
-        store.addSystemMessage('server', `  Handle: ${msg.params[2]}`);
+        store.addSystemMessage('server', `  Handle: ${handle}`);
       }
       break;
     }

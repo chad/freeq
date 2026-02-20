@@ -48,6 +48,18 @@ interface Batch {
   messages: Message[];
 }
 
+export interface WhoisInfo {
+  nick: string;
+  user?: string;
+  host?: string;
+  realname?: string;
+  server?: string;
+  did?: string;
+  handle?: string;
+  channels?: string;
+  fetchedAt: number;
+}
+
 export interface Store {
   // Connection
   connectionState: TransportState;
@@ -64,6 +76,9 @@ export interface Store {
 
   // Active batches
   batches: Map<string, Batch>;
+
+  // WHOIS cache
+  whoisCache: Map<string, WhoisInfo>;
 
   // Actions — connection
   setConnectionState: (state: TransportState) => void;
@@ -102,6 +117,9 @@ export interface Store {
   // Actions — batches
   startBatch: (id: string, type: string, target: string) => void;
   endBatch: (id: string) => void;
+
+  // Actions — whois
+  updateWhois: (nick: string, info: Partial<WhoisInfo>) => void;
 }
 
 function getOrCreateChannel(channels: Map<string, Channel>, name: string): Channel {
@@ -135,6 +153,7 @@ export const useStore = create<Store>((set, get) => ({
   activeChannel: 'server',
   serverMessages: [],
   batches: new Map(),
+  whoisCache: new Map(),
 
   // Connection
   setConnectionState: (state) => set({ connectionState: state }),
@@ -161,6 +180,7 @@ export const useStore = create<Store>((set, get) => ({
     activeChannel: 'server',
     serverMessages: [],
     batches: new Map(),
+    whoisCache: new Map(),
   }),
 
   // Channels
@@ -430,5 +450,14 @@ export const useStore = create<Store>((set, get) => ({
     ch.messages = [...batch.messages, ...ch.messages].slice(-1000);
     channels.set(batch.target.toLowerCase(), ch);
     return { channels, batches };
+  }),
+
+  // Whois
+  updateWhois: (nick, info) => set((s) => {
+    const whoisCache = new Map(s.whoisCache);
+    const key = nick.toLowerCase();
+    const existing = whoisCache.get(key) || { nick, fetchedAt: Date.now() };
+    whoisCache.set(key, { ...existing, ...info, nick, fetchedAt: Date.now() });
+    return { whoisCache };
   }),
 }));
