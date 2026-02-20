@@ -495,10 +495,12 @@ async fn auth_login(
     let handle = q.handle.trim().to_string();
 
     // Derive the origin from the Host header so redirect_uri matches what the browser sees
-    let host = headers.get("host")
+    let raw_host = headers.get("host")
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost:8080");
-    let scheme = if host.starts_with("localhost") || host.starts_with("127.") { "http" } else { "https" };
+        .unwrap_or("127.0.0.1:8080");
+    // AT Protocol OAuth forbids "localhost" (RFC 8252) — use loopback IP instead
+    let host = raw_host.replace("localhost", "127.0.0.1");
+    let scheme = if host.starts_with("127.") || host.starts_with("192.168.") || host.starts_with("10.") { "http" } else { "https" };
     let web_origin = format!("{scheme}://{host}");
 
     // Resolve handle → DID → PDS
