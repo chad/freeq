@@ -4738,3 +4738,99 @@ async fn s2s_msgid3_cross_server_messages_have_msgid() {
     let _ = ha.quit(Some("done")).await;
     let _ = hb.quit(Some("done")).await;
 }
+
+/// When the first user joins a channel (auto-opped as founder),
+/// a second user joining should see them as op in NAMES — and
+/// the second user should also receive a MODE +o broadcast so
+/// their client's in-memory state stays consistent with NAMES.
+#[tokio::test]
+async fn single_server_autoop_visible_to_others() {
+    let Some(server) = get_single_server() else { return };
+    let op_nick = test_nick("aop", "op");
+    let obs_nick = test_nick("aop", "obs");
+    let channel = test_channel("aop");
+
+    // First user joins — becomes op (founder) of new channel
+    let (h_op, mut e_op) = connect_guest(&server, &op_nick).await;
+    wait_registered(&mut e_op).await;
+    h_op.join(&channel).await.unwrap();
+    wait_joined(&mut e_op, &channel).await;
+    // Check NAMES shows founder as op
+    let names = wait_names_containing(&mut e_op, &channel, &op_nick).await;
+    assert!(names.iter().any(|n| n == &format!("@{op_nick}")),
+        "Founder should see self as op in NAMES, got: {names:?}");
+    eprintln!("  ✓ First joiner is op in own NAMES");
+
+    // Second user joins — should see first user as op in NAMES
+    let (h_obs, mut e_obs) = connect_guest(&server, &obs_nick).await;
+    wait_registered(&mut e_obs).await;
+    h_obs.join(&channel).await.unwrap();
+    wait_joined(&mut e_obs, &channel).await;
+    let names2 = wait_names_containing(&mut e_obs, &channel, &op_nick).await;
+    assert!(names2.iter().any(|n| n == &format!("@{op_nick}")),
+        "Observer should see first joiner as op in NAMES, got: {names2:?}");
+    eprintln!("  ✓ Second joiner sees first user as op in NAMES");
+
+    // Verify: op manually ops observer, observer gets MODE +o broadcast
+    h_op.raw(&format!("MODE {channel} +o {obs_nick}")).await.unwrap();
+    let (mode, arg) = wait_mode(&mut e_obs, &channel).await;
+    assert_eq!(mode, "+o", "Observer should receive MODE +o, got: {mode}");
+    assert_eq!(arg.as_deref(), Some(obs_nick.as_str()),
+        "MODE +o should target observer, got: {arg:?}");
+    eprintln!("  ✓ Observer received MODE +o broadcast");
+
+    let _ = h_op.quit(Some("done")).await;
+    let _ = h_obs.quit(Some("done")).await;
+}
+
+/// When a DID-authenticated user (founder/persistent-op) rejoins a channel,
+/// other members should receive a MODE +o broadcast so their client state
+/// stays in sync without requiring a NAMES refresh.
+/// NOTE: This test only runs with DID auth, which requires AT Protocol setup.
+/// For now we test the auto-op-on-empty-rejoin case: op parts, observer parts,
+/// op rejoins empty channel (gets auto-opped), observer rejoins and should see op.
+#[tokio::test]
+async fn single_server_autoop_on_empty_rejoin() {
+    let Some(server) = get_single_server() else { return };
+    let op_nick = test_nick("aor", "op");
+    let obs_nick = test_nick("aor", "obs");
+    let channel = test_channel("aor");
+
+    // Create channel with first user as op
+    let (h_op, mut e_op) = connect_guest(&server, &op_nick).await;
+    wait_registered(&mut e_op).await;
+    h_op.join(&channel).await.unwrap();
+    wait_joined(&mut e_op, &channel).await;
+
+    // Second user joins
+    let (h_obs, mut e_obs) = connect_guest(&server, &obs_nick).await;
+    wait_registered(&mut e_obs).await;
+    h_obs.join(&channel).await.unwrap();
+    wait_joined(&mut e_obs, &channel).await;
+    drain(&mut e_obs).await;
+
+    // Both part — channel becomes empty
+    h_op.raw(&format!("PART {channel} :brb")).await.unwrap();
+    wait_parted(&mut e_op, &channel, &op_nick).await;
+    h_obs.raw(&format!("PART {channel} :brb")).await.unwrap();
+    wait_parted(&mut e_obs, &channel, &obs_nick).await;
+
+    // Op rejoins empty channel — should get auto-opped
+    h_op.join(&channel).await.unwrap();
+    wait_joined(&mut e_op, &channel).await;
+    let names = wait_names_containing(&mut e_op, &channel, &op_nick).await;
+    assert!(names.iter().any(|n| n == &format!("@{op_nick}")),
+        "Rejoining empty channel should auto-op, got: {names:?}");
+    eprintln!("  ✓ First rejoiner of empty channel is auto-opped");
+
+    // Observer rejoins — should see op in NAMES and get MODE +o broadcast
+    h_obs.join(&channel).await.unwrap();
+    wait_joined(&mut e_obs, &channel).await;
+    let names2 = wait_names_containing(&mut e_obs, &channel, &op_nick).await;
+    assert!(names2.iter().any(|n| n == &format!("@{op_nick}")),
+        "Observer should see auto-opped user in NAMES, got: {names2:?}");
+    eprintln!("  ✓ Second joiner sees auto-opped user in NAMES");
+
+    let _ = h_op.quit(Some("done")).await;
+    let _ = h_obs.quit(Some("done")).await;
+}

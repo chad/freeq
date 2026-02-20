@@ -148,6 +148,28 @@ pub(super) fn handle_join(
         }
     }
 
+    // Broadcast MODE +o to existing channel members if the joiner was auto-opped
+    {
+        let is_op = state.channels.lock().unwrap()
+            .get(channel)
+            .map(|ch| ch.ops.contains(session_id))
+            .unwrap_or(false);
+        if is_op {
+            let mode_msg = format!(":{server_name} MODE {channel} +o {nick}\r\n");
+            let channels = state.channels.lock().unwrap();
+            if let Some(ch) = channels.get(channel) {
+                let members: Vec<String> = ch.members.iter().cloned().collect();
+                drop(channels);
+                let conns = state.connections.lock().unwrap();
+                for member_session in &members {
+                    if let Some(tx) = conns.get(member_session) {
+                        let _ = tx.try_send(mode_msg.clone());
+                    }
+                }
+            }
+        }
+    }
+
     // Plugin on_join hook
     state.plugin_manager.on_join(&crate::plugin::JoinEvent {
         nick: nick.to_string(),

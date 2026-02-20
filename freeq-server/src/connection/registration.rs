@@ -44,6 +44,95 @@ pub(super) fn try_complete_registration(
         }
     }
 
+    // Ghost any existing session with the same DID.
+    // When a DID-authenticated user reconnects (e.g. from another device),
+    // the old session is killed — like NickServ GHOST but automatic.
+    if let Some(ref did) = conn.authenticated_did {
+        let mut sessions_to_ghost = Vec::new();
+        {
+            let session_dids = state.session_dids.lock().unwrap();
+            for (sid, d) in session_dids.iter() {
+                if d == did && sid != session_id {
+                    sessions_to_ghost.push(sid.clone());
+                }
+            }
+        }
+        for old_session in &sessions_to_ghost {
+            // Find old nick
+            let old_nick = state.nick_to_session.lock().unwrap()
+                .iter()
+                .find(|(_, s)| *s == old_session)
+                .map(|(n, _)| n.clone());
+            if let Some(ref old_nick) = old_nick {
+                // Send QUIT to all channels the old session is in
+                let channels: Vec<String> = state.channels.lock().unwrap()
+                    .iter()
+                    .filter(|(_, ch)| ch.members.contains(old_session))
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                let quit_msg = format!(
+                    ":{old_nick}!~u@host QUIT :Ghosted (same identity reconnected)\r\n"
+                );
+                for ch_name in &channels {
+                    let members: Vec<String> = state.channels.lock().unwrap()
+                        .get(ch_name)
+                        .map(|ch| ch.members.iter().cloned().collect())
+                        .unwrap_or_default();
+                    let conns = state.connections.lock().unwrap();
+                    for member_session in &members {
+                        if member_session != old_session {
+                            if let Some(tx) = conns.get(member_session) {
+                                let _ = tx.try_send(quit_msg.clone());
+                            }
+                        }
+                    }
+                }
+                // Remove from channels
+                let mut channels_lock = state.channels.lock().unwrap();
+                for ch_name in &channels {
+                    if let Some(ch) = channels_lock.get_mut(ch_name) {
+                        ch.members.remove(old_session);
+                        ch.ops.remove(old_session);
+                        ch.voiced.remove(old_session);
+                    }
+                }
+                drop(channels_lock);
+                // Remove nick mapping
+                state.nick_to_session.lock().unwrap().remove(old_nick);
+            }
+            // Clean up session metadata
+            state.session_dids.lock().unwrap().remove(old_session);
+            state.session_handles.lock().unwrap().remove(old_session);
+            state.session_iroh_ids.lock().unwrap().remove(old_session);
+            // Send ERROR to old session and close it
+            if let Some(tx) = state.connections.lock().unwrap().get(old_session) {
+                let _ = tx.try_send(
+                    "ERROR :Closing link (same identity reconnected)\r\n".to_string()
+                );
+            }
+            // Remove old session from connections (causes its read loop to end)
+            state.connections.lock().unwrap().remove(old_session);
+            tracing::info!(did = %did, old_session = %old_session, "Ghosted old session for same DID");
+        }
+
+        // After ghosting, try to reclaim the desired nick if we got a fallback (e.g. nick_).
+        // The DID owner's preferred nick is now free.
+        let reclaim = conn.nick.as_ref()
+            .filter(|n| n.ends_with('_'))
+            .map(|n| (n.clone(), n.trim_end_matches('_').to_string()));
+        if let Some((current_nick, desired)) = reclaim {
+            let nick_free = !state.nick_to_session.lock().unwrap()
+                .keys().any(|k| k.to_lowercase() == desired.to_lowercase());
+            if nick_free {
+                state.nick_to_session.lock().unwrap().remove(&current_nick);
+                state.nick_to_session.lock().unwrap()
+                    .insert(desired.clone(), session_id.to_string());
+                tracing::info!(old = %current_nick, new = %desired, "Reclaimed nick after ghost");
+                conn.nick = Some(desired);
+            }
+        }
+    }
+
     conn.registered = true;
     let nick = conn.nick.as_deref().unwrap();
 

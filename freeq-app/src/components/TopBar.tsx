@@ -15,7 +15,8 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
   const ch = channels.get(activeChannel.toLowerCase());
   const topic = ch?.topic || '';
   const memberCount = ch?.members.size || 0;
-  const isChannel = activeChannel !== 'server';
+  const isChannel = activeChannel !== 'server' && activeChannel.startsWith('#');
+  const isDM = activeChannel !== 'server' && !activeChannel.startsWith('#');
 
   const startEdit = () => {
     setTopicDraft(topic);
@@ -39,11 +40,12 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
         </svg>
       </button>
 
-      {/* Channel name */}
+      {/* Channel / DM name */}
       <div className="flex items-center gap-2 shrink-0">
         {isChannel && <span className="text-accent text-sm font-medium">#</span>}
+        {isDM && <span className="text-fg-dim text-sm">💬</span>}
         <span className="font-semibold text-sm text-fg">
-          {isChannel ? (ch?.name || activeChannel).replace(/^#/, '') : 'Server'}
+          {isChannel ? (ch?.name || activeChannel).replace(/^#/, '') : isDM ? activeChannel : 'Server'}
         </span>
       </div>
 
