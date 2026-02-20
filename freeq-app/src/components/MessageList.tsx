@@ -47,6 +47,28 @@ function shouldShowDateSep(msgs: Message[], i: number): boolean {
 
 // ── Linkify + markdown-lite ──
 
+// Image URL patterns (CDN, direct links)
+const IMAGE_URL_RE = /https?:\/\/[^\s<]+\.(?:jpg|jpeg|png|gif|webp)(?:\?[^\s<]*)?/gi;
+const CDN_IMAGE_RE = /https?:\/\/cdn\.bsky\.app\/img\/[^\s<]+/gi;
+
+function extractImageUrls(text: string): string[] {
+  const urls: string[] = [];
+  const matches = text.match(IMAGE_URL_RE) || [];
+  const cdnMatches = text.match(CDN_IMAGE_RE) || [];
+  const all = new Set([...matches, ...cdnMatches]);
+  for (const u of all) urls.push(u);
+  return urls;
+}
+
+/** Text WITHOUT image URLs (for display above images) */
+function textWithoutImages(text: string, imageUrls: string[]): string {
+  let result = text;
+  for (const url of imageUrls) {
+    result = result.replace(url, '').trim();
+  }
+  return result;
+}
+
 function renderText(text: string): string {
   const escaped = text
     .replace(/&/g, '&amp;')
@@ -68,6 +90,49 @@ function renderText(text: string): string {
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>')
     .replace(/~~(.+?)~~/g, '<del class="text-fg-dim">$1</del>');
+}
+
+// ── Message content (text + inline images) ──
+
+function MessageContent({ msg }: { msg: Message }) {
+  if (msg.isAction) {
+    return <div className="text-fg-muted italic text-sm mt-0.5">{msg.text}</div>;
+  }
+
+  const imageUrls = extractImageUrls(msg.text);
+  const cleanText = imageUrls.length > 0 ? textWithoutImages(msg.text, imageUrls) : msg.text;
+
+  return (
+    <div className="mt-0.5">
+      {cleanText && (
+        <div
+          className="text-sm leading-relaxed [&_pre]:my-1 [&_a]:break-all"
+          dangerouslySetInnerHTML={{ __html: renderText(cleanText) }}
+        />
+      )}
+      {imageUrls.length > 0 && (
+        <div className="mt-1.5 flex flex-wrap gap-2">
+          {imageUrls.map((url) => (
+            <a key={url} href={url} target="_blank" rel="noopener" className="block">
+              <img
+                src={url}
+                alt=""
+                className="max-w-sm max-h-80 rounded-lg border border-border object-contain bg-bg-tertiary hover:opacity-90 transition-opacity"
+                loading="lazy"
+                onError={(e) => {
+                  // Replace broken images with a link
+                  const el = e.currentTarget;
+                  el.style.display = 'none';
+                  const a = el.parentElement;
+                  if (a) a.innerHTML = `<span class="text-accent text-sm hover:underline">${url}</span>`;
+                }}
+              />
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ── Message grouping ──
@@ -193,14 +258,7 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
           <span className="text-[11px] text-fg-dim">{formatTime(msg.timestamp)}</span>
           {msg.editOf && <span className="text-[10px] text-fg-dim">(edited)</span>}
         </div>
-        {msg.isAction ? (
-          <div className="text-fg-muted italic text-sm mt-0.5">{msg.text}</div>
-        ) : (
-          <div
-            className="text-sm leading-relaxed mt-0.5 [&_pre]:my-1 [&_a]:break-all"
-            dangerouslySetInnerHTML={{ __html: renderText(msg.text) }}
-          />
-        )}
+        <MessageContent msg={msg} />
         <Reactions msg={msg} channel={channel} />
       </div>
 
@@ -244,14 +302,7 @@ function GroupedMessage({ msg, channel }: MessageProps) {
         {formatTime(msg.timestamp)}
       </span>
       <div className="min-w-0 flex-1">
-        {msg.isAction ? (
-          <div className="text-fg-muted italic text-sm">{msg.text}</div>
-        ) : (
-          <div
-            className="text-sm leading-relaxed [&_pre]:my-1 [&_a]:break-all"
-            dangerouslySetInnerHTML={{ __html: renderText(msg.text) }}
-          />
-        )}
+        <MessageContent msg={msg} />
         <Reactions msg={msg} channel={channel} />
       </div>
 

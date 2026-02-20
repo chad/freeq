@@ -1,7 +1,18 @@
-import { useState, useRef, useCallback, useEffect, useMemo, type KeyboardEvent } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo, type KeyboardEvent, type DragEvent } from 'react';
 import { useStore } from '../store';
 import { sendMessage, joinChannel, partChannel, setTopic, setMode, kickUser, inviteUser, setAway, rawCommand, sendWhois } from '../irc/client';
 import { EmojiPicker } from './EmojiPicker';
+
+// Max file size: 10MB
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
+const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'video/mp4', 'video/webm', 'audio/mpeg', 'audio/ogg', 'application/pdf'];
+
+interface PendingUpload {
+  file: File;
+  preview?: string;
+  uploading: boolean;
+  error?: string;
+}
 
 export function ComposeBox() {
   const [text, setText] = useState('');
@@ -9,10 +20,14 @@ export function ComposeBox() {
   const [historyPos, setHistoryPos] = useState(-1);
   const [showEmoji, setShowEmoji] = useState(false);
   const [autocomplete, setAutocomplete] = useState<{ items: string[]; selected: number; startPos: number } | null>(null);
+  const [pendingUpload, setPendingUpload] = useState<PendingUpload | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const emojiRef = useRef<HTMLButtonElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const activeChannel = useStore((s) => s.activeChannel);
   const channels = useStore((s) => s.channels);
+  const authDid = useStore((s) => s.authDid);
   const ch = channels.get(activeChannel.toLowerCase());
 
   // Typing members
@@ -33,7 +48,6 @@ export function ComposeBox() {
 
   // Autocomplete logic
   const updateAutocomplete = (value: string, cursorPos: number) => {
-    // Find @ before cursor
     const before = value.slice(0, cursorPos);
     const atIdx = before.lastIndexOf('@');
     if (atIdx >= 0 && (atIdx === 0 || before[atIdx - 1] === ' ')) {
@@ -46,7 +60,6 @@ export function ComposeBox() {
         }
       }
     }
-    // Check for # autocomplete
     const hashIdx = before.lastIndexOf('#');
     if (hashIdx >= 0 && (hashIdx === 0 || before[hashIdx - 1] === ' ')) {
       const partial = before.slice(hashIdx + 1).toLowerCase();
@@ -72,7 +85,111 @@ export function ComposeBox() {
     inputRef.current?.focus();
   };
 
+  // ── File upload ──
+
+  const handleFileSelect = useCallback((file: File) => {
+    if (!authDid) {
+      useStore.getState().addSystemMessage(activeChannel, 'File upload requires AT Protocol authentication');
+      return;
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      useStore.getState().addSystemMessage(activeChannel, `File too large (max ${MAX_FILE_SIZE / 1024 / 1024}MB)`);
+      return;
+    }
+    if (!ALLOWED_TYPES.includes(file.type) && !file.type.startsWith('image/')) {
+      useStore.getState().addSystemMessage(activeChannel, `Unsupported file type: ${file.type}`);
+      return;
+    }
+
+    const preview = file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined;
+    setPendingUpload({ file, preview, uploading: false });
+  }, [authDid, activeChannel]);
+
+  const cancelUpload = () => {
+    if (pendingUpload?.preview) URL.revokeObjectURL(pendingUpload.preview);
+    setPendingUpload(null);
+  };
+
+  const doUpload = useCallback(async () => {
+    if (!pendingUpload || !authDid) return;
+    setPendingUpload((p) => p ? { ...p, uploading: true, error: undefined } : null);
+
+    try {
+      const form = new FormData();
+      form.append('file', pendingUpload.file);
+      form.append('did', authDid);
+      if (activeChannel !== 'server' && activeChannel.startsWith('#')) {
+        form.append('channel', activeChannel);
+      }
+      if (text.trim()) {
+        form.append('alt', text.trim());
+      }
+
+      const resp = await fetch('/api/v1/upload', { method: 'POST', body: form });
+      if (!resp.ok) {
+        const err = await resp.text();
+        throw new Error(err);
+      }
+
+      const result = await resp.json();
+      const target = ch?.name || activeChannel;
+      if (target && target !== 'server') {
+        // Send as PRIVMSG with the media URL (and alt text as message)
+        const msgText = text.trim() ? `${text.trim()} ${result.url}` : result.url;
+        sendMessage(target, msgText);
+      }
+
+      if (pendingUpload.preview) URL.revokeObjectURL(pendingUpload.preview);
+      setPendingUpload(null);
+      setText('');
+    } catch (e: any) {
+      setPendingUpload((p) => p ? { ...p, uploading: false, error: e.message || 'Upload failed' } : null);
+    }
+  }, [pendingUpload, authDid, activeChannel, text, ch]);
+
+  // ── Drag & drop ──
+
+  const onDragOver = (e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer?.types.includes('Files')) setDragOver(true);
+  };
+
+  const onDragLeave = (e: DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+  };
+
+  const onDrop = (e: DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+    const file = e.dataTransfer?.files[0];
+    if (file) handleFileSelect(file);
+  };
+
+  // ── Paste ──
+
+  const onPaste = useCallback((e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.kind === 'file') {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) handleFileSelect(file);
+        return;
+      }
+    }
+  }, [handleFileSelect]);
+
   const submit = useCallback(() => {
+    // If there's a pending upload, do that instead of sending text
+    if (pendingUpload && !pendingUpload.uploading) {
+      doUpload();
+      return;
+    }
+
     const trimmed = text.trim();
     if (!trimmed) return;
     setHistory((h) => [...h.slice(-100), trimmed]);
@@ -87,17 +204,16 @@ export function ComposeBox() {
     setText('');
     setAutocomplete(null);
     if (inputRef.current) inputRef.current.style.height = 'auto';
-  }, [text, activeChannel, ch]);
+  }, [text, activeChannel, ch, pendingUpload, doUpload]);
 
   const onKeyDown = (e: KeyboardEvent) => {
-    // Tab completion — works with or without autocomplete dropdown
+    // Tab completion
     if (e.key === 'Tab') {
       e.preventDefault();
       e.stopPropagation();
       if (autocomplete) {
         acceptAutocomplete(autocomplete.items[autocomplete.selected]);
       } else {
-        // Classic IRC tab-complete: complete the word at cursor
         const el = inputRef.current;
         if (el) {
           const pos = el.selectionStart || 0;
@@ -110,7 +226,7 @@ export function ComposeBox() {
             const match = memberNicks.find((n) => n.toLowerCase().startsWith(search));
             if (match) {
               const prefix = isAtPrefix ? '@' : '';
-              const suffix = spIdx < 0 ? ': ' : ' '; // Add : if at start of line
+              const suffix = spIdx < 0 ? ': ' : ' ';
               const newText = before.slice(0, spIdx + 1) + prefix + match + suffix + text.slice(pos);
               setText(newText);
               setAutocomplete(null);
@@ -142,6 +258,12 @@ export function ComposeBox() {
         setAutocomplete(null);
         return;
       }
+    }
+
+    // Escape cancels pending upload
+    if (e.key === 'Escape' && pendingUpload) {
+      cancelUpload();
+      return;
     }
 
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -179,7 +301,21 @@ export function ComposeBox() {
   const canSend = activeChannel !== 'server' || text.startsWith('/');
 
   return (
-    <div className="border-t border-border bg-bg-secondary shrink-0 relative">
+    <div
+      className={`border-t border-border bg-bg-secondary shrink-0 relative ${dragOver ? 'ring-2 ring-accent/50 ring-inset' : ''}`}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {/* Drag overlay */}
+      {dragOver && (
+        <div className="absolute inset-0 bg-accent/5 flex items-center justify-center z-30 pointer-events-none">
+          <div className="bg-bg-secondary border-2 border-dashed border-accent rounded-xl px-6 py-4 text-accent font-medium">
+            Drop file to upload
+          </div>
+        </div>
+      )}
+
       {/* Typing indicator */}
       {typingMembers.length > 0 && (
         <div className="px-4 py-1 text-xs text-fg-dim animate-fadeIn">
@@ -191,6 +327,38 @@ export function ComposeBox() {
           {typingMembers.length === 1
             ? `${typingMembers[0]} is typing`
             : `${typingMembers.slice(0, 3).join(', ')} are typing`}
+        </div>
+      )}
+
+      {/* Pending upload preview */}
+      {pendingUpload && (
+        <div className="px-3 py-2 border-b border-border flex items-center gap-3 animate-fadeIn">
+          {pendingUpload.preview ? (
+            <img src={pendingUpload.preview} alt="" className="w-16 h-16 rounded-lg object-cover border border-border" />
+          ) : (
+            <div className="w-16 h-16 rounded-lg border border-border bg-bg-tertiary flex items-center justify-center text-fg-dim text-xl">
+              📎
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <div className="text-sm text-fg truncate">{pendingUpload.file.name}</div>
+            <div className="text-xs text-fg-dim">
+              {(pendingUpload.file.size / 1024).toFixed(0)} KB · {pendingUpload.file.type}
+            </div>
+            {pendingUpload.error && (
+              <div className="text-xs text-danger mt-0.5">{pendingUpload.error}</div>
+            )}
+          </div>
+          {pendingUpload.uploading ? (
+            <svg className="animate-spin w-5 h-5 text-accent shrink-0" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+          ) : (
+            <button onClick={cancelUpload} className="text-fg-dim hover:text-danger text-lg shrink-0 p-1" title="Cancel">
+              ✕
+            </button>
+          )}
         </div>
       )}
 
@@ -218,6 +386,32 @@ export function ComposeBox() {
       )}
 
       <div className="flex items-end gap-2 px-3 py-2">
+        {/* File upload button (only for AT-authenticated users) */}
+        {authDid && activeChannel !== 'server' && (
+          <>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="w-9 h-9 rounded-lg flex items-center justify-center text-fg-dim hover:text-fg-muted hover:bg-bg-tertiary shrink-0"
+              title="Upload file (or drag & drop, or paste)"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M14 10v3a1 1 0 01-1 1H3a1 1 0 01-1-1v-3M11 5L8 2M8 2L5 5M8 2v8" />
+              </svg>
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              accept="image/*,video/mp4,video/webm,audio/mpeg,audio/ogg,application/pdf"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleFileSelect(file);
+                e.target.value = '';
+              }}
+            />
+          </>
+        )}
+
         {/* Emoji button */}
         <button
           ref={emojiRef}
@@ -235,10 +429,13 @@ export function ComposeBox() {
             value={text}
             onChange={(e) => { setText(e.target.value); onInput(); }}
             onKeyDown={onKeyDown}
+            onPaste={onPaste}
             placeholder={
-              activeChannel === 'server'
-                ? 'Type /help for commands...'
-                : `Message ${ch?.name || activeChannel}`
+              pendingUpload
+                ? 'Add a caption (optional)...'
+                : activeChannel === 'server'
+                  ? 'Type /help for commands...'
+                  : `Message ${ch?.name || activeChannel}`
             }
             rows={1}
             className="flex-1 bg-transparent px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-dim resize-none min-h-[36px] max-h-[120px] leading-relaxed"
@@ -250,16 +447,23 @@ export function ComposeBox() {
         {/* Send */}
         <button
           onClick={submit}
-          disabled={!text.trim() || !canSend}
+          disabled={(!text.trim() && !pendingUpload) || !canSend}
           className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
-            text.trim() && canSend
+            (text.trim() || pendingUpload) && canSend
               ? 'bg-accent text-black hover:bg-accent-hover'
               : 'bg-bg-tertiary text-fg-dim cursor-not-allowed'
           }`}
+          title={pendingUpload ? 'Upload' : 'Send'}
         >
-          <svg className="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M15.854 8.354a.5.5 0 000-.708L12.207 4l-.707.707L14.293 7.5H1v1h13.293l-2.793 2.793.707.707 3.647-3.646z"/>
-          </svg>
+          {pendingUpload ? (
+            <svg className="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M14 10v3a1 1 0 01-1 1H3a1 1 0 01-1-1v-3M11 5L8 2M8 2L5 5M8 2v8" />
+            </svg>
+          ) : (
+            <svg className="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M15.854 8.354a.5.5 0 000-.708L12.207 4l-.707.707L14.293 7.5H1v1h13.293l-2.793 2.793.707.707 3.647-3.646z"/>
+            </svg>
+          )}
         </button>
       </div>
 

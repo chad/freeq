@@ -182,6 +182,7 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/channels/{name}/topic", get(api_channel_topic))
         .route("/api/v1/users/{nick}", get(api_user))
         .route("/api/v1/users/{nick}/whois", get(api_user_whois))
+        .route("/api/v1/upload", axum::routing::post(api_upload))
         .layer(CorsLayer::permissive());
 
     // Serve static web client files if the directory exists
@@ -713,7 +714,18 @@ async fn auth_callback(
         web_token: Some(web_token),
     };
 
-    tracing::info!(did = %pending.did, handle = %pending.handle, "OAuth callback: token obtained");
+    // Store web session for server-proxied operations (media upload)
+    state.web_sessions.lock().unwrap().insert(pending.did.clone(), crate::server::WebSession {
+        did: pending.did.clone(),
+        handle: pending.handle.clone(),
+        pds_url: pending.pds_url.clone(),
+        access_token: access_token.to_string(),
+        dpop_key_b64: pending.dpop_key_b64.clone(),
+        dpop_nonce: dpop_nonce.clone(),
+        created_at: std::time::Instant::now(),
+    });
+
+    tracing::info!(did = %pending.did, handle = %pending.handle, "OAuth callback: token obtained, session stored");
 
     // Return HTML page that posts result to parent window
     Ok(Html(oauth_result_page("Authentication successful!", Some(&result))))
@@ -780,4 +792,96 @@ fn generate_random_string(len: usize) -> String {
 fn urlencod(s: &str) -> String {
     use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
     utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
+}
+
+// ── Media upload endpoint ───────────────────────────────────────────
+
+/// POST /api/v1/upload
+/// Multipart form: `file` (binary), `did` (text), `alt` (optional text), `channel` (optional text).
+/// Server proxies the upload to the user's PDS using their stored OAuth credentials.
+/// Returns JSON: `{ "url": "...", "content_type": "...", "size": N }`.
+async fn api_upload(
+    State(state): State<Arc<SharedState>>,
+    mut multipart: axum::extract::Multipart,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let mut file_data: Option<Vec<u8>> = None;
+    let mut content_type = String::from("application/octet-stream");
+    let mut did = String::new();
+    let mut alt = None::<String>;
+    let mut channel = None::<String>;
+
+    while let Some(field) = multipart.next_field().await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Multipart error: {e}")))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "file" => {
+                if let Some(ct) = field.content_type() {
+                    content_type = ct.to_string();
+                }
+                let bytes = field.bytes().await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("File read error: {e}")))?;
+                if bytes.len() > 10 * 1024 * 1024 {
+                    return Err((StatusCode::PAYLOAD_TOO_LARGE, "File too large (max 10MB)".into()));
+                }
+                file_data = Some(bytes.to_vec());
+            }
+            "did" => {
+                did = field.text().await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("DID read error: {e}")))?;
+            }
+            "alt" => {
+                alt = Some(field.text().await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("Alt read error: {e}")))?);
+            }
+            "channel" => {
+                channel = Some(field.text().await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("Channel read error: {e}")))?);
+            }
+            _ => {}
+        }
+    }
+
+    let file_data = file_data.ok_or_else(|| (StatusCode::BAD_REQUEST, "No file provided".into()))?;
+    if did.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "No DID provided".into()));
+    }
+
+    // Look up the user's web session
+    let session = state.web_sessions.lock().unwrap().get(&did).cloned()
+        .ok_or_else(|| (StatusCode::UNAUTHORIZED, "No active session for this DID — please re-authenticate".into()))?;
+
+    // Check session age (expire after 1 hour)
+    if session.created_at.elapsed() > std::time::Duration::from_secs(3600) {
+        state.web_sessions.lock().unwrap().remove(&did);
+        return Err((StatusCode::UNAUTHORIZED, "Session expired — please re-authenticate".into()));
+    }
+
+    // Upload to PDS using stored DPoP credentials
+    let dpop_key = freeq_sdk::oauth::DpopKey::from_base64url(&session.dpop_key_b64)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DPoP key error: {e}")))?;
+
+    let result = freeq_sdk::media::upload_media_to_pds(
+        &session.pds_url,
+        &session.did,
+        &session.access_token,
+        Some(&dpop_key),
+        session.dpop_nonce.as_deref(),
+        &content_type,
+        &file_data,
+        alt.as_deref(),
+        channel.as_deref(),
+        false, // don't cross-post to Bluesky feed
+    ).await.map_err(|e| {
+        tracing::warn!(did = %did, error = %e, "Media upload failed");
+        (StatusCode::BAD_GATEWAY, format!("PDS upload failed: {e}"))
+    })?;
+
+    tracing::info!(did = %did, url = %result.url, size = result.size, "Media uploaded to PDS");
+
+    Ok(Json(serde_json::json!({
+        "url": result.url,
+        "content_type": result.mime_type,
+        "size": result.size,
+    })))
 }

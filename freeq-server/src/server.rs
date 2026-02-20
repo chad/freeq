@@ -125,6 +125,19 @@ pub struct OAuthResult {
     pub web_token: Option<String>,
 }
 
+/// Active web session with credentials for PDS operations (e.g., media upload).
+/// Keyed by DID in SharedState.web_sessions.
+#[derive(Debug, Clone)]
+pub struct WebSession {
+    pub did: String,
+    pub handle: String,
+    pub pds_url: String,
+    pub access_token: String,
+    pub dpop_key_b64: String,
+    pub dpop_nonce: Option<String>,
+    pub created_at: std::time::Instant,
+}
+
 /// Info about a remote user connected via S2S federation.
 #[derive(Debug, Clone, Default)]
 pub struct RemoteMember {
@@ -276,6 +289,9 @@ pub struct SharedState {
     /// One-time web auth tokens: token → (DID, handle, created_at).
     /// Generated during OAuth callback, consumed during SASL.
     pub web_auth_tokens: Mutex<HashMap<String, (String, String, std::time::Instant)>>,
+    /// Active web sessions with PDS credentials, keyed by DID.
+    /// Used for server-proxied operations like media upload.
+    pub web_sessions: Mutex<HashMap<String, WebSession>>,
     /// session_id -> iroh endpoint ID (for connections via iroh transport).
     pub session_iroh_ids: Mutex<HashMap<String, String>>,
     /// session_id -> away message (None = not away).
@@ -526,6 +542,7 @@ impl Server {
             oauth_pending: Mutex::new(HashMap::new()),
             oauth_complete: Mutex::new(HashMap::new()),
             web_auth_tokens: Mutex::new(HashMap::new()),
+            web_sessions: Mutex::new(HashMap::new()),
             session_iroh_ids: Mutex::new(HashMap::new()),
             session_away: Mutex::new(HashMap::new()),
             server_iroh_id: Mutex::new(None),

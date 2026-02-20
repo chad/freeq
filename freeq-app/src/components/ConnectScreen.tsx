@@ -4,20 +4,48 @@ import { useStore } from '../store';
 
 type LoginMode = 'at-proto' | 'guest';
 
+// Default AT Protocol hosting suffixes — strip these to get short nick
+const DEFAULT_SUFFIXES = [
+  '.bsky.social',
+  '.bsky.app',
+  '.bsky.team',
+  '.bsky.network',
+  '.atproto.com',
+];
+
+/** Derive an IRC nick from an AT Protocol handle.
+ * Custom domains (e.g. chadfowler.com) → use full handle as nick.
+ * Default hosting (e.g. chad.bsky.social) → strip suffix → "chad".
+ */
+function nickFromHandle(handle: string): string {
+  const h = handle.toLowerCase().trim();
+  for (const suffix of DEFAULT_SUFFIXES) {
+    if (h.endsWith(suffix)) {
+      return h.slice(0, -suffix.length);
+    }
+  }
+  // Custom domain — use the full handle as nick
+  return h;
+}
+
+// localStorage keys
+const LS_HANDLE = 'freeq-handle';
+const LS_CHANNELS = 'freeq-channels';
+
 export function ConnectScreen() {
   const registered = useStore((s) => s.registered);
   const connectionState = useStore((s) => s.connectionState);
   const authError = useStore((s) => s.authError);
 
   const [mode, setMode] = useState<LoginMode>('at-proto');
-  const [handle, setHandle] = useState('');
+  const [handle, setHandle] = useState(() => localStorage.getItem(LS_HANDLE) || '');
   const [nick, setNick] = useState(() => 'web' + Math.floor(Math.random() * 99999));
-  const [channels, setChannels] = useState('#freeq');
+  const [atNick, setAtNick] = useState(''); // derived nick for AT login, editable
+  const [channels, setChannels] = useState(() => localStorage.getItem(LS_CHANNELS) || '#freeq');
   const [server, setServer] = useState(() => {
     const loc = window.location;
     if (loc.hostname === 'app.freeq.at') return 'wss://irc.freeq.at/irc';
     const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
-    // AT Protocol OAuth forbids "localhost" — use 127.0.0.1
     const host = loc.host.replace('localhost', '127.0.0.1');
     return `${proto}//${host}/irc`;
   });
@@ -38,6 +66,13 @@ export function ConnectScreen() {
     else nickRef.current?.focus();
   }, [mode]);
 
+  // Update derived nick when handle changes
+  useEffect(() => {
+    if (handle.trim()) {
+      setAtNick(nickFromHandle(handle.trim()));
+    }
+  }, [handle]);
+
   if (registered) return null;
 
   const chans = channels.split(',').map((s) => s.trim()).filter(Boolean);
@@ -50,10 +85,14 @@ export function ConnectScreen() {
     setOauthPending(true);
 
     try {
+      // Persist handle + channels for next visit
+      localStorage.setItem(LS_HANDLE, h);
+      localStorage.setItem(LS_CHANNELS, channels);
+
       // Clear any stale OAuth result
       try { localStorage.removeItem('freeq-oauth-result'); } catch { /* ignore */ }
 
-      // Open OAuth popup — use current page origin so it goes through Vite proxy
+      // Open OAuth popup
       const popupOrigin = window.location.origin.replace('localhost', '127.0.0.1');
       const authUrl = `${popupOrigin}/auth/login?handle=${encodeURIComponent(h)}`;
       const popup = window.open(authUrl, 'freeq-auth', 'width=500,height=700');
@@ -70,20 +109,21 @@ export function ConnectScreen() {
       // Set SASL credentials using the one-time web auth token
       setSaslCredentials(result.web_token || result.access_jwt, result.did, result.pds_url, 'web-token');
 
-      // Derive nick from handle (e.g., chad.bsky.social → chad)
-      const derivedNick = result.handle?.split('.')[0] || h.split('.')[0] || nick;
-      connect(server, derivedNick, chans);
+      // Use the editable nick, falling back to derived from server-returned handle
+      const finalNick = atNick.trim() || nickFromHandle(result.handle || h);
+      connect(server, finalNick, chans);
       setOauthPending(false);
     } catch (e) {
       setError(`OAuth error: ${e}`);
       setOauthPending(false);
     }
-  }, [handle, server, channels, nick, webOrigin, chans]);
+  }, [handle, server, channels, atNick, chans]);
 
   // Guest login (no AT auth)
   const doGuestLogin = () => {
     if (!nick.trim()) { setError('Enter a nickname'); return; }
     setError('');
+    localStorage.setItem(LS_CHANNELS, channels);
     connect(server, nick.trim(), chans);
   };
 
@@ -149,8 +189,22 @@ export function ConnectScreen() {
                   onKeyDown={(e) => e.key === 'Enter' && doAtLogin()}
                   className="w-full bg-bg border border-border rounded-lg px-3 py-2.5 text-sm text-fg outline-none focus:border-accent transition-colors placeholder:text-fg-dim"
                 />
+              </div>
+
+              {/* Derived nick (editable) */}
+              <div>
+                <label className="block text-[10px] uppercase tracking-widest text-fg-dim font-semibold mb-1.5">
+                  Nickname
+                </label>
+                <input
+                  value={atNick}
+                  onChange={(e) => setAtNick(e.target.value)}
+                  placeholder="derived from handle"
+                  onKeyDown={(e) => e.key === 'Enter' && doAtLogin()}
+                  className="w-full bg-bg border border-border rounded-lg px-3 py-2.5 text-sm text-fg outline-none focus:border-accent transition-colors placeholder:text-fg-dim"
+                />
                 <p className="text-[10px] text-fg-dim mt-1">
-                  Your Bluesky or AT Protocol handle. Nickname derived automatically.
+                  Your IRC nick. Defaults to your handle — edit if you prefer something different.
                 </p>
               </div>
             </>
@@ -273,6 +327,14 @@ export function ConnectScreen() {
   );
 }
 
+interface OAuthResultData {
+  did: string;
+  handle: string;
+  access_jwt: string;
+  pds_url: string;
+  web_token?: string;
+}
+
 /**
  * Wait for OAuth result from popup window.
  * Tries BroadcastChannel, postMessage, and localStorage polling.
@@ -280,59 +342,47 @@ export function ConnectScreen() {
 function waitForOAuthResult(_popup: Window | null): Promise<OAuthResultData | null> {
   return new Promise((resolve) => {
     let resolved = false;
-    const done = (result: OAuthResultData | null) => {
+    const done = (data: OAuthResultData | null) => {
       if (resolved) return;
       resolved = true;
       cleanup();
-      resolve(result);
+      resolve(data);
     };
 
-    // 5 minute timeout — user might be slow logging in
-    const timeout = setTimeout(() => done(null), 5 * 60 * 1000);
-
-    // BroadcastChannel (best — works across same-origin tabs)
+    // Method 1: BroadcastChannel
     let bc: BroadcastChannel | null = null;
     try {
       bc = new BroadcastChannel('freeq-oauth');
-      bc.onmessage = (e) => {
-        if (e.data?.type === 'freeq-oauth' && e.data.result) {
-          done(e.data.result);
-        }
+      bc.onmessage = (ev) => {
+        if (ev.data?.type === 'oauth-result') done(ev.data.result);
       };
-    } catch { /* not supported */ }
+    } catch { /* BroadcastChannel not supported */ }
 
-    // window.postMessage
-    const msgHandler = (e: MessageEvent) => {
-      if (e.data?.type === 'freeq-oauth' && e.data.result) {
-        done(e.data.result);
-      }
+    // Method 2: postMessage from popup
+    const onMessage = (ev: MessageEvent) => {
+      if (ev.data?.type === 'oauth-result') done(ev.data.result);
     };
-    window.addEventListener('message', msgHandler);
+    window.addEventListener('message', onMessage);
 
-    // localStorage polling — most reliable fallback
-    const pollInterval = setInterval(() => {
+    // Method 3: localStorage polling (fallback)
+    const poll = setInterval(() => {
       try {
-        const stored = localStorage.getItem('freeq-oauth-result');
-        if (stored) {
+        const raw = localStorage.getItem('freeq-oauth-result');
+        if (raw) {
           localStorage.removeItem('freeq-oauth-result');
-          done(JSON.parse(stored));
+          done(JSON.parse(raw));
         }
       } catch { /* ignore */ }
     }, 300);
 
+    // Timeout after 5 minutes
+    const timeout = setTimeout(() => done(null), 5 * 60 * 1000);
+
     function cleanup() {
+      bc?.close();
+      window.removeEventListener('message', onMessage);
+      clearInterval(poll);
       clearTimeout(timeout);
-      clearInterval(pollInterval);
-      window.removeEventListener('message', msgHandler);
-      if (bc) { bc.close(); bc = null; }
     }
   });
-}
-
-interface OAuthResultData {
-  did: string;
-  handle: string;
-  access_jwt: string;
-  pds_url: string;
-  web_token?: string;
 }
