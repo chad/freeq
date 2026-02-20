@@ -355,11 +355,11 @@ async fn channel_messaging() {
     // Alice sends a message
     handle1.privmsg("#test", "hello bob!").await.unwrap();
 
-    // Bob should receive it
+    // Bob should receive it (skip echo-message from alice if any)
     let msg = expect_event(
         &mut events2,
         2000,
-        |e| matches!(e, Event::Message { target, .. } if target == "#test"),
+        |e| matches!(e, Event::Message { from, target, .. } if target == "#test" && from == "alice"),
         "Bob receives message",
     )
     .await;
@@ -373,10 +373,11 @@ async fn channel_messaging() {
     // Bob replies
     handle2.privmsg("#test", "hi alice!").await.unwrap();
 
+    // Alice receives bob's reply (skip echo of her own message)
     let msg = expect_event(
         &mut events1,
         2000,
-        |e| matches!(e, Event::Message { target, .. } if target == "#test"),
+        |e| matches!(e, Event::Message { from, target, .. } if target == "#test" && from == "bob"),
         "Alice receives reply",
     )
     .await;
@@ -439,12 +440,12 @@ async fn mixed_auth_and_guest_in_channel() {
     handle_guest.join("#mixed").await.unwrap();
     expect_event(&mut events_guest, 2000, |e| matches!(e, Event::Joined { .. }), "Guest join").await;
 
-    // Guest sends message, authed user receives it
+    // Guest sends message, authed user receives it (filter by sender)
     handle_guest.privmsg("#mixed", "from guest").await.unwrap();
     let msg = expect_event(
         &mut events_auth,
         2000,
-        |e| matches!(e, Event::Message { target, .. } if target == "#mixed"),
+        |e| matches!(e, Event::Message { from, target, .. } if target == "#mixed" && from == "guest"),
         "Authed receives from guest",
     )
     .await;
@@ -453,12 +454,12 @@ async fn mixed_auth_and_guest_in_channel() {
         assert_eq!(text, "from guest");
     }
 
-    // Authed sends message, guest receives it
+    // Authed sends message, guest receives it (filter by sender)
     handle_auth.privmsg("#mixed", "from authed").await.unwrap();
     let msg = expect_event(
         &mut events_guest,
         2000,
-        |e| matches!(e, Event::Message { target, .. } if target == "#mixed"),
+        |e| matches!(e, Event::Message { from, target, .. } if target == "#mixed" && from == "authed"),
         "Guest receives from authed",
     )
     .await;

@@ -149,17 +149,37 @@ pub(super) async fn handle_authenticate(
         send(state, session_id, format!("{reply}\r\n"));
     } else if conn.sasl_in_progress {
         if let Some(response) = sasl::decode_response(param) {
+            // Check for web-token method first (server-side OAuth pre-verified)
+            let web_token_result = if response.method.as_deref() == Some("web-token") {
+                let mut tokens = state.web_auth_tokens.lock().unwrap();
+                if let Some((did, _handle, created)) = tokens.remove(&response.signature) {
+                    // Token expires after 5 minutes
+                    if created.elapsed() < std::time::Duration::from_secs(300) && did == response.did {
+                        Some(Ok(did))
+                    } else {
+                        Some(Err("Web auth token expired or DID mismatch".to_string()))
+                    }
+                } else {
+                    Some(Err("Invalid web auth token".to_string()))
+                }
+            } else {
+                None
+            };
+
             let taken = state.challenge_store.take(session_id);
             match taken {
                 Some((challenge, challenge_bytes)) => {
-                    match sasl::verify_response(
-                        &challenge,
-                        &challenge_bytes,
-                        &response,
-                        &state.did_resolver,
-                    )
-                    .await
-                    {
+                    let verify_result = if let Some(result) = web_token_result {
+                        result
+                    } else {
+                        sasl::verify_response(
+                            &challenge,
+                            &challenge_bytes,
+                            &response,
+                            &state.did_resolver,
+                        ).await
+                    };
+                    match verify_result {
                         Ok(did) => {
                             conn.authenticated_did = Some(did.clone());
                             conn.sasl_in_progress = false;

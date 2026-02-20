@@ -67,8 +67,8 @@ export function ConnectScreen() {
         return;
       }
 
-      // Set SASL credentials and connect
-      setSaslCredentials(result.access_jwt, result.did, result.pds_url, 'oauth');
+      // Set SASL credentials using the one-time web auth token
+      setSaslCredentials(result.web_token || result.access_jwt, result.did, result.pds_url, 'web-token');
 
       // Derive nick from handle (e.g., chad.bsky.social → chad)
       const derivedNick = result.handle?.split('.')[0] || h.split('.')[0] || nick;
@@ -334,4 +334,5 @@ interface OAuthResultData {
   handle: string;
   access_jwt: string;
   pds_url: string;
+  web_token?: string;
 }

@@ -993,7 +993,6 @@ async fn process_input(
                 let msg_parts: Vec<&str> = arg.splitn(2, ' ').collect();
                 if msg_parts.len() == 2 {
                     handle.privmsg(msg_parts[0], msg_parts[1]).await?;
-                    app.chat_msg(msg_parts[0], &app.nick.clone(), msg_parts[1]);
                 } else {
                     app.status_msg("Usage: /msg <target> <message>");
                 }

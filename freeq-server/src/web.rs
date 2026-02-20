@@ -698,11 +698,19 @@ async fn auth_callback(
     let access_token = token_resp["access_token"].as_str()
         .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No access_token".to_string()))?;
 
+    // Generate a one-time web auth token for SASL
+    let web_token = generate_random_string(32);
+    state.web_auth_tokens.lock().unwrap().insert(
+        web_token.clone(),
+        (pending.did.clone(), pending.handle.clone(), std::time::Instant::now()),
+    );
+
     let result = crate::server::OAuthResult {
         did: pending.did.clone(),
         handle: pending.handle.clone(),
         access_jwt: access_token.to_string(),
         pds_url: pending.pds_url.clone(),
+        web_token: Some(web_token),
     };
 
     tracing::info!(did = %pending.did, handle = %pending.handle, "OAuth callback: token obtained");

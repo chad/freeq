@@ -120,6 +120,9 @@ pub struct OAuthResult {
     pub handle: String,
     pub access_jwt: String,
     pub pds_url: String,
+    /// One-time token for SASL web-token auth (consumed on first use).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub web_token: Option<String>,
 }
 
 /// Info about a remote user connected via S2S federation.
@@ -270,6 +273,9 @@ pub struct SharedState {
     pub oauth_pending: Mutex<HashMap<String, OAuthPending>>,
     /// Completed OAuth sessions: state → OAuthResult.
     pub oauth_complete: Mutex<HashMap<String, OAuthResult>>,
+    /// One-time web auth tokens: token → (DID, handle, created_at).
+    /// Generated during OAuth callback, consumed during SASL.
+    pub web_auth_tokens: Mutex<HashMap<String, (String, String, std::time::Instant)>>,
     /// session_id -> iroh endpoint ID (for connections via iroh transport).
     pub session_iroh_ids: Mutex<HashMap<String, String>>,
     /// session_id -> away message (None = not away).
@@ -519,6 +525,7 @@ impl Server {
             cap_away_notify: Mutex::new(HashSet::new()),
             oauth_pending: Mutex::new(HashMap::new()),
             oauth_complete: Mutex::new(HashMap::new()),
+            web_auth_tokens: Mutex::new(HashMap::new()),
             session_iroh_ids: Mutex::new(HashMap::new()),
             session_away: Mutex::new(HashMap::new()),
             server_iroh_id: Mutex::new(None),
