@@ -6,3 +6,7 @@ freeq.db*
 .claude/
 .entire/
 tests.log
+
+# freeq-app
+freeq-app/node_modules/
+freeq-app/dist/
