@@ -73,11 +73,21 @@ export function setSaslCredentials(token: string, did: string, pdsUrl: string, m
 
 export function sendMessage(target: string, text: string) {
   raw(`PRIVMSG ${target} :${text}`);
+
+  // Ensure DM buffer exists
+  const isChannel = target.startsWith('#') || target.startsWith('&');
+  if (!isChannel) {
+    const store = useStore.getState();
+    if (!store.channels.has(target.toLowerCase())) {
+      store.addChannel(target);
+    }
+  }
+
   // If we have echo-message, server will echo it back.
   // Otherwise, add it locally.
   if (!ackedCaps.has('echo-message')) {
     useStore.getState().addMessage(target, {
-      id: crypto.randomUUID(), // placeholder until echo
+      id: crypto.randomUUID(),
       from: nick,
       text,
       timestamp: new Date(),
@@ -269,7 +279,10 @@ function handleLine(rawLine: string) {
       const target = msg.params[0];
       const text = msg.params[1] || '';
       const isAction = text.startsWith('\x01ACTION ') && text.endsWith('\x01');
-      const bufName = target.startsWith('#') || target.startsWith('&') ? target : from;
+      // For channels, buffer = channel name. For DMs, buffer = the other person's nick.
+      const isChannel = target.startsWith('#') || target.startsWith('&');
+      const isSelf = from.toLowerCase() === nick.toLowerCase();
+      const bufName = isChannel ? target : (isSelf ? target : from);
 
       // Handle edits
       const editOf = msg.tags['+draft/edit'];
@@ -285,9 +298,14 @@ function handleLine(rawLine: string) {
         timestamp: msg.tags['time'] ? new Date(msg.tags['time']) : new Date(),
         tags: msg.tags,
         isAction,
-        isSelf: from === nick,
+        isSelf: isSelf,
         replyTo: msg.tags['+reply'],
       };
+
+      // Ensure DM buffer exists
+      if (!isChannel && !store.channels.has(bufName.toLowerCase())) {
+        store.addChannel(bufName);
+      }
 
       store.addMessage(bufName, message);
 
