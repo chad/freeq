@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useStore } from '../store';
-import { sendWhois } from '../irc/client';
 import { fetchProfile, getCachedProfile } from '../lib/profiles';
+import { UserPopover } from './UserPopover';
 
 const NICK_COLORS = [
   '#ff6eb4', '#00d4aa', '#ffb547', '#5c9eff', '#b18cff',
@@ -18,6 +18,7 @@ export function MemberList() {
   const activeChannel = useStore((s) => s.activeChannel);
   const channels = useStore((s) => s.channels);
   const ch = channels.get(activeChannel.toLowerCase());
+  const [popover, setPopover] = useState<{ nick: string; did?: string; pos: { x: number; y: number } } | null>(null);
 
   if (!ch || activeChannel === 'server') return null;
 
@@ -31,23 +32,36 @@ export function MemberList() {
   const voiced = members.filter((m) => !m.isOp && m.isVoiced);
   const regular = members.filter((m) => !m.isOp && !m.isVoiced);
 
+  const onMemberClick = (nick: string, did: string | undefined, e: React.MouseEvent) => {
+    setPopover({ nick, did, pos: { x: e.clientX, y: e.clientY } });
+  };
+
   return (
     <aside className="w-52 bg-bg-secondary border-l border-border overflow-y-auto shrink-0 hidden lg:block">
       <div className="px-3 pt-4 pb-2">
         {ops.length > 0 && (
           <Section label={`Operators — ${ops.length}`}>
-            {ops.map((m) => <MemberItem key={m.nick} member={m} />)}
+            {ops.map((m) => <MemberItem key={m.nick} member={m} onClick={onMemberClick} />)}
           </Section>
         )}
         {voiced.length > 0 && (
           <Section label={`Voiced — ${voiced.length}`}>
-            {voiced.map((m) => <MemberItem key={m.nick} member={m} />)}
+            {voiced.map((m) => <MemberItem key={m.nick} member={m} onClick={onMemberClick} />)}
           </Section>
         )}
         <Section label={`${ops.length > 0 || voiced.length > 0 ? 'Members' : 'Online'} — ${regular.length}`}>
-          {regular.map((m) => <MemberItem key={m.nick} member={m} />)}
+          {regular.map((m) => <MemberItem key={m.nick} member={m} onClick={onMemberClick} />)}
         </Section>
       </div>
+
+      {popover && (
+        <UserPopover
+          nick={popover.nick}
+          did={popover.did}
+          position={popover.pos}
+          onClose={() => setPopover(null)}
+        />
+      )}
     </aside>
   );
 }
@@ -72,21 +86,21 @@ interface MemberItemProps {
     away?: string | null;
     typing?: boolean;
   };
+  onClick: (nick: string, did: string | undefined, e: React.MouseEvent) => void;
 }
 
-function MemberItem({ member }: MemberItemProps) {
+function MemberItem({ member, onClick }: MemberItemProps) {
   const color = nickColor(member.nick);
 
   return (
     <button
-      onClick={() => sendWhois(member.nick)}
+      onClick={(e) => onClick(member.nick, member.did, e)}
       className="w-full flex items-center gap-2 px-1.5 py-1 rounded-md text-sm hover:bg-bg-tertiary group"
       title={member.did || member.nick}
     >
       <MiniAvatar nick={member.nick} did={member.did} color={color} />
 
       <div className="min-w-0 flex-1 flex items-center gap-1">
-        {/* Prefix */}
         {member.isOp && <span className="text-success text-[10px] font-bold">@</span>}
         {!member.isOp && member.isVoiced && <span className="text-warning text-[10px] font-bold">+</span>}
 
@@ -101,12 +115,10 @@ function MemberItem({ member }: MemberItemProps) {
         )}
       </div>
 
-      {/* Away dot */}
       {member.away && !member.typing && (
         <span className="w-1.5 h-1.5 rounded-full bg-warning shrink-0 ml-auto" title={`Away: ${member.away}`} />
       )}
 
-      {/* DID badge */}
       {member.did && !member.typing && !member.away && (
         <span className="text-[9px] text-accent opacity-0 group-hover:opacity-60 ml-auto" title={member.did}>✓</span>
       )}
