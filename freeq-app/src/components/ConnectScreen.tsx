@@ -50,8 +50,10 @@ export function ConnectScreen() {
     setOauthPending(true);
 
     try {
-      // Open OAuth popup
-      const authUrl = `${webOrigin}/auth/login?handle=${encodeURIComponent(h)}`;
+      // Open OAuth popup — use current page origin so it goes through Vite proxy
+      // (which forwards /auth to the freeq server)
+      const popupOrigin = window.location.origin.replace('localhost', '127.0.0.1');
+      const authUrl = `${popupOrigin}/auth/login?handle=${encodeURIComponent(h)}`;
       const popup = window.open(authUrl, 'freeq-auth', 'width=500,height=700');
 
       // Listen for OAuth result via BroadcastChannel
