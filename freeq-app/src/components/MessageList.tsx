@@ -1,6 +1,9 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { useStore, type Message } from '../store';
-import { getNick, requestHistory } from '../irc/client';
+import { getNick, requestHistory, sendReaction } from '../irc/client';
+import { fetchProfile, getCachedProfile, type ATProfile } from '../lib/profiles';
+import { EmojiPicker } from './EmojiPicker';
+import { UserPopover } from './UserPopover';
 
 // ── Colors ──
 
@@ -29,7 +32,6 @@ function formatDateSeparator(d: Date): string {
   const today = new Date();
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
-
   if (d.toDateString() === today.toDateString()) return 'Today';
   if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
   return d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
@@ -43,7 +45,7 @@ function shouldShowDateSep(msgs: Message[], i: number): boolean {
   return prev.timestamp.toDateString() !== curr.timestamp.toDateString();
 }
 
-// ── Linkify ──
+// ── Linkify + markdown-lite ──
 
 function renderText(text: string): string {
   const escaped = text
@@ -56,17 +58,19 @@ function renderText(text: string): string {
       '<a href="$1" target="_blank" rel="noopener" class="text-accent hover:underline break-all">$1</a>',
     )
     .replace(
-      /`([^`]+)`/g,
-      '<code class="bg-surface px-1 py-0.5 rounded text-[13px] font-mono">$1</code>',
+      /```([\s\S]*?)```/g,
+      '<pre class="bg-surface rounded px-2 py-1.5 my-1 text-[13px] font-mono overflow-x-auto">$1</pre>',
     )
     .replace(
-      /\*\*(.+?)\*\*/g,
-      '<strong>$1</strong>',
-    );
+      /`([^`]+)`/g,
+      '<code class="bg-surface px-1 py-0.5 rounded text-[13px] font-mono text-pink">$1</code>',
+    )
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>')
+    .replace(/~~(.+?)~~/g, '<del class="text-fg-dim">$1</del>');
 }
 
 // ── Message grouping ──
-// Consecutive messages from the same nick within 5 minutes are "grouped"
 
 function isGrouped(msgs: Message[], i: number): boolean {
   if (i === 0) return false;
@@ -76,6 +80,48 @@ function isGrouped(msgs: Message[], i: number): boolean {
   if (prev.from !== curr.from) return false;
   if (curr.timestamp.getTime() - prev.timestamp.getTime() > 5 * 60 * 1000) return false;
   return true;
+}
+
+// ── Avatar component with AT profile support ──
+
+function Avatar({ nick, did, size = 36 }: { nick: string; did?: string; size?: number }) {
+  const [profile, setProfile] = useState<ATProfile | null>(
+    did ? getCachedProfile(did) : null
+  );
+
+  useEffect(() => {
+    if (did && !profile) {
+      fetchProfile(did).then((p) => p && setProfile(p));
+    }
+  }, [did]);
+
+  const color = nickColor(nick);
+
+  if (profile?.avatar) {
+    return (
+      <img
+        src={profile.avatar}
+        alt=""
+        className="rounded-full object-cover shrink-0"
+        style={{ width: size, height: size }}
+      />
+    );
+  }
+
+  return (
+    <div
+      className="rounded-full flex items-center justify-center font-bold shrink-0"
+      style={{
+        width: size,
+        height: size,
+        backgroundColor: color + '20',
+        color,
+        fontSize: size * 0.4,
+      }}
+    >
+      {nickInitial(nick)}
+    </div>
+  );
 }
 
 // ── Components ──
@@ -101,129 +147,171 @@ function SystemMessage({ msg }: { msg: Message }) {
   );
 }
 
-function FullMessage({ msg }: { msg: Message }) {
+interface MessageProps {
+  msg: Message;
+  channel: string;
+  onNickClick: (nick: string, did: string | undefined, e: React.MouseEvent) => void;
+}
+
+function FullMessage({ msg, channel, onNickClick }: MessageProps) {
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [pickerPos, setPickerPos] = useState<{ x: number; y: number } | undefined>();
   const color = msg.isSelf ? '#b18cff' : nickColor(msg.from);
   const currentNick = getNick();
   const isMention = !msg.isSelf && msg.text.toLowerCase().includes(currentNick.toLowerCase());
 
+  // Find DID for this user from channel members
+  const channels = useStore.getState().channels;
+  const ch = channels.get(channel.toLowerCase());
+  const member = ch?.members.get(msg.from.toLowerCase());
+
+  const openEmojiPicker = (e: React.MouseEvent) => {
+    setPickerPos({ x: e.clientX, y: e.clientY });
+    setShowEmojiPicker(true);
+  };
+
   return (
-    <div className={`group px-4 pt-2 pb-0.5 hover:bg-white/[0.015] flex gap-3 ${
-      isMention ? 'bg-accent-dim border-l-2 border-accent' : ''
+    <div className={`group px-4 pt-2 pb-0.5 hover:bg-white/[0.015] flex gap-3 relative ${
+      isMention ? 'bg-accent/[0.04] border-l-2 border-accent' : ''
     }`}>
-      {/* Avatar */}
       <div
-        className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0 mt-0.5"
-        style={{ backgroundColor: color + '20', color }}
+        className="cursor-pointer mt-0.5"
+        onClick={(e) => onNickClick(msg.from, member?.did, e)}
       >
-        {nickInitial(msg.from)}
+        <Avatar nick={msg.from} did={member?.did} />
       </div>
 
-      {/* Content */}
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
-          <span className="font-semibold text-sm" style={{ color }}>
+          <button
+            className="font-semibold text-sm hover:underline"
+            style={{ color }}
+            onClick={(e) => onNickClick(msg.from, member?.did, e)}
+          >
             {msg.from}
-          </span>
-          <span className="text-[11px] text-fg-dim">
-            {formatTime(msg.timestamp)}
-          </span>
-          {msg.editOf && (
-            <span className="text-[10px] text-fg-dim">(edited)</span>
-          )}
+          </button>
+          <span className="text-[11px] text-fg-dim">{formatTime(msg.timestamp)}</span>
+          {msg.editOf && <span className="text-[10px] text-fg-dim">(edited)</span>}
         </div>
         {msg.isAction ? (
-          <div className="text-fg-muted italic text-sm mt-0.5">
-            {msg.text}
-          </div>
+          <div className="text-fg-muted italic text-sm mt-0.5">{msg.text}</div>
         ) : (
           <div
-            className="text-sm leading-relaxed mt-0.5"
+            className="text-sm leading-relaxed mt-0.5 [&_pre]:my-1 [&_a]:break-all"
             dangerouslySetInnerHTML={{ __html: renderText(msg.text) }}
           />
         )}
-        {/* Reactions */}
-        {msg.reactions && msg.reactions.size > 0 && (
-          <div className="flex gap-1 mt-1 flex-wrap">
-            {[...msg.reactions.entries()].map(([emoji, nicks]) => (
-              <span
-                key={emoji}
-                className="bg-surface hover:bg-surface-hover rounded-md px-2 py-0.5 text-xs cursor-default inline-flex items-center gap-1"
-                title={[...nicks].join(', ')}
-              >
-                <span>{emoji}</span>
-                <span className="text-fg-muted">{nicks.size}</span>
-              </span>
-            ))}
-          </div>
-        )}
+        <Reactions msg={msg} channel={channel} />
       </div>
 
       {/* Hover actions */}
-      <div className="opacity-0 group-hover:opacity-100 shrink-0 flex items-start gap-0.5 -mt-1">
-        <HoverButton emoji="😄" title="React" />
-        <HoverButton emoji="↩" title="Reply" />
+      <div className="opacity-0 group-hover:opacity-100 absolute right-3 -top-3 flex items-center bg-bg-secondary border border-border rounded-lg shadow-lg overflow-hidden">
+        <HoverBtn emoji="😄" title="Add reaction" onClick={openEmojiPicker} />
+        <HoverBtn emoji="💬" title="Reply" onClick={() => {}} />
+        <HoverBtn emoji="📌" title="Pin" onClick={() => {}} />
       </div>
+
+      {showEmojiPicker && pickerPos && (
+        <div className="fixed z-50" style={{ left: pickerPos.x - 140, top: pickerPos.y - 280 }}>
+          <EmojiPicker
+            onSelect={(emoji) => {
+              sendReaction(channel, emoji, msg.id);
+              setShowEmojiPicker(false);
+            }}
+            onClose={() => setShowEmojiPicker(false)}
+          />
+        </div>
+      )}
     </div>
   );
 }
 
-function GroupedMessage({ msg }: { msg: Message }) {
+function GroupedMessage({ msg, channel }: MessageProps) {
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [pickerPos, setPickerPos] = useState<{ x: number; y: number } | undefined>();
   const currentNick = getNick();
   const isMention = !msg.isSelf && msg.text.toLowerCase().includes(currentNick.toLowerCase());
 
+  const openEmojiPicker = (e: React.MouseEvent) => {
+    setPickerPos({ x: e.clientX, y: e.clientY });
+    setShowEmojiPicker(true);
+  };
+
   return (
-    <div className={`group px-4 py-0.5 hover:bg-white/[0.015] flex gap-3 ${
-      isMention ? 'bg-accent-dim border-l-2 border-accent' : ''
+    <div className={`group px-4 py-0.5 hover:bg-white/[0.015] flex gap-3 relative ${
+      isMention ? 'bg-accent/[0.04] border-l-2 border-accent' : ''
     }`}>
-      {/* Time (shows on hover) */}
       <span className="w-9 shrink-0 text-right text-[10px] text-fg-dim opacity-0 group-hover:opacity-100 leading-[22px]">
         {formatTime(msg.timestamp)}
       </span>
-
-      {/* Content */}
       <div className="min-w-0 flex-1">
         {msg.isAction ? (
-          <div className="text-fg-muted italic text-sm">
-            {msg.text}
-          </div>
+          <div className="text-fg-muted italic text-sm">{msg.text}</div>
         ) : (
           <div
-            className="text-sm leading-relaxed"
+            className="text-sm leading-relaxed [&_pre]:my-1 [&_a]:break-all"
             dangerouslySetInnerHTML={{ __html: renderText(msg.text) }}
           />
         )}
-        {msg.reactions && msg.reactions.size > 0 && (
-          <div className="flex gap-1 mt-1 flex-wrap">
-            {[...msg.reactions.entries()].map(([emoji, nicks]) => (
-              <span
-                key={emoji}
-                className="bg-surface hover:bg-surface-hover rounded-md px-2 py-0.5 text-xs cursor-default inline-flex items-center gap-1"
-                title={[...nicks].join(', ')}
-              >
-                <span>{emoji}</span>
-                <span className="text-fg-muted">{nicks.size}</span>
-              </span>
-            ))}
-          </div>
-        )}
+        <Reactions msg={msg} channel={channel} />
       </div>
 
-      <div className="opacity-0 group-hover:opacity-100 shrink-0 flex items-start gap-0.5">
-        <HoverButton emoji="😄" title="React" />
-        <HoverButton emoji="↩" title="Reply" />
+      <div className="opacity-0 group-hover:opacity-100 absolute right-3 -top-3 flex items-center bg-bg-secondary border border-border rounded-lg shadow-lg overflow-hidden">
+        <HoverBtn emoji="😄" title="Add reaction" onClick={openEmojiPicker} />
+        <HoverBtn emoji="💬" title="Reply" onClick={() => {}} />
       </div>
+
+      {showEmojiPicker && pickerPos && (
+        <div className="fixed z-50" style={{ left: pickerPos.x - 140, top: pickerPos.y - 280 }}>
+          <EmojiPicker
+            onSelect={(emoji) => {
+              sendReaction(channel, emoji, msg.id);
+              setShowEmojiPicker(false);
+            }}
+            onClose={() => setShowEmojiPicker(false)}
+          />
+        </div>
+      )}
     </div>
   );
 }
 
-function HoverButton({ emoji, title }: { emoji: string; title: string }) {
+function HoverBtn({ emoji, title, onClick }: { emoji: string; title: string; onClick: (e: React.MouseEvent) => void }) {
   return (
     <button
-      className="w-7 h-7 rounded flex items-center justify-center text-xs hover:bg-surface text-fg-dim hover:text-fg-muted"
+      className="w-8 h-8 flex items-center justify-center text-xs hover:bg-bg-tertiary text-fg-dim hover:text-fg-muted"
       title={title}
+      onClick={onClick}
     >
       {emoji}
     </button>
+  );
+}
+
+function Reactions({ msg, channel }: { msg: Message; channel: string }) {
+  if (!msg.reactions || msg.reactions.size === 0) return null;
+  const myNick = getNick();
+  return (
+    <div className="flex gap-1 mt-1 flex-wrap">
+      {[...msg.reactions.entries()].map(([emoji, nicks]) => {
+        const isMine = nicks.has(myNick);
+        return (
+          <button
+            key={emoji}
+            onClick={() => sendReaction(channel, emoji, msg.id)}
+            className={`rounded-md px-2 py-0.5 text-xs inline-flex items-center gap-1 border ${
+              isMine
+                ? 'bg-accent/10 border-accent/30 text-accent'
+                : 'bg-surface border-transparent hover:border-border-bright text-fg-muted'
+            }`}
+            title={[...nicks].join(', ')}
+          >
+            <span>{emoji}</span>
+            <span>{nicks.size}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -235,12 +323,13 @@ export function MessageList() {
   const serverMessages = useStore((s) => s.serverMessages);
   const ref = useRef<HTMLDivElement>(null);
   const prevLenRef = useRef(0);
+  const [popover, setPopover] = useState<{ nick: string; did?: string; pos: { x: number; y: number } } | null>(null);
 
   const messages = activeChannel === 'server'
     ? serverMessages
     : channels.get(activeChannel.toLowerCase())?.messages || [];
 
-  // Auto-scroll to bottom on new messages (if near bottom)
+  // Auto-scroll
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -273,6 +362,10 @@ export function MessageList() {
     }
   }, [activeChannel, messages]);
 
+  const onNickClick = useCallback((nick: string, did: string | undefined, e: React.MouseEvent) => {
+    setPopover({ nick, did, pos: { x: e.clientX, y: e.clientY } });
+  }, []);
+
   return (
     <div ref={ref} className="flex-1 overflow-y-auto" onScroll={onScroll}>
       {messages.length === 0 && (
@@ -282,9 +375,7 @@ export function MessageList() {
             {activeChannel === 'server' ? 'Server messages will appear here' : 'No messages yet'}
           </div>
           {activeChannel !== 'server' && (
-            <div className="text-xs mt-1 text-fg-dim">
-              Be the first to say something!
-            </div>
+            <div className="text-xs mt-1 text-fg-dim">Be the first to say something!</div>
           )}
         </div>
       )}
@@ -295,13 +386,22 @@ export function MessageList() {
             {msg.isSystem ? (
               <SystemMessage msg={msg} />
             ) : isGrouped(messages, i) ? (
-              <GroupedMessage msg={msg} />
+              <GroupedMessage msg={msg} channel={activeChannel} onNickClick={onNickClick} />
             ) : (
-              <FullMessage msg={msg} />
+              <FullMessage msg={msg} channel={activeChannel} onNickClick={onNickClick} />
             )}
           </div>
         ))}
       </div>
+
+      {popover && (
+        <UserPopover
+          nick={popover.nick}
+          did={popover.did}
+          position={popover.pos}
+          onClose={() => setPopover(null)}
+        />
+      )}
     </div>
   );
 }

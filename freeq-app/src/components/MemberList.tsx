@@ -1,5 +1,7 @@
+import { useState, useEffect } from 'react';
 import { useStore } from '../store';
 import { sendWhois } from '../irc/client';
+import { fetchProfile, getCachedProfile } from '../lib/profiles';
 
 const NICK_COLORS = [
   '#ff6eb4', '#00d4aa', '#ffb547', '#5c9eff', '#b18cff',
@@ -81,13 +83,7 @@ function MemberItem({ member }: MemberItemProps) {
       className="w-full flex items-center gap-2 px-1.5 py-1 rounded-md text-sm hover:bg-bg-tertiary group"
       title={member.did || member.nick}
     >
-      {/* Mini avatar */}
-      <div
-        className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
-        style={{ backgroundColor: color + '20', color }}
-      >
-        {member.nick[0]?.toUpperCase()}
-      </div>
+      <MiniAvatar nick={member.nick} did={member.did} color={color} />
 
       <div className="min-w-0 flex-1 flex items-center gap-1">
         {/* Prefix */}
@@ -115,5 +111,31 @@ function MemberItem({ member }: MemberItemProps) {
         <span className="text-[9px] text-accent opacity-0 group-hover:opacity-60 ml-auto" title={member.did}>✓</span>
       )}
     </button>
+  );
+}
+
+function MiniAvatar({ nick, did, color }: { nick: string; did?: string; color: string }) {
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(() => {
+    if (!did) return null;
+    return getCachedProfile(did)?.avatar || null;
+  });
+
+  useEffect(() => {
+    if (did && !avatarUrl) {
+      fetchProfile(did).then((p) => p?.avatar && setAvatarUrl(p.avatar));
+    }
+  }, [did]);
+
+  if (avatarUrl) {
+    return <img src={avatarUrl} alt="" className="w-6 h-6 rounded-full object-cover shrink-0" />;
+  }
+
+  return (
+    <div
+      className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
+      style={{ backgroundColor: color + '20', color }}
+    >
+      {nick[0]?.toUpperCase()}
+    </div>
   );
 }

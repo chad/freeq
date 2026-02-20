@@ -60,10 +60,15 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes slideIn {
+@keyframes slideInLeft {
   from { opacity: 0; transform: translateX(-8px); }
   to { opacity: 1; transform: translateX(0); }
 }
 
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
 .animate-fadeIn { animation: fadeIn 200ms ease; }
-.animate-slideIn { animation: slideIn 150ms ease; }
+.animate-slideIn { animation: slideInRight 200ms ease; }

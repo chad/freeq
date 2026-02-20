@@ -8,6 +8,7 @@
 import { parse, prefixNick, format, type IRCMessage } from './parser';
 import { Transport, type TransportState } from './transport';
 import { useStore, type Message } from '../store';
+import { notify } from '../lib/notifications';
 
 // ── State ──
 
@@ -267,9 +268,10 @@ function handleLine(rawLine: string) {
 
       store.addMessage(bufName, message);
 
-      // Mention detection
+      // Mention detection + notification
       if (!message.isSelf && text.toLowerCase().includes(nick.toLowerCase())) {
         store.incrementMentions(bufName);
+        notify(bufName, `${from}: ${text.slice(0, 100)}`);
       }
       break;
     }

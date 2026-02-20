@@ -2,7 +2,11 @@ import { useState } from 'react';
 import { useStore } from '../store';
 import { setTopic as sendTopic } from '../irc/client';
 
-export function TopBar() {
+interface TopBarProps {
+  onToggleSidebar?: () => void;
+}
+
+export function TopBar({ onToggleSidebar }: TopBarProps) {
   const activeChannel = useStore((s) => s.activeChannel);
   const channels = useStore((s) => s.channels);
   const [editing, setEditing] = useState(false);
@@ -25,6 +29,16 @@ export function TopBar() {
 
   return (
     <header className="h-12 bg-bg-secondary border-b border-border flex items-center gap-3 px-4 shrink-0">
+      {/* Mobile menu button */}
+      <button
+        onClick={onToggleSidebar}
+        className="md:hidden text-fg-dim hover:text-fg-muted p-1 -ml-1 mr-1"
+      >
+        <svg className="w-5 h-5" viewBox="0 0 16 16" fill="currentColor">
+          <path fillRule="evenodd" d="M2.5 12a.5.5 0 01.5-.5h10a.5.5 0 010 1H3a.5.5 0 01-.5-.5zm0-4a.5.5 0 01.5-.5h10a.5.5 0 010 1H3a.5.5 0 01-.5-.5zm0-4a.5.5 0 01.5-.5h10a.5.5 0 010 1H3a.5.5 0 01-.5-.5z"/>
+        </svg>
+      </button>
+
       {/* Channel name */}
       <div className="flex items-center gap-2 shrink-0">
         {isChannel && <span className="text-accent text-sm font-medium">#</span>}
