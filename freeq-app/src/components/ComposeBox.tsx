@@ -21,6 +21,7 @@ export function ComposeBox() {
   const [showEmoji, setShowEmoji] = useState(false);
   const [autocomplete, setAutocomplete] = useState<{ items: string[]; selected: number; startPos: number } | null>(null);
   const [pendingUpload, setPendingUpload] = useState<PendingUpload | null>(null);
+  const [crossPost, setCrossPost] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const emojiRef = useRef<HTMLButtonElement>(null);
@@ -140,6 +141,9 @@ export function ComposeBox() {
       }
       if (text.trim()) {
         form.append('alt', text.trim());
+      }
+      if (crossPost) {
+        form.append('cross_post', 'true');
       }
 
       const resp = await fetch('/api/v1/upload', { method: 'POST', body: form });
@@ -416,6 +420,18 @@ export function ComposeBox() {
             </div>
             {pendingUpload.error && (
               <div className="text-xs text-danger mt-0.5">{pendingUpload.error}</div>
+            )}
+            {authDid && (
+              <label className="flex items-center gap-1.5 mt-1 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={crossPost}
+                  onChange={(e) => setCrossPost(e.target.checked)}
+                  className="w-3 h-3 rounded accent-blue"
+                />
+                <span className="text-[11px] text-fg-dim">Also post to Bluesky</span>
+                <span className="text-[10px]">🦋</span>
+              </label>
             )}
           </div>
           {pendingUpload.uploading ? (

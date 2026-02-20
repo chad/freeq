@@ -809,6 +809,7 @@ async fn api_upload(
     let mut did = String::new();
     let mut alt = None::<String>;
     let mut channel = None::<String>;
+    let mut cross_post = false;
 
     while let Some(field) = multipart.next_field().await
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Multipart error: {e}")))?
@@ -837,6 +838,10 @@ async fn api_upload(
             "channel" => {
                 channel = Some(field.text().await
                     .map_err(|e| (StatusCode::BAD_REQUEST, format!("Channel read error: {e}")))?);
+            }
+            "cross_post" => {
+                let val = field.text().await.unwrap_or_default();
+                cross_post = val == "true" || val == "1";
             }
             _ => {}
         }
@@ -871,7 +876,7 @@ async fn api_upload(
         &file_data,
         alt.as_deref(),
         channel.as_deref(),
-        false, // don't cross-post to Bluesky feed
+        cross_post,
     ).await.map_err(|e| {
         tracing::warn!(did = %did, error = %e, "Media upload failed");
         (StatusCode::BAD_GATEWAY, format!("PDS upload failed: {e}"))

@@ -7,24 +7,17 @@ export function ChannelListModal() {
   const list = useStore((s) => s.channelList);
   const setOpen = useStore((s) => s.setChannelListOpen);
   const [filter, setFilter] = useState('');
-  const [createMode, setCreateMode] = useState(false);
-  const [newChan, setNewChan] = useState('#');
+  const [confirmCreate, setConfirmCreate] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const createRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
-      // Request channel list from server
       rawCommand('LIST');
       setFilter('');
-      setCreateMode(false);
+      setConfirmCreate(null);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [open]);
-
-  useEffect(() => {
-    if (createMode) createRef.current?.focus();
-  }, [createMode]);
 
   const filtered = useMemo(() => {
     if (!filter) return list;
@@ -33,6 +26,22 @@ export function ChannelListModal() {
       ch.name.toLowerCase().includes(q) || ch.topic.toLowerCase().includes(q)
     );
   }, [list, filter]);
+
+  // Derive the channel name from filter for "create" suggestion
+  const createName = useMemo(() => {
+    if (!filter.trim()) return '';
+    const f = filter.trim();
+    return f.startsWith('#') ? f : `#${f}`;
+  }, [filter]);
+
+  // Show create suggestion when filter doesn't match any channel exactly
+  const showCreateSuggestion = filter.trim().length > 0 &&
+    !list.some((ch) => ch.name.toLowerCase() === createName.toLowerCase());
+
+  const doCreate = (name: string) => {
+    joinChannel(name);
+    setOpen(false);
+  };
 
   if (!open) return null;
 
@@ -47,38 +56,50 @@ export function ChannelListModal() {
           <span className="text-accent text-sm font-semibold">Browse Channels</span>
           <span className="text-[10px] text-fg-dim bg-bg px-1.5 py-0.5 rounded-full">{list.length}</span>
           <div className="flex-1" />
-          <button
-            onClick={() => setCreateMode(!createMode)}
-            className="text-xs text-accent hover:text-accent-hover font-medium"
-          >
-            + Create
-          </button>
+          <kbd className="text-[10px] text-fg-dim bg-bg px-1.5 py-0.5 rounded border border-border">ESC</kbd>
         </div>
 
-        {/* Create channel */}
-        {createMode && (
-          <div className="px-4 py-2 border-b border-border flex gap-2 animate-fadeIn">
-            <input
-              ref={createRef}
-              value={newChan}
-              onChange={(e) => setNewChan(e.target.value)}
-              placeholder="#new-channel"
-              className="flex-1 bg-bg border border-border rounded-lg px-3 py-1.5 text-sm text-fg outline-none focus:border-accent"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && newChan.trim()) {
-                  const name = newChan.startsWith('#') ? newChan : `#${newChan}`;
-                  joinChannel(name);
-                  setOpen(false);
-                }
-                if (e.key === 'Escape') setCreateMode(false);
-              }}
-            />
-            <button
-              onClick={() => {
-                const name = newChan.startsWith('#') ? newChan : `#${newChan}`;
-                joinChannel(name);
+        {/* Filter / Search */}
+        <div className="px-4 py-2 border-b border-border">
+          <input
+            ref={inputRef}
+            value={filter}
+            onChange={(e) => { setFilter(e.target.value); setConfirmCreate(null); }}
+            placeholder="Search or create a channel..."
+            className="w-full bg-bg border border-border rounded-lg px-3 py-2 text-sm text-fg outline-none focus:border-accent placeholder:text-fg-dim"
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setOpen(false);
+              if (e.key === 'Enter' && showCreateSuggestion && !confirmCreate) {
+                setConfirmCreate(createName);
+              } else if (e.key === 'Enter' && confirmCreate) {
+                doCreate(confirmCreate);
+              } else if (e.key === 'Enter' && filtered.length === 1) {
+                joinChannel(filtered[0].name);
                 setOpen(false);
-              }}
+              }
+            }}
+          />
+        </div>
+
+        {/* Confirm create */}
+        {confirmCreate && (
+          <div className="px-4 py-3 border-b border-border bg-accent/[0.03] flex items-center gap-3 animate-fadeIn">
+            <div className="flex-1">
+              <div className="text-sm text-fg">
+                Create <span className="font-semibold text-accent">{confirmCreate}</span>?
+              </div>
+              <div className="text-xs text-fg-dim mt-0.5">
+                This channel doesn't exist yet. You'll be the founder.
+              </div>
+            </div>
+            <button
+              onClick={() => setConfirmCreate(null)}
+              className="text-xs text-fg-dim hover:text-fg-muted px-2 py-1"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => doCreate(confirmCreate)}
               className="bg-accent text-black text-xs font-bold px-3 py-1.5 rounded-lg hover:bg-accent-hover"
             >
               Create
@@ -86,25 +107,25 @@ export function ChannelListModal() {
           </div>
         )}
 
-        {/* Filter */}
-        <div className="px-4 py-2 border-b border-border">
-          <input
-            ref={inputRef}
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            placeholder="Filter channels..."
-            className="w-full bg-bg border border-border rounded-lg px-3 py-1.5 text-sm text-fg outline-none focus:border-accent"
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') setOpen(false);
-            }}
-          />
-        </div>
-
         {/* Channel list */}
         <div className="flex-1 overflow-y-auto">
-          {filtered.length === 0 ? (
+          {/* Create suggestion when no exact match */}
+          {showCreateSuggestion && !confirmCreate && (
+            <button
+              onClick={() => setConfirmCreate(createName)}
+              className="w-full text-left px-4 py-3 hover:bg-bg-tertiary border-b border-border/50 flex items-center gap-2"
+            >
+              <span className="w-7 h-7 rounded-lg bg-accent/10 flex items-center justify-center text-accent text-sm font-bold">+</span>
+              <div>
+                <span className="text-sm font-semibold text-fg">Create {createName}</span>
+                <span className="text-xs text-fg-dim ml-2">New channel</span>
+              </div>
+            </button>
+          )}
+
+          {filtered.length === 0 && !showCreateSuggestion ? (
             <div className="text-center text-fg-dim text-sm py-8">
-              {list.length === 0 ? 'Loading channels...' : 'No channels match filter'}
+              {list.length === 0 ? 'Loading channels...' : 'No channels match'}
             </div>
           ) : (
             filtered.map((ch) => (
