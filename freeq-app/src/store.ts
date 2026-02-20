@@ -60,6 +60,25 @@ export interface WhoisInfo {
   fetchedAt: number;
 }
 
+export interface ReplyContext {
+  msgId: string;
+  from: string;
+  text: string;
+  channel: string;
+}
+
+export interface EditContext {
+  msgId: string;
+  text: string;
+  channel: string;
+}
+
+export interface ChannelListEntry {
+  name: string;
+  topic: string;
+  count: number;
+}
+
 export interface Store {
   // Connection
   connectionState: TransportState;
@@ -79,6 +98,16 @@ export interface Store {
 
   // WHOIS cache
   whoisCache: Map<string, WhoisInfo>;
+
+  // UI state
+  replyTo: ReplyContext | null;
+  editingMsg: EditContext | null;
+  theme: 'dark' | 'light';
+  searchOpen: boolean;
+  searchQuery: string;
+  channelListOpen: boolean;
+  channelList: ChannelListEntry[];
+  lightboxUrl: string | null;
 
   // Actions — connection
   setConnectionState: (state: TransportState) => void;
@@ -120,6 +149,17 @@ export interface Store {
 
   // Actions — whois
   updateWhois: (nick: string, info: Partial<WhoisInfo>) => void;
+
+  // Actions — UI
+  setReplyTo: (ctx: ReplyContext | null) => void;
+  setEditingMsg: (ctx: EditContext | null) => void;
+  setTheme: (theme: 'dark' | 'light') => void;
+  setSearchOpen: (open: boolean) => void;
+  setSearchQuery: (query: string) => void;
+  setChannelListOpen: (open: boolean) => void;
+  setChannelList: (list: ChannelListEntry[]) => void;
+  addChannelListEntry: (entry: ChannelListEntry) => void;
+  setLightboxUrl: (url: string | null) => void;
 }
 
 function getOrCreateChannel(channels: Map<string, Channel>, name: string): Channel {
@@ -154,6 +194,14 @@ export const useStore = create<Store>((set, get) => ({
   serverMessages: [],
   batches: new Map(),
   whoisCache: new Map(),
+  replyTo: null,
+  editingMsg: null,
+  theme: (localStorage.getItem('freeq-theme') as 'dark' | 'light') || 'dark',
+  searchOpen: false,
+  searchQuery: '',
+  channelListOpen: false,
+  channelList: [],
+  lightboxUrl: null,
 
   // Connection
   setConnectionState: (state) => set({ connectionState: state }),
@@ -169,7 +217,7 @@ export const useStore = create<Store>((set, get) => ({
     serverMessages: [],
     batches: new Map(),
   }),
-  fullReset: () => set({
+  fullReset: () => set((s) => ({
     connectionState: 'disconnected',
     nick: '',
     registered: false,
@@ -181,7 +229,15 @@ export const useStore = create<Store>((set, get) => ({
     serverMessages: [],
     batches: new Map(),
     whoisCache: new Map(),
-  }),
+    replyTo: null,
+    editingMsg: null,
+    searchOpen: false,
+    searchQuery: '',
+    channelListOpen: false,
+    channelList: [],
+    lightboxUrl: null,
+    theme: s.theme, // preserve theme across reconnects
+  })),
 
   // Channels
   addChannel: (name) => set((s) => {
@@ -460,4 +516,20 @@ export const useStore = create<Store>((set, get) => ({
     whoisCache.set(key, { ...existing, ...info, nick, fetchedAt: Date.now() });
     return { whoisCache };
   }),
+
+  // UI actions
+  setReplyTo: (ctx) => set({ replyTo: ctx }),
+  setEditingMsg: (ctx) => set({ editingMsg: ctx }),
+  setTheme: (theme) => {
+    localStorage.setItem('freeq-theme', theme);
+    set({ theme });
+  },
+  setSearchOpen: (open) => set({ searchOpen: open, searchQuery: open ? '' : '' }),
+  setSearchQuery: (query) => set({ searchQuery: query }),
+  setChannelListOpen: (open) => set({ channelListOpen: open }),
+  setChannelList: (list) => set({ channelList: list }),
+  addChannelListEntry: (entry) => set((s) => ({
+    channelList: [...s.channelList, entry],
+  })),
+  setLightboxUrl: (url) => set({ lightboxUrl: url }),
 }));

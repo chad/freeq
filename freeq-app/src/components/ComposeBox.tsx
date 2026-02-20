@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo, type KeyboardEvent, type DragEvent } from 'react';
 import { useStore } from '../store';
-import { sendMessage, joinChannel, partChannel, setTopic, setMode, kickUser, inviteUser, setAway, rawCommand, sendWhois } from '../irc/client';
+import { sendMessage, sendReply, sendEdit, joinChannel, partChannel, setTopic, setMode, kickUser, inviteUser, setAway, rawCommand, sendWhois } from '../irc/client';
 import { EmojiPicker } from './EmojiPicker';
 
 // Max file size: 10MB
@@ -28,7 +28,24 @@ export function ComposeBox() {
   const activeChannel = useStore((s) => s.activeChannel);
   const channels = useStore((s) => s.channels);
   const authDid = useStore((s) => s.authDid);
+  const replyTo = useStore((s) => s.replyTo);
+  const editingMsg = useStore((s) => s.editingMsg);
   const ch = channels.get(activeChannel.toLowerCase());
+
+  // Initialize edit mode with message text
+  useEffect(() => {
+    if (editingMsg && editingMsg.channel.toLowerCase() === activeChannel.toLowerCase()) {
+      setText(editingMsg.text);
+      inputRef.current?.focus();
+    }
+  }, [editingMsg]);
+
+  // Focus on reply
+  useEffect(() => {
+    if (replyTo && replyTo.channel.toLowerCase() === activeChannel.toLowerCase()) {
+      inputRef.current?.focus();
+    }
+  }, [replyTo]);
 
   // Typing members
   const typingMembers = ch
@@ -183,6 +200,12 @@ export function ComposeBox() {
     }
   }, [handleFileSelect]);
 
+  const cancelReplyEdit = () => {
+    useStore.getState().setReplyTo(null);
+    useStore.getState().setEditingMsg(null);
+    setText('');
+  };
+
   const submit = useCallback(() => {
     // If there's a pending upload, do that instead of sending text
     if (pendingUpload && !pendingUpload.uploading) {
@@ -199,12 +222,22 @@ export function ComposeBox() {
       handleCommand(trimmed, activeChannel);
     } else if (activeChannel !== 'server') {
       const target = ch?.name || activeChannel;
-      sendMessage(target, trimmed);
+      if (editingMsg && editingMsg.channel.toLowerCase() === activeChannel.toLowerCase()) {
+        // Edit mode
+        sendEdit(target, editingMsg.msgId, trimmed);
+        useStore.getState().setEditingMsg(null);
+      } else if (replyTo && replyTo.channel.toLowerCase() === activeChannel.toLowerCase()) {
+        // Reply mode
+        sendReply(target, replyTo.msgId, trimmed);
+        useStore.getState().setReplyTo(null);
+      } else {
+        sendMessage(target, trimmed);
+      }
     }
     setText('');
     setAutocomplete(null);
     if (inputRef.current) inputRef.current.style.height = 'auto';
-  }, [text, activeChannel, ch, pendingUpload, doUpload]);
+  }, [text, activeChannel, ch, pendingUpload, doUpload, editingMsg, replyTo]);
 
   const onKeyDown = (e: KeyboardEvent) => {
     // Tab completion
@@ -260,10 +293,10 @@ export function ComposeBox() {
       }
     }
 
-    // Escape cancels pending upload
-    if (e.key === 'Escape' && pendingUpload) {
-      cancelUpload();
-      return;
+    // Escape cancels pending upload, reply, or edit
+    if (e.key === 'Escape') {
+      if (pendingUpload) { cancelUpload(); return; }
+      if (replyTo || editingMsg) { cancelReplyEdit(); return; }
     }
 
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -327,6 +360,30 @@ export function ComposeBox() {
           {typingMembers.length === 1
             ? `${typingMembers[0]} is typing`
             : `${typingMembers.slice(0, 3).join(', ')} are typing`}
+        </div>
+      )}
+
+      {/* Reply context */}
+      {replyTo && replyTo.channel.toLowerCase() === activeChannel.toLowerCase() && (
+        <div className="px-3 py-2 border-b border-border flex items-center gap-2 animate-fadeIn bg-accent/[0.03]">
+          <div className="w-1 h-8 bg-accent rounded-full shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="text-[10px] text-accent font-semibold">Replying to {replyTo.from}</div>
+            <div className="text-xs text-fg-muted truncate">{replyTo.text}</div>
+          </div>
+          <button onClick={cancelReplyEdit} className="text-fg-dim hover:text-danger text-lg shrink-0 p-1">✕</button>
+        </div>
+      )}
+
+      {/* Edit context */}
+      {editingMsg && editingMsg.channel.toLowerCase() === activeChannel.toLowerCase() && (
+        <div className="px-3 py-2 border-b border-border flex items-center gap-2 animate-fadeIn bg-warning/[0.03]">
+          <div className="w-1 h-8 bg-warning rounded-full shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="text-[10px] text-warning font-semibold">Editing message</div>
+            <div className="text-xs text-fg-muted truncate">{editingMsg.text}</div>
+          </div>
+          <button onClick={cancelReplyEdit} className="text-fg-dim hover:text-danger text-lg shrink-0 p-1">✕</button>
         </div>
       )}
 

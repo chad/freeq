@@ -97,6 +97,20 @@ export function sendMessage(target: string, text: string) {
   }
 }
 
+export function sendReply(target: string, replyToMsgId: string, text: string) {
+  const line = format('PRIVMSG', [target, text], { '+reply': replyToMsgId });
+  raw(line);
+
+  // Ensure DM buffer exists
+  const isChannel = target.startsWith('#') || target.startsWith('&');
+  if (!isChannel) {
+    const store = useStore.getState();
+    if (!store.channels.has(target.toLowerCase())) {
+      store.addChannel(target);
+    }
+  }
+}
+
 export function sendEdit(target: string, originalMsgId: string, newText: string) {
   const line = format('PRIVMSG', [target, newText], { '+draft/edit': originalMsgId });
   raw(line);
@@ -499,8 +513,18 @@ function handleLine(rawLine: string) {
     }
 
     // ── Channel list ──
-    case '322': // RPL_LIST
-      store.addSystemMessage('server', `  ${msg.params[1]} (${msg.params[2]}) ${msg.params[3] || ''}`);
+    case '321': // RPL_LISTSTART
+      store.setChannelList([]);
+      break;
+    case '322': { // RPL_LIST
+      const chName = msg.params[1] || '';
+      const chCount = parseInt(msg.params[2] || '0', 10);
+      const chTopic = msg.params[3] || '';
+      store.addChannelListEntry({ name: chName, topic: chTopic, count: chCount });
+      store.addSystemMessage('server', `  ${chName} (${chCount}) ${chTopic}`);
+      break;
+    }
+    case '323': // RPL_LISTEND
       break;
 
     // ── Informational ──

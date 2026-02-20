@@ -4,6 +4,7 @@ import { getNick, requestHistory, sendReaction } from '../irc/client';
 import { fetchProfile, getCachedProfile, type ATProfile } from '../lib/profiles';
 import { EmojiPicker } from './EmojiPicker';
 import { UserPopover } from './UserPopover';
+import { BlueskyEmbed } from './BlueskyEmbed';
 
 // ── Colors ──
 
@@ -94,7 +95,14 @@ function renderText(text: string): string {
 
 // ── Message content (text + inline images) ──
 
+// Bluesky post URL pattern
+const BSKY_POST_RE = /https?:\/\/bsky\.app\/profile\/([^/]+)\/post\/([a-zA-Z0-9]+)/;
+// YouTube URL pattern  
+const YT_RE = /(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
+
 function MessageContent({ msg }: { msg: Message }) {
+  const setLightbox = useStore((s) => s.setLightboxUrl);
+
   if (msg.isAction) {
     return <div className="text-fg-muted italic text-sm mt-0.5">{msg.text}</div>;
   }
@@ -102,35 +110,80 @@ function MessageContent({ msg }: { msg: Message }) {
   const imageUrls = extractImageUrls(msg.text);
   const cleanText = imageUrls.length > 0 ? textWithoutImages(msg.text, imageUrls) : msg.text;
 
+  // Check for embeddable URLs
+  const bskyMatch = msg.text.match(BSKY_POST_RE);
+  const ytMatch = msg.text.match(YT_RE);
+
   return (
     <div className="mt-0.5">
+      {/* Reply context */}
+      {msg.replyTo && <ReplyBadge msgId={msg.replyTo} />}
+
       {cleanText && (
         <div
           className="text-sm leading-relaxed [&_pre]:my-1 [&_a]:break-all"
           dangerouslySetInnerHTML={{ __html: renderText(cleanText) }}
         />
       )}
+
+      {/* Inline images */}
       {imageUrls.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-2">
           {imageUrls.map((url) => (
-            <a key={url} href={url} target="_blank" rel="noopener" className="block">
+            <button key={url} onClick={() => setLightbox(url)} className="block cursor-zoom-in">
               <img
                 src={url}
                 alt=""
                 className="max-w-sm max-h-80 rounded-lg border border-border object-contain bg-bg-tertiary hover:opacity-90 transition-opacity"
                 loading="lazy"
                 onError={(e) => {
-                  // Replace broken images with a link
                   const el = e.currentTarget;
                   el.style.display = 'none';
-                  const a = el.parentElement;
-                  if (a) a.innerHTML = `<span class="text-accent text-sm hover:underline">${url}</span>`;
                 }}
               />
-            </a>
+            </button>
           ))}
         </div>
       )}
+
+      {/* Bluesky post embed */}
+      {bskyMatch && <BlueskyEmbed handle={bskyMatch[1]} rkey={bskyMatch[2]} />}
+
+      {/* YouTube thumbnail */}
+      {ytMatch && (
+        <a
+          href={`https://youtube.com/watch?v=${ytMatch[1]}`}
+          target="_blank"
+          rel="noopener"
+          className="mt-2 block max-w-sm rounded-lg overflow-hidden border border-border hover:border-accent/50 transition-colors"
+        >
+          <img
+            src={`https://img.youtube.com/vi/${ytMatch[1]}/mqdefault.jpg`}
+            alt="YouTube video"
+            className="w-full"
+            loading="lazy"
+          />
+          <div className="bg-bg-tertiary px-3 py-1.5 text-xs text-fg-muted flex items-center gap-1">
+            <span className="text-red-500">▶</span> YouTube
+          </div>
+        </a>
+      )}
+    </div>
+  );
+}
+
+/** Inline reply badge showing the original message */
+function ReplyBadge({ msgId }: { msgId: string }) {
+  const channels = useStore((s) => s.channels);
+  const activeChannel = useStore((s) => s.activeChannel);
+  const ch = channels.get(activeChannel.toLowerCase());
+  const original = ch?.messages.find((m) => m.id === msgId);
+  if (!original) return null;
+
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-fg-dim mb-1 pl-2 border-l-2 border-accent/30">
+      <span className="font-semibold text-fg-muted">{original.from}</span>
+      <span className="truncate max-w-[300px]">{original.text}</span>
     </div>
   );
 }
@@ -255,6 +308,10 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
           >
             {msg.from}
           </button>
+          {member?.did && <VerifiedBadge />}
+          {member?.away != null && (
+            <span className="text-[10px] text-fg-dim bg-warning/10 text-warning px-1 py-0.5 rounded">away</span>
+          )}
           <span className="text-[11px] text-fg-dim">{formatTime(msg.timestamp)}</span>
           {msg.editOf && <span className="text-[10px] text-fg-dim">(edited)</span>}
         </div>
@@ -264,8 +321,15 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
 
       {/* Hover actions */}
       <div className="opacity-0 group-hover:opacity-100 absolute right-3 -top-3 flex items-center bg-bg-secondary border border-border rounded-lg shadow-lg overflow-hidden">
+        <HoverBtn emoji="↩️" title="Reply" onClick={() => {
+          useStore.getState().setReplyTo({ msgId: msg.id, from: msg.from, text: msg.text, channel });
+        }} />
+        {msg.isSelf && !msg.isSystem && (
+          <HoverBtn emoji="✏️" title="Edit" onClick={() => {
+            useStore.getState().setEditingMsg({ msgId: msg.id, text: msg.text, channel });
+          }} />
+        )}
         <HoverBtn emoji="😄" title="Add reaction" onClick={openEmojiPicker} />
-
       </div>
 
       {showEmojiPicker && pickerPos && (
@@ -307,8 +371,15 @@ function GroupedMessage({ msg, channel }: MessageProps) {
       </div>
 
       <div className="opacity-0 group-hover:opacity-100 absolute right-3 -top-3 flex items-center bg-bg-secondary border border-border rounded-lg shadow-lg overflow-hidden">
+        <HoverBtn emoji="↩️" title="Reply" onClick={() => {
+          useStore.getState().setReplyTo({ msgId: msg.id, from: msg.from, text: msg.text, channel });
+        }} />
+        {msg.isSelf && !msg.isSystem && (
+          <HoverBtn emoji="✏️" title="Edit" onClick={() => {
+            useStore.getState().setEditingMsg({ msgId: msg.id, text: msg.text, channel });
+          }} />
+        )}
         <HoverBtn emoji="😄" title="Add reaction" onClick={openEmojiPicker} />
-
       </div>
 
       {showEmojiPicker && pickerPos && (
@@ -323,6 +394,17 @@ function GroupedMessage({ msg, channel }: MessageProps) {
         </div>
       )}
     </div>
+  );
+}
+
+/** Verification badge for AT Protocol-authenticated users */
+function VerifiedBadge() {
+  return (
+    <span className="text-accent text-[10px]" title="AT Protocol verified identity">
+      <svg className="w-3.5 h-3.5 inline -mt-0.5" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M8 0a8 8 0 100 16A8 8 0 008 0zm3.78 5.97l-4.5 5a.75.75 0 01-1.06.02l-2-1.86a.75.75 0 011.02-1.1l1.45 1.35 3.98-4.43a.75.75 0 011.11 1.02z"/>
+      </svg>
+    </span>
   );
 }
 

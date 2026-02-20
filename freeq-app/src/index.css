@@ -1,5 +1,6 @@
 @import "tailwindcss";
 
+/* ── Dark theme (default) ── */
 @theme {
   --color-bg: #0c0c0f;
   --color-bg-secondary: #131318;
@@ -24,6 +25,30 @@
 
   --font-mono: 'JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas', monospace;
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* ── Light theme ── */
+[data-theme="light"] {
+  --color-bg: #ffffff;
+  --color-bg-secondary: #f8f8fa;
+  --color-bg-tertiary: #f0f0f4;
+  --color-surface: #e4e4ea;
+  --color-surface-hover: #d8d8e0;
+  --color-border: #e0e0e8;
+  --color-border-bright: #d0d0da;
+  --color-fg: #1a1a2e;
+  --color-fg-muted: #555570;
+  --color-fg-dim: #9898b0;
+  --color-accent: #00a882;
+  --color-accent-hover: #00c49a;
+  --color-accent-dim: #00a88220;
+  --color-success: #00a882;
+  --color-warning: #cc8800;
+  --color-danger: #dd4444;
+  --color-purple: #8a5cf5;
+  --color-blue: #3b7dff;
+  --color-pink: #e05090;
+  --color-orange: #e07520;
 }
 
 @font-face {

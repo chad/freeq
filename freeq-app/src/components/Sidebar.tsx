@@ -66,13 +66,22 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
           <span className="text-[10px] uppercase tracking-widest text-fg-dim font-semibold">
             Channels
           </span>
-          <button
-            onClick={() => setShowJoin(!showJoin)}
-            className="text-fg-dim hover:text-fg-muted text-lg leading-none px-1"
-            title="Join channel"
-          >
-            +
-          </button>
+          <div className="flex items-center gap-0.5">
+            <button
+              onClick={() => useStore.getState().setChannelListOpen(true)}
+              className="text-fg-dim hover:text-fg-muted text-[10px] px-1"
+              title="Browse channels"
+            >
+              ⊞
+            </button>
+            <button
+              onClick={() => setShowJoin(!showJoin)}
+              className="text-fg-dim hover:text-fg-muted text-lg leading-none px-1"
+              title="Join channel"
+            >
+              +
+            </button>
+          </div>
         </div>
 
         {showJoin && (

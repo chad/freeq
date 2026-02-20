@@ -98,7 +98,13 @@ function MemberItem({ member, onClick }: MemberItemProps) {
       className="w-full flex items-center gap-2 px-1.5 py-1 rounded-md text-sm hover:bg-bg-tertiary group"
       title={member.did || member.nick}
     >
-      <MiniAvatar nick={member.nick} did={member.did} color={color} />
+      <div className="relative">
+        <MiniAvatar nick={member.nick} did={member.did} color={color} />
+        {/* Presence dot */}
+        <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-bg-secondary ${
+          member.away ? 'bg-warning' : 'bg-success'
+        }`} />
+      </div>
 
       <div className="min-w-0 flex-1 flex items-center gap-1">
         {member.isOp && <span className="text-success text-[10px] font-bold">@</span>}
@@ -110,18 +116,14 @@ function MemberItem({ member, onClick }: MemberItemProps) {
           {member.nick}
         </span>
 
+        {member.did && (
+          <span className="text-accent text-[9px]" title="AT Protocol verified">✓</span>
+        )}
+
         {member.typing && (
           <span className="text-accent text-[10px] ml-auto animate-pulse">typing</span>
         )}
       </div>
-
-      {member.away && !member.typing && (
-        <span className="w-1.5 h-1.5 rounded-full bg-warning shrink-0 ml-auto" title={`Away: ${member.away}`} />
-      )}
-
-      {member.did && !member.typing && !member.away && (
-        <span className="text-[9px] text-accent opacity-0 group-hover:opacity-60 ml-auto" title={member.did}>✓</span>
-      )}
     </button>
   );
 }
