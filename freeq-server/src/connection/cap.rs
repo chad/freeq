@@ -189,6 +189,10 @@ pub(super) async fn handle_authenticate(
                                 .unwrap()
                                 .insert(session_id.to_string(), did.clone());
 
+                            // Ghost any old sessions with the same DID.
+                            // This frees the nick so reclaim can work at registration time.
+                            super::registration::ghost_same_did(conn, state, session_id);
+
                             // Bind nick to DID (persistent identity-nick)
                             if let Some(ref nick) = conn.nick {
                                 let nick_lower = nick.to_lowercase();
