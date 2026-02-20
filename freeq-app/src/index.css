@@ -1,33 +1,69 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg: #09090b;
-  --color-bg-secondary: #18181b;
-  --color-bg-tertiary: #27272a;
-  --color-surface: #3f3f46;
-  --color-border: #27272a;
-  --color-fg: #fafafa;
-  --color-fg-muted: #a1a1aa;
-  --color-fg-dim: #52525b;
-  --color-accent: #06b6d4;
-  --color-accent-hover: #22d3ee;
-  --color-success: #10b981;
-  --color-warning: #f59e0b;
-  --color-danger: #ef4444;
-  --color-purple: #a855f7;
+  --color-bg: #0c0c0f;
+  --color-bg-secondary: #131318;
+  --color-bg-tertiary: #1c1c24;
+  --color-surface: #26263a;
+  --color-surface-hover: #2e2e42;
+  --color-border: #1e1e2e;
+  --color-border-bright: #2e2e42;
+  --color-fg: #e8e8ed;
+  --color-fg-muted: #9898b0;
+  --color-fg-dim: #555570;
+  --color-accent: #00d4aa;
+  --color-accent-hover: #00f0c0;
+  --color-accent-dim: #00d4aa20;
+  --color-success: #00d4aa;
+  --color-warning: #ffb547;
+  --color-danger: #ff5c5c;
+  --color-purple: #b18cff;
+  --color-blue: #5c9eff;
+  --color-pink: #ff6eb4;
+  --color-orange: #ff9547;
 
-  --font-mono: 'SF Mono', 'Menlo', 'Consolas', 'Liberation Mono', monospace;
+  --font-mono: 'JetBrains Mono', 'SF Mono', 'Menlo', 'Consolas', monospace;
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
+
+@font-face {
+  font-family: 'Inter';
+  font-display: swap;
+  src: local('Inter');
+}
+
+html { font-size: 15px; }
 
 body {
   background: var(--color-bg);
   color: var(--color-fg);
   font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
 }
 
 /* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--color-surface); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-surface-hover); }
 ::selection { background: var(--color-accent); color: #000; }
+
+/* Transitions */
+* { transition-property: background-color, border-color, color, opacity;
+    transition-duration: 120ms; transition-timing-function: ease; }
+
+/* Remove transition from scroll */
+[class*="overflow"] { transition: none; }
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.animate-fadeIn { animation: fadeIn 200ms ease; }
+.animate-slideIn { animation: slideIn 150ms ease; }

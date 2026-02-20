@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, type KeyboardEvent } from 'react';
+import { useState, useRef, useCallback, useEffect, type KeyboardEvent } from 'react';
 import { useStore } from '../store';
 import { sendMessage, joinChannel, partChannel, setTopic, setMode, kickUser, inviteUser, setAway, rawCommand, sendWhois } from '../irc/client';
 
@@ -6,22 +6,37 @@ export function ComposeBox() {
   const [text, setText] = useState('');
   const [history, setHistory] = useState<string[]>([]);
   const [historyPos, setHistoryPos] = useState(-1);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const activeChannel = useStore((s) => s.activeChannel);
+  const channels = useStore((s) => s.channels);
+  const ch = channels.get(activeChannel.toLowerCase());
+
+  // Typing members
+  const typingMembers = ch
+    ? [...ch.members.values()].filter((m) => m.typing).map((m) => m.nick)
+    : [];
+
+  // Focus input on channel switch
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, [activeChannel]);
 
   const submit = useCallback(() => {
-    if (!text.trim()) return;
-    setHistory((h) => [...h, text]);
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setHistory((h) => [...h.slice(-100), trimmed]);
     setHistoryPos(-1);
 
-    if (text.startsWith('/')) {
-      handleCommand(text, activeChannel);
+    if (trimmed.startsWith('/')) {
+      handleCommand(trimmed, activeChannel);
     } else if (activeChannel !== 'server') {
-      const ch = useStore.getState().channels.get(activeChannel.toLowerCase());
-      sendMessage(ch?.name || activeChannel, text);
+      const target = ch?.name || activeChannel;
+      sendMessage(target, trimmed);
     }
     setText('');
-  }, [text, activeChannel]);
+    // Reset textarea height
+    if (inputRef.current) inputRef.current.style.height = 'auto';
+  }, [text, activeChannel, ch]);
 
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -47,25 +62,68 @@ export function ComposeBox() {
     }
   };
 
+  // Auto-resize textarea
+  const onInput = () => {
+    const el = inputRef.current;
+    if (el) {
+      el.style.height = 'auto';
+      el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+    }
+  };
+
+  const canSend = activeChannel !== 'server' || text.startsWith('/');
+
   return (
-    <div className="border-t border-border bg-bg-secondary flex items-center shrink-0">
-      <input
-        ref={inputRef}
-        type="text"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder={activeChannel === 'server' ? 'Type a /command...' : 'Type a message...'}
-        className="flex-1 bg-transparent px-4 py-3 text-sm text-fg outline-none placeholder:text-fg-dim"
-        autoComplete="off"
-        spellCheck
-      />
-      <button
-        onClick={submit}
-        className="px-3 py-2 text-accent opacity-50 hover:opacity-100 transition-opacity"
-      >
-        ↵
-      </button>
+    <div className="border-t border-border bg-bg-secondary shrink-0">
+      {/* Typing indicator */}
+      {typingMembers.length > 0 && (
+        <div className="px-4 py-1 text-xs text-fg-dim animate-fadeIn">
+          <span className="inline-flex gap-0.5 mr-1">
+            <span className="w-1 h-1 bg-fg-dim rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+            <span className="w-1 h-1 bg-fg-dim rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+            <span className="w-1 h-1 bg-fg-dim rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+          </span>
+          {typingMembers.length === 1
+            ? `${typingMembers[0]} is typing`
+            : `${typingMembers.slice(0, 3).join(', ')} are typing`}
+        </div>
+      )}
+
+      <div className="flex items-end gap-2 px-3 py-2">
+        {/* Compose area */}
+        <div className="flex-1 bg-bg-tertiary rounded-lg border border-border focus-within:border-accent/50 flex items-end">
+          <textarea
+            ref={inputRef}
+            value={text}
+            onChange={(e) => { setText(e.target.value); onInput(); }}
+            onKeyDown={onKeyDown}
+            placeholder={
+              activeChannel === 'server'
+                ? 'Type /help for commands...'
+                : `Message ${ch?.name || activeChannel}`
+            }
+            rows={1}
+            className="flex-1 bg-transparent px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-dim resize-none min-h-[36px] max-h-[120px] leading-relaxed"
+            autoComplete="off"
+            spellCheck
+          />
+        </div>
+
+        {/* Send */}
+        <button
+          onClick={submit}
+          disabled={!text.trim() || !canSend}
+          className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 transition-all ${
+            text.trim() && canSend
+              ? 'bg-accent text-black hover:bg-accent-hover'
+              : 'bg-bg-tertiary text-fg-dim cursor-not-allowed'
+          }`}
+        >
+          <svg className="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M15.854 8.354a.5.5 0 000-.708L12.207 4l-.707.707L14.293 7.5H1v1h13.293l-2.793 2.793.707.707 3.647-3.646z"/>
+          </svg>
+        </button>
+      </div>
     </div>
   );
 }
@@ -81,7 +139,9 @@ function handleCommand(text: string, activeChannel: string) {
 
   switch (cmd) {
     case 'join': case 'j':
-      args.split(',').map((s) => s.trim()).filter(Boolean).forEach(joinChannel);
+      args.split(',').map((s) => s.trim()).filter(Boolean).forEach((c) =>
+        joinChannel(c.startsWith('#') ? c : `#${c}`)
+      );
       break;
     case 'part': case 'leave':
       partChannel(args || target);
@@ -106,9 +166,7 @@ function handleCommand(text: string, activeChannel: string) {
     case 'whois': case 'wi': if (args) sendWhois(args); break;
     case 'msg': case 'query': {
       const mp = args.split(' ');
-      if (mp[0] && mp[1]) {
-        sendMessage(mp[0], mp.slice(1).join(' '));
-      }
+      if (mp[0] && mp[1]) sendMessage(mp[0], mp.slice(1).join(' '));
       break;
     }
     case 'me': case 'action':
@@ -119,10 +177,10 @@ function handleCommand(text: string, activeChannel: string) {
       break;
     case 'help':
       store.addSystemMessage(activeChannel, '── Commands ──');
-      store.addSystemMessage(activeChannel, '/join #channel · /part · /topic text · /kick user');
-      store.addSystemMessage(activeChannel, '/op user · /deop user · /voice user · /invite user');
-      store.addSystemMessage(activeChannel, '/whois user · /away reason · /me action');
-      store.addSystemMessage(activeChannel, '/msg user text · /mode +o user · /raw IRC_LINE');
+      store.addSystemMessage(activeChannel, '/join #channel  ·  /part  ·  /topic text');
+      store.addSystemMessage(activeChannel, '/kick user  ·  /op user  ·  /voice user  ·  /invite user');
+      store.addSystemMessage(activeChannel, '/whois user  ·  /away reason  ·  /me action');
+      store.addSystemMessage(activeChannel, '/msg user text  ·  /mode +o user  ·  /raw IRC_LINE');
       break;
     default:
       rawCommand(`${cmd.toUpperCase()}${args ? ' ' + args : ''}`);

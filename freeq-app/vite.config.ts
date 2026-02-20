@@ -10,14 +10,17 @@ export default defineConfig({
   server: {
     proxy: {
       '/irc': {
-        target: FREEQ_WEB.replace('http', 'ws'),
+        target: FREEQ_WEB,
         ws: true,
+        changeOrigin: true,
       },
       '/api': {
         target: FREEQ_WEB,
+        changeOrigin: true,
       },
       '/auth': {
         target: FREEQ_WEB,
+        changeOrigin: true,
       },
     },
   },
