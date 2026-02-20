@@ -502,7 +502,7 @@ export function MessageList() {
     <div ref={ref} className="flex-1 overflow-y-auto" onScroll={onScroll}>
       {messages.length === 0 && (
         <div className="flex flex-col items-center justify-center h-full text-fg-dim">
-          <div className="text-4xl mb-3">💬</div>
+          <img src="/freeq.png" alt="freeq" className="w-12 h-12 mb-3 opacity-30" />
           <div className="text-sm">
             {activeChannel === 'server' ? 'Server messages will appear here' : 'No messages yet'}
           </div>

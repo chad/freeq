@@ -1,13 +1,14 @@
 {
-  "name": "freeq",
+  "name": "freeq — IRC for the open web",
   "short_name": "freeq",
-  "description": "IRC with AT Protocol identity",
+  "description": "IRC with AT Protocol identity. Pronounced like 'freak'.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0c0c0f",
   "theme_color": "#00d4aa",
   "icons": [
     { "src": "/favicon.png", "sizes": "32x32", "type": "image/png" },
-    { "src": "/freeq-180.png", "sizes": "180x180", "type": "image/png" }
+    { "src": "/freeq-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "/freeq.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any maskable" }
   ]
 }

@@ -141,6 +141,7 @@ export function ConnectScreen() {
       <div className="bg-bg-secondary border border-border rounded-2xl p-8 w-[420px] max-w-[92vw] shadow-2xl relative animate-fadeIn">
         {/* Logo */}
         <div className="text-center mb-6">
+          <img src="/freeq.png" alt="freeq" className="w-16 h-16 mx-auto mb-2" />
           <h1 className="text-3xl font-bold tracking-tight">
             <span className="text-accent">free</span><span className="text-fg">q</span>
           </h1>
