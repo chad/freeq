@@ -302,9 +302,21 @@ export function ComposeBox() {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submit();
-    } else if (e.key === 'ArrowUp' && !text) {
+    } else if (e.key === 'ArrowUp' && !text && !editingMsg && !replyTo) {
       e.preventDefault();
-      if (history.length > 0) {
+      if (historyPos < 0 && history.length === 0) {
+        // No history — try edit last own message (Slack-style)
+        const msgs = ch?.messages;
+        if (msgs) {
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            const m = msgs[i];
+            if (m.isSelf && !m.isSystem && !m.deleted) {
+              useStore.getState().setEditingMsg({ msgId: m.id, text: m.text, channel: activeChannel });
+              break;
+            }
+          }
+        }
+      } else if (history.length > 0) {
         const pos = historyPos < 0 ? history.length - 1 : Math.max(0, historyPos - 1);
         setHistoryPos(pos);
         setText(history[pos] || '');

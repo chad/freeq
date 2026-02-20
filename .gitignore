@@ -10,3 +10,4 @@ tests.log
 # freeq-app
 freeq-app/node_modules/
 freeq-app/dist/
+freeq-app/src-tauri/target/

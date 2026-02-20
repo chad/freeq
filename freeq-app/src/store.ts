@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { TransportState } from './irc/transport';
+import { setLastReadMsgId } from './lib/db';
 
 // ── Types ──
 
@@ -481,6 +482,11 @@ export const useStore = create<Store>((set, get) => ({
     if (ch) {
       ch.unreadCount = 0;
       ch.mentionCount = 0;
+      // Persist last-read message ID
+      const lastMsg = ch.messages[ch.messages.length - 1];
+      if (lastMsg?.id) {
+        setLastReadMsgId(channel, lastMsg.id).catch(() => {});
+      }
       channels.set(channel.toLowerCase(), { ...ch });
     }
     return { channels };
