@@ -47,11 +47,14 @@ pub(super) fn handle_tagmsg(
             .unwrap_or_default();
 
         let tag_caps = state.cap_message_tags.lock().unwrap();
+        let echo_caps = state.cap_echo_message.lock().unwrap();
         let conns = state.connections.lock().unwrap();
         for member_session in &members {
-            if member_session != &conn.id
-                && let Some(tx) = conns.get(member_session)
-            {
+            // Skip sender unless they have echo-message
+            if member_session == &conn.id && !echo_caps.contains(member_session) {
+                continue;
+            }
+            if let Some(tx) = conns.get(member_session) {
                 if tag_caps.contains(member_session) {
                     let _ = tx.try_send(tagged_line.clone());
                 } else if let Some(ref fallback) = plain_fallback {

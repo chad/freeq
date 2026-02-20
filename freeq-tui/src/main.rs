@@ -1437,8 +1437,8 @@ async fn process_input(
                 input.to_string()
             };
             handle.privmsg(&target, &wire_text).await?;
-            // Show plaintext locally (we know what we sent)
-            app.chat_msg(&target, &app.nick.clone(), input);
+            // echo-message cap is negotiated, so server will echo it back.
+            // Don't add locally — that would duplicate the message.
         }
     }
 

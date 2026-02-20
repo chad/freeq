@@ -207,8 +207,7 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
       {/* Hover actions */}
       <div className="opacity-0 group-hover:opacity-100 absolute right-3 -top-3 flex items-center bg-bg-secondary border border-border rounded-lg shadow-lg overflow-hidden">
         <HoverBtn emoji="😄" title="Add reaction" onClick={openEmojiPicker} />
-        <HoverBtn emoji="💬" title="Reply" onClick={() => {}} />
-        <HoverBtn emoji="📌" title="Pin" onClick={() => {}} />
+
       </div>
 
       {showEmojiPicker && pickerPos && (
@@ -258,7 +257,7 @@ function GroupedMessage({ msg, channel }: MessageProps) {
 
       <div className="opacity-0 group-hover:opacity-100 absolute right-3 -top-3 flex items-center bg-bg-secondary border border-border rounded-lg shadow-lg overflow-hidden">
         <HoverBtn emoji="😄" title="Add reaction" onClick={openEmojiPicker} />
-        <HoverBtn emoji="💬" title="Reply" onClick={() => {}} />
+
       </div>
 
       {showEmojiPicker && pickerPos && (
