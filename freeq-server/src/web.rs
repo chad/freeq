@@ -813,16 +813,27 @@ fn oauth_result_page(message: &str, result: Option<&crate::server::OAuthResult>)
         String::new()
     };
 
+    // Show different text depending on whether this is a popup or same-window flow
+    let close_hint = if result.is_some() {
+        "<p id=\"hint\" style=\"color:#6c7086\">Connecting...</p>\
+<div style=\"margin-top:16px\"><svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" \
+style=\"animation:spin 1s linear infinite\"><style>@keyframes spin{{to{{transform:rotate(360deg)}}}}</style>\
+<circle cx=\"12\" cy=\"12\" r=\"10\" stroke=\"#6c7086\" stroke-width=\"3\" fill=\"none\" \
+stroke-dasharray=\"31.4 31.4\" stroke-linecap=\"round\"/></svg></div>\
+<script>if(window.opener)document.getElementById('hint').textContent='You can close this window.';</script>"
+    } else {
+        "<p style=\"color:#f38ba8\">Please close this window and try again.</p>"
+    };
     format!(
         r#"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>freeq auth</title>
 <style>
-body {{ font-family: system-ui; background: #1e1e2e; color: #cdd6f4; display: flex; align-items: center; justify-content: center; height: 100vh; }}
+body {{ font-family: system-ui; background: #1e1e2e; color: #cdd6f4; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }}
 .box {{ text-align: center; }}
 h1 {{ color: #89b4fa; font-size: 20px; }}
 p {{ color: #a6adc8; }}
 </style></head>
-<body><div class="box"><h1>freeq</h1><p>{message}</p><p style="color:#6c7086">You can close this window.</p></div>
+<body><div class="box"><h1>freeq</h1><p>{message}</p>{close_hint}</div>
 {script}
 </body></html>"#
     )

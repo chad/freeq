@@ -60,6 +60,7 @@ export function ConnectScreen() {
   const [error, setError] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [oauthPending, setOauthPending] = useState(false);
+  const [autoConnecting, setAutoConnecting] = useState(false);
   const handleRef = useRef<HTMLInputElement>(null);
   const nickRef = useRef<HTMLInputElement>(null);
 
@@ -86,6 +87,7 @@ export function ConnectScreen() {
     try {
       const result = JSON.parse(raw) as OAuthResultData;
       if (result?.did) {
+        setAutoConnecting(true);
         const h = localStorage.getItem(LS_HANDLE) || result.handle || '';
         const ch = (localStorage.getItem(LS_CHANNELS) || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
         const finalNick = nickFromHandle(result.handle || h);
@@ -99,6 +101,21 @@ export function ConnectScreen() {
   }, []);
 
   if (registered) return null;
+
+  // Show spinner when auto-connecting after OAuth redirect (or pending popup)
+  if (autoConnecting || oauthPending) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-bg">
+        <div className="text-center">
+          <img src="/freeq.png" alt="freeq" className="w-16 h-16 mx-auto mb-4 animate-pulse" />
+          <h1 className="text-xl font-bold mb-2">
+            <span className="text-accent">free</span><span className="text-fg">q</span>
+          </h1>
+          <p className="text-fg-dim text-sm">Connecting...</p>
+        </div>
+      </div>
+    );
+  }
 
   const chans = channels.split(',').map((s) => s.trim()).filter(Boolean);
 
