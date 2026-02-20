@@ -278,15 +278,37 @@ pub(super) fn handle_privmsg(
                     }
                 }
 
-                let has_tags = state.cap_message_tags.lock().unwrap().contains(session);
-                let line = if has_tags { &tagged_line } else { &plain_line };
-                if let Some(tx) = state.connections.lock().unwrap().get(session) {
+                // Collect cap info, then send (avoid holding locks across sends)
+                let target_has_tags = state.cap_message_tags.lock().unwrap().contains(session);
+                let sender_has_tags = state.cap_message_tags.lock().unwrap().contains(&conn.id);
+                let sender_has_echo = state.cap_echo_message.lock().unwrap().contains(&conn.id);
+
+                let conns = state.connections.lock().unwrap();
+                // Deliver to target
+                let line = if target_has_tags { &tagged_line } else { &plain_line };
+                if let Some(tx) = conns.get(session) {
                     let _ = tx.try_send(line.clone());
+                }
+                // echo-message: echo DM back to sender
+                if sender_has_echo {
+                    let echo_line = if sender_has_tags { &tagged_line } else { &plain_line };
+                    if let Some(tx) = conns.get(&conn.id) {
+                        let _ = tx.try_send(echo_line.clone());
+                    }
                 }
             }
             RouteResult::Relayed => {
                 // Sent to S2S peers — receiving server will deliver.
                 // No ERR_NOSUCHNICK: we can't know if it arrived (same as email).
+                // echo-message: echo DM back to sender even for relayed messages
+                let sender_has_echo = state.cap_echo_message.lock().unwrap().contains(&conn.id);
+                if sender_has_echo {
+                    let sender_has_tags = state.cap_message_tags.lock().unwrap().contains(&conn.id);
+                    let echo_line = if sender_has_tags { &tagged_line } else { &plain_line };
+                    if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+                        let _ = tx.try_send(echo_line.clone());
+                    }
+                }
             }
             RouteResult::Unreachable => {
                 // No federation, nick doesn't exist locally
