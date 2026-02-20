@@ -42,7 +42,9 @@ export function ConnectScreen() {
   const [nick, setNick] = useState(() => 'web' + Math.floor(Math.random() * 99999));
   const [atNick, setAtNick] = useState(''); // derived nick for AT login, editable
   const [channels, setChannels] = useState(() => localStorage.getItem(LS_CHANNELS) || '#freeq');
+  const isTauri = !!(window as any).__TAURI_INTERNALS__;
   const [server, setServer] = useState(() => {
+    if (isTauri) return 'wss://irc.freeq.at/irc';
     const loc = window.location;
     const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
     // In dev, replace localhost with 127.0.0.1 for OAuth compliance
@@ -50,6 +52,7 @@ export function ConnectScreen() {
     return `${proto}//${host}/irc`;
   });
   const [webOrigin, setWebOrigin] = useState(() => {
+    if (isTauri) return 'https://irc.freeq.at';
     const loc = window.location;
     const host = loc.host.replace('localhost', '127.0.0.1');
     return `${loc.protocol}//${host}`;
@@ -72,6 +75,29 @@ export function ConnectScreen() {
     }
   }, [handle]);
 
+  // Check for OAuth result on mount (same-window redirect flow for Tauri/desktop)
+  useEffect(() => {
+    const pending = localStorage.getItem('freeq-oauth-pending');
+    const raw = localStorage.getItem('freeq-oauth-result');
+    if (pending && raw) {
+      localStorage.removeItem('freeq-oauth-pending');
+      localStorage.removeItem('freeq-oauth-result');
+      try {
+        const result = JSON.parse(raw) as OAuthResultData;
+        if (result?.did) {
+          const h = localStorage.getItem(LS_HANDLE) || '';
+          const ch = (localStorage.getItem(LS_CHANNELS) || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
+          const finalNick = nickFromHandle(result.handle || h);
+          setSaslCredentials(result.web_token || result.access_jwt, result.did, result.pds_url, 'web-token');
+          const loc = window.location;
+          const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+          const host = loc.host.replace('localhost', '127.0.0.1');
+          connect(`${proto}//${host}/irc`, finalNick, ch);
+        }
+      } catch { /* ignore parse errors */ }
+    }
+  }, []);
+
   if (registered) return null;
 
   const chans = channels.split(',').map((s) => s.trim()).filter(Boolean);
@@ -91,9 +117,19 @@ export function ConnectScreen() {
       // Clear any stale OAuth result
       try { localStorage.removeItem('freeq-oauth-result'); } catch { /* ignore */ }
 
-      // Open OAuth popup
-      const popupOrigin = window.location.origin.replace('localhost', '127.0.0.1');
-      const authUrl = `${popupOrigin}/auth/login?handle=${encodeURIComponent(h)}`;
+      // Use webOrigin for auth URLs (same-origin in browser, explicit server in Tauri)
+      const authUrl = `${webOrigin}/auth/login?handle=${encodeURIComponent(h)}`;
+
+      if (isTauri) {
+        // In Tauri, navigate the main window to the OAuth URL.
+        // The callback page will store the result and redirect back to /
+        // where the on-mount effect picks it up.
+        localStorage.setItem('freeq-oauth-pending', '1');
+        window.location.href = authUrl;
+        return;
+      }
+
+      // Browser: open OAuth popup
       const popup = window.open(authUrl, 'freeq-auth', 'width=500,height=700');
 
       // Listen for OAuth result via BroadcastChannel

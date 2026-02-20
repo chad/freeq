@@ -791,6 +791,8 @@ fn oauth_result_page(message: &str, result: Option<&crate::server::OAuthResult>)
         let json = serde_json::to_string(r).unwrap_or_default();
         format!(
             r#"<script>
+            // Store result in localStorage (used by both popup polling and same-window redirect)
+            try {{ localStorage.setItem('freeq-oauth-result', JSON.stringify({json})); }} catch(e) {{}}
             // Use BroadcastChannel (works across redirects, unlike window.opener)
             try {{
                 const bc = new BroadcastChannel('freeq-oauth');
@@ -800,10 +802,11 @@ fn oauth_result_page(message: &str, result: Option<&crate::server::OAuthResult>)
             // Also try window.opener as fallback
             if (window.opener) {{
                 try {{ window.opener.postMessage({{ type: 'freeq-oauth', result: {json} }}, '*'); }} catch(e) {{}}
+                setTimeout(() => window.close(), 1500);
+            }} else {{
+                // Same-window flow (Tauri/desktop) — redirect back to app
+                setTimeout(() => {{ window.location.href = '/'; }}, 1000);
             }}
-            // Also store in localStorage for polling fallback
-            try {{ localStorage.setItem('freeq-oauth-result', JSON.stringify({json})); }} catch(e) {{}}
-            setTimeout(() => window.close(), 1500);
             </script>"#
         )
     } else {
