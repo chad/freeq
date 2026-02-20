@@ -277,21 +277,26 @@ export function ConnectScreen() {
  * Wait for OAuth result from popup window.
  * Tries BroadcastChannel, postMessage, and localStorage polling.
  */
-function waitForOAuthResult(popup: Window | null): Promise<OAuthResultData | null> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
+function waitForOAuthResult(_popup: Window | null): Promise<OAuthResultData | null> {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const done = (result: OAuthResultData | null) => {
+      if (resolved) return;
+      resolved = true;
       cleanup();
-      reject(new Error('OAuth timed out (60s)'));
-    }, 60000);
+      resolve(result);
+    };
 
-    // BroadcastChannel
+    // 5 minute timeout — user might be slow logging in
+    const timeout = setTimeout(() => done(null), 5 * 60 * 1000);
+
+    // BroadcastChannel (best — works across same-origin tabs)
     let bc: BroadcastChannel | null = null;
     try {
       bc = new BroadcastChannel('freeq-oauth');
       bc.onmessage = (e) => {
         if (e.data?.type === 'freeq-oauth' && e.data.result) {
-          cleanup();
-          resolve(e.data.result);
+          done(e.data.result);
         }
       };
     } catch { /* not supported */ }
@@ -299,50 +304,25 @@ function waitForOAuthResult(popup: Window | null): Promise<OAuthResultData | nul
     // window.postMessage
     const msgHandler = (e: MessageEvent) => {
       if (e.data?.type === 'freeq-oauth' && e.data.result) {
-        cleanup();
-        resolve(e.data.result);
+        done(e.data.result);
       }
     };
     window.addEventListener('message', msgHandler);
 
-    // localStorage polling fallback
+    // localStorage polling — most reliable fallback
     const pollInterval = setInterval(() => {
       try {
         const stored = localStorage.getItem('freeq-oauth-result');
         if (stored) {
           localStorage.removeItem('freeq-oauth-result');
-          cleanup();
-          resolve(JSON.parse(stored));
+          done(JSON.parse(stored));
         }
       } catch { /* ignore */ }
-    }, 500);
-
-    // Check if popup closed without result — wait a moment for messages to arrive
-    const closedCheck = setInterval(() => {
-      if (popup && popup.closed) {
-        // Give BroadcastChannel/localStorage a moment to deliver
-        setTimeout(() => {
-          // Final localStorage check
-          try {
-            const stored = localStorage.getItem('freeq-oauth-result');
-            if (stored) {
-              localStorage.removeItem('freeq-oauth-result');
-              cleanup();
-              resolve(JSON.parse(stored));
-              return;
-            }
-          } catch { /* ignore */ }
-          cleanup();
-          resolve(null);
-        }, 1500);
-        clearInterval(closedCheck); // stop checking, we're in the final wait
-      }
-    }, 500);
+    }, 300);
 
     function cleanup() {
       clearTimeout(timeout);
       clearInterval(pollInterval);
-      clearInterval(closedCheck);
       window.removeEventListener('message', msgHandler);
       if (bc) { bc.close(); bc = null; }
     }
