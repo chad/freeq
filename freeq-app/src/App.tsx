@@ -21,6 +21,7 @@ export default function App() {
   const [quickSwitcher, setQuickSwitcher] = useState(false);
   const [settings, setSettings] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [membersOpen, setMembersOpen] = useState(true);
   const channels = useStore((s) => s.channels);
   const activeChannel = useStore((s) => s.activeChannel);
   const setActive = useStore((s) => s.setActiveChannel);
@@ -94,11 +95,15 @@ export default function App() {
         </div>
 
         <main className="flex-1 flex flex-col min-w-0">
-          <TopBar onToggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
+          <TopBar
+            onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
+            onToggleMembers={() => setMembersOpen(!membersOpen)}
+            membersOpen={membersOpen}
+          />
           <MessageList />
           <ComposeBox />
         </main>
-        <MemberList />
+        {membersOpen && <MemberList />}
       </div>
       <QuickSwitcher open={quickSwitcher} onClose={() => setQuickSwitcher(false)} />
       <SettingsPanel open={settings} onClose={() => setSettings(false)} />

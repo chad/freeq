@@ -4,9 +4,11 @@ import { setTopic as sendTopic } from '../irc/client';
 
 interface TopBarProps {
   onToggleSidebar?: () => void;
+  onToggleMembers?: () => void;
+  membersOpen?: boolean;
 }
 
-export function TopBar({ onToggleSidebar }: TopBarProps) {
+export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBarProps) {
   const activeChannel = useStore((s) => s.activeChannel);
   const channels = useStore((s) => s.channels);
   const [editing, setEditing] = useState(false);
@@ -82,14 +84,20 @@ export function TopBar({ onToggleSidebar }: TopBarProps) {
         )}
       </div>
 
-      {/* Member count */}
-      {isChannel && memberCount > 0 && (
-        <div className="flex items-center gap-1 text-fg-dim text-xs shrink-0">
+      {/* Member list toggle */}
+      {isChannel && (
+        <button
+          onClick={onToggleMembers}
+          className={`flex items-center gap-1 text-xs shrink-0 px-2 py-1 rounded hover:bg-bg-tertiary transition-colors ${
+            membersOpen ? 'text-fg-muted' : 'text-fg-dim'
+          }`}
+          title={membersOpen ? 'Hide members' : 'Show members'}
+        >
           <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
             <path d="M8 8a3 3 0 100-6 3 3 0 000 6zM2 14s-1 0-1-1 1-4 7-4 7 3 7 4-1 1-1 1H2z"/>
           </svg>
-          <span>{memberCount}</span>
-        </div>
+          {memberCount > 0 && <span>{memberCount}</span>}
+        </button>
       )}
     </header>
   );
