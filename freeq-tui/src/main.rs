@@ -953,14 +953,7 @@ async fn process_input(
                             msgid: None, // TODO: track message IDs for targeted reactions
                         };
                         handle.send_reaction(&target, &reaction).await?;
-                        let nick = app.nick.clone();
-                        app.buffer_mut(&target).push(crate::app::BufferLine {
-                            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
-                            from: String::new(),
-                            text: format!("  {nick} reacted {}", reaction.emoji),
-                            is_system: true,
-                            image_url: None,
-                        });
+                        // echo-message will deliver the reaction back to us
                     }
                 }
             }

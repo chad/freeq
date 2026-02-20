@@ -351,9 +351,19 @@ function handleLine(rawLine: string) {
       // Handle reactions — +reply tag references the target message
       const reaction = msg.tags['+react'];
       if (reaction) {
-        const reactTarget = msg.tags['+reply'] || msg.tags['msgid'];
+        const reactTarget = msg.tags['+reply'];
         if (reactTarget) {
           store.addReaction(target, reactTarget, reaction, from);
+        } else {
+          // No +reply — reaction to the channel generally.
+          // Attach to the most recent non-system message.
+          const ch = store.channels.get(target.toLowerCase());
+          if (ch) {
+            const lastMsg = [...ch.messages].reverse().find((m) => !m.isSystem && !m.deleted);
+            if (lastMsg) {
+              store.addReaction(target, lastMsg.id, reaction, from);
+            }
+          }
         }
       }
       // Handle typing
