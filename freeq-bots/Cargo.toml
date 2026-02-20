@@ -9,6 +9,10 @@ description = "AI agent bots for freeq IRC — software factory, auditor, protot
 name = "freeq-bots"
 path = "src/main.rs"
 
+[[bin]]
+name = "chatroom"
+path = "src/bin/chatroom.rs"
+
 [dependencies]
 freeq-sdk = { path = "../freeq-sdk" }
 tokio = { workspace = true }
