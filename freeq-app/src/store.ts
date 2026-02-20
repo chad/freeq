@@ -72,6 +72,7 @@ export interface Store {
   setAuth: (did: string, message: string) => void;
   setAuthError: (error: string) => void;
   reset: () => void;
+  fullReset: () => void;
 
   // Actions — channels
   addChannel: (name: string) => void;
@@ -144,6 +145,18 @@ export const useStore = create<Store>((set, get) => ({
   reset: () => set({
     connectionState: 'disconnected',
     registered: false,
+    channels: new Map(),
+    activeChannel: 'server',
+    serverMessages: [],
+    batches: new Map(),
+  }),
+  fullReset: () => set({
+    connectionState: 'disconnected',
+    nick: '',
+    registered: false,
+    authDid: null,
+    authMessage: null,
+    authError: null,
     channels: new Map(),
     activeChannel: 'server',
     serverMessages: [],

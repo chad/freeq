@@ -90,9 +90,40 @@ export function ComposeBox() {
   }, [text, activeChannel, ch]);
 
   const onKeyDown = (e: KeyboardEvent) => {
+    // Tab completion — works with or without autocomplete dropdown
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (autocomplete) {
+        acceptAutocomplete(autocomplete.items[autocomplete.selected]);
+      } else {
+        // Classic IRC tab-complete: complete the word at cursor
+        const el = inputRef.current;
+        if (el) {
+          const pos = el.selectionStart || 0;
+          const before = text.slice(0, pos);
+          const spIdx = before.lastIndexOf(' ');
+          const partial = before.slice(spIdx + 1).toLowerCase();
+          if (partial.length > 0) {
+            const isAtPrefix = partial.startsWith('@');
+            const search = isAtPrefix ? partial.slice(1) : partial;
+            const match = memberNicks.find((n) => n.toLowerCase().startsWith(search));
+            if (match) {
+              const prefix = isAtPrefix ? '@' : '';
+              const suffix = spIdx < 0 ? ': ' : ' '; // Add : if at start of line
+              const newText = before.slice(0, spIdx + 1) + prefix + match + suffix + text.slice(pos);
+              setText(newText);
+              setAutocomplete(null);
+            }
+          }
+        }
+      }
+      return;
+    }
+
     // Autocomplete navigation
     if (autocomplete) {
-      if (e.key === 'Tab' || e.key === 'Enter') {
+      if (e.key === 'Enter') {
         e.preventDefault();
         acceptAutocomplete(autocomplete.items[autocomplete.selected]);
         return;

@@ -22,10 +22,14 @@ let saslDid = '';
 let saslPdsUrl = '';
 let saslMethod = '';
 
+// Auto-join channels after registration
+let autoJoinChannels: string[] = [];
+
 // ── Public API (called by UI) ──
 
-export function connect(url: string, desiredNick: string) {
+export function connect(url: string, desiredNick: string, channels?: string[]) {
   nick = desiredNick;
+  autoJoinChannels = channels || [];
   const store = useStore.getState();
   store.reset();
 
@@ -47,6 +51,13 @@ export function connect(url: string, desiredNick: string) {
 export function disconnect() {
   transport?.disconnect();
   transport = null;
+  nick = '';
+  ackedCaps = new Set();
+  saslToken = '';
+  saslDid = '';
+  saslPdsUrl = '';
+  saslMethod = '';
+  useStore.getState().fullReset();
 }
 
 export function setSaslCredentials(token: string, did: string, pdsUrl: string, method: string) {
@@ -84,7 +95,7 @@ export function sendDelete(target: string, msgId: string) {
 
 export function sendReaction(target: string, emoji: string, msgId?: string) {
   const tags: Record<string, string> = { '+react': emoji };
-  if (msgId) tags['msgid'] = msgId;
+  if (msgId) tags['+reply'] = msgId;
   raw(format('TAGMSG', [target], tags));
 }
 
@@ -177,6 +188,11 @@ function handleLine(rawLine: string) {
       nick = msg.params[0] || nick;
       store.setNick(nick);
       store.setRegistered(true);
+      // Auto-join channels
+      for (const ch of autoJoinChannels) {
+        if (ch.trim()) raw(`JOIN ${ch.trim()}`);
+      }
+      autoJoinChannels = [];
       break;
     case '433': // Nick in use
       nick += '_';
@@ -293,12 +309,12 @@ function handleLine(rawLine: string) {
         store.deleteMessage(target, deleteOf);
         break;
       }
-      // Handle reactions
+      // Handle reactions — +reply tag references the target message
       const reaction = msg.tags['+react'];
       if (reaction) {
-        const reactMsgId = msg.tags['msgid'];
-        if (reactMsgId) {
-          store.addReaction(target, reactMsgId, reaction, from);
+        const reactTarget = msg.tags['+reply'] || msg.tags['msgid'];
+        if (reactTarget) {
+          store.addReaction(target, reactTarget, reaction, from);
         }
       }
       // Handle typing

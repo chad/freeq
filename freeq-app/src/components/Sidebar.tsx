@@ -17,9 +17,9 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
   const [joinInput, setJoinInput] = useState('');
   const [showJoin, setShowJoin] = useState(false);
 
-  const sorted = [...channels.values()]
-    .filter((ch) => ch.isJoined)
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const allJoined = [...channels.values()].filter((ch) => ch.isJoined);
+  const chanList = allJoined.filter((ch) => ch.name.startsWith('#') || ch.name.startsWith('&')).sort((a, b) => a.name.localeCompare(b.name));
+  const dmList = allJoined.filter((ch) => !ch.name.startsWith('#') && !ch.name.startsWith('&') && ch.name !== 'server').sort((a, b) => a.name.localeCompare(b.name));
 
   const handleJoin = () => {
     const ch = joinInput.trim();
@@ -87,37 +87,19 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
           </div>
         )}
 
-        {sorted.map((ch) => {
-          const isActive = activeChannel.toLowerCase() === ch.name.toLowerCase();
-          const hasMention = ch.mentionCount > 0;
-          const hasUnread = ch.unreadCount > 0;
-          return (
-            <button
-              key={ch.name}
-              onClick={() => setActive(ch.name)}
-              className={`w-full text-left px-3 py-1.5 rounded-lg text-sm flex items-center gap-2 ${
-                isActive
-                  ? 'bg-surface text-fg'
-                  : hasMention
-                    ? 'text-fg font-semibold hover:bg-bg-tertiary'
-                    : hasUnread
-                      ? 'text-fg-muted hover:bg-bg-tertiary'
-                      : 'text-fg-dim hover:text-fg-muted hover:bg-bg-tertiary'
-              }`}
-            >
-              <span className={`shrink-0 text-xs ${isActive ? 'text-accent' : 'opacity-50'}`}>#</span>
-              <span className="truncate">{ch.name.replace(/^#/, '')}</span>
-              {hasMention && (
-                <span className="ml-auto shrink-0 bg-danger text-white text-[10px] min-w-[18px] text-center px-1 py-0.5 rounded-full font-bold">
-                  {ch.mentionCount}
-                </span>
-              )}
-              {!hasMention && hasUnread && (
-                <span className="ml-auto shrink-0 w-1.5 h-1.5 rounded-full bg-fg-muted" />
-              )}
-            </button>
-          );
-        })}
+        {chanList.map((ch) => <ChannelButton key={ch.name} ch={ch} isActive={activeChannel.toLowerCase() === ch.name.toLowerCase()} onSelect={setActive} icon="#" />)}
+
+        {/* DMs */}
+        {dmList.length > 0 && (
+          <>
+            <div className="mt-3 mb-1 px-2">
+              <span className="text-[10px] uppercase tracking-widest text-fg-dim font-semibold">
+                Messages
+              </span>
+            </div>
+            {dmList.map((ch) => <ChannelButton key={ch.name} ch={ch} isActive={activeChannel.toLowerCase() === ch.name.toLowerCase()} onSelect={setActive} icon="@" />)}
+          </>
+        )}
       </nav>
 
       {/* User footer */}
@@ -157,5 +139,40 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
         </div>
       </div>
     </aside>
+  );
+}
+
+function ChannelButton({ ch, isActive, onSelect, icon }: {
+  ch: { name: string; mentionCount: number; unreadCount: number };
+  isActive: boolean;
+  onSelect: (name: string) => void;
+  icon: string;
+}) {
+  const hasMention = ch.mentionCount > 0;
+  const hasUnread = ch.unreadCount > 0;
+  return (
+    <button
+      onClick={() => onSelect(ch.name)}
+      className={`w-full text-left px-3 py-1.5 rounded-lg text-sm flex items-center gap-2 ${
+        isActive
+          ? 'bg-surface text-fg'
+          : hasMention
+            ? 'text-fg font-semibold hover:bg-bg-tertiary'
+            : hasUnread
+              ? 'text-fg-muted hover:bg-bg-tertiary'
+              : 'text-fg-dim hover:text-fg-muted hover:bg-bg-tertiary'
+      }`}
+    >
+      <span className={`shrink-0 text-xs ${isActive ? 'text-accent' : 'opacity-50'}`}>{icon}</span>
+      <span className="truncate">{ch.name.replace(/^[#&]/, '')}</span>
+      {hasMention && (
+        <span className="ml-auto shrink-0 bg-danger text-white text-[10px] min-w-[18px] text-center px-1 py-0.5 rounded-full font-bold">
+          {ch.mentionCount}
+        </span>
+      )}
+      {!hasMention && hasUnread && (
+        <span className="ml-auto shrink-0 w-1.5 h-1.5 rounded-full bg-fg-muted" />
+      )}
+    </button>
   );
 }
