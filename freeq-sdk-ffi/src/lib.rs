@@ -75,7 +75,7 @@ pub struct FreeqClient {
     server: String,
     nick: Arc<Mutex<String>>,
     handler: Arc<dyn EventHandler>,
-    handle: Mutex<Option<freeq_sdk::client::ClientHandle>>,
+    handle: Arc<Mutex<Option<freeq_sdk::client::ClientHandle>>>,
     connected: Arc<Mutex<bool>>,
 }
 
@@ -89,7 +89,7 @@ impl FreeqClient {
             server,
             nick: Arc::new(Mutex::new(nick)),
             handler: Arc::from(handler),
-            handle: Mutex::new(None),
+            handle: Arc::new(Mutex::new(None)),
             connected: Arc::new(Mutex::new(false)),
         })
     }
@@ -105,34 +105,43 @@ impl FreeqClient {
             tls_insecure: false,
         };
 
-        let (client_handle, mut event_rx) = freeq_sdk::client::connect(config, None);
-
-        *self.handle.lock().unwrap() = Some(client_handle);
-        *self.connected.lock().unwrap() = true;
-
+        // MUST call connect() inside the runtime — it uses tokio::spawn internally.
+        let handle_store = self.handle.clone();
+        let connected_store = self.connected.clone();
         let handler = self.handler.clone();
         let nick_state = self.nick.clone();
-        let connected_state = self.connected.clone();
 
-        RUNTIME.spawn(async move {
-            while let Some(event) = event_rx.recv().await {
-                let ffi_event = convert_event(&event);
-                if let FreeqEvent::Disconnected { .. } = &ffi_event {
-                    *connected_state.lock().unwrap() = false;
+        // Use a std::thread to avoid blocking the main thread (UniFFI calls from Swift main thread).
+        // The thread enters the tokio runtime, calls connect, then pumps events.
+        std::thread::spawn(move || {
+            RUNTIME.block_on(async move {
+                let (client_handle, mut event_rx) = freeq_sdk::client::connect(config, None);
+
+                *handle_store.lock().unwrap() = Some(client_handle);
+                *connected_store.lock().unwrap() = true;
+
+                // Pump events
+                while let Some(event) = event_rx.recv().await {
+                    let ffi_event = convert_event(&event);
+                    if let FreeqEvent::Disconnected { .. } = &ffi_event {
+                        *connected_store.lock().unwrap() = false;
+                    }
+                    if let FreeqEvent::Registered { ref nick } = &ffi_event {
+                        *nick_state.lock().unwrap() = nick.clone();
+                    }
+                    handler.on_event(ffi_event);
                 }
-                if let FreeqEvent::Registered { ref nick } = &ffi_event {
-                    *nick_state.lock().unwrap() = nick.clone();
-                }
-                handler.on_event(ffi_event);
-            }
+            });
         });
 
         Ok(())
     }
 
     pub fn disconnect(&self) {
-        if let Some(handle) = self.handle.lock().unwrap().take() {
-            RUNTIME.block_on(async {
+        let handle = self.handle.lock().unwrap().take();
+        if let Some(handle) = handle {
+            // Spawn quit on the runtime — don't block_on from arbitrary thread
+            RUNTIME.spawn(async move {
                 let _ = handle.quit(Some("Goodbye")).await;
             });
         }
@@ -141,30 +150,43 @@ impl FreeqClient {
 
     pub fn join(&self, channel: String) -> Result<(), FreeqError> {
         let handle = self.handle.lock().unwrap().clone().ok_or(FreeqError::NotConnected)?;
-        RUNTIME.block_on(async {
-            handle.join(&channel).await.map_err(|_| FreeqError::SendFailed)
-        })
+        // Use spawn + oneshot to avoid block_on deadlock
+        let (tx, rx) = std::sync::mpsc::channel();
+        RUNTIME.spawn(async move {
+            let result = handle.join(&channel).await.map_err(|_| FreeqError::SendFailed);
+            let _ = tx.send(result);
+        });
+        rx.recv().map_err(|_| FreeqError::SendFailed)?
     }
 
     pub fn part(&self, channel: String) -> Result<(), FreeqError> {
         let handle = self.handle.lock().unwrap().clone().ok_or(FreeqError::NotConnected)?;
-        RUNTIME.block_on(async {
-            handle.raw(&format!("PART {channel}")).await.map_err(|_| FreeqError::SendFailed)
-        })
+        let (tx, rx) = std::sync::mpsc::channel();
+        RUNTIME.spawn(async move {
+            let result = handle.raw(&format!("PART {channel}")).await.map_err(|_| FreeqError::SendFailed);
+            let _ = tx.send(result);
+        });
+        rx.recv().map_err(|_| FreeqError::SendFailed)?
     }
 
     pub fn send_message(&self, target: String, text: String) -> Result<(), FreeqError> {
         let handle = self.handle.lock().unwrap().clone().ok_or(FreeqError::NotConnected)?;
-        RUNTIME.block_on(async {
-            handle.privmsg(&target, &text).await.map_err(|_| FreeqError::SendFailed)
-        })
+        let (tx, rx) = std::sync::mpsc::channel();
+        RUNTIME.spawn(async move {
+            let result = handle.privmsg(&target, &text).await.map_err(|_| FreeqError::SendFailed);
+            let _ = tx.send(result);
+        });
+        rx.recv().map_err(|_| FreeqError::SendFailed)?
     }
 
     pub fn send_raw(&self, line: String) -> Result<(), FreeqError> {
         let handle = self.handle.lock().unwrap().clone().ok_or(FreeqError::NotConnected)?;
-        RUNTIME.block_on(async {
-            handle.raw(&line).await.map_err(|_| FreeqError::SendFailed)
-        })
+        let (tx, rx) = std::sync::mpsc::channel();
+        RUNTIME.spawn(async move {
+            let result = handle.raw(&line).await.map_err(|_| FreeqError::SendFailed);
+            let _ = tx.send(result);
+        });
+        rx.recv().map_err(|_| FreeqError::SendFailed)?
     }
 
     pub fn set_topic(&self, channel: String, topic: String) -> Result<(), FreeqError> {
