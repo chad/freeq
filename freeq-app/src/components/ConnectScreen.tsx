@@ -60,6 +60,7 @@ export function ConnectScreen() {
   const [error, setError] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [oauthPending, setOauthPending] = useState(false);
+  const [autoConnecting, setAutoConnecting] = useState(false);
   const handleRef = useRef<HTMLInputElement>(null);
   const nickRef = useRef<HTMLInputElement>(null);
 
@@ -86,6 +87,7 @@ export function ConnectScreen() {
     try {
       const result = JSON.parse(raw) as OAuthResultData;
       if (result?.did) {
+        setAutoConnecting(true);
         const h = localStorage.getItem(LS_HANDLE) || result.handle || '';
         const ch = (localStorage.getItem(LS_CHANNELS) || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
         const finalNick = nickFromHandle(result.handle || h);
@@ -98,7 +100,40 @@ export function ConnectScreen() {
     } catch { /* ignore parse errors */ }
   }, []);
 
+  // Clear autoConnecting on auth failure or disconnect
+  useEffect(() => {
+    if (!autoConnecting) return;
+    if (registered) { setAutoConnecting(false); return; }
+    if (authError) { setAutoConnecting(false); return; }
+    // If we were connecting but dropped back to disconnected, give a brief grace period
+    // then show the form. This prevents a permanent spinner if SASL fails.
+    if (connectionState === 'disconnected') {
+      const t = setTimeout(() => setAutoConnecting(false), 2000);
+      return () => clearTimeout(t);
+    }
+  }, [autoConnecting, registered, connectionState, authError]);
+
   if (registered) return null;
+
+  // Show a clean loading screen while auto-connecting from OAuth redirect
+  if (autoConnecting || oauthPending) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-bg">
+        <div className="text-center">
+          <img src="/freeq.png" alt="freeq" className="w-16 h-16 mx-auto mb-4 animate-pulse" />
+          <h1 className="text-2xl font-bold mb-2">
+            <span className="text-accent">free</span><span className="text-fg">q</span>
+          </h1>
+          <p className="text-fg-dim text-sm">
+            {oauthPending ? 'Waiting for authorization...' : 'Connecting...'}
+          </p>
+          {authError && (
+            <p className="text-danger text-xs mt-3">{authError}</p>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   const chans = channels.split(',').map((s) => s.trim()).filter(Boolean);
 
