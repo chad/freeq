@@ -187,7 +187,7 @@ where
     });
 
     // Channel for sending messages TO this client
-    let (tx, mut rx) = mpsc::channel::<String>(512);
+    let (tx, mut rx) = mpsc::channel::<String>(4096);
     state
         .connections
         .lock()
@@ -200,9 +200,26 @@ where
     let write_session_id = session_id.clone();
     let mut write_half = writer;
     let write_handle = tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
         while let Some(line) = rx.recv().await {
+            // Write the first message
             if let Err(e) = write_half.write_all(line.as_bytes()).await {
                 tracing::warn!(session_id = %write_session_id, "Write error: {e}");
+                break;
+            }
+            // Drain any queued messages and batch-write them (reduces syscalls)
+            let mut batch_count = 0;
+            while let Ok(queued) = rx.try_recv() {
+                if let Err(e) = write_half.write_all(queued.as_bytes()).await {
+                    tracing::warn!(session_id = %write_session_id, "Write error: {e}");
+                    return;
+                }
+                batch_count += 1;
+                if batch_count >= 64 { break; } // cap batch size
+            }
+            // Flush after the batch
+            if let Err(e) = write_half.flush().await {
+                tracing::warn!(session_id = %write_session_id, "Flush error: {e}");
                 break;
             }
         }

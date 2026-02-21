@@ -358,8 +358,8 @@ pub fn connect_with_stream(
     config: ConnectConfig,
     signer: Option<Arc<dyn ChallengeSigner>>,
 ) -> (ClientHandle, mpsc::Receiver<Event>) {
-    let (event_tx, event_rx) = mpsc::channel(256);
-    let (cmd_tx, cmd_rx) = mpsc::channel(64);
+    let (event_tx, event_rx) = mpsc::channel(4096);
+    let (cmd_tx, cmd_rx) = mpsc::channel(256);
 
     let handle = ClientHandle {
         cmd_tx: cmd_tx.clone(),
@@ -404,8 +404,8 @@ pub fn connect(
     config: ConnectConfig,
     signer: Option<Arc<dyn ChallengeSigner>>,
 ) -> (ClientHandle, mpsc::Receiver<Event>) {
-    let (event_tx, event_rx) = mpsc::channel(256);
-    let (cmd_tx, cmd_rx) = mpsc::channel(64);
+    let (event_tx, event_rx) = mpsc::channel(4096);
+    let (cmd_tx, cmd_rx) = mpsc::channel(256);
 
     let handle = ClientHandle {
         cmd_tx: cmd_tx.clone(),

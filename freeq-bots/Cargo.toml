@@ -13,6 +13,10 @@ path = "src/main.rs"
 name = "chatroom"
 path = "src/bin/chatroom.rs"
 
+[[bin]]
+name = "loadtest"
+path = "src/bin/loadtest.rs"
+
 [dependencies]
 freeq-sdk = { path = "../freeq-sdk" }
 tokio = { workspace = true }
@@ -28,3 +32,4 @@ rusqlite = { workspace = true }
 base64 = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }
+futures = "0.3"
