@@ -933,8 +933,8 @@ async fn api_upload(
     let session = state.web_sessions.lock().unwrap().get(&did).cloned()
         .ok_or_else(|| (StatusCode::UNAUTHORIZED, "No active session for this DID — please re-authenticate".into()))?;
 
-    // Check session age (expire after 1 hour)
-    if session.created_at.elapsed() > std::time::Duration::from_secs(3600) {
+    // Check session age (expire after 24 hours)
+    if session.created_at.elapsed() > std::time::Duration::from_secs(24 * 3600) {
         state.web_sessions.lock().unwrap().remove(&did);
         return Err((StatusCode::UNAUTHORIZED, "Session expired — please re-authenticate".into()));
     }

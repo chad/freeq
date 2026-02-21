@@ -149,6 +149,9 @@ export function ComposeBox() {
       const resp = await fetch('/api/v1/upload', { method: 'POST', body: form });
       if (!resp.ok) {
         const err = await resp.text();
+        if (resp.status === 401) {
+          throw new Error('Upload session expired. Please log out and sign in again to upload.');
+        }
         throw new Error(err);
       }
 
