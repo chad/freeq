@@ -184,6 +184,7 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/users/{nick}", get(api_user))
         .route("/api/v1/users/{nick}/whois", get(api_user_whois))
         .route("/api/v1/upload", axum::routing::post(api_upload))
+        .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)) // 12MB
         .layer(CorsLayer::permissive());
 
     // Serve static web client files if the directory exists
