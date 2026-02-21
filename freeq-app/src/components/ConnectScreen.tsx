@@ -113,28 +113,6 @@ export function ConnectScreen() {
     }
   }, [autoConnecting, registered, connectionState, authError]);
 
-  if (registered) return null;
-
-  // Show a clean loading screen while auto-connecting from OAuth redirect
-  if (autoConnecting || oauthPending) {
-    return (
-      <div className="flex-1 flex items-center justify-center bg-bg">
-        <div className="text-center">
-          <img src="/freeq.png" alt="freeq" className="w-16 h-16 mx-auto mb-4 animate-pulse" />
-          <h1 className="text-2xl font-bold mb-2">
-            <span className="text-accent">free</span><span className="text-fg">q</span>
-          </h1>
-          <p className="text-fg-dim text-sm">
-            {oauthPending ? 'Waiting for authorization...' : 'Connecting...'}
-          </p>
-          {authError && (
-            <p className="text-danger text-xs mt-3">{authError}</p>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   const chans = channels.split(',').map((s) => s.trim()).filter(Boolean);
 
   // AT Protocol OAuth login
@@ -203,6 +181,28 @@ export function ConnectScreen() {
 
   const connecting = connectionState === 'connecting' || connectionState === 'connected';
   const displayError = error || authError;
+
+  // Early returns MUST come after all hooks (React rules of hooks)
+  if (registered) return null;
+
+  if (autoConnecting || oauthPending) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-bg">
+        <div className="text-center">
+          <img src="/freeq.png" alt="freeq" className="w-16 h-16 mx-auto mb-4 animate-pulse" />
+          <h1 className="text-2xl font-bold mb-2">
+            <span className="text-accent">free</span><span className="text-fg">q</span>
+          </h1>
+          <p className="text-fg-dim text-sm">
+            {oauthPending ? 'Waiting for authorization...' : 'Connecting...'}
+          </p>
+          {authError && (
+            <p className="text-danger text-xs mt-3">{authError}</p>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 flex items-center justify-center bg-bg relative overflow-hidden">
