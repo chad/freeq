@@ -7,7 +7,8 @@ description = "Client SDK for IRC servers with AT Protocol SASL authentication"
 
 [dependencies]
 tokio = { workspace = true }
-tokio-rustls = { workspace = true }
+tokio-rustls = { version = "0.26", default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"] }
 webpki-roots = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
@@ -27,10 +28,16 @@ p256 = { workspace = true }
 sha2 = { workspace = true }
 aes-gcm = { workspace = true }
 hkdf = { workspace = true }
-iroh = { workspace = true }
-iroh-quinn = { workspace = true }
+iroh = { workspace = true, optional = true }
+iroh-quinn = { workspace = true, optional = true }
 open = { workspace = true }
 dirs = { workspace = true }
+
+[features]
+default = ["iroh-transport", "aws-lc-rs"]
+iroh-transport = ["iroh", "iroh-quinn"]
+aws-lc-rs = ["rustls/aws_lc_rs", "tokio-rustls/aws_lc_rs"]
+ring = ["rustls/ring", "tokio-rustls/ring"]
 
 [dev-dependencies]
 clap = { workspace = true }

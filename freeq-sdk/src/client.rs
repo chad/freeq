@@ -204,12 +204,15 @@ pub enum EstablishedConnection {
     Plain(TcpStream),
     Tls(tokio_rustls::client::TlsStream<TcpStream>),
     /// Iroh QUIC connection (already encrypted, NAT-traversing).
+    #[cfg(feature = "iroh-transport")]
     Iroh(tokio::io::DuplexStream),
 }
 
 /// ALPN for IRC-over-iroh (must match server).
+#[cfg(feature = "iroh-transport")]
 pub const IROH_ALPN: &[u8] = b"freeq/iroh/1";
 
+#[cfg(feature = "iroh-transport")]
 /// Establish a connection to an IRC server via iroh.
 ///
 /// `addr` is the iroh endpoint address string (EndpointAddr format).
@@ -287,6 +290,7 @@ pub async fn establish_iroh_connection(addr: &str) -> Result<EstablishedConnecti
 ///
 /// This enables automatic iroh transport upgrade: connect cheap (TCP),
 /// discover capabilities, reconnect optimal (iroh QUIC).
+#[cfg(feature = "iroh-transport")]
 pub async fn discover_iroh_id(server_addr: &str, tls: bool, tls_insecure: bool) -> Option<String> {
     use tokio::time::timeout;
     use std::time::Duration;
@@ -376,6 +380,7 @@ pub fn connect_with_stream(
                 let (reader, writer) = tokio::io::split(tls);
                 run_irc(BufReader::new(reader), writer, &config, signer, event_tx.clone(), cmd_rx).await
             }
+            #[cfg(feature = "iroh-transport")]
             EstablishedConnection::Iroh(duplex) => {
                 let (reader, writer) = tokio::io::split(duplex);
                 run_irc(BufReader::new(reader), writer, &config, signer, event_tx.clone(), cmd_rx).await
@@ -441,6 +446,7 @@ async fn run_client(
             let (reader, writer) = tokio::io::split(tls);
             run_irc(BufReader::new(reader), writer, &config, signer, event_tx, cmd_rx).await
         }
+        #[cfg(feature = "iroh-transport")]
         EstablishedConnection::Iroh(duplex) => {
             let (reader, writer) = tokio::io::split(duplex);
             run_irc(BufReader::new(reader), writer, &config, signer, event_tx, cmd_rx).await
@@ -448,10 +454,17 @@ async fn run_client(
     }
 }
 
+fn install_crypto_provider() {
+    // Install a crypto provider for rustls.
+    // ring is preferred (works on iOS); aws-lc-rs is the default on desktop.
+    #[cfg(feature = "ring")]
+    { let _ = rustls::crypto::ring::default_provider().install_default(); }
+    #[cfg(all(feature = "aws-lc-rs", not(feature = "ring")))]
+    { let _ = rustls::crypto::aws_lc_rs::default_provider().install_default(); }
+}
+
 fn rustls_default_config() -> rustls::ClientConfig {
-    // Ensure ring crypto provider is installed (iroh brings in ring,
-    // which can conflict with rustls auto-detection).
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    install_crypto_provider();
 
     let root_store =
         rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -461,7 +474,7 @@ fn rustls_default_config() -> rustls::ClientConfig {
 }
 
 fn rustls_insecure_config() -> rustls::ClientConfig {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    install_crypto_provider();
     rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(InsecureVerifier))
@@ -502,9 +515,9 @@ impl rustls::client::danger::ServerCertVerifier for InsecureVerifier {
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        rustls::crypto::aws_lc_rs::default_provider()
-            .signature_verification_algorithms
-            .supported_schemes()
+        rustls::crypto::CryptoProvider::get_default()
+            .map(|p| p.signature_verification_algorithms.supported_schemes())
+            .unwrap_or_default()
     }
 }
 

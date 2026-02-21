@@ -1,0 +1,30 @@
+name: freeq
+options:
+  bundleIdPrefix: at.freeq
+  deploymentTarget:
+    iOS: "18.0"
+
+targets:
+  freeq:
+    type: application
+    platform: iOS
+    sources:
+      - path: freeq
+        excludes:
+          - Info.plist
+      - path: Generated/freeq.swift
+    info:
+      path: freeq/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: at.freeq.ios
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: 1
+        DEVELOPMENT_TEAM: ""
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: Automatic
+        OTHER_LDFLAGS:
+          - "-ObjC"
+    dependencies:
+      - framework: FreeqSDK.xcframework
+        embed: false

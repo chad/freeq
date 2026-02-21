@@ -18,3 +18,9 @@ freeq-app/test-results/
 freeq-app/playwright-report/
 freeq-app/screenshots/
 freeq-app/test-results/
+
+# iOS build artifacts
+freeq-ios/build/
+freeq-ios/FreeqSDK.xcframework/
+freeq-ios/Generated/
+freeq-ios/freeq.xcodeproj/

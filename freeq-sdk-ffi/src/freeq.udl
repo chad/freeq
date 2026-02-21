@@ -1,0 +1,84 @@
+namespace freeq {};
+
+dictionary IrcMessage {
+    string from_nick;
+    string target;
+    string text;
+    string? msgid;
+    string? reply_to;
+    boolean is_action;
+    i64 timestamp_ms;
+};
+
+dictionary IrcMember {
+    string nick;
+    boolean is_op;
+    boolean is_voiced;
+};
+
+dictionary ChannelTopic {
+    string text;
+    string? set_by;
+};
+
+[Enum]
+interface FreeqEvent {
+    Connected();
+    Registered(string nick);
+    Authenticated(string did);
+    AuthFailed(string reason);
+    Joined(string channel, string nick);
+    Parted(string channel, string nick);
+    Message(IrcMessage msg);
+    Names(string channel, sequence<IrcMember> members);
+    TopicChanged(string channel, ChannelTopic topic);
+    ModeChanged(string channel, string mode, string? arg, string set_by);
+    Kicked(string channel, string nick, string by, string reason);
+    UserQuit(string nick, string reason);
+    Notice(string text);
+    Disconnected(string reason);
+};
+
+callback interface EventHandler {
+    void on_event(FreeqEvent event);
+};
+
+interface FreeqClient {
+    [Throws=FreeqError]
+    constructor(string server, string nick, EventHandler handler);
+
+    [Throws=FreeqError]
+    void connect();
+
+    void disconnect();
+
+    [Throws=FreeqError]
+    void join(string channel);
+
+    [Throws=FreeqError]
+    void part(string channel);
+
+    [Throws=FreeqError]
+    void send_message(string target, string text);
+
+    [Throws=FreeqError]
+    void send_raw(string line);
+
+    [Throws=FreeqError]
+    void set_topic(string channel, string topic);
+
+    [Throws=FreeqError]
+    void nick(string new_nick);
+
+    boolean is_connected();
+
+    string? current_nick();
+};
+
+[Error]
+enum FreeqError {
+    "ConnectionFailed",
+    "NotConnected",
+    "SendFailed",
+    "InvalidArgument",
+};

@@ -24,5 +24,6 @@ pub mod event;
 pub mod irc;
 pub mod media;
 pub mod oauth;
+#[cfg(feature = "iroh-transport")]
 pub mod p2p;
 pub mod pds;
