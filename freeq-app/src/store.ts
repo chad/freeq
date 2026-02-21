@@ -40,6 +40,7 @@ export interface Channel {
   modes: Set<string>;
   unreadCount: number;
   mentionCount: number;
+  lastReadMsgId?: string; // last message seen when channel was active
   isJoined: boolean;
 }
 
@@ -109,6 +110,8 @@ export interface Store {
   channelListOpen: boolean;
   channelList: ChannelListEntry[];
   lightboxUrl: string | null;
+  threadMsgId: string | null;
+  threadChannel: string | null;
 
   // Actions — connection
   setConnectionState: (state: TransportState) => void;
@@ -161,6 +164,8 @@ export interface Store {
   setChannelList: (list: ChannelListEntry[]) => void;
   addChannelListEntry: (entry: ChannelListEntry) => void;
   setLightboxUrl: (url: string | null) => void;
+  openThread: (msgId: string, channel: string) => void;
+  closeThread: () => void;
 }
 
 function getOrCreateChannel(channels: Map<string, Channel>, name: string): Channel {
@@ -203,6 +208,8 @@ export const useStore = create<Store>((set, get) => ({
   channelListOpen: false,
   channelList: [],
   lightboxUrl: null,
+  threadMsgId: null,
+  threadChannel: null,
 
   // Connection
   setConnectionState: (state) => set({ connectionState: state }),
@@ -237,6 +244,8 @@ export const useStore = create<Store>((set, get) => ({
     channelListOpen: false,
     channelList: [],
     lightboxUrl: null,
+    threadMsgId: null,
+    threadChannel: null,
     theme: s.theme, // preserve theme across reconnects
   })),
 
@@ -257,8 +266,15 @@ export const useStore = create<Store>((set, get) => ({
   }),
 
   setActiveChannel: (name) => set((s) => {
-    // Clear unread when switching to channel
     const channels = new Map(s.channels);
+    // Mark last-read on the channel we're leaving
+    const oldCh = channels.get(s.activeChannel.toLowerCase());
+    if (oldCh && oldCh.messages.length > 0) {
+      const lastMsg = oldCh.messages[oldCh.messages.length - 1];
+      oldCh.lastReadMsgId = lastMsg.id;
+      channels.set(s.activeChannel.toLowerCase(), oldCh);
+    }
+    // Clear unread on the channel we're entering
     const ch = channels.get(name.toLowerCase());
     if (ch) {
       ch.unreadCount = 0;
@@ -538,4 +554,6 @@ export const useStore = create<Store>((set, get) => ({
     channelList: [...s.channelList, entry],
   })),
   setLightboxUrl: (url) => set({ lightboxUrl: url }),
+  openThread: (msgId, channel) => set({ threadMsgId: msgId, threadChannel: channel }),
+  closeThread: () => set({ threadMsgId: null, threadChannel: null }),
 }));

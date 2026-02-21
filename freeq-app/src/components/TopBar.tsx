@@ -54,8 +54,8 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
       {/* Separator */}
       {isChannel && <div className="w-px h-5 bg-border" />}
 
-      {/* Topic (channels only) */}
-      <div className="flex-1 min-w-0">
+      {/* Topic (channels only, hidden on very small screens) */}
+      <div className="flex-1 min-w-0 hidden sm:block">
         {isChannel ? (
           editing ? (
             <input

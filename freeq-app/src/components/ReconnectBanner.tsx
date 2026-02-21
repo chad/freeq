@@ -1,11 +1,33 @@
 import { useStore } from '../store';
+import { disconnect } from '../irc/client';
 
 export function ReconnectBanner() {
   const connectionState = useStore((s) => s.connectionState);
   const registered = useStore((s) => s.registered);
+  const authDid = useStore((s) => s.authDid);
 
-  // Only show after we were registered (so we know we disconnected)
-  if (connectionState === 'connected' || !registered) return null;
+  // Show identity loss warning (reconnected as guest after having AT identity)
+  const hadIdentity = !!localStorage.getItem('freeq-handle');
+  const identityLost = registered && connectionState === 'connected' && !authDid && hadIdentity;
+
+  // Show reconnecting/disconnected banner
+  const showReconnect = registered && connectionState !== 'connected';
+
+  if (!showReconnect && !identityLost) return null;
+
+  if (identityLost) {
+    return (
+      <div className="flex items-center justify-center gap-3 py-1.5 text-xs font-medium shrink-0 bg-warning/10 text-warning">
+        <span>Signed in as guest — AT Protocol session expired</span>
+        <button
+          onClick={() => disconnect()}
+          className="underline hover:no-underline"
+        >
+          Sign in again
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className={`flex items-center justify-center gap-2 py-1.5 text-xs font-medium shrink-0 ${

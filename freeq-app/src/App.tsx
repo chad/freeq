@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useStore } from './store';
 import { useKeyboard } from './hooks/useKeyboard';
-import { setUnreadCount } from './lib/notifications';
+import { setUnreadCount, requestPermission } from './lib/notifications';
 import { ConnectScreen } from './components/ConnectScreen';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
@@ -14,6 +14,7 @@ import { ReconnectBanner } from './components/ReconnectBanner';
 import { ImageLightbox } from './components/ImageLightbox';
 import { SearchModal } from './components/SearchModal';
 import { ChannelListModal } from './components/ChannelListModal';
+import { ThreadView } from './components/ThreadView';
 
 export default function App() {
   const registered = useStore((s) => s.registered);
@@ -22,6 +23,8 @@ export default function App() {
   const [settings, setSettings] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [membersOpen, setMembersOpen] = useState(true);
+  const threadMsgId = useStore((s) => s.threadMsgId);
+  const threadChannel = useStore((s) => s.threadChannel);
   const channels = useStore((s) => s.channels);
   const activeChannel = useStore((s) => s.activeChannel);
   const setActive = useStore((s) => s.setActiveChannel);
@@ -30,6 +33,11 @@ export default function App() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
+
+  // Request notification permission when registered
+  useEffect(() => {
+    if (registered) requestPermission();
+  }, [registered]);
 
   // Close sidebar on mobile when switching channels
   useEffect(() => {
@@ -66,6 +74,7 @@ export default function App() {
       useStore.getState().setSearchOpen(false);
       useStore.getState().setChannelListOpen(false);
       useStore.getState().setLightboxUrl(null);
+      useStore.getState().closeThread();
     },
   }, [channels, switchToNth]);
 
@@ -104,6 +113,13 @@ export default function App() {
           <ComposeBox />
         </main>
         {membersOpen && <MemberList />}
+        {threadMsgId && threadChannel && (
+          <ThreadView
+            rootMsgId={threadMsgId}
+            channel={threadChannel}
+            onClose={() => useStore.getState().closeThread()}
+          />
+        )}
       </div>
       <QuickSwitcher open={quickSwitcher} onClose={() => setQuickSwitcher(false)} />
       <SettingsPanel open={settings} onClose={() => setSettings(false)} />

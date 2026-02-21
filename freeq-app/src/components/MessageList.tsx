@@ -5,6 +5,7 @@ import { fetchProfile, getCachedProfile, type ATProfile } from '../lib/profiles'
 import { EmojiPicker } from './EmojiPicker';
 import { UserPopover } from './UserPopover';
 import { BlueskyEmbed } from './BlueskyEmbed';
+import { LinkPreview } from './LinkPreview';
 
 // ── Colors ──
 
@@ -168,6 +169,12 @@ function MessageContent({ msg }: { msg: Message }) {
           </div>
         </a>
       )}
+
+      {/* Link preview for other URLs (not images, Bluesky, or YouTube) */}
+      {!bskyMatch && !ytMatch && imageUrls.length === 0 && (() => {
+        const urlMatch = msg.text.match(/(https?:\/\/[^\s<]+)/);
+        return urlMatch ? <LinkPreview url={urlMatch[1]} /> : null;
+      })()}
     </div>
   );
 }
@@ -324,6 +331,9 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
         <HoverBtn emoji="↩️" title="Reply" onClick={() => {
           useStore.getState().setReplyTo({ msgId: msg.id, from: msg.from, text: msg.text, channel });
         }} />
+        <HoverBtn emoji="🧵" title="View thread" onClick={() => {
+          useStore.getState().openThread(msg.id, channel);
+        }} />
         {msg.isSelf && !msg.isSystem && (
           <HoverBtn emoji="✏️" title="Edit" onClick={() => {
             useStore.getState().setEditingMsg({ msgId: msg.id, text: msg.text, channel });
@@ -455,6 +465,7 @@ export function MessageList() {
     if (s.activeChannel === 'server') return s.serverMessages;
     return s.channels.get(s.activeChannel.toLowerCase())?.messages || [];
   });
+  const lastReadMsgId = useStore((s) => s.channels.get(s.activeChannel.toLowerCase())?.lastReadMsgId);
   const ref = useRef<HTMLDivElement>(null);
   const prevLenRef = useRef(0);
   const [popover, setPopover] = useState<{ nick: string; did?: string; pos: { x: number; y: number } } | null>(null);
@@ -516,7 +527,14 @@ export function MessageList() {
       )}
       <div className="pb-2">
         {messages.map((msg, i) => (
-          <div key={msg.id}>
+          <div key={msg.id} style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 44px' }}>
+            {lastReadMsgId && i > 0 && messages[i - 1].id === lastReadMsgId && !msg.isSelf && (
+              <div className="flex items-center gap-2 px-4 my-2">
+                <div className="flex-1 h-px bg-danger/40" />
+                <span className="text-[10px] font-semibold text-danger/70 uppercase tracking-wider">New</span>
+                <div className="flex-1 h-px bg-danger/40" />
+              </div>
+            )}
             {shouldShowDateSep(messages, i) && <DateSeparator date={msg.timestamp} />}
             {msg.isSystem ? (
               <SystemMessage msg={msg} />
