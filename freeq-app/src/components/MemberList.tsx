@@ -69,7 +69,7 @@ export function MemberList() {
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="mb-3">
-      <div className="text-[10px] uppercase tracking-widest text-fg-dim font-semibold mb-1.5 px-1">
+      <div className="text-xs uppercase tracking-wider text-fg-dim font-bold mb-2 px-1">
         {label}
       </div>
       {children}
@@ -95,33 +95,33 @@ function MemberItem({ member, onClick }: MemberItemProps) {
   return (
     <button
       onClick={(e) => onClick(member.nick, member.did, e)}
-      className="w-full flex items-center gap-2 px-1.5 py-1 rounded-md text-sm hover:bg-bg-tertiary group"
+      className="w-full flex items-center gap-2.5 px-2 py-1.5 rounded-lg text-[15px] hover:bg-bg-tertiary group"
       title={member.did || member.nick}
     >
       <div className="relative">
         <MiniAvatar nick={member.nick} did={member.did} color={color} />
         {/* Presence dot */}
-        <span className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-bg-secondary ${
+        <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-bg-secondary ${
           member.away ? 'bg-warning' : 'bg-success'
         }`} />
       </div>
 
       <div className="min-w-0 flex-1 flex items-center gap-1">
-        {member.isOp && <span className="text-success text-[10px] font-bold">@</span>}
-        {!member.isOp && member.isVoiced && <span className="text-warning text-[10px] font-bold">+</span>}
+        {member.isOp && <span className="text-success text-xs font-bold">@</span>}
+        {!member.isOp && member.isVoiced && <span className="text-warning text-xs font-bold">+</span>}
 
-        <span className={`truncate text-sm ${
+        <span className={`truncate text-[15px] ${
           member.away ? 'text-fg-dim' : 'text-fg-muted group-hover:text-fg'
         }`}>
           {member.nick}
         </span>
 
         {member.did && (
-          <span className="text-accent text-[9px]" title="AT Protocol verified">✓</span>
+          <span className="text-accent text-xs" title="AT Protocol verified">✓</span>
         )}
 
         {member.typing && (
-          <span className="text-accent text-[10px] ml-auto animate-pulse">typing</span>
+          <span className="text-accent text-xs ml-auto animate-pulse">typing</span>
         )}
       </div>
     </button>
@@ -141,12 +141,12 @@ function MiniAvatar({ nick, did, color }: { nick: string; did?: string; color: s
   }, [did]);
 
   if (avatarUrl) {
-    return <img src={avatarUrl} alt="" className="w-6 h-6 rounded-full object-cover shrink-0" />;
+    return <img src={avatarUrl} alt="" className="w-8 h-8 rounded-full object-cover shrink-0" />;
   }
 
   return (
     <div
-      className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0"
+      className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
       style={{ backgroundColor: color + '20', color }}
     >
       {nick[0]?.toUpperCase()}

@@ -31,7 +31,7 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
   };
 
   return (
-    <header className="h-12 bg-bg-secondary border-b border-border flex items-center gap-3 px-4 shrink-0">
+    <header className="h-14 bg-bg-secondary border-b border-border flex items-center gap-3 px-4 shrink-0">
       {/* Mobile menu button */}
       <button
         onClick={onToggleSidebar}
@@ -44,9 +44,9 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
 
       {/* Channel / DM name */}
       <div className="flex items-center gap-2 shrink-0">
-        {isChannel && <span className="text-accent text-sm font-medium">#</span>}
-        {isDM && <span className="text-fg-dim text-sm">💬</span>}
-        <span className="font-semibold text-sm text-fg">
+        {isChannel && <span className="text-accent text-base font-bold">#</span>}
+        {isDM && <span className="text-fg-dim text-base">💬</span>}
+        <span className="font-bold text-base text-fg">
           {isChannel ? (ch?.name || activeChannel).replace(/^#/, '') : isDM ? activeChannel : 'Server'}
         </span>
       </div>
@@ -67,13 +67,13 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
               }}
               onBlur={() => setEditing(false)}
               autoFocus
-              className="w-full bg-transparent text-xs text-fg outline-none"
+              className="w-full bg-transparent text-sm text-fg outline-none"
               placeholder="Set a topic..."
             />
           ) : (
             <button
               onClick={startEdit}
-              className="text-xs text-fg-dim hover:text-fg-muted truncate block w-full text-left"
+              className="text-sm text-fg-dim hover:text-fg-muted truncate block w-full text-left"
               title={topic || 'Click to set topic'}
             >
               {topic || 'Set a topic'}
@@ -88,7 +88,7 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
       {isChannel && (
         <button
           onClick={onToggleMembers}
-          className={`flex items-center gap-1 text-xs shrink-0 px-2 py-1 rounded hover:bg-bg-tertiary transition-colors ${
+          className={`flex items-center gap-1.5 text-sm shrink-0 px-2.5 py-1.5 rounded-lg hover:bg-bg-tertiary transition-colors ${
             membersOpen ? 'text-fg-muted' : 'text-fg-dim'
           }`}
           title={membersOpen ? 'Hide members' : 'Show members'}

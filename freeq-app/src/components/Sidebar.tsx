@@ -32,11 +32,11 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
   };
 
   return (
-    <aside data-testid="sidebar" className="w-60 bg-bg-secondary flex flex-col shrink-0 overflow-hidden">
+    <aside data-testid="sidebar" className="w-64 bg-bg-secondary flex flex-col shrink-0 overflow-hidden">
       {/* Brand */}
-      <div className="h-12 flex items-center px-4 border-b border-border shrink-0 gap-2">
-        <img src="/freeq.png" alt="" className="w-6 h-6" />
-        <span className="text-accent font-bold text-lg tracking-tight">freeq</span>
+      <div className="h-14 flex items-center px-4 border-b border-border shrink-0 gap-2.5">
+        <img src="/freeq.png" alt="" className="w-7 h-7" />
+        <span className="text-accent font-bold text-xl tracking-tight">freeq</span>
         <span className={`ml-auto w-2 h-2 rounded-full ${
           connectionState === 'connected' ? 'bg-success' :
           connectionState === 'connecting' ? 'bg-warning animate-pulse' : 'bg-danger'
@@ -47,7 +47,7 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
         {/* Server */}
         <button
           onClick={() => setActive('server')}
-          className={`w-full text-left px-3 py-1.5 rounded-lg text-sm flex items-center gap-2 mb-1 ${
+          className={`w-full text-left px-3 py-2 rounded-lg text-[15px] flex items-center gap-2.5 mb-1 ${
             activeChannel === 'server'
               ? 'bg-surface text-fg'
               : 'text-fg-dim hover:text-fg-muted hover:bg-bg-tertiary'
@@ -64,7 +64,7 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
 
         {/* Channels */}
         <div className="mt-3 mb-1 px-2 flex items-center justify-between">
-          <span className="text-[10px] uppercase tracking-widest text-fg-dim font-semibold">
+          <span className="text-xs uppercase tracking-wider text-fg-dim font-bold">
             Channels
           </span>
           <div className="flex items-center gap-0.5">
@@ -104,7 +104,7 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
         {dmList.length > 0 && (
           <>
             <div className="mt-3 mb-1 px-2">
-              <span className="text-[10px] uppercase tracking-widest text-fg-dim font-semibold">
+              <span className="text-xs uppercase tracking-wider text-fg-dim font-bold">
                 Messages
               </span>
             </div>
@@ -114,13 +114,13 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
       </nav>
 
       {/* User footer */}
-      <div className="border-t border-border px-3 py-2.5 shrink-0">
-        <div className="flex items-center gap-2">
+      <div className="border-t border-border px-3 py-3 shrink-0">
+        <div className="flex items-center gap-2.5">
           <SelfAvatar nick={nick} did={authDid} />
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium truncate">{nick}</div>
+            <div className="text-[15px] font-semibold truncate">{nick}</div>
             {authDid && (
-              <div className="text-[10px] text-fg-dim truncate" title={authDid}>
+              <div className="text-xs text-fg-dim truncate" title={authDid}>
                 {authDid}
               </div>
             )}
@@ -164,10 +164,10 @@ function SelfAvatar({ nick, did }: { nick: string; did: string | null }) {
   }, [did]);
 
   if (avatarUrl) {
-    return <img src={avatarUrl} alt="" className="w-8 h-8 rounded-full object-cover shrink-0" />;
+    return <img src={avatarUrl} alt="" className="w-9 h-9 rounded-full object-cover shrink-0" />;
   }
   return (
-    <div className="w-8 h-8 rounded-full bg-surface flex items-center justify-center text-accent font-bold text-sm shrink-0">
+    <div className="w-9 h-9 rounded-full bg-surface flex items-center justify-center text-accent font-bold text-[15px] shrink-0">
       {(nick || '?')[0].toUpperCase()}
     </div>
   );
@@ -184,7 +184,7 @@ function ChannelButton({ ch, isActive, onSelect, icon }: {
   return (
     <button
       onClick={() => onSelect(ch.name)}
-      className={`w-full text-left px-3 py-1.5 rounded-lg text-sm flex items-center gap-2 ${
+      className={`w-full text-left px-3 py-2 rounded-lg text-[15px] flex items-center gap-2.5 ${
         isActive
           ? 'bg-surface text-fg'
           : hasMention
@@ -194,10 +194,10 @@ function ChannelButton({ ch, isActive, onSelect, icon }: {
               : 'text-fg-dim hover:text-fg-muted hover:bg-bg-tertiary'
       }`}
     >
-      <span className={`shrink-0 text-xs ${isActive ? 'text-accent' : 'opacity-50'}`}>{icon}</span>
+      <span className={`shrink-0 text-[15px] font-medium ${isActive ? 'text-accent' : 'opacity-50'}`}>{icon}</span>
       <span className="truncate">{ch.name.replace(/^[#&]/, '')}</span>
       {hasMention && (
-        <span className="ml-auto shrink-0 bg-danger text-white text-[10px] min-w-[18px] text-center px-1 py-0.5 rounded-full font-bold">
+        <span className="ml-auto shrink-0 bg-danger text-white text-xs min-w-[20px] text-center px-1.5 py-0.5 rounded-full font-bold">
           {ch.mentionCount}
         </span>
       )}

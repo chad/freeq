@@ -228,7 +228,7 @@ export function ConnectScreen() {
         <div className="flex gap-1 bg-bg rounded-lg p-1 mb-4">
           <button
             onClick={() => setMode('at-proto')}
-            className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${
+            className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-colors ${
               mode === 'at-proto'
                 ? 'bg-accent/10 text-accent'
                 : 'text-fg-dim hover:text-fg-muted'
@@ -238,7 +238,7 @@ export function ConnectScreen() {
           </button>
           <button
             onClick={() => setMode('guest')}
-            className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${
+            className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-colors ${
               mode === 'guest'
                 ? 'bg-bg-tertiary text-fg-muted'
                 : 'text-fg-dim hover:text-fg-muted'
@@ -253,7 +253,7 @@ export function ConnectScreen() {
             <>
               {/* AT Handle */}
               <div>
-                <label className="block text-[10px] uppercase tracking-widest text-fg-dim font-semibold mb-1.5">
+                <label className="block text-xs uppercase tracking-wider text-fg-dim font-bold mb-2">
                   AT Protocol Handle
                 </label>
                 <input
@@ -262,13 +262,13 @@ export function ConnectScreen() {
                   onChange={(e) => setHandle(e.target.value)}
                   placeholder="you.bsky.social"
                   onKeyDown={(e) => e.key === 'Enter' && doAtLogin()}
-                  className="w-full bg-bg border border-border rounded-lg px-3 py-2.5 text-sm text-fg outline-none focus:border-accent transition-colors placeholder:text-fg-dim"
+                  className="w-full bg-bg border border-border rounded-lg px-4 py-3 text-base text-fg outline-none focus:border-accent transition-colors placeholder:text-fg-dim"
                 />
               </div>
 
               {/* Derived nick (editable) */}
               <div>
-                <label className="block text-[10px] uppercase tracking-widest text-fg-dim font-semibold mb-1.5">
+                <label className="block text-xs uppercase tracking-wider text-fg-dim font-bold mb-2">
                   Nickname
                 </label>
                 <input
@@ -276,9 +276,9 @@ export function ConnectScreen() {
                   onChange={(e) => setAtNick(e.target.value)}
                   placeholder="derived from handle"
                   onKeyDown={(e) => e.key === 'Enter' && doAtLogin()}
-                  className="w-full bg-bg border border-border rounded-lg px-3 py-2.5 text-sm text-fg outline-none focus:border-accent transition-colors placeholder:text-fg-dim"
+                  className="w-full bg-bg border border-border rounded-lg px-4 py-3 text-base text-fg outline-none focus:border-accent transition-colors placeholder:text-fg-dim"
                 />
-                <p className="text-[10px] text-fg-dim mt-1">
+                <p className="text-xs text-fg-dim mt-1.5">
                   Your IRC nick. Defaults to your handle — edit if you prefer something different.
                 </p>
               </div>
@@ -287,7 +287,7 @@ export function ConnectScreen() {
             <>
               {/* Nick */}
               <div>
-                <label className="block text-[10px] uppercase tracking-widest text-fg-dim font-semibold mb-1.5">
+                <label className="block text-xs uppercase tracking-wider text-fg-dim font-bold mb-2">
                   Nickname
                 </label>
                 <input
@@ -296,7 +296,7 @@ export function ConnectScreen() {
                   onChange={(e) => setNick(e.target.value)}
                   placeholder="your_nick"
                   onKeyDown={(e) => e.key === 'Enter' && doGuestLogin()}
-                  className="w-full bg-bg border border-border rounded-lg px-3 py-2.5 text-sm text-fg outline-none focus:border-accent transition-colors placeholder:text-fg-dim"
+                  className="w-full bg-bg border border-border rounded-lg px-4 py-3 text-base text-fg outline-none focus:border-accent transition-colors placeholder:text-fg-dim"
                 />
               </div>
             </>
@@ -304,7 +304,7 @@ export function ConnectScreen() {
 
           {/* Channels */}
           <div>
-            <label className="block text-[10px] uppercase tracking-widest text-fg-dim font-semibold mb-1.5">
+            <label className="block text-xs uppercase tracking-wider text-fg-dim font-bold mb-2">
               Auto-join channels
             </label>
             <input
@@ -312,7 +312,7 @@ export function ConnectScreen() {
               onChange={(e) => setChannels(e.target.value)}
               placeholder="#freeq"
               onKeyDown={(e) => e.key === 'Enter' && (mode === 'at-proto' ? doAtLogin() : doGuestLogin())}
-              className="w-full bg-bg border border-border rounded-lg px-3 py-2.5 text-sm text-fg outline-none focus:border-accent transition-colors placeholder:text-fg-dim"
+              className="w-full bg-bg border border-border rounded-lg px-4 py-3 text-base text-fg outline-none focus:border-accent transition-colors placeholder:text-fg-dim"
             />
           </div>
 
@@ -320,25 +320,25 @@ export function ConnectScreen() {
           {showAdvanced && (
             <div className="animate-fadeIn space-y-3">
               <div>
-                <label className="block text-[10px] uppercase tracking-widest text-fg-dim font-semibold mb-1.5">
+                <label className="block text-xs uppercase tracking-wider text-fg-dim font-bold mb-2">
                   WebSocket URL
                 </label>
                 <input
                   value={server}
                   onChange={(e) => setServer(e.target.value)}
-                  className="w-full bg-bg border border-border rounded-lg px-3 py-2.5 text-sm text-fg outline-none focus:border-accent transition-colors font-mono text-xs placeholder:text-fg-dim"
+                  className="w-full bg-bg border border-border rounded-lg px-4 py-3 text-base text-fg outline-none focus:border-accent transition-colors font-mono text-xs placeholder:text-fg-dim"
                 />
               </div>
               <div>
-                <label className="block text-[10px] uppercase tracking-widest text-fg-dim font-semibold mb-1.5">
+                <label className="block text-xs uppercase tracking-wider text-fg-dim font-bold mb-2">
                   Server HTTP Origin
                 </label>
                 <input
                   value={webOrigin}
                   onChange={(e) => setWebOrigin(e.target.value)}
-                  className="w-full bg-bg border border-border rounded-lg px-3 py-2.5 text-sm text-fg outline-none focus:border-accent transition-colors font-mono text-xs placeholder:text-fg-dim"
+                  className="w-full bg-bg border border-border rounded-lg px-4 py-3 text-base text-fg outline-none focus:border-accent transition-colors font-mono text-xs placeholder:text-fg-dim"
                 />
-                <p className="text-[10px] text-fg-dim mt-1">
+                <p className="text-xs text-fg-dim mt-1.5">
                   HTTP origin of the freeq server (for OAuth). Must match --web-addr.
                 </p>
               </div>
@@ -358,7 +358,7 @@ export function ConnectScreen() {
           <button
             onClick={mode === 'at-proto' ? doAtLogin : doGuestLogin}
             disabled={connecting || oauthPending}
-            className="w-full bg-accent text-black font-bold py-2.5 rounded-lg transition-all hover:bg-accent-hover hover:shadow-[0_0_24px_rgba(0,212,170,0.15)] disabled:opacity-50 disabled:hover:shadow-none mt-1"
+            className="w-full bg-accent text-black font-bold py-3 rounded-xl text-lg transition-all hover:bg-accent-hover hover:shadow-[0_0_24px_rgba(0,212,170,0.15)] disabled:opacity-50 disabled:hover:shadow-none mt-1"
           >
             {oauthPending ? (
               <span className="flex items-center justify-center gap-2">

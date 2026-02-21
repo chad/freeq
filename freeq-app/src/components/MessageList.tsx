@@ -105,7 +105,7 @@ function MessageContent({ msg }: { msg: Message }) {
   const setLightbox = useStore((s) => s.setLightboxUrl);
 
   if (msg.isAction) {
-    return <div className="text-fg-muted italic text-sm mt-0.5">{msg.text}</div>;
+    return <div className="text-fg-muted italic text-[15px] mt-0.5">{msg.text}</div>;
   }
 
   const imageUrls = extractImageUrls(msg.text);
@@ -122,7 +122,7 @@ function MessageContent({ msg }: { msg: Message }) {
 
       {cleanText && (
         <div
-          className="text-sm leading-relaxed [&_pre]:my-1 [&_a]:break-all"
+          className="text-[15px] leading-relaxed [&_pre]:my-1 [&_a]:break-all"
           dangerouslySetInnerHTML={{ __html: renderText(cleanText) }}
         />
       )}
@@ -188,7 +188,7 @@ function ReplyBadge({ msgId }: { msgId: string }) {
   if (!original) return null;
 
   return (
-    <div className="flex items-center gap-1.5 text-xs text-fg-dim mb-1 pl-2 border-l-2 border-accent/30">
+    <div className="flex items-center gap-2 text-sm text-fg-dim mb-1.5 pl-2 border-l-2 border-accent/30">
       <span className="font-semibold text-fg-muted">{original.from}</span>
       <span className="truncate max-w-[300px]">{original.text}</span>
     </div>
@@ -209,7 +209,7 @@ function isGrouped(msgs: Message[], i: number): boolean {
 
 // ── Avatar component with AT profile support ──
 
-function Avatar({ nick, did, size = 36 }: { nick: string; did?: string; size?: number }) {
+function Avatar({ nick, did, size = 40 }: { nick: string; did?: string; size?: number }) {
   const [profile, setProfile] = useState<ATProfile | null>(
     did ? getCachedProfile(did) : null
   );
@@ -255,7 +255,7 @@ function DateSeparator({ date }: { date: Date }) {
   return (
     <div className="flex items-center gap-3 py-3 px-4">
       <div className="flex-1 border-t border-border" />
-      <span className="text-[11px] text-fg-dim font-medium">{formatDateSeparator(date)}</span>
+      <span className="text-xs text-fg-dim font-semibold">{formatDateSeparator(date)}</span>
       <div className="flex-1 border-t border-border" />
     </div>
   );
@@ -263,9 +263,9 @@ function DateSeparator({ date }: { date: Date }) {
 
 function SystemMessage({ msg }: { msg: Message }) {
   return (
-    <div className="px-4 py-0.5 flex items-start gap-2">
+    <div className="px-4 py-1 flex items-start gap-3">
       <span className="w-10 shrink-0" />
-      <span className="text-fg-dim text-[13px]">
+      <span className="text-fg-dim text-sm">
         <span className="opacity-60">—</span> {msg.text}
       </span>
     </div>
@@ -296,7 +296,7 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
   };
 
   return (
-    <div className={`group px-4 pt-2 pb-0.5 hover:bg-white/[0.015] flex gap-3 relative ${
+    <div className={`group px-4 pt-3 pb-1 hover:bg-white/[0.02] flex gap-3 relative ${
       isMention ? 'bg-accent/[0.04] border-l-2 border-accent' : ''
     }`}>
       <div
@@ -309,7 +309,7 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
           <button
-            className="font-semibold text-sm hover:underline"
+            className="font-semibold text-[15px] hover:underline"
             style={{ color }}
             onClick={(e) => onNickClick(msg.from, member?.did, e)}
           >
@@ -317,10 +317,10 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
           </button>
           {member?.did && <VerifiedBadge />}
           {member?.away != null && (
-            <span className="text-[10px] text-fg-dim bg-warning/10 text-warning px-1 py-0.5 rounded">away</span>
+            <span className="text-xs text-fg-dim bg-warning/10 text-warning px-1.5 py-0.5 rounded">away</span>
           )}
-          <span className="text-[11px] text-fg-dim whitespace-nowrap">{formatTime(msg.timestamp)}</span>
-          {msg.editOf && <span className="text-[10px] text-fg-dim">(edited)</span>}
+          <span className="text-xs text-fg-dim whitespace-nowrap">{formatTime(msg.timestamp)}</span>
+          {msg.editOf && <span className="text-xs text-fg-dim">(edited)</span>}
         </div>
         <MessageContent msg={msg} />
         <Reactions msg={msg} channel={channel} />
@@ -369,10 +369,10 @@ function GroupedMessage({ msg, channel }: MessageProps) {
   };
 
   return (
-    <div className={`group px-4 py-0.5 hover:bg-white/[0.015] flex gap-3 relative ${
+    <div className={`group px-4 py-0.5 hover:bg-white/[0.02] flex gap-3 relative ${
       isMention ? 'bg-accent/[0.04] border-l-2 border-accent' : ''
     }`}>
-      <span className="w-9 shrink-0 text-right text-[10px] text-fg-dim opacity-0 group-hover:opacity-100 leading-[22px]">
+      <span className="w-10 shrink-0 text-right text-[11px] text-fg-dim opacity-0 group-hover:opacity-100 leading-[24px]">
         {formatTime(msg.timestamp)}
       </span>
       <div className="min-w-0 flex-1">
@@ -410,7 +410,7 @@ function GroupedMessage({ msg, channel }: MessageProps) {
 /** Verification badge for AT Protocol-authenticated users */
 function VerifiedBadge() {
   return (
-    <span className="text-accent text-[10px]" title="AT Protocol verified identity">
+    <span className="text-accent text-xs" title="AT Protocol verified identity">
       <svg className="w-3.5 h-3.5 inline -mt-0.5" viewBox="0 0 16 16" fill="currentColor">
         <path d="M8 0a8 8 0 100 16A8 8 0 008 0zm3.78 5.97l-4.5 5a.75.75 0 01-1.06.02l-2-1.86a.75.75 0 011.02-1.1l1.45 1.35 3.98-4.43a.75.75 0 011.11 1.02z"/>
       </svg>
@@ -421,7 +421,7 @@ function VerifiedBadge() {
 function HoverBtn({ emoji, title, onClick }: { emoji: string; title: string; onClick: (e: React.MouseEvent) => void }) {
   return (
     <button
-      className="w-8 h-8 flex items-center justify-center text-xs hover:bg-bg-tertiary text-fg-dim hover:text-fg-muted"
+      className="w-9 h-9 flex items-center justify-center text-sm hover:bg-bg-tertiary text-fg-dim hover:text-fg-muted"
       title={title}
       onClick={onClick}
     >
@@ -434,14 +434,14 @@ function Reactions({ msg, channel }: { msg: Message; channel: string }) {
   if (!msg.reactions || msg.reactions.size === 0) return null;
   const myNick = getNick();
   return (
-    <div className="flex gap-1 mt-1 flex-wrap">
+    <div className="flex gap-1.5 mt-1.5 flex-wrap">
       {[...msg.reactions.entries()].map(([emoji, nicks]) => {
         const isMine = nicks.has(myNick);
         return (
           <button
             key={emoji}
             onClick={() => sendReaction(channel, emoji, msg.id)}
-            className={`rounded-md px-2 py-0.5 text-xs inline-flex items-center gap-1 border ${
+            className={`rounded-lg px-2.5 py-1 text-sm inline-flex items-center gap-1.5 border ${
               isMine
                 ? 'bg-accent/10 border-accent/30 text-accent'
                 : 'bg-surface border-transparent hover:border-border-bright text-fg-muted'
@@ -521,11 +521,11 @@ export function MessageList() {
       {messages.length === 0 && (
         <div className="flex flex-col items-center justify-center h-full text-fg-dim">
           <img src="/freeq.png" alt="freeq" className="w-12 h-12 mb-3 opacity-30" />
-          <div className="text-sm">
+          <div className="text-base">
             {activeChannel === 'server' ? 'Server messages will appear here' : 'No messages yet'}
           </div>
           {activeChannel !== 'server' && (
-            <div className="text-xs mt-1 text-fg-dim">Be the first to say something!</div>
+            <div className="text-sm mt-1 text-fg-dim">Be the first to say something!</div>
           )}
         </div>
       )}
@@ -533,9 +533,9 @@ export function MessageList() {
         {messages.map((msg, i) => (
           <div key={msg.id}>
             {lastReadMsgId && i > 0 && messages[i - 1].id === lastReadMsgId && !msg.isSelf && (
-              <div className="flex items-center gap-2 px-4 my-2">
+              <div className="flex items-center gap-3 px-4 my-3">
                 <div className="flex-1 h-px bg-danger/40" />
-                <span className="text-[10px] font-semibold text-danger/70 uppercase tracking-wider">New</span>
+                <span className="text-xs font-bold text-danger/70 uppercase tracking-wider">New</span>
                 <div className="flex-1 h-px bg-danger/40" />
               </div>
             )}

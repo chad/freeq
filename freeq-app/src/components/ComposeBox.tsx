@@ -387,7 +387,7 @@ export function ComposeBox() {
         <div className="px-3 py-2 border-b border-border flex items-center gap-2 animate-fadeIn bg-accent/[0.03]">
           <div className="w-1 h-8 bg-accent rounded-full shrink-0" />
           <div className="flex-1 min-w-0">
-            <div className="text-[10px] text-accent font-semibold">Replying to {replyTo.from}</div>
+            <div className="text-xs text-accent font-bold">Replying to {replyTo.from}</div>
             <div className="text-xs text-fg-muted truncate">{replyTo.text}</div>
           </div>
           <button onClick={cancelReplyEdit} className="text-fg-dim hover:text-danger text-lg shrink-0 p-1">✕</button>
@@ -399,7 +399,7 @@ export function ComposeBox() {
         <div className="px-3 py-2 border-b border-border flex items-center gap-2 animate-fadeIn bg-warning/[0.03]">
           <div className="w-1 h-8 bg-warning rounded-full shrink-0" />
           <div className="flex-1 min-w-0">
-            <div className="text-[10px] text-warning font-semibold">Editing message</div>
+            <div className="text-xs text-warning font-bold">Editing message</div>
             <div className="text-xs text-fg-muted truncate">{editingMsg.text}</div>
           </div>
           <button onClick={cancelReplyEdit} className="text-fg-dim hover:text-danger text-lg shrink-0 p-1">✕</button>
@@ -432,7 +432,7 @@ export function ComposeBox() {
                   onChange={(e) => setCrossPost(e.target.checked)}
                   className="w-3 h-3 rounded accent-blue"
                 />
-                <span className="text-[11px] text-fg-dim">Also post to Bluesky</span>
+                <span className="text-sm text-fg-dim">Also post to Bluesky</span>
                 <span className="text-[10px]">🦋</span>
               </label>
             )}
@@ -473,7 +473,7 @@ export function ComposeBox() {
         </div>
       )}
 
-      <div className="flex items-end gap-2 px-3 py-2">
+      <div className="flex items-end gap-2.5 px-4 py-3">
         {/* File upload button (only for AT-authenticated users) */}
         {authDid && activeChannel !== 'server' && (
           <>
@@ -504,7 +504,7 @@ export function ComposeBox() {
         <button
           ref={emojiRef}
           onClick={() => setShowEmoji(!showEmoji)}
-          className="w-9 h-9 rounded-lg flex items-center justify-center text-fg-dim hover:text-fg-muted hover:bg-bg-tertiary shrink-0"
+          className="w-10 h-10 rounded-lg flex items-center justify-center text-lg text-fg-dim hover:text-fg-muted hover:bg-bg-tertiary shrink-0"
           title="Emoji"
         >
           😊
@@ -527,7 +527,7 @@ export function ComposeBox() {
                   : `Message ${ch?.name || activeChannel}`
             }
             rows={1}
-            className="flex-1 bg-transparent px-3 py-2 text-sm text-fg outline-none placeholder:text-fg-dim resize-none min-h-[36px] max-h-[120px] leading-relaxed"
+            className="flex-1 bg-transparent px-3 py-2.5 text-base text-fg outline-none placeholder:text-fg-dim resize-none min-h-[44px] max-h-[140px] leading-relaxed"
             autoComplete="off"
             spellCheck
           />
@@ -537,7 +537,7 @@ export function ComposeBox() {
         <button
           onClick={submit}
           disabled={(!text.trim() && !pendingUpload) || !canSend}
-          className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+          className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${
             (text.trim() || pendingUpload) && canSend
               ? 'bg-accent text-black hover:bg-accent-hover'
               : 'bg-bg-tertiary text-fg-dim cursor-not-allowed'
