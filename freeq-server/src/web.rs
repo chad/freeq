@@ -933,11 +933,9 @@ async fn api_upload(
     let session = state.web_sessions.lock().unwrap().get(&did).cloned()
         .ok_or_else(|| (StatusCode::UNAUTHORIZED, "No active session for this DID — please re-authenticate".into()))?;
 
-    // Check session age (expire after 24 hours)
-    if session.created_at.elapsed() > std::time::Duration::from_secs(24 * 3600) {
-        state.web_sessions.lock().unwrap().remove(&did);
-        return Err((StatusCode::UNAUTHORIZED, "Session expired — please re-authenticate".into()));
-    }
+    // Sessions persist until server restart (in-memory only).
+    // No time-based expiry — the PDS access token may expire on its own,
+    // in which case the upload will fail with a PDS error.
 
     // Upload to PDS using stored DPoP credentials
     let dpop_key = freeq_sdk::oauth::DpopKey::from_base64url(&session.dpop_key_b64)

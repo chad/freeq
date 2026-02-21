@@ -467,37 +467,41 @@ export function MessageList() {
   });
   const lastReadMsgId = useStore((s) => s.channels.get(s.activeChannel.toLowerCase())?.lastReadMsgId);
   const ref = useRef<HTMLDivElement>(null);
-  const prevLenRef = useRef(0);
+  const stickToBottomRef = useRef(true);
   const [popover, setPopover] = useState<{ nick: string; did?: string; pos: { x: number; y: number } } | null>(null);
 
-  // Auto-scroll
-  useEffect(() => {
+  // Track whether user has scrolled up (unstick from bottom)
+  const handleScroll = useCallback(() => {
     const el = ref.current;
     if (!el) return;
-    if (messages.length > prevLenRef.current) {
-      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
-      if (isNearBottom || prevLenRef.current === 0) {
-        requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
-      }
-    }
-    prevLenRef.current = messages.length;
-  }, [messages.length]);
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }, []);
 
-  // Scroll to bottom on channel switch — use multiple rAFs to handle late layout
+  // Scroll to bottom when messages change (if stuck to bottom)
   useEffect(() => {
-    prevLenRef.current = 0;
+    if (!stickToBottomRef.current) return;
     const scrollBottom = () => {
       if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
     };
-    // Immediate + delayed to catch messages that render after channel switch
+    // Double RAF ensures layout is complete after React render
+    requestAnimationFrame(() => requestAnimationFrame(scrollBottom));
+  }, [messages.length, messages]);
+
+  // Always scroll to bottom on channel switch
+  useEffect(() => {
+    stickToBottomRef.current = true;
+    const scrollBottom = () => {
+      if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+    };
     scrollBottom();
-    requestAnimationFrame(scrollBottom);
-    const t = setTimeout(scrollBottom, 100);
+    requestAnimationFrame(() => requestAnimationFrame(scrollBottom));
+    const t = setTimeout(scrollBottom, 150);
     return () => clearTimeout(t);
   }, [activeChannel]);
 
-  // Load history on scroll to top
+  // Combined scroll handler: track stick-to-bottom + load history on scroll-to-top
   const onScroll = useCallback(() => {
+    handleScroll();
     const el = ref.current;
     if (!el || el.scrollTop > 50) return;
     if (activeChannel !== 'server' && messages.length > 0) {
@@ -506,7 +510,7 @@ export function MessageList() {
         requestHistory(activeChannel, oldest.timestamp.toISOString());
       }
     }
-  }, [activeChannel, messages]);
+  }, [activeChannel, messages, handleScroll]);
 
   const onNickClick = useCallback((nick: string, did: string | undefined, e: React.MouseEvent) => {
     setPopover({ nick, did, pos: { x: e.clientX, y: e.clientY } });
@@ -527,7 +531,7 @@ export function MessageList() {
       )}
       <div className="pb-2">
         {messages.map((msg, i) => (
-          <div key={msg.id} style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 44px' }}>
+          <div key={msg.id}>
             {lastReadMsgId && i > 0 && messages[i - 1].id === lastReadMsgId && !msg.isSelf && (
               <div className="flex items-center gap-2 px-4 my-2">
                 <div className="flex-1 h-px bg-danger/40" />
