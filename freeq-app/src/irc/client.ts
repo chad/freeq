@@ -400,8 +400,10 @@ function handleLine(rawLine: string) {
       }
       break;
     }
-    case '366': { // End of NAMES — WHOIS members to get DIDs for avatars
+    case '366': { // End of NAMES — request history and WHOIS members for avatars
       const namesChannel = msg.params[1];
+      // Fetch recent history for the channel
+      requestHistory(namesChannel);
       const ch = store.channels.get(namesChannel?.toLowerCase());
       if (ch) {
         const toWhois: string[] = [];

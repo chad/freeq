@@ -474,12 +474,17 @@ export function MessageList() {
     prevLenRef.current = messages.length;
   }, [messages.length]);
 
-  // Scroll to bottom on channel switch
+  // Scroll to bottom on channel switch — use multiple rAFs to handle late layout
   useEffect(() => {
     prevLenRef.current = 0;
-    requestAnimationFrame(() => {
+    const scrollBottom = () => {
       if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
-    });
+    };
+    // Immediate + delayed to catch messages that render after channel switch
+    scrollBottom();
+    requestAnimationFrame(scrollBottom);
+    const t = setTimeout(scrollBottom, 100);
+    return () => clearTimeout(t);
   }, [activeChannel]);
 
   // Load history on scroll to top
