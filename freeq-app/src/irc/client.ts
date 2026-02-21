@@ -212,6 +212,17 @@ function handleLine(rawLine: string) {
       raw(`PONG :${msg.params[0] || ''}`);
       break;
 
+    // ── ERROR (server closing link) ──
+    case 'ERROR': {
+      const reason = msg.params[0] || '';
+      // If ghosted (same identity reconnected elsewhere), don't auto-reconnect
+      if (reason.includes('same identity reconnected')) {
+        transport?.disconnect(); // sets intentionalClose = true, prevents reconnect
+        useStore.getState().fullReset();
+      }
+      break;
+    }
+
     // ── Registration ──
     case '001':
       nick = msg.params[0] || nick;

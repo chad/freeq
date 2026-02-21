@@ -151,13 +151,12 @@ pub(super) async fn handle_authenticate(
         if let Some(response) = sasl::decode_response(param) {
             // Check for web-token method first (server-side OAuth pre-verified)
             let web_token_result = if response.method.as_deref() == Some("web-token") {
-                let tokens = state.web_auth_tokens.lock().unwrap();
-                if let Some((did, _handle, created)) = tokens.get(&response.signature) {
-                    // Token expires after 5 minutes but is reusable within that window.
-                    // This allows reconnects (e.g. Tauri app redirect flow) to reuse
-                    // the same token without needing a new OAuth round-trip.
-                    if created.elapsed() < std::time::Duration::from_secs(300) && *did == response.did {
-                        Some(Ok(did.clone()))
+                let mut tokens = state.web_auth_tokens.lock().unwrap();
+                if let Some((did, _handle, created)) = tokens.remove(&response.signature) {
+                    // One-time use: token is consumed on first successful auth.
+                    // Reusable tokens caused ghost loops (reconnect → ghost → reconnect).
+                    if created.elapsed() < std::time::Duration::from_secs(300) && did == response.did {
+                        Some(Ok(did))
                     } else {
                         Some(Err("Web auth token expired or DID mismatch".to_string()))
                     }
