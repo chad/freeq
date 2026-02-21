@@ -181,8 +181,12 @@ export function ConnectScreen() {
 
       // Use the editable nick, falling back to derived from server-returned handle
       const finalNick = atNick.trim() || nickFromHandle(result.handle || h);
-      connect(server, finalNick, chans);
+
+      // Switch from oauthPending to autoConnecting — keeps spinner showing
+      // through the connection + SASL + registration phase
       setOauthPending(false);
+      setAutoConnecting(true);
+      connect(server, finalNick, chans);
     } catch (e) {
       setError(`OAuth error: ${e}`);
       setOauthPending(false);
