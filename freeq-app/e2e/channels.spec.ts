@@ -6,6 +6,10 @@ import { uniqueNick, uniqueChannel, connectGuest, sendMessage } from './helpers'
 
 test.describe('Channels', () => {
   test('channel topic shows in top bar', async ({ page }) => {
+    // Topic is hidden on mobile (sm: breakpoint)
+    const vp = page.viewportSize();
+    test.skip(!vp || vp.width < 640, 'topic hidden on mobile');
+
     const nick = uniqueNick();
     const channel = uniqueChannel();
     await connectGuest(page, nick, channel);
@@ -22,9 +26,27 @@ test.describe('Channels', () => {
     const ch1 = uniqueChannel();
     const ch2 = uniqueChannel();
     await connectGuest(page, nick, `${ch1}, ${ch2}`);
+    const isMobile = (page.viewportSize()?.width || 1280) < 768;
 
-    // Both channels should be in sidebar (check separately)
-    const sidebar = page.getByTestId('sidebar');
+    // Helper to ensure sidebar is visible (open hamburger on mobile)
+    const openSidebar = async () => {
+      const sidebar = page.getByTestId('sidebar');
+      // On mobile, sidebar may be off-screen (translated). Check if we need to open it.
+      const isInViewport = await sidebar.evaluate((el) => {
+        const rect = el.getBoundingClientRect();
+        return rect.right > 0 && rect.left < window.innerWidth;
+      }).catch(() => false);
+
+      if (!isInViewport) {
+        // Click the hamburger menu button in the top bar
+        const hamburger = page.locator('header button').first();
+        await hamburger.click();
+        await page.waitForTimeout(300); // wait for slide animation
+      }
+      return sidebar;
+    };
+
+    let sidebar = await openSidebar();
     await expect(sidebar.getByText(ch1)).toBeVisible({ timeout: 10_000 });
     await expect(sidebar.getByText(ch2)).toBeVisible({ timeout: 10_000 });
 
@@ -33,12 +55,14 @@ test.describe('Channels', () => {
     await sendMessage(page, 'msg in first channel');
     await expect(page.getByTestId('message-list').getByText('msg in first channel')).toBeVisible();
 
-    // Click ch2 in sidebar
+    // Click ch2 in sidebar (reopen on mobile since it closes on channel switch)
+    sidebar = await openSidebar();
     await sidebar.getByText(ch2).click();
     await sendMessage(page, 'msg in second channel');
     await expect(page.getByTestId('message-list').getByText('msg in second channel')).toBeVisible();
 
     // Switch back to ch1 — should still see first message
+    sidebar = await openSidebar();
     await sidebar.getByText(ch1).click();
     await expect(page.getByTestId('message-list').getByText('msg in first channel')).toBeVisible();
   });
