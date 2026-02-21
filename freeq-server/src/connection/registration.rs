@@ -128,8 +128,9 @@ pub(super) fn try_complete_registration(
         if let Some(owner) = owner_did {
             let is_owner = conn.authenticated_did.as_ref().is_some_and(|d| d == &owner);
             if !is_owner {
-                // Generate a guest nick
-                let guest_nick = format!("Guest{}", &session_id[session_id.len().saturating_sub(4)..]);
+                // Generate a guest nick using a random suffix
+                let guest_id: u32 = rand::random::<u32>() % 100000;
+                let guest_nick = format!("Guest{guest_id}");
                 let notice = Message::from_server(
                     server_name,
                     "NOTICE",
