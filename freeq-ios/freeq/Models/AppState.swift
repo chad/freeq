@@ -65,7 +65,26 @@ class AppState: ObservableObject {
     /// DM buffers (keyed by nick, not channel)
     @Published var dmBuffers: [ChannelState] = []
 
+    /// Channels to auto-join on connect
+    @Published var autoJoinChannels: [String] = ["#general"]
+
+    /// Unread message counts per channel
+    @Published var unreadCounts: [String: Int] = [:]
+
     private var client: FreeqClient? = nil
+
+    init() {
+        // Restore saved state
+        if let savedNick = UserDefaults.standard.string(forKey: "freeq.nick") {
+            nick = savedNick
+        }
+        if let savedServer = UserDefaults.standard.string(forKey: "freeq.server") {
+            serverAddress = savedServer
+        }
+        if let savedChannels = UserDefaults.standard.stringArray(forKey: "freeq.channels") {
+            autoJoinChannels = savedChannels
+        }
+    }
 
     var activeChannelState: ChannelState? {
         if let name = activeChannel {
@@ -78,6 +97,10 @@ class AppState: ObservableObject {
         self.nick = nick
         self.connectionState = .connecting
         self.errorMessage = nil
+
+        // Persist
+        UserDefaults.standard.set(nick, forKey: "freeq.nick")
+        UserDefaults.standard.set(serverAddress, forKey: "freeq.server")
 
         do {
             let handler = SwiftEventHandler(appState: self)
@@ -92,6 +115,16 @@ class AppState: ObservableObject {
                 self.connectionState = .disconnected
                 self.errorMessage = "Connection failed: \(error)"
             }
+        }
+    }
+
+    func markRead(_ channel: String) {
+        unreadCounts[channel] = 0
+    }
+
+    func incrementUnread(_ channel: String) {
+        if activeChannel != channel {
+            unreadCounts[channel, default: 0] += 1
         }
     }
 
@@ -182,8 +215,10 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
         case .registered(let nick):
             state.connectionState = .registered
             state.nick = nick
-            // Auto-join default channel
-            state.joinChannel("#general")
+            // Auto-join saved channels
+            for channel in state.autoJoinChannels {
+                state.joinChannel(channel)
+            }
 
         case .authenticated(let did):
             state.authenticatedDID = did
@@ -194,7 +229,14 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
         case .joined(let channel, let nick):
             let ch = state.getOrCreateChannel(channel)
             if nick.lowercased() == state.nick.lowercased() {
-                state.activeChannel = channel
+                if state.activeChannel == nil {
+                    state.activeChannel = channel
+                }
+                // Save to auto-join list
+                if !state.autoJoinChannels.contains(where: { $0.lowercased() == channel.lowercased() }) {
+                    state.autoJoinChannels.append(channel)
+                    UserDefaults.standard.set(state.autoJoinChannels, forKey: "freeq.channels")
+                }
             }
             // Add system message
             let msg = ChatMessage(
@@ -210,6 +252,8 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
         case .parted(let channel, let nick):
             if nick.lowercased() == state.nick.lowercased() {
                 state.channels.removeAll { $0.name == channel }
+                state.autoJoinChannels.removeAll { $0.lowercased() == channel.lowercased() }
+                UserDefaults.standard.set(state.autoJoinChannels, forKey: "freeq.channels")
                 if state.activeChannel == channel {
                     state.activeChannel = state.channels.first?.name
                 }
@@ -243,6 +287,7 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
             if target.hasPrefix("#") {
                 let ch = state.getOrCreateChannel(target)
                 ch.messages.append(msg)
+                state.incrementUnread(target)
             } else {
                 // DM — buffer keyed by the other person
                 let bufferName = isSelf ? target : from

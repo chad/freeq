@@ -4,89 +4,182 @@ struct ConnectView: View {
     @EnvironmentObject var appState: AppState
     @State private var nick: String = ""
     @State private var server: String = "irc.freeq.at:6667"
+    @FocusState private var nickFocused: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
+        ZStack {
+            // Background gradient
+            LinearGradient(
+                colors: [Theme.bgPrimary, Color(hex: "0f0f1e")],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
 
-            // Logo area
-            VStack(spacing: 12) {
-                Text("freeq")
-                    .font(.system(size: 48, weight: .bold, design: .rounded))
-                    .foregroundColor(.accentColor)
-
-                Text("IRC + AT Protocol")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
-            .padding(.bottom, 48)
-
-            // Form
-            VStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("NICKNAME")
-                        .font(.caption)
-                        .fontWeight(.bold)
-                        .foregroundColor(.secondary)
-
-                    TextField("Enter a nickname", text: $nick)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.body)
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
-                        .textContentType(.username)
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("SERVER")
-                        .font(.caption)
-                        .fontWeight(.bold)
-                        .foregroundColor(.secondary)
-
-                    TextField("irc.freeq.at:6667", text: $server)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.body)
-                        .autocapitalization(.none)
-                        .disableAutocorrection(true)
-                        .keyboardType(.URL)
-                }
-
-                if let error = appState.errorMessage {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundColor(.red)
-                        .multilineTextAlignment(.center)
-                }
-            }
-            .padding(.horizontal, 32)
-
-            Spacer().frame(height: 32)
-
-            // Connect button
-            Button(action: {
-                appState.serverAddress = server
-                appState.connect(nick: nick)
-            }) {
-                HStack {
-                    if appState.connectionState == .connecting {
-                        ProgressView()
-                            .tint(.white)
-                            .padding(.trailing, 4)
+            // Subtle grid pattern overlay
+            GeometryReader { geo in
+                Path { path in
+                    let spacing: CGFloat = 40
+                    for x in stride(from: 0, through: geo.size.width, by: spacing) {
+                        path.move(to: CGPoint(x: x, y: 0))
+                        path.addLine(to: CGPoint(x: x, y: geo.size.height))
                     }
-                    Text(appState.connectionState == .connecting ? "Connecting..." : "Connect")
-                        .fontWeight(.semibold)
+                    for y in stride(from: 0, through: geo.size.height, by: spacing) {
+                        path.move(to: CGPoint(x: 0, y: y))
+                        path.addLine(to: CGPoint(x: geo.size.width, y: y))
+                    }
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(nick.isEmpty ? Color.gray : Color.accentColor)
-                .foregroundColor(.white)
-                .cornerRadius(12)
+                .stroke(Color.white.opacity(0.02), lineWidth: 0.5)
             }
-            .disabled(nick.isEmpty || appState.connectionState == .connecting)
-            .padding(.horizontal, 32)
+            .ignoresSafeArea()
 
-            Spacer()
+            VStack(spacing: 0) {
+                Spacer()
+
+                // Logo + tagline
+                VStack(spacing: 16) {
+                    // Glow circle behind logo
+                    ZStack {
+                        Circle()
+                            .fill(Theme.accent.opacity(0.15))
+                            .frame(width: 100, height: 100)
+                            .blur(radius: 30)
+
+                        Text("fq")
+                            .font(.system(size: 44, weight: .black, design: .rounded))
+                            .foregroundColor(Theme.accent)
+                    }
+
+                    Text("freeq")
+                        .font(.system(size: 36, weight: .bold, design: .rounded))
+                        .foregroundColor(Theme.textPrimary)
+
+                    Text("Decentralized chat powered by IRC + AT Protocol")
+                        .font(.system(size: 14))
+                        .foregroundColor(Theme.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 40)
+                }
+                .padding(.bottom, 44)
+
+                // Card
+                VStack(spacing: 20) {
+                    // Nickname field
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("NICKNAME")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(Theme.textMuted)
+                            .kerning(1)
+
+                        HStack(spacing: 10) {
+                            Image(systemName: "person.fill")
+                                .foregroundColor(Theme.textMuted)
+                                .font(.system(size: 14))
+
+                            TextField("", text: $nick, prompt: Text("Choose a nickname").foregroundColor(Theme.textMuted))
+                                .foregroundColor(Theme.textPrimary)
+                                .font(.system(size: 16))
+                                .autocapitalization(.none)
+                                .disableAutocorrection(true)
+                                .textContentType(.username)
+                                .focused($nickFocused)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(Theme.bgPrimary)
+                        .cornerRadius(10)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(nickFocused ? Theme.accent : Theme.border, lineWidth: 1)
+                        )
+                    }
+
+                    // Server field
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("SERVER")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(Theme.textMuted)
+                            .kerning(1)
+
+                        HStack(spacing: 10) {
+                            Image(systemName: "server.rack")
+                                .foregroundColor(Theme.textMuted)
+                                .font(.system(size: 14))
+
+                            TextField("", text: $server, prompt: Text("irc.freeq.at:6667").foregroundColor(Theme.textMuted))
+                                .foregroundColor(Theme.textPrimary)
+                                .font(.system(size: 16))
+                                .autocapitalization(.none)
+                                .disableAutocorrection(true)
+                                .keyboardType(.URL)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(Theme.bgPrimary)
+                        .cornerRadius(10)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(Theme.border, lineWidth: 1)
+                        )
+                    }
+
+                    // Error
+                    if let error = appState.errorMessage {
+                        HStack(spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(Theme.danger)
+                                .font(.system(size: 12))
+                            Text(error)
+                                .font(.system(size: 13))
+                                .foregroundColor(Theme.danger)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    // Connect button
+                    Button(action: {
+                        appState.serverAddress = server
+                        appState.connect(nick: nick)
+                    }) {
+                        HStack(spacing: 8) {
+                            if appState.connectionState == .connecting {
+                                ProgressView()
+                                    .tint(.white)
+                                    .scaleEffect(0.85)
+                            }
+                            Text(appState.connectionState == .connecting ? "Connecting..." : "Connect")
+                                .font(.system(size: 16, weight: .semibold))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(
+                            nick.isEmpty
+                                ? AnyShapeStyle(Theme.textMuted.opacity(0.3))
+                                : AnyShapeStyle(LinearGradient(colors: [Theme.accent, Theme.accentLight], startPoint: .leading, endPoint: .trailing))
+                        )
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                    }
+                    .disabled(nick.isEmpty || appState.connectionState == .connecting)
+                }
+                .padding(24)
+                .background(Theme.bgSecondary)
+                .cornerRadius(16)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(Theme.border, lineWidth: 1)
+                )
+                .padding(.horizontal, 24)
+
+                Spacer()
+
+                // Footer
+                Text("Open source · IRC compatible · AT Protocol identity")
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textMuted)
+                    .padding(.bottom, 16)
+            }
         }
-        .background(Color(.systemBackground))
+        .preferredColorScheme(.dark)
     }
 }

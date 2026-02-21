@@ -7,31 +7,58 @@ struct ComposeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Divider()
+            Rectangle()
+                .fill(Theme.border)
+                .frame(height: 1)
 
             HStack(alignment: .bottom, spacing: 10) {
-                // Text field
-                TextField("Message \(appState.activeChannel ?? "")", text: $text, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.body)
-                    .lineLimit(1...5)
-                    .focused($isFocused)
-                    .submitLabel(.send)
-                    .onSubmit {
-                        send()
+                // Compose area
+                HStack(alignment: .bottom, spacing: 8) {
+                    // Plus button for attachments (placeholder)
+                    Button(action: {}) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 24))
+                            .foregroundColor(Theme.textMuted)
                     }
 
-                // Send button
-                Button(action: send) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.system(size: 32))
-                        .foregroundColor(text.isEmpty ? .gray : .accentColor)
+                    TextField(
+                        "",
+                        text: $text,
+                        prompt: Text("Message \(appState.activeChannel ?? "")").foregroundColor(Theme.textMuted),
+                        axis: .vertical
+                    )
+                    .foregroundColor(Theme.textPrimary)
+                    .font(.system(size: 16))
+                    .lineLimit(1...6)
+                    .focused($isFocused)
+                    .submitLabel(.send)
+                    .onSubmit { send() }
+                    .tint(Theme.accent)
+
+                    // Send button
+                    Button(action: send) {
+                        ZStack {
+                            Circle()
+                                .fill(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                      ? Theme.textMuted.opacity(0.3)
+                                      : Theme.accent)
+                                .frame(width: 32, height: 32)
+
+                            Image(systemName: "arrow.up")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundColor(.white)
+                        }
+                    }
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-                .disabled(text.isEmpty)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Theme.bgTertiary)
+                .cornerRadius(22)
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color(.systemBackground))
+            .padding(.vertical, 10)
+            .background(Theme.bgSecondary)
         }
     }
 
@@ -72,6 +99,10 @@ struct ComposeView: View {
             let msgParts = input.dropFirst(5).split(separator: " ", maxSplits: 1)
             if msgParts.count == 2 {
                 appState.sendMessage(target: String(msgParts[0]), text: String(msgParts[1]))
+            }
+        case "topic":
+            if let rest = parts.dropFirst().first, let channel = appState.activeChannel {
+                appState.sendRaw("TOPIC \(channel) :\(rest)")
             }
         default:
             appState.sendRaw(String(input.dropFirst()))

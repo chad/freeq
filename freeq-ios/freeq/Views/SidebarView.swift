@@ -7,136 +7,211 @@ struct SidebarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Header
-            HStack {
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(Theme.accent.opacity(0.15))
+                        .frame(width: 36, height: 36)
+                    Text("fq")
+                        .font(.system(size: 14, weight: .black, design: .rounded))
+                        .foregroundColor(Theme.accent)
+                }
+
                 Text("freeq")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                    .foregroundColor(.accentColor)
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .foregroundColor(Theme.accent)
 
                 Spacer()
 
-                if appState.authenticatedDID != nil {
-                    Image(systemName: "checkmark.seal.fill")
-                        .foregroundColor(.green)
-                        .font(.caption)
-                }
+                // Connection status dot
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 8, height: 8)
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .background(Color(.secondarySystemBackground))
+            .frame(height: 56)
+            .background(Theme.bgSecondary)
 
-            Divider()
+            Rectangle()
+                .fill(Theme.border)
+                .frame(height: 1)
 
+            // Content
             ScrollView {
-                VStack(alignment: .leading, spacing: 4) {
-                    // Channels section
-                    if !appState.channels.isEmpty {
-                        Text("CHANNELS")
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 16)
-                            .padding(.top, 12)
+                VStack(alignment: .leading, spacing: 2) {
+                    // Channels
+                    sectionHeader("CHANNELS", count: appState.channels.count)
 
-                        ForEach(appState.channels) { channel in
-                            Button(action: {
-                                appState.activeChannel = channel.name
-                                showingSidebar = false
-                            }) {
-                                HStack(spacing: 8) {
-                                    Text("#")
-                                        .font(.system(size: 16, weight: .medium, design: .monospaced))
-                                        .foregroundColor(.secondary)
-
-                                    Text(channel.name.dropFirst())
-                                        .font(.system(size: 15))
-                                        .lineLimit(1)
-
-                                    Spacer()
-
-                                    Text("\(channel.members.count)")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(
-                                    appState.activeChannel == channel.name
-                                        ? Color.accentColor.opacity(0.15)
-                                        : Color.clear
-                                )
-                                .cornerRadius(8)
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.horizontal, 4)
-                        }
+                    ForEach(appState.channels) { channel in
+                        channelRow(channel)
                     }
 
-                    // DMs section
+                    // DMs
                     if !appState.dmBuffers.isEmpty {
-                        Text("DIRECT MESSAGES")
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 16)
+                        sectionHeader("DIRECT MESSAGES", count: appState.dmBuffers.count)
                             .padding(.top, 12)
 
                         ForEach(appState.dmBuffers) { dm in
-                            Button(action: {
-                                appState.activeChannel = dm.name
-                                showingSidebar = false
-                            }) {
-                                HStack(spacing: 8) {
-                                    Circle()
-                                        .fill(Color.green)
-                                        .frame(width: 8, height: 8)
-
-                                    Text(dm.name)
-                                        .font(.system(size: 15))
-                                        .lineLimit(1)
-
-                                    Spacer()
-                                }
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(
-                                    appState.activeChannel == dm.name
-                                        ? Color.accentColor.opacity(0.15)
-                                        : Color.clear
-                                )
-                                .cornerRadius(8)
-                            }
-                            .buttonStyle(.plain)
-                            .padding(.horizontal, 4)
+                            dmRow(dm)
                         }
                     }
                 }
+                .padding(.vertical, 8)
             }
 
-            Divider()
+            Rectangle()
+                .fill(Theme.border)
+                .frame(height: 1)
 
             // User footer
-            HStack(spacing: 10) {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 10, height: 10)
+            HStack(spacing: 12) {
+                // Avatar
+                ZStack {
+                    Circle()
+                        .fill(Theme.nickColor(for: appState.nick).opacity(0.2))
+                        .frame(width: 36, height: 36)
+                    Text(String(appState.nick.prefix(1)).uppercased())
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(Theme.nickColor(for: appState.nick))
+                }
 
-                Text(appState.nick)
-                    .font(.system(size: 15, weight: .medium))
-                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 4) {
+                        Text(appState.nick)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(Theme.textPrimary)
+                            .lineLimit(1)
+
+                        if appState.authenticatedDID != nil {
+                            Image(systemName: "checkmark.seal.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(Theme.accent)
+                        }
+                    }
+
+                    Text(appState.authenticatedDID ?? "Guest")
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.textMuted)
+                        .lineLimit(1)
+                }
 
                 Spacer()
 
-                Button(action: { appState.disconnect() }) {
-                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                        .foregroundColor(.secondary)
+                // Settings / disconnect
+                Menu {
+                    Button(role: .destructive, action: {
+                        appState.disconnect()
+                        showingSidebar = false
+                    }) {
+                        Label("Disconnect", systemImage: "rectangle.portrait.and.arrow.right")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 16))
+                        .foregroundColor(Theme.textMuted)
+                        .frame(width: 32, height: 32)
                 }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(Color(.secondarySystemBackground))
+            .background(Theme.bgSecondary)
         }
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 0))
-        .shadow(radius: 8)
+        .background(Theme.bgPrimary)
+    }
+
+    private var statusColor: Color {
+        switch appState.connectionState {
+        case .registered: return Theme.success
+        case .connected, .connecting: return Theme.warning
+        case .disconnected: return Theme.danger
+        }
+    }
+
+    private func sectionHeader(_ title: String, count: Int) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(Theme.textMuted)
+                .kerning(0.8)
+            Spacer()
+            Text("\(count)")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(Theme.textMuted)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
+    }
+
+    private func channelRow(_ channel: ChannelState) -> some View {
+        let isActive = appState.activeChannel == channel.name
+
+        return Button(action: {
+            appState.activeChannel = channel.name
+            showingSidebar = false
+        }) {
+            HStack(spacing: 8) {
+                Text("#")
+                    .font(.system(size: 16, weight: .medium, design: .monospaced))
+                    .foregroundColor(isActive ? Theme.accent : Theme.textMuted)
+                    .frame(width: 20)
+
+                Text(String(channel.name.dropFirst()))
+                    .font(.system(size: 15, weight: isActive ? .semibold : .regular))
+                    .foregroundColor(isActive ? Theme.textPrimary : Theme.textSecondary)
+                    .lineLimit(1)
+
+                Spacer()
+
+                if !channel.members.isEmpty {
+                    Text("\(channel.members.count)")
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.textMuted)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Theme.bgTertiary)
+                        .cornerRadius(4)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(isActive ? Theme.accent.opacity(0.12) : Color.clear)
+            .cornerRadius(8)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 4)
+    }
+
+    private func dmRow(_ dm: ChannelState) -> some View {
+        let isActive = appState.activeChannel == dm.name
+
+        return Button(action: {
+            appState.activeChannel = dm.name
+            showingSidebar = false
+        }) {
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(Theme.nickColor(for: dm.name).opacity(0.2))
+                        .frame(width: 28, height: 28)
+                    Text(String(dm.name.prefix(1)).uppercased())
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(Theme.nickColor(for: dm.name))
+                }
+
+                Text(dm.name)
+                    .font(.system(size: 15, weight: isActive ? .semibold : .regular))
+                    .foregroundColor(isActive ? Theme.textPrimary : Theme.textSecondary)
+                    .lineLimit(1)
+
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(isActive ? Theme.accent.opacity(0.12) : Color.clear)
+            .cornerRadius(8)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 4)
     }
 }
