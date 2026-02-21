@@ -451,15 +451,13 @@ function Reactions({ msg, channel }: { msg: Message; channel: string }) {
 
 export function MessageList() {
   const activeChannel = useStore((s) => s.activeChannel);
-  const channels = useStore((s) => s.channels);
-  const serverMessages = useStore((s) => s.serverMessages);
+  const messages = useStore((s) => {
+    if (s.activeChannel === 'server') return s.serverMessages;
+    return s.channels.get(s.activeChannel.toLowerCase())?.messages || [];
+  });
   const ref = useRef<HTMLDivElement>(null);
   const prevLenRef = useRef(0);
   const [popover, setPopover] = useState<{ nick: string; did?: string; pos: { x: number; y: number } } | null>(null);
-
-  const messages = activeChannel === 'server'
-    ? serverMessages
-    : channels.get(activeChannel.toLowerCase())?.messages || [];
 
   // Auto-scroll
   useEffect(() => {
@@ -504,7 +502,7 @@ export function MessageList() {
   }, []);
 
   return (
-    <div ref={ref} className="flex-1 overflow-y-auto" onScroll={onScroll}>
+    <div key={activeChannel} ref={ref} className="flex-1 overflow-y-auto" onScroll={onScroll}>
       {messages.length === 0 && (
         <div className="flex flex-col items-center justify-center h-full text-fg-dim">
           <img src="/freeq.png" alt="freeq" className="w-12 h-12 mb-3 opacity-30" />
