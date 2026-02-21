@@ -791,17 +791,24 @@ fn oauth_result_page(message: &str, result: Option<&crate::server::OAuthResult>)
         let json = serde_json::to_string(r).unwrap_or_default();
         format!(
             r#"<script>
-            // Store result in localStorage (used by both popup polling and same-window redirect)
+            // Store result in localStorage (used by polling fallback and Tauri redirect)
             try {{ localStorage.setItem('freeq-oauth-result', JSON.stringify({json})); }} catch(e) {{}}
-            // Use BroadcastChannel (works across redirects, unlike window.opener)
+            // BroadcastChannel delivers result to main window (works cross-origin)
             try {{
                 const bc = new BroadcastChannel('freeq-oauth');
                 bc.postMessage({{ type: 'freeq-oauth', result: {json} }});
                 bc.close();
             }} catch(e) {{}}
-            // Also try window.opener as fallback
+            // Try postMessage to opener as secondary channel
             if (window.opener) {{
                 try {{ window.opener.postMessage({{ type: 'freeq-oauth', result: {json} }}, '*'); }} catch(e) {{}}
+            }}
+            // Detect popup vs main window. Popups have a smaller window or were opened by script.
+            // window.opener is often null after cross-origin redirects, so check window name instead.
+            const isPopup = (window.name === 'freeq-auth') || !!window.opener;
+            if (isPopup) {{
+                // Close the popup after a short delay
+                document.querySelector('#hint').textContent = 'You can close this window.';
                 setTimeout(() => window.close(), 1500);
             }} else {{
                 // Same-window flow (Tauri/desktop) — redirect back to app
