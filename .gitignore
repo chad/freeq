@@ -12,3 +12,9 @@ freeq-app/node_modules/
 freeq-app/dist/
 freeq-app/src-tauri/target/
 freeq-app/src-tauri/target/
+
+# Playwright
+freeq-app/test-results/
+freeq-app/playwright-report/
+freeq-app/screenshots/
+freeq-app/test-results/

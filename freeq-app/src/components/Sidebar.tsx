@@ -32,7 +32,7 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
   };
 
   return (
-    <aside className="w-60 bg-bg-secondary flex flex-col shrink-0 overflow-hidden">
+    <aside data-testid="sidebar" className="w-60 bg-bg-secondary flex flex-col shrink-0 overflow-hidden">
       {/* Brand */}
       <div className="h-12 flex items-center px-4 border-b border-border shrink-0 gap-2">
         <img src="/freeq.png" alt="" className="w-6 h-6" />

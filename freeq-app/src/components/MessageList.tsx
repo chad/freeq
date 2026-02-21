@@ -517,7 +517,7 @@ export function MessageList() {
   }, []);
 
   return (
-    <div key={activeChannel} ref={ref} className="flex-1 overflow-y-auto" onScroll={onScroll}>
+    <div key={activeChannel} ref={ref} data-testid="message-list" className="flex-1 overflow-y-auto" onScroll={onScroll}>
       {messages.length === 0 && (
         <div className="flex flex-col items-center justify-center h-full text-fg-dim">
           <img src="/freeq.png" alt="freeq" className="w-12 h-12 mb-3 opacity-30" />

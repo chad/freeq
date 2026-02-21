@@ -513,6 +513,7 @@ export function ComposeBox() {
         {/* Compose area */}
         <div className="flex-1 bg-bg-tertiary rounded-lg border border-border focus-within:border-accent/50 flex items-end">
           <textarea
+            data-testid="compose-input"
             ref={inputRef}
             value={text}
             onChange={(e) => { setText(e.target.value); onInput(); }}
