@@ -803,17 +803,19 @@ fn oauth_result_page(message: &str, result: Option<&crate::server::OAuthResult>)
             if (window.opener) {{
                 try {{ window.opener.postMessage({{ type: 'freeq-oauth', result: {json} }}, '*'); }} catch(e) {{}}
             }}
-            // Detect popup vs main window. Popups have a smaller window or were opened by script.
-            // window.opener is often null after cross-origin redirects, so check window name instead.
-            const isPopup = (window.name === 'freeq-auth') || !!window.opener;
-            if (isPopup) {{
-                // Close the popup after a short delay
+            // Try to close this window after a delay (gives BroadcastChannel time to deliver).
+            // The main window will also try popup.close() when it receives the result.
+            // If close fails (not a popup), check for Tauri and redirect.
+            setTimeout(() => {{
                 document.querySelector('#hint').textContent = 'You can close this window.';
-                setTimeout(() => window.close(), 1500);
-            }} else {{
-                // Same-window flow (Tauri/desktop) — redirect back to app
-                setTimeout(() => {{ window.location.href = '/'; }}, 1000);
-            }}
+                window.close();
+                // If we're still here after close(), check if this is Tauri (same-window flow)
+                setTimeout(() => {{
+                    if (window.__TAURI_INTERNALS__ || !window.opener && window.name !== 'freeq-auth') {{
+                        window.location.href = '/';
+                    }}
+                }}, 500);
+            }}, 1500);
             </script>"#
         )
     } else {

@@ -410,32 +410,34 @@ interface OAuthResultData {
  * Wait for OAuth result from popup window.
  * Tries BroadcastChannel, postMessage, and localStorage polling.
  */
-function waitForOAuthResult(_popup: Window | null): Promise<OAuthResultData | null> {
+function waitForOAuthResult(popup: Window | null): Promise<OAuthResultData | null> {
   return new Promise((resolve) => {
     let resolved = false;
     const done = (data: OAuthResultData | null) => {
       if (resolved) return;
       resolved = true;
       cleanup();
+      // Close the popup from the main window (more reliable than self-close)
+      try { popup?.close(); } catch { /* ignore */ }
       resolve(data);
     };
 
-    // Method 1: BroadcastChannel
+    // Method 1: BroadcastChannel (server callback sends type: 'freeq-oauth')
     let bc: BroadcastChannel | null = null;
     try {
       bc = new BroadcastChannel('freeq-oauth');
       bc.onmessage = (ev) => {
-        if (ev.data?.type === 'oauth-result') done(ev.data.result);
+        if (ev.data?.type === 'freeq-oauth' && ev.data.result) done(ev.data.result);
       };
     } catch { /* BroadcastChannel not supported */ }
 
-    // Method 2: postMessage from popup
+    // Method 2: postMessage from popup (server callback sends type: 'freeq-oauth')
     const onMessage = (ev: MessageEvent) => {
-      if (ev.data?.type === 'oauth-result') done(ev.data.result);
+      if (ev.data?.type === 'freeq-oauth' && ev.data.result) done(ev.data.result);
     };
     window.addEventListener('message', onMessage);
 
-    // Method 3: localStorage polling (fallback)
+    // Method 3: localStorage polling (fallback — always works)
     const poll = setInterval(() => {
       try {
         const raw = localStorage.getItem('freeq-oauth-result');
@@ -444,7 +446,7 @@ function waitForOAuthResult(_popup: Window | null): Promise<OAuthResultData | nu
           done(JSON.parse(raw));
         }
       } catch { /* ignore */ }
-    }, 300);
+    }, 200);
 
     // Timeout after 5 minutes
     const timeout = setTimeout(() => done(null), 5 * 60 * 1000);
