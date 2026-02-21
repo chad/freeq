@@ -97,3 +97,11 @@ body {
 
 .animate-fadeIn { animation: fadeIn 200ms ease; }
 .animate-slideIn { animation: slideInRight 200ms ease; }
+
+/* Touch devices: show message action buttons on active/focus instead of hover */
+@media (hover: none) {
+  .group:active > [class*="group-hover:opacity-100"],
+  .group:focus-within > [class*="group-hover:opacity-100"] {
+    opacity: 1 !important;
+  }
+}

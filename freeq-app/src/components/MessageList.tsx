@@ -319,15 +319,15 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
           {member?.away != null && (
             <span className="text-[10px] text-fg-dim bg-warning/10 text-warning px-1 py-0.5 rounded">away</span>
           )}
-          <span className="text-[11px] text-fg-dim">{formatTime(msg.timestamp)}</span>
+          <span className="text-[11px] text-fg-dim whitespace-nowrap">{formatTime(msg.timestamp)}</span>
           {msg.editOf && <span className="text-[10px] text-fg-dim">(edited)</span>}
         </div>
         <MessageContent msg={msg} />
         <Reactions msg={msg} channel={channel} />
       </div>
 
-      {/* Hover actions */}
-      <div className="opacity-0 group-hover:opacity-100 absolute right-3 -top-3 flex items-center bg-bg-secondary border border-border rounded-lg shadow-lg overflow-hidden">
+      {/* Message actions — hover on desktop, tap on mobile */}
+      <div className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 absolute right-3 -top-3 flex items-center bg-bg-secondary border border-border rounded-lg shadow-lg overflow-hidden transition-opacity z-10">
         <HoverBtn emoji="↩️" title="Reply" onClick={() => {
           useStore.getState().setReplyTo({ msgId: msg.id, from: msg.from, text: msg.text, channel });
         }} />

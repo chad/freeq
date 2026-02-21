@@ -22,7 +22,7 @@ export default function App() {
   const [quickSwitcher, setQuickSwitcher] = useState(false);
   const [settings, setSettings] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [membersOpen, setMembersOpen] = useState(true);
+  const [membersOpen, setMembersOpen] = useState(() => window.innerWidth >= 768);
   const threadMsgId = useStore((s) => s.threadMsgId);
   const threadChannel = useStore((s) => s.threadChannel);
   const channels = useStore((s) => s.channels);
@@ -39,9 +39,12 @@ export default function App() {
     if (registered) requestPermission();
   }, [registered]);
 
-  // Close sidebar on mobile when switching channels
+  // Close sidebar and member list on mobile when switching channels
   useEffect(() => {
-    if (window.innerWidth < 768) setSidebarOpen(false);
+    if (window.innerWidth < 768) {
+      setSidebarOpen(false);
+      setMembersOpen(false);
+    }
   }, [activeChannel]);
 
   // Total unread for title badge
@@ -112,7 +115,18 @@ export default function App() {
           <MessageList />
           <ComposeBox />
         </main>
-        {membersOpen && <MemberList />}
+        {/* Member list — inline on desktop, overlay on mobile */}
+        {membersOpen && (
+          <>
+            <div
+              className="fixed inset-0 bg-black/40 z-30 md:hidden"
+              onClick={() => setMembersOpen(false)}
+            />
+            <div className="fixed right-0 top-0 bottom-0 z-30 md:relative md:z-auto">
+              <MemberList />
+            </div>
+          </>
+        )}
         {threadMsgId && threadChannel && (
           <ThreadView
             rootMsgId={threadMsgId}
