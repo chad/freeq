@@ -26,6 +26,9 @@ let saslMethod = '';
 // Auto-join channels after registration
 let autoJoinChannels: string[] = [];
 
+// Channels we're currently in (for rejoin on reconnect)
+let joinedChannels = new Set<string>();
+
 // Background WHOIS lookups (suppress output for these)
 const backgroundWhois = new Set<string>();
 
@@ -43,6 +46,7 @@ export function connect(url: string, desiredNick: string, channels?: string[]) {
     onStateChange: (s: TransportState) => {
       useStore.getState().setConnectionState(s);
       if (s === 'connected') {
+        ackedCaps = new Set(); // reset caps for new connection
         raw('CAP LS 302');
         raw(`NICK ${nick}`);
         raw(`USER ${nick} 0 * :freeq web app`);
@@ -61,6 +65,7 @@ export function disconnect() {
   saslDid = '';
   saslPdsUrl = '';
   saslMethod = '';
+  joinedChannels.clear();
   useStore.getState().fullReset();
 }
 
@@ -228,8 +233,11 @@ function handleLine(rawLine: string) {
       nick = msg.params[0] || nick;
       store.setNick(nick);
       store.setRegistered(true);
-      // Auto-join channels
-      for (const ch of autoJoinChannels) {
+      // Auto-join channels (first connect uses autoJoinChannels, reconnects use joinedChannels)
+      const toJoin = autoJoinChannels.length > 0
+        ? autoJoinChannels
+        : [...joinedChannels];
+      for (const ch of toJoin) {
         if (ch.trim()) raw(`JOIN ${ch.trim()}`);
       }
       autoJoinChannels = [];
@@ -255,6 +263,7 @@ function handleLine(rawLine: string) {
       if (from === nick) {
         store.addChannel(channel);
         store.setActiveChannel(channel);
+        joinedChannels.add(channel.toLowerCase());
       }
       const joinDid = account && account !== '*' ? account : undefined;
       store.addMember(channel, {
@@ -272,6 +281,7 @@ function handleLine(rawLine: string) {
       const channel = msg.params[0];
       if (from === nick) {
         store.removeChannel(channel);
+        joinedChannels.delete(channel.toLowerCase());
       } else {
         store.removeMember(channel, from);
         store.addSystemMessage(channel, `${from} left`);
@@ -291,6 +301,7 @@ function handleLine(rawLine: string) {
       const reason = msg.params[2] || '';
       if (kicked.toLowerCase() === nick.toLowerCase()) {
         store.removeChannel(channel);
+        joinedChannels.delete(channel.toLowerCase());
         store.addSystemMessage('server', `Kicked from ${channel} by ${from}: ${reason}`);
       } else {
         store.removeMember(channel, kicked);
