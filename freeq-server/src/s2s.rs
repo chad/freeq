@@ -200,6 +200,20 @@ pub enum S2sMessage {
         origin: String,
     },
 
+    /// Policy sync — share a channel's policy document with peers.
+    /// Sent when a policy is created/updated/cleared.
+    #[serde(rename = "policy_sync")]
+    PolicySync {
+        #[serde(default)]
+        event_id: String,
+        channel: String,
+        /// JSON-serialized PolicyDocument (None = policy cleared).
+        policy_json: Option<String>,
+        /// JSON-serialized AuthoritySet.
+        authority_set_json: Option<String>,
+        origin: String,
+    },
+
     /// Internal event: a peer's S2S link has disconnected.
     /// Not sent over the wire — synthesized locally so the event processor
     /// can clean up remote_members for that peer's origin.

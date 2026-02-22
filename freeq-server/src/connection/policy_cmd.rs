@@ -13,6 +13,8 @@ use crate::server::SharedState;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
+use super::helpers::{s2s_broadcast, s2s_next_event_id};
+
 pub(super) fn handle_policy(
     conn: &super::Connection,
     msg: &Message,
@@ -144,6 +146,21 @@ pub(super) fn handle_policy(
                         };
                         let _ = engine.process_join(channel, did, &evidence);
                     }
+
+                    // Broadcast policy to S2S peers
+                    let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+                    let auth_set_json = engine.store()
+                        .get_authority_set(&policy.authority_set_hash)
+                        .ok()
+                        .flatten()
+                        .and_then(|a| serde_json::to_string(&a).ok());
+                    s2s_broadcast(state, crate::s2s::S2sMessage::PolicySync {
+                        event_id: s2s_next_event_id(state),
+                        channel: channel.to_string(),
+                        policy_json: serde_json::to_string(&policy).ok(),
+                        authority_set_json: auth_set_json,
+                        origin,
+                    });
                 }
                 Err(e) => {
                     let reply = Message::from_server(
@@ -286,13 +303,53 @@ pub(super) fn handle_policy(
         }
 
         "CLEAR" => {
-            // TODO: implement policy removal
-            let reply = Message::from_server(
-                server_name,
-                "NOTICE",
-                vec![nick, "POLICY CLEAR is not yet implemented"],
-            );
-            send_fn(state, session_id, format!("{reply}\r\n"));
+            // Require ops
+            if !is_channel_op(state, channel, session_id, conn.authenticated_did.as_deref()) {
+                let reply = Message::from_server(
+                    server_name,
+                    "482",
+                    vec![nick, channel, "You're not channel operator"],
+                );
+                send_fn(state, session_id, format!("{reply}\r\n"));
+                return;
+            }
+
+            match engine.remove_policy(channel) {
+                Ok(true) => {
+                    let reply = Message::from_server(
+                        server_name,
+                        "NOTICE",
+                        vec![nick, &format!("Policy removed from {channel} — channel is now open join")],
+                    );
+                    send_fn(state, session_id, format!("{reply}\r\n"));
+
+                    // Broadcast clear to S2S peers
+                    let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+                    s2s_broadcast(state, crate::s2s::S2sMessage::PolicySync {
+                        event_id: s2s_next_event_id(state),
+                        channel: channel.to_string(),
+                        policy_json: None,
+                        authority_set_json: None,
+                        origin,
+                    });
+                }
+                Ok(false) => {
+                    let reply = Message::from_server(
+                        server_name,
+                        "NOTICE",
+                        vec![nick, &format!("{channel} has no policy to remove")],
+                    );
+                    send_fn(state, session_id, format!("{reply}\r\n"));
+                }
+                Err(e) => {
+                    let reply = Message::from_server(
+                        server_name,
+                        "NOTICE",
+                        vec![nick, &format!("Failed to remove policy: {e}")],
+                    );
+                    send_fn(state, session_id, format!("{reply}\r\n"));
+                }
+            }
         }
 
         _ => {

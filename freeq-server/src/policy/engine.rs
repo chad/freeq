@@ -15,6 +15,8 @@ pub struct PolicyEngine {
     store: PolicyStore,
     /// DID of this server (as an authority).
     authority_did: String,
+    /// HMAC signing key for attestations (32 bytes, generated at startup).
+    signing_key: [u8; 32],
 }
 
 /// Result of a join attempt.
@@ -38,9 +40,20 @@ pub enum JoinResult {
 
 impl PolicyEngine {
     pub fn new(store: PolicyStore, authority_did: String) -> Self {
+        let signing_key: [u8; 32] = rand::random();
         PolicyEngine {
             store,
             authority_did,
+            signing_key,
+        }
+    }
+
+    /// Create with a specific signing key (for testing/persistence).
+    pub fn with_key(store: PolicyStore, authority_did: String, signing_key: [u8; 32]) -> Self {
+        PolicyEngine {
+            store,
+            authority_did,
+            signing_key,
         }
     }
 
@@ -73,7 +86,7 @@ impl PolicyEngine {
             channel_id: channel_id.to_string(),
             signers: vec![AuthoritySigner {
                 did: self.authority_did.clone(),
-                public_key: String::new(), // TODO: actual key
+                public_key: format!("hmac-sha256:{}", hex::encode(&self.signing_key[..16])),
                 label: Some("Primary authority".into()),
                 endpoint: None,
             }],
@@ -281,7 +294,8 @@ impl PolicyEngine {
             ValidityModel::JoinTime => None,
         };
 
-        let attestation = MembershipAttestation {
+        // Build attestation without signature, then sign the canonical form
+        let mut attestation = MembershipAttestation {
             attestation_id: generate_attestation_id(),
             channel_id: channel_id.to_string(),
             policy_id: policy_id.to_string(),
@@ -291,9 +305,13 @@ impl PolicyEngine {
             issued_at: now.to_rfc3339(),
             expires_at,
             join_id: join_id.map(String::from),
-            signature: String::new(), // TODO: actual signing
+            signature: String::new(),
             issuer_did: self.authority_did.clone(),
         };
+        // Sign the attestation (HMAC-SHA256 over JCS-canonical form with empty signature)
+        if let Ok(sig) = canonical::hmac_sign(&attestation, &self.signing_key) {
+            attestation.signature = sig;
+        }
 
         self.store.store_attestation(&attestation)?;
 
@@ -314,6 +332,53 @@ impl PolicyEngine {
     /// Get the current policy for a channel.
     pub fn get_policy(&self, channel_id: &str) -> Result<Option<PolicyDocument>, PolicyError> {
         self.store.get_current_policy(channel_id)
+    }
+
+    /// Verify the signature on an attestation.
+    pub fn verify_attestation(&self, attestation: &MembershipAttestation) -> bool {
+        let sig = attestation.signature.clone();
+        let mut unsigned = attestation.clone();
+        unsigned.signature = String::new();
+        canonical::hmac_verify(&unsigned, &self.signing_key, &sig).unwrap_or(false)
+    }
+
+    /// Remove a channel's policy entirely.
+    /// Returns true if a policy was removed.
+    pub fn remove_policy(&self, channel_id: &str) -> Result<bool, PolicyError> {
+        self.store.remove_channel_policy(channel_id)
+    }
+
+    /// Get the role for a user's current attestation (if any).
+    /// Returns None if no valid attestation exists.
+    pub fn get_member_role(
+        &self,
+        channel_id: &str,
+        subject_did: &str,
+    ) -> Result<Option<String>, PolicyError> {
+        Ok(self.store.get_attestation(channel_id, subject_did)?
+            .map(|a| a.role))
+    }
+
+    /// Get all channel members with valid attestations.
+    pub fn get_channel_members(
+        &self,
+        channel_id: &str,
+    ) -> Result<Vec<MembershipAttestation>, PolicyError> {
+        self.store.get_channel_members(channel_id)
+    }
+
+    /// Invalidate expired attestations. Returns count of invalidated.
+    pub fn revalidate_expired(&self) -> Result<usize, PolicyError> {
+        let expired = self.store.get_expired_attestations()?;
+        let count = expired.len();
+        for att in &expired {
+            self.store.invalidate_attestation(&att.attestation_id)?;
+            tracing::debug!(
+                channel = %att.channel_id, did = %att.subject_did,
+                "Invalidated expired attestation"
+            );
+        }
+        Ok(count)
     }
 }
 
@@ -544,5 +609,140 @@ mod tests {
         assert_eq!(entries.len(), 2);
         // Entries don't contain user DIDs (privacy)
         assert!(entries.iter().all(|e| !e.attestation_hash.is_empty()));
+    }
+
+    #[test]
+    fn test_attestation_signing() {
+        let engine = test_engine();
+        let hash = canonical::sha256_hex(b"rules");
+
+        engine
+            .create_channel_policy(
+                "#signed",
+                Requirement::Accept { hash: hash.clone() },
+                std::collections::BTreeMap::new(),
+            )
+            .unwrap();
+
+        let evidence = UserEvidence {
+            accepted_hashes: HashSet::from([hash]),
+            credentials: vec![],
+            proofs: HashSet::new(),
+        };
+
+        let result = engine.process_join("#signed", "did:plc:user1", &evidence).unwrap();
+        match result {
+            JoinResult::Confirmed { attestation, .. } => {
+                // Signature should be non-empty
+                assert!(!attestation.signature.is_empty());
+                // Signature should verify
+                assert!(engine.verify_attestation(&attestation));
+                // Tampered attestation should fail
+                let mut tampered = attestation.clone();
+                tampered.role = "admin".to_string();
+                assert!(!engine.verify_attestation(&tampered));
+            }
+            other => panic!("Expected Confirmed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_remove_policy() {
+        let engine = test_engine();
+        let hash = canonical::sha256_hex(b"rules");
+
+        engine
+            .create_channel_policy(
+                "#removable",
+                Requirement::Accept { hash: hash.clone() },
+                std::collections::BTreeMap::new(),
+            )
+            .unwrap();
+
+        assert!(engine.get_policy("#removable").unwrap().is_some());
+        assert!(engine.remove_policy("#removable").unwrap());
+        assert!(engine.get_policy("#removable").unwrap().is_none());
+        // Double remove returns false
+        assert!(!engine.remove_policy("#removable").unwrap());
+    }
+
+    #[test]
+    fn test_get_member_role() {
+        let engine = test_engine();
+        let hash = canonical::sha256_hex(b"rules");
+
+        let mut role_reqs = std::collections::BTreeMap::new();
+        role_reqs.insert(
+            "op".to_string(),
+            Requirement::Present {
+                credential_type: "admin".into(),
+                issuer: Some("github".into()),
+            },
+        );
+
+        engine
+            .create_channel_policy("#roles", Requirement::Accept { hash: hash.clone() }, role_reqs)
+            .unwrap();
+
+        let evidence = UserEvidence {
+            accepted_hashes: HashSet::from([hash]),
+            credentials: vec![],
+            proofs: HashSet::new(),
+        };
+
+        engine.process_join("#roles", "did:plc:regular", &evidence).unwrap();
+        assert_eq!(engine.get_member_role("#roles", "did:plc:regular").unwrap(), Some("member".into()));
+        assert_eq!(engine.get_member_role("#roles", "did:plc:nobody").unwrap(), None);
+    }
+
+    #[test]
+    fn test_continuous_validity_expiry() {
+        let engine = test_engine();
+        let hash = canonical::sha256_hex(b"rules");
+
+        // Create policy with continuous validity
+        let auth_set = AuthoritySet {
+            authority_set_hash: None,
+            channel_id: "#expire".to_string(),
+            signers: vec![],
+            policy_threshold: 1,
+            authority_refresh_ttl_seconds: 3600,
+            transparency: None,
+            previous_authority_set_hash: None,
+        };
+        let auth_set = engine.store.store_authority_set(auth_set).unwrap();
+        let auth_hash = auth_set.authority_set_hash.unwrap();
+
+        let policy = PolicyDocument {
+            channel_id: "#expire".to_string(),
+            policy_id: None,
+            version: 1,
+            effective_at: chrono::Utc::now().to_rfc3339(),
+            previous_policy_hash: None,
+            authority_set_hash: auth_hash,
+            requirements: Requirement::Accept { hash: hash.clone() },
+            role_requirements: std::collections::BTreeMap::new(),
+            validity_model: ValidityModel::Continuous,
+            receipt_embedding: ReceiptEmbedding::Allow,
+            policy_locations: vec![],
+            limits: None,
+            transparency: None,
+        };
+        engine.store.store_policy(policy).unwrap();
+
+        let evidence = UserEvidence {
+            accepted_hashes: HashSet::from([hash]),
+            credentials: vec![],
+            proofs: HashSet::new(),
+        };
+
+        let result = engine.process_join("#expire", "did:plc:user1", &evidence).unwrap();
+        match &result {
+            JoinResult::Confirmed { attestation, .. } => {
+                // Continuous validity: should have an expiry
+                assert!(attestation.expires_at.is_some());
+            }
+            other => panic!("Expected Confirmed, got {:?}", other),
+        }
     }
 }

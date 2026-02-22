@@ -34,6 +34,7 @@ axum = { workspace = true }
 tower-http = { workspace = true }
 iroh = { workspace = true }
 sha2 = { workspace = true }
+hmac = "0.12"
 hex = "0.4"
 percent-encoding = { workspace = true }
 iroh-quinn = { workspace = true }

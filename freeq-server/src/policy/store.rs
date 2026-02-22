@@ -451,6 +451,58 @@ impl PolicyStore {
         Ok(members)
     }
 
+    /// Get expired attestations (continuous validity model, past their expires_at).
+    pub fn get_expired_attestations(&self) -> Result<Vec<MembershipAttestation>, PolicyError> {
+        let db = self.db.lock().unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut stmt = db
+            .prepare(
+                "SELECT attestation_json FROM membership_attestations
+                 WHERE state = 'VALID' AND expires_at IS NOT NULL AND expires_at < ?1",
+            )
+            .map_err(|e| PolicyError::Database(e.to_string()))?;
+
+        let expired = stmt
+            .query_map(params![now], |row| {
+                let json: String = row.get(0)?;
+                Ok(json)
+            })
+            .map_err(|e| PolicyError::Database(e.to_string()))?
+            .filter_map(|r| r.ok())
+            .filter_map(|j| serde_json::from_str::<MembershipAttestation>(&j).ok())
+            .collect();
+
+        Ok(expired)
+    }
+
+    /// Mark an attestation as invalid (expired/revoked).
+    pub fn invalidate_attestation(&self, attestation_id: &str) -> Result<(), PolicyError> {
+        let db = self.db.lock().unwrap();
+        db.execute(
+            "UPDATE membership_attestations SET state = 'INVALID' WHERE attestation_id = ?1",
+            params![attestation_id],
+        ).map_err(|e| PolicyError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    // ─── Policy Removal ────────────────────────────────────────────────
+
+    /// Remove all policy data for a channel.
+    /// Returns true if anything was removed.
+    pub fn remove_channel_policy(&self, channel_id: &str) -> Result<bool, PolicyError> {
+        let db = self.db.lock().unwrap();
+        let total: usize = ["policies", "membership_attestations", "join_receipts", "transparency_log"]
+            .iter()
+            .map(|table| {
+                db.execute(
+                    &format!("DELETE FROM {} WHERE channel_id = ?1", table),
+                    params![channel_id],
+                ).unwrap_or(0)
+            })
+            .sum();
+        Ok(total > 0)
+    }
+
     // ─── Transparency Log ────────────────────────────────────────────────
 
     /// Get transparency log entries for a channel.

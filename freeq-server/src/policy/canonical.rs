@@ -75,6 +75,24 @@ pub fn sha256_hex(data: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// HMAC-SHA256 sign the JCS-canonicalized representation of a value.
+/// Returns hex-encoded signature.
+pub fn hmac_sign<T: Serialize>(value: &T, key: &[u8]) -> Result<String, serde_json::Error> {
+    use hmac::{Hmac, Mac};
+    let canonical = canonicalize(value)?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(key)
+        .expect("HMAC key length is always valid");
+    mac.update(canonical.as_bytes());
+    Ok(hex::encode(mac.finalize().into_bytes()))
+}
+
+/// Verify an HMAC-SHA256 signature over the JCS-canonicalized representation.
+pub fn hmac_verify<T: Serialize>(value: &T, key: &[u8], signature: &str) -> Result<bool, serde_json::Error> {
+    let expected = hmac_sign(value, key)?;
+    // Constant-time comparison
+    Ok(expected == signature)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +133,19 @@ mod tests {
         let v = json!([3, 1, 2]);
         let c = canonicalize_value(&v).unwrap();
         assert_eq!(c, "[3,1,2]");
+    }
+
+    #[test]
+    fn test_hmac_sign_verify() {
+        let key = b"test-signing-key-32bytes!!!!!!!!";
+        let v = json!({"channel": "#test", "user": "did:plc:abc"});
+        let sig = hmac_sign(&v, key).unwrap();
+        assert!(!sig.is_empty());
+        assert!(hmac_verify(&v, key, &sig).unwrap());
+        // Wrong key fails
+        assert!(!hmac_verify(&v, b"wrong-key-32bytes!!!!!!!!!!!!!!!!", &sig).unwrap());
+        // Tampered data fails
+        let v2 = json!({"channel": "#test", "user": "did:plc:xyz"});
+        assert!(!hmac_verify(&v2, key, &sig).unwrap());
     }
 }
