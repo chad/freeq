@@ -54,6 +54,13 @@ export function connect(url: string, desiredNick: string, channels?: string[]) {
     },
   });
   transport.connect();
+
+  // Send QUIT when tab/window is closing to avoid ghost connections
+  window.addEventListener('beforeunload', () => {
+    if (transport) {
+      try { transport.send('QUIT :Leaving'); } catch { /* ignore */ }
+    }
+  });
 }
 
 export function disconnect() {
