@@ -1,9 +1,11 @@
 //! IRC POLICY command handler.
 //!
-//! POLICY <channel> SET <rules_text>   — Create/update ACCEPT-only policy
-//! POLICY <channel> INFO               — Show current policy
-//! POLICY <channel> ACCEPT             — Accept current policy (join flow)
-//! POLICY <channel> CLEAR              — Remove policy (ops only)
+//! POLICY <channel> SET <rules_text>                   — Create/update ACCEPT-only policy
+//! POLICY <channel> SET-ROLE <role> <requirement_json> — Add role escalation requirement
+//! POLICY <channel> VERIFY github <username> <org>     — Verify GitHub org membership
+//! POLICY <channel> INFO                               — Show current policy
+//! POLICY <channel> ACCEPT                             — Accept policy + present credentials
+//! POLICY <channel> CLEAR                              — Remove policy (ops only)
 
 use crate::irc::Message;
 use crate::policy::canonical;
@@ -42,7 +44,7 @@ pub(super) fn handle_policy(
         let reply = Message::from_server(
             server_name,
             "NOTICE",
-            vec![nick, "Usage: POLICY <channel> SET|INFO|ACCEPT|CLEAR"],
+            vec![nick, "Usage: POLICY <channel> SET|SET-ROLE|VERIFY|INFO|ACCEPT|CLEAR"],
         );
         send_fn(state, session_id, format!("{reply}\r\n"));
         return;
@@ -173,6 +175,215 @@ pub(super) fn handle_policy(
             }
         }
 
+        "SET-ROLE" => {
+            // POLICY #channel SET-ROLE <role> <requirement_json>
+            // e.g. POLICY #channel SET-ROLE op {"type":"ALL","requirements":[{"type":"ACCEPT","hash":"abc"},{"type":"PRESENT","credential_type":"github_membership","issuer":"github"}]}
+            if !is_channel_op(state, channel, session_id, conn.authenticated_did.as_deref()) {
+                let reply = Message::from_server(
+                    server_name,
+                    "482",
+                    vec![nick, channel, "You're not channel operator"],
+                );
+                send_fn(state, session_id, format!("{reply}\r\n"));
+                return;
+            }
+
+            if msg.params.len() < 4 {
+                let reply = Message::from_server(
+                    server_name,
+                    "NOTICE",
+                    vec![nick, "Usage: POLICY <channel> SET-ROLE <role_name> <requirement_json>"],
+                );
+                send_fn(state, session_id, format!("{reply}\r\n"));
+                return;
+            }
+
+            let role_name = msg.params[2].to_lowercase();
+            let json_str = msg.params[3..].join(" ");
+
+            let requirement: Requirement = match serde_json::from_str(&json_str) {
+                Ok(r) => r,
+                Err(e) => {
+                    let reply = Message::from_server(
+                        server_name,
+                        "NOTICE",
+                        vec![nick, &format!("Invalid requirement JSON: {e}")],
+                    );
+                    send_fn(state, session_id, format!("{reply}\r\n"));
+                    return;
+                }
+            };
+
+            // Get current policy, add/update role requirement, create new version
+            let current = match engine.get_policy(channel) {
+                Ok(Some(p)) => p,
+                Ok(None) => {
+                    let reply = Message::from_server(
+                        server_name,
+                        "NOTICE",
+                        vec![nick, "Set a base policy first with POLICY <channel> SET <rules>"],
+                    );
+                    send_fn(state, session_id, format!("{reply}\r\n"));
+                    return;
+                }
+                Err(e) => {
+                    let reply = Message::from_server(
+                        server_name,
+                        "NOTICE",
+                        vec![nick, &format!("Policy error: {e}")],
+                    );
+                    send_fn(state, session_id, format!("{reply}\r\n"));
+                    return;
+                }
+            };
+
+            let mut role_reqs = current.role_requirements.clone();
+            role_reqs.insert(role_name.clone(), requirement);
+
+            match engine.update_channel_policy(channel, current.requirements.clone(), role_reqs) {
+                Ok(policy) => {
+                    let pid = policy.policy_id.as_deref().unwrap_or("?");
+                    let notice = format!(
+                        "Role '{}' requirement set for {} (version {}, policy_id={})",
+                        role_name,
+                        channel,
+                        policy.version,
+                        &pid[..12.min(pid.len())]
+                    );
+                    let reply = Message::from_server(server_name, "NOTICE", vec![nick, &notice]);
+                    send_fn(state, session_id, format!("{reply}\r\n"));
+
+                    // Broadcast to S2S
+                    let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+                    let auth_set_json = engine.store()
+                        .get_authority_set(&policy.authority_set_hash)
+                        .ok()
+                        .flatten()
+                        .and_then(|a| serde_json::to_string(&a).ok());
+                    s2s_broadcast(state, crate::s2s::S2sMessage::PolicySync {
+                        event_id: s2s_next_event_id(state),
+                        channel: channel.to_string(),
+                        policy_json: serde_json::to_string(&policy).ok(),
+                        authority_set_json: auth_set_json,
+                        origin,
+                    });
+                }
+                Err(e) => {
+                    let reply = Message::from_server(
+                        server_name,
+                        "NOTICE",
+                        vec![nick, &format!("Failed to set role: {e}")],
+                    );
+                    send_fn(state, session_id, format!("{reply}\r\n"));
+                }
+            }
+        }
+
+        "VERIFY" => {
+            // POLICY #channel VERIFY github <username> <org>
+            // Shortcut to verify GitHub membership and store credential
+            let did = match &conn.authenticated_did {
+                Some(d) => d.clone(),
+                None => {
+                    let reply = Message::from_server(
+                        server_name,
+                        "NOTICE",
+                        vec![nick, "You must be authenticated to verify credentials"],
+                    );
+                    send_fn(state, session_id, format!("{reply}\r\n"));
+                    return;
+                }
+            };
+
+            if msg.params.len() < 5 {
+                let reply = Message::from_server(
+                    server_name,
+                    "NOTICE",
+                    vec![nick, "Usage: POLICY <channel> VERIFY github <username> <org>"],
+                );
+                send_fn(state, session_id, format!("{reply}\r\n"));
+                return;
+            }
+
+            let provider = msg.params[2].to_lowercase();
+            if provider != "github" {
+                let reply = Message::from_server(
+                    server_name,
+                    "NOTICE",
+                    vec![nick, "Only 'github' verification is currently supported"],
+                );
+                send_fn(state, session_id, format!("{reply}\r\n"));
+                return;
+            }
+
+            let username = &msg.params[3];
+            let org = &msg.params[4];
+
+            // Fire off GitHub API check (async)
+            let engine_ref = Arc::clone(engine);
+            let did_c = did.clone();
+            let username_c = username.to_string();
+            let org_c = org.to_string();
+            let state_c = Arc::clone(state);
+            let session_c = session_id.to_string();
+            let server_c = server_name.to_string();
+            let nick_c = nick.to_string();
+
+            let reply = Message::from_server(
+                server_name,
+                "NOTICE",
+                vec![nick, &format!("Checking GitHub: is {} a public member of {}?", username, org)],
+            );
+            send_fn(state, session_id, format!("{reply}\r\n"));
+
+            tokio::spawn(async move {
+                let client = reqwest::Client::new();
+                let url = format!(
+                    "https://api.github.com/orgs/{}/public_members/{}",
+                    org_c, username_c
+                );
+                let result = client
+                    .get(&url)
+                    .header("User-Agent", "freeq-server")
+                    .header("Accept", "application/vnd.github+json")
+                    .send()
+                    .await;
+
+                let (success, msg_text) = match result {
+                    Ok(resp) if resp.status().as_u16() == 204 => {
+                        let metadata = serde_json::json!({
+                            "github_username": username_c,
+                            "org": org_c,
+                            "verified_at": chrono::Utc::now().to_rfc3339(),
+                        });
+                        match engine_ref.store_credential(&did_c, "github_membership", "github", &metadata) {
+                            Ok(()) => (true, format!("✓ Verified: {} is a member of {}. Credential stored.", username_c, org_c)),
+                            Err(e) => (false, format!("Verified but failed to store: {e}")),
+                        }
+                    }
+                    Ok(resp) if resp.status().as_u16() == 404 => {
+                        (false, format!("✗ {} is NOT a public member of {}. Make your membership public at https://github.com/orgs/{}/people", username_c, org_c, org_c))
+                    }
+                    Ok(resp) => {
+                        (false, format!("GitHub API returned {}", resp.status()))
+                    }
+                    Err(e) => {
+                        (false, format!("GitHub API error: {e}"))
+                    }
+                };
+
+                let reply = Message::from_server(
+                    &server_c,
+                    "NOTICE",
+                    vec![&nick_c, &msg_text],
+                );
+                let conns = state_c.connections.lock().unwrap();
+                if let Some(tx) = conns.get(&session_c) {
+                    let _ = tx.try_send(format!("{reply}\r\n"));
+                }
+            });
+        }
+
         "INFO" => {
             match engine.get_policy(channel) {
                 Ok(Some(policy)) => {
@@ -259,12 +470,23 @@ pub(super) fn handle_policy(
                 }
             };
 
-            // Extract the ACCEPT hash from the requirement
-            let accepted_hash = extract_accept_hash(&policy.requirements);
-            let evidence = UserEvidence {
-                accepted_hashes: accepted_hash.into_iter().collect(),
-                credentials: vec![],
-                proofs: HashSet::new(),
+            // Extract ACCEPT hashes from the requirement tree, then
+            // auto-collect stored credentials (e.g. verified GitHub membership)
+            let accepted_hashes: HashSet<String> = extract_accept_hash(&policy.requirements)
+                .into_iter()
+                .chain(extract_accept_hash_from_roles(&policy.role_requirements))
+                .collect();
+            let evidence = match engine.build_evidence(&did, accepted_hashes) {
+                Ok(e) => e,
+                Err(err) => {
+                    let reply = Message::from_server(
+                        server_name,
+                        "NOTICE",
+                        vec![nick, &format!("Error building evidence: {err}")],
+                    );
+                    send_fn(state, session_id, format!("{reply}\r\n"));
+                    return;
+                }
             };
 
             match engine.process_join(channel, &did, &evidence) {
@@ -356,7 +578,7 @@ pub(super) fn handle_policy(
             let reply = Message::from_server(
                 server_name,
                 "NOTICE",
-                vec![nick, "Usage: POLICY <channel> SET|INFO|ACCEPT|CLEAR"],
+                vec![nick, "Usage: POLICY <channel> SET|SET-ROLE|VERIFY|INFO|ACCEPT|CLEAR"],
             );
             send_fn(state, session_id, format!("{reply}\r\n"));
         }
@@ -382,6 +604,15 @@ fn is_channel_op(
         }
     }
     false
+}
+
+/// Extract ACCEPT hashes from role requirements too.
+fn extract_accept_hash_from_roles(roles: &BTreeMap<String, Requirement>) -> HashSet<String> {
+    let mut hashes = HashSet::new();
+    for req in roles.values() {
+        hashes.extend(extract_accept_hash(req));
+    }
+    hashes
 }
 
 /// Extract ACCEPT hash from a requirement tree (for simple ACCEPT-only policies).

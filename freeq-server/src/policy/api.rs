@@ -34,6 +34,8 @@ pub fn routes() -> Router<Arc<SharedState>> {
             get(get_transparency_log),
         )
         .route("/api/v1/authority/{hash}", get(get_authority_set))
+        .route("/api/v1/verify/github", post(verify_github))
+        .route("/api/v1/credentials/{did}", get(get_credentials))
 }
 
 // ─── Request/Response Types ──────────────────────────────────────────────────
@@ -266,6 +268,165 @@ async fn get_authority_set(
     match engine.store().get_authority_set(&hash) {
         Ok(Some(auth_set)) => Json(auth_set).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "Authority set not found").into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ─── GitHub Verification ─────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct GitHubVerifyRequest {
+    /// The DID of the user claiming GitHub membership.
+    did: String,
+    /// Their GitHub username.
+    github_username: String,
+    /// The GitHub org to verify membership in.
+    org: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CredentialResponse {
+    status: String,
+    credential_type: String,
+    issuer: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<serde_json::Value>,
+}
+
+/// Verify GitHub org membership and issue a credential.
+///
+/// Calls the GitHub API to check if the user is a public member of the org.
+/// If verified, stores a `github_membership` credential for their DID.
+async fn verify_github(
+    State(state): State<Arc<SharedState>>,
+    Json(req): Json<GitHubVerifyRequest>,
+) -> impl IntoResponse {
+    let engine = match get_engine(&state) {
+        Ok(e) => e,
+        Err(e) => return e.into_response(),
+    };
+
+    // Validate inputs
+    if req.did.is_empty() || req.github_username.is_empty() || req.org.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(CredentialResponse {
+                status: "error".into(),
+                credential_type: "github_membership".into(),
+                issuer: "github".into(),
+                error: Some("did, github_username, and org are required".into()),
+                metadata: None,
+            }),
+        )
+            .into_response();
+    }
+
+    // Check GitHub API for public org membership
+    // GET https://api.github.com/orgs/{org}/public_members/{username}
+    // Returns 204 if member, 404 if not
+    let client = reqwest::Client::new();
+    let url = format!(
+        "https://api.github.com/orgs/{}/public_members/{}",
+        req.org, req.github_username
+    );
+
+    let result = client
+        .get(&url)
+        .header("User-Agent", "freeq-server")
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .await;
+
+    match result {
+        Ok(resp) if resp.status().as_u16() == 204 => {
+            // Verified! Store credential
+            let metadata = serde_json::json!({
+                "github_username": req.github_username,
+                "org": req.org,
+                "verified_at": chrono::Utc::now().to_rfc3339(),
+            });
+
+            match engine.store_credential(
+                &req.did,
+                "github_membership",
+                "github",
+                &metadata,
+            ) {
+                Ok(()) => {
+                    tracing::info!(
+                        did = %req.did, username = %req.github_username, org = %req.org,
+                        "GitHub org membership verified"
+                    );
+                    Json(CredentialResponse {
+                        status: "verified".into(),
+                        credential_type: "github_membership".into(),
+                        issuer: "github".into(),
+                        error: None,
+                        metadata: Some(metadata),
+                    })
+                    .into_response()
+                }
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            }
+        }
+        Ok(resp) if resp.status().as_u16() == 404 => {
+            (
+                StatusCode::FORBIDDEN,
+                Json(CredentialResponse {
+                    status: "not_verified".into(),
+                    credential_type: "github_membership".into(),
+                    issuer: "github".into(),
+                    error: Some(format!(
+                        "{} is not a public member of {}",
+                        req.github_username, req.org
+                    )),
+                    metadata: None,
+                }),
+            )
+                .into_response()
+        }
+        Ok(resp) => {
+            let status = resp.status();
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(CredentialResponse {
+                    status: "error".into(),
+                    credential_type: "github_membership".into(),
+                    issuer: "github".into(),
+                    error: Some(format!("GitHub API returned {status}")),
+                    metadata: None,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(CredentialResponse {
+                status: "error".into(),
+                credential_type: "github_membership".into(),
+                issuer: "github".into(),
+                error: Some(format!("GitHub API error: {e}")),
+                metadata: None,
+            }),
+        )
+            .into_response(),
+    }
+}
+
+/// Get all credentials for a DID.
+async fn get_credentials(
+    State(state): State<Arc<SharedState>>,
+    Path(did): Path<String>,
+) -> impl IntoResponse {
+    let engine = match get_engine(&state) {
+        Ok(e) => e,
+        Err(e) => return e.into_response(),
+    };
+
+    match engine.store().get_credentials(&did) {
+        Ok(creds) => Json(creds).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }

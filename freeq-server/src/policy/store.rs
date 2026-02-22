@@ -99,6 +99,19 @@ impl PolicyStore {
 
             CREATE INDEX IF NOT EXISTS idx_tlog_channel ON transparency_log(channel_id);
 
+            CREATE TABLE IF NOT EXISTS credentials (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subject_did TEXT NOT NULL,
+                credential_type TEXT NOT NULL,
+                issuer TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                issued_at TEXT NOT NULL DEFAULT (datetime('now')),
+                revoked INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(subject_did, credential_type, issuer)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_credentials_did ON credentials(subject_did);
+
             CREATE TABLE IF NOT EXISTS signed_tree_heads (
                 log_id TEXT NOT NULL,
                 tree_size INTEGER NOT NULL,
@@ -538,6 +551,87 @@ impl PolicyStore {
 
         Ok(entries)
     }
+    // ─── Credentials ───────────────────────────────────────────────────
+
+    /// Store a verified credential for a user.
+    /// Upserts (replaces if same did+type+issuer exists).
+    pub fn store_credential(
+        &self,
+        subject_did: &str,
+        credential_type: &str,
+        issuer: &str,
+        metadata: &serde_json::Value,
+    ) -> Result<(), PolicyError> {
+        let db = self.db.lock().unwrap();
+        db.execute(
+            "INSERT INTO credentials (subject_did, credential_type, issuer, metadata_json, issued_at)
+             VALUES (?1, ?2, ?3, ?4, datetime('now'))
+             ON CONFLICT(subject_did, credential_type, issuer)
+             DO UPDATE SET metadata_json = ?4, issued_at = datetime('now'), revoked = 0",
+            params![
+                subject_did,
+                credential_type,
+                issuer,
+                serde_json::to_string(metadata).unwrap_or_default(),
+            ],
+        )
+        .map_err(|e| PolicyError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Get all valid (non-revoked) credentials for a user.
+    pub fn get_credentials(
+        &self,
+        subject_did: &str,
+    ) -> Result<Vec<StoredCredential>, PolicyError> {
+        let db = self.db.lock().unwrap();
+        let mut stmt = db
+            .prepare(
+                "SELECT credential_type, issuer, metadata_json, issued_at
+                 FROM credentials
+                 WHERE subject_did = ?1 AND revoked = 0",
+            )
+            .map_err(|e| PolicyError::Database(e.to_string()))?;
+
+        let creds = stmt
+            .query_map(params![subject_did], |row| {
+                Ok(StoredCredential {
+                    credential_type: row.get(0)?,
+                    issuer: row.get(1)?,
+                    metadata_json: row.get(2)?,
+                    issued_at: row.get(3)?,
+                })
+            })
+            .map_err(|e| PolicyError::Database(e.to_string()))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(creds)
+    }
+
+    /// Revoke a credential.
+    pub fn revoke_credential(
+        &self,
+        subject_did: &str,
+        credential_type: &str,
+        issuer: &str,
+    ) -> Result<bool, PolicyError> {
+        let db = self.db.lock().unwrap();
+        let n = db.execute(
+            "UPDATE credentials SET revoked = 1 WHERE subject_did = ?1 AND credential_type = ?2 AND issuer = ?3",
+            params![subject_did, credential_type, issuer],
+        ).map_err(|e| PolicyError::Database(e.to_string()))?;
+        Ok(n > 0)
+    }
+}
+
+/// A stored credential from the database.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StoredCredential {
+    pub credential_type: String,
+    pub issuer: String,
+    pub metadata_json: String,
+    pub issued_at: String,
 }
 
 #[derive(Debug, thiserror::Error)]

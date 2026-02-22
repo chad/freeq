@@ -210,10 +210,68 @@ POLICY #myproject SET <Code of Conduct text>
 - Audit trail proves CoC was in place when incident occurred
 - Policy updates create version chain — full history preserved
 
-### Role-Based Access via Credentials
+### Role-Based Access via GitHub Org Membership
+
+This is a full working example. A project channel where accepting the Code of Conduct gets you in, but GitHub org members automatically get ops.
+
+**Step 1: Create the channel and set base policy**
 ```
-POLICY #myproject SET requires: ACCEPT(coc) + role "op" requires: ALL(ACCEPT(coc), PRESENT(github_membership, issuer=github))
+/join #myproject
+/POLICY #myproject SET By contributing to this project you agree to our Code of Conduct: be respectful, inclusive, and constructive.
 ```
+
+**Step 2: Add role escalation — org members get ops**
+
+First, get the rules hash from POLICY INFO:
+```
+/POLICY #myproject INFO
+→ Requirement: ACCEPT(a1b2c3d4e5f6...)
+```
+
+Then set the "op" role requirement (replace the hash):
+```
+/POLICY #myproject SET-ROLE op {"type":"ALL","requirements":[{"type":"ACCEPT","hash":"a1b2c3d4e5f6...full-hash..."},{"type":"PRESENT","credential_type":"github_membership","issuer":"github"}]}
+```
+
+**Step 3: A contributor verifies their GitHub membership**
+```
+/POLICY #myproject VERIFY github octocat myorg
+→ Checking GitHub: is octocat a public member of myorg?
+→ ✓ Verified: octocat is a member of myorg. Credential stored.
+```
+
+**Step 4: The contributor accepts the policy**
+```
+/POLICY #myproject ACCEPT
+→ Policy accepted for #myproject — role: op. You may now JOIN.
+```
+
+They got `op` because they have both the CoC acceptance AND the GitHub credential.
+
+**Step 5: Join — auto +o**
+```
+/join #myproject
+→ (joined with +o automatically)
+```
+
+A user without GitHub membership who accepts the same policy gets `member` role — no ops, but they can chat.
+
+**API alternative (for web/mobile):**
+```bash
+# Verify GitHub membership
+curl -X POST http://localhost:8080/api/v1/verify/github \
+  -H 'Content-Type: application/json' \
+  -d '{"did":"did:plc:abc123","github_username":"octocat","org":"myorg"}'
+
+# Check stored credentials
+curl http://localhost:8080/api/v1/credentials/did:plc:abc123
+
+# Submit join with evidence
+curl -X POST http://localhost:8080/api/v1/policy/%23myproject/join \
+  -H 'Content-Type: application/json' \
+  -d '{"subject_did":"did:plc:abc123","accepted_hashes":["a1b2c3..."],"credentials":[{"credential_type":"github_membership","issuer":"github"}]}'
+```
+
 - Regular users who accept CoC → `member` role
 - GitHub org members who accept CoC → `op` role → automatic +o on join
 - No manual op management needed

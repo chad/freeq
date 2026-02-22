@@ -367,6 +367,39 @@ impl PolicyEngine {
         self.store.get_channel_members(channel_id)
     }
 
+    /// Build UserEvidence from a user's stored credentials + accepted hashes.
+    /// This auto-collects all verified credentials for the user.
+    pub fn build_evidence(
+        &self,
+        subject_did: &str,
+        accepted_hashes: HashSet<String>,
+    ) -> Result<UserEvidence, PolicyError> {
+        let stored = self.store.get_credentials(subject_did)?;
+        let credentials = stored
+            .into_iter()
+            .map(|c| Credential {
+                credential_type: c.credential_type,
+                issuer: c.issuer,
+            })
+            .collect();
+        Ok(UserEvidence {
+            accepted_hashes,
+            credentials,
+            proofs: HashSet::new(),
+        })
+    }
+
+    /// Store a verified credential for a user.
+    pub fn store_credential(
+        &self,
+        subject_did: &str,
+        credential_type: &str,
+        issuer: &str,
+        metadata: &serde_json::Value,
+    ) -> Result<(), PolicyError> {
+        self.store.store_credential(subject_did, credential_type, issuer, metadata)
+    }
+
     /// Invalidate expired attestations. Returns count of invalidated.
     pub fn revalidate_expired(&self) -> Result<usize, PolicyError> {
         let expired = self.store.get_expired_attestations()?;
@@ -743,6 +776,78 @@ mod tests {
                 assert!(attestation.expires_at.is_some());
             }
             other => panic!("Expected Confirmed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_credential_store_and_build_evidence() {
+        let engine = test_engine();
+
+        // Store credentials
+        let metadata = serde_json::json!({
+            "github_username": "octocat",
+            "org": "freeq",
+        });
+        engine.store_credential("did:plc:dev1", "github_membership", "github", &metadata).unwrap();
+
+        // Build evidence auto-collects credentials
+        let evidence = engine.build_evidence("did:plc:dev1", HashSet::new()).unwrap();
+        assert_eq!(evidence.credentials.len(), 1);
+        assert_eq!(evidence.credentials[0].credential_type, "github_membership");
+        assert_eq!(evidence.credentials[0].issuer, "github");
+
+        // User without credentials
+        let evidence = engine.build_evidence("did:plc:nobody", HashSet::new()).unwrap();
+        assert!(evidence.credentials.is_empty());
+    }
+
+    #[test]
+    fn test_github_role_escalation_with_credentials() {
+        let engine = test_engine();
+        let rules_hash = canonical::sha256_hex(b"Code of Conduct");
+
+        // Create policy: ACCEPT(coc) to join, ACCEPT(coc)+PRESENT(github) for op
+        let mut role_reqs = std::collections::BTreeMap::new();
+        role_reqs.insert(
+            "op".to_string(),
+            Requirement::All {
+                requirements: vec![
+                    Requirement::Accept { hash: rules_hash.clone() },
+                    Requirement::Present {
+                        credential_type: "github_membership".into(),
+                        issuer: Some("github".into()),
+                    },
+                ],
+            },
+        );
+        engine.create_channel_policy(
+            "#project",
+            Requirement::Accept { hash: rules_hash.clone() },
+            role_reqs,
+        ).unwrap();
+
+        // Store GitHub credential for dev1
+        let metadata = serde_json::json!({ "org": "freeq", "github_username": "dev1" });
+        engine.store_credential("did:plc:dev1", "github_membership", "github", &metadata).unwrap();
+
+        // dev1 accepts policy — should get "op" role (has GitHub cred)
+        let evidence = engine.build_evidence("did:plc:dev1", HashSet::from([rules_hash.clone()])).unwrap();
+        let result = engine.process_join("#project", "did:plc:dev1", &evidence).unwrap();
+        match result {
+            JoinResult::Confirmed { attestation, .. } => {
+                assert_eq!(attestation.role, "op");
+            }
+            other => panic!("Expected Confirmed with op, got {:?}", other),
+        }
+
+        // regular user accepts policy — should get "member" role (no GitHub cred)
+        let evidence = engine.build_evidence("did:plc:regular", HashSet::from([rules_hash.clone()])).unwrap();
+        let result = engine.process_join("#project", "did:plc:regular", &evidence).unwrap();
+        match result {
+            JoinResult::Confirmed { attestation, .. } => {
+                assert_eq!(attestation.role, "member");
+            }
+            other => panic!("Expected Confirmed with member, got {:?}", other),
         }
     }
 }

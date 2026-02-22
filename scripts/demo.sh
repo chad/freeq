@@ -177,32 +177,38 @@ pause
 
 # ─── Scene 6: Role Escalation ────────────────────────────────────────────────
 
-banner "Scene 6: Role Escalation (The Big Idea)"
+banner "Scene 6: GitHub Role Escalation (Live)"
 
-step "The policy DSL is composable. Imagine:"
+step "Add a role requirement: GitHub org members get ops."
 echo
-cat << 'POLICY'
-  POLICY #myproject SET {
-    "type": "ALL",
-    "requirements": [
-      { "type": "ACCEPT", "hash": "<code-of-conduct-hash>" },
-    ]
-  }
-
-  With role escalation:
-    "op" role requires:
-      ALL(
-        ACCEPT(code-of-conduct),
-        PRESENT(github_membership, issuer=github)
-      )
-POLICY
+echo "  ${bold}# First, note the rules_hash from POLICY INFO${reset}"
+echo "  ${bold}/POLICY ${CHANNEL} INFO${reset}"
 echo
-step "Regular users who accept the CoC get 'member' role."
-step "GitHub org members who accept the CoC get 'op' role → auto +o on join."
+echo "  ${bold}# Then set the op role (replace HASH with the real one):${reset}"
+echo "  ${bold}/POLICY ${CHANNEL} SET-ROLE op {\"type\":\"ALL\",\"requirements\":[{\"type\":\"ACCEPT\",\"hash\":\"HASH\"},{\"type\":\"PRESENT\",\"credential_type\":\"github_membership\",\"issuer\":\"github\"}]}${reset}"
 echo
-info "This is the same POLICY SET command. No code changes."
-info "The requirement DSL supports: ACCEPT, PRESENT, PROVE, ALL, ANY, NOT"
-info "Verifiers are pluggable — GitHub, email domain, NFT, anything."
+step "Verify your GitHub org membership:"
+echo
+echo "  ${bold}/POLICY ${CHANNEL} VERIFY github <your-username> <your-org>${reset}"
+echo
+info "  Server calls GitHub API → confirms public membership → stores credential"
+echo
+step "Now ACCEPT pulls in your credentials automatically:"
+echo
+echo "  ${bold}/POLICY ${CHANNEL} ACCEPT${reset}"
+info "  → Policy accepted for ${CHANNEL} — role: op. You may now JOIN."
+echo
+step "JOIN gives you +o automatically:"
+echo
+echo "  ${bold}/join ${CHANNEL}${reset}"
+info "  → Joined with ops (auto +o from attestation role)"
+echo
+info "Users without GitHub membership get 'member' role — chat but no ops."
+info ""
+info "HTTP API alternative:"
+echo "  ${dim}curl -X POST http://${SERVER}:${WEB_PORT}/api/v1/verify/github \\${reset}"
+echo "  ${dim}  -H 'Content-Type: application/json' \\${reset}"
+echo "  ${dim}  -d '{\"did\":\"did:plc:...\",\"github_username\":\"octocat\",\"org\":\"myorg\"}'${reset}"
 
 pause
 
@@ -228,10 +234,12 @@ echo "  GET  /api/v1/policy/{channel}/transparency    — audit log"
 echo "  GET  /api/v1/authority/{hash}                 — authority set"
 echo
 echo "${bold}${cyan}IRC Commands:${reset}"
-echo "  POLICY #channel SET <rules text>   — create/update policy (ops)"
-echo "  POLICY #channel INFO               — view current policy"
-echo "  POLICY #channel ACCEPT             — accept and get attestation"
-echo "  POLICY #channel CLEAR              — remove policy (ops)"
+echo "  POLICY #channel SET <rules text>               — create/update policy (ops)"
+echo "  POLICY #channel SET-ROLE <role> <json>          — add role escalation (ops)"
+echo "  POLICY #channel VERIFY github <user> <org>      — verify GitHub membership"
+echo "  POLICY #channel INFO                            — view current policy"
+echo "  POLICY #channel ACCEPT                          — accept + present credentials"
+echo "  POLICY #channel CLEAR                           — remove policy (ops)"
 echo
 echo "${bold}Source: ${reset}https://github.com/chad/freeq"
 echo "${bold}Spec:   ${reset}https://gist.github.com/chad/9569f5265bfc3b6f5764d404118038b8"
