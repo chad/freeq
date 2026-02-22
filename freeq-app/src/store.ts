@@ -166,6 +166,14 @@ export interface Store {
   setLightboxUrl: (url: string | null) => void;
   openThread: (msgId: string, channel: string) => void;
   closeThread: () => void;
+
+  // Join gate
+  joinGateChannel: string | null;
+  setJoinGateChannel: (channel: string | null) => void;
+
+  // Channel settings
+  channelSettingsOpen: string | null;
+  setChannelSettingsOpen: (channel: string | null) => void;
 }
 
 function getOrCreateChannel(channels: Map<string, Channel>, name: string): Channel {
@@ -210,6 +218,8 @@ export const useStore = create<Store>((set, get) => ({
   lightboxUrl: null,
   threadMsgId: null,
   threadChannel: null,
+  joinGateChannel: null,
+  channelSettingsOpen: null,
 
   // Connection
   setConnectionState: (state) => set({ connectionState: state }),
@@ -246,6 +256,8 @@ export const useStore = create<Store>((set, get) => ({
     lightboxUrl: null,
     threadMsgId: null,
     threadChannel: null,
+    joinGateChannel: null,
+    channelSettingsOpen: null,
     theme: s.theme, // preserve theme across reconnects
   })),
 
@@ -556,4 +568,6 @@ export const useStore = create<Store>((set, get) => ({
   setLightboxUrl: (url) => set({ lightboxUrl: url }),
   openThread: (msgId, channel) => set({ threadMsgId: msgId, threadChannel: channel }),
   closeThread: () => set({ threadMsgId: null, threadChannel: null }),
+  setJoinGateChannel: (channel) => set({ joinGateChannel: channel }),
+  setChannelSettingsOpen: (channel) => set({ channelSettingsOpen: channel }),
 }));

@@ -15,6 +15,8 @@ import { ImageLightbox } from './components/ImageLightbox';
 import { SearchModal } from './components/SearchModal';
 import { ChannelListModal } from './components/ChannelListModal';
 import { ThreadView } from './components/ThreadView';
+import { JoinGateModal } from './components/JoinGateModal';
+import { ChannelSettingsPanel } from './components/ChannelSettingsPanel';
 
 export default function App() {
   const registered = useStore((s) => s.registered);
@@ -140,6 +142,8 @@ export default function App() {
       <ImageLightbox />
       <SearchModal />
       <ChannelListModal />
+      <JoinGateModal />
+      <ChannelSettingsPanel />
     </div>
   );
 }
