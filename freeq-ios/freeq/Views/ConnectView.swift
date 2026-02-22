@@ -12,6 +12,8 @@ struct ConnectView: View {
     @FocusState private var handleFocused: Bool
     @FocusState private var nickFocused: Bool
 
+    private var keyboardActive: Bool { handleFocused || nickFocused }
+
     var body: some View {
         ZStack {
             // Background
@@ -42,34 +44,38 @@ struct ConnectView: View {
             ScrollViewReader { scrollProxy in
                 ScrollView {
                     VStack(spacing: 0) {
-                        Spacer(minLength: 60)
+                        Spacer(minLength: keyboardActive ? 20 : 60)
 
-                        // Logo
-                        VStack(spacing: 16) {
+                        // Logo — shrinks and text fades when keyboard is up
+                        VStack(spacing: keyboardActive ? 8 : 16) {
                             ZStack {
                                 Circle()
                                     .fill(Theme.accent.opacity(0.15))
-                                    .frame(width: 140, height: 140)
-                                    .blur(radius: 30)
+                                    .frame(width: keyboardActive ? 70 : 140, height: keyboardActive ? 70 : 140)
+                                    .blur(radius: keyboardActive ? 15 : 30)
 
                                 Image("FreeqLogo")
                                     .resizable()
                                     .scaledToFit()
-                                    .frame(width: 100, height: 100)
-                                    .shadow(color: Theme.accent.opacity(0.4), radius: 20)
+                                    .frame(width: keyboardActive ? 48 : 100, height: keyboardActive ? 48 : 100)
+                                    .shadow(color: Theme.accent.opacity(0.4), radius: keyboardActive ? 10 : 20)
                             }
 
                             VStack(spacing: 6) {
                                 Text("freeq")
-                                    .font(.system(size: 36, weight: .bold, design: .rounded))
+                                    .font(.system(size: keyboardActive ? 20 : 36, weight: .bold, design: .rounded))
                                     .foregroundColor(Theme.textPrimary)
 
                                 Text("Decentralized chat")
                                     .font(.system(size: 15))
                                     .foregroundColor(Theme.textSecondary)
+                                    .opacity(keyboardActive ? 0 : 1)
+                                    .frame(height: keyboardActive ? 0 : nil)
+                                    .clipped()
                             }
                         }
-                        .padding(.bottom, 40)
+                        .animation(.easeInOut(duration: 0.3), value: keyboardActive)
+                        .padding(.bottom, keyboardActive ? 16 : 40)
 
                         if !showGuestLogin {
                             // ── Primary: Bluesky Login ──
