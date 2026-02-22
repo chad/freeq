@@ -61,6 +61,28 @@ pub struct PolicyDocument {
     /// Transparency configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transparency: Option<TransparencyConfig>,
+
+    /// Credential endpoints — tells clients where to obtain each credential type.
+    /// Keyed by credential_type (e.g. "github_membership").
+    /// This is UX metadata, not part of the security model.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub credential_endpoints: BTreeMap<String, CredentialEndpoint>,
+}
+
+/// Metadata about where/how to obtain a specific credential type.
+/// Stored in the policy document so clients can build guided join flows.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CredentialEndpoint {
+    /// DID of the credential issuer.
+    pub issuer: String,
+    /// URL to start the verification flow.
+    /// Client appends `?subject_did=...&callback=...` query params.
+    pub url: String,
+    /// Human-readable label for the button (e.g. "Verify with GitHub").
+    pub label: String,
+    /// Optional description shown to users.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

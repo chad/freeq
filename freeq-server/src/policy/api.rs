@@ -37,6 +37,7 @@ pub fn routes() -> Router<Arc<SharedState>> {
         .route("/api/v1/verify/github", post(verify_github))
         .route("/api/v1/credentials/{did}", get(get_credentials))
         .route("/api/v1/credentials/present", post(present_credential))
+        .route("/api/v1/policy/{channel}/check", post(check_requirements))
 }
 
 // ─── Request/Response Types ──────────────────────────────────────────────────
@@ -608,5 +609,263 @@ async fn get_credentials(
     match engine.store().get_credentials(&did) {
         Ok(creds) => Json(creds).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ─── Personalized Requirements Check ─────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct CheckRequest {
+    /// DID of the user checking requirements.
+    did: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CheckResponse {
+    channel: String,
+    /// Whether the user can currently join.
+    can_join: bool,
+    /// Overall status: "open", "satisfied", "unsatisfied", "no_policy".
+    status: String,
+    /// Per-requirement status.
+    requirements: Vec<RequirementStatus>,
+    /// Role the user would get if they joined now.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct RequirementStatus {
+    /// "accept", "present", "prove"
+    requirement_type: String,
+    /// Human-readable description.
+    description: String,
+    /// Whether this requirement is currently satisfied.
+    satisfied: bool,
+    /// For PRESENT: credential endpoint info (if in policy).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action: Option<RequirementAction>,
+}
+
+#[derive(Debug, Serialize)]
+struct RequirementAction {
+    /// "accept_rules", "verify_external"
+    action_type: String,
+    /// URL to start verification (for external credentials).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    /// Button label.
+    label: String,
+    /// Hash to accept (for ACCEPT requirements).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    accept_hash: Option<String>,
+}
+
+/// Check what a specific user needs to join a policy-gated channel.
+/// Returns per-requirement status and action URLs.
+async fn check_requirements(
+    State(state): State<Arc<SharedState>>,
+    Path(channel): Path<String>,
+    Json(req): Json<CheckRequest>,
+) -> impl IntoResponse {
+    let engine = match get_engine(&state) {
+        Ok(e) => e,
+        Err(e) => return e.into_response(),
+    };
+    let channel_id = normalize_channel(&channel);
+
+    // Get policy
+    let policy = match engine.get_policy(&channel_id) {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return Json(CheckResponse {
+                channel: channel_id,
+                can_join: true,
+                status: "no_policy".into(),
+                requirements: vec![],
+                role: None,
+            })
+            .into_response();
+        }
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    // Check if user already has attestation
+    if let Ok(Some(att)) = engine.check_membership(&channel_id, &req.did) {
+        return Json(CheckResponse {
+            channel: channel_id,
+            can_join: true,
+            status: "satisfied".into(),
+            requirements: vec![],
+            role: Some(att.role),
+        })
+        .into_response();
+    }
+
+    // Build evidence from stored credentials
+    let evidence = engine
+        .build_evidence(&req.did, collect_accept_hashes(&policy))
+        .unwrap_or_else(|_| super::eval::UserEvidence {
+            accepted_hashes: HashSet::new(),
+            credentials: vec![],
+            proofs: HashSet::new(),
+        });
+
+    // Evaluate each requirement
+    let mut requirements = vec![];
+    flatten_requirements(
+        &policy.requirements,
+        &evidence,
+        &policy.credential_endpoints,
+        &req.did,
+        &mut requirements,
+    );
+
+    let all_satisfied = requirements.iter().all(|r| r.satisfied);
+
+    // Determine role
+    let role = if all_satisfied {
+        let mut role = "member".to_string();
+        for (role_name, role_req) in policy.role_requirements.iter().rev() {
+            if super::eval::evaluate(role_req, &evidence).is_satisfied() {
+                role = role_name.clone();
+                break;
+            }
+        }
+        Some(role)
+    } else {
+        None
+    };
+
+    Json(CheckResponse {
+        channel: channel_id,
+        can_join: all_satisfied,
+        status: if all_satisfied {
+            "satisfied".into()
+        } else {
+            "unsatisfied".into()
+        },
+        requirements,
+        role,
+    })
+    .into_response()
+}
+
+/// Flatten a requirement tree into individual statuses with actions.
+fn flatten_requirements(
+    req: &super::types::Requirement,
+    evidence: &super::eval::UserEvidence,
+    endpoints: &std::collections::BTreeMap<String, super::types::CredentialEndpoint>,
+    subject_did: &str,
+    out: &mut Vec<RequirementStatus>,
+) {
+    use super::types::Requirement;
+    match req {
+        Requirement::Accept { hash } => {
+            let satisfied = evidence.accepted_hashes.contains(hash);
+            out.push(RequirementStatus {
+                requirement_type: "accept".into(),
+                description: "Accept the channel rules".into(),
+                satisfied,
+                action: if satisfied {
+                    None
+                } else {
+                    Some(RequirementAction {
+                        action_type: "accept_rules".into(),
+                        url: None,
+                        label: "Accept Rules".into(),
+                        accept_hash: Some(hash.clone()),
+                    })
+                },
+            });
+        }
+        Requirement::Present {
+            credential_type,
+            issuer,
+        } => {
+            let satisfied = evidence.credentials.iter().any(|c| {
+                c.credential_type == *credential_type
+                    && issuer
+                        .as_ref()
+                        .map_or(true, |iss| c.issuer == *iss)
+            });
+            let action = if satisfied {
+                None
+            } else {
+                endpoints.get(credential_type).map(|ep| {
+                    // Build verification URL with subject_did and callback params
+                    let sep = if ep.url.contains('?') { '&' } else { '?' };
+                    let url = format!(
+                        "{}{}subject_did={}&callback=/api/v1/credentials/present",
+                        ep.url,
+                        sep,
+                        urlencoding::encode(subject_did),
+                    );
+                    RequirementAction {
+                        action_type: "verify_external".into(),
+                        url: Some(url),
+                        label: ep.label.clone(),
+                        accept_hash: None,
+                    }
+                })
+            };
+            let desc = match issuer {
+                Some(iss) => format!("Credential: {} (from {})", credential_type, iss),
+                None => format!("Credential: {}", credential_type),
+            };
+            out.push(RequirementStatus {
+                requirement_type: "present".into(),
+                description: desc,
+                satisfied,
+                action,
+            });
+        }
+        Requirement::Prove { proof_type } => {
+            let satisfied = evidence.proofs.contains(proof_type);
+            out.push(RequirementStatus {
+                requirement_type: "prove".into(),
+                description: format!("Prove: {}", proof_type),
+                satisfied,
+                action: None,
+            });
+        }
+        Requirement::All { requirements } => {
+            for r in requirements {
+                flatten_requirements(r, evidence, endpoints, subject_did, out);
+            }
+        }
+        Requirement::Any { requirements } => {
+            // For ANY, show all options but mark the group
+            for r in requirements {
+                flatten_requirements(r, evidence, endpoints, subject_did, out);
+            }
+        }
+        Requirement::Not { requirement } => {
+            flatten_requirements(requirement, evidence, endpoints, subject_did, out);
+        }
+    }
+}
+
+/// Collect all ACCEPT hashes from a policy (requirements + role requirements).
+fn collect_accept_hashes(
+    policy: &super::types::PolicyDocument,
+) -> HashSet<String> {
+    let mut hashes = HashSet::new();
+    collect_hashes_from_req(&policy.requirements, &mut hashes);
+    for req in policy.role_requirements.values() {
+        collect_hashes_from_req(req, &mut hashes);
+    }
+    hashes
+}
+
+fn collect_hashes_from_req(req: &super::types::Requirement, out: &mut HashSet<String>) {
+    use super::types::Requirement;
+    match req {
+        Requirement::Accept { hash } => { out.insert(hash.clone()); }
+        Requirement::All { requirements } | Requirement::Any { requirements } => {
+            for r in requirements { collect_hashes_from_req(r, out); }
+        }
+        Requirement::Not { requirement } => { collect_hashes_from_req(requirement, out); }
+        _ => {}
     }
 }

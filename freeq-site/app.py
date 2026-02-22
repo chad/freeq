@@ -12,8 +12,9 @@ from markdown.extensions.toc import TocExtension
 
 app = Flask(__name__)
 
-# Docs directory — repo docs/ relative to this file
-DOCS_DIR = Path(__file__).parent / "docs"
+# Docs directory — site docs/ and repo docs/
+SITE_DOCS_DIR = Path(__file__).parent / "docs"
+REPO_DOCS_DIR = Path(__file__).parent.parent / "docs"
 
 # Markdown renderer
 MD_EXTENSIONS = [
@@ -39,6 +40,34 @@ def render_md(filepath: Path) -> dict:
             break
     md.reset()
     return {"html": html, "toc": toc, "title": title}
+
+
+# ── Slug → file mapping ──────────────────────────────────────────
+
+SLUG_MAP = {
+    # Site docs (new content)
+    "what-is-freeq": ("site", "what-is-freeq.md"),
+    "getting-started": ("site", "getting-started.md"),
+    "authentication": ("site", "authentication.md"),
+    "web-client": ("site", "web-client.md"),
+    "ios-app": ("site", "ios-app.md"),
+    "bots": ("site", "bots.md"),
+    "policy-framework": ("site", "policy-framework.md"),
+    "verifiers": ("site", "verifiers.md"),
+    "federation": ("site", "federation.md"),
+    "self-hosting": ("site", "self-hosting.md"),
+    "api-reference": ("site", "api-reference.md"),
+    # Repo docs (existing technical docs)
+    "protocol": ("repo", "PROTOCOL.md"),
+    "features": ("repo", "Features.md"),
+    "limitations": ("repo", "KNOWN-LIMITATIONS.md"),
+    "architecture": ("repo", "architecture-decisions.md"),
+    "s2s": ("repo", "s2s-audit.md"),
+    "future": ("repo", "FutureDirection.md"),
+    "web-infra": ("repo", "proposal-web-infra.md"),
+    "whats-new": ("repo", "WHATS-NEW.md"),
+    "demo": ("repo", "DEMO.md"),
+}
 
 
 # ── Routes ────────────────────────────────────────────────────────
@@ -71,21 +100,15 @@ def docs_index():
 
 @app.route("/docs/<path:slug>/")
 def docs_page(slug):
-    """Render a doc page from the docs/ directory."""
-    # Map URL slugs to filenames
-    slug_map = {
-        "protocol": "PROTOCOL.md",
-        "features": "Features.md",
-        "limitations": "KNOWN-LIMITATIONS.md",
-        "architecture": "architecture-decisions.md",
-        "s2s": "s2s-audit.md",
-        "future": "FutureDirection.md",
-        "web-infra": "proposal-web-infra.md",
-    }
-    filename = slug_map.get(slug)
-    if not filename:
+    """Render a doc page from either site or repo docs."""
+    entry = SLUG_MAP.get(slug)
+    if not entry:
         abort(404)
-    filepath = DOCS_DIR / filename
+    source, filename = entry
+    if source == "site":
+        filepath = SITE_DOCS_DIR / filename
+    else:
+        filepath = REPO_DOCS_DIR / filename
     if not filepath.exists():
         abort(404)
     doc = render_md(filepath)

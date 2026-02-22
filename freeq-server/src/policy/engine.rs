@@ -115,7 +115,7 @@ impl PolicyEngine {
             receipt_embedding: ReceiptEmbedding::Require,
             policy_locations: vec![],
             limits: None,
-            transparency: None,
+            transparency: None, credential_endpoints: std::collections::BTreeMap::new(),
         };
         let policy = self.store.store_policy(policy)?;
 
@@ -149,7 +149,40 @@ impl PolicyEngine {
             receipt_embedding: current.receipt_embedding.clone(),
             policy_locations: current.policy_locations.clone(),
             limits: current.limits.clone(),
+            transparency: current.transparency.clone(), credential_endpoints: current.credential_endpoints.clone(),
+        };
+        self.store.store_policy(policy)
+    }
+
+    /// Update a channel's policy with explicit credential endpoints.
+    pub fn update_channel_policy_with_endpoints(
+        &self,
+        channel_id: &str,
+        requirements: Requirement,
+        role_requirements: std::collections::BTreeMap<String, Requirement>,
+        credential_endpoints: std::collections::BTreeMap<String, crate::policy::types::CredentialEndpoint>,
+    ) -> Result<PolicyDocument, PolicyError> {
+        eval::validate_structure(&requirements)
+            .map_err(|e| PolicyError::Validation(e))?;
+
+        let current = self.store.get_current_policy(channel_id)?
+            .ok_or_else(|| PolicyError::Validation("No existing policy to update".into()))?;
+
+        let policy = PolicyDocument {
+            channel_id: channel_id.to_string(),
+            policy_id: None,
+            version: current.version + 1,
+            effective_at: Utc::now().to_rfc3339(),
+            previous_policy_hash: current.policy_id.clone(),
+            authority_set_hash: current.authority_set_hash.clone(),
+            requirements,
+            role_requirements,
+            validity_model: current.validity_model.clone(),
+            receipt_embedding: current.receipt_embedding.clone(),
+            policy_locations: current.policy_locations.clone(),
+            limits: current.limits.clone(),
             transparency: current.transparency.clone(),
+            credential_endpoints,
         };
         self.store.store_policy(policy)
     }
@@ -759,7 +792,7 @@ mod tests {
             receipt_embedding: ReceiptEmbedding::Allow,
             policy_locations: vec![],
             limits: None,
-            transparency: None,
+            transparency: None, credential_endpoints: std::collections::BTreeMap::new(),
         };
         engine.store.store_policy(policy).unwrap();
 

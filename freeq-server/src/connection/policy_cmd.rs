@@ -612,11 +612,132 @@ pub(super) fn handle_policy(
             }
         }
 
+        "REQUIRE" => {
+            // POLICY #channel REQUIRE <credential_type> issuer=<did> url=<verify_url> label=<Button Text>
+            // Adds a credential endpoint to the policy (UX metadata).
+            if !is_channel_op(state, channel, session_id, conn.authenticated_did.as_deref()) {
+                let reply = Message::from_server(
+                    server_name,
+                    "482",
+                    vec![nick, channel, "You're not channel operator"],
+                );
+                send_fn(state, session_id, format!("{reply}\r\n"));
+                return;
+            }
+
+            if msg.params.len() < 3 {
+                let reply = Message::from_server(
+                    server_name,
+                    "NOTICE",
+                    vec![nick, "Usage: POLICY <channel> REQUIRE <credential_type> issuer=<did> url=<url> label=<text>"],
+                );
+                send_fn(state, session_id, format!("{reply}\r\n"));
+                return;
+            }
+
+            let credential_type = msg.params[2].to_lowercase();
+            let rest = msg.params[3..].join(" ");
+
+            // Parse key=value pairs
+            let mut issuer = String::new();
+            let mut url = String::new();
+            let mut label = format!("Verify {}", credential_type);
+
+            for part in rest.split_whitespace() {
+                if let Some(val) = part.strip_prefix("issuer=") {
+                    issuer = val.to_string();
+                } else if let Some(val) = part.strip_prefix("url=") {
+                    url = val.to_string();
+                } else if let Some(val) = part.strip_prefix("label=") {
+                    label = val.replace('_', " ");
+                }
+            }
+
+            if issuer.is_empty() || url.is_empty() {
+                let reply = Message::from_server(
+                    server_name,
+                    "NOTICE",
+                    vec![nick, "issuer= and url= are required"],
+                );
+                send_fn(state, session_id, format!("{reply}\r\n"));
+                return;
+            }
+
+            // Get current policy and add credential endpoint
+            let current = match engine.get_policy(channel) {
+                Ok(Some(p)) => p,
+                Ok(None) => {
+                    let reply = Message::from_server(
+                        server_name,
+                        "NOTICE",
+                        vec![nick, "Set a base policy first with POLICY <channel> SET <rules>"],
+                    );
+                    send_fn(state, session_id, format!("{reply}\r\n"));
+                    return;
+                }
+                Err(e) => {
+                    let reply = Message::from_server(
+                        server_name,
+                        "NOTICE",
+                        vec![nick, &format!("Policy error: {e}")],
+                    );
+                    send_fn(state, session_id, format!("{reply}\r\n"));
+                    return;
+                }
+            };
+
+            let endpoint = crate::policy::types::CredentialEndpoint {
+                issuer: issuer.clone(),
+                url: url.clone(),
+                label: label.clone(),
+                description: None,
+            };
+
+            // Update policy with new endpoint — creates new version
+            let mut endpoints = current.credential_endpoints.clone();
+            endpoints.insert(credential_type.clone(), endpoint);
+
+            // We need to update the policy — reuse current requirements but add endpoint
+            match engine.update_channel_policy_with_endpoints(
+                channel,
+                current.requirements.clone(),
+                current.role_requirements.clone(),
+                endpoints,
+            ) {
+                Ok(policy) => {
+                    let notice = format!(
+                        "Credential endpoint '{}' added to {} (issuer={}, version {})",
+                        credential_type, channel, issuer, policy.version
+                    );
+                    let reply = Message::from_server(server_name, "NOTICE", vec![nick, &notice]);
+                    send_fn(state, session_id, format!("{reply}\r\n"));
+
+                    // Broadcast to S2S
+                    let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+                    s2s_broadcast(state, crate::s2s::S2sMessage::PolicySync {
+                        event_id: s2s_next_event_id(state),
+                        channel: channel.to_string(),
+                        policy_json: serde_json::to_string(&policy).ok(),
+                        authority_set_json: None,
+                        origin,
+                    });
+                }
+                Err(e) => {
+                    let reply = Message::from_server(
+                        server_name,
+                        "NOTICE",
+                        vec![nick, &format!("Failed: {e}")],
+                    );
+                    send_fn(state, session_id, format!("{reply}\r\n"));
+                }
+            }
+        }
+
         _ => {
             let reply = Message::from_server(
                 server_name,
                 "NOTICE",
-                vec![nick, "Usage: POLICY <channel> SET|SET-ROLE|VERIFY|INFO|ACCEPT|CLEAR"],
+                vec![nick, "Usage: POLICY <channel> SET|SET-ROLE|REQUIRE|VERIFY|INFO|ACCEPT|CLEAR"],
             );
             send_fn(state, session_id, format!("{reply}\r\n"));
         }
