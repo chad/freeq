@@ -318,6 +318,61 @@ pub struct RevocationSignature {
     pub signature: String,
 }
 
+// ─── Verifiable Credential ────────────────────────────────────────────────────
+
+/// A portable, signed credential issued by an external verifier.
+///
+/// The issuer is identified by DID. The signature is Ed25519 over the
+/// JCS-canonical form (with signature field empty). Anyone can verify
+/// by resolving the issuer's DID document and extracting the public key.
+///
+/// This decouples credential verification from the freeq server:
+/// - A standalone service does GitHub OAuth, email verification, etc.
+/// - It issues a VerifiableCredential signed with its key
+/// - The user presents it to any freeq server
+/// - The server verifies the signature, never talks to GitHub
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VerifiableCredential {
+    /// Always "FreeqCredential/v1".
+    #[serde(rename = "type")]
+    pub credential_type_tag: String,
+
+    /// DID of the issuer (e.g. "did:web:verify.freeq.at").
+    pub issuer: String,
+
+    /// DID of the credential subject (the user).
+    pub subject: String,
+
+    /// Credential type (e.g. "github_membership").
+    pub credential_type: String,
+
+    /// Credential claims (issuer-defined).
+    pub claims: serde_json::Value,
+
+    /// When issued (RFC 3339).
+    pub issued_at: String,
+
+    /// When it expires (RFC 3339). None = no expiry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+
+    /// Ed25519 signature over the JCS-canonical form (base64url, unpadded).
+    /// Computed with this field set to empty string.
+    pub signature: String,
+}
+
+impl VerifiableCredential {
+    /// Check if the credential has expired.
+    pub fn is_expired(&self) -> bool {
+        if let Some(ref exp) = self.expires_at {
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(exp) {
+                return dt < chrono::Utc::now();
+            }
+        }
+        false
+    }
+}
+
 // ─── Role & Permission ───────────────────────────────────────────────────────
 
 /// Protocol-native permissions.

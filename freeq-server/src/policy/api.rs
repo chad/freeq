@@ -36,6 +36,7 @@ pub fn routes() -> Router<Arc<SharedState>> {
         .route("/api/v1/authority/{hash}", get(get_authority_set))
         .route("/api/v1/verify/github", post(verify_github))
         .route("/api/v1/credentials/{did}", get(get_credentials))
+        .route("/api/v1/credentials/present", post(present_credential))
 }
 
 // ─── Request/Response Types ──────────────────────────────────────────────────
@@ -412,6 +413,185 @@ async fn verify_github(
             }),
         )
             .into_response(),
+    }
+}
+
+/// Present a verifiable credential issued by an external service.
+/// The server verifies the signature and stores it if valid.
+#[derive(Debug, Deserialize)]
+struct PresentCredentialRequest {
+    /// The VerifiableCredential JSON.
+    credential: super::types::VerifiableCredential,
+}
+
+#[derive(Debug, Serialize)]
+struct PresentCredentialResponse {
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+async fn present_credential(
+    State(state): State<Arc<SharedState>>,
+    Json(req): Json<PresentCredentialRequest>,
+) -> impl IntoResponse {
+    let engine = match get_engine(&state) {
+        Ok(e) => e,
+        Err(e) => return e.into_response(),
+    };
+
+    let vc = &req.credential;
+
+    // Basic checks
+    if vc.credential_type_tag != "FreeqCredential/v1" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(PresentCredentialResponse {
+                status: "error".into(),
+                error: Some("Unknown credential type".into()),
+            }),
+        )
+            .into_response();
+    }
+
+    if vc.is_expired() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(PresentCredentialResponse {
+                status: "error".into(),
+                error: Some("Credential has expired".into()),
+            }),
+        )
+            .into_response();
+    }
+
+    // Resolve issuer DID → get public key
+    let resolver = &state.did_resolver;
+    let issuer_key = match resolve_issuer_key(resolver, &vc.issuer).await {
+        Ok(key) => key,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(PresentCredentialResponse {
+                    status: "error".into(),
+                    error: Some(format!("Cannot resolve issuer {}: {e}", vc.issuer)),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    // Verify signature
+    match super::credentials::verify_credential(vc, &vc.subject, &issuer_key) {
+        Ok(()) => {}
+        Err(e) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(PresentCredentialResponse {
+                    status: "error".into(),
+                    error: Some(e),
+                }),
+            )
+                .into_response();
+        }
+    }
+
+    // Valid! Store as a local credential
+    if let Err(e) = engine.store_credential(
+        &vc.subject,
+        &vc.credential_type,
+        &vc.issuer,
+        &vc.claims,
+    ) {
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    }
+
+    tracing::info!(
+        subject = %vc.subject, issuer = %vc.issuer, cred_type = %vc.credential_type,
+        "External verifiable credential accepted"
+    );
+
+    Json(PresentCredentialResponse {
+        status: "accepted".into(),
+        error: None,
+    })
+    .into_response()
+}
+
+/// Resolve an issuer DID to an Ed25519 public key.
+///
+/// Looks for a verification method with `publicKeyMultibase` containing
+/// an Ed25519 key in the DID document.
+async fn resolve_issuer_key(
+    resolver: &freeq_sdk::did::DidResolver,
+    issuer_did: &str,
+) -> Result<[u8; 32], String> {
+    let did_doc = resolver
+        .resolve(issuer_did)
+        .await
+        .map_err(|e| format!("DID resolution failed: {e}"))?;
+
+    // Look for Ed25519 key in verification methods
+    for method in &did_doc.verification_method {
+        if let Some(ref multibase) = method.public_key_multibase {
+            if let Some(key) = decode_multibase_ed25519(multibase) {
+                return Ok(key);
+            }
+        }
+    }
+
+    // Also check assertionMethod (inline methods)
+    for entry in &did_doc.assertion_method {
+        if let freeq_sdk::did::StringOrMap::Inline(method) = entry {
+            if let Some(ref multibase) = method.public_key_multibase {
+                if let Some(key) = decode_multibase_ed25519(multibase) {
+                    return Ok(key);
+                }
+            }
+        }
+    }
+
+    Err("No Ed25519 public key found in issuer DID document".into())
+}
+
+/// Decode a multibase-encoded Ed25519 public key.
+/// Expects 'z' prefix (base58btc) followed by multicodec 0xed01 + 32 bytes.
+fn decode_multibase_ed25519(multibase: &str) -> Option<[u8; 32]> {
+    if !multibase.starts_with('z') {
+        return None;
+    }
+    let bytes = bs58::decode(&multibase[1..]).into_vec().ok()?;
+    // Multicodec ed25519-pub: 0xed, 0x01 prefix (2 bytes) + 32-byte key
+    if bytes.len() == 34 && bytes[0] == 0xed && bytes[1] == 0x01 {
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&bytes[2..]);
+        Some(key)
+    } else if bytes.len() == 32 {
+        // Raw key without multicodec prefix
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&bytes);
+        Some(key)
+    } else {
+        None
+    }
+}
+
+/// Decode an Ed25519 public key from JWK.
+fn decode_jwk_ed25519(jwk: &serde_json::Value) -> Option<[u8; 32]> {
+    use base64::Engine;
+    let kty = jwk.get("kty")?.as_str()?;
+    let crv = jwk.get("crv")?.as_str()?;
+    if kty != "OKP" || crv != "Ed25519" {
+        return None;
+    }
+    let x = jwk.get("x")?.as_str()?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(x).ok()?;
+    if bytes.len() == 32 {
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&bytes);
+        Some(key)
+    } else {
+        None
     }
 }
 

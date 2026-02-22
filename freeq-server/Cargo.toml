@@ -37,6 +37,8 @@ sha2 = { workspace = true }
 hmac = "0.12"
 hex = "0.4"
 urlencoding = "2"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+bs58 = "0.5"
 percent-encoding = { workspace = true }
 iroh-quinn = { workspace = true }
 automerge = { workspace = true }

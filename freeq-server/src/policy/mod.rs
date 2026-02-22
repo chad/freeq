@@ -13,6 +13,7 @@
 
 pub mod api;
 pub mod canonical;
+pub mod credentials;
 pub mod engine;
 pub mod eval;
 pub mod store;
@@ -21,4 +22,4 @@ pub mod types;
 pub use engine::{JoinResult, PolicyEngine};
 pub use store::{PolicyError, PolicyStore};
 // Re-export key types
-pub use types::{Requirement, PolicyDocument, AuthoritySet, MembershipAttestation};
+pub use types::{Requirement, PolicyDocument, AuthoritySet, MembershipAttestation, VerifiableCredential};
