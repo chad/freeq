@@ -339,20 +339,28 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
 
             if target.hasPrefix("#") {
                 let ch = state.getOrCreateChannel(target)
-                // Check for edit
-                if let editId = ircMsg.replyTo, ircMsg.msgid != nil {
-                    // This is heuristic — real edit detection needs +draft/edit tag
-                    // which would require extending the FFI. For now, append.
-                }
                 ch.messages.append(msg)
                 state.incrementUnread(target)
-                // Clear typing for this user
                 ch.typingUsers.removeValue(forKey: from)
+
+                // Notify on mention
+                if !isSelf && ircMsg.text.lowercased().contains(state.nick.lowercased()) {
+                    NotificationManager.shared.sendMessageNotification(
+                        from: from, text: ircMsg.text, channel: target
+                    )
+                }
             } else {
                 let bufferName = isSelf ? target : from
                 let dm = state.getOrCreateDM(bufferName)
                 dm.messages.append(msg)
                 state.incrementUnread(bufferName)
+
+                // Always notify on DMs
+                if !isSelf {
+                    NotificationManager.shared.sendMessageNotification(
+                        from: from, text: ircMsg.text, channel: bufferName
+                    )
+                }
             }
 
         case .names(let channel, let members):

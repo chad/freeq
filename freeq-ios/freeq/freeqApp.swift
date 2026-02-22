@@ -12,6 +12,7 @@ struct FreeqApp: App {
                 .environmentObject(networkMonitor)
                 .onAppear {
                     networkMonitor.bind(to: appState)
+                    NotificationManager.shared.requestPermission()
                 }
         }
     }

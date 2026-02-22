@@ -5,6 +5,7 @@ struct TopBarView: View {
     @Binding var showingSidebar: Bool
     @Binding var showingJoinSheet: Bool
     @Binding var showingMembers: Bool
+    @Binding var showingSearch: Bool
 
     var body: some View {
         HStack(spacing: 14) {
@@ -67,6 +68,14 @@ struct TopBarView: View {
                     .background(showingMembers ? Theme.accent.opacity(0.15) : Theme.bgTertiary)
                     .cornerRadius(8)
                 }
+            }
+
+            // Search
+            Button(action: { showingSearch = true }) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 16))
+                    .foregroundColor(Theme.textSecondary)
+                    .frame(width: 36, height: 36)
             }
 
             // Join channel

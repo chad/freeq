@@ -8,6 +8,23 @@ struct MessageListView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
+                // Pull to load older messages
+                Button(action: {
+                    appState.requestHistory(channel: channel.name)
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "arrow.up.circle")
+                            .font(.system(size: 13))
+                        Text("Load older messages")
+                            .font(.system(size: 13))
+                    }
+                    .foregroundColor(Theme.textMuted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                }
+                .buttonStyle(.plain)
+
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(channel.messages.enumerated()), id: \.element.id) { idx, msg in
                         let showHeader = shouldShowHeader(at: idx)
@@ -23,6 +40,15 @@ struct MessageListView: View {
                             deletedMessage(msg, showHeader: showHeader)
                         } else {
                             messageRow(msg, showHeader: showHeader)
+                                .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                    Button {
+                                        appState.replyingTo = msg
+                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                    } label: {
+                                        Label("Reply", systemImage: "arrowshape.turn.up.left")
+                                    }
+                                    .tint(Theme.accent)
+                                }
                                 .contextMenu { messageContextMenu(msg) }
                         }
                     }
@@ -346,6 +372,15 @@ struct MessageListView: View {
 
     // MARK: - Message Body
 
+    // Bluesky URL pattern: bsky.app/profile/{handle}/post/{rkey}
+    private static let bskyPattern = try! NSRegularExpression(
+        pattern: #"https?://bsky\.app/profile/([^/]+)/post/([a-zA-Z0-9]+)"#
+    )
+    // YouTube URL pattern
+    private static let ytPattern = try! NSRegularExpression(
+        pattern: #"(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})"#
+    )
+
     @ViewBuilder
     private func messageBody(_ msg: ChatMessage) -> some View {
         if msg.isAction {
@@ -380,6 +415,16 @@ struct MessageListView: View {
                     }
                 }
             }
+        } else if let (handle, rkey) = extractBskyPost(msg.text) {
+            VStack(alignment: .leading, spacing: 6) {
+                styledText(msg.text)
+                BlueskyEmbed(handle: handle, rkey: rkey)
+            }
+        } else if let videoId = extractYouTubeId(msg.text) {
+            VStack(alignment: .leading, spacing: 6) {
+                styledText(msg.text)
+                YouTubeThumb(videoId: videoId)
+            }
         } else if let url = extractURL(msg.text) {
             VStack(alignment: .leading, spacing: 4) {
                 styledText(msg.text)
@@ -390,11 +435,31 @@ struct MessageListView: View {
         }
     }
 
+    private func extractBskyPost(_ text: String) -> (String, String)? {
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = Self.bskyPattern.firstMatch(in: text, range: range) else { return nil }
+        guard let handleRange = Range(match.range(at: 1), in: text),
+              let rkeyRange = Range(match.range(at: 2), in: text) else { return nil }
+        return (String(text[handleRange]), String(text[rkeyRange]))
+    }
+
+    private func extractYouTubeId(_ text: String) -> String? {
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = Self.ytPattern.firstMatch(in: text, range: range) else { return nil }
+        guard let idRange = Range(match.range(at: 1), in: text) else { return nil }
+        return String(text[idRange])
+    }
+
     private func styledText(_ text: String) -> some View {
-        Text(attributedMessage(text))
+        let isMention = text.lowercased().contains(appState.nick.lowercased())
+        return Text(attributedMessage(text))
             .font(.system(size: 15))
             .foregroundColor(Theme.textPrimary)
             .textSelection(.enabled)
+            .padding(.horizontal, isMention ? 4 : 0)
+            .padding(.vertical, isMention ? 2 : 0)
+            .background(isMention ? Theme.accent.opacity(0.1) : Color.clear)
+            .cornerRadius(4)
     }
 
     private func linkButton(_ url: URL) -> some View {

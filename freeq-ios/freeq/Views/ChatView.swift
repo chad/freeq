@@ -6,6 +6,7 @@ struct ChatView: View {
     @State private var showingSidebar = false
     @State private var showingJoinSheet = false
     @State private var showingMembers = false
+    @State private var showingSearch = false
 
     var body: some View {
         ZStack {
@@ -30,7 +31,8 @@ struct ChatView: View {
                 TopBarView(
                     showingSidebar: $showingSidebar,
                     showingJoinSheet: $showingJoinSheet,
-                    showingMembers: $showingMembers
+                    showingMembers: $showingMembers,
+                    showingSearch: $showingSearch
                 )
 
                 ZStack {
@@ -76,6 +78,10 @@ struct ChatView: View {
             JoinChannelSheet()
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showingSearch) {
+            SearchSheet()
+                .presentationDetents([.large])
         }
         .preferredColorScheme(.dark)
     }
