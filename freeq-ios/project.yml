@@ -15,6 +15,12 @@ targets:
       - path: Generated/freeq.swift
     info:
       path: freeq/Info.plist
+      properties:
+        UILaunchScreen:
+          UIColorName: AccentColor
+        LSRequiresIPhoneOS: true
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: at.freeq.ios
