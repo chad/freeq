@@ -418,8 +418,9 @@ struct MessageListView: View {
                 .foregroundColor(Theme.textSecondary)
         } else if let url = extractImageURL(msg.text) {
             VStack(alignment: .leading, spacing: 6) {
-                if msg.text != url.absoluteString {
-                    styledText(msg.text)
+                let remainingText = msg.text.replacingOccurrences(of: url.absoluteString, with: "").trimmingCharacters(in: .whitespaces)
+                if !remainingText.isEmpty {
+                    styledText(remainingText)
                 }
                 AsyncImage(url: url) { phase in
                     switch phase {
