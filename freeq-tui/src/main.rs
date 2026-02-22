@@ -398,6 +398,22 @@ async fn run_app(
                         continue;
                     }
                 }
+                // Handle pending URL prompt (Enter to open, anything else to dismiss)
+                if app.pending_url.is_some() {
+                    use crossterm::event::KeyCode;
+                    if matches!(key.code, KeyCode::Enter) {
+                        if let Some(url) = app.pending_url.take() {
+                            match open::that(&url) {
+                                Ok(_) => app.status_msg("Opened URL in browser."),
+                                Err(e) => app.status_msg(&format!("Failed to open URL: {e}")),
+                            }
+                        }
+                    } else {
+                        app.pending_url = None;
+                        app.status_msg("URL dismissed.");
+                    }
+                    continue;
+                }
                 let action = app.editor.handle_key(key);
                 match action {
                     EditAction::Submit => {
@@ -847,6 +863,11 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
         }
         Event::ServerNotice { text } => {
             app.status_msg(&text);
+            // Detect URLs in server notices and offer to open them
+            if let Some(url) = extract_url(&text) {
+                app.pending_url = Some(url.to_string());
+                app.status_msg("Press Enter to open URL in browser, or any other key to dismiss.");
+            }
         }
         Event::Disconnected { reason } => {
             app.connection_state = "disconnected".to_string();

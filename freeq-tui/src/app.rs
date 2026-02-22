@@ -191,6 +191,8 @@ pub struct App {
     pub p2p_handle: Option<freeq_sdk::p2p::P2pHandle>,
     /// P2P event receiver (moved to main loop on first use).
     pub p2p_event_rx: Option<tokio::sync::mpsc::Receiver<freeq_sdk::p2p::P2pEvent>>,
+    /// Pending URL from a server notice (waiting for user to press Enter to open).
+    pub pending_url: Option<String>,
 }
 
 /// Results from background tasks that need to update the UI.
@@ -241,6 +243,7 @@ impl App {
             bg_result_rx: Some(rx),
             p2p_handle: None,
             p2p_event_rx: None,
+            pending_url: None,
         }
     }
 

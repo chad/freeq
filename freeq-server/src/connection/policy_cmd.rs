@@ -321,14 +321,14 @@ pub(super) fn handle_policy(
 
             if state.config.github_client_id.is_some() {
                 // OAuth mode — redirect user to GitHub
-                // Build the URL they need to visit
-                let web_addr = state.config.web_addr.as_deref().unwrap_or("127.0.0.1:8080");
+                // Build the URL using server_name (public hostname)
+                let origin = format!("https://{}", state.config.server_name);
                 let verify_url = format!(
-                    "http://{}/auth/github?did={}&org={}&session_id={}",
-                    web_addr,
+                    "{}/verify/github/start?subject_did={}&org={}&callback={}/api/v1/credentials/present",
+                    origin,
                     urlencoding::encode(&did),
                     urlencoding::encode(org),
-                    urlencoding::encode(session_id),
+                    urlencoding::encode(&origin),
                 );
                 let reply = Message::from_server(
                     server_name,
