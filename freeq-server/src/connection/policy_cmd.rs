@@ -300,7 +300,7 @@ pub(super) fn handle_policy(
                 let reply = Message::from_server(
                     server_name,
                     "NOTICE",
-                    vec![nick, "Usage: POLICY <channel> VERIFY github <org>"],
+                    vec![nick, "Usage: POLICY <channel> VERIFY github <org-or-owner/repo>"],
                 );
                 send_fn(state, session_id, format!("{reply}\r\n"));
                 return;
@@ -317,17 +317,24 @@ pub(super) fn handle_policy(
                 return;
             }
 
-            let org = &msg.params[3];
+            let target = &msg.params[3];
 
             if state.config.github_client_id.is_some() {
                 // OAuth mode — redirect user to GitHub
-                // Build the URL using server_name (public hostname)
                 let origin = format!("https://{}", state.config.server_name);
+
+                // Detect if target is owner/repo or just an org name
+                let query_param = if target.contains('/') {
+                    format!("repo={}", urlencoding::encode(target))
+                } else {
+                    format!("org={}", urlencoding::encode(target))
+                };
+
                 let verify_url = format!(
-                    "{}/verify/github/start?subject_did={}&org={}&callback={}/api/v1/credentials/present",
+                    "{}/verify/github/start?subject_did={}&{}&callback={}/api/v1/credentials/present",
                     origin,
                     urlencoding::encode(&did),
-                    urlencoding::encode(org),
+                    query_param,
                     urlencoding::encode(&origin),
                 );
                 let reply = Message::from_server(
@@ -359,7 +366,7 @@ pub(super) fn handle_policy(
                 let engine_ref = Arc::clone(engine);
                 let did_c = did.clone();
                 let username_c = username.to_string();
-                let org_c = org.to_string();
+                let org_c = target.to_string();
                 let state_c = Arc::clone(state);
                 let session_c = session_id.to_string();
                 let server_c = server_name.to_string();
@@ -368,7 +375,7 @@ pub(super) fn handle_policy(
                 let reply = Message::from_server(
                     server_name,
                     "NOTICE",
-                    vec![nick, &format!("Checking GitHub: is {} a public member of {}? (unverified — no OAuth)", username, org)],
+                    vec![nick, &format!("Checking GitHub: is {} a public member of {}? (unverified — no OAuth)", username, target)],
                 );
                 send_fn(state, session_id, format!("{reply}\r\n"));
 

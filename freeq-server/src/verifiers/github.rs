@@ -1,10 +1,12 @@
-//! GitHub org membership verifier.
+//! GitHub verifier — org membership OR repo collaborator.
 //!
 //! Routes:
 //!   GET /verify/github/start?subject_did=...&org=...&callback=...
-//!     → Redirect to GitHub OAuth
+//!     → Redirect to GitHub OAuth (org membership check)
+//!   GET /verify/github/start?subject_did=...&repo=owner/repo&callback=...
+//!     → Redirect to GitHub OAuth (repo collaborator check)
 //!   GET /verify/github/callback
-//!     → Exchange code, verify org membership, sign credential, POST to callback
+//!     → Exchange code, verify membership/collaborator, sign credential, POST to callback
 
 use super::{PendingVerification, VerifierState};
 use crate::policy::credentials;
@@ -29,9 +31,14 @@ pub fn routes() -> Router<Arc<VerifierState>> {
 struct StartQuery {
     /// DID of the user (proven via AT Protocol auth on the freeq server).
     subject_did: String,
-    /// GitHub org to verify membership for.
-    org: String,
+    /// GitHub org to verify membership for (mutually exclusive with repo).
+    #[serde(default)]
+    org: Option<String>,
+    /// GitHub repo (owner/name) to verify collaborator access for.
+    #[serde(default)]
+    repo: Option<String>,
     /// URL to POST the signed credential to after verification.
+    #[serde(default)]
     callback: String,
 }
 
@@ -44,30 +51,36 @@ async fn start(
         .as_ref()
         .ok_or((StatusCode::SERVICE_UNAVAILABLE, "GitHub not configured".into()))?;
 
+    if q.org.is_none() && q.repo.is_none() {
+        return Err((StatusCode::BAD_REQUEST, "Must specify org= or repo=".into()));
+    }
+
     let state_token = hex::encode(rand::random::<[u8; 16]>());
+
+    let mut params = serde_json::Map::new();
+    if let Some(ref org) = q.org {
+        params.insert("org".into(), serde_json::Value::String(org.clone()));
+    }
+    if let Some(ref repo) = q.repo {
+        params.insert("repo".into(), serde_json::Value::String(repo.clone()));
+    }
 
     state.pending.lock().unwrap().insert(
         state_token.clone(),
         PendingVerification {
             subject_did: q.subject_did,
             callback_url: q.callback,
-            provider_params: serde_json::json!({ "org": q.org }),
+            provider_params: serde_json::Value::Object(params),
             created_at: std::time::Instant::now(),
         },
     );
 
-    // Build redirect URI — points back to OUR callback, not the freeq server's
-    // The callback_url is where we POST the credential AFTER verification
-    let redirect_uri = format!(
-        "{}/verify/github/callback",
-        // Derive from the state — we need the external URL
-        // For now, use a relative path (works when colocated)
-        ""
-    );
+    // Scopes: read:org for org membership, repo for collaborator check
+    let scope = if q.repo.is_some() { "repo" } else { "read:org" };
 
     let url = format!(
-        "https://github.com/login/oauth/authorize?client_id={}&scope=read:org&state={}",
-        github.client_id, state_token,
+        "https://github.com/login/oauth/authorize?client_id={}&scope={}&state={}",
+        github.client_id, scope, state_token,
     );
 
     Ok(Redirect::temporary(&url))
@@ -103,8 +116,13 @@ async fn callback(
         .provider_params
         .get("org")
         .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+        .map(String::from);
+
+    let repo = pending
+        .provider_params
+        .get("repo")
+        .and_then(|v| v.as_str())
+        .map(String::from);
 
     let http = reqwest::Client::new();
 
@@ -152,7 +170,35 @@ async fn callback(
         None => return error_page("Could not determine GitHub username"),
     };
 
-    // Check org membership with authenticated token
+    // Route to the appropriate verification
+    if let Some(ref repo_name) = repo {
+        return verify_repo_collaborator(
+            &state, &http, &access_token, &username, repo_name, &pending,
+        )
+        .await;
+    }
+
+    if let Some(ref org_name) = org {
+        return verify_org_membership(
+            &state, &http, &access_token, &username, org_name, &pending,
+        )
+        .await;
+    }
+
+    error_page("No org or repo specified")
+}
+
+/// Verify org membership using the authenticated user's token.
+/// This can see private memberships because the token has read:org scope.
+async fn verify_org_membership(
+    state: &Arc<VerifierState>,
+    http: &reqwest::Client,
+    access_token: &str,
+    username: &str,
+    org: &str,
+    pending: &PendingVerification,
+) -> axum::response::Response {
+    // Try authenticated membership endpoint first (sees private memberships)
     let is_member = http
         .get(&format!(
             "https://api.github.com/user/memberships/orgs/{}",
@@ -166,7 +212,9 @@ async fn callback(
         .unwrap_or(false);
 
     if !is_member {
-        // Fall back to public membership check
+        // Also check if they're a collaborator on any repo in the org
+        // GET /orgs/{org}/repos then check collaborator status
+        // For now, try the simpler public membership check as fallback
         let is_public = http
             .get(&format!(
                 "https://api.github.com/orgs/{}/public_members/{}",
@@ -180,23 +228,115 @@ async fn callback(
 
         if !is_public {
             return error_page(&format!(
-                "{username} is not a member of {org}. \
-                 If you are a member, ensure your membership is public at \
-                 https://github.com/orgs/{org}/people"
+                "{username} is not a member of the {org} organization.\n\n\
+                 Options:\n\
+                 • Make your membership public at https://github.com/orgs/{org}/people\n\
+                 • Ask the channel to accept repo collaborator verification instead:\n\
+                   /POLICY #channel REQUIRE github_repo issuer=... url=.../verify/github/start repo=owner/repo"
             ));
         }
     }
 
-    // Issue signed credential
+    issue_credential(
+        state,
+        http,
+        pending,
+        username,
+        "github_membership",
+        serde_json::json!({
+            "github_username": username,
+            "org": org,
+        }),
+        &format!("{username} is a member of {org}"),
+        &format!("{org} (org)"),
+    )
+    .await
+}
+
+/// Verify repo collaborator access. The user's token must have access to the repo.
+async fn verify_repo_collaborator(
+    state: &Arc<VerifierState>,
+    http: &reqwest::Client,
+    access_token: &str,
+    username: &str,
+    repo: &str,
+    pending: &PendingVerification,
+) -> axum::response::Response {
+    // Check if the user is a collaborator on the repo
+    // GET /repos/{owner}/{repo}/collaborators/{username} → 204 if yes
+    let is_collaborator = http
+        .get(&format!(
+            "https://api.github.com/repos/{}/collaborators/{}",
+            repo, username
+        ))
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("User-Agent", "freeq-verifier")
+        .send()
+        .await
+        .map(|r| r.status().as_u16() == 204)
+        .unwrap_or(false);
+
+    if !is_collaborator {
+        // Also check if they have push access via the repo endpoint
+        let has_push = match http
+            .get(&format!("https://api.github.com/repos/{}", repo))
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("User-Agent", "freeq-verifier")
+            .send()
+            .await
+        {
+            Ok(r) => {
+                let repo_json: serde_json::Value = r.json().await.unwrap_or_default();
+                repo_json
+                    .get("permissions")
+                    .and_then(|p| p.get("push"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            }
+            Err(_) => false,
+        };
+
+        if !has_push {
+            return error_page(&format!(
+                "{username} is not a collaborator on {repo}.\n\n\
+                 You need push access or collaborator status on this repository."
+            ));
+        }
+    }
+
+    issue_credential(
+        state,
+        http,
+        pending,
+        username,
+        "github_repo",
+        serde_json::json!({
+            "github_username": username,
+            "repo": repo,
+        }),
+        &format!("{username} has access to {repo}"),
+        &format!("{repo}"),
+    )
+    .await
+}
+
+/// Issue a signed credential and POST it to the callback URL.
+async fn issue_credential(
+    state: &Arc<VerifierState>,
+    http: &reqwest::Client,
+    pending: &PendingVerification,
+    username: &str,
+    credential_type: &str,
+    claims: serde_json::Value,
+    verified_msg: &str,
+    badge_label: &str,
+) -> axum::response::Response {
     let mut vc = VerifiableCredential {
         credential_type_tag: "FreeqCredential/v1".into(),
         issuer: state.issuer_did.clone(),
         subject: pending.subject_did.clone(),
-        credential_type: "github_membership".into(),
-        claims: serde_json::json!({
-            "github_username": username,
-            "org": org,
-        }),
+        credential_type: credential_type.into(),
+        claims,
         issued_at: chrono::Utc::now().to_rfc3339(),
         expires_at: Some(
             (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339(),
@@ -208,11 +348,11 @@ async fn callback(
     tracing::info!(
         subject = %pending.subject_did,
         github = %username,
-        org = %org,
-        "GitHub org membership verified, credential issued"
+        credential_type = %credential_type,
+        "GitHub verification complete, credential issued"
     );
 
-    // POST credential to callback URL (the freeq server's /api/v1/credentials/present)
+    // POST credential to callback URL
     let callback_result = if !pending.callback_url.is_empty() {
         http.post(&pending.callback_url)
             .json(&serde_json::json!({ "credential": vc }))
@@ -224,7 +364,6 @@ async fn callback(
         false
     };
 
-    // Success page
     let vc_json = serde_json::to_string_pretty(&vc).unwrap_or_default();
     let callback_status = if callback_result {
         "<p style='color:#0a0'>✓ Credential automatically delivered to the server. You can close this window.</p>"
@@ -243,14 +382,13 @@ button {{ background: #333; color: #fff; border: 1px solid #555; padding: 8px 16
 button:hover {{ background: #444; }}
 </style>
 <script>
-// Notify opener (web client) that verification is complete
 if (window.opener) {{
-    window.opener.postMessage({{ type: 'freeq-credential', status: 'verified', credential_type: 'github_membership' }}, '*');
+    window.opener.postMessage({{ type: 'freeq-credential', status: 'verified', credential_type: '{credential_type}' }}, '*');
 }}
 </script>
 </head><body>
 <h1>✓ Verified</h1>
-<p><span class="badge">{username}</span> is a member of <span class="badge">{org}</span></p>
+<p><span class="badge">{username}</span> — {verified_msg}</p>
 <p>Credential issued for: <code>{did}</code></p>
 {callback_status}
 <details><summary>Credential JSON</summary>
@@ -270,6 +408,7 @@ fn error_page(msg: &str) -> axum::response::Response {
 <style>
 body {{ font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; background: #0a0a1a; color: #e0e0e0; }}
 h1 {{ color: #f44; }}
+p {{ white-space: pre-wrap; text-align: left; }}
 </style></head><body>
 <h1>Verification Failed</h1>
 <p>{msg}</p>
