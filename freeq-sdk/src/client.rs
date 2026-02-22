@@ -820,14 +820,22 @@ where
                         }
                         "PRIVMSG" | "NOTICE" => {
                             if msg.params.len() >= 2 {
-                                let from = msg.prefix.as_deref()
-                                    .and_then(|p| p.split('!').next())
-                                    .unwrap_or("")
-                                    .to_string();
-                                let target = msg.params[0].clone();
-                                let text = msg.params[1].clone();
-                                let tags = msg.tags.clone();
-                                let _ = event_tx.send(Event::Message { from, target, text, tags }).await;
+                                let prefix = msg.prefix.as_deref().unwrap_or("");
+                                let is_server_notice = msg.command == "NOTICE"
+                                    && !prefix.contains('!');
+                                if is_server_notice {
+                                    // Server NOTICE (no hostmask in prefix) → ServerNotice
+                                    let text = msg.params[1].clone();
+                                    let _ = event_tx.send(Event::ServerNotice { text }).await;
+                                } else {
+                                    let from = prefix.split('!').next()
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let target = msg.params[0].clone();
+                                    let text = msg.params[1].clone();
+                                    let tags = msg.tags.clone();
+                                    let _ = event_tx.send(Event::Message { from, target, text, tags }).await;
+                                }
                             }
                         }
                         "TAGMSG" => {
@@ -840,7 +848,22 @@ where
                                 let _ = event_tx.send(Event::TagMsg { from, target, tags: msg.tags.clone() }).await;
                             }
                         }
-                        _ => {}
+                        _ => {
+                            // Emit server error numerics (4xx, 5xx, 6xx, 9xx)
+                            // and unrecognized commands as ServerNotice so the
+                            // UI can display them.
+                            if let Ok(num) = msg.command.parse::<u16>() {
+                                if (400..700).contains(&num) || (900..1000).contains(&num) {
+                                    // Skip our nick (param[0]) and join the rest
+                                    let text = if msg.params.len() > 1 {
+                                        msg.params[1..].join(" ")
+                                    } else {
+                                        msg.params.join(" ")
+                                    };
+                                    let _ = event_tx.send(Event::ServerNotice { text }).await;
+                                }
+                            }
+                        }
                     }
                 }
 
