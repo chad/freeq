@@ -56,6 +56,7 @@ struct ImagePreviewSheet: View {
     let channel: String
 
     @State private var caption: String = ""
+    @State private var crossPost = false
     @State private var uploading = false
     @State private var uploadProgress: String = ""
     @FocusState private var captionFocused: Bool
@@ -73,6 +74,23 @@ struct ImagePreviewSheet: View {
                         .frame(maxHeight: 400)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                         .padding(16)
+
+                    // Cross-post toggle
+                    if appState.authenticatedDID != nil {
+                        Toggle(isOn: $crossPost) {
+                            HStack(spacing: 8) {
+                                Image(systemName: "arrow.up.right.circle.fill")
+                                    .font(.system(size: 16))
+                                    .foregroundColor(Color(hex: "0085ff"))
+                                Text("Also post to Bluesky")
+                                    .font(.system(size: 14, weight: .medium))
+                                    .foregroundColor(Theme.textPrimary)
+                            }
+                        }
+                        .tint(Color(hex: "0085ff"))
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 8)
+                    }
 
                     Spacer()
 
@@ -150,6 +168,11 @@ struct ImagePreviewSheet: View {
 
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
             body.append("Content-Disposition: form-data; name=\"channel\"\r\n\r\n\(channel)\r\n".data(using: .utf8)!)
+
+            if crossPost {
+                body.append("--\(boundary)\r\n".data(using: .utf8)!)
+                body.append("Content-Disposition: form-data; name=\"cross_post\"\r\n\r\ntrue\r\n".data(using: .utf8)!)
+            }
 
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
             body.append("Content-Disposition: form-data; name=\"file\"; filename=\"photo.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)

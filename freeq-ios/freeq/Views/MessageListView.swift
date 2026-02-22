@@ -5,6 +5,7 @@ struct MessageListView: View {
     @ObservedObject var channel: ChannelState
     @State private var emojiPickerMessage: ChatMessage? = nil
     @State private var profileNick: String? = nil
+    @State private var threadMessage: ChatMessage? = nil
     @StateObject private var avatarCache = AvatarCache.shared
 
     var body: some View {
@@ -97,6 +98,11 @@ struct MessageListView: View {
         )) { target in
             UserProfileSheet(nick: target.nick)
                 .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $threadMessage) { msg in
+            ThreadView(rootMessage: msg, channelName: channel.name)
+                .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
     }
@@ -259,14 +265,17 @@ struct MessageListView: View {
     @ViewBuilder
     private func messageRow(_ msg: ChatMessage, showHeader: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Reply context
+            // Reply context — tap to open thread
             if let replyId = msg.replyTo,
                let originalIdx = channel.findMessage(byId: replyId) {
                 let original = channel.messages[originalIdx]
-                replyContext(original)
-                    .padding(.leading, 68)
-                    .padding(.trailing, 16)
-                    .padding(.top, 4)
+                Button(action: { threadMessage = msg }) {
+                    replyContext(original)
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 68)
+                .padding(.trailing, 16)
+                .padding(.top, 4)
             }
 
             if showHeader {
