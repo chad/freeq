@@ -102,7 +102,7 @@ async fn main() -> Result<()> {
         user: args.nick.clone(),
         realname: "freeq AI factory bot".to_string(),
         tls: args.tls,
-        tls_insecure: false,
+        tls_insecure: false, web_token: None,
     })
     .await?;
 
@@ -112,7 +112,7 @@ async fn main() -> Result<()> {
         user: args.nick.clone(),
         realname: "freeq AI factory bot".to_string(),
         tls: args.tls,
-        tls_insecure: false,
+        tls_insecure: false, web_token: None,
     };
 
     let (handle, mut events) = client::connect_with_stream(conn, config, None);

@@ -327,7 +327,7 @@ async fn run_bot(
         user: persona.nick.clone(),
         realname: persona.realname.clone(),
         tls,
-        tls_insecure: false,
+        tls_insecure: false, web_token: None,
     };
 
     let (handle, mut events) = client::connect(config, None);

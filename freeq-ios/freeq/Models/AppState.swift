@@ -132,6 +132,13 @@ class AppState: ObservableObject {
                 nick: nick,
                 handler: handler
             )
+
+            // Set web-token for SASL auth if available (from AT Protocol OAuth)
+            if let token = pendingWebToken {
+                try client?.setWebToken(token: token)
+                pendingWebToken = nil
+            }
+
             try client?.connect()
         } catch {
             DispatchQueue.main.async {
@@ -272,22 +279,10 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
         switch event {
         case .connected:
             state.connectionState = .connected
-            // If we have a web-token, initiate SASL auth
-            if let token = state.pendingWebToken {
-                state.sendRaw("CAP REQ :sasl")
-                state.sendRaw("AUTHENTICATE WEB-TOKEN")
-                // The server will respond with AUTHENTICATE +, then we send the token
-                // For now, send it directly (the SDK handles the flow via raw)
-                let payload = Data(token.utf8).base64EncodedString()
-                state.sendRaw("AUTHENTICATE \(payload)")
-                state.pendingWebToken = nil
-            }
 
         case .registered(let nick):
             state.connectionState = .registered
             state.nick = nick
-            // Request capabilities
-            state.sendRaw("CAP REQ :message-tags echo-message server-time draft/chathistory away-notify")
             // Auto-join saved channels
             for channel in state.autoJoinChannels {
                 state.joinChannel(channel)

@@ -77,6 +77,7 @@ pub struct FreeqClient {
     handler: Arc<dyn EventHandler>,
     handle: Arc<Mutex<Option<freeq_sdk::client::ClientHandle>>>,
     connected: Arc<Mutex<bool>>,
+    web_token: Arc<Mutex<Option<String>>>,
 }
 
 impl FreeqClient {
@@ -91,11 +92,18 @@ impl FreeqClient {
             handler: Arc::from(handler),
             handle: Arc::new(Mutex::new(None)),
             connected: Arc::new(Mutex::new(false)),
+            web_token: Arc::new(Mutex::new(None)),
         })
+    }
+
+    pub fn set_web_token(&self, token: String) -> Result<(), FreeqError> {
+        *self.web_token.lock().unwrap() = Some(token);
+        Ok(())
     }
 
     pub fn connect(&self) -> Result<(), FreeqError> {
         let nick = self.nick.lock().unwrap().clone();
+        let web_token = self.web_token.lock().unwrap().take();
         let config = freeq_sdk::client::ConnectConfig {
             server_addr: self.server.clone(),
             nick: nick.clone(),
@@ -103,6 +111,7 @@ impl FreeqClient {
             realname: "freeq iOS".to_string(),
             tls: self.server.contains(":6697") || self.server.contains(":443"),
             tls_insecure: false,
+            web_token,
         };
 
         // MUST call connect() inside the runtime — it uses tokio::spawn internally.

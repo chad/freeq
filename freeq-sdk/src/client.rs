@@ -32,6 +32,8 @@ pub struct ConnectConfig {
     pub tls: bool,
     /// Skip TLS certificate verification (for self-signed certs).
     pub tls_insecure: bool,
+    /// One-time web-token for SASL WEB-TOKEN authentication (from OAuth flow).
+    pub web_token: Option<String>,
 }
 
 impl Default for ConnectConfig {
@@ -43,6 +45,7 @@ impl Default for ConnectConfig {
             realname: "IRC AT SDK User".to_string(),
             tls: false,
             tls_insecure: false,
+            web_token: None,
         }
     }
 }
@@ -545,6 +548,7 @@ where
 
     let mut sasl_in_progress = false;
     let mut registered = false;
+    let mut web_token = config.web_token.clone();
     let mut pending_commands: Vec<Command> = Vec::new();
     let mut line_buf = String::new();
     let mut last_activity = tokio::time::Instant::now();
@@ -567,19 +571,30 @@ where
                 if let Some(msg) = Message::parse(&line_buf) {
                     match msg.command.as_str() {
                         "CAP" => {
-                            handle_cap_response(&msg, &signer, &mut writer, &mut sasl_in_progress).await?;
+                            handle_cap_response(&msg, &signer, &web_token, &mut writer, &mut sasl_in_progress).await?;
                         }
                         "AUTHENTICATE" => {
-                            if let Some(ref signer) = signer {
+                            if let Some(ref token) = web_token {
+                                // WEB-TOKEN SASL: server sends "+", we reply with base64(token)
+                                let payload = msg.params.first().map(|s| s.as_str()).unwrap_or("");
+                                if payload == "+" {
+                                    use base64::Engine;
+                                    let encoded = base64::engine::general_purpose::STANDARD.encode(token.as_bytes());
+                                    writer.write_all(format!("AUTHENTICATE {encoded}\r\n").as_bytes()).await?;
+                                }
+                            } else if let Some(ref signer) = signer {
                                 handle_authenticate_challenge(&msg, signer.as_ref(), &mut writer).await?;
                             }
                         }
                         "903" => {
                             sasl_in_progress = false;
-                            // eprintln!("  SASL authentication successful!");
                             if let Some(ref signer) = signer {
                                 let _ = event_tx.send(Event::Authenticated { did: signer.did().to_string() }).await;
+                            } else if web_token.is_some() {
+                                // Web-token auth succeeded — DID will come from server
+                                let _ = event_tx.send(Event::Authenticated { did: "web-token".to_string() }).await;
                             }
+                            web_token = None; // Consumed
                             writer.write_all(b"CAP END\r\n").await?;
                         }
                         "904" => {
@@ -855,6 +870,7 @@ async fn execute_command<W: AsyncWrite + Unpin>(writer: &mut W, cmd: Command) ->
 async fn handle_cap_response<W: AsyncWrite + Unpin>(
     msg: &Message,
     signer: &Option<Arc<dyn ChallengeSigner>>,
+    web_token: &Option<String>,
     writer: &mut W,
     sasl_in_progress: &mut bool,
 ) -> Result<()> {
@@ -862,18 +878,16 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
     match subcmd.as_deref() {
         Some("LS") => {
             let caps_str = msg.params.last().map(|s| s.as_str()).unwrap_or("");
-            // eprintln!("  Server capabilities: {caps_str}");
             let mut req_caps = Vec::new();
             if caps_str.contains("message-tags") {
                 req_caps.push("message-tags");
             }
-            // Request additional IRCv3 capabilities the SDK understands
-            for cap in &["server-time", "batch", "echo-message", "away-notify", "account-notify", "extended-join"] {
+            for cap in &["server-time", "batch", "echo-message", "away-notify", "account-notify", "extended-join", "draft/chathistory"] {
                 if caps_str.contains(cap) {
                     req_caps.push(cap);
                 }
             }
-            if caps_str.contains("sasl") && signer.is_some() {
+            if caps_str.contains("sasl") && (signer.is_some() || web_token.is_some()) {
                 req_caps.push("sasl");
             }
             if req_caps.is_empty() {
@@ -887,16 +901,14 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
         }
         Some("ACK") => {
             let caps = msg.params.last().map(|s| s.as_str()).unwrap_or("");
-            // eprintln!("  Capabilities acknowledged: {caps}");
             if caps.contains("sasl") {
                 *sasl_in_progress = true;
-                // eprintln!("  Starting SASL ATPROTO-CHALLENGE...");
-                writer
-                    .write_all(b"AUTHENTICATE ATPROTO-CHALLENGE\r\n")
-                    .await?;
+                if web_token.is_some() {
+                    writer.write_all(b"AUTHENTICATE WEB-TOKEN\r\n").await?;
+                } else {
+                    writer.write_all(b"AUTHENTICATE ATPROTO-CHALLENGE\r\n").await?;
+                }
             } else {
-                // Got message-tags but no sasl (or no signer) — done with CAP
-                // eprintln!("  No SASL needed, sending CAP END");
                 writer.write_all(b"CAP END\r\n").await?;
             }
         }

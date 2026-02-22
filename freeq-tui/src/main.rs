@@ -143,7 +143,7 @@ async fn main() -> Result<()> {
             user: cli.nick.clone(),
             realname: "IRC AT TUI Client".to_string(),
             tls: use_tls,
-            tls_insecure: cli.tls_insecure,
+            tls_insecure: cli.tls_insecure, web_token: None,
         }).await?
     };
 
@@ -153,7 +153,7 @@ async fn main() -> Result<()> {
         user: cli.nick.clone(),
         realname: "IRC AT TUI Client".to_string(),
         tls: cli.tls || cli.server.ends_with(":6697"),
-        tls_insecure: cli.tls_insecure,
+        tls_insecure: cli.tls_insecure, web_token: None,
     };
 
     let (mut handle, mut events) = client::connect_with_stream(conn, config.clone(), signer.clone());

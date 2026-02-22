@@ -119,7 +119,7 @@ async fn main() -> Result<()> {
             user: nick.clone(),
             realname: format!("Load test user {i}"),
             tls: args.tls,
-            tls_insecure: args.tls,
+            tls_insecure: args.tls, web_token: None,
         };
 
         let (handle, events) = freeq_sdk::client::connect(config, None);
