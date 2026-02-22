@@ -1,13 +1,18 @@
 import SwiftUI
 import PhotosUI
 
+/// Wrapper so we can use sheet(item:) — passes image data directly.
+struct StagedPhoto: Identifiable {
+    let id = UUID()
+    let image: UIImage
+    let data: Data
+}
+
 /// Photo picker button — opens picker, stages image for preview before send.
 struct PhotoPickerButton: View {
     @EnvironmentObject var appState: AppState
     @State private var selectedItem: PhotosPickerItem? = nil
-    @State private var stagedImage: UIImage? = nil
-    @State private var stagedData: Data? = nil
-    @State private var showingPreview = false
+    @State private var stagedPhoto: StagedPhoto? = nil
 
     let channel: String
 
@@ -23,14 +28,12 @@ struct PhotoPickerButton: View {
                 selectedItem = nil
             }
         }
-        .sheet(isPresented: $showingPreview) {
-            if let image = stagedImage, let data = stagedData {
-                ImagePreviewSheet(
-                    image: image,
-                    imageData: data,
-                    channel: channel
-                )
-            }
+        .sheet(item: $stagedPhoto) { photo in
+            ImagePreviewSheet(
+                image: photo.image,
+                imageData: photo.data,
+                channel: channel
+            )
         }
     }
 
@@ -39,9 +42,7 @@ struct PhotoPickerButton: View {
             guard let data = try? await item.loadTransferable(type: Data.self) else { return }
             guard let uiImage = UIImage(data: data) else { return }
             await MainActor.run {
-                stagedImage = uiImage
-                stagedData = data
-                showingPreview = true
+                stagedPhoto = StagedPhoto(image: uiImage, data: data)
             }
         }
     }
