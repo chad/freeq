@@ -549,6 +549,7 @@ where
     let mut sasl_in_progress = false;
     let mut registered = false;
     let mut web_token = config.web_token.clone();
+    eprintln!("[SDK] run_irc: web_token={}, signer={}", web_token.is_some(), signer.is_some());
     let mut pending_commands: Vec<Command> = Vec::new();
     let mut line_buf = String::new();
     let mut last_activity = tokio::time::Instant::now();
@@ -889,6 +890,9 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
             }
             if caps_str.contains("sasl") && (signer.is_some() || web_token.is_some()) {
                 req_caps.push("sasl");
+                eprintln!("[SDK] Requesting SASL (web_token={})", web_token.is_some());
+            } else {
+                eprintln!("[SDK] NOT requesting SASL: sasl_in_caps={}, signer={}, web_token={}", caps_str.contains("sasl"), signer.is_some(), web_token.is_some());
             }
             if req_caps.is_empty() {
                 // eprintln!("  No caps to request, sending CAP END");

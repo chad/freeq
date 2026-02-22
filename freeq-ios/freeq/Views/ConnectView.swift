@@ -277,7 +277,6 @@ struct ConnectView: View {
             handleFocused = false
             nickFocused = false
         }
-        .ignoresSafeArea(.keyboard)
         .preferredColorScheme(.dark)
     }
 
