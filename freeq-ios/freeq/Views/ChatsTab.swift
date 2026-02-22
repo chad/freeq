@@ -51,7 +51,7 @@ struct ChatsTab: View {
                 }
             }
             .navigationTitle("Chats")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Theme.bgSecondary, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {

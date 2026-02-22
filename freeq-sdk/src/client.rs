@@ -549,6 +549,7 @@ where
     let mut sasl_in_progress = false;
     let mut registered = false;
     let mut web_token = config.web_token.clone();
+    let mut authenticated_did: Option<String> = None;
     eprintln!("[SDK] run_irc: web_token={}, signer={}", web_token.is_some(), signer.is_some());
     let mut pending_commands: Vec<Command> = Vec::new();
     let mut line_buf = String::new();
@@ -601,15 +602,27 @@ where
                                 handle_authenticate_challenge(&msg, signer.as_ref(), &mut writer).await?;
                             }
                         }
+                        // 900 RPL_LOGGEDIN — server tells us our authenticated DID
+                        "900" => {
+                            // :server 900 nick :You are now logged in as did:plc:...
+                            if let Some(text) = msg.params.last() {
+                                if let Some(did) = text.split("as ").last() {
+                                    let did = did.trim().to_string();
+                                    if did.starts_with("did:") {
+                                        authenticated_did = Some(did);
+                                    }
+                                }
+                            }
+                        }
                         "903" => {
                             sasl_in_progress = false;
-                            if let Some(ref signer) = signer {
-                                let _ = event_tx.send(Event::Authenticated { did: signer.did().to_string() }).await;
-                            } else if web_token.is_some() {
-                                // Web-token auth succeeded — DID will come from server
-                                let _ = event_tx.send(Event::Authenticated { did: "web-token".to_string() }).await;
+                            let did = authenticated_did.take()
+                                .or_else(|| signer.as_ref().map(|s| s.did().to_string()))
+                                .unwrap_or_default();
+                            if !did.is_empty() {
+                                let _ = event_tx.send(Event::Authenticated { did }).await;
                             }
-                            web_token = None; // Consumed
+                            web_token = None;
                             writer.write_all(b"CAP END\r\n").await?;
                         }
                         "904" => {

@@ -26,7 +26,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: at.freeq.ios
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: 1
-        DEVELOPMENT_TEAM: D6G9BYGH26
+        DEVELOPMENT_TEAM: 3DT7XF7L4R
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Automatic
         OTHER_LDFLAGS:

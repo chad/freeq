@@ -37,8 +37,17 @@ class ChannelState: ObservableObject, Identifiable {
         self.name = name
     }
 
+    private var messageIds: Set<String> = []
+
     func findMessage(byId id: String) -> Int? {
         messages.firstIndex(where: { $0.id == id })
+    }
+
+    /// Append a message only if its ID hasn't been seen before.
+    func appendIfNew(_ msg: ChatMessage) {
+        guard !messageIds.contains(msg.id) else { return }
+        messageIds.insert(msg.id)
+        messages.append(msg)
     }
 }
 
@@ -314,7 +323,7 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 id: UUID().uuidString, from: "", text: "\(nick) joined",
                 isAction: false, timestamp: Date(), replyTo: nil
             )
-            ch.messages.append(msg)
+            ch.appendIfNew(msg)
 
         case .parted(let channel, let nick):
             if nick.lowercased() == state.nick.lowercased() {
@@ -326,7 +335,7 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 }
             } else {
                 let ch = state.getOrCreateChannel(channel)
-                ch.messages.append(ChatMessage(
+                ch.appendIfNew(ChatMessage(
                     id: UUID().uuidString, from: "", text: "\(nick) left",
                     isAction: false, timestamp: Date(), replyTo: nil
                 ))
@@ -349,7 +358,7 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
 
             if target.hasPrefix("#") {
                 let ch = state.getOrCreateChannel(target)
-                ch.messages.append(msg)
+                ch.appendIfNew(msg)
                 state.incrementUnread(target)
                 ch.typingUsers.removeValue(forKey: from)
 
@@ -362,7 +371,7 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
             } else {
                 let bufferName = isSelf ? target : from
                 let dm = state.getOrCreateDM(bufferName)
-                dm.messages.append(msg)
+                dm.appendIfNew(msg)
                 state.incrementUnread(bufferName)
 
                 // Always notify on DMs
@@ -395,7 +404,7 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 state.errorMessage = "Kicked from \(channel) by \(by): \(reason)"
             } else {
                 let ch = state.getOrCreateChannel(channel)
-                ch.messages.append(ChatMessage(
+                ch.appendIfNew(ChatMessage(
                     id: UUID().uuidString, from: "",
                     text: "\(nick) was kicked by \(by) (\(reason))",
                     isAction: false, timestamp: Date(), replyTo: nil

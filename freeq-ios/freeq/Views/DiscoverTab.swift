@@ -109,7 +109,7 @@ struct DiscoverTab: View {
                 }
             }
             .navigationTitle("Discover")
-            .navigationBarTitleDisplayMode(.large)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(Theme.bgSecondary, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
         }
