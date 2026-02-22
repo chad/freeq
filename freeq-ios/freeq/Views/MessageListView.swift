@@ -73,6 +73,12 @@ struct MessageListView: View {
             }
             .onAppear {
                 appState.markRead(channel.name)
+                // Scroll to bottom on appear
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    if let last = channel.messages.last {
+                        proxy.scrollTo(last.id, anchor: .bottom)
+                    }
+                }
             }
             .onChange(of: appState.activeChannel) {
                 appState.markRead(channel.name)

@@ -38,6 +38,9 @@ struct ChatView: View {
                 ZStack {
                     if let channel = appState.activeChannelState {
                         MessageListView(channel: channel)
+                            .onTapGesture {
+                                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                            }
                     } else {
                         emptyState
                     }
@@ -62,7 +65,10 @@ struct ChatView: View {
             if showingSidebar {
                 Color.black.opacity(0.5)
                     .ignoresSafeArea()
-                    .onTapGesture { showingSidebar = false }
+                    .onTapGesture {
+                        showingSidebar = false
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
 
                 HStack(spacing: 0) {
                     SidebarView(showingSidebar: $showingSidebar)

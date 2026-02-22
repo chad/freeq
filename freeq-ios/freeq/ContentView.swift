@@ -5,6 +5,8 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
+            Theme.bgPrimary.ignoresSafeArea()
+
             Group {
                 switch appState.connectionState {
                 case .disconnected, .connecting:

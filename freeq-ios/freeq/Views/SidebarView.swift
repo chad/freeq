@@ -8,14 +8,11 @@ struct SidebarView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Header
             HStack(spacing: 10) {
-                ZStack {
-                    Circle()
-                        .fill(Theme.accent.opacity(0.15))
-                        .frame(width: 36, height: 36)
-                    Text("fq")
-                        .font(.system(size: 14, weight: .black, design: .rounded))
-                        .foregroundColor(Theme.accent)
-                }
+                Image("FreeqLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 32, height: 32)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
 
                 Text("freeq")
                     .font(.system(size: 20, weight: .bold, design: .rounded))
