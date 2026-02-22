@@ -68,6 +68,12 @@ export function ChannelSettingsPanel() {
 }
 
 function SettingsContent({ channel, onClose }: { channel: string; onClose: () => void }) {
+  const nick = useStore((s) => s.nick);
+  const channels = useStore((s) => s.channels);
+  const ch = channels.get(channel.toLowerCase());
+  const myMember = ch?.members.get(nick.toLowerCase());
+  const isOp = myMember?.isOp ?? false;
+
   const [tab, setTab] = useState<'rules' | 'requirements' | 'roles'>('rules');
   const [policy, setPolicy] = useState<PolicyInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -233,12 +239,14 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
               <div className="bg-bg rounded-lg border border-border p-3">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs text-fg-dim uppercase tracking-wide">Current Policy (v{policy.policy.version})</span>
-                  <button
-                    onClick={handleClearPolicy}
-                    className="text-xs text-red-400 hover:text-red-300"
-                  >
-                    Remove policy
-                  </button>
+                  {isOp && (
+                    <button
+                      onClick={handleClearPolicy}
+                      className="text-xs text-red-400 hover:text-red-300"
+                    >
+                      Remove policy
+                    </button>
+                  )}
                 </div>
                 <p className="text-sm text-fg-muted">{describeRequirements(policy.policy.requirements)}</p>
               </div>
@@ -246,25 +254,30 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
               <p className="text-sm text-fg-dim">No policy set. Add rules to gate channel access.</p>
             )}
 
-            <div>
-              <label className="block text-xs text-fg-dim uppercase tracking-wide mb-2">
-                {policy?.policy ? 'Update rules' : 'Set channel rules'}
-              </label>
-              <textarea
-                value={rulesText}
-                onChange={(e) => setRulesText(e.target.value)}
-                placeholder="e.g., By participating you agree to our Code of Conduct."
-                rows={3}
-                className="w-full bg-bg border border-border rounded-lg p-3 text-sm text-fg placeholder-fg-dim resize-none focus:outline-none focus:border-accent"
-              />
-              <button
-                onClick={handleSetRules}
-                disabled={!rulesText.trim() || saving}
-                className="mt-2 px-4 py-1.5 text-sm font-medium bg-accent text-bg rounded-lg hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {saving ? 'Saving…' : policy?.policy ? 'Update Policy' : 'Set Policy'}
-              </button>
-            </div>
+            {isOp && (
+              <div>
+                <label className="block text-xs text-fg-dim uppercase tracking-wide mb-2">
+                  {policy?.policy ? 'Update rules' : 'Set channel rules'}
+                </label>
+                <textarea
+                  value={rulesText}
+                  onChange={(e) => setRulesText(e.target.value)}
+                  placeholder="e.g., By participating you agree to our Code of Conduct."
+                  rows={3}
+                  className="w-full bg-bg border border-border rounded-lg p-3 text-sm text-fg placeholder-fg-dim resize-none focus:outline-none focus:border-accent"
+                />
+                <button
+                  onClick={handleSetRules}
+                  disabled={!rulesText.trim() || saving}
+                  className="mt-2 px-4 py-1.5 text-sm font-medium bg-accent text-bg rounded-lg hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {saving ? 'Saving…' : policy?.policy ? 'Update Policy' : 'Set Policy'}
+                </button>
+              </div>
+            )}
+            {!isOp && !policy?.policy && (
+              <p className="text-sm text-fg-dim">No policy set on this channel.</p>
+            )}
           </div>
         )}
 
@@ -297,8 +310,8 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
               </div>
             )}
 
-            {/* Add verifier */}
-            {policy?.policy && !showAddVerifier && (
+            {/* Add verifier (ops only) */}
+            {isOp && policy?.policy && !showAddVerifier && (
               <button
                 onClick={() => setShowAddVerifier(true)}
                 className="w-full p-3 border border-dashed border-border rounded-lg text-sm text-fg-dim hover:border-accent hover:text-accent transition-colors"
@@ -399,8 +412,8 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
               </div>
             )}
 
-            {/* Add role */}
-            {policy?.policy && (
+            {/* Add role (ops only) */}
+            {isOp && policy?.policy && (
               <div className="bg-bg border border-border rounded-lg p-4 space-y-3">
                 <label className="block text-xs text-fg-dim uppercase tracking-wide">Auto-assign role by credential</label>
 

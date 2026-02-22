@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useStore } from '../store';
-import { setTopic as sendTopic, getNick } from '../irc/client';
+import { setTopic as sendTopic } from '../irc/client';
 
 interface TopBarProps {
   onToggleSidebar?: () => void;
@@ -20,9 +20,6 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
   const isChannel = activeChannel !== 'server' && activeChannel.startsWith('#');
   const isDM = activeChannel !== 'server' && !activeChannel.startsWith('#');
   const setChannelSettings = useStore((s) => s.setChannelSettingsOpen);
-  const myNick = getNick();
-  const myMember = ch?.members.get(myNick.toLowerCase());
-  const isOp = myMember?.isOp ?? false;
 
   const startEdit = () => {
     setTopicDraft(topic);
@@ -88,8 +85,8 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
         )}
       </div>
 
-      {/* Settings gear (ops only) */}
-      {isChannel && isOp && (
+      {/* Settings gear */}
+      {isChannel && (
         <button
           onClick={() => setChannelSettings(ch?.name || activeChannel)}
           className="text-fg-dim hover:text-fg-muted p-1.5 rounded-lg hover:bg-bg-tertiary transition-colors"
