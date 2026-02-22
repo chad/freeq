@@ -815,8 +815,12 @@ fn oauth_result_page(message: &str, result: Option<&crate::server::OAuthResult>)
         let json = serde_json::to_string(r).unwrap_or_default();
         format!(
             r#"<script>
-            // Store result in localStorage (used by polling fallback and Tauri redirect)
-            try {{ localStorage.setItem('freeq-oauth-result', JSON.stringify({json})); }} catch(e) {{}}
+            // Store result in localStorage with timestamp (used by polling fallback and Tauri redirect)
+            try {{
+                var resultWithTs = {json};
+                resultWithTs._ts = Date.now();
+                localStorage.setItem('freeq-oauth-result', JSON.stringify(resultWithTs));
+            }} catch(e) {{}}
             // BroadcastChannel delivers result to main window (works cross-origin)
             try {{
                 const bc = new BroadcastChannel('freeq-oauth');

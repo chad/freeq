@@ -85,7 +85,11 @@ export function ConnectScreen() {
     localStorage.removeItem('freeq-oauth-result');
     localStorage.removeItem('freeq-oauth-pending');
     try {
-      const result = JSON.parse(raw) as OAuthResultData;
+      const result = JSON.parse(raw) as OAuthResultData & { _ts?: number };
+      // Reject stale OAuth results (>5 minutes old) — prevents auto-connect
+      // with consumed web-tokens from previous sessions
+      const age = result._ts ? Date.now() - result._ts : Infinity;
+      if (age > 5 * 60 * 1000) return;
       if (result?.did) {
         setAutoConnecting(true);
         const h = localStorage.getItem(LS_HANDLE) || result.handle || '';
