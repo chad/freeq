@@ -95,20 +95,26 @@ export function JoinGateModal() {
   };
 
   const handleVerify = (url: string) => {
-    // Build full URL with subject_did
     let fullUrl = url;
+    // Make relative URLs absolute
     if (!fullUrl.startsWith('http')) {
       fullUrl = `${window.location.origin}${fullUrl}`;
+    }
+    // Replace relative callback with absolute (the check endpoint returns relative paths)
+    const absoluteCallback = `${window.location.origin}/api/v1/credentials/present`;
+    fullUrl = fullUrl.replace(
+      /callback=[^&]*/,
+      `callback=${encodeURIComponent(absoluteCallback)}`
+    );
+    // Add callback if not present at all
+    if (!fullUrl.includes('callback')) {
+      const sep = fullUrl.includes('?') ? '&' : '?';
+      fullUrl += `${sep}callback=${encodeURIComponent(absoluteCallback)}`;
     }
     // Add subject_did if not already in the URL
     if (!fullUrl.includes('subject_did') && authDid) {
       const sep = fullUrl.includes('?') ? '&' : '?';
       fullUrl += `${sep}subject_did=${encodeURIComponent(authDid)}`;
-    }
-    // Add callback
-    if (!fullUrl.includes('callback')) {
-      const sep = fullUrl.includes('?') ? '&' : '?';
-      fullUrl += `${sep}callback=${encodeURIComponent(window.location.origin + '/api/v1/credentials/present')}`;
     }
     window.open(fullUrl, 'freeq-verify', 'width=600,height=700');
   };

@@ -354,13 +354,30 @@ async fn issue_credential(
 
     // POST credential to callback URL
     let callback_result = if !pending.callback_url.is_empty() {
-        http.post(&pending.callback_url)
+        tracing::info!(callback_url = %pending.callback_url, "POSTing credential to callback");
+        match http.post(&pending.callback_url)
             .json(&serde_json::json!({ "credential": vc }))
             .send()
             .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
+        {
+            Ok(r) => {
+                let status = r.status();
+                let body = r.text().await.unwrap_or_default();
+                if status.is_success() {
+                    tracing::info!("Credential callback succeeded");
+                    true
+                } else {
+                    tracing::warn!(status = %status, body = %body, "Credential callback failed");
+                    false
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Credential callback request failed");
+                false
+            }
+        }
     } else {
+        tracing::warn!("No callback URL — credential not auto-delivered");
         false
     };
 
