@@ -172,6 +172,9 @@ class AppState: ObservableObject {
 
     func sendMessage(target: String, text: String) {
         guard !text.isEmpty else { return }
+        // Clear typing indicator for remote users
+        sendRaw("@+typing=done TAGMSG \(target)")
+        lastTypingSent = .distantPast
 
         // Check for edit mode
         if let editing = editingMessage {

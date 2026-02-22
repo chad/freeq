@@ -37,9 +37,13 @@ struct PhotoPickerButton: View {
         uploading = true
         Task {
             guard let data = try? await item.loadTransferable(type: Data.self) else {
-                await MainActor.run { uploading = false }
+                await MainActor.run {
+                    uploading = false
+                    appState.errorMessage = "Failed to load photo data"
+                }
                 return
             }
+            print("[Upload] Photo data loaded: \(data.count) bytes")
 
             let did = appState.authenticatedDID ?? ""
             let serverBase = appState.serverAddress.contains("freeq.at")
@@ -73,8 +77,11 @@ struct PhotoPickerButton: View {
             request.httpBody = body
 
             do {
+                print("[Upload] Sending to \(serverBase)/api/v1/upload, DID=\(did), channel=\(channel)")
                 let (responseData, response) = try await URLSession.shared.data(for: request)
                 let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+                let responseText = String(data: responseData, encoding: .utf8) ?? ""
+                print("[Upload] Response: HTTP \(statusCode), body=\(responseText.prefix(200))")
 
                 if statusCode == 200 {
                     let json = try JSONSerialization.jsonObject(with: responseData) as? [String: Any]
@@ -85,10 +92,11 @@ struct PhotoPickerButton: View {
                     }
                 } else {
                     await MainActor.run {
-                        appState.errorMessage = "Upload failed (HTTP \(statusCode))"
+                        appState.errorMessage = "Upload failed (HTTP \(statusCode)): \(responseText.prefix(100))"
                     }
                 }
             } catch {
+                print("[Upload] Error: \(error)")
                 await MainActor.run {
                     appState.errorMessage = "Upload failed: \(error.localizedDescription)"
                 }
