@@ -138,20 +138,17 @@ struct ChatRow: View {
     var body: some View {
         HStack(spacing: 12) {
             // Avatar / Icon
-            ZStack {
-                Circle()
-                    .fill(isChannel ? Theme.accent.opacity(0.15) : Theme.bgTertiary)
-                    .frame(width: 50, height: 50)
-
-                if isChannel {
+            if isChannel {
+                ZStack {
+                    Circle()
+                        .fill(Theme.accent.opacity(0.15))
+                        .frame(width: 50, height: 50)
                     Text("#")
                         .font(.system(size: 22, weight: .bold, design: .rounded))
                         .foregroundColor(Theme.accent)
-                } else {
-                    Text(String(conversation.name.prefix(1)).uppercased())
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundColor(Theme.textSecondary)
                 }
+            } else {
+                UserAvatar(nick: conversation.name, size: 50)
             }
 
             // Content

@@ -1,75 +1,160 @@
 import SwiftUI
 import PhotosUI
 
-/// Photo picker + upload flow for AT-authenticated users.
+/// Photo picker button — opens picker, stages image for preview before send.
 struct PhotoPickerButton: View {
     @EnvironmentObject var appState: AppState
     @State private var selectedItem: PhotosPickerItem? = nil
-    @State private var uploading = false
+    @State private var stagedImage: UIImage? = nil
+    @State private var stagedData: Data? = nil
+    @State private var showingPreview = false
 
     let channel: String
 
     var body: some View {
-        if appState.authenticatedDID != nil {
-            PhotosPicker(selection: $selectedItem, matching: .images) {
-                Image(systemName: "photo.on.rectangle.angled")
-                    .font(.system(size: 20))
-                    .foregroundColor(uploading ? Theme.textMuted : Theme.accent)
+        PhotosPicker(selection: $selectedItem, matching: .images) {
+            Image(systemName: "photo.on.rectangle.angled")
+                .font(.system(size: 20))
+                .foregroundColor(Theme.accent)
+        }
+        .onChange(of: selectedItem) {
+            if let item = selectedItem {
+                loadPhoto(item)
+                selectedItem = nil
             }
-            .disabled(uploading)
-            .onChange(of: selectedItem) {
-                if let item = selectedItem {
-                    uploadPhoto(item)
-                    selectedItem = nil
-                }
-            }
-            .overlay {
-                if uploading {
-                    ProgressView()
-                        .scaleEffect(0.6)
-                        .tint(Theme.accent)
-                }
+        }
+        .sheet(isPresented: $showingPreview) {
+            if let image = stagedImage, let data = stagedData {
+                ImagePreviewSheet(
+                    image: image,
+                    imageData: data,
+                    channel: channel
+                )
             }
         }
     }
 
-    private func uploadPhoto(_ item: PhotosPickerItem) {
-        uploading = true
+    private func loadPhoto(_ item: PhotosPickerItem) {
         Task {
-            guard let data = try? await item.loadTransferable(type: Data.self) else {
-                await MainActor.run {
-                    uploading = false
-                    appState.errorMessage = "Failed to load photo data"
-                }
-                return
+            guard let data = try? await item.loadTransferable(type: Data.self) else { return }
+            guard let uiImage = UIImage(data: data) else { return }
+            await MainActor.run {
+                stagedImage = uiImage
+                stagedData = data
+                showingPreview = true
             }
-            print("[Upload] Photo data loaded: \(data.count) bytes")
+        }
+    }
+}
 
+/// Preview sheet — shows the image with optional caption, upload progress, and send button.
+struct ImagePreviewSheet: View {
+    @EnvironmentObject var appState: AppState
+    @Environment(\.dismiss) var dismiss
+    let image: UIImage
+    let imageData: Data
+    let channel: String
+
+    @State private var caption: String = ""
+    @State private var uploading = false
+    @State private var uploadProgress: String = ""
+    @FocusState private var captionFocused: Bool
+
+    var body: some View {
+        NavigationView {
+            ZStack {
+                Theme.bgPrimary.ignoresSafeArea()
+
+                VStack(spacing: 0) {
+                    // Image preview
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxHeight: 400)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .padding(16)
+
+                    Spacer()
+
+                    // Caption input + send
+                    VStack(spacing: 0) {
+                        Rectangle().fill(Theme.border).frame(height: 1)
+
+                        if uploading {
+                            HStack(spacing: 12) {
+                                ProgressView()
+                                    .tint(Theme.accent)
+                                Text(uploadProgress.isEmpty ? "Uploading..." : uploadProgress)
+                                    .font(.system(size: 14))
+                                    .foregroundColor(Theme.textSecondary)
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 16)
+                            .background(Theme.bgSecondary)
+                        } else {
+                            HStack(alignment: .bottom, spacing: 10) {
+                                TextField("Add a caption...", text: $caption, axis: .vertical)
+                                    .foregroundColor(Theme.textPrimary)
+                                    .font(.system(size: 16))
+                                    .lineLimit(1...4)
+                                    .focused($captionFocused)
+                                    .tint(Theme.accent)
+
+                                Button(action: upload) {
+                                    ZStack {
+                                        Circle()
+                                            .fill(Theme.accent)
+                                            .frame(width: 36, height: 36)
+                                        Image(systemName: "arrow.up")
+                                            .font(.system(size: 15, weight: .bold))
+                                            .foregroundColor(.white)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                            .background(Theme.bgSecondary)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Send Photo")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarBackground(Theme.bgSecondary, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .foregroundColor(Theme.accent)
+                        .disabled(uploading)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+        .interactiveDismissDisabled(uploading)
+    }
+
+    private func upload() {
+        uploading = true
+        uploadProgress = "Uploading \(ByteCountFormatter.string(fromByteCount: Int64(imageData.count), countStyle: .file))..."
+
+        Task {
             let did = appState.authenticatedDID ?? ""
-            let serverBase = appState.serverAddress.contains("freeq.at")
-                ? "https://irc.freeq.at"
-                : "http://127.0.0.1:8080"
+            let serverBase = "https://irc.freeq.at"
 
             let boundary = UUID().uuidString
             var body = Data()
 
-            // DID field
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"did\"\r\n\r\n".data(using: .utf8)!)
-            body.append("\(did)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"did\"\r\n\r\n\(did)\r\n".data(using: .utf8)!)
 
-            // Channel field
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"channel\"\r\n\r\n".data(using: .utf8)!)
-            body.append("\(channel)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"channel\"\r\n\r\n\(channel)\r\n".data(using: .utf8)!)
 
-            // File field
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"file\"; filename=\"photo.jpg\"\r\n".data(using: .utf8)!)
-            body.append("Content-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
-            body.append(data)
-            body.append("\r\n".data(using: .utf8)!)
-            body.append("--\(boundary)--\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"file\"; filename=\"photo.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n".data(using: .utf8)!)
+            body.append(imageData)
+            body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
 
             var request = URLRequest(url: URL(string: "\(serverBase)/api/v1/upload")!)
             request.httpMethod = "POST"
@@ -77,32 +162,37 @@ struct PhotoPickerButton: View {
             request.httpBody = body
 
             do {
-                print("[Upload] Sending to \(serverBase)/api/v1/upload, DID=\(did), channel=\(channel)")
                 let (responseData, response) = try await URLSession.shared.data(for: request)
                 let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-                let responseText = String(data: responseData, encoding: .utf8) ?? ""
-                print("[Upload] Response: HTTP \(statusCode), body=\(responseText.prefix(200))")
 
                 if statusCode == 200 {
                     let json = try JSONSerialization.jsonObject(with: responseData) as? [String: Any]
                     if let url = json?["url"] as? String {
                         await MainActor.run {
-                            appState.sendMessage(target: channel, text: url)
+                            // Send image URL, then caption if provided
+                            let text = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if text.isEmpty {
+                                appState.sendMessage(target: channel, text: url)
+                            } else {
+                                appState.sendMessage(target: channel, text: "\(url) \(text)")
+                            }
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            dismiss()
                         }
                     }
                 } else {
+                    let responseText = String(data: responseData, encoding: .utf8) ?? ""
                     await MainActor.run {
-                        appState.errorMessage = "Upload failed (HTTP \(statusCode)): \(responseText.prefix(100))"
+                        uploading = false
+                        uploadProgress = "Failed: \(responseText.prefix(80))"
                     }
                 }
             } catch {
-                print("[Upload] Error: \(error)")
                 await MainActor.run {
-                    appState.errorMessage = "Upload failed: \(error.localizedDescription)"
+                    uploading = false
+                    uploadProgress = "Error: \(error.localizedDescription)"
                 }
             }
-
-            await MainActor.run { uploading = false }
         }
     }
 }

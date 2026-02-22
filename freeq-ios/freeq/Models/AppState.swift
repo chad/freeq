@@ -385,6 +385,11 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
         case .names(let channel, let members):
             let ch = state.getOrCreateChannel(channel)
             ch.members = members.map { MemberInfo(nick: $0.nick, isOp: $0.isOp, isVoiced: $0.isVoiced) }
+            // Prefetch avatars for all channel members
+            let nicks = members.map { $0.nick }
+            Task { @MainActor in
+                AvatarCache.shared.prefetchAll(nicks)
+            }
 
         case .topicChanged(let channel, let topic):
             let ch = state.getOrCreateChannel(channel)

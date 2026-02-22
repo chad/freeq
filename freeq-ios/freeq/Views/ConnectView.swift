@@ -105,6 +105,7 @@ struct ConnectView: View {
                                     RoundedRectangle(cornerRadius: 10)
                                         .stroke(handleFocused ? Theme.accent : Theme.border, lineWidth: 1)
                                 )
+                                .id("handleField")
                             }
 
                             // Error

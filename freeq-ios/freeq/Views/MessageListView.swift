@@ -262,14 +262,7 @@ struct MessageListView: View {
             if showHeader {
                 HStack(alignment: .top, spacing: 12) {
                     // Avatar
-                    ZStack {
-                        Circle()
-                            .fill(Theme.nickColor(for: msg.from).opacity(0.2))
-                            .frame(width: 40, height: 40)
-                        Text(String(msg.from.prefix(1)).uppercased())
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundColor(Theme.nickColor(for: msg.from))
-                    }
+                    UserAvatar(nick: msg.from, size: 40)
 
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
