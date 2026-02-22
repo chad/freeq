@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MemberListView: View {
     @ObservedObject var channel: ChannelState
+    @State private var profileNick: String? = nil
 
     private var ops: [MemberInfo] {
         channel.members.filter { $0.isOp }.sorted { $0.nick.lowercased() < $1.nick.lowercased() }
@@ -56,6 +57,14 @@ struct MemberListView: View {
                 .frame(width: 1),
             alignment: .leading
         )
+        .sheet(item: Binding(
+            get: { profileNick.map { ProfileTarget(nick: $0) } },
+            set: { profileNick = $0?.nick }
+        )) { target in
+            UserProfileSheet(nick: target.nick)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
     }
 
     private func memberSection(_ title: String, members: [MemberInfo]) -> some View {
@@ -75,46 +84,48 @@ struct MemberListView: View {
     }
 
     private func memberRow(_ member: MemberInfo) -> some View {
-        HStack(spacing: 10) {
-            // Avatar
-            ZStack {
-                Circle()
-                    .fill(Theme.nickColor(for: member.nick).opacity(0.2))
-                    .frame(width: 32, height: 32)
-                Text(String(member.nick.prefix(1)).uppercased())
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundColor(Theme.nickColor(for: member.nick))
-            }
-            .overlay(
-                // Presence dot
-                Circle()
-                    .fill(Theme.success)
-                    .frame(width: 10, height: 10)
+        Button(action: { profileNick = member.nick }) {
+            HStack(spacing: 10) {
+                // Avatar with presence dot
+                UserAvatar(nick: member.nick, size: 32)
                     .overlay(
                         Circle()
-                            .stroke(Theme.bgSecondary, lineWidth: 2)
+                            .fill(Theme.success)
+                            .frame(width: 10, height: 10)
+                            .overlay(
+                                Circle()
+                                    .stroke(Theme.bgSecondary, lineWidth: 2)
+                            )
+                            .offset(x: 2, y: 2),
+                        alignment: .bottomTrailing
                     )
-                    .offset(x: 2, y: 2),
-                alignment: .bottomTrailing
-            )
 
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 4) {
-                    if member.isOp {
-                        Image(systemName: "shield.fill")
-                            .font(.system(size: 9))
-                            .foregroundColor(Theme.warning)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 4) {
+                        if member.isOp {
+                            Image(systemName: "shield.fill")
+                                .font(.system(size: 9))
+                                .foregroundColor(Theme.warning)
+                        }
+                        Text(member.nick)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(Theme.textPrimary)
+                            .lineLimit(1)
                     }
-                    Text(member.nick)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(Theme.textPrimary)
-                        .lineLimit(1)
                 }
-            }
 
-            Spacer()
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 5)
+        .buttonStyle(.plain)
     }
+}
+
+// Helper for sheet binding
+private struct ProfileTarget: Identifiable {
+    let nick: String
+    var id: String { nick }
 }

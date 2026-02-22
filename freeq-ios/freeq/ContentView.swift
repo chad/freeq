@@ -12,6 +12,6 @@ struct ContentView: View {
                 MainTabView()
             }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(appState.isDarkTheme ? .dark : .light)
     }
 }

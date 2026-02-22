@@ -4,6 +4,8 @@ struct MessageListView: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var channel: ChannelState
     @State private var emojiPickerMessage: ChatMessage? = nil
+    @State private var profileNick: String? = nil
+    @StateObject private var avatarCache = AvatarCache.shared
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -87,6 +89,14 @@ struct MessageListView: View {
         .sheet(item: $emojiPickerMessage) { msg in
             EmojiPickerSheet(message: msg, channel: channel.name)
                 .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(item: Binding(
+            get: { profileNick.map { ProfileNickTarget(nick: $0) } },
+            set: { profileNick = $0?.nick }
+        )) { target in
+            UserProfileSheet(nick: target.nick)
+                .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
     }
@@ -266,9 +276,19 @@ struct MessageListView: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Text(msg.from)
-                                .font(.system(size: 15, weight: .bold))
-                                .foregroundColor(Theme.nickColor(for: msg.from))
+                            Button(action: { profileNick = msg.from }) {
+                                HStack(spacing: 4) {
+                                    Text(msg.from)
+                                        .font(.system(size: 15, weight: .bold))
+                                        .foregroundColor(Theme.nickColor(for: msg.from))
+
+                                    // Verified badge — shown if we have a cached avatar (means Bluesky profile found)
+                                    if avatarCache.avatarURL(for: msg.from.lowercased()) != nil {
+                                        VerifiedBadge(size: 12)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
 
                             Text(formatTime(msg.timestamp))
                                 .font(.system(size: 11))
@@ -590,4 +610,10 @@ struct EmojiPickerSheet: View {
         .background(Theme.bgPrimary)
         .preferredColorScheme(.dark)
     }
+}
+
+// Helper for profile sheet binding
+private struct ProfileNickTarget: Identifiable {
+    let nick: String
+    var id: String { nick }
 }

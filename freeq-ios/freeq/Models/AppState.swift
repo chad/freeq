@@ -96,6 +96,12 @@ class AppState: ObservableObject {
     /// Pending web-token for SASL auth (from AT Protocol OAuth)
     var pendingWebToken: String? = nil
 
+    /// Read position tracking — channel name -> last read message ID
+    @Published var lastReadMessageIds: [String: String] = [:]
+
+    /// Theme
+    @Published var isDarkTheme: Bool = true
+
     private var client: FreeqClient? = nil
     private var typingTimer: Timer? = nil
     private var lastTypingSent: Date = .distantPast
@@ -117,6 +123,10 @@ class AppState: ObservableObject {
         if let savedChannels = UserDefaults.standard.stringArray(forKey: "freeq.channels") {
             autoJoinChannels = savedChannels
         }
+        if let savedReadPositions = UserDefaults.standard.dictionary(forKey: "freeq.readPositions") as? [String: String] {
+            lastReadMessageIds = savedReadPositions
+        }
+        isDarkTheme = UserDefaults.standard.object(forKey: "freeq.darkTheme") as? Bool ?? true
 
         // Prune stale typing indicators every 3 seconds
         Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
@@ -232,6 +242,17 @@ class AppState: ObservableObject {
 
     func markRead(_ channel: String) {
         unreadCounts[channel] = 0
+        // Persist last-read message ID
+        if let state = channels.first(where: { $0.name == channel }) ?? dmBuffers.first(where: { $0.name == channel }),
+           let lastMsg = state.messages.last {
+            lastReadMessageIds[channel] = lastMsg.id
+            UserDefaults.standard.set(lastReadMessageIds, forKey: "freeq.readPositions")
+        }
+    }
+
+    func toggleTheme() {
+        isDarkTheme.toggle()
+        UserDefaults.standard.set(isDarkTheme, forKey: "freeq.darkTheme")
     }
 
     func incrementUnread(_ channel: String) {

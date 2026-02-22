@@ -4,12 +4,39 @@ struct ComposeView: View {
     @EnvironmentObject var appState: AppState
     @State private var text: String = ""
     @FocusState private var isFocused: Bool
+    @State private var completions: [String] = []
 
     var body: some View {
         VStack(spacing: 0) {
             Rectangle()
                 .fill(Theme.border)
                 .frame(height: 1)
+
+            // Nick autocomplete suggestions
+            if !completions.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(completions, id: \.self) { nick in
+                            Button(action: { applyCompletion(nick) }) {
+                                HStack(spacing: 4) {
+                                    UserAvatar(nick: nick, size: 20)
+                                    Text(nick)
+                                        .font(.system(size: 13, weight: .medium))
+                                        .foregroundColor(Theme.textPrimary)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Theme.bgTertiary)
+                                .cornerRadius(16)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                }
+                .background(Theme.bgSecondary)
+            }
 
             // Reply / Edit context bar
             if let reply = appState.replyingTo {
@@ -36,7 +63,7 @@ struct ComposeView: View {
 
             HStack(alignment: .bottom, spacing: 10) {
                 HStack(alignment: .bottom, spacing: 8) {
-                    // Photo upload (AT-authenticated only) or placeholder
+                    // Photo upload (AT-authenticated only)
                     if appState.authenticatedDID != nil, let target = appState.activeChannel {
                         PhotoPickerButton(channel: target)
                     } else {
@@ -59,6 +86,7 @@ struct ComposeView: View {
                     .onSubmit { send() }
                     .tint(Theme.accent)
                     .onChange(of: text) {
+                        updateCompletions()
                         if let target = appState.activeChannel, !text.isEmpty {
                             appState.sendTyping(target: target)
                         }
@@ -87,6 +115,37 @@ struct ComposeView: View {
             .padding(.vertical, 10)
             .background(Theme.bgSecondary)
         }
+    }
+
+    // MARK: - Nick Autocomplete
+
+    private func updateCompletions() {
+        // Check if the user is typing @someone
+        guard let lastWord = text.split(separator: " ").last,
+              lastWord.hasPrefix("@"),
+              lastWord.count > 1 else {
+            completions = []
+            return
+        }
+
+        let prefix = String(lastWord.dropFirst()).lowercased()
+        let members = appState.activeChannelState?.members ?? []
+        completions = members
+            .map { $0.nick }
+            .filter { $0.lowercased().hasPrefix(prefix) && $0.lowercased() != appState.nick.lowercased() }
+            .sorted()
+            .prefix(5)
+            .map { String($0) }
+    }
+
+    private func applyCompletion(_ nick: String) {
+        // Replace the @partial with @nick
+        var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+        if let lastIdx = words.indices.last, words[lastIdx].hasPrefix("@") {
+            words[lastIdx] = "@\(nick)"
+        }
+        text = words.joined(separator: " ") + " "
+        completions = []
     }
 
     private var canSend: Bool {
@@ -139,6 +198,8 @@ struct ComposeView: View {
     private func send() {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let target = appState.activeChannel else { return }
+
+        completions = []
 
         if trimmed.hasPrefix("/") {
             handleCommand(trimmed)

@@ -1,31 +1,32 @@
 import SwiftUI
 
-/// Centralized color palette matching the web app's dark theme.
+/// Centralized color palette — supports dark and light themes.
+/// Uses adaptive colors that respond to SwiftUI's colorScheme.
 enum Theme {
     // Backgrounds
-    static let bgPrimary = Color(hex: "1a1a2e")
-    static let bgSecondary = Color(hex: "16162a")
-    static let bgTertiary = Color(hex: "222240")
-    static let bgHover = Color(hex: "2a2a4a")
+    static let bgPrimary = Color("bgPrimary")
+    static let bgSecondary = Color("bgSecondary")
+    static let bgTertiary = Color("bgTertiary")
+    static let bgHover = Color("bgHover")
 
     // Text
-    static let textPrimary = Color(hex: "e8e8f0")
-    static let textSecondary = Color(hex: "8888aa")
-    static let textMuted = Color(hex: "666688")
+    static let textPrimary = Color("textPrimary")
+    static let textSecondary = Color("textSecondary")
+    static let textMuted = Color("textMuted")
 
-    // Accent
+    // Accent — same in both themes
     static let accent = Color(hex: "6c63ff")
     static let accentLight = Color(hex: "8b83ff")
 
-    // Status
+    // Status — same in both themes
     static let success = Color(hex: "43b581")
     static let warning = Color(hex: "faa61a")
     static let danger = Color(hex: "f04747")
 
     // Borders
-    static let border = Color(hex: "2a2a4a")
+    static let border = Color("border")
 
-    // Nick colors (deterministic by name)
+    // Nick colors (deterministic by name) — same in both themes
     static let nickColors: [Color] = [
         Color(hex: "6c63ff"),
         Color(hex: "43b581"),
@@ -43,6 +44,11 @@ enum Theme {
         let hash = nick.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
         return nickColors[abs(hash) % nickColors.count]
     }
+
+    // Fallback hex-based colors for when asset catalog isn't loaded yet
+    // These match the dark theme (the primary theme).
+    static let bgPrimaryHex = Color(hex: "1a1a2e")
+    static let bgSecondaryHex = Color(hex: "16162a")
 }
 
 extension Color {

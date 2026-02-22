@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// Settings — account info, connection, about.
 struct SettingsTab: View {
     @EnvironmentObject var appState: AppState
 
@@ -10,56 +9,65 @@ struct SettingsTab: View {
                 Theme.bgPrimary.ignoresSafeArea()
 
                 List {
-                    // Account section
+                    // Account
                     Section {
-                        HStack(spacing: 14) {
-                            // Avatar
-                            ZStack {
-                                Circle()
-                                    .fill(Theme.accent.opacity(0.15))
-                                    .frame(width: 56, height: 56)
+                        HStack(spacing: 12) {
+                            UserAvatar(nick: appState.nick, size: 48)
 
-                                Text(String(appState.nick.prefix(1)).uppercased())
-                                    .font(.system(size: 24, weight: .semibold))
-                                    .foregroundColor(Theme.accent)
-                            }
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(spacing: 5) {
+                                    Text(appState.nick)
+                                        .font(.system(size: 17, weight: .semibold))
+                                        .foregroundColor(Theme.textPrimary)
 
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(appState.nick)
-                                    .font(.system(size: 18, weight: .semibold))
-                                    .foregroundColor(Theme.textPrimary)
+                                    if appState.authenticatedDID != nil {
+                                        VerifiedBadge(size: 14)
+                                    }
+                                }
 
                                 if let did = appState.authenticatedDID {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "checkmark.seal.fill")
-                                            .font(.system(size: 12))
-                                            .foregroundColor(Theme.accent)
-                                        Text("Verified")
-                                            .font(.system(size: 13))
-                                            .foregroundColor(Theme.accent)
-                                    }
+                                    Text(did)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundColor(Theme.textMuted)
+                                        .lineLimit(1)
                                 } else {
                                     Text("Guest")
                                         .font(.system(size: 13))
-                                        .foregroundColor(Theme.textMuted)
+                                        .foregroundColor(Theme.textSecondary)
                                 }
                             }
-
-                            Spacer()
                         }
-                        .padding(.vertical, 4)
                         .listRowBackground(Theme.bgSecondary)
+                    } header: {
+                        Text("Account")
+                            .foregroundColor(Theme.textMuted)
+                    }
+
+                    // Appearance
+                    Section {
+                        Toggle(isOn: Binding(
+                            get: { !appState.isDarkTheme },
+                            set: { _ in appState.toggleTheme() }
+                        )) {
+                            Label("Light Theme", systemImage: "sun.max.fill")
+                                .foregroundColor(Theme.textPrimary)
+                        }
+                        .tint(Theme.accent)
+                        .listRowBackground(Theme.bgSecondary)
+                    } header: {
+                        Text("Appearance")
+                            .foregroundColor(Theme.textMuted)
                     }
 
                     // Connection
-                    Section("Connection") {
+                    Section {
                         HStack {
                             Label("Server", systemImage: "server.rack")
                                 .foregroundColor(Theme.textPrimary)
                             Spacer()
                             Text(appState.serverAddress)
                                 .font(.system(size: 14))
-                                .foregroundColor(Theme.textMuted)
+                                .foregroundColor(Theme.textSecondary)
                         }
                         .listRowBackground(Theme.bgSecondary)
 
@@ -73,7 +81,7 @@ struct SettingsTab: View {
                                     .frame(width: 8, height: 8)
                                 Text(statusText)
                                     .font(.system(size: 14))
-                                    .foregroundColor(Theme.textMuted)
+                                    .foregroundColor(Theme.textSecondary)
                             }
                         }
                         .listRowBackground(Theme.bgSecondary)
@@ -84,20 +92,23 @@ struct SettingsTab: View {
                             Spacer()
                             Text("\(appState.channels.count)")
                                 .font(.system(size: 14))
-                                .foregroundColor(Theme.textMuted)
+                                .foregroundColor(Theme.textSecondary)
                         }
                         .listRowBackground(Theme.bgSecondary)
+                    } header: {
+                        Text("Connection")
+                            .foregroundColor(Theme.textMuted)
                     }
 
                     // About
-                    Section("About") {
+                    Section {
                         HStack {
                             Label("Version", systemImage: "info.circle")
                                 .foregroundColor(Theme.textPrimary)
                             Spacer()
                             Text("1.0.0")
                                 .font(.system(size: 14))
-                                .foregroundColor(Theme.textMuted)
+                                .foregroundColor(Theme.textSecondary)
                         }
                         .listRowBackground(Theme.bgSecondary)
 
@@ -124,13 +135,14 @@ struct SettingsTab: View {
                             }
                         }
                         .listRowBackground(Theme.bgSecondary)
+                    } header: {
+                        Text("About")
+                            .foregroundColor(Theme.textMuted)
                     }
 
                     // Disconnect
                     Section {
-                        Button(action: {
-                            appState.disconnect()
-                        }) {
+                        Button(action: { appState.disconnect() }) {
                             HStack {
                                 Spacer()
                                 Text("Disconnect")
@@ -154,9 +166,9 @@ struct SettingsTab: View {
 
     private var statusColor: Color {
         switch appState.connectionState {
-        case .registered: return .green
-        case .connected, .connecting: return .yellow
-        case .disconnected: return .red
+        case .registered: return Theme.success
+        case .connected, .connecting: return Theme.warning
+        case .disconnected: return Theme.danger
         }
     }
 
