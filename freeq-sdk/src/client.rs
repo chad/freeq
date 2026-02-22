@@ -576,11 +576,25 @@ where
                         }
                         "AUTHENTICATE" => {
                             if let Some(ref token) = web_token {
-                                // WEB-TOKEN SASL: server sends "+", we reply with base64(token)
+                                // Web-token SASL: server sends challenge, we respond with JSON
+                                // containing method:"web-token" and the token as signature.
+                                // The DID is extracted by the server from the token lookup.
                                 let payload = msg.params.first().map(|s| s.as_str()).unwrap_or("");
-                                if payload == "+" {
+                                if payload == "+" || !payload.is_empty() {
+                                    // For web-token, we need the DID from the token lookup.
+                                    // Send a JSON response matching ChallengeResponse format.
+                                    // The DID comes from the server's token store, but we need
+                                    // to send *something* — use a placeholder that matches.
+                                    // Actually, we need the DID. Extract from config or just
+                                    // send with empty DID — server validates via token lookup.
+                                    let response = serde_json::json!({
+                                        "did": "", // Server fills from token lookup
+                                        "method": "web-token",
+                                        "signature": token,
+                                    });
                                     use base64::Engine;
-                                    let encoded = base64::engine::general_purpose::STANDARD.encode(token.as_bytes());
+                                    let json_bytes = response.to_string();
+                                    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json_bytes.as_bytes());
                                     writer.write_all(format!("AUTHENTICATE {encoded}\r\n").as_bytes()).await?;
                                 }
                             } else if let Some(ref signer) = signer {
@@ -907,11 +921,9 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
             let caps = msg.params.last().map(|s| s.as_str()).unwrap_or("");
             if caps.contains("sasl") {
                 *sasl_in_progress = true;
-                if web_token.is_some() {
-                    writer.write_all(b"AUTHENTICATE WEB-TOKEN\r\n").await?;
-                } else {
-                    writer.write_all(b"AUTHENTICATE ATPROTO-CHALLENGE\r\n").await?;
-                }
+                // Both web-token and ATPROTO-CHALLENGE use the same SASL mechanism;
+                // the method field in the JSON payload distinguishes them.
+                writer.write_all(b"AUTHENTICATE ATPROTO-CHALLENGE\r\n").await?;
             } else {
                 writer.write_all(b"CAP END\r\n").await?;
             }

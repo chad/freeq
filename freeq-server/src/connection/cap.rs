@@ -155,10 +155,11 @@ pub(super) async fn handle_authenticate(
                 if let Some((did, _handle, created)) = tokens.remove(&response.signature) {
                     // One-time use: token is consumed on first successful auth.
                     // Reusable tokens caused ghost loops (reconnect → ghost → reconnect).
-                    if created.elapsed() < std::time::Duration::from_secs(300) && did == response.did {
+                    if created.elapsed() < std::time::Duration::from_secs(300) {
+                        // DID comes from the token store — no need to trust the client's DID field.
                         Some(Ok(did))
                     } else {
-                        Some(Err("Web auth token expired or DID mismatch".to_string()))
+                        Some(Err("Web auth token expired".to_string()))
                     }
                 } else {
                     Some(Err("Invalid web auth token".to_string()))
