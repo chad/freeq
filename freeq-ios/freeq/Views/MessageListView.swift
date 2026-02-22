@@ -510,9 +510,17 @@ struct MessageListView: View {
     // MARK: - URL Detection
 
     private func extractImageURL(_ text: String) -> URL? {
-        let pattern = #"https?://\S+\.(?:png|jpg|jpeg|gif|webp)(?:\?\S*)?"#
-        guard let range = text.range(of: pattern, options: .regularExpression) else { return nil }
-        return URL(string: String(text[range]))
+        // Match explicit image file extensions
+        let extPattern = #"https?://\S+\.(?:png|jpg|jpeg|gif|webp)(?:\?\S*)?"#
+        if let range = text.range(of: extPattern, options: .regularExpression) {
+            return URL(string: String(text[range]))
+        }
+        // Match AT Protocol CDN image URLs (cdn.bsky.app/img/...)
+        let cdnPattern = #"https?://cdn\.bsky\.app/img/[^\s<]+"#
+        if let range = text.range(of: cdnPattern, options: .regularExpression) {
+            return URL(string: String(text[range]))
+        }
+        return nil
     }
 
     private func extractURL(_ text: String) -> URL? {

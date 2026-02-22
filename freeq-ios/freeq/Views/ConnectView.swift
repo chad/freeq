@@ -49,10 +49,13 @@ struct ConnectView: View {
                             ZStack {
                                 Circle()
                                     .fill(Theme.accent.opacity(0.15))
-                                    .frame(width: 120, height: 120)
+                                    .frame(width: 140, height: 140)
                                     .blur(radius: 30)
 
-                                FreeqLogo(size: 80)
+                                Image("FreeqLogo")
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 100, height: 100)
                                     .shadow(color: Theme.accent.opacity(0.4), radius: 20)
                             }
 
