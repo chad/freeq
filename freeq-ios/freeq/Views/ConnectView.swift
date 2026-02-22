@@ -34,8 +34,9 @@ struct ConnectView: View {
             }
             .ignoresSafeArea()
 
+            ScrollView {
             VStack(spacing: 0) {
-                Spacer()
+                Spacer(minLength: 40)
 
                 // Logo + tagline
                 VStack(spacing: 16) {
@@ -206,7 +207,7 @@ struct ConnectView: View {
                 }
                 .padding(.top, 12)
 
-                Spacer()
+                Spacer(minLength: 20)
 
                 // Footer
                 Text("Open source · IRC compatible · AT Protocol identity")
@@ -214,7 +215,10 @@ struct ConnectView: View {
                     .foregroundColor(Theme.textMuted)
                     .padding(.bottom, 16)
             }
+            .frame(minHeight: UIScreen.main.bounds.height)
+            }
         }
+        .scrollDismissesKeyboard(.interactively)
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showATLogin) {
             ATLoginSheet()
