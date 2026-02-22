@@ -5,6 +5,7 @@ struct ConnectView: View {
     @State private var nick: String = ""
     @State private var server: String = "irc.freeq.at:6667"
     @FocusState private var nickFocused: Bool
+    @State private var showATLogin = false
 
     var body: some View {
         ZStack {
@@ -173,6 +174,40 @@ struct ConnectView: View {
 
                 Spacer()
 
+                // AT Protocol login
+                VStack(spacing: 8) {
+                    HStack {
+                        Rectangle().fill(Theme.border).frame(height: 1)
+                        Text("or")
+                            .font(.system(size: 12))
+                            .foregroundColor(Theme.textMuted)
+                        Rectangle().fill(Theme.border).frame(height: 1)
+                    }
+                    .padding(.horizontal, 40)
+
+                    Button(action: { showATLogin = true }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "person.badge.key.fill")
+                                .font(.system(size: 14))
+                            Text("Sign in with Bluesky")
+                                .font(.system(size: 15, weight: .medium))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.clear)
+                        .foregroundColor(Theme.accent)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(Theme.accent, lineWidth: 1.5)
+                        )
+                        .cornerRadius(10)
+                    }
+                    .padding(.horizontal, 24)
+                }
+                .padding(.top, 12)
+
+                Spacer()
+
                 // Footer
                 Text("Open source · IRC compatible · AT Protocol identity")
                     .font(.system(size: 11))
@@ -181,5 +216,9 @@ struct ConnectView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $showATLogin) {
+            ATLoginSheet()
+                .presentationDetents([.medium, .large])
+        }
     }
 }

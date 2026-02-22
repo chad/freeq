@@ -111,6 +111,8 @@ pub struct OAuthPending {
     pub token_endpoint: String,
     pub dpop_key_b64: String,
     pub created_at: u64,
+    /// If true, callback redirects to freeq:// custom scheme instead of returning HTML.
+    pub mobile: bool,
 }
 
 /// Completed OAuth: stored after /auth/callback, consumed by the web client.

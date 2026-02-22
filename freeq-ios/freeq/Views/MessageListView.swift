@@ -426,9 +426,9 @@ struct MessageListView: View {
                 YouTubeThumb(videoId: videoId)
             }
         } else if let url = extractURL(msg.text) {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 styledText(msg.text)
-                linkButton(url)
+                LinkPreviewCard(url: url)
             }
         } else {
             styledText(msg.text)

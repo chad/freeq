@@ -545,6 +545,8 @@ fn build_client_id(web_origin: &str, redirect_uri: &str) -> String {
 #[derive(Deserialize)]
 struct AuthLoginQuery {
     handle: String,
+    /// If "1", callback redirects to freeq:// URL scheme for mobile apps.
+    mobile: Option<String>,
 }
 
 /// GET /auth/login?handle=user.bsky.social
@@ -660,6 +662,7 @@ async fn auth_login(
         token_endpoint: token_endpoint.to_string(),
         dpop_key_b64: dpop_key.to_base64url(),
         created_at: now,
+        mobile: q.mobile.as_deref() == Some("1"),
     });
 
     // Redirect to authorization server
@@ -779,7 +782,22 @@ async fn auth_callback(
         created_at: std::time::Instant::now(),
     });
 
-    tracing::info!(did = %pending.did, handle = %pending.handle, "OAuth callback: token obtained, session stored");
+    tracing::info!(did = %pending.did, handle = %pending.handle, mobile = pending.mobile, "OAuth callback: token obtained, session stored");
+
+    // Mobile apps get a redirect to freeq:// custom scheme
+    if pending.mobile {
+        let nick = mobile_nick_from_handle(&pending.handle);
+        let redirect = format!(
+            "freeq://auth?token={}&nick={}&did={}&handle={}",
+            urlencod(result.web_token.as_deref().unwrap_or("")),
+            urlencod(&nick),
+            urlencod(&result.did),
+            urlencod(&result.handle),
+        );
+        return Ok(Html(format!(
+            r#"<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url={redirect}"></head><body><script>window.location.href = "{redirect}";</script><p>Redirecting to freeq app...</p></body></html>"#
+        )));
+    }
 
     // Return HTML page that posts result to parent window
     Ok(Html(oauth_result_page("Authentication successful!", Some(&result))))
@@ -869,6 +887,18 @@ fn generate_random_string(len: usize) -> String {
 fn urlencod(s: &str) -> String {
     use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
     utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
+}
+
+/// Derive an IRC nick from an AT Protocol handle.
+/// Custom domains use the full handle; standard hosting suffixes are stripped.
+fn mobile_nick_from_handle(handle: &str) -> String {
+    let standard_suffixes = [".bsky.social", ".bsky.app", ".bsky.team", ".bsky.network"];
+    for suffix in &standard_suffixes {
+        if let Some(stripped) = handle.strip_suffix(suffix) {
+            return stripped.to_string();
+        }
+    }
+    handle.to_string()
 }
 
 // ── Media upload endpoint ───────────────────────────────────────────

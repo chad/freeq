@@ -36,11 +36,13 @@ struct ComposeView: View {
 
             HStack(alignment: .bottom, spacing: 10) {
                 HStack(alignment: .bottom, spacing: 8) {
-                    // Attachment button
-                    Button(action: {}) {
+                    // Photo upload (AT-authenticated only) or placeholder
+                    if appState.authenticatedDID != nil, let target = appState.activeChannel {
+                        PhotoPickerButton(channel: target)
+                    } else {
                         Image(systemName: "plus.circle.fill")
                             .font(.system(size: 24))
-                            .foregroundColor(Theme.textMuted)
+                            .foregroundColor(Theme.textMuted.opacity(0.5))
                     }
 
                     TextField(

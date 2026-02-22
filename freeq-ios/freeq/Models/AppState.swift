@@ -84,6 +84,8 @@ class AppState: ObservableObject {
     @Published var editingMessage: ChatMessage? = nil
     /// Image lightbox
     @Published var lightboxURL: URL? = nil
+    /// Pending web-token for SASL auth (from AT Protocol OAuth)
+    var pendingWebToken: String? = nil
 
     private var client: FreeqClient? = nil
     private var typingTimer: Timer? = nil
@@ -270,6 +272,16 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
         switch event {
         case .connected:
             state.connectionState = .connected
+            // If we have a web-token, initiate SASL auth
+            if let token = state.pendingWebToken {
+                state.sendRaw("CAP REQ :sasl")
+                state.sendRaw("AUTHENTICATE WEB-TOKEN")
+                // The server will respond with AUTHENTICATE +, then we send the token
+                // For now, send it directly (the SDK handles the flow via raw)
+                let payload = Data(token.utf8).base64EncodedString()
+                state.sendRaw("AUTHENTICATE \(payload)")
+                state.pendingWebToken = nil
+            }
 
         case .registered(let nick):
             state.connectionState = .registered
