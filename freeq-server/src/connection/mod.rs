@@ -233,8 +233,8 @@ where
 
     let mut line_buf = String::new();
     let mut last_activity = tokio::time::Instant::now();
-    let ping_interval = tokio::time::Duration::from_secs(90);
-    let ping_timeout = tokio::time::Duration::from_secs(180);
+    let ping_interval = tokio::time::Duration::from_secs(30);
+    let ping_timeout = tokio::time::Duration::from_secs(60);
     let mut awaiting_pong = false;
 
     // Rate limiting: max 10 commands per second, token bucket

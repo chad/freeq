@@ -59,6 +59,7 @@ fn bridge_ws(socket: WebSocket) -> WsBridge {
     tokio::spawn(async move {
         let mut socket = socket;
         let mut ws_rx = ws_rx;
+        let ws_send_timeout = tokio::time::Duration::from_secs(30);
         loop {
             tokio::select! {
                 // Read from WebSocket → write to bridge (→ IRC handler reads)
@@ -85,12 +86,16 @@ fn bridge_ws(socket: WebSocket) -> WsBridge {
                         Some(Err(_)) => break,
                     }
                 }
-                // Read from channel → send as WebSocket frame
+                // Read from channel → send as WebSocket frame (with timeout to detect dead sockets)
                 msg = ws_rx.recv() => {
                     match msg {
                         Some(ws_msg) => {
-                            if socket.send(ws_msg).await.is_err() {
-                                break;
+                            match tokio::time::timeout(ws_send_timeout, socket.send(ws_msg)).await {
+                                Ok(Ok(())) => {}
+                                Ok(Err(_)) | Err(_) => {
+                                    tracing::debug!("WebSocket send failed or timed out, closing bridge");
+                                    break;
+                                }
                             }
                         }
                         None => break,
