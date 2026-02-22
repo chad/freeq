@@ -1419,7 +1419,15 @@ async fn process_input(
                 }
             }
             _ => {
-                app.status_msg(&format!("Unknown command: {cmd}. Type /help for help."));
+                // Pass unrecognized commands through to the server as raw IRC.
+                // e.g. /policy #chan INFO → POLICY #chan INFO
+                let raw_cmd = cmd.trim_start_matches('/').to_uppercase();
+                let raw = if arg.is_empty() {
+                    raw_cmd
+                } else {
+                    format!("{raw_cmd} {arg}")
+                };
+                handle.raw(&raw).await?;
             }
         }
     } else {
