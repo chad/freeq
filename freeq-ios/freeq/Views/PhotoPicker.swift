@@ -59,7 +59,7 @@ struct ImagePreviewSheet: View {
     @State private var caption: String = ""
     @State private var crossPost = false
     @State private var uploading = false
-    @State private var uploadProgress: String = ""
+    @State private var uploadError: String? = nil
     @FocusState private var captionFocused: Bool
 
     var body: some View {
@@ -99,16 +99,45 @@ struct ImagePreviewSheet: View {
                     VStack(spacing: 0) {
                         Rectangle().fill(Theme.border).frame(height: 1)
 
+                        // Error banner
+                        if let error = uploadError {
+                            HStack(spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Theme.danger)
+                                Text(error)
+                                    .font(.system(size: 13))
+                                    .foregroundColor(Theme.danger)
+                                    .lineLimit(2)
+                                Spacer()
+                                Button("Retry") {
+                                    uploadError = nil
+                                    upload()
+                                }
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(Theme.accent)
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(Theme.danger.opacity(0.1))
+                        }
+
                         if uploading {
                             HStack(spacing: 12) {
                                 ProgressView()
                                     .tint(Theme.accent)
-                                Text(uploadProgress.isEmpty ? "Uploading..." : uploadProgress)
+                                Text("Uploading \(ByteCountFormatter.string(fromByteCount: Int64(imageData.count), countStyle: .file))...")
                                     .font(.system(size: 14))
                                     .foregroundColor(Theme.textSecondary)
+                                Spacer()
+                                Button("Cancel") {
+                                    uploading = false
+                                }
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(Theme.textMuted)
                             }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 16)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
                             .background(Theme.bgSecondary)
                         } else {
                             HStack(alignment: .bottom, spacing: 10) {
@@ -155,7 +184,7 @@ struct ImagePreviewSheet: View {
 
     private func upload() {
         uploading = true
-        uploadProgress = "Uploading \(ByteCountFormatter.string(fromByteCount: Int64(imageData.count), countStyle: .file))..."
+        uploadError = nil
 
         Task {
             let did = appState.authenticatedDID ?? ""
@@ -182,6 +211,7 @@ struct ImagePreviewSheet: View {
 
             var request = URLRequest(url: URL(string: "\(serverBase)/api/v1/upload")!)
             request.httpMethod = "POST"
+            request.timeoutInterval = 30
             request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
             request.httpBody = body
 
@@ -208,13 +238,15 @@ struct ImagePreviewSheet: View {
                     let responseText = String(data: responseData, encoding: .utf8) ?? ""
                     await MainActor.run {
                         uploading = false
-                        uploadProgress = "Failed: \(responseText.prefix(80))"
+                        uploadError = "Upload failed: \(responseText.prefix(80))"
                     }
                 }
             } catch {
                 await MainActor.run {
                     uploading = false
-                    uploadProgress = "Error: \(error.localizedDescription)"
+                    uploadError = error.localizedDescription.contains("timed out")
+                        ? "Upload timed out — tap Retry"
+                        : "Error: \(error.localizedDescription)"
                 }
             }
         }

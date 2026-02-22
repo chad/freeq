@@ -44,10 +44,18 @@ class ChannelState: ObservableObject, Identifiable {
     }
 
     /// Append a message only if its ID hasn't been seen before.
+    /// Inserts in timestamp order to handle CHATHISTORY arriving after live messages.
     func appendIfNew(_ msg: ChatMessage) {
         guard !messageIds.contains(msg.id) else { return }
         messageIds.insert(msg.id)
-        messages.append(msg)
+
+        // If the message is older than the last message, insert in sorted position
+        if let last = messages.last, msg.timestamp < last.timestamp {
+            let idx = messages.firstIndex(where: { $0.timestamp > msg.timestamp }) ?? messages.endIndex
+            messages.insert(msg, at: idx)
+        } else {
+            messages.append(msg)
+        }
     }
 }
 
