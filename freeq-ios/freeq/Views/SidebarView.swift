@@ -163,7 +163,16 @@ struct SidebarView: View {
 
                 Spacer()
 
-                if !channel.members.isEmpty {
+                let unread = appState.unreadCounts[channel.name] ?? 0
+                if unread > 0 {
+                    Text("\(unread)")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Theme.accent)
+                        .cornerRadius(10)
+                } else if !channel.members.isEmpty {
                     Text("\(channel.members.count)")
                         .font(.system(size: 11))
                         .foregroundColor(Theme.textMuted)

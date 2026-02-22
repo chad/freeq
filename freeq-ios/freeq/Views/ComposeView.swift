@@ -11,10 +11,32 @@ struct ComposeView: View {
                 .fill(Theme.border)
                 .frame(height: 1)
 
+            // Reply / Edit context bar
+            if let reply = appState.replyingTo {
+                contextBar(
+                    icon: "arrowshape.turn.up.left.fill",
+                    label: "Replying to \(reply.from)",
+                    preview: reply.text,
+                    color: Theme.accent
+                ) {
+                    appState.replyingTo = nil
+                }
+            } else if let edit = appState.editingMessage {
+                contextBar(
+                    icon: "pencil",
+                    label: "Editing message",
+                    preview: edit.text,
+                    color: Theme.warning
+                ) {
+                    appState.editingMessage = nil
+                    text = ""
+                }
+                .onAppear { text = edit.text }
+            }
+
             HStack(alignment: .bottom, spacing: 10) {
-                // Compose area
                 HStack(alignment: .bottom, spacing: 8) {
-                    // Plus button for attachments (placeholder)
+                    // Attachment button
                     Button(action: {}) {
                         Image(systemName: "plus.circle.fill")
                             .font(.system(size: 24))
@@ -24,7 +46,7 @@ struct ComposeView: View {
                     TextField(
                         "",
                         text: $text,
-                        prompt: Text("Message \(appState.activeChannel ?? "")").foregroundColor(Theme.textMuted),
+                        prompt: Text(placeholder).foregroundColor(Theme.textMuted),
                         axis: .vertical
                     )
                     .foregroundColor(Theme.textPrimary)
@@ -34,22 +56,25 @@ struct ComposeView: View {
                     .submitLabel(.send)
                     .onSubmit { send() }
                     .tint(Theme.accent)
+                    .onChange(of: text) {
+                        if let target = appState.activeChannel, !text.isEmpty {
+                            appState.sendTyping(target: target)
+                        }
+                    }
 
                     // Send button
                     Button(action: send) {
                         ZStack {
                             Circle()
-                                .fill(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                      ? Theme.textMuted.opacity(0.3)
-                                      : Theme.accent)
+                                .fill(canSend ? Theme.accent : Theme.textMuted.opacity(0.3))
                                 .frame(width: 32, height: 32)
 
-                            Image(systemName: "arrow.up")
+                            Image(systemName: appState.editingMessage != nil ? "checkmark" : "arrow.up")
                                 .font(.system(size: 14, weight: .bold))
                                 .foregroundColor(.white)
                         }
                     }
-                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!canSend)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
@@ -62,6 +87,53 @@ struct ComposeView: View {
         }
     }
 
+    private var canSend: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var placeholder: String {
+        if appState.replyingTo != nil {
+            return "Reply..."
+        }
+        if appState.editingMessage != nil {
+            return "Edit message..."
+        }
+        return "Message \(appState.activeChannel ?? "")"
+    }
+
+    private func contextBar(icon: String, label: String, preview: String, color: Color, onDismiss: @escaping () -> Void) -> some View {
+        HStack(spacing: 8) {
+            Rectangle()
+                .fill(color)
+                .frame(width: 3)
+
+            Image(systemName: icon)
+                .font(.system(size: 12))
+                .foregroundColor(color)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(color)
+                Text(preview)
+                    .font(.system(size: 12))
+                    .foregroundColor(Theme.textMuted)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundColor(Theme.textMuted)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Theme.bgSecondary)
+    }
+
     private func send() {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let target = appState.activeChannel else { return }
@@ -72,6 +144,7 @@ struct ComposeView: View {
             appState.sendMessage(target: target, text: trimmed)
         }
         text = ""
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
     private func handleCommand(_ input: String) {

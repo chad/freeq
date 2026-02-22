@@ -5,10 +5,13 @@ import SwiftUI
 struct ChatMessage: Identifiable, Equatable {
     let id: String  // msgid or UUID
     let from: String
-    let text: String
+    var text: String
     let isAction: Bool
     let timestamp: Date
     let replyTo: String?
+    var isEdited: Bool = false
+    var isDeleted: Bool = false
+    var reactions: [String: Set<String>] = [:]  // emoji -> set of nicks
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
         lhs.id == rhs.id
@@ -21,11 +24,21 @@ class ChannelState: ObservableObject, Identifiable {
     @Published var messages: [ChatMessage] = []
     @Published var members: [MemberInfo] = []
     @Published var topic: String = ""
+    @Published var typingUsers: [String: Date] = [:]  // nick -> last typing time
 
     var id: String { name }
 
+    var activeTypers: [String] {
+        let cutoff = Date().addingTimeInterval(-5)
+        return typingUsers.filter { $0.value > cutoff }.map { $0.key }.sorted()
+    }
+
     init(name: String) {
         self.name = name
+    }
+
+    func findMessage(byId id: String) -> Int? {
+        messages.firstIndex(where: { $0.id == id })
     }
 }
 
@@ -61,20 +74,29 @@ class AppState: ObservableObject {
     @Published var activeChannel: String? = nil
     @Published var errorMessage: String? = nil
     @Published var authenticatedDID: String? = nil
-
-    /// DM buffers (keyed by nick, not channel)
     @Published var dmBuffers: [ChannelState] = []
-
-    /// Channels to auto-join on connect
     @Published var autoJoinChannels: [String] = ["#general"]
-
-    /// Unread message counts per channel
     @Published var unreadCounts: [String: Int] = [:]
 
+    /// For reply UI
+    @Published var replyingTo: ChatMessage? = nil
+    /// For edit UI
+    @Published var editingMessage: ChatMessage? = nil
+    /// Image lightbox
+    @Published var lightboxURL: URL? = nil
+
     private var client: FreeqClient? = nil
+    private var typingTimer: Timer? = nil
+    private var lastTypingSent: Date = .distantPast
+
+    var activeChannelState: ChannelState? {
+        if let name = activeChannel {
+            return channels.first { $0.name == name } ?? dmBuffers.first { $0.name == name }
+        }
+        return nil
+    }
 
     init() {
-        // Restore saved state
         if let savedNick = UserDefaults.standard.string(forKey: "freeq.nick") {
             nick = savedNick
         }
@@ -84,13 +106,13 @@ class AppState: ObservableObject {
         if let savedChannels = UserDefaults.standard.stringArray(forKey: "freeq.channels") {
             autoJoinChannels = savedChannels
         }
-    }
 
-    var activeChannelState: ChannelState? {
-        if let name = activeChannel {
-            return channels.first { $0.name == name } ?? dmBuffers.first { $0.name == name }
+        // Prune stale typing indicators every 3 seconds
+        Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.pruneTypingIndicators()
+            }
         }
-        return nil
     }
 
     func connect(nick: String) {
@@ -98,7 +120,6 @@ class AppState: ObservableObject {
         self.connectionState = .connecting
         self.errorMessage = nil
 
-        // Persist
         UserDefaults.standard.set(nick, forKey: "freeq.nick")
         UserDefaults.standard.set(serverAddress, forKey: "freeq.server")
 
@@ -118,6 +139,76 @@ class AppState: ObservableObject {
         }
     }
 
+    func disconnect() {
+        client?.disconnect()
+        DispatchQueue.main.async {
+            self.connectionState = .disconnected
+            self.channels = []
+            self.dmBuffers = []
+            self.activeChannel = nil
+            self.replyingTo = nil
+            self.editingMessage = nil
+        }
+    }
+
+    func joinChannel(_ channel: String) {
+        let ch = channel.hasPrefix("#") ? channel : "#\(channel)"
+        do { try client?.join(channel: ch) }
+        catch { DispatchQueue.main.async { self.errorMessage = "Failed to join \(ch)" } }
+    }
+
+    func partChannel(_ channel: String) {
+        try? client?.part(channel: channel)
+    }
+
+    func sendMessage(target: String, text: String) {
+        guard !text.isEmpty else { return }
+
+        // Check for edit mode
+        if let editing = editingMessage {
+            sendRaw("PRIVMSG \(target) :\(text)\r\n")
+            // Actually send with edit tag via raw
+            let escaped = text.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: " ")
+            sendRaw("@+draft/edit=\(editing.id) PRIVMSG \(target) :\(escaped)")
+            editingMessage = nil
+            return
+        }
+
+        // Check for reply mode
+        if let reply = replyingTo {
+            let escaped = text.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: " ")
+            sendRaw("@+reply=\(reply.id) PRIVMSG \(target) :\(escaped)")
+            replyingTo = nil
+            return
+        }
+
+        do { try client?.sendMessage(target: target, text: text) }
+        catch { DispatchQueue.main.async { self.errorMessage = "Send failed" } }
+    }
+
+    func sendRaw(_ line: String) {
+        try? client?.sendRaw(line: line)
+    }
+
+    func sendReaction(target: String, msgId: String, emoji: String) {
+        sendRaw("@+react=\(emoji);+reply=\(msgId) TAGMSG \(target)")
+    }
+
+    func deleteMessage(target: String, msgId: String) {
+        sendRaw("@+draft/delete=\(msgId) TAGMSG \(target)")
+    }
+
+    func sendTyping(target: String) {
+        let now = Date()
+        guard now.timeIntervalSince(lastTypingSent) > 3 else { return }
+        lastTypingSent = now
+        sendRaw("@+typing=active TAGMSG \(target)")
+    }
+
+    func requestHistory(channel: String) {
+        sendRaw("CHATHISTORY LATEST \(channel) * 50")
+    }
+
     func markRead(_ channel: String) {
         unreadCounts[channel] = 0
     }
@@ -126,50 +217,6 @@ class AppState: ObservableObject {
         if activeChannel != channel {
             unreadCounts[channel, default: 0] += 1
         }
-    }
-
-    func disconnect() {
-        client?.disconnect()
-        DispatchQueue.main.async {
-            self.connectionState = .disconnected
-            self.channels = []
-            self.dmBuffers = []
-            self.activeChannel = nil
-        }
-    }
-
-    func joinChannel(_ channel: String) {
-        let ch = channel.hasPrefix("#") ? channel : "#\(channel)"
-        do {
-            try client?.join(channel: ch)
-        } catch {
-            DispatchQueue.main.async {
-                self.errorMessage = "Failed to join \(ch): \(error)"
-            }
-        }
-    }
-
-    func partChannel(_ channel: String) {
-        do {
-            try client?.part(channel: channel)
-        } catch {
-            print("Part failed: \(error)")
-        }
-    }
-
-    func sendMessage(target: String, text: String) {
-        guard !text.isEmpty else { return }
-        do {
-            try client?.sendMessage(target: target, text: text)
-        } catch {
-            DispatchQueue.main.async {
-                self.errorMessage = "Send failed: \(error)"
-            }
-        }
-    }
-
-    func sendRaw(_ line: String) {
-        try? client?.sendRaw(line: line)
     }
 
     func getOrCreateChannel(_ name: String) -> ChannelState {
@@ -188,6 +235,18 @@ class AppState: ObservableObject {
         let dm = ChannelState(name: nick)
         dmBuffers.append(dm)
         return dm
+    }
+
+    private func pruneTypingIndicators() {
+        let cutoff = Date().addingTimeInterval(-5)
+        for ch in channels + dmBuffers {
+            let stale = ch.typingUsers.filter { $0.value < cutoff }
+            if !stale.isEmpty {
+                for key in stale.keys {
+                    ch.typingUsers.removeValue(forKey: key)
+                }
+            }
+        }
     }
 }
 
@@ -215,6 +274,8 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
         case .registered(let nick):
             state.connectionState = .registered
             state.nick = nick
+            // Request capabilities
+            state.sendRaw("CAP REQ :message-tags echo-message server-time draft/chathistory away-notify")
             // Auto-join saved channels
             for channel in state.autoJoinChannels {
                 state.joinChannel(channel)
@@ -232,20 +293,16 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 if state.activeChannel == nil {
                     state.activeChannel = channel
                 }
-                // Save to auto-join list
                 if !state.autoJoinChannels.contains(where: { $0.lowercased() == channel.lowercased() }) {
                     state.autoJoinChannels.append(channel)
                     UserDefaults.standard.set(state.autoJoinChannels, forKey: "freeq.channels")
                 }
+                // Request history
+                state.requestHistory(channel: channel)
             }
-            // Add system message
             let msg = ChatMessage(
-                id: UUID().uuidString,
-                from: "",
-                text: "\(nick) joined \(channel)",
-                isAction: false,
-                timestamp: Date(),
-                replyTo: nil
+                id: UUID().uuidString, from: "", text: "\(nick) joined",
+                isAction: false, timestamp: Date(), replyTo: nil
             )
             ch.messages.append(msg)
 
@@ -259,15 +316,11 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 }
             } else {
                 let ch = state.getOrCreateChannel(channel)
-                let msg = ChatMessage(
-                    id: UUID().uuidString,
-                    from: "",
-                    text: "\(nick) left \(channel)",
-                    isAction: false,
-                    timestamp: Date(),
-                    replyTo: nil
-                )
-                ch.messages.append(msg)
+                ch.messages.append(ChatMessage(
+                    id: UUID().uuidString, from: "", text: "\(nick) left",
+                    isAction: false, timestamp: Date(), replyTo: nil
+                ))
+                ch.members.removeAll { $0.nick.lowercased() == nick.lowercased() }
             }
 
         case .message(let ircMsg):
@@ -286,13 +339,20 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
 
             if target.hasPrefix("#") {
                 let ch = state.getOrCreateChannel(target)
+                // Check for edit
+                if let editId = ircMsg.replyTo, ircMsg.msgid != nil {
+                    // This is heuristic — real edit detection needs +draft/edit tag
+                    // which would require extending the FFI. For now, append.
+                }
                 ch.messages.append(msg)
                 state.incrementUnread(target)
+                // Clear typing for this user
+                ch.typingUsers.removeValue(forKey: from)
             } else {
-                // DM — buffer keyed by the other person
                 let bufferName = isSelf ? target : from
                 let dm = state.getOrCreateDM(bufferName)
                 dm.messages.append(msg)
+                state.incrementUnread(bufferName)
             }
 
         case .names(let channel, let members):
@@ -309,37 +369,36 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
         case .kicked(let channel, let nick, let by, let reason):
             if nick.lowercased() == state.nick.lowercased() {
                 state.channels.removeAll { $0.name == channel }
+                state.autoJoinChannels.removeAll { $0.lowercased() == channel.lowercased() }
+                UserDefaults.standard.set(state.autoJoinChannels, forKey: "freeq.channels")
                 if state.activeChannel == channel {
                     state.activeChannel = state.channels.first?.name
                 }
                 state.errorMessage = "Kicked from \(channel) by \(by): \(reason)"
             } else {
                 let ch = state.getOrCreateChannel(channel)
-                let msg = ChatMessage(
-                    id: UUID().uuidString,
-                    from: "",
+                ch.messages.append(ChatMessage(
+                    id: UUID().uuidString, from: "",
                     text: "\(nick) was kicked by \(by) (\(reason))",
-                    isAction: false,
-                    timestamp: Date(),
-                    replyTo: nil
-                )
-                ch.messages.append(msg)
-            }
-
-        case .userQuit(let nick, _):
-            // Remove from all channel member lists
-            for ch in state.channels {
+                    isAction: false, timestamp: Date(), replyTo: nil
+                ))
                 ch.members.removeAll { $0.nick.lowercased() == nick.lowercased() }
             }
 
-        case .notice(let text):
-            if !text.isEmpty {
-                print("Notice: \(text)")
+        case .userQuit(let nick, _):
+            for ch in state.channels {
+                ch.members.removeAll { $0.nick.lowercased() == nick.lowercased() }
+                ch.typingUsers.removeValue(forKey: nick)
             }
+
+        case .notice(let text):
+            if !text.isEmpty { print("Notice: \(text)") }
 
         case .disconnected(let reason):
             state.connectionState = .disconnected
-            state.errorMessage = "Disconnected: \(reason)"
+            if !reason.isEmpty {
+                state.errorMessage = "Disconnected: \(reason)"
+            }
         }
     }
 }

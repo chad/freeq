@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ChatView: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var networkMonitor: NetworkMonitor
     @State private var showingSidebar = false
     @State private var showingJoinSheet = false
     @State private var showingMembers = false
@@ -12,6 +13,20 @@ struct ChatView: View {
 
             // Main chat area
             VStack(spacing: 0) {
+                // Network warning banner
+                if !networkMonitor.isConnected {
+                    HStack(spacing: 8) {
+                        Image(systemName: "wifi.slash")
+                            .font(.system(size: 12))
+                        Text("No network connection")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(Theme.danger)
+                }
+
                 TopBarView(
                     showingSidebar: $showingSidebar,
                     showingJoinSheet: $showingJoinSheet,
