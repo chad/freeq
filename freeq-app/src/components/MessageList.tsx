@@ -266,7 +266,8 @@ function SystemMessage({ msg }: { msg: Message }) {
     <div className="px-4 py-1 flex items-start gap-3">
       <span className="w-10 shrink-0" />
       <span className="text-fg-dim text-sm">
-        <span className="opacity-60">—</span> {msg.text}
+        <span className="opacity-60">—</span>{' '}
+        <span dangerouslySetInnerHTML={{ __html: renderText(msg.text) }} />
       </span>
     </div>
   );
