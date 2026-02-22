@@ -233,11 +233,20 @@ Then set the "op" role requirement (replace the hash):
 /POLICY #myproject SET-ROLE op {"type":"ALL","requirements":[{"type":"ACCEPT","hash":"a1b2c3d4e5f6...full-hash..."},{"type":"PRESENT","credential_type":"github_membership","issuer":"github"}]}
 ```
 
-**Step 3: A contributor verifies their GitHub membership**
+**Step 3: A contributor verifies their GitHub identity**
+
+With GitHub OAuth configured (`GITHUB_CLIENT_ID` + `GITHUB_CLIENT_SECRET`):
 ```
-/POLICY #myproject VERIFY github octocat myorg
-→ Checking GitHub: is octocat a public member of myorg?
-→ ✓ Verified: octocat is a member of myorg. Credential stored.
+/POLICY #myproject VERIFY github myorg
+→ Open this URL to verify your GitHub identity: http://127.0.0.1:8080/auth/github?did=...&org=myorg
+```
+Click the link → GitHub OAuth → authenticate → server confirms org membership → credential stored. **The server knows your real GitHub username from the OAuth token — no self-attestation possible.**
+
+Without GitHub OAuth (public API fallback — weaker):
+```
+/POLICY #myproject VERIFY github myorg octocat
+→ ⚠ Note: public API check cannot prove you own this GitHub account
+→ ✓ octocat is a public member of myorg. Credential stored (⚠ not OAuth-verified).
 ```
 
 **Step 4: The contributor accepts the policy**

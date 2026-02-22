@@ -280,8 +280,9 @@ pub(super) fn handle_policy(
         }
 
         "VERIFY" => {
-            // POLICY #channel VERIFY github <username> <org>
-            // Shortcut to verify GitHub membership and store credential
+            // POLICY #channel VERIFY github <org>
+            // Verifies GitHub org membership via OAuth (if configured)
+            // or public API fallback.
             let did = match &conn.authenticated_did {
                 Some(d) => d.clone(),
                 None => {
@@ -295,11 +296,11 @@ pub(super) fn handle_policy(
                 }
             };
 
-            if msg.params.len() < 5 {
+            if msg.params.len() < 4 {
                 let reply = Message::from_server(
                     server_name,
                     "NOTICE",
-                    vec![nick, "Usage: POLICY <channel> VERIFY github <username> <org>"],
+                    vec![nick, "Usage: POLICY <channel> VERIFY github <org>"],
                 );
                 send_fn(state, session_id, format!("{reply}\r\n"));
                 return;
@@ -316,72 +317,109 @@ pub(super) fn handle_policy(
                 return;
             }
 
-            let username = &msg.params[3];
-            let org = &msg.params[4];
+            let org = &msg.params[3];
 
-            // Fire off GitHub API check (async)
-            let engine_ref = Arc::clone(engine);
-            let did_c = did.clone();
-            let username_c = username.to_string();
-            let org_c = org.to_string();
-            let state_c = Arc::clone(state);
-            let session_c = session_id.to_string();
-            let server_c = server_name.to_string();
-            let nick_c = nick.to_string();
-
-            let reply = Message::from_server(
-                server_name,
-                "NOTICE",
-                vec![nick, &format!("Checking GitHub: is {} a public member of {}?", username, org)],
-            );
-            send_fn(state, session_id, format!("{reply}\r\n"));
-
-            tokio::spawn(async move {
-                let client = reqwest::Client::new();
-                let url = format!(
-                    "https://api.github.com/orgs/{}/public_members/{}",
-                    org_c, username_c
+            if state.config.github_client_id.is_some() {
+                // OAuth mode — redirect user to GitHub
+                // Build the URL they need to visit
+                let web_addr = state.config.web_addr.as_deref().unwrap_or("127.0.0.1:8080");
+                let verify_url = format!(
+                    "http://{}/auth/github?did={}&org={}&session_id={}",
+                    web_addr,
+                    urlencoding::encode(&did),
+                    urlencoding::encode(org),
+                    urlencoding::encode(session_id),
                 );
-                let result = client
-                    .get(&url)
-                    .header("User-Agent", "freeq-server")
-                    .header("Accept", "application/vnd.github+json")
-                    .send()
-                    .await;
+                let reply = Message::from_server(
+                    server_name,
+                    "NOTICE",
+                    vec![nick, &format!("Open this URL to verify your GitHub identity: {verify_url}")],
+                );
+                send_fn(state, session_id, format!("{reply}\r\n"));
+            } else {
+                // No OAuth configured — fall back to public membership check
+                // This requires the user to also provide their GitHub username
+                if msg.params.len() < 5 {
+                    let reply = Message::from_server(
+                        server_name,
+                        "NOTICE",
+                        vec![nick, "No GitHub OAuth configured. Usage: POLICY <channel> VERIFY github <org> <github-username>"],
+                    );
+                    send_fn(state, session_id, format!("{reply}\r\n"));
+                    let reply2 = Message::from_server(
+                        server_name,
+                        "NOTICE",
+                        vec![nick, "⚠ Note: public API check cannot prove you own this GitHub account"],
+                    );
+                    send_fn(state, session_id, format!("{reply2}\r\n"));
+                    return;
+                }
 
-                let (success, msg_text) = match result {
-                    Ok(resp) if resp.status().as_u16() == 204 => {
-                        let metadata = serde_json::json!({
-                            "github_username": username_c,
-                            "org": org_c,
-                            "verified_at": chrono::Utc::now().to_rfc3339(),
-                        });
-                        match engine_ref.store_credential(&did_c, "github_membership", "github", &metadata) {
-                            Ok(()) => (true, format!("✓ Verified: {} is a member of {}. Credential stored.", username_c, org_c)),
-                            Err(e) => (false, format!("Verified but failed to store: {e}")),
-                        }
-                    }
-                    Ok(resp) if resp.status().as_u16() == 404 => {
-                        (false, format!("✗ {} is NOT a public member of {}. Make your membership public at https://github.com/orgs/{}/people", username_c, org_c, org_c))
-                    }
-                    Ok(resp) => {
-                        (false, format!("GitHub API returned {}", resp.status()))
-                    }
-                    Err(e) => {
-                        (false, format!("GitHub API error: {e}"))
-                    }
-                };
+                let username = &msg.params[4];
+                let engine_ref = Arc::clone(engine);
+                let did_c = did.clone();
+                let username_c = username.to_string();
+                let org_c = org.to_string();
+                let state_c = Arc::clone(state);
+                let session_c = session_id.to_string();
+                let server_c = server_name.to_string();
+                let nick_c = nick.to_string();
 
                 let reply = Message::from_server(
-                    &server_c,
+                    server_name,
                     "NOTICE",
-                    vec![&nick_c, &msg_text],
+                    vec![nick, &format!("Checking GitHub: is {} a public member of {}? (unverified — no OAuth)", username, org)],
                 );
-                let conns = state_c.connections.lock().unwrap();
-                if let Some(tx) = conns.get(&session_c) {
-                    let _ = tx.try_send(format!("{reply}\r\n"));
-                }
-            });
+                send_fn(state, session_id, format!("{reply}\r\n"));
+
+                tokio::spawn(async move {
+                    let client = reqwest::Client::new();
+                    let url = format!(
+                        "https://api.github.com/orgs/{}/public_members/{}",
+                        org_c, username_c
+                    );
+                    let result = client
+                        .get(&url)
+                        .header("User-Agent", "freeq-server")
+                        .header("Accept", "application/vnd.github+json")
+                        .send()
+                        .await;
+
+                    let msg_text = match result {
+                        Ok(resp) if resp.status().as_u16() == 204 => {
+                            let metadata = serde_json::json!({
+                                "github_username": username_c,
+                                "org": org_c,
+                                "verified_at": chrono::Utc::now().to_rfc3339(),
+                                "method": "public_api",
+                            });
+                            match engine_ref.store_credential(&did_c, "github_membership", "github", &metadata) {
+                                Ok(()) => format!("✓ {} is a public member of {}. Credential stored (⚠ not OAuth-verified).", username_c, org_c),
+                                Err(e) => format!("Verified but failed to store: {e}"),
+                            }
+                        }
+                        Ok(resp) if resp.status().as_u16() == 404 => {
+                            format!("✗ {} is NOT a public member of {}. Make your membership public at https://github.com/orgs/{}/people", username_c, org_c, org_c)
+                        }
+                        Ok(resp) => {
+                            format!("GitHub API returned {}", resp.status())
+                        }
+                        Err(e) => {
+                            format!("GitHub API error: {e}")
+                        }
+                    };
+
+                    let reply = Message::from_server(
+                        &server_c,
+                        "NOTICE",
+                        vec![&nick_c, &msg_text],
+                    );
+                    let conns = state_c.connections.lock().unwrap();
+                    if let Some(tx) = conns.get(&session_c) {
+                        let _ = tx.try_send(format!("{reply}\r\n"));
+                    }
+                });
+            }
         }
 
         "INFO" => {

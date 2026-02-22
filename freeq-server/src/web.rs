@@ -197,6 +197,13 @@ pub fn router(state: Arc<SharedState>) -> Router {
         app = app.merge(crate::policy::api::routes());
     }
 
+    // GitHub OAuth verification endpoints (if configured)
+    if state.config.github_client_id.is_some() {
+        app = app
+            .route("/auth/github", get(github_auth_start))
+            .route("/auth/github/callback", get(github_auth_callback));
+    }
+
     // Serve static web client files if the directory exists
     if let Some(ref web_dir) = state.config.web_static_dir {
         let dir = std::path::PathBuf::from(web_dir);
@@ -1008,4 +1015,251 @@ async fn api_upload(
         "content_type": result.mime_type,
         "size": result.size,
     })))
+}
+
+// ─── GitHub OAuth Verification ───────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct GitHubAuthQuery {
+    /// DID of the user requesting verification (must be authenticated).
+    did: String,
+    /// GitHub org to check membership for.
+    org: String,
+    /// IRC session ID for notification callback.
+    #[serde(default)]
+    session_id: Option<String>,
+}
+
+/// Start GitHub OAuth flow — redirects to GitHub authorization page.
+async fn github_auth_start(
+    headers: axum::http::HeaderMap,
+    Query(q): Query<GitHubAuthQuery>,
+    State(state): State<Arc<SharedState>>,
+) -> Result<Redirect, (StatusCode, String)> {
+    let client_id = state.config.github_client_id.as_ref()
+        .ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "GitHub OAuth not configured".into()))?;
+
+    let (web_origin, _) = derive_web_origin(&headers);
+    let redirect_uri = format!("{web_origin}/auth/github/callback");
+
+    // Generate state token
+    let state_token: String = {
+        let bytes: [u8; 16] = rand::random();
+        hex::encode(bytes)
+    };
+
+    // Store pending verification
+    state.github_verify_pending.lock().unwrap().insert(
+        state_token.clone(),
+        crate::server::GitHubVerifyPending {
+            did: q.did,
+            org: q.org,
+            session_id: q.session_id.unwrap_or_default(),
+            created_at: std::time::Instant::now(),
+        },
+    );
+
+    // Redirect to GitHub — request read:org scope to check org membership
+    let auth_url = format!(
+        "https://github.com/login/oauth/authorize?client_id={}&redirect_uri={}&scope=read:org&state={}",
+        client_id,
+        urlencoding::encode(&redirect_uri),
+        state_token,
+    );
+
+    Ok(Redirect::temporary(&auth_url))
+}
+
+/// GitHub OAuth callback — exchanges code for token, verifies org membership,
+/// stores credential, and notifies the IRC session.
+async fn github_auth_callback(
+    Query(q): Query<std::collections::HashMap<String, String>>,
+    State(state): State<Arc<SharedState>>,
+) -> impl IntoResponse {
+    let code = match q.get("code") {
+        Some(c) => c.clone(),
+        None => return axum::response::Html(
+            "<h1>Error</h1><p>No authorization code from GitHub</p>".to_string()
+        ).into_response(),
+    };
+    let oauth_state = match q.get("state") {
+        Some(s) => s.clone(),
+        None => return axum::response::Html(
+            "<h1>Error</h1><p>Missing state parameter</p>".to_string()
+        ).into_response(),
+    };
+
+    // Look up pending verification
+    let pending = state.github_verify_pending.lock().unwrap().remove(&oauth_state);
+    let pending = match pending {
+        Some(p) => {
+            // Check expiry (5 minutes)
+            if p.created_at.elapsed() > std::time::Duration::from_secs(300) {
+                return axum::response::Html(
+                    "<h1>Error</h1><p>Verification expired. Please try again.</p>".to_string()
+                ).into_response();
+            }
+            p
+        }
+        None => return axum::response::Html(
+            "<h1>Error</h1><p>Unknown or expired verification state</p>".to_string()
+        ).into_response(),
+    };
+
+    let client_id = state.config.github_client_id.as_deref().unwrap_or("");
+    let client_secret = state.config.github_client_secret.as_deref().unwrap_or("");
+
+    let http = reqwest::Client::new();
+
+    // Exchange code for access token
+    let token_resp = http
+        .post("https://github.com/login/oauth/access_token")
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("code", &code),
+        ])
+        .send()
+        .await;
+
+    let token_json: serde_json::Value = match token_resp {
+        Ok(resp) => match resp.json().await {
+            Ok(j) => j,
+            Err(e) => return axum::response::Html(
+                format!("<h1>Error</h1><p>Failed to parse token: {e}</p>")
+            ).into_response(),
+        },
+        Err(e) => return axum::response::Html(
+            format!("<h1>Error</h1><p>Failed to exchange code: {e}</p>")
+        ).into_response(),
+    };
+
+    let access_token = match token_json["access_token"].as_str() {
+        Some(t) => t.to_string(),
+        None => {
+            let err = token_json["error_description"].as_str()
+                .or(token_json["error"].as_str())
+                .unwrap_or("unknown error");
+            return axum::response::Html(
+                format!("<h1>Error</h1><p>GitHub OAuth failed: {err}</p>")
+            ).into_response();
+        }
+    };
+
+    // Get the authenticated GitHub user's info
+    let user_resp = http
+        .get("https://api.github.com/user")
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("User-Agent", "freeq-server")
+        .send()
+        .await;
+
+    let user_json: serde_json::Value = match user_resp {
+        Ok(resp) => match resp.json().await {
+            Ok(j) => j,
+            Err(e) => return axum::response::Html(
+                format!("<h1>Error</h1><p>Failed to get GitHub user: {e}</p>")
+            ).into_response(),
+        },
+        Err(e) => return axum::response::Html(
+            format!("<h1>Error</h1><p>GitHub API error: {e}</p>")
+        ).into_response(),
+    };
+
+    let github_username = match user_json["login"].as_str() {
+        Some(u) => u.to_string(),
+        None => return axum::response::Html(
+            "<h1>Error</h1><p>Could not determine GitHub username</p>".to_string()
+        ).into_response(),
+    };
+
+    // Check org membership using the authenticated token
+    let org_resp = http
+        .get(&format!("https://api.github.com/user/memberships/orgs/{}", pending.org))
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("User-Agent", "freeq-server")
+        .send()
+        .await;
+
+    let is_member = match org_resp {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    };
+
+    if !is_member {
+        // Also try public membership check as fallback
+        let pub_resp = http
+            .get(&format!(
+                "https://api.github.com/orgs/{}/public_members/{}",
+                pending.org, github_username
+            ))
+            .header("User-Agent", "freeq-server")
+            .send()
+            .await;
+        let is_public = matches!(pub_resp, Ok(r) if r.status().as_u16() == 204);
+
+        if !is_public {
+            let html = format!(
+                r#"<!DOCTYPE html><html><head><title>freeq — Verification Failed</title>
+                <style>body {{ font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }}
+                h1 {{ color: #e11; }} p {{ color: #666; }}</style></head>
+                <body><h1>Not a member</h1>
+                <p><strong>{github_username}</strong> is not a member of <strong>{org}</strong> on GitHub.</p>
+                <p>If you are a member, make sure your membership is not set to private.</p>
+                </body></html>"#,
+                org = pending.org,
+            );
+            return axum::response::Html(html).into_response();
+        }
+    }
+
+    // Verified! Store credential bound to their DID
+    let metadata = serde_json::json!({
+        "github_username": github_username,
+        "org": pending.org,
+        "verified_at": chrono::Utc::now().to_rfc3339(),
+        "method": "oauth",
+    });
+
+    if let Some(ref engine) = state.policy_engine {
+        if let Err(e) = engine.store_credential(&pending.did, "github_membership", "github", &metadata) {
+            tracing::error!(error = %e, "Failed to store GitHub credential");
+        }
+    }
+
+    tracing::info!(
+        did = %pending.did, github = %github_username, org = %pending.org,
+        "GitHub org membership verified via OAuth"
+    );
+
+    // Notify IRC session if provided
+    if !pending.session_id.is_empty() {
+        let notice = format!(
+            ":{} NOTICE * :✓ GitHub verified: {} is a member of {}. Credential stored for your DID.\r\n",
+            state.server_name, github_username, pending.org
+        );
+        let conns = state.connections.lock().unwrap();
+        if let Some(tx) = conns.get(&pending.session_id) {
+            let _ = tx.try_send(notice);
+        }
+    }
+
+    // Success page
+    let html = format!(
+        r#"<!DOCTYPE html><html><head><title>freeq — Verified!</title>
+        <style>body {{ font-family: system-ui; max-width: 500px; margin: 80px auto; text-align: center; }}
+        h1 {{ color: #0a0; }} .badge {{ background: #0a0; color: white; padding: 4px 12px; border-radius: 12px; }}
+        p {{ color: #666; }}</style></head>
+        <body><h1>✓ Verified</h1>
+        <p><span class="badge">{github_username}</span> is a member of <span class="badge">{org}</span></p>
+        <p>Credential stored for DID: <code>{did}</code></p>
+        <p>You can close this window and return to IRC.</p>
+        <p>Use <code>/POLICY #channel ACCEPT</code> — your GitHub credential will be included automatically.</p>
+        </body></html>"#,
+        org = pending.org,
+        did = pending.did,
+    );
+
+    axum::response::Html(html).into_response()
 }

@@ -314,6 +314,21 @@ pub struct SharedState {
     pub plugin_manager: PluginManager,
     /// Policy engine for channel governance (if enabled).
     pub policy_engine: Option<Arc<crate::policy::PolicyEngine>>,
+    /// Pending GitHub OAuth verifications: state → GitHubVerifyPending.
+    pub github_verify_pending: Mutex<HashMap<String, GitHubVerifyPending>>,
+}
+
+/// Pending GitHub OAuth verification.
+#[derive(Debug, Clone)]
+pub struct GitHubVerifyPending {
+    /// The DID of the user requesting verification.
+    pub did: String,
+    /// The GitHub org to check membership for.
+    pub org: String,
+    /// IRC session ID to send result notification to.
+    pub session_id: String,
+    /// When this was created.
+    pub created_at: std::time::Instant,
 }
 
 impl SharedState {
@@ -572,6 +587,7 @@ impl Server {
                     }
                 }
             },
+            github_verify_pending: Mutex::new(HashMap::new()),
         }))
     }
 
