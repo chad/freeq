@@ -5,9 +5,9 @@
 //! - Join flow (clients submit evidence, receive attestations)
 //! - Transparency log queries
 
-use super::engine::PolicyEngine;
 use super::eval::{Credential, UserEvidence};
 use super::types::*;
+use crate::server::SharedState;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -19,37 +19,32 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 
-/// Build the policy API router.
-pub fn router(engine: Arc<PolicyEngine>) -> Router {
+/// Build the policy API router (shares state with main server).
+pub fn routes() -> Router<Arc<SharedState>> {
     Router::new()
-        .route("/api/v1/policy/:channel", get(get_policy))
-        .route("/api/v1/policy/:channel/history", get(get_policy_chain))
-        .route("/api/v1/policy/:channel/join", post(join_channel))
+        .route("/api/v1/policy/{channel}", get(get_policy))
+        .route("/api/v1/policy/{channel}/history", get(get_policy_chain))
+        .route("/api/v1/policy/{channel}/join", post(join_channel))
         .route(
-            "/api/v1/policy/:channel/membership/:did",
+            "/api/v1/policy/{channel}/membership/{did}",
             get(check_membership),
         )
         .route(
-            "/api/v1/policy/:channel/transparency",
+            "/api/v1/policy/{channel}/transparency",
             get(get_transparency_log),
         )
-        .route("/api/v1/authority/:hash", get(get_authority_set))
-        .with_state(engine)
+        .route("/api/v1/authority/{hash}", get(get_authority_set))
 }
 
 // ─── Request/Response Types ──────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 struct JoinRequest {
-    /// DID of the joining user.
     subject_did: String,
-    /// Hashes of accepted rules documents.
     #[serde(default)]
     accepted_hashes: Vec<String>,
-    /// Credentials presented.
     #[serde(default)]
     credentials: Vec<CredentialInput>,
-    /// Proofs provided.
     #[serde(default)]
     proofs: Vec<String>,
 }
@@ -85,24 +80,44 @@ struct LogQuery {
     since: Option<i64>,
 }
 
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+fn get_engine(state: &SharedState) -> Result<&super::PolicyEngine, (StatusCode, &'static str)> {
+    state
+        .policy_engine
+        .as_ref()
+        .map(|e| e.as_ref())
+        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Policy framework not enabled"))
+}
+
+fn normalize_channel(channel: &str) -> String {
+    let ch = if channel.starts_with('#') {
+        channel.to_string()
+    } else {
+        format!("#{channel}")
+    };
+    ch.to_lowercase()
+}
+
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
-/// GET /api/v1/policy/:channel — Get current policy for a channel.
 async fn get_policy(
-    State(engine): State<Arc<PolicyEngine>>,
+    State(state): State<Arc<SharedState>>,
     Path(channel): Path<String>,
 ) -> impl IntoResponse {
+    let engine = match get_engine(&state) {
+        Ok(e) => e,
+        Err(e) => return e.into_response(),
+    };
     let channel_id = normalize_channel(&channel);
 
     match engine.get_policy(&channel_id) {
         Ok(Some(policy)) => {
-            // Also fetch the authority set
             let auth_set = engine
                 .store()
                 .get_authority_set(&policy.authority_set_hash)
                 .ok()
                 .flatten();
-
             Json(PolicyResponse {
                 policy,
                 authority_set: auth_set,
@@ -114,11 +129,14 @@ async fn get_policy(
     }
 }
 
-/// GET /api/v1/policy/:channel/history — Get full policy chain.
 async fn get_policy_chain(
-    State(engine): State<Arc<PolicyEngine>>,
+    State(state): State<Arc<SharedState>>,
     Path(channel): Path<String>,
 ) -> impl IntoResponse {
+    let engine = match get_engine(&state) {
+        Ok(e) => e,
+        Err(e) => return e.into_response(),
+    };
     let channel_id = normalize_channel(&channel);
 
     match engine.store().get_policy_chain(&channel_id) {
@@ -127,12 +145,15 @@ async fn get_policy_chain(
     }
 }
 
-/// POST /api/v1/policy/:channel/join — Submit evidence to join a channel.
 async fn join_channel(
-    State(engine): State<Arc<PolicyEngine>>,
+    State(state): State<Arc<SharedState>>,
     Path(channel): Path<String>,
     Json(req): Json<JoinRequest>,
 ) -> impl IntoResponse {
+    let engine = match get_engine(&state) {
+        Ok(e) => e,
+        Err(e) => return e.into_response(),
+    };
     let channel_id = normalize_channel(&channel);
 
     let evidence = UserEvidence {
@@ -199,11 +220,14 @@ async fn join_channel(
     }
 }
 
-/// GET /api/v1/policy/:channel/membership/:did — Check membership.
 async fn check_membership(
-    State(engine): State<Arc<PolicyEngine>>,
+    State(state): State<Arc<SharedState>>,
     Path((channel, did)): Path<(String, String)>,
 ) -> impl IntoResponse {
+    let engine = match get_engine(&state) {
+        Ok(e) => e,
+        Err(e) => return e.into_response(),
+    };
     let channel_id = normalize_channel(&channel);
 
     match engine.check_membership(&channel_id, &did) {
@@ -213,12 +237,15 @@ async fn check_membership(
     }
 }
 
-/// GET /api/v1/policy/:channel/transparency — Get transparency log.
 async fn get_transparency_log(
-    State(engine): State<Arc<PolicyEngine>>,
+    State(state): State<Arc<SharedState>>,
     Path(channel): Path<String>,
     Query(query): Query<LogQuery>,
 ) -> impl IntoResponse {
+    let engine = match get_engine(&state) {
+        Ok(e) => e,
+        Err(e) => return e.into_response(),
+    };
     let channel_id = normalize_channel(&channel);
 
     match engine.store().get_log_entries(&channel_id, query.since) {
@@ -227,24 +254,18 @@ async fn get_transparency_log(
     }
 }
 
-/// GET /api/v1/authority/:hash — Get authority set by hash.
 async fn get_authority_set(
-    State(engine): State<Arc<PolicyEngine>>,
+    State(state): State<Arc<SharedState>>,
     Path(hash): Path<String>,
 ) -> impl IntoResponse {
+    let engine = match get_engine(&state) {
+        Ok(e) => e,
+        Err(e) => return e.into_response(),
+    };
+
     match engine.store().get_authority_set(&hash) {
         Ok(Some(auth_set)) => Json(auth_set).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "Authority set not found").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
-}
-
-/// Normalize channel name (ensure # prefix, lowercase).
-fn normalize_channel(channel: &str) -> String {
-    let ch = if channel.starts_with('#') {
-        channel.to_string()
-    } else {
-        format!("#{channel}")
-    };
-    ch.to_lowercase()
 }

@@ -312,6 +312,8 @@ pub struct SharedState {
     pub config: ServerConfig,
     /// Plugin manager for server extensions.
     pub plugin_manager: PluginManager,
+    /// Policy engine for channel governance (if enabled).
+    pub policy_engine: Option<Arc<crate::policy::PolicyEngine>>,
 }
 
 impl SharedState {
@@ -554,6 +556,22 @@ impl Server {
             db: db.map(Mutex::new),
             config: self.config.clone(),
             plugin_manager,
+            policy_engine: {
+                // Initialize policy engine alongside the main DB
+                let policy_db_path = self.config.db_path.as_ref()
+                    .map(|p| p.replace(".db", "-policy.db"))
+                    .unwrap_or_else(|| ":memory:".to_string());
+                match crate::policy::PolicyStore::open(&policy_db_path) {
+                    Ok(store) => {
+                        let authority_did = format!("did:web:{}", self.config.server_name);
+                        Some(Arc::new(crate::policy::PolicyEngine::new(store, authority_did)))
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to initialize policy engine: {e}");
+                        None
+                    }
+                }
+            },
         }))
     }
 

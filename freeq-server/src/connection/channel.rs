@@ -92,6 +92,57 @@ pub(super) fn handle_join(
         }
     }
 
+    // ─── Policy check ─────────────────────────────────────────────────
+    // If the channel has a policy, check if the user has a valid attestation.
+    // Channels without policies are open (backwards compatible).
+    if let Some(ref engine) = state.policy_engine {
+        if let Ok(Some(_policy)) = engine.get_policy(channel) {
+            // Channel has a policy — user must have a valid attestation
+            match did {
+                Some(user_did) => {
+                    match engine.check_membership(channel, user_did) {
+                        Ok(Some(_attestation)) => {
+                            // Valid attestation — allow join
+                        }
+                        Ok(None) => {
+                            // No attestation — reject with informative message
+                            let reply = Message::from_server(
+                                server_name,
+                                "477", // ERR_NEEDREGGEDNICK (repurposed: need policy acceptance)
+                                vec![
+                                    nick,
+                                    channel,
+                                    "This channel requires policy acceptance — use /api/v1/policy/ to join",
+                                ],
+                            );
+                            send(state, session_id, format!("{reply}\r\n"));
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::warn!(channel, did = user_did, error = %e, "Policy check failed");
+                            // Fail-open on engine errors (don't break IRC)
+                        }
+                    }
+                }
+                None => {
+                    // Guest user (no DID) — check if policy allows unauthenticated join
+                    // For now, guests cannot join policy-gated channels
+                    let reply = Message::from_server(
+                        server_name,
+                        "477",
+                        vec![
+                            nick,
+                            channel,
+                            "This channel requires authentication — sign in to join",
+                        ],
+                    );
+                    send(state, session_id, format!("{reply}\r\n"));
+                    return;
+                }
+            }
+        }
+    }
+
     {
         let mut channels = state.channels.lock().unwrap();
         let ch = channels.entry(channel.to_string()).or_default();

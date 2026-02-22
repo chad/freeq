@@ -192,6 +192,11 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)) // 12MB
         .layer(CorsLayer::permissive());
 
+    // Policy API endpoints
+    if state.policy_engine.is_some() {
+        app = app.merge(crate::policy::api::routes());
+    }
+
     // Serve static web client files if the directory exists
     if let Some(ref web_dir) = state.config.web_static_dir {
         let dir = std::path::PathBuf::from(web_dir);

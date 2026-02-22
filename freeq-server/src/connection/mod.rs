@@ -20,6 +20,7 @@ mod cap;
 mod channel;
 pub mod helpers;
 mod messaging;
+mod policy_cmd;
 mod queries;
 mod registration;
 pub(crate) mod routing;
@@ -42,6 +43,7 @@ use channel::{
 use helpers::{normalize_channel, s2s_broadcast, s2s_next_event_id};
 use messaging::{handle_chathistory, handle_privmsg, handle_tagmsg};
 use queries::{handle_away, handle_lusers, handle_who, handle_whois};
+use policy_cmd::handle_policy;
 use registration::try_complete_registration;
 
 // Re-export items used by other modules in the crate
@@ -686,6 +688,10 @@ where
                 }
                 let end = Message::from_server(&server_name, irc::RPL_ENDOFINFO, vec![nick, "End of /INFO list"]);
                 send(&state, &session_id, format!("{end}\r\n"));
+            }
+            "POLICY" => {
+                if !conn.registered { continue; }
+                handle_policy(&conn, &msg, &state, &server_name, &session_id, &send);
             }
             "QUIT" => {
                 break;
