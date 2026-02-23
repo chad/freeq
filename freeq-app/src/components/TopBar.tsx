@@ -44,10 +44,10 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
       </button>
 
       {/* Channel / DM name */}
-      <div className="flex items-center gap-2 shrink-0">
-        {isChannel && <span className="text-accent text-base font-bold">#</span>}
-        {isDM && <span className="text-fg-dim text-base">💬</span>}
-        <span className="font-bold text-base text-fg">
+      <div className="flex items-center gap-2 min-w-0 shrink">
+        {isChannel && <span className="text-accent text-base font-bold shrink-0">#</span>}
+        {isDM && <span className="text-fg-dim text-base shrink-0">💬</span>}
+        <span className="font-bold text-base text-fg truncate">
           {isChannel ? (ch?.name || activeChannel).replace(/^#/, '') : isDM ? activeChannel : 'Server'}
         </span>
       </div>

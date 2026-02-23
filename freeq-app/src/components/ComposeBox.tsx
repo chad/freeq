@@ -79,8 +79,10 @@ export function ComposeBox() {
     return [...ch.members.values()].map((m) => m.nick).sort();
   }, [ch?.members]);
 
-  // Focus input on channel switch
+  // Clear compose and focus on channel switch
   useEffect(() => {
+    setText('');
+    setAutocomplete(null);
     inputRef.current?.focus();
   }, [activeChannel]);
 
