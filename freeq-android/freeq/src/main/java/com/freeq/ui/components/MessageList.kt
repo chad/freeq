@@ -1,13 +1,11 @@
 package com.freeq.ui.components
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Reply
@@ -16,7 +14,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -89,35 +86,9 @@ fun MessageList(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(vertical = 8.dp)
         ) {
-            // Find the unread boundary — try by ID first, fall back to timestamp
-            val unreadSeparatorMsgId = run sep@{
-                val nick = appState.nick.value
-
-                // Primary: find lastReadId in messages
-                if (lastReadId != null) {
-                    val idx = messages.indexOfFirst { it.id == lastReadId }
-                    if (idx >= 0 && idx < messages.size - 1) {
-                        val tail = messages.subList(idx + 1, messages.size)
-                        val hasRealUnread = tail.any { it.from.isNotEmpty() }
-                        val userCaughtUp = tail.any { it.from.equals(nick, ignoreCase = true) }
-                        if (hasRealUnread && !userCaughtUp) return@sep messages[idx + 1].id
-                    }
-                }
-
-                // Fallback: find first real message after lastReadTimestamp
-                if (lastReadTimestamp > 0) {
-                    val idx = messages.indexOfFirst {
-                        it.timestamp.time > lastReadTimestamp && it.from.isNotEmpty()
-                    }
-                    if (idx >= 0) {
-                        val tail = messages.subList(idx, messages.size)
-                        val userCaughtUp = tail.any { it.from.equals(nick, ignoreCase = true) }
-                        if (!userCaughtUp) return@sep messages[idx].id
-                    }
-                }
-
-                null
-            }
+            val unreadSeparatorMsgId = findUnreadBoundary(
+                messages, lastReadId, lastReadTimestamp, appState.nick.value
+            )
 
             itemsIndexed(messages, key = { _, msg -> msg.id }) { index, msg ->
                 val prevMsg = if (index > 0) messages[index - 1] else null
@@ -507,6 +478,43 @@ private fun TypingIndicator(typers: List<String>) {
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
         )
     }
+}
+
+/**
+ * Find the first unread message ID to place the "New messages" separator before.
+ * Tries matching by message ID first, falls back to timestamp for cross-session reliability.
+ * Returns null if there are no unread messages or the user has already sent a message.
+ */
+private fun findUnreadBoundary(
+    messages: List<ChatMessage>,
+    lastReadId: String?,
+    lastReadTimestamp: Long,
+    nick: String
+): String? {
+    // Primary: find lastReadId in messages
+    if (lastReadId != null) {
+        val idx = messages.indexOfFirst { it.id == lastReadId }
+        if (idx >= 0 && idx < messages.size - 1) {
+            val tail = messages.subList(idx + 1, messages.size)
+            val hasRealUnread = tail.any { it.from.isNotEmpty() }
+            val userCaughtUp = tail.any { it.from.equals(nick, ignoreCase = true) }
+            if (hasRealUnread && !userCaughtUp) return messages[idx + 1].id
+        }
+    }
+
+    // Fallback: find first real message after lastReadTimestamp
+    if (lastReadTimestamp > 0) {
+        val idx = messages.indexOfFirst {
+            it.timestamp.time > lastReadTimestamp && it.from.isNotEmpty()
+        }
+        if (idx >= 0) {
+            val tail = messages.subList(idx, messages.size)
+            val userCaughtUp = tail.any { it.from.equals(nick, ignoreCase = true) }
+            if (!userCaughtUp) return messages[idx].id
+        }
+    }
+
+    return null
 }
 
 private fun formatTime(date: Date): String {
