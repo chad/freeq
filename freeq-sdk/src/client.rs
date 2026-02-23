@@ -848,6 +848,11 @@ where
                                 let _ = event_tx.send(Event::TagMsg { from, target, tags: msg.tags.clone() }).await;
                             }
                         }
+                        "FAIL" => {
+                            // IRCv3 FAIL command — emit as ServerNotice
+                            let text = msg.params.join(" ");
+                            let _ = event_tx.send(Event::ServerNotice { text }).await;
+                        }
                         _ => {
                             // Emit server error numerics (4xx, 5xx, 6xx, 9xx)
                             // and unrecognized commands as ServerNotice so the

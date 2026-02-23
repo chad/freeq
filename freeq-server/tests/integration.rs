@@ -1466,6 +1466,7 @@ async fn tls_connection() {
         realname: "TLS User".to_string(),
         tls: true,
         tls_insecure: true, // Self-signed cert
+        web_token: None,
     };
 
     let (handle, mut events) = client::connect(tls_config, None);

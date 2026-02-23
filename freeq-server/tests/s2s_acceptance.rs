@@ -45,6 +45,7 @@ async fn connect_guest(addr: &str, nick: &str) -> (ClientHandle, mpsc::Receiver<
         realname: format!("S2S Test ({nick})"),
         tls: false,
         tls_insecure: false,
+        web_token: None,
     })
     .await
     .unwrap_or_else(|e| panic!("Failed to connect {nick} to {addr}: {e}"));
@@ -56,6 +57,7 @@ async fn connect_guest(addr: &str, nick: &str) -> (ClientHandle, mpsc::Receiver<
         realname: format!("S2S Test ({nick})"),
         tls: false,
         tls_insecure: false,
+        web_token: None,
     };
 
     client::connect_with_stream(conn, config, None)
@@ -4833,4 +4835,455 @@ async fn single_server_autoop_on_empty_rejoin() {
 
     let _ = h_op.quit(Some("done")).await;
     let _ = h_obs.quit(Some("done")).await;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Edge case tests — risky protocol paths
+// ═══════════════════════════════════════════════════════════════════
+
+/// EDGE1: PRIVMSG to channel with +n mode from non-member should fail
+#[tokio::test]
+async fn single_server_edge1_no_external_messages_enforced() {
+    let Some(addr) = get_single_server() else { return };
+    let ch = test_channel("edge1");
+    let nick_in = test_nick("in", "edge1");
+    let nick_out = test_nick("out", "edge1");
+
+    // User IN creates channel (gets +nt by default)
+    let (h_in, mut rx_in) = connect_guest(&addr, &nick_in).await;
+    wait_registered(&mut rx_in).await;
+    h_in.join(&ch).await.unwrap();
+    wait_joined(&mut rx_in, &ch).await;
+
+    // User OUT connects but does NOT join the channel
+    let (h_out, mut rx_out) = connect_guest(&addr, &nick_out).await;
+    wait_registered(&mut rx_out).await;
+
+    // OUT tries to send to channel — should get ERR_CANNOTSENDTOCHAN
+    h_out.raw(&format!("PRIVMSG {} :sneaky message", ch)).await.unwrap();
+
+    // OUT should receive an error notice
+    wait_notice_containing(&mut rx_out, "Cannot send to channel").await;
+    eprintln!("  ✓ Non-member blocked from sending to +n channel");
+
+    // IN should NOT receive the message
+    let got = maybe_wait(
+        &mut rx_in,
+        |e| matches!(e, Event::Message { text, .. } if text.contains("sneaky")),
+        Duration::from_secs(2),
+    ).await;
+    assert!(got.is_none(), "Message from non-member leaked through +n");
+    eprintln!("  ✓ No message leaked through +n");
+
+    let _ = h_in.quit(Some("done")).await;
+    let _ = h_out.quit(Some("done")).await;
+}
+
+/// EDGE2: NICK change to a registered nick should be blocked
+#[tokio::test]
+async fn single_server_edge2_nick_change_to_registered_nick_blocked() {
+    let Some(addr) = get_single_server() else { return };
+    let _ch = test_channel("edge2");
+    let owner_nick = test_nick("owner", "edge2");
+    let intruder_nick = test_nick("intruder", "edge2");
+
+    // Owner creates channel (this registers the nick to... well, no DID for guests.
+    // Nick ownership requires DID auth. So test NICK change to an IN-USE nick instead.)
+    let (h_owner, mut rx_owner) = connect_guest(&addr, &owner_nick).await;
+    wait_registered(&mut rx_owner).await;
+
+    let (h_intruder, mut rx_intruder) = connect_guest(&addr, &intruder_nick).await;
+    wait_registered(&mut rx_intruder).await;
+
+    // Intruder tries to change nick to owner's nick
+    h_intruder.raw(&format!("NICK {}", owner_nick)).await.unwrap();
+
+    // Should get ERR_NICKNAMEINUSE (433)
+    wait_notice_containing(&mut rx_intruder, "already in use").await;
+    eprintln!("  ✓ NICK change to in-use nick blocked with 433");
+
+    let _ = h_owner.quit(Some("done")).await;
+    let _ = h_intruder.quit(Some("done")).await;
+}
+
+/// EDGE3: CHATHISTORY for channel you're not in should be rejected
+#[tokio::test]
+async fn single_server_edge3_chathistory_unauthorized() {
+    let Some(addr) = get_single_server() else { return };
+    let ch = test_channel("edge3");
+    let nick_in = test_nick("in", "edge3");
+    let nick_out = test_nick("spy", "edge3");
+
+    // User IN creates channel and sends messages
+    let (h_in, mut rx_in) = connect_guest(&addr, &nick_in).await;
+    wait_registered(&mut rx_in).await;
+    h_in.join(&ch).await.unwrap();
+    wait_joined(&mut rx_in, &ch).await;
+    h_in.privmsg(&ch, "secret message").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // User OUT connects but does NOT join
+    let (h_out, mut rx_out) = connect_guest(&addr, &nick_out).await;
+    wait_registered(&mut rx_out).await;
+
+    // OUT requests chathistory — should fail
+    h_out.raw(&format!("CHATHISTORY LATEST {} * 50", ch)).await.unwrap();
+
+    // Should receive an error (INVALID_TARGET or similar), NOT the secret message
+    wait_notice_containing(&mut rx_out, "not in that channel").await;
+
+    // Should NOT have received the secret message
+    let got = maybe_wait(
+        &mut rx_out,
+        |e| matches!(e, Event::Message { text, .. } if text.contains("secret")),
+        Duration::from_secs(2),
+    ).await;
+    assert!(got.is_none(), "CHATHISTORY leaked messages to non-member!");
+    eprintln!("  ✓ CHATHISTORY rejected for non-member");
+
+    let _ = h_in.quit(Some("done")).await;
+    let _ = h_out.quit(Some("done")).await;
+}
+
+/// EDGE4: Double JOIN to same channel should be harmless
+#[tokio::test]
+async fn single_server_edge4_double_join_harmless() {
+    let Some(addr) = get_single_server() else { return };
+    let ch = test_channel("edge4");
+    let nick = test_nick("dblj", "edge4");
+
+    let (h, mut rx) = connect_guest(&addr, &nick).await;
+    wait_registered(&mut rx).await;
+
+    h.join(&ch).await.unwrap();
+    wait_joined(&mut rx, &ch).await;
+    eprintln!("  ✓ First JOIN succeeded");
+
+    // Second JOIN to same channel
+    h.join(&ch).await.unwrap();
+    // Should either silently ignore or re-send NAMES. Should NOT crash or kick.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Send a message to verify we're still in the channel
+    h.privmsg(&ch, "still here after double join").await.unwrap();
+    wait_message_containing(&mut rx, "still here after double join").await;
+    eprintln!("  ✓ Double JOIN is harmless, user still functional");
+
+    let _ = h.quit(Some("done")).await;
+}
+
+/// EDGE5: KICK yourself from your own channel
+#[tokio::test]
+async fn single_server_edge5_kick_self() {
+    let Some(addr) = get_single_server() else { return };
+    let ch = test_channel("edge5");
+    let nick = test_nick("selfkick", "edge5");
+
+    let (h, mut rx) = connect_guest(&addr, &nick).await;
+    let actual_nick = wait_registered(&mut rx).await;
+
+    h.join(&ch).await.unwrap();
+    wait_joined(&mut rx, &ch).await;
+
+    // Kick yourself
+    h.raw(&format!("KICK {} {} :self-kick", ch, actual_nick)).await.unwrap();
+
+    // Should be kicked from the channel
+    wait_for(
+        &mut rx,
+        |e| matches!(e, Event::Kicked { .. }),
+        "self-kick",
+    ).await;
+    eprintln!("  ✓ Self-kick works");
+
+    // Try to send after kick — should fail
+    h.raw(&format!("PRIVMSG {} :ghost message", ch)).await.unwrap();
+    wait_notice_containing(&mut rx, "Cannot send to channel").await;
+    eprintln!("  ✓ Cannot send after being kicked");
+
+    let _ = h.quit(Some("done")).await;
+}
+
+/// EDGE6: MODE change on non-existent channel
+#[tokio::test]
+async fn single_server_edge6_mode_nonexistent_channel() {
+    let Some(addr) = get_single_server() else { return };
+    let ch = test_channel("edge6noexist");
+    let nick = test_nick("moder", "edge6");
+
+    let (h, mut rx) = connect_guest(&addr, &nick).await;
+    wait_registered(&mut rx).await;
+
+    // Try MODE on a channel that doesn't exist
+    h.raw(&format!("MODE {} +m", ch)).await.unwrap();
+
+    // Should get an error (442 ERR_NOTONCHANNEL or 403 ERR_NOSUCHCHANNEL)
+    wait_notice_containing(&mut rx, "not on that channel").await;
+    eprintln!("  ✓ MODE on non-existent channel returns error");
+
+    let _ = h.quit(Some("done")).await;
+}
+
+/// EDGE7: Very long message doesn't crash server
+#[tokio::test]
+async fn single_server_edge7_long_message() {
+    let Some(addr) = get_single_server() else { return };
+    let ch = test_channel("edge7");
+    let nick1 = test_nick("long1", "edge7");
+    let nick2 = test_nick("long2", "edge7");
+
+    let (h1, mut rx1) = connect_guest(&addr, &nick1).await;
+    let (h2, mut rx2) = connect_guest(&addr, &nick2).await;
+    wait_registered(&mut rx1).await;
+    wait_registered(&mut rx2).await;
+
+    h1.join(&ch).await.unwrap();
+    h2.join(&ch).await.unwrap();
+    wait_joined(&mut rx1, &ch).await;
+    wait_joined(&mut rx2, &ch).await;
+    drain(&mut rx1).await;
+    drain(&mut rx2).await;
+
+    // Send a very long message (IRC max is typically 512 bytes total, but many modern servers allow more)
+    let long_msg = "A".repeat(400);
+    h1.privmsg(&ch, &long_msg).await.unwrap();
+
+    // Other user should receive at least part of it
+    let (_, _, text) = wait_message_containing(&mut rx2, "AAAA").await;
+    eprintln!("  ✓ Long message delivered ({} chars received)", text.len());
+
+    // Send a normal message after to verify server isn't broken
+    h1.privmsg(&ch, "still working after long msg").await.unwrap();
+    wait_message_containing(&mut rx2, "still working").await;
+    eprintln!("  ✓ Server still functional after long message");
+
+    let _ = h1.quit(Some("done")).await;
+    let _ = h2.quit(Some("done")).await;
+}
+
+/// EDGE8: Non-op cannot set MODE +o
+#[tokio::test]
+async fn single_server_edge8_nonop_mode_change_rejected() {
+    let Some(addr) = get_single_server() else { return };
+    let ch = test_channel("edge8");
+    let nick_op = test_nick("theop", "edge8");
+    let nick_user = test_nick("norml", "edge8");
+    let nick_target = test_nick("targ", "edge8");
+
+    // Op creates channel
+    let (h_op, mut rx_op) = connect_guest(&addr, &nick_op).await;
+    wait_registered(&mut rx_op).await;
+    h_op.join(&ch).await.unwrap();
+    wait_joined(&mut rx_op, &ch).await;
+
+    // Normal user joins
+    let (h_user, mut rx_user) = connect_guest(&addr, &nick_user).await;
+    let _actual_user = wait_registered(&mut rx_user).await;
+    h_user.join(&ch).await.unwrap();
+    wait_joined(&mut rx_user, &ch).await;
+
+    // Target user joins
+    let (h_target, mut rx_target) = connect_guest(&addr, &nick_target).await;
+    let actual_target = wait_registered(&mut rx_target).await;
+    h_target.join(&ch).await.unwrap();
+    wait_joined(&mut rx_target, &ch).await;
+    drain(&mut rx_user).await;
+
+    // Normal user tries to +o target — should fail
+    h_user.raw(&format!("MODE {} +o {}", ch, actual_target)).await.unwrap();
+    wait_notice_containing(&mut rx_user, "not channel operator").await;
+    eprintln!("  ✓ Non-op cannot set +o");
+
+    let _ = h_op.quit(Some("done")).await;
+    let _ = h_user.quit(Some("done")).await;
+    let _ = h_target.quit(Some("done")).await;
+}
+
+/// EDGE9: Edit someone else's message is rejected
+#[tokio::test]
+async fn single_server_edge9_edit_others_message_rejected() {
+    let Some(addr) = get_single_server() else { return };
+    let ch = test_channel("edge9");
+    let nick1 = test_nick("auth1", "edge9");
+    let nick2 = test_nick("edit2", "edge9");
+
+    let (h1, mut rx1) = connect_guest(&addr, &nick1).await;
+    let (h2, mut rx2) = connect_guest(&addr, &nick2).await;
+    wait_registered(&mut rx1).await;
+    wait_registered(&mut rx2).await;
+
+    h1.join(&ch).await.unwrap();
+    h2.join(&ch).await.unwrap();
+    wait_joined(&mut rx1, &ch).await;
+    wait_joined(&mut rx2, &ch).await;
+    drain(&mut rx1).await;
+    drain(&mut rx2).await;
+
+    // User 1 sends a message
+    h1.privmsg(&ch, "original message from user1").await.unwrap();
+    // Get the msgid from user 2's perspective
+    let evt = wait_message_event_containing(&mut rx2, "original message from user1").await;
+    let msgid = match &evt {
+        Event::Message { tags, .. } => tags.get("msgid").cloned().unwrap_or_default(),
+        _ => String::new(),
+    };
+    assert!(!msgid.is_empty(), "Message should have msgid");
+    eprintln!("  ✓ Got msgid: {}", &msgid[..8]);
+
+    // User 2 tries to edit user 1's message
+    h2.raw(&format!(
+        "@+draft/edit={} PRIVMSG {} :hacked content",
+        msgid, ch
+    )).await.unwrap();
+
+    // The edit should be rejected — either with FAIL AUTHOR_MISMATCH (if DB enabled)
+    // or silently dropped (if no DB). Either way, user 1 must NOT see the edit.
+    let got = maybe_wait(
+        &mut rx1,
+        |e| matches!(e, Event::Message { text, .. } if text.contains("hacked")),
+        Duration::from_secs(3),
+    ).await;
+    assert!(got.is_none(), "Unauthorized edit was delivered!");
+    eprintln!("  ✓ Unauthorized edit not delivered to other users");
+
+    let _ = h1.quit(Some("done")).await;
+    let _ = h2.quit(Some("done")).await;
+}
+
+/// EDGE10: Delete someone else's message without ops is rejected
+#[tokio::test]
+async fn single_server_edge10_delete_others_message_rejected() {
+    let Some(addr) = get_single_server() else { return };
+    let ch = test_channel("edge10");
+    let nick1 = test_nick("auth1", "edge10");
+    let nick2 = test_nick("del2", "edge10");
+
+    // nick1 creates channel (gets ops)
+    let (h1, mut rx1) = connect_guest(&addr, &nick1).await;
+    wait_registered(&mut rx1).await;
+    h1.join(&ch).await.unwrap();
+    wait_joined(&mut rx1, &ch).await;
+
+    // nick2 joins (not op)
+    let (h2, mut rx2) = connect_guest(&addr, &nick2).await;
+    wait_registered(&mut rx2).await;
+    h2.join(&ch).await.unwrap();
+    wait_joined(&mut rx2, &ch).await;
+    drain(&mut rx1).await;
+    drain(&mut rx2).await;
+
+    // User 1 (op) sends a message
+    h1.privmsg(&ch, "important message from op").await.unwrap();
+    // Get msgid from user 2's view
+    let evt = wait_message_event_containing(&mut rx2, "important message from op").await;
+    let msgid = match &evt {
+        Event::Message { tags, .. } => tags.get("msgid").cloned().unwrap_or_default(),
+        _ => String::new(),
+    };
+    assert!(!msgid.is_empty(), "Message should have msgid");
+
+    // User 2 (not op, not author) tries to delete
+    h2.raw(&format!(
+        "@+draft/delete={} TAGMSG {}",
+        msgid, ch
+    )).await.unwrap();
+
+    // The delete should be rejected — either with FAIL DELETE AUTHOR_MISMATCH (if DB)
+    // or silently dropped. Either way, check user 1 doesn't see a deletion broadcast.
+    let got = maybe_wait(
+        &mut rx1,
+        |e| matches!(e, Event::Message { text, .. } if text.contains("deleted")),
+        Duration::from_secs(3),
+    ).await;
+    assert!(got.is_none(), "Unauthorized delete was broadcast!");
+    eprintln!("  ✓ Unauthorized delete not broadcast");
+
+    let _ = h1.quit(Some("done")).await;
+    let _ = h2.quit(Some("done")).await;
+}
+
+/// EDGE11: Rapid NICK changes don't cause state corruption
+#[tokio::test]
+async fn single_server_edge11_rapid_nick_changes() {
+    let Some(addr) = get_single_server() else { return };
+    let ch = test_channel("edge11");
+    let nick_base = test_nick("rapid", "edge11");
+
+    let (h, mut rx) = connect_guest(&addr, &nick_base).await;
+    wait_registered(&mut rx).await;
+    h.join(&ch).await.unwrap();
+    wait_joined(&mut rx, &ch).await;
+    drain(&mut rx).await;
+
+    // Rapid nick changes
+    for i in 0..5 {
+        let new = format!("{nick_base}v{i}");
+        h.raw(&format!("NICK {new}")).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Wait for nick changes to settle
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    drain(&mut rx).await;
+
+    // Send a message — server should still work
+    let _final_nick = format!("{nick_base}v4");
+    h.privmsg(&ch, "after rapid nick changes").await.unwrap();
+    wait_message_containing(&mut rx, "after rapid nick changes").await;
+    eprintln!("  ✓ Server stable after 5 rapid nick changes");
+
+    let _ = h.quit(Some("done")).await;
+}
+
+/// EDGE12: Moderated channel (+m) blocks non-voiced users
+#[tokio::test]
+async fn single_server_edge12_moderated_blocks_unvoiced() {
+    let Some(addr) = get_single_server() else { return };
+    let ch = test_channel("edge12");
+    let nick_op = test_nick("mop", "edge12");
+    let nick_user = test_nick("muted", "edge12");
+
+    let (h_op, mut rx_op) = connect_guest(&addr, &nick_op).await;
+    wait_registered(&mut rx_op).await;
+    h_op.join(&ch).await.unwrap();
+    wait_joined(&mut rx_op, &ch).await;
+
+    // Set +m
+    h_op.raw(&format!("MODE {} +m", ch)).await.unwrap();
+    wait_mode(&mut rx_op, &ch).await;
+
+    let (h_user, mut rx_user) = connect_guest(&addr, &nick_user).await;
+    wait_registered(&mut rx_user).await;
+    h_user.join(&ch).await.unwrap();
+    wait_joined(&mut rx_user, &ch).await;
+    drain(&mut rx_op).await;
+
+    // Unvoiced user tries to send — should fail
+    h_user.raw(&format!("PRIVMSG {} :muted message", ch)).await.unwrap();
+    wait_notice_containing(&mut rx_user, "Cannot send to channel").await;
+    eprintln!("  ✓ Unvoiced user blocked in +m channel");
+
+    // Op should NOT receive the message
+    let got = maybe_wait(
+        &mut rx_op,
+        |e| matches!(e, Event::Message { text, .. } if text.contains("muted")),
+        Duration::from_secs(2),
+    ).await;
+    assert!(got.is_none(), "Muted message leaked through +m");
+    eprintln!("  ✓ No message leaked through +m");
+
+    // Voice the user
+    let actual_user = nick_user.clone(); // might differ if collision
+    h_op.raw(&format!("MODE {} +v {}", ch, actual_user)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    drain(&mut rx_op).await;
+    drain(&mut rx_user).await;
+
+    // Now the voiced user can send
+    h_user.privmsg(&ch, "voiced message").await.unwrap();
+    wait_message_containing(&mut rx_op, "voiced message").await;
+    eprintln!("  ✓ Voiced user can send in +m channel");
+
+    let _ = h_op.quit(Some("done")).await;
+    let _ = h_user.quit(Some("done")).await;
 }
