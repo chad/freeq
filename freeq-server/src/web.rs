@@ -189,6 +189,7 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/users/{nick}", get(api_user))
         .route("/api/v1/users/{nick}/whois", get(api_user_whois))
         .route("/api/v1/upload", axum::routing::post(api_upload))
+        .route("/api/v1/og", get(api_og_preview))
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)) // 12MB
         .layer(CorsLayer::permissive());
 
@@ -1039,3 +1040,95 @@ async fn api_upload(
     })))
 }
 
+
+// ── OG metadata proxy (replaces allorigins.win privacy leak) ──────────
+
+#[derive(Deserialize)]
+struct OgQuery {
+    url: String,
+}
+
+/// Fetch OpenGraph metadata from a URL and return as JSON.
+/// Avoids clients leaking browsing data to third-party proxy services.
+async fn api_og_preview(Query(q): Query<OgQuery>) -> impl IntoResponse {
+    // Validate URL
+    let url = match url::Url::parse(&q.url) {
+        Ok(u) if u.scheme() == "http" || u.scheme() == "https" => u,
+        _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid URL"}))).into_response(),
+    };
+
+    // Fetch with timeout
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .build()
+        .unwrap();
+
+    let resp = match client.get(url.as_str())
+        .header("User-Agent", "freeq/1.0 (link preview)")
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": "Fetch failed"}))).into_response(),
+    };
+
+    // Only process HTML
+    let ct = resp.headers().get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !ct.contains("text/html") {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Not HTML"}))).into_response();
+    }
+
+    // Limit body size to 256KB
+    let body = match resp.bytes().await {
+        Ok(b) if b.len() <= 256 * 1024 => String::from_utf8_lossy(&b).to_string(),
+        _ => return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": "Body too large"}))).into_response(),
+    };
+
+    // Parse OG tags
+    let get_meta = |prop: &str| -> Option<String> {
+        let patterns = [
+            format!(r#"<meta[^>]*(?:property|name)=["']{prop}["'][^>]*content=["']([^"']*)["']"#),
+            format!(r#"<meta[^>]*content=["']([^"']*)["'][^>]*(?:property|name)=["']{prop}["']"#),
+        ];
+        for pat in &patterns {
+            if let Ok(re) = regex::Regex::new(pat) {
+                if let Some(caps) = re.captures(&body) {
+                    return caps.get(1).map(|m| decode_html_entities(m.as_str()));
+                }
+            }
+        }
+        None
+    };
+
+    // Also try <title> tag
+    let title = get_meta("og:title")
+        .or_else(|| {
+            regex::Regex::new(r"<title[^>]*>([^<]+)</title>")
+                .ok()
+                .and_then(|re| re.captures(&body))
+                .and_then(|caps| caps.get(1))
+                .map(|m| decode_html_entities(m.as_str()))
+        });
+
+    Json(serde_json::json!({
+        "title": title,
+        "description": get_meta("og:description").or_else(|| get_meta("description")),
+        "image": get_meta("og:image"),
+        "site_name": get_meta("og:site_name"),
+    })).into_response()
+}
+
+fn decode_html_entities(s: &str) -> String {
+    s.replace("&amp;", "&")
+     .replace("&lt;", "<")
+     .replace("&gt;", ">")
+     .replace("&quot;", "\"")
+     .replace("&#39;", "'")
+     .replace("&apos;", "'")
+     .replace("&#x27;", "'")
+     .replace("&#x2F;", "/")
+     .replace("&nbsp;", " ")
+}
