@@ -105,6 +105,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     private var lastTypingSent: Long = 0
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     val notificationManager = FreeqNotificationManager(application)
+    val networkMonitor = NetworkMonitor(application).also { it.bind(this) }
 
     private val prefs: SharedPreferences
         get() = getApplication<Application>().getSharedPreferences("freeq", Context.MODE_PRIVATE)
@@ -143,6 +144,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         super.onCleared()
         scope.cancel()
+        networkMonitor.destroy()
         client?.disconnect()
     }
 
