@@ -18,6 +18,7 @@ import com.freeq.model.AppState
 import com.freeq.ui.components.ComposeBar
 import com.freeq.ui.components.MemberList
 import com.freeq.ui.components.MessageList
+import com.freeq.ui.components.UserProfileSheet
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -33,6 +34,7 @@ fun ChatDetailScreen(
     }
 
     var showMembers by remember { mutableStateOf(false) }
+    var profileSheetNick by remember { mutableStateOf<String?>(null) }
     val isChannel = channelName.startsWith("#")
 
     // Update active channel and mark read
@@ -143,6 +145,7 @@ fun ChatDetailScreen(
                 MessageList(
                     appState = appState,
                     channelState = channelState,
+                    onProfileClick = { nick -> profileSheetNick = nick },
                     modifier = Modifier.weight(1f)
                 )
 
@@ -163,16 +166,25 @@ fun ChatDetailScreen(
                 ) {
                     MemberList(
                         members = channelState.members,
-                        onMemberClick = { nick ->
-                            if (!nick.equals(appState.nick.value, ignoreCase = true)) {
-                                appState.getOrCreateDM(nick)
-                                showMembers = false
-                                onNavigateToChat?.invoke(nick)
-                            }
-                        }
+                        onMemberClick = { nick -> profileSheetNick = nick }
                     )
                 }
             }
+        }
+
+        // Profile sheet
+        profileSheetNick?.let { nick ->
+            UserProfileSheet(
+                nick = nick,
+                appState = appState,
+                onDismiss = { profileSheetNick = null },
+                onNavigateToDM = { dmNick ->
+                    appState.getOrCreateDM(dmNick)
+                    showMembers = false
+                    profileSheetNick = null
+                    onNavigateToChat?.invoke(dmNick)
+                }
+            )
         }
     }
 }

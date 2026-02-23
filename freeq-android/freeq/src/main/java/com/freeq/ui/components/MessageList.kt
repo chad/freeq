@@ -36,6 +36,7 @@ import java.util.*
 fun MessageList(
     appState: AppState,
     channelState: ChannelState,
+    onProfileClick: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val messages = channelState.messages
@@ -103,7 +104,8 @@ fun MessageList(
                 showHeader = showHeader,
                 appState = appState,
                 channelState = channelState,
-                clipboardManager = clipboardManager
+                clipboardManager = clipboardManager,
+                onNickClick = onProfileClick
             )
 
             lastSender = msg.from
@@ -126,7 +128,8 @@ private fun MessageBubble(
     showHeader: Boolean,
     appState: AppState,
     channelState: ChannelState,
-    clipboardManager: androidx.compose.ui.platform.ClipboardManager
+    clipboardManager: androidx.compose.ui.platform.ClipboardManager,
+    onNickClick: ((String) -> Unit)? = null
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val isOwn = msg.from.equals(appState.nick.value, ignoreCase = true)
@@ -174,7 +177,11 @@ private fun MessageBubble(
         ) {
             // Avatar (only on header rows)
             if (showHeader) {
-                UserAvatar(nick = msg.from, size = 36.dp)
+                UserAvatar(
+                    nick = msg.from,
+                    size = 36.dp,
+                    modifier = Modifier.clickable { onNickClick?.invoke(msg.from) }
+                )
             } else {
                 Spacer(modifier = Modifier.width(36.dp))
             }
@@ -194,7 +201,8 @@ private fun MessageBubble(
                             text = msg.from,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = Theme.nickColor(msg.from)
+                            color = Theme.nickColor(msg.from),
+                            modifier = Modifier.clickable { onNickClick?.invoke(msg.from) }
                         )
                         Text(
                             text = formatTime(msg.timestamp),

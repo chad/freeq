@@ -6,13 +6,33 @@ import java.net.URL
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 
+data class BlueskyProfile(
+    val handle: String,
+    val displayName: String?,
+    val description: String?,
+    val avatar: String?,
+    val followersCount: Int?,
+    val followsCount: Int?,
+    val postsCount: Int?
+)
+
 object AvatarCache {
     private val cache = ConcurrentHashMap<String, String>()  // nick -> avatar URL
+    private val profileCache = ConcurrentHashMap<String, BlueskyProfile>()
     private val pending = ConcurrentHashMap.newKeySet<String>()
     private val failed = ConcurrentHashMap.newKeySet<String>()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     fun avatarUrl(nick: String): String? = cache[nick.lowercase()]
+
+    fun profile(nick: String): BlueskyProfile? = profileCache[nick.lowercase()]
+
+    suspend fun fetchProfileIfNeeded(nick: String): BlueskyProfile? {
+        val key = nick.lowercase()
+        profileCache[key]?.let { return it }
+        fetchAvatar(nick, key)
+        return profileCache[key]
+    }
 
     fun prefetch(nick: String) {
         val key = nick.lowercase()
@@ -29,9 +49,10 @@ object AvatarCache {
         val handles = if (nick.contains(".")) listOf(nick) else listOf("$nick.bsky.social")
 
         for (handle in handles) {
-            val url = resolveAvatar(handle)
-            if (url != null) {
-                cache[key] = url
+            val result = resolveProfile(handle)
+            if (result != null) {
+                profileCache[key] = result
+                result.avatar?.let { cache[key] = it }
                 pending.remove(key)
                 return
             }
@@ -40,7 +61,7 @@ object AvatarCache {
         pending.remove(key)
     }
 
-    private fun resolveAvatar(handle: String): String? {
+    private fun resolveProfile(handle: String): BlueskyProfile? {
         return try {
             val encoded = URLEncoder.encode(handle, "UTF-8")
             val url = URL("https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=$encoded")
@@ -50,7 +71,15 @@ object AvatarCache {
             }
             val text = conn.getInputStream().bufferedReader().readText()
             val json = JSONObject(text)
-            json.optString("avatar", null as String?)
+            BlueskyProfile(
+                handle = json.optString("handle", handle),
+                displayName = json.opt("displayName") as? String,
+                description = json.opt("description") as? String,
+                avatar = json.opt("avatar") as? String,
+                followersCount = if (json.has("followersCount")) json.optInt("followersCount") else null,
+                followsCount = if (json.has("followsCount")) json.optInt("followsCount") else null,
+                postsCount = if (json.has("postsCount")) json.optInt("postsCount") else null
+            )
         } catch (_: Exception) {
             null
         }
