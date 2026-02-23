@@ -347,12 +347,14 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 }
                 // Request history
                 state.requestHistory(channel: channel)
+                // Don't show "you joined" system message — the user knows they joined
+            } else {
+                let msg = ChatMessage(
+                    id: UUID().uuidString, from: "", text: "\(nick) joined",
+                    isAction: false, timestamp: Date(), replyTo: nil
+                )
+                ch.appendIfNew(msg)
             }
-            let msg = ChatMessage(
-                id: UUID().uuidString, from: "", text: "\(nick) joined",
-                isAction: false, timestamp: Date(), replyTo: nil
-            )
-            ch.appendIfNew(msg)
 
         case .parted(let channel, let nick):
             if nick.lowercased() == state.nick.lowercased() {
