@@ -99,6 +99,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     var pendingWebToken: String? = null
     var pendingNavigation = mutableStateOf<String?>(null)
     val lastReadMessageIds = mutableStateMapOf<String, String>()
+    val lastReadTimestamps = mutableStateMapOf<String, Long>()
     var isDarkTheme = mutableStateOf(true)
 
     private var client: FreeqClient? = null
@@ -130,6 +131,8 @@ class AppState(application: Application) : AndroidViewModel(application) {
         // Restore read positions
         prefs.getStringSet("readPositionKeys", emptySet())?.forEach { key ->
             prefs.getString("readPos_$key", null)?.let { lastReadMessageIds[key] = it }
+            val ts = prefs.getLong("readPosTime_$key", 0L)
+            if (ts > 0) lastReadTimestamps[key] = ts
         }
 
         // Prune stale typing indicators every 3 seconds
@@ -264,8 +267,13 @@ class AppState(application: Application) : AndroidViewModel(application) {
         unreadCounts[channel] = 0
         val state = channels.firstOrNull { it.name == channel }
             ?: dmBuffers.firstOrNull { it.name == channel }
-        state?.messages?.lastOrNull()?.let { lastMsg ->
-            lastReadMessageIds[channel] = lastMsg.id
+        // Prefer the last real message (has a sender) — system messages use random UUIDs
+        // that don't survive CHATHISTORY replay
+        val lastMsg = state?.messages?.lastOrNull { it.from.isNotEmpty() }
+            ?: state?.messages?.lastOrNull()
+        lastMsg?.let {
+            lastReadMessageIds[channel] = it.id
+            lastReadTimestamps[channel] = it.timestamp.time
             persistReadPositions()
         }
     }
@@ -310,6 +318,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
         val editor = prefs.edit()
         editor.putStringSet("readPositionKeys", lastReadMessageIds.keys.toSet())
         lastReadMessageIds.forEach { (key, value) -> editor.putString("readPos_$key", value) }
+        lastReadTimestamps.forEach { (key, value) -> editor.putLong("readPosTime_$key", value) }
         editor.apply()
     }
 

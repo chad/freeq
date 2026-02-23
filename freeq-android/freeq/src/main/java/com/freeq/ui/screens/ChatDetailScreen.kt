@@ -47,6 +47,15 @@ fun ChatDetailScreen(
         appState.markRead(channelName)
     }
 
+    // Clear active channel when leaving (back button or tab navigation)
+    DisposableEffect(channelName) {
+        onDispose {
+            if (appState.activeChannel.value == channelName) {
+                appState.activeChannel.value = null
+            }
+        }
+    }
+
     // Mark read as messages arrive
     LaunchedEffect(channelState?.messages?.size) {
         appState.markRead(channelName)

@@ -42,7 +42,6 @@ fun MainScreen(appState: AppState) {
         if (pendingNav != null) {
             appState.pendingNavigation.value = null
             appState.activeChannel.value = pendingNav
-            appState.markRead(pendingNav)
             navController.navigate("chat/$pendingNav") {
                 launchSingleTop = true
             }
@@ -131,7 +130,6 @@ fun MainScreen(appState: AppState) {
                     appState = appState,
                     onChannelClick = { channelName ->
                         appState.activeChannel.value = channelName
-                        appState.markRead(channelName)
                         navController.navigate("chat/$channelName")
                     }
                 )

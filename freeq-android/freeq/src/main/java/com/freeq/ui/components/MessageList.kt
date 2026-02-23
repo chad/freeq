@@ -5,7 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -48,9 +48,12 @@ fun MessageList(
     var lightboxUrl by remember { mutableStateOf<String?>(null) }
     var highlightedMessageId by remember { mutableStateOf<String?>(null) }
 
-    // Snapshot last-read message ID on first composition (before markRead updates it)
+    // Snapshot last-read position from before this screen visit
     val lastReadId = remember(channelState.name) {
         appState.lastReadMessageIds[channelState.name]
+    }
+    val lastReadTimestamp = remember(channelState.name) {
+        appState.lastReadTimestamps[channelState.name] ?: 0L
     }
 
     // Scroll to specific message (from search)
@@ -86,55 +89,74 @@ fun MessageList(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(vertical = 8.dp)
         ) {
-            var lastSender = ""
-            var lastDate = ""
-            var lastTimestamp = 0L
-            var lastSenderId: String? = null
-            var showUnreadSeparator = lastReadId != null &&
-                    messages.any { it.id == lastReadId } &&
-                    messages.last().id != lastReadId
+            // Find the unread boundary — try by ID first, fall back to timestamp
+            val unreadSeparatorMsgId = run sep@{
+                val nick = appState.nick.value
 
-            items(messages, key = { it.id }) { msg ->
+                // Primary: find lastReadId in messages
+                if (lastReadId != null) {
+                    val idx = messages.indexOfFirst { it.id == lastReadId }
+                    if (idx >= 0 && idx < messages.size - 1) {
+                        val tail = messages.subList(idx + 1, messages.size)
+                        val hasRealUnread = tail.any { it.from.isNotEmpty() }
+                        val userCaughtUp = tail.any { it.from.equals(nick, ignoreCase = true) }
+                        if (hasRealUnread && !userCaughtUp) return@sep messages[idx + 1].id
+                    }
+                }
+
+                // Fallback: find first real message after lastReadTimestamp
+                if (lastReadTimestamp > 0) {
+                    val idx = messages.indexOfFirst {
+                        it.timestamp.time > lastReadTimestamp && it.from.isNotEmpty()
+                    }
+                    if (idx >= 0) {
+                        val tail = messages.subList(idx, messages.size)
+                        val userCaughtUp = tail.any { it.from.equals(nick, ignoreCase = true) }
+                        if (!userCaughtUp) return@sep messages[idx].id
+                    }
+                }
+
+                null
+            }
+
+            itemsIndexed(messages, key = { _, msg -> msg.id }) { index, msg ->
+                val prevMsg = if (index > 0) messages[index - 1] else null
                 val currentDate = formatDate(msg.timestamp)
-                val timeDiff = msg.timestamp.time - lastTimestamp
+                val prevDate = prevMsg?.let { formatDate(it.timestamp) }
+                val timeDiff = if (prevMsg != null) msg.timestamp.time - prevMsg.timestamp.time else Long.MAX_VALUE
 
-                // Unread separator — show before first message after the last-read one
-                val showingUnread = lastReadId != null && showUnreadSeparator &&
-                    lastSenderId != null && lastSenderId == lastReadId
+                // Unread separator — show before the first unread message
+                val showingUnread = msg.id == unreadSeparatorMsgId
                 if (showingUnread) {
                     UnreadSeparator()
-                    showUnreadSeparator = false
                 }
 
                 // Date separator (skip if unread separator already shown at this boundary)
-                if (currentDate != lastDate) {
+                if (prevDate == null || currentDate != prevDate) {
                     if (!showingUnread) {
                         DateSeparator(currentDate)
                     }
-                    lastDate = currentDate
-                    lastSender = "" // reset grouping after date
                 }
 
                 // System message (join/part/kick — from is empty)
                 if (msg.from.isEmpty()) {
                     SystemMessage(msg.text)
-                    lastSender = ""
-                    lastTimestamp = msg.timestamp.time
-                    lastSenderId = msg.id
-                    return@items
+                    return@itemsIndexed
                 }
 
                 // Deleted message
                 if (msg.isDeleted) {
                     DeletedMessage()
-                    lastSender = ""
-                    lastTimestamp = msg.timestamp.time
-                    lastSenderId = msg.id
-                    return@items
+                    return@itemsIndexed
                 }
 
-                // Show header if sender changes or >5 min gap
-                val showHeader = msg.from != lastSender || timeDiff > 5 * 60 * 1000
+                // Show header if sender changes, >5 min gap, or after date/system/deleted boundary
+                val showHeader = prevMsg == null
+                    || msg.from != prevMsg.from
+                    || prevMsg.from.isEmpty()
+                    || prevMsg.isDeleted
+                    || timeDiff > 5 * 60 * 1000
+                    || currentDate != prevDate
 
                 MessageBubble(
                     msg = msg,
@@ -146,10 +168,6 @@ fun MessageList(
                     onNickClick = onProfileClick,
                     onImageClick = { url -> lightboxUrl = url }
                 )
-
-                lastSender = msg.from
-                lastTimestamp = msg.timestamp.time
-                lastSenderId = msg.id
             }
 
             // Typing indicator
