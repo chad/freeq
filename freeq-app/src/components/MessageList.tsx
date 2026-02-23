@@ -639,15 +639,23 @@ export function MessageList() {
   }, [messages.length, messages]);
 
   // Always scroll to bottom on channel switch
+  // Multiple timers to catch: initial render, layout, CHATHISTORY load
   useEffect(() => {
     stickToBottomRef.current = true;
+    setShowScrollBtn(false);
     const scrollBottom = () => {
-      if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+      if (ref.current) {
+        ref.current.scrollTop = ref.current.scrollHeight;
+        stickToBottomRef.current = true;
+      }
     };
     scrollBottom();
     requestAnimationFrame(() => requestAnimationFrame(scrollBottom));
-    const t = setTimeout(scrollBottom, 150);
-    return () => clearTimeout(t);
+    const t1 = setTimeout(scrollBottom, 100);
+    const t2 = setTimeout(scrollBottom, 300);
+    const t3 = setTimeout(scrollBottom, 600); // after CHATHISTORY arrives
+    const t4 = setTimeout(scrollBottom, 1200); // slow networks
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
   }, [activeChannel]);
 
   // Combined scroll handler: track stick-to-bottom + load history on scroll-to-top
