@@ -96,7 +96,10 @@ struct ChatDetailView: View {
             appState.markRead(channelName)
         }
         .onDisappear {
-            // Don't clear activeChannel here — it breaks compose
+            // Clear activeChannel so unread counting works for this channel
+            if appState.activeChannel == channelName {
+                appState.activeChannel = nil
+            }
         }
         .sheet(isPresented: $showingSearch) {
             SearchSheet()

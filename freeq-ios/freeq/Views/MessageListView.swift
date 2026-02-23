@@ -87,9 +87,11 @@ struct MessageListView: View {
                 }
                 .background(Theme.bgPrimary)
                 .onPreferenceChange(ScrollOffsetKey.self) { value in
-                    // Show scroll button when not at bottom
+                    // value is the minY of the bottom anchor in global coords
+                    // When at bottom, it's near screen height; when scrolled up, it goes large/positive
                     let screenHeight = UIScreen.main.bounds.height
-                    showScrollButton = value < -100
+                    // If the bottom anchor is more than 150pt below the screen, user has scrolled up
+                    showScrollButton = value > screenHeight + 150
                 }
 
                 // Scroll to bottom button
@@ -121,25 +123,28 @@ struct MessageListView: View {
                 }
             }
             .onChange(of: channel.messages.count) {
+                // Auto-scroll on new messages if already near bottom
                 if !showScrollButton, let last = channel.messages.last {
                     withAnimation(.easeOut(duration: 0.15)) {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
+                }
+                // Mark read if this is the active channel
+                if appState.activeChannel == channel.name {
+                    appState.markRead(channel.name)
                 }
             }
             .onAppear {
                 // Capture current read position before marking read
                 lastReadId = UserDefaults.standard.string(forKey: "freeq.lastRead.\(channel.name)")
                 appState.markRead(channel.name)
-                // Scroll to bottom on appear
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    if let last = channel.messages.last {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                    }
-                }
+                scrollToBottom(proxy: proxy)
             }
             .onChange(of: appState.activeChannel) {
-                appState.markRead(channel.name)
+                if appState.activeChannel == channel.name {
+                    appState.markRead(channel.name)
+                    scrollToBottom(proxy: proxy)
+                }
             }
         }
         .sheet(item: $emojiPickerMessage) { msg in
@@ -159,6 +164,25 @@ struct MessageListView: View {
             ThreadView(rootMessage: msg, channelName: channel.name)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+        }
+    }
+
+    // MARK: - Scroll
+
+    private func scrollToBottom(proxy: ScrollViewProxy) {
+        // Triple-scroll: immediate + short delay + after CHATHISTORY arrives
+        if let last = channel.messages.last {
+            proxy.scrollTo(last.id, anchor: .bottom)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            if let last = channel.messages.last {
+                proxy.scrollTo(last.id, anchor: .bottom)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            if let last = channel.messages.last {
+                proxy.scrollTo(last.id, anchor: .bottom)
+            }
         }
     }
 
