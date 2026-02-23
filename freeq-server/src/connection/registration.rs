@@ -128,19 +128,20 @@ pub(super) fn try_complete_registration(
         if let Some(owner) = owner_did {
             let is_owner = conn.authenticated_did.as_ref().is_some_and(|d| d == &owner);
             if !is_owner {
-                // Nick is registered to a DID — reject the connection instead of
-                // creating a Ghost user. This prevents ghost accumulation from
-                // web clients that auto-reconnect after losing their auth token.
-                let err = Message::from_server(
+                // Nick is registered to a DID — rename to a temp nick.
+                // The web client detects Guest rename and disconnects (no ghost).
+                // The iOS client continues with the temp nick and auto-joins channels.
+                let guest_id: u32 = rand::random::<u32>() % 100000;
+                let guest_nick = format!("Guest{guest_id}");
+                let notice = Message::from_server(
                     server_name,
-                    "ERROR",
-                    vec![&format!("Nick {nick} is registered. Please authenticate or use a different nick.")],
+                    "NOTICE",
+                    vec!["*", &format!("Nick {nick} is registered — renamed to {guest_nick}. Authenticate to reclaim.")],
                 );
-                send(state, session_id, format!("{err}\r\n"));
-                // Remove from nick_to_session so the nick is available for the real owner
+                send(state, session_id, format!("{notice}\r\n"));
                 state.nick_to_session.lock().unwrap().remove(nick);
-                state.connections.lock().unwrap().remove(session_id);
-                return;
+                state.nick_to_session.lock().unwrap().insert(guest_nick.clone(), session_id.to_string());
+                conn.nick = Some(guest_nick);
             }
         }
     }
