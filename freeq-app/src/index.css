@@ -98,6 +98,36 @@ body {
 .animate-fadeIn { animation: fadeIn 200ms ease; }
 .animate-slideIn { animation: slideInRight 200ms ease; }
 
+/* Better code blocks in messages */
+pre.bg-surface {
+  font-family: var(--font-mono);
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Inline code */
+code.bg-surface {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+}
+
+/* Smooth channel transitions */
+@keyframes channelIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+[data-testid="message-list"] > div {
+  animation: channelIn 150ms ease;
+}
+
+/* Keyboard shortcuts kbd styling */
+kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
 /* Touch devices: show message action buttons on active/focus instead of hover */
 @media (hover: none) {
   .group:active > [class*="group-hover:opacity-100"],

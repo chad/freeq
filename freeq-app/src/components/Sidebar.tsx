@@ -98,7 +98,7 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
           </div>
         )}
 
-        {chanList.map((ch) => <ChannelButton key={ch.name} ch={ch} isActive={activeChannel.toLowerCase() === ch.name.toLowerCase()} onSelect={setActive} icon="#" />)}
+        {chanList.map((ch) => <ChannelButton key={ch.name} ch={ch as any} isActive={activeChannel.toLowerCase() === ch.name.toLowerCase()} onSelect={setActive} icon="#" />)}
 
         {/* DMs */}
         {dmList.length > 0 && (
@@ -108,7 +108,7 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
                 Messages
               </span>
             </div>
-            {dmList.map((ch) => <ChannelButton key={ch.name} ch={ch} isActive={activeChannel.toLowerCase() === ch.name.toLowerCase()} onSelect={setActive} icon="@" />)}
+            {dmList.map((ch) => <ChannelButton key={ch.name} ch={ch as any} isActive={activeChannel.toLowerCase() === ch.name.toLowerCase()} onSelect={setActive} icon="@" showPreview />)}
           </>
         )}
       </nav>
@@ -173,18 +173,24 @@ function SelfAvatar({ nick, did }: { nick: string; did: string | null }) {
   );
 }
 
-function ChannelButton({ ch, isActive, onSelect, icon }: {
-  ch: { name: string; mentionCount: number; unreadCount: number };
+function ChannelButton({ ch, isActive, onSelect, icon, showPreview }: {
+  ch: { name: string; mentionCount: number; unreadCount: number; messages: any[]; members: Map<string, any> };
   isActive: boolean;
   onSelect: (name: string) => void;
   icon: string;
+  showPreview?: boolean;
 }) {
   const hasMention = ch.mentionCount > 0;
   const hasUnread = ch.unreadCount > 0;
+
+  // Last message preview for DMs
+  const lastMsg = showPreview ? ch.messages.filter((m: any) => !m.isSystem).slice(-1)[0] : null;
+  const preview = lastMsg ? `${lastMsg.from}: ${lastMsg.text}` : null;
+
   return (
     <button
       onClick={() => onSelect(ch.name)}
-      className={`w-full text-left px-3 py-2 rounded-lg text-[15px] flex items-center gap-2.5 ${
+      className={`w-full text-left px-3 py-2 rounded-lg flex items-center gap-2.5 ${
         isActive
           ? 'bg-surface text-fg'
           : hasMention
@@ -195,14 +201,24 @@ function ChannelButton({ ch, isActive, onSelect, icon }: {
       }`}
     >
       <span className={`shrink-0 text-[15px] font-medium ${isActive ? 'text-accent' : 'opacity-50'}`}>{icon}</span>
-      <span className="truncate">{ch.name.replace(/^[#&]/, '')}</span>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1">
+          <span className="truncate text-[15px]">{ch.name.replace(/^[#&]/, '')}</span>
+          {!showPreview && ch.members.size > 0 && (
+            <span className="text-[10px] text-fg-dim ml-auto shrink-0">{ch.members.size}</span>
+          )}
+        </div>
+        {showPreview && preview && (
+          <div className="text-xs text-fg-dim truncate mt-0.5">{preview.slice(0, 50)}</div>
+        )}
+      </div>
       {hasMention && (
-        <span className="ml-auto shrink-0 bg-danger text-white text-xs min-w-[20px] text-center px-1.5 py-0.5 rounded-full font-bold">
+        <span className="shrink-0 bg-danger text-white text-xs min-w-[20px] text-center px-1.5 py-0.5 rounded-full font-bold">
           {ch.mentionCount}
         </span>
       )}
       {!hasMention && hasUnread && (
-        <span className="ml-auto shrink-0 w-1.5 h-1.5 rounded-full bg-fg-muted" />
+        <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-fg-muted" />
       )}
     </button>
   );

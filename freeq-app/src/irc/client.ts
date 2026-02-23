@@ -353,9 +353,20 @@ function handleLine(rawLine: string) {
       store.addMessage(bufName, message);
 
       // Mention detection + notification
-      if (!message.isSelf && text.toLowerCase().includes(nick.toLowerCase())) {
+      const isMention = !message.isSelf && text.toLowerCase().includes(nick.toLowerCase());
+      const isDM = !isChannel && !message.isSelf;
+      if (isMention) {
         store.incrementMentions(bufName);
-        notify(bufName, `${from}: ${text.slice(0, 100)}`);
+      }
+      if (isDM) {
+        store.incrementMentions(bufName);
+      }
+      if (isMention || isDM) {
+        notify(
+          isDM ? `DM from ${from}` : bufName,
+          `${from}: ${text.slice(0, 100)}`,
+          () => useStore.getState().setActiveChannel(bufName),
+        );
       }
       break;
     }

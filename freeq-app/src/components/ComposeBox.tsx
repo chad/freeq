@@ -626,6 +626,13 @@ function handleCommand(text: string, activeChannel: string) {
       store.addSystemMessage(activeChannel, '/kick user  ·  /op user  ·  /voice user  ·  /invite user');
       store.addSystemMessage(activeChannel, '/whois user  ·  /away reason  ·  /me action');
       store.addSystemMessage(activeChannel, '/msg user text  ·  /mode +o user  ·  /raw IRC_LINE');
+      store.addSystemMessage(activeChannel, '── Policy ──');
+      store.addSystemMessage(activeChannel, '/policy #ch SET <rules>  ·  /policy #ch INFO  ·  /policy #ch ACCEPT');
+      store.addSystemMessage(activeChannel, '/policy #ch REQUIRE <type> issuer=... url=... label=...');
+      store.addSystemMessage(activeChannel, '/policy #ch SET-ROLE <role> <json>  ·  /policy #ch CLEAR');
+      store.addSystemMessage(activeChannel, '/policy #ch VERIFY github <org-or-owner/repo>');
+      store.addSystemMessage(activeChannel, '── Shortcuts ──');
+      store.addSystemMessage(activeChannel, '⌘K quick switch  ·  ⌘F search  ·  ⌘/ shortcuts  ·  ↑ edit last');
       break;
     default:
       rawCommand(`${cmd.toUpperCase()}${args ? ' ' + args : ''}`);

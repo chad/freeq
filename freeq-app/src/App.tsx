@@ -17,12 +17,14 @@ import { ChannelListModal } from './components/ChannelListModal';
 import { ThreadView } from './components/ThreadView';
 import { JoinGateModal } from './components/JoinGateModal';
 import { ChannelSettingsPanel } from './components/ChannelSettingsPanel';
+import { KeyboardShortcuts } from './components/KeyboardShortcuts';
 
 export default function App() {
   const registered = useStore((s) => s.registered);
   const theme = useStore((s) => s.theme);
   const [quickSwitcher, setQuickSwitcher] = useState(false);
   const [settings, setSettings] = useState(false);
+  const [shortcuts, setShortcuts] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [membersOpen, setMembersOpen] = useState(() => window.innerWidth >= 768);
   const threadMsgId = useStore((s) => s.threadMsgId);
@@ -64,6 +66,7 @@ export default function App() {
   useKeyboard({
     'mod+k': () => setQuickSwitcher(true),
     'mod+f': () => useStore.getState().setSearchOpen(true),
+    'mod+/': () => setShortcuts(true),
     'mod+1': () => switchToNth(0),
     'mod+2': () => switchToNth(1),
     'mod+3': () => switchToNth(2),
@@ -76,6 +79,7 @@ export default function App() {
     'escape': () => {
       setQuickSwitcher(false);
       setSettings(false);
+      setShortcuts(false);
       useStore.getState().setSearchOpen(false);
       useStore.getState().setChannelListOpen(false);
       useStore.getState().setLightboxUrl(null);
@@ -144,6 +148,7 @@ export default function App() {
       <ChannelListModal />
       <JoinGateModal />
       <ChannelSettingsPanel />
+      <KeyboardShortcuts open={shortcuts} onClose={() => setShortcuts(false)} />
     </div>
   );
 }

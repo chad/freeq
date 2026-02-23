@@ -320,7 +320,7 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
           {member?.away != null && (
             <span className="text-xs text-fg-dim bg-warning/10 text-warning px-1.5 py-0.5 rounded">away</span>
           )}
-          <span className="text-xs text-fg-dim whitespace-nowrap">{formatTime(msg.timestamp)}</span>
+          <span className="text-xs text-fg-dim whitespace-nowrap cursor-default" title={msg.timestamp.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}>{formatTime(msg.timestamp)}</span>
           {msg.editOf && <span className="text-xs text-fg-dim">(edited)</span>}
         </div>
         <MessageContent msg={msg} />
@@ -373,7 +373,7 @@ function GroupedMessage({ msg, channel }: MessageProps) {
     <div className={`group px-4 py-0.5 hover:bg-white/[0.02] flex gap-3 relative ${
       isMention ? 'bg-accent/[0.04] border-l-2 border-accent' : ''
     }`}>
-      <span className="w-10 shrink-0 text-right text-[11px] text-fg-dim opacity-0 group-hover:opacity-100 leading-[24px]">
+      <span className="w-10 shrink-0 text-right text-[11px] text-fg-dim opacity-0 group-hover:opacity-100 leading-[24px] cursor-default" title={msg.timestamp.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}>
         {formatTime(msg.timestamp)}
       </span>
       <div className="min-w-0 flex-1">
@@ -520,13 +520,26 @@ export function MessageList() {
   return (
     <div key={activeChannel} ref={ref} data-testid="message-list" className="flex-1 overflow-y-auto" onScroll={onScroll}>
       {messages.length === 0 && (
-        <div className="flex flex-col items-center justify-center h-full text-fg-dim">
-          <img src="/freeq.png" alt="freeq" className="w-12 h-12 mb-3 opacity-30" />
-          <div className="text-base">
-            {activeChannel === 'server' ? 'Server messages will appear here' : 'No messages yet'}
-          </div>
-          {activeChannel !== 'server' && (
-            <div className="text-sm mt-1 text-fg-dim">Be the first to say something!</div>
+        <div className="flex flex-col items-center justify-center h-full text-fg-dim px-8">
+          <img src="/freeq.png" alt="freeq" className="w-14 h-14 mb-4 opacity-20" />
+          {activeChannel === 'server' ? (
+            <>
+              <div className="text-base text-fg-muted font-medium">Welcome to freeq</div>
+              <div className="text-sm mt-1 text-center">Server messages and notices will appear here.</div>
+              <div className="text-xs mt-3 text-center space-y-1">
+                <div><kbd className="px-1.5 py-0.5 text-xs bg-bg-tertiary border border-border rounded font-mono">⌘K</kbd> Quick switch · <kbd className="px-1.5 py-0.5 text-xs bg-bg-tertiary border border-border rounded font-mono">⌘/</kbd> Shortcuts</div>
+              </div>
+            </>
+          ) : activeChannel.startsWith('#') ? (
+            <>
+              <div className="text-lg text-fg-muted font-medium">Welcome to {activeChannel}</div>
+              <div className="text-sm mt-1 text-center">This is the beginning of the channel. Say hello! 👋</div>
+            </>
+          ) : (
+            <>
+              <div className="text-lg text-fg-muted font-medium">Conversation with {activeChannel}</div>
+              <div className="text-sm mt-1 text-center">Messages are end-to-end between you two.</div>
+            </>
           )}
         </div>
       )}
