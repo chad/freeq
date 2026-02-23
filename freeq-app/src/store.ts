@@ -461,6 +461,12 @@ export const useStore = create<Store>((set, get) => ({
 
     const channels = new Map(s.channels);
     const ch = getOrCreateChannel(channels, channel);
+
+    // Dedup by msgid — CHATHISTORY can return messages already shown live
+    if (msg.id && !msg.isSystem && ch.messages.some((m) => m.id === msg.id)) {
+      return {};
+    }
+
     ch.messages = [...ch.messages, msg].slice(-1000);
     if (s.activeChannel.toLowerCase() !== channel.toLowerCase()) {
       ch.unreadCount++;
