@@ -7,19 +7,36 @@ set -euo pipefail
 # Prerequisites:
 #   - Android NDK installed (set ANDROID_NDK_HOME or use default path)
 #   - cargo-ndk: cargo install cargo-ndk
-#   - Rust Android targets: rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+#   - Rust Android targets: rustup target add aarch64-linux-android x86_64-linux-android
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-JNILIBS_DIR="freeq-android/freeq/src/main/jniLibs"
+# Prefer rustup-managed cargo/rustc over Homebrew
+export PATH="$HOME/.cargo/bin:$PATH"
 
-echo "==> Building for Android targets..."
+# Auto-detect NDK if not set
+if [ -z "${ANDROID_NDK_HOME:-}" ]; then
+    NDK_DIR="$HOME/Library/Android/sdk/ndk"
+    if [ -d "$NDK_DIR" ]; then
+        ANDROID_NDK_HOME="$(ls -d "$NDK_DIR"/*/ 2>/dev/null | sort -V | tail -1)"
+        ANDROID_NDK_HOME="${ANDROID_NDK_HOME%/}"
+        export ANDROID_NDK_HOME
+        echo "==> Auto-detected NDK: $ANDROID_NDK_HOME"
+    else
+        echo "ERROR: Android NDK not found. Install via Android Studio SDK Manager."
+        exit 1
+    fi
+fi
+
+JNILIBS_DIR="freeq-android/freeq/src/main/jniLibs"
+FFI_DIR="freeq-android/freeq/src/main/java/com/freeq/ffi"
+GEN_DIR="freeq-android/Generated"
+
+echo "==> Building for Android targets (arm64-v8a, x86_64)..."
 cargo ndk \
     -t arm64-v8a \
-    -t armeabi-v7a \
     -t x86_64 \
-    -t x86 \
     -o "$JNILIBS_DIR" \
     build -p freeq-sdk-ffi --lib --release
 
@@ -31,14 +48,17 @@ echo "==> Generating Kotlin bindings..."
 cargo run -p freeq-sdk-ffi --bin uniffi-bindgen -- generate \
     --library target/release/libfreeq_sdk_ffi.dylib \
     --language kotlin \
-    --out-dir freeq-android/Generated
+    --config freeq-sdk-ffi/uniffi.toml \
+    --out-dir "$GEN_DIR"
+
+echo "==> Installing generated bindings..."
+# Remove old stub files
+rm -f "$FFI_DIR/FreeqClient.kt" "$FFI_DIR/FreeqTypes.kt" "$FFI_DIR/EventHandler.kt"
+
+# Copy generated binding (UniFFI outputs to package path under out-dir)
+mkdir -p "$FFI_DIR"
+find "$GEN_DIR" -name "*.kt" -exec cp {} "$FFI_DIR/" \;
 
 echo "==> Done!"
-echo "    Native libs at $JNILIBS_DIR"
-echo "    Kotlin bindings at freeq-android/Generated/"
-echo ""
-echo "Next steps:"
-echo "  1. Copy Generated/*.kt into freeq/src/main/java/com/freeq/ffi/"
-echo "     (replacing the stub files)"
-echo "  2. Add JNA dependency to freeq/build.gradle.kts:"
-echo "     implementation(\"net.java.dev.jna:jna:5.13.0@aar\")"
+echo "    Native libs: $JNILIBS_DIR/{arm64-v8a,x86_64}/libfreeq_sdk_ffi.so"
+echo "    Kotlin binding: $FFI_DIR/freeq.kt"

@@ -4,13 +4,7 @@ Android client for the freeq IRC network, built with Kotlin and Jetpack Compose 
 Mirrors the functionality of the [iOS client](../freeq-ios) and uses the same
 `freeq-sdk-ffi` library (UniFFI) for IRC connectivity and AT Protocol authentication.
 
-## Current status
-
-The app is fully functional with **stubbed FFI bindings** — all UI screens are implemented
-and work with simulated SDK responses. To connect to a real freeq server, run
-`build-rust.sh` and replace the stubs in `com.freeq.ffi` with real UniFFI-generated bindings.
-
-### Screens implemented
+## Screens
 
 - **ConnectScreen** — Bluesky OAuth login (Chrome Custom Tabs) + guest mode
 - **ChatsTab** — Channel/DM list with last message preview, unread badges, search
@@ -34,37 +28,42 @@ MainActivity (entry point, deep link handler)
 
 - **State**: `AppState` (AndroidViewModel) with Compose `mutableStateOf` / `mutableStateListOf`
 - **Events**: `AndroidEventHandler` bridges FFI callbacks → `Dispatchers.Main` → state updates
+- **FFI**: UniFFI-generated Kotlin bindings (`freeq.kt`) + JNA → `libfreeq_sdk_ffi.so`
 - **Persistence**: SharedPreferences (nick, server, channels, read positions, theme)
 - **Theme**: Material 3 dark/light with freeq accent (#6c63ff)
 
-## Quick start
+## Prerequisites
 
-1. **Open the project** in Android Studio (Hedgehog or newer)
+- Android Studio (Hedgehog or newer)
+- Android NDK (install via SDK Manager → SDK Tools → NDK)
+- Rust toolchain via [rustup](https://rustup.rs/)
+- `cargo-ndk`: `cargo install cargo-ndk`
+- Rust Android targets: `rustup target add aarch64-linux-android x86_64-linux-android`
 
-2. **Build & run** on emulator or device (minSdk 26):
-   ```sh
-   cd freeq-android
-   ./gradlew assembleDebug
-   ```
+## Building
 
-3. The app runs with stub FFI — connect as guest to test all UI flows.
+### 1. Build the native library
 
-## Building with real FFI
-
-Run from the repo root:
+From the repo root:
 
 ```sh
 ./freeq-android/build-rust.sh
 ```
 
-This requires `cargo-ndk` and Android NDK targets installed. See the script for details.
+This cross-compiles `freeq-sdk-ffi` for arm64 and x86_64, generates the Kotlin bindings
+via `uniffi-bindgen`, and copies everything into the right places.
 
-After running, copy the generated Kotlin sources from `Generated/` into
-`freeq/src/main/java/com/freeq/ffi/` (replacing the stub files) and add JNA:
+### 2. Build the APK
 
-```kotlin
-// freeq/build.gradle.kts
-implementation("net.java.dev.jna:jna:5.13.0@aar")
+```sh
+cd freeq-android
+./gradlew assembleDebug
+```
+
+### 3. Install on emulator or device
+
+```sh
+./gradlew installDebug
 ```
 
 ## Future work

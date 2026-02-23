@@ -13,6 +13,10 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
     }
 
     buildTypes {
@@ -66,6 +70,9 @@ dependencies {
 
     // Browser (Chrome Custom Tabs for OAuth)
     implementation("androidx.browser:browser:1.7.0")
+
+    // JNA (required by UniFFI-generated Kotlin bindings)
+    implementation("net.java.dev.jna:jna:5.13.0@aar")
 
     // Debug
     debugImplementation("androidx.compose.ui:ui-tooling")

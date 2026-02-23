@@ -11,3 +11,5 @@
 *.aab
 *.ap_
 *.dex
+/freeq/src/main/jniLibs/
+/Generated/

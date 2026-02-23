@@ -34,10 +34,12 @@ open = { workspace = true }
 dirs = { workspace = true }
 
 [features]
-default = ["iroh-transport", "aws-lc-rs"]
+default = ["iroh-transport", "aws-lc-rs", "native-tls"]
 iroh-transport = ["iroh", "iroh-quinn"]
 aws-lc-rs = ["rustls/aws_lc_rs", "tokio-rustls/aws_lc_rs"]
 ring = ["rustls/ring", "tokio-rustls/ring"]
+native-tls = ["reqwest/native-tls"]
+rustls-tls = ["reqwest/rustls-tls"]
 
 [dev-dependencies]
 clap = { workspace = true }
