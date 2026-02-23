@@ -285,6 +285,11 @@ where
             rate_last = now;
             if rate_tokens < 1.0 {
                 tracing::debug!(%session_id, "Rate limited");
+                // Warn the user (only once per burst)
+                if rate_tokens > -1.0 {
+                    let notice = Message::from_server(&server_name, "NOTICE", vec!["*", "Flood protection: you are sending commands too fast"]);
+                    send(&state, &session_id, format!("{notice}\r\n"));
+                }
                 continue;
             }
             rate_tokens -= 1.0;

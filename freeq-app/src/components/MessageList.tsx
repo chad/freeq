@@ -72,6 +72,101 @@ function textWithoutImages(text: string, imageUrls: string[]): string {
   return result;
 }
 
+/** Parse text into typed segments for safe React rendering (no dangerouslySetInnerHTML). */
+interface TextSegment {
+  type: 'text' | 'link' | 'code' | 'codeblock' | 'bold' | 'italic' | 'strike';
+  content: string;
+  href?: string;
+}
+
+function parseTextSegments(text: string): TextSegment[] {
+  const segments: TextSegment[] = [];
+  // Tokenize by splitting on markdown patterns
+  // Order matters: code blocks first, then inline code, then other formatting
+  const patterns: { re: RegExp; type: TextSegment['type']; group: number }[] = [
+    { re: /```([\s\S]*?)```/g, type: 'codeblock', group: 1 },
+    { re: /`([^`]+)`/g, type: 'code', group: 1 },
+    { re: /(https?:\/\/[^\s<]+)/g, type: 'link', group: 1 },
+    { re: /\*\*(.+?)\*\*/g, type: 'bold', group: 1 },
+    { re: /(?<!\*)\*([^*]+)\*(?!\*)/g, type: 'italic', group: 1 },
+    { re: /~~(.+?)~~/g, type: 'strike', group: 1 },
+  ];
+
+  // Build a combined list of all matches with positions
+  const matches: { start: number; end: number; type: TextSegment['type']; content: string; full: string }[] = [];
+  for (const p of patterns) {
+    p.re.lastIndex = 0;
+    let m;
+    while ((m = p.re.exec(text)) !== null) {
+      matches.push({
+        start: m.index,
+        end: m.index + m[0].length,
+        type: p.type,
+        content: m[p.group],
+        full: m[0],
+      });
+    }
+  }
+
+  // Sort by start position, remove overlapping
+  matches.sort((a, b) => a.start - b.start);
+  const filtered: typeof matches = [];
+  let lastEnd = 0;
+  for (const m of matches) {
+    if (m.start >= lastEnd) {
+      filtered.push(m);
+      lastEnd = m.end;
+    }
+  }
+
+  // Build segments
+  let pos = 0;
+  for (const m of filtered) {
+    if (m.start > pos) {
+      segments.push({ type: 'text', content: text.slice(pos, m.start) });
+    }
+    if (m.type === 'link') {
+      segments.push({ type: 'link', content: m.content, href: m.content });
+    } else {
+      segments.push({ type: m.type, content: m.content });
+    }
+    pos = m.end;
+  }
+  if (pos < text.length) {
+    segments.push({ type: 'text', content: text.slice(pos) });
+  }
+
+  return segments;
+}
+
+/** Render text segments as React elements (XSS-safe — no innerHTML). */
+function renderTextSafe(text: string): React.ReactElement {
+  const segments = parseTextSegments(text);
+  return (
+    <>
+      {segments.map((seg, i) => {
+        switch (seg.type) {
+          case 'link':
+            return <a key={i} href={seg.href} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline break-all">{seg.content}</a>;
+          case 'codeblock':
+            return <pre key={i} className="bg-surface rounded px-2 py-1.5 my-1 text-[13px] font-mono overflow-x-auto">{seg.content}</pre>;
+          case 'code':
+            return <code key={i} className="bg-surface px-1 py-0.5 rounded text-[13px] font-mono text-pink">{seg.content}</code>;
+          case 'bold':
+            return <strong key={i}>{seg.content}</strong>;
+          case 'italic':
+            return <em key={i}>{seg.content}</em>;
+          case 'strike':
+            return <del key={i} className="text-fg-dim">{seg.content}</del>;
+          default:
+            return <span key={i}>{seg.content}</span>;
+        }
+      })}
+    </>
+  );
+}
+
+// Keep old renderText for system messages that need innerHTML (server notices with URLs)
 function renderText(text: string): string {
   const escaped = text
     .replace(/&/g, '&amp;')
@@ -81,18 +176,7 @@ function renderText(text: string): string {
     .replace(
       /(https?:\/\/[^\s<]+)/g,
       '<a href="$1" target="_blank" rel="noopener" class="text-accent hover:underline break-all">$1</a>',
-    )
-    .replace(
-      /```([\s\S]*?)```/g,
-      '<pre class="bg-surface rounded px-2 py-1.5 my-1 text-[13px] font-mono overflow-x-auto">$1</pre>',
-    )
-    .replace(
-      /`([^`]+)`/g,
-      '<code class="bg-surface px-1 py-0.5 rounded text-[13px] font-mono text-pink">$1</code>',
-    )
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>')
-    .replace(/~~(.+?)~~/g, '<del class="text-fg-dim">$1</del>');
+    );
 }
 
 // ── Message content (text + inline images) ──
@@ -122,10 +206,9 @@ function MessageContent({ msg }: { msg: Message }) {
       {msg.replyTo && <ReplyBadge msgId={msg.replyTo} />}
 
       {cleanText && (
-        <div
-          className="text-[15px] leading-relaxed [&_pre]:my-1 [&_a]:break-all"
-          dangerouslySetInnerHTML={{ __html: renderText(cleanText) }}
-        />
+        <div className="text-[15px] leading-relaxed [&_pre]:my-1 [&_a]:break-all">
+          {renderTextSafe(cleanText)}
+        </div>
       )}
 
       {/* Inline images */}
