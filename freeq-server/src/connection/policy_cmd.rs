@@ -720,14 +720,38 @@ pub(super) fn handle_policy(
                 description: None,
             };
 
-            // Update policy with new endpoint — creates new version
+            // Update policy with new endpoint AND add PRESENT requirement
             let mut endpoints = current.credential_endpoints.clone();
             endpoints.insert(credential_type.clone(), endpoint);
 
-            // We need to update the policy — reuse current requirements but add endpoint
+            // Add a PRESENT requirement for this credential type to the requirement tree.
+            // If the current requirements don't already include this credential type,
+            // wrap existing + new PRESENT in an ALL.
+            let present_req = crate::policy::types::Requirement::Present {
+                credential_type: credential_type.clone(),
+                issuer: Some(issuer.clone()),
+            };
+
+            let new_requirements = if already_requires_credential(&current.requirements, &credential_type) {
+                current.requirements.clone()
+            } else {
+                match &current.requirements {
+                    crate::policy::types::Requirement::All { requirements } => {
+                        let mut reqs = requirements.clone();
+                        reqs.push(present_req);
+                        crate::policy::types::Requirement::All { requirements: reqs }
+                    }
+                    other => {
+                        crate::policy::types::Requirement::All {
+                            requirements: vec![other.clone(), present_req],
+                        }
+                    }
+                }
+            };
+
             match engine.update_channel_policy_with_endpoints(
                 channel,
-                current.requirements.clone(),
+                new_requirements,
                 current.role_requirements.clone(),
                 endpoints,
             ) {
@@ -802,6 +826,18 @@ fn extract_accept_hash_from_roles(roles: &BTreeMap<String, Requirement>) -> Hash
 }
 
 /// Extract ACCEPT hash from a requirement tree (for simple ACCEPT-only policies).
+/// Check if a requirement tree already contains a PRESENT for a given credential type.
+fn already_requires_credential(req: &Requirement, credential_type: &str) -> bool {
+    match req {
+        Requirement::Present { credential_type: ct, .. } => ct == credential_type,
+        Requirement::All { requirements } | Requirement::Any { requirements } => {
+            requirements.iter().any(|r| already_requires_credential(r, credential_type))
+        }
+        Requirement::Not { requirement } => already_requires_credential(requirement, credential_type),
+        _ => false,
+    }
+}
+
 fn extract_accept_hash(req: &Requirement) -> HashSet<String> {
     let mut hashes = HashSet::new();
     match req {
