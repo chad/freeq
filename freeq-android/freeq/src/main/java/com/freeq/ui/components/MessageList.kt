@@ -49,6 +49,16 @@ fun MessageList(
         }
     }
 
+    // Load older history when scrolled to top
+    val firstVisibleIndex by remember { derivedStateOf { listState.firstVisibleItemIndex } }
+    LaunchedEffect(firstVisibleIndex) {
+        if (firstVisibleIndex == 0 && messages.isNotEmpty()) {
+            val oldestId = messages.first().id
+            val target = appState.activeChannel.value ?: return@LaunchedEffect
+            appState.sendRaw("CHATHISTORY BEFORE $target msgid=$oldestId 50")
+        }
+    }
+
     LazyColumn(
         state = listState,
         modifier = modifier.fillMaxSize(),

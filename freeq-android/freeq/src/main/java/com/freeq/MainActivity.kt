@@ -27,8 +27,8 @@ class MainActivity : ComponentActivity() {
             val state: AppState = viewModel()
             appState = state
 
-            // Handle initial deep link if launched via OAuth callback
-            intent?.data?.let { handleOAuthCallback(it, state) }
+            // Handle initial deep link
+            intent?.data?.let { handleDeepLink(it, state) }
 
             FreeqApp(appState = state)
         }
@@ -36,9 +36,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // Handle OAuth callback when activity already running (singleTask)
         intent.data?.let { uri ->
-            appState?.let { handleOAuthCallback(uri, it) }
+            appState?.let { state ->
+                handleDeepLink(uri, state)
+            }
         }
     }
 
@@ -51,16 +52,26 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun handleOAuthCallback(uri: Uri, state: AppState) {
+    private fun handleDeepLink(uri: Uri, state: AppState) {
         if (uri.scheme != "freeq") return
 
-        val token = uri.getQueryParameter("token") ?: return
-        val nick = uri.getQueryParameter("nick") ?: return
-        val did = uri.getQueryParameter("did")
+        when (uri.host) {
+            "chat" -> {
+                // freeq://chat/{channelName} — navigate to channel/DM
+                val channel = uri.pathSegments.firstOrNull() ?: return
+                state.pendingNavigation.value = channel
+            }
+            else -> {
+                // OAuth callback: freeq://?token=...&nick=...&did=...
+                val token = uri.getQueryParameter("token") ?: return
+                val nick = uri.getQueryParameter("nick") ?: return
+                val did = uri.getQueryParameter("did")
 
-        state.pendingWebToken = token
-        did?.let { state.authenticatedDID.value = it }
-        state.serverAddress.value = "irc.freeq.at:6667"
-        state.connect(nick)
+                state.pendingWebToken = token
+                did?.let { state.authenticatedDID.value = it }
+                state.serverAddress.value = "irc.freeq.at:6667"
+                state.connect(nick)
+            }
+        }
     }
 }

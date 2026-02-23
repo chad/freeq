@@ -97,6 +97,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     var editingMessage = mutableStateOf<ChatMessage?>(null)
 
     var pendingWebToken: String? = null
+    var pendingNavigation = mutableStateOf<String?>(null)
     val lastReadMessageIds = mutableStateMapOf<String, String>()
     var isDarkTheme = mutableStateOf(true)
 
@@ -293,6 +294,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
         dmBuffers.firstOrNull { it.name.equals(nick, ignoreCase = true) }?.let { return it }
         val dm = ChannelState(nick)
         dmBuffers.add(dm)
+        requestHistory(nick)
         return dm
     }
 

@@ -36,6 +36,19 @@ fun MainScreen(appState: AppState) {
 
     val totalUnread = appState.unreadCounts.values.sum()
 
+    // Handle pending navigation from notification tap
+    val pendingNav = appState.pendingNavigation.value
+    LaunchedEffect(pendingNav) {
+        if (pendingNav != null) {
+            appState.pendingNavigation.value = null
+            appState.activeChannel.value = pendingNav
+            appState.markRead(pendingNav)
+            navController.navigate("chat/$pendingNav") {
+                launchSingleTop = true
+            }
+        }
+    }
+
     Scaffold(
         bottomBar = {
             if (showBottomBar) {

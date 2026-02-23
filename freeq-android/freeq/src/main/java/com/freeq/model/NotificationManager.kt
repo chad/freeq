@@ -2,7 +2,10 @@ package com.freeq.model
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -36,6 +39,15 @@ class FreeqNotificationManager(private val context: Context) {
     fun sendMessageNotification(from: String, text: String, channel: String) {
         val title = if (channel.startsWith("#")) "$from in $channel" else from
 
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("freeq://chat/$channel")).apply {
+            setPackage(context.packageName)
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context, notificationId, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.freeq_logo)
             .setContentTitle(title)
@@ -43,6 +55,7 @@ class FreeqNotificationManager(private val context: Context) {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setGroup(channel)
             .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
             .build()
 
         try {
