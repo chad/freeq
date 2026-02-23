@@ -17,6 +17,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -33,6 +35,7 @@ fun ComposeBar(
 ) {
     var text by remember { mutableStateOf("") }
     var completions by remember { mutableStateOf<List<String>>(emptyList()) }
+    val haptic = LocalHapticFeedback.current
 
     val replyingTo by appState.replyingTo
     val editingMessage by appState.editingMessage
@@ -140,6 +143,7 @@ fun ComposeBar(
                 keyboardActions = KeyboardActions(
                     onSend = {
                         if (canSend) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             send(text.trim(), appState) { text = ""; completions = emptyList() }
                         }
                     }
@@ -158,6 +162,7 @@ fun ComposeBar(
             IconButton(
                 onClick = {
                     if (canSend) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         send(text.trim(), appState) { text = ""; completions = emptyList() }
                     }
                 },

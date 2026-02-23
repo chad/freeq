@@ -17,7 +17,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -142,6 +144,7 @@ private fun MessageBubble(
     onImageClick: ((String) -> Unit)? = null
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
     val isOwn = msg.from.equals(appState.nick.value, ignoreCase = true)
     val isMention = !isOwn && appState.nick.value.isNotEmpty() &&
             msg.text.contains(appState.nick.value, ignoreCase = true)
@@ -262,6 +265,7 @@ private fun MessageBubble(
                                 else
                                     MaterialTheme.colorScheme.surfaceVariant,
                                 modifier = Modifier.clickable {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     appState.activeChannel.value?.let { target ->
                                         appState.sendReaction(target, msg.id, emoji)
                                     }
@@ -319,6 +323,7 @@ private fun MessageBubble(
                 DropdownMenuItem(
                     text = { Text("Delete") },
                     onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         appState.activeChannel.value?.let { target ->
                             appState.deleteMessage(target, msg.id)
                         }
