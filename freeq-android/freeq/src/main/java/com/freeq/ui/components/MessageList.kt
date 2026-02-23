@@ -42,6 +42,7 @@ fun MessageList(
     val messages = channelState.messages
     val listState = rememberLazyListState()
     val clipboardManager = LocalClipboardManager.current
+    var lightboxUrl by remember { mutableStateOf<String?>(null) }
 
     // Auto-scroll to bottom on new messages
     LaunchedEffect(messages.size) {
@@ -60,64 +61,72 @@ fun MessageList(
         }
     }
 
-    LazyColumn(
-        state = listState,
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(vertical = 8.dp)
-    ) {
-        var lastSender = ""
-        var lastDate = ""
-        var lastTimestamp = 0L
+    Box(modifier = modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(vertical = 8.dp)
+        ) {
+            var lastSender = ""
+            var lastDate = ""
+            var lastTimestamp = 0L
 
-        items(messages, key = { it.id }) { msg ->
-            val currentDate = formatDate(msg.timestamp)
-            val timeDiff = msg.timestamp.time - lastTimestamp
+            items(messages, key = { it.id }) { msg ->
+                val currentDate = formatDate(msg.timestamp)
+                val timeDiff = msg.timestamp.time - lastTimestamp
 
-            // Date separator
-            if (currentDate != lastDate) {
-                DateSeparator(currentDate)
-                lastDate = currentDate
-                lastSender = "" // reset grouping after date
-            }
+                // Date separator
+                if (currentDate != lastDate) {
+                    DateSeparator(currentDate)
+                    lastDate = currentDate
+                    lastSender = "" // reset grouping after date
+                }
 
-            // System message (join/part/kick — from is empty)
-            if (msg.from.isEmpty()) {
-                SystemMessage(msg.text)
-                lastSender = ""
+                // System message (join/part/kick — from is empty)
+                if (msg.from.isEmpty()) {
+                    SystemMessage(msg.text)
+                    lastSender = ""
+                    lastTimestamp = msg.timestamp.time
+                    return@items
+                }
+
+                // Deleted message
+                if (msg.isDeleted) {
+                    DeletedMessage()
+                    lastSender = ""
+                    lastTimestamp = msg.timestamp.time
+                    return@items
+                }
+
+                // Show header if sender changes or >5 min gap
+                val showHeader = msg.from != lastSender || timeDiff > 5 * 60 * 1000
+
+                MessageBubble(
+                    msg = msg,
+                    showHeader = showHeader,
+                    appState = appState,
+                    channelState = channelState,
+                    clipboardManager = clipboardManager,
+                    onNickClick = onProfileClick,
+                    onImageClick = { url -> lightboxUrl = url }
+                )
+
+                lastSender = msg.from
                 lastTimestamp = msg.timestamp.time
-                return@items
             }
 
-            // Deleted message
-            if (msg.isDeleted) {
-                DeletedMessage()
-                lastSender = ""
-                lastTimestamp = msg.timestamp.time
-                return@items
+            // Typing indicator
+            val typers = channelState.activeTypers
+            if (typers.isNotEmpty()) {
+                item {
+                    TypingIndicator(typers)
+                }
             }
-
-            // Show header if sender changes or >5 min gap
-            val showHeader = msg.from != lastSender || timeDiff > 5 * 60 * 1000
-
-            MessageBubble(
-                msg = msg,
-                showHeader = showHeader,
-                appState = appState,
-                channelState = channelState,
-                clipboardManager = clipboardManager,
-                onNickClick = onProfileClick
-            )
-
-            lastSender = msg.from
-            lastTimestamp = msg.timestamp.time
         }
 
-        // Typing indicator
-        val typers = channelState.activeTypers
-        if (typers.isNotEmpty()) {
-            item {
-                TypingIndicator(typers)
-            }
+        // Image lightbox overlay
+        lightboxUrl?.let { url ->
+            ImageLightbox(url = url, onDismiss = { lightboxUrl = null })
         }
     }
 }
@@ -129,7 +138,8 @@ private fun MessageBubble(
     appState: AppState,
     channelState: ChannelState,
     clipboardManager: androidx.compose.ui.platform.ClipboardManager,
-    onNickClick: ((String) -> Unit)? = null
+    onNickClick: ((String) -> Unit)? = null,
+    onImageClick: ((String) -> Unit)? = null
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val isOwn = msg.from.equals(appState.nick.value, ignoreCase = true)
@@ -227,21 +237,13 @@ private fun MessageBubble(
                     }
                 }
 
-                // Message text
-                if (msg.isAction) {
-                    Text(
-                        text = "${msg.from} ${msg.text}",
-                        fontSize = 15.sp,
-                        fontStyle = FontStyle.Italic,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                } else {
-                    Text(
-                        text = msg.text,
-                        fontSize = 15.sp,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                }
+                // Message text + inline embeds
+                MessageContent(
+                    text = msg.text,
+                    isAction = msg.isAction,
+                    fromNick = msg.from,
+                    onImageClick = onImageClick
+                )
 
                 // Reactions
                 if (msg.reactions.isNotEmpty()) {
