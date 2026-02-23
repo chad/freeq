@@ -46,6 +46,11 @@ fun MessageList(
     val clipboardManager = LocalClipboardManager.current
     var lightboxUrl by remember { mutableStateOf<String?>(null) }
 
+    // Snapshot last-read message ID on first composition (before markRead updates it)
+    val lastReadId = remember(channelState.name) {
+        appState.lastReadMessageIds[channelState.name]
+    }
+
     // Auto-scroll to bottom on new messages
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
@@ -72,14 +77,28 @@ fun MessageList(
             var lastSender = ""
             var lastDate = ""
             var lastTimestamp = 0L
+            var lastSenderId: String? = null
+            var showUnreadSeparator = lastReadId != null &&
+                    messages.any { it.id == lastReadId } &&
+                    messages.last().id != lastReadId
 
             items(messages, key = { it.id }) { msg ->
                 val currentDate = formatDate(msg.timestamp)
                 val timeDiff = msg.timestamp.time - lastTimestamp
 
-                // Date separator
+                // Unread separator — show before first message after the last-read one
+                val showingUnread = lastReadId != null && showUnreadSeparator &&
+                    lastSenderId != null && lastSenderId == lastReadId
+                if (showingUnread) {
+                    UnreadSeparator()
+                    showUnreadSeparator = false
+                }
+
+                // Date separator (skip if unread separator already shown at this boundary)
                 if (currentDate != lastDate) {
-                    DateSeparator(currentDate)
+                    if (!showingUnread) {
+                        DateSeparator(currentDate)
+                    }
                     lastDate = currentDate
                     lastSender = "" // reset grouping after date
                 }
@@ -89,6 +108,7 @@ fun MessageList(
                     SystemMessage(msg.text)
                     lastSender = ""
                     lastTimestamp = msg.timestamp.time
+                    lastSenderId = msg.id
                     return@items
                 }
 
@@ -97,6 +117,7 @@ fun MessageList(
                     DeletedMessage()
                     lastSender = ""
                     lastTimestamp = msg.timestamp.time
+                    lastSenderId = msg.id
                     return@items
                 }
 
@@ -115,6 +136,7 @@ fun MessageList(
 
                 lastSender = msg.from
                 lastTimestamp = msg.timestamp.time
+                lastSenderId = msg.id
             }
 
             // Typing indicator
@@ -339,6 +361,33 @@ private fun MessageBubble(
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun UnreadSeparator() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        HorizontalDivider(
+            modifier = Modifier.weight(1f),
+            color = FreeqColors.accent
+        )
+        Text(
+            text = "New messages",
+            modifier = Modifier.padding(horizontal = 12.dp),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = FreeqColors.accent
+        )
+        HorizontalDivider(
+            modifier = Modifier.weight(1f),
+            color = FreeqColors.accent
+        )
     }
 }
 
