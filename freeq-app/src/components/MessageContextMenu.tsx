@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { type Message } from '../store';
+import { useStore, type Message } from '../store';
 import { sendDelete } from '../irc/client';
 
 interface Props {
@@ -63,6 +63,10 @@ export function MessageContextMenu({ msg, channel, position, onClose, onReply, o
       <div className="h-px bg-border mx-2 my-1" />
       <MenuItem icon="📋" label="Copy Text" onClick={copyText} />
       <MenuItem icon="🔗" label="Copy Link" onClick={copyLink} />
+      <MenuItem icon="🔖" label="Bookmark" onClick={() => {
+        useStore.getState().addBookmark(channel, msg.id, msg.from, msg.text, msg.timestamp);
+        onClose();
+      }} />
       <MenuItem icon="🦋" label="Share to Bluesky" onClick={() => {
         const bskyUrl = `https://bsky.app/intent/compose?text=${encodeURIComponent(`"${msg.text.slice(0, 200)}" — ${msg.from} on freeq`)}`;
         window.open(bskyUrl, '_blank');

@@ -108,6 +108,8 @@ export interface Store {
   messageDensity: 'default' | 'compact' | 'cozy';
   favorites: Set<string>; // lowercase channel names
   mutedChannels: Set<string>; // lowercase channel names
+  bookmarks: { channel: string; msgId: string; from: string; text: string; timestamp: Date }[];
+  bookmarksPanelOpen: boolean;
   searchOpen: boolean;
   searchQuery: string;
   channelListOpen: boolean;
@@ -166,6 +168,9 @@ export interface Store {
   toggleMuted: (channel: string) => void;
   isFavorite: (channel: string) => boolean;
   isMuted: (channel: string) => boolean;
+  addBookmark: (channel: string, msgId: string, from: string, text: string, timestamp: Date) => void;
+  removeBookmark: (msgId: string) => void;
+  setBookmarksPanelOpen: (open: boolean) => void;
   setSearchOpen: (open: boolean) => void;
   setSearchQuery: (query: string) => void;
   setChannelListOpen: (open: boolean) => void;
@@ -222,6 +227,8 @@ export const useStore = create<Store>((set, get) => ({
   messageDensity: (localStorage.getItem('freeq-density') as 'default' | 'compact' | 'cozy') || 'default',
   favorites: new Set(JSON.parse(localStorage.getItem('freeq-favorites') || '[]')),
   mutedChannels: new Set(JSON.parse(localStorage.getItem('freeq-muted') || '[]')),
+  bookmarks: JSON.parse(localStorage.getItem('freeq-bookmarks') || '[]').map((b: any) => ({ ...b, timestamp: new Date(b.timestamp) })),
+  bookmarksPanelOpen: false,
   searchOpen: false,
   searchQuery: '',
   channelListOpen: false,
@@ -269,7 +276,7 @@ export const useStore = create<Store>((set, get) => ({
     threadChannel: null,
     joinGateChannel: null,
     channelSettingsOpen: null,
-    theme: s.theme, messageDensity: s.messageDensity, favorites: s.favorites, mutedChannels: s.mutedChannels, // preserve across reconnects
+    theme: s.theme, messageDensity: s.messageDensity, favorites: s.favorites, mutedChannels: s.mutedChannels, bookmarks: s.bookmarks, bookmarksPanelOpen: false, // preserve across reconnects
   })),
 
   // Channels
@@ -589,6 +596,18 @@ export const useStore = create<Store>((set, get) => ({
   }),
   isFavorite: (channel) => get().favorites.has(channel.toLowerCase()),
   isMuted: (channel) => get().mutedChannels.has(channel.toLowerCase()),
+  addBookmark: (channel, msgId, from, text, timestamp) => set((s) => {
+    if (s.bookmarks.some((b) => b.msgId === msgId)) return s;
+    const bookmarks = [...s.bookmarks, { channel, msgId, from, text, timestamp }];
+    localStorage.setItem('freeq-bookmarks', JSON.stringify(bookmarks));
+    return { bookmarks };
+  }),
+  removeBookmark: (msgId) => set((s) => {
+    const bookmarks = s.bookmarks.filter((b) => b.msgId !== msgId);
+    localStorage.setItem('freeq-bookmarks', JSON.stringify(bookmarks));
+    return { bookmarks };
+  }),
+  setBookmarksPanelOpen: (open) => set({ bookmarksPanelOpen: open }),
   setSearchOpen: (open) => set({ searchOpen: open, searchQuery: open ? '' : '' }),
   setSearchQuery: (query) => set({ searchQuery: query }),
   setChannelListOpen: (open) => set({ channelListOpen: open }),

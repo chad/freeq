@@ -52,6 +52,19 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
         </span>
       </div>
 
+      {/* Identity stats */}
+      {isChannel && ch && (() => {
+        const verified = [...ch.members.values()].filter((m) => m.did).length;
+        return verified > 0 ? (
+          <span className="text-xs text-success/80 shrink-0 flex items-center gap-1" title={`${verified} AT Protocol verified`}>
+            <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 0a8 8 0 100 16A8 8 0 008 0zm3.78 5.97l-4.5 5a.75.75 0 01-1.06.02l-2-1.86a.75.75 0 011.02-1.1l1.45 1.35 3.98-4.43a.75.75 0 011.11 1.02z"/>
+            </svg>
+            {verified}
+          </span>
+        ) : null;
+      })()}
+
       {/* Separator */}
       {isChannel && <div className="w-px h-5 bg-border" />}
 

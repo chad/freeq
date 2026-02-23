@@ -413,6 +413,9 @@ export function ConnectScreen() {
           <span className="text-border">·</span>
           <a href="https://freeq.at/docs/" target="_blank" className="text-fg-dim hover:text-fg-muted">Docs</a>
         </div>
+
+        {/* Live social proof */}
+        <ServerStats />
       </div>
     </div>
   );
@@ -430,6 +433,30 @@ interface OAuthResultData {
  * Wait for OAuth result from popup window.
  * Tries BroadcastChannel, postMessage, and localStorage polling.
  */
+function ServerStats() {
+  const [stats, setStats] = useState<{ connections: number; channels: number } | null>(null);
+
+  useEffect(() => {
+    fetch('/api/v1/health')
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => d && setStats(d))
+      .catch(() => {});
+  }, []);
+
+  if (!stats || stats.connections === 0) return null;
+
+  return (
+    <div className="text-center mt-3 animate-fadeIn">
+      <div className="inline-flex items-center gap-2 bg-bg/60 rounded-full px-3 py-1.5 border border-border/50">
+        <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
+        <span className="text-[11px] text-fg-dim">
+          <span className="text-fg-muted font-medium">{stats.connections}</span> online · <span className="text-fg-muted font-medium">{stats.channels}</span> channels
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function waitForOAuthResult(popup: Window | null): Promise<OAuthResultData | null> {
   return new Promise((resolve) => {
     let resolved = false;

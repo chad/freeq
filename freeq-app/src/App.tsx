@@ -21,6 +21,8 @@ import { KeyboardShortcuts } from './components/KeyboardShortcuts';
 import { ToastContainer } from './components/Toast';
 import { FileDropOverlay } from './components/FileDropOverlay';
 import { InstallPrompt } from './components/InstallPrompt';
+import { OnboardingTour } from './components/OnboardingTour';
+import { BookmarksPanel } from './components/BookmarksPanel';
 
 export default function App() {
   const registered = useStore((s) => s.registered);
@@ -70,6 +72,7 @@ export default function App() {
     'mod+k': () => setQuickSwitcher(true),
     'mod+f': () => useStore.getState().setSearchOpen(true),
     'mod+/': () => setShortcuts(true),
+    'mod+b': () => useStore.getState().setBookmarksPanelOpen(true),
     'mod+1': () => switchToNth(0),
     'mod+2': () => switchToNth(1),
     'mod+3': () => switchToNth(2),
@@ -155,6 +158,8 @@ export default function App() {
       <ToastContainer />
       <FileDropOverlay />
       <InstallPrompt />
+      <OnboardingTour />
+      <BookmarksPanel />
     </div>
   );
 }
