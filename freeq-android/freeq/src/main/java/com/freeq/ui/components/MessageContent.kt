@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -78,19 +79,21 @@ fun MessageContent(
     // Text portion
     val showText = if (embedUrl != null) remainingText else text
     if (showText.isNotEmpty()) {
-        if (isAction) {
-            Text(
-                text = "$fromNick $showText",
-                fontSize = 15.sp,
-                fontStyle = FontStyle.Italic,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-        } else {
-            Text(
-                text = showText,
-                fontSize = 15.sp,
-                color = MaterialTheme.colorScheme.onBackground
-            )
+        SelectionContainer {
+            if (isAction) {
+                Text(
+                    text = "$fromNick $showText",
+                    fontSize = 15.sp,
+                    fontStyle = FontStyle.Italic,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+            } else {
+                Text(
+                    text = showText,
+                    fontSize = 15.sp,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+            }
         }
     } else if (isAction && embedUrl != null) {
         // Action with only a URL — still show nick
