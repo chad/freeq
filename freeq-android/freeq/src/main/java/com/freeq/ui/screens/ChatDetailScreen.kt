@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Group
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -18,6 +19,7 @@ import com.freeq.model.AppState
 import com.freeq.ui.components.ComposeBar
 import com.freeq.ui.components.MemberList
 import com.freeq.ui.components.MessageList
+import com.freeq.ui.components.SearchSheet
 import com.freeq.ui.components.UserProfileSheet
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -34,7 +36,9 @@ fun ChatDetailScreen(
     }
 
     var showMembers by remember { mutableStateOf(false) }
+    var showSearch by remember { mutableStateOf(false) }
     var profileSheetNick by remember { mutableStateOf<String?>(null) }
+    var scrollToMessageId by remember { mutableStateOf<String?>(null) }
     val isChannel = channelName.startsWith("#")
 
     // Update active channel and mark read
@@ -80,6 +84,13 @@ fun ChatDetailScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showSearch = true }) {
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = "Search",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     if (isChannel) {
                         IconButton(onClick = { showMembers = !showMembers }) {
                             Icon(
@@ -146,6 +157,7 @@ fun ChatDetailScreen(
                     appState = appState,
                     channelState = channelState,
                     onProfileClick = { nick -> profileSheetNick = nick },
+                    scrollToMessageId = scrollToMessageId,
                     modifier = Modifier.weight(1f)
                 )
 
@@ -170,6 +182,21 @@ fun ChatDetailScreen(
                     )
                 }
             }
+        }
+
+        // Search sheet
+        if (showSearch) {
+            SearchSheet(
+                appState = appState,
+                onDismiss = { showSearch = false },
+                onNavigateToChannel = { channel, messageId ->
+                    if (channel.equals(channelName, ignoreCase = true)) {
+                        scrollToMessageId = messageId
+                    } else {
+                        onNavigateToChat?.invoke(channel)
+                    }
+                }
+            )
         }
 
         // Profile sheet

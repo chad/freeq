@@ -39,21 +39,33 @@ fun MessageList(
     appState: AppState,
     channelState: ChannelState,
     onProfileClick: ((String) -> Unit)? = null,
+    scrollToMessageId: String? = null,
     modifier: Modifier = Modifier
 ) {
     val messages = channelState.messages
     val listState = rememberLazyListState()
     val clipboardManager = LocalClipboardManager.current
     var lightboxUrl by remember { mutableStateOf<String?>(null) }
+    var highlightedMessageId by remember { mutableStateOf<String?>(null) }
 
     // Snapshot last-read message ID on first composition (before markRead updates it)
     val lastReadId = remember(channelState.name) {
         appState.lastReadMessageIds[channelState.name]
     }
 
-    // Auto-scroll to bottom on new messages
+    // Scroll to specific message (from search)
+    LaunchedEffect(scrollToMessageId) {
+        val targetId = scrollToMessageId ?: return@LaunchedEffect
+        val idx = messages.indexOfFirst { it.id == targetId }
+        if (idx >= 0) {
+            listState.animateScrollToItem(idx)
+            highlightedMessageId = targetId
+        }
+    }
+
+    // Auto-scroll to bottom on new messages (skip if we just scrolled to a search result)
     LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
+        if (messages.isNotEmpty() && scrollToMessageId == null) {
             listState.animateScrollToItem(messages.size - 1)
         }
     }
@@ -127,6 +139,7 @@ fun MessageList(
                 MessageBubble(
                     msg = msg,
                     showHeader = showHeader,
+                    isHighlighted = msg.id == highlightedMessageId,
                     appState = appState,
                     channelState = channelState,
                     clipboardManager = clipboardManager,
@@ -159,6 +172,7 @@ fun MessageList(
 private fun MessageBubble(
     msg: ChatMessage,
     showHeader: Boolean,
+    isHighlighted: Boolean = false,
     appState: AppState,
     channelState: ChannelState,
     clipboardManager: androidx.compose.ui.platform.ClipboardManager,
@@ -171,14 +185,16 @@ private fun MessageBubble(
     val isMention = !isOwn && appState.nick.value.isNotEmpty() &&
             msg.text.contains(appState.nick.value, ignoreCase = true)
 
+    val bgModifier = when {
+        isHighlighted -> Modifier.background(FreeqColors.accent.copy(alpha = 0.12f))
+        isMention -> Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
+        else -> Modifier
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .then(
-                if (isMention) Modifier.background(
-                    MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
-                ) else Modifier
-            )
+            .then(bgModifier)
             .padding(
                 start = 16.dp,
                 end = 16.dp,
