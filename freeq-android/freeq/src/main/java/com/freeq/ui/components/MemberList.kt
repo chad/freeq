@@ -1,6 +1,7 @@
 package com.freeq.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,6 +20,7 @@ import com.freeq.ui.theme.FreeqColors
 @Composable
 fun MemberList(
     members: List<MemberInfo>,
+    onMemberClick: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val ops = members.filter { it.isOp }
@@ -34,7 +36,7 @@ fun MemberList(
                 SectionHeader("Operators", ops.size)
             }
             items(ops, key = { "op-${it.nick}" }) { member ->
-                MemberRow(member)
+                MemberRow(member, onMemberClick)
             }
         }
 
@@ -43,7 +45,7 @@ fun MemberList(
                 SectionHeader("Voiced", voiced.size)
             }
             items(voiced, key = { "v-${it.nick}" }) { member ->
-                MemberRow(member)
+                MemberRow(member, onMemberClick)
             }
         }
 
@@ -52,7 +54,7 @@ fun MemberList(
                 SectionHeader("Members", regular.size)
             }
             items(regular, key = { "m-${it.nick}" }) { member ->
-                MemberRow(member)
+                MemberRow(member, onMemberClick)
             }
         }
     }
@@ -71,10 +73,11 @@ private fun SectionHeader(title: String, count: Int) {
 }
 
 @Composable
-private fun MemberRow(member: MemberInfo) {
+private fun MemberRow(member: MemberInfo, onMemberClick: ((String) -> Unit)? = null) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .let { if (onMemberClick != null) it.clickable { onMemberClick(member.nick) } else it }
             .padding(horizontal = 16.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)

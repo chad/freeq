@@ -134,7 +134,10 @@ fun MainScreen(appState: AppState) {
                 ChatDetailScreen(
                     appState = appState,
                     channelName = channelName,
-                    onBack = { navController.popBackStack() }
+                    onBack = { navController.popBackStack() },
+                    onNavigateToChat = { nick ->
+                        navController.navigate("chat/$nick")
+                    }
                 )
             }
         }

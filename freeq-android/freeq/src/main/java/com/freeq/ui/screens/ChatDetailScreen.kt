@@ -24,7 +24,8 @@ import com.freeq.ui.components.MessageList
 fun ChatDetailScreen(
     appState: AppState,
     channelName: String,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onNavigateToChat: ((String) -> Unit)? = null
 ) {
     val channelState = remember(channelName) {
         appState.channels.firstOrNull { it.name.equals(channelName, ignoreCase = true) }
@@ -160,7 +161,16 @@ fun ChatDetailScreen(
                     color = MaterialTheme.colorScheme.surface,
                     shadowElevation = 4.dp
                 ) {
-                    MemberList(members = channelState.members)
+                    MemberList(
+                        members = channelState.members,
+                        onMemberClick = { nick ->
+                            if (!nick.equals(appState.nick.value, ignoreCase = true)) {
+                                appState.getOrCreateDM(nick)
+                                showMembers = false
+                                onNavigateToChat?.invoke(nick)
+                            }
+                        }
+                    )
                 }
             }
         }
