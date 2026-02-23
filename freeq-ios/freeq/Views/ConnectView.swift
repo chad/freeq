@@ -279,6 +279,8 @@ struct ConnectView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             // Auto-login if session is within 2 weeks
+            // Delay slightly to ensure the window is in the scene hierarchy
+            // (ASWebAuthenticationSession error 3 = presentationContextInvalid)
             let lastLogin = UserDefaults.standard.double(forKey: "freeq.lastLogin")
             let twoWeeks: TimeInterval = 14 * 24 * 60 * 60
             if lastLogin > 0,
@@ -286,7 +288,10 @@ struct ConnectView: View {
                !handle.isEmpty,
                appState.connectionState == .disconnected,
                !loading {
-                startLogin()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    guard appState.connectionState == .disconnected, !loading else { return }
+                    startLogin()
+                }
             }
         }
     }
@@ -366,10 +371,20 @@ class ASPresentationContextProvider: NSObject, ASWebAuthenticationPresentationCo
     static let shared = ASPresentationContextProvider()
 
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let window = scene.windows.first else {
-            return ASPresentationAnchor()
+        // Try to find the key window from connected scenes
+        for scene in UIApplication.shared.connectedScenes {
+            if let windowScene = scene as? UIWindowScene {
+                // Prefer the key window
+                if let keyWindow = windowScene.windows.first(where: { $0.isKeyWindow }) {
+                    return keyWindow
+                }
+                // Fall back to any window
+                if let window = windowScene.windows.first {
+                    return window
+                }
+            }
         }
-        return window
+        // Last resort — create a new window (may cause error 3)
+        return ASPresentationAnchor()
     }
 }
