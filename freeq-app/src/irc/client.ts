@@ -515,7 +515,15 @@ function handleLine(rawLine: string) {
       break;
 
     // ── Error numerics ──
-    case '401': store.addSystemMessage('server', `No such nick: ${msg.params[1]}`); break;
+    case '401': {
+      const failNick = msg.params[1];
+      // Show in the DM buffer if it exists, otherwise server buffer
+      if (failNick && store.channels.has(failNick.toLowerCase())) {
+        store.addSystemMessage(failNick, `${failNick} is not online — message not delivered`);
+      }
+      store.addSystemMessage('server', `No such nick: ${failNick}`);
+      break;
+    }
     case '473': store.addSystemMessage('server', `Cannot join ${msg.params[1]} (invite only)`); break;
     case '474': store.addSystemMessage('server', `Cannot join ${msg.params[1]} (banned)`); break;
     case '475': store.addSystemMessage('server', `Cannot join ${msg.params[1]} (bad key)`); break;
