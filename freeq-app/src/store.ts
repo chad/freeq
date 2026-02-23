@@ -134,6 +134,7 @@ export interface Store {
   setTopic: (channel: string, topic: string, setBy?: string) => void;
 
   // Actions — members
+  clearMembers: (channel: string) => void;
   addMember: (channel: string, member: Partial<Member> & { nick: string }) => void;
   removeMember: (channel: string, nick: string) => void;
   removeUserFromAll: (nick: string, reason: string) => void;
@@ -324,6 +325,12 @@ export const useStore = create<Store>((set, get) => ({
   }),
 
   // Members
+  clearMembers: (channel) => set((s) => {
+    const key = channel.toLowerCase();
+    const ch = s.channels.get(key);
+    if (ch) ch.members = new Map();
+    return {};
+  }),
   addMember: (channel, member) => set((s) => {
     const channels = new Map(s.channels);
     const ch = getOrCreateChannel(channels, channel);

@@ -284,6 +284,7 @@ function handleLine(rawLine: string) {
       const account = msg.params[1]; // extended-join
       if (from === nick) {
         store.addChannel(channel);
+        store.clearMembers(channel); // Clear stale members before NAMES reply arrives
         store.setActiveChannel(channel);
         joinedChannels.add(channel.toLowerCase());
       }
