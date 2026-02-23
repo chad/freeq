@@ -146,6 +146,46 @@ The freeq server will:
 
 See `freeq-server/src/verifiers/github.rs` for a complete working example, or `freeq-server/src/bin/credential-issuer.rs` for a standalone issuer binary.
 
+## Built-in Bluesky follower verifier
+
+Require users to follow a Bluesky account before joining a channel. No API keys or OAuth needed — uses the public AT Protocol social graph.
+
+### How it works
+
+1. Channel op sets the policy:
+   ```
+   /POLICY #vip SET accept-rules
+   /POLICY #vip REQUIRE bluesky_follower issuer=did:web:irc.freeq.at:verify url=/verify/bluesky/start?target=chadfowler.com label=Follow_@chadfowler.com
+   ```
+
+2. User tries to join `#vip` → blocked with 477
+
+3. In the web client, the JoinGateModal shows requirements:
+   - ✅ Accept the channel rules
+   - 🦋 Follow @chadfowler.com on Bluesky
+
+4. User clicks "Follow @chadfowler.com" → popup checks public Bluesky API:
+   - **Already following**: Credential issued instantly, user auto-joins
+   - **Not following**: Shows link to Bluesky profile + "I followed — check again" button
+
+5. No OAuth, no API keys, no login — the follow graph is public
+
+### Quick setup (one command)
+
+```
+/POLICY #channel VERIFY bluesky chadfowler.com
+```
+
+This generates a verification URL the user can open.
+
+### Why this is powerful
+
+- **Inherently viral** — users must follow you to join, growing your Bluesky audience
+- **Zero configuration** — no API keys, no OAuth apps, no env vars
+- **Instant verification** — public API check, no login flow
+- **Time-limited credentials** — 7-day expiry, users must still be following on re-check
+- **Fully decoupled** — same Verifiable Credential architecture as GitHub verifier
+
 ## Endpoint namespacing
 
 Verifiers on the freeq server live under `/verify/`:
@@ -155,6 +195,8 @@ Verifiers on the freeq server live under `/verify/`:
 | `/verify/.well-known/did.json` | Verifier DID document |
 | `/verify/github/start` | Start GitHub OAuth flow |
 | `/verify/github/callback` | GitHub OAuth callback |
+| `/verify/bluesky/start` | Check Bluesky follow relationship |
+| `/verify/bluesky/check` | Re-check after following |
 
 Future verifiers would add their own namespaces:
 

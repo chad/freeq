@@ -245,3 +245,53 @@ User                               │                           │
     │ Joined with +o               │                           │
     │<─────────────────────────────│                           │
 ```
+
+## Web UI
+
+The web client has built-in UI for policy management:
+
+### JoinGateModal (for users)
+
+When you try to join a policy-gated channel, a modal appears showing:
+
+- All requirements with ✅/❌ status
+- Action buttons for each requirement (Accept Rules, Verify with GitHub, Follow on Bluesky)
+- "Join Channel" button that enables when all requirements are met
+- Automatic re-check after completing verification
+
+### Channel Settings Panel (for ops)
+
+Click the ⚙️ gear icon in any channel's top bar:
+
+- **Rules tab**: Set or update the channel policy (accept-rules, custom JSON)
+- **Verifiers tab**: Add credential verifiers from presets:
+  - 🐙 GitHub Repo Collaborator
+  - 🏢 GitHub Org Member
+  - 🦋 Bluesky Follower
+- **Roles tab**: Assign auto-op or auto-voice based on credential type
+
+Non-ops see a read-only view of the current policy.
+
+## Quick start examples
+
+### Bluesky follower gate (no config needed)
+
+```
+/POLICY #vip SET accept-rules
+/POLICY #vip REQUIRE bluesky_follower issuer=did:web:irc.freeq.at:verify url=/verify/bluesky/start?target=yourhandle.bsky.social label=Follow_on_Bluesky
+```
+
+### GitHub org gate
+
+```
+/POLICY #team SET accept-rules
+/POLICY #team REQUIRE github_membership issuer=did:web:irc.freeq.at:verify url=/verify/github/start?org=yourorg label=Verify_GitHub
+```
+
+### Auto-op for GitHub repo collaborators
+
+```
+/POLICY #project SET accept-rules
+/POLICY #project SET-ROLE op {"type":"PRESENT","credential_type":"github_repo","issuer":"did:web:irc.freeq.at:verify"}
+/POLICY #project REQUIRE github_repo issuer=did:web:irc.freeq.at:verify url=/verify/github/start?repo=owner/repo label=Verify_Repo_Access
+```
