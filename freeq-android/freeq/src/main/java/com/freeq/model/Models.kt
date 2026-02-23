@@ -103,6 +103,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     private var client: FreeqClient? = null
     private var lastTypingSent: Long = 0
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    val notificationManager = FreeqNotificationManager(application)
 
     private val prefs: SharedPreferences
         get() = getApplication<Application>().getSharedPreferences("freeq", Context.MODE_PRIVATE)
@@ -406,11 +407,23 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                     ch.appendIfNew(msg)
                     state.incrementUnread(ircMsg.target)
                     ch.typingUsers.remove(ircMsg.fromNick)
+
+                    if (!isSelf && ircMsg.text.contains(state.nick.value, ignoreCase = true)) {
+                        state.notificationManager.sendMessageNotification(
+                            from = ircMsg.fromNick, text = ircMsg.text, channel = ircMsg.target
+                        )
+                    }
                 } else {
                     val bufferName = if (isSelf) ircMsg.target else ircMsg.fromNick
                     val dm = state.getOrCreateDM(bufferName)
                     dm.appendIfNew(msg)
                     state.incrementUnread(bufferName)
+
+                    if (!isSelf) {
+                        state.notificationManager.sendMessageNotification(
+                            from = ircMsg.fromNick, text = ircMsg.text, channel = bufferName
+                        )
+                    }
                 }
             }
 
@@ -420,6 +433,7 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                 ch.members.addAll(event.members.map {
                     MemberInfo(nick = it.nick, isOp = it.isOp, isVoiced = it.isVoiced)
                 })
+                AvatarCache.prefetchAll(event.members.map { it.nick })
             }
 
             is FreeqEvent.TopicChanged -> {

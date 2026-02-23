@@ -5,16 +5,18 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.freeq.ui.theme.FreeqColors
+import coil.compose.AsyncImage
+import com.freeq.model.AvatarCache
 import kotlin.math.abs
 
 private val avatarColors = listOf(
@@ -32,6 +34,33 @@ private val avatarColors = listOf(
 fun UserAvatar(
     nick: String,
     size: Dp = 40.dp,
+    modifier: Modifier = Modifier
+) {
+    val avatarUrl = AvatarCache.avatarUrl(nick)
+
+    // Trigger prefetch on first render
+    LaunchedEffect(nick) {
+        AvatarCache.prefetch(nick)
+    }
+
+    if (avatarUrl != null) {
+        AsyncImage(
+            model = avatarUrl,
+            contentDescription = "$nick avatar",
+            contentScale = ContentScale.Crop,
+            modifier = modifier
+                .size(size)
+                .clip(CircleShape)
+        )
+    } else {
+        InitialCircle(nick = nick, size = size, modifier = modifier)
+    }
+}
+
+@Composable
+private fun InitialCircle(
+    nick: String,
+    size: Dp,
     modifier: Modifier = Modifier
 ) {
     val initial = nick.firstOrNull()?.uppercaseChar() ?: '?'

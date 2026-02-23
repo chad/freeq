@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -131,11 +132,50 @@ fun ChatsTab(
             } else {
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(filteredConversations, key = { it.name }) { conversation ->
-                        ChatRow(
-                            conversation = conversation,
-                            unreadCount = appState.unreadCounts[conversation.name] ?: 0,
-                            onClick = { onChannelClick(conversation.name) }
-                        )
+                        val isChannel = conversation.name.startsWith("#")
+                        if (isChannel) {
+                            val dismissState = rememberSwipeToDismissBoxState(
+                                confirmValueChange = { value ->
+                                    if (value == SwipeToDismissBoxValue.EndToStart) {
+                                        appState.partChannel(conversation.name)
+                                        true
+                                    } else false
+                                }
+                            )
+                            SwipeToDismissBox(
+                                state = dismissState,
+                                backgroundContent = {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(MaterialTheme.colorScheme.error)
+                                            .padding(horizontal = 20.dp),
+                                        contentAlignment = Alignment.CenterEnd
+                                    ) {
+                                        Icon(
+                                            Icons.AutoMirrored.Filled.ExitToApp,
+                                            contentDescription = "Leave",
+                                            tint = MaterialTheme.colorScheme.onError
+                                        )
+                                    }
+                                },
+                                enableDismissFromStartToEnd = false
+                            ) {
+                                Surface(color = MaterialTheme.colorScheme.background) {
+                                    ChatRow(
+                                        conversation = conversation,
+                                        unreadCount = appState.unreadCounts[conversation.name] ?: 0,
+                                        onClick = { onChannelClick(conversation.name) }
+                                    )
+                                }
+                            }
+                        } else {
+                            ChatRow(
+                                conversation = conversation,
+                                unreadCount = appState.unreadCounts[conversation.name] ?: 0,
+                                onClick = { onChannelClick(conversation.name) }
+                            )
+                        }
                         HorizontalDivider(
                             modifier = Modifier.padding(start = 76.dp),
                             color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
