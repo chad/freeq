@@ -44,6 +44,7 @@ fun MessageList(
     val clipboardManager = LocalClipboardManager.current
     var lightboxUrl by remember { mutableStateOf<String?>(null) }
     var highlightedMessageId by remember { mutableStateOf<String?>(null) }
+    var threadMessage by remember { mutableStateOf<ChatMessage?>(null) }
 
     // Snapshot last-read position from before this screen visit
     val lastReadId = remember(channelState.name) {
@@ -137,7 +138,8 @@ fun MessageList(
                     channelState = channelState,
                     clipboardManager = clipboardManager,
                     onNickClick = onProfileClick,
-                    onImageClick = { url -> lightboxUrl = url }
+                    onImageClick = { url -> lightboxUrl = url },
+                    onThreadClick = { threadMsg -> threadMessage = threadMsg }
                 )
             }
 
@@ -155,6 +157,16 @@ fun MessageList(
             ImageLightbox(url = url, onDismiss = { lightboxUrl = null })
         }
     }
+
+    // Thread sheet
+    threadMessage?.let { msg ->
+        ThreadSheet(
+            rootMessage = msg,
+            channelState = channelState,
+            appState = appState,
+            onDismiss = { threadMessage = null }
+        )
+    }
 }
 
 @Composable
@@ -166,7 +178,8 @@ private fun MessageBubble(
     channelState: ChannelState,
     clipboardManager: androidx.compose.ui.platform.ClipboardManager,
     onNickClick: ((String) -> Unit)? = null,
-    onImageClick: ((String) -> Unit)? = null
+    onImageClick: ((String) -> Unit)? = null,
+    onThreadClick: ((ChatMessage) -> Unit)? = null
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val haptic = LocalHapticFeedback.current
@@ -190,13 +203,14 @@ private fun MessageBubble(
                 top = if (showHeader) 8.dp else 1.dp
             )
     ) {
-        // Reply context
+        // Reply context — tap to open thread view
         if (msg.replyTo != null) {
             val parentMsg = channelState.messages.firstOrNull { it.id == msg.replyTo }
             if (parentMsg != null) {
                 Row(
                     modifier = Modifier
-                        .padding(start = 48.dp, bottom = 2.dp),
+                        .padding(start = 48.dp, bottom = 2.dp)
+                        .clickable { onThreadClick?.invoke(msg) },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
@@ -330,6 +344,18 @@ private fun MessageBubble(
                 },
                 leadingIcon = { Icon(Icons.AutoMirrored.Filled.Reply, contentDescription = null) }
             )
+            val hasThread = msg.replyTo != null ||
+                channelState.messages.any { it.replyTo == msg.id }
+            if (hasThread) {
+                DropdownMenuItem(
+                    text = { Text("View Thread") },
+                    onClick = {
+                        onThreadClick?.invoke(msg)
+                        showMenu = false
+                    },
+                    leadingIcon = { Icon(Icons.Default.Forum, contentDescription = null) }
+                )
+            }
             DropdownMenuItem(
                 text = { Text("Copy") },
                 onClick = {
