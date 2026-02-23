@@ -7,8 +7,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -27,7 +29,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.compose.SubcomposeAsyncImage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.net.URI
+import java.net.URL
+import java.net.URLEncoder
 
 private val IMAGE_PATTERN = Regex(
     """https?://\S+\.(?:png|jpg|jpeg|gif|webp)(?:\?\S*)?""",
@@ -39,6 +46,9 @@ private val CDN_PATTERN = Regex(
 )
 private val YOUTUBE_PATTERN = Regex(
     """(?:youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})"""
+)
+private val BSKY_POST_PATTERN = Regex(
+    """https?://bsky\.app/profile/([^/]+)/post/([a-zA-Z0-9]+)"""
 )
 private val URL_PATTERN = Regex(
     """https?://\S+"""
@@ -53,12 +63,16 @@ fun MessageContent(
 ) {
     val uriHandler = LocalUriHandler.current
 
-    // Priority: image > YouTube > generic link
+    // Priority: image > Bluesky post > YouTube > generic link
     val imageUrl = IMAGE_PATTERN.find(text)?.value ?: CDN_PATTERN.find(text)?.value
-    val ytMatch = if (imageUrl == null) YOUTUBE_PATTERN.find(text) else null
-    val linkUrl = if (imageUrl == null && ytMatch == null) URL_PATTERN.find(text)?.value else null
+    val bskyMatch = if (imageUrl == null) BSKY_POST_PATTERN.find(text) else null
+    val ytMatch = if (imageUrl == null && bskyMatch == null) YOUTUBE_PATTERN.find(text) else null
+    val linkUrl = if (imageUrl == null && bskyMatch == null && ytMatch == null) URL_PATTERN.find(text)?.value else null
 
-    val embedUrl = imageUrl ?: ytMatch?.let { URL_PATTERN.find(text)?.value } ?: linkUrl
+    val embedUrl = imageUrl
+        ?: bskyMatch?.let { URL_PATTERN.find(text)?.value }
+        ?: ytMatch?.let { URL_PATTERN.find(text)?.value }
+        ?: linkUrl
     val remainingText = embedUrl?.let { text.replace(it, "").trim() } ?: text
 
     // Text portion
@@ -92,6 +106,17 @@ fun MessageContent(
     when {
         imageUrl != null -> {
             InlineImage(url = imageUrl, onClick = { onImageClick?.invoke(imageUrl) })
+        }
+        bskyMatch != null -> {
+            val handle = bskyMatch.groupValues[1]
+            val rkey = bskyMatch.groupValues[2]
+            val postUrl = bskyMatch.value
+            BlueskyEmbed(
+                handle = handle,
+                rkey = rkey,
+                onClick = { uriHandler.openUri(postUrl) },
+                onImageClick = onImageClick
+            )
         }
         ytMatch != null -> {
             val videoId = ytMatch.groupValues[1]
@@ -241,5 +266,203 @@ private fun LinkPreview(url: String, onClick: () -> Unit) {
                 )
             }
         }
+    }
+}
+
+// ── Bluesky post embed ──
+
+private data class BskyPost(
+    val authorName: String,
+    val authorHandle: String,
+    val authorAvatar: String?,
+    val text: String,
+    val imageUrl: String?,
+    val likeCount: Int,
+    val repostCount: Int
+)
+
+@Composable
+private fun BlueskyEmbed(
+    handle: String,
+    rkey: String,
+    onClick: () -> Unit,
+    onImageClick: ((String) -> Unit)? = null
+) {
+    var post by remember { mutableStateOf<BskyPost?>(null) }
+    var failed by remember { mutableStateOf(false) }
+
+    LaunchedEffect(handle, rkey) {
+        post = withContext(Dispatchers.IO) { fetchBskyPost(handle, rkey) }
+        if (post == null) failed = true
+    }
+
+    if (failed) {
+        // Fall back to link preview
+        LinkPreview(url = "https://bsky.app/profile/$handle/post/$rkey", onClick = onClick)
+        return
+    }
+
+    val p = post ?: run {
+        // Loading
+        Row(
+            modifier = Modifier.padding(top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+            )
+            Text(
+                "Loading Bluesky post...",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            )
+        }
+        return
+    }
+
+    Column(
+        modifier = Modifier
+            .padding(top = 4.dp)
+            .widthIn(max = 300.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick)
+            .padding(12.dp)
+    ) {
+        // Author row
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            UserAvatar(nick = p.authorHandle, size = 20.dp)
+            Text(
+                text = p.authorName.ifEmpty { p.authorHandle },
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            // Bluesky butterfly icon (blue)
+            Text(
+                text = "\uD83E\uDD8B",
+                fontSize = 14.sp
+            )
+        }
+
+        // Post text
+        if (p.text.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = p.text,
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        // Post image
+        p.imageUrl?.let { imgUrl ->
+            Spacer(modifier = Modifier.height(8.dp))
+            AsyncImage(
+                model = imgUrl,
+                contentDescription = null,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 160.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onImageClick?.invoke(imgUrl) },
+                contentScale = ContentScale.Crop
+            )
+        }
+
+        // Stats row
+        if (p.likeCount > 0 || p.repostCount > 0) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (p.likeCount > 0) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Favorite,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                        Text(
+                            "${p.likeCount}",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
+                }
+                if (p.repostCount > 0) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Repeat,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                        Text(
+                            "${p.repostCount}",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun fetchBskyPost(handle: String, rkey: String): BskyPost? {
+    return try {
+        val uri = "at://$handle/app.bsky.feed.post/$rkey"
+        val encoded = URLEncoder.encode(uri, "UTF-8")
+        val url = URL("https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri=$encoded&depth=0")
+        val conn = url.openConnection().apply {
+            connectTimeout = 5000
+            readTimeout = 5000
+        }
+        val text = conn.getInputStream().bufferedReader().readText()
+        val json = JSONObject(text)
+        val thread = json.optJSONObject("thread") ?: return null
+        val post = thread.optJSONObject("post") ?: return null
+        val author = post.optJSONObject("author") ?: return null
+        val record = post.optJSONObject("record") ?: return null
+
+        // Extract first image if present
+        val embed = post.optJSONObject("embed")
+        val imageUrl = embed?.optJSONArray("images")
+            ?.optJSONObject(0)
+            ?.optString("thumb")
+            ?.takeIf { it.isNotEmpty() }
+
+        BskyPost(
+            authorName = author.optString("displayName", ""),
+            authorHandle = author.optString("handle", handle),
+            authorAvatar = author.optString("avatar", null),
+            text = record.optString("text", ""),
+            imageUrl = imageUrl,
+            likeCount = post.optInt("likeCount", 0),
+            repostCount = post.optInt("repostCount", 0)
+        )
+    } catch (_: Exception) {
+        null
     }
 }
