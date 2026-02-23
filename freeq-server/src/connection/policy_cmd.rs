@@ -300,24 +300,44 @@ pub(super) fn handle_policy(
                 let reply = Message::from_server(
                     server_name,
                     "NOTICE",
-                    vec![nick, "Usage: POLICY <channel> VERIFY github <org-or-owner/repo>"],
+                    vec![nick, "Usage: POLICY <channel> VERIFY <github|bluesky> <target>"],
                 );
                 send_fn(state, session_id, format!("{reply}\r\n"));
                 return;
             }
 
             let provider = msg.params[2].to_lowercase();
-            if provider != "github" {
+            if provider != "github" && provider != "bluesky" {
                 let reply = Message::from_server(
                     server_name,
                     "NOTICE",
-                    vec![nick, "Only 'github' verification is currently supported"],
+                    vec![nick, "Supported providers: github, bluesky"],
                 );
                 send_fn(state, session_id, format!("{reply}\r\n"));
                 return;
             }
 
             let target = &msg.params[3];
+
+            // Bluesky follower verification — no OAuth needed, uses public API
+            if provider == "bluesky" {
+                let origin = format!("https://{}", state.config.server_name);
+                let target_handle = target.trim_start_matches('@');
+                let verify_url = format!(
+                    "{}/verify/bluesky/start?subject_did={}&target={}&callback={}/api/v1/credentials/present",
+                    origin,
+                    urlencoding::encode(&did),
+                    urlencoding::encode(target_handle),
+                    urlencoding::encode(&origin),
+                );
+                let reply = Message::from_server(
+                    server_name,
+                    "NOTICE",
+                    vec![nick, &format!("Open this URL to verify you follow @{target_handle} on Bluesky: {verify_url}")],
+                );
+                send_fn(state, session_id, format!("{reply}\r\n"));
+                return;
+            }
 
             if state.config.github_client_id.is_some() {
                 // OAuth mode — redirect user to GitHub

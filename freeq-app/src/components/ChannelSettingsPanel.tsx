@@ -50,6 +50,16 @@ const VERIFIER_PRESETS: {
     placeholder: 'org-name',
     paramLabel: 'Organization',
   },
+  {
+    id: 'bluesky_follower',
+    label: 'Bluesky Follower',
+    icon: '🦋',
+    description: 'Require the user to follow a Bluesky account',
+    credentialType: 'bluesky_follower',
+    buildUrl: (handle) => `/verify/bluesky/start?target=${encodeURIComponent(handle)}`,
+    placeholder: 'handle.bsky.social',
+    paramLabel: 'Bluesky Handle',
+  },
 ];
 
 export function ChannelSettingsPanel() {
@@ -297,7 +307,7 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
                   {Object.entries(policy.policy.credential_endpoints).map(([type, ep]) => (
                     <div key={type} className="bg-bg border border-border rounded-lg p-3 flex items-center gap-3">
                       <div className="w-8 h-8 rounded-lg bg-bg-tertiary flex items-center justify-center text-lg">
-                        {type.includes('github') ? '🐙' : '🔑'}
+                        {type.includes('github') ? '🐙' : type.includes('bluesky') ? '🦋' : '🔑'}
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-fg">{ep.label}</p>

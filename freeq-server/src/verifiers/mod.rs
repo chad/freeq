@@ -11,6 +11,7 @@
 //! Verifiers could run on a completely separate server — they're
 //! colocated here for convenience, not coupling.
 
+pub mod bluesky;
 pub mod github;
 
 use axum::Router;
@@ -48,10 +49,6 @@ pub fn router(
     issuer_did: String,
     github: Option<GitHubConfig>,
 ) -> Option<(Router<()>, Arc<VerifierState>)> {
-    if github.is_none() {
-        return None;
-    }
-
     let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
     let public_key = signing_key.verifying_key();
     let public_key_multibase = format!(
@@ -79,7 +76,10 @@ pub fn router(
             axum::routing::get(did_document),
         );
 
-    // Mount provider-specific routes
+    // Bluesky follower verifier — always available (uses public API, no config needed)
+    app = app.merge(bluesky::routes());
+
+    // GitHub verifier — only if OAuth credentials are configured
     if state.github.is_some() {
         app = app.merge(github::routes());
     }
