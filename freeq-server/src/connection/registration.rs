@@ -68,6 +68,7 @@ pub(super) fn ghost_same_did(
                     ch.members.remove(old_session);
                     ch.ops.remove(old_session);
                     ch.voiced.remove(old_session);
+                    ch.halfops.remove(old_session);
                 }
             }
             drop(channels_lock);

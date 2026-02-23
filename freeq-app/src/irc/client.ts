@@ -293,6 +293,7 @@ function handleLine(rawLine: string) {
         nick: from,
         did: joinDid,
         isOp: false,
+        isHalfop: false,
         isVoiced: false,
       });
       if (joinDid) prefetchProfiles([joinDid]);
@@ -450,9 +451,10 @@ function handleLine(rawLine: string) {
       const nicks = (msg.params[3] || '').split(' ').filter(Boolean);
       for (const n of nicks) {
         const isOp = n.startsWith('@');
+        const isHalfop = n.startsWith('%');
         const isVoiced = n.startsWith('+');
-        const bare = n.replace(/^[@+]/, '');
-        store.addMember(channel, { nick: bare, isOp, isVoiced });
+        const bare = n.replace(/^[@%+]/, '');
+        store.addMember(channel, { nick: bare, isOp, isHalfop, isVoiced });
       }
       break;
     }

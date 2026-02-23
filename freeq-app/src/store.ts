@@ -26,6 +26,7 @@ export interface Member {
   displayName?: string;
   avatarUrl?: string;
   isOp: boolean;
+  isHalfop: boolean;
   isVoiced: boolean;
   away?: string | null;
   typing?: boolean;
@@ -342,6 +343,7 @@ export const useStore = create<Store>((set, get) => ({
       displayName: member.displayName ?? existing?.displayName,
       avatarUrl: member.avatarUrl ?? existing?.avatarUrl,
       isOp: member.isOp ?? existing?.isOp ?? false,
+      isHalfop: member.isHalfop ?? existing?.isHalfop ?? false,
       isVoiced: member.isVoiced ?? existing?.isVoiced ?? false,
       away: existing?.away,
     });
@@ -436,11 +438,12 @@ export const useStore = create<Store>((set, get) => ({
     const adding = mode.startsWith('+');
     const modeChar = mode.replace(/^[+-]/, '');
 
-    // User modes (+o, +v)
-    if ((modeChar === 'o' || modeChar === 'v') && arg) {
+    // User modes (+o, +h, +v)
+    if ((modeChar === 'o' || modeChar === 'h' || modeChar === 'v') && arg) {
       const member = ch.members.get(arg.toLowerCase());
       if (member) {
         if (modeChar === 'o') member.isOp = adding;
+        if (modeChar === 'h') member.isHalfop = adding;
         if (modeChar === 'v') member.isVoiced = adding;
         ch.members.set(arg.toLowerCase(), { ...member });
       }

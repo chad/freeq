@@ -28,6 +28,8 @@ pub struct ChannelState {
     pub remote_members: HashMap<String, RemoteMember>,
     /// Session IDs of channel operators (ephemeral, per-session).
     pub ops: HashSet<String>,
+    /// Session IDs of halfops/moderators (+h). Can kick/ban regular users, set +v.
+    pub halfops: HashSet<String>,
     /// Session IDs of voiced users.
     pub voiced: HashSet<String>,
 
@@ -941,6 +943,7 @@ async fn process_s2s_message(
             .filter_map(|s| {
                 reverse.get(s).map(|n| {
                     let prefix = if ch.ops.contains(s) { "@" }
+                        else if ch.halfops.contains(s) { "%" }
                         else if ch.voiced.contains(s) { "+" }
                         else { "" };
                     format!("{prefix}{n}")
@@ -1696,6 +1699,7 @@ async fn process_s2s_message(
                     let removed = ch.members.remove(sid);
                     ch.ops.remove(sid);
                     ch.voiced.remove(sid);
+                    ch.halfops.remove(sid);
                     tracing::info!(
                         nick = %nick, channel = %channel_key, removed = removed,
                         "S2S Kick: removed local user from channel"

@@ -54,6 +54,7 @@ SLUG_MAP = {
     "bots": ("site", "bots.md"),
     "policy-framework": ("site", "policy-framework.md"),
     "verifiers": ("site", "verifiers.md"),
+    "moderation": ("site", "moderation.md"),
     "federation": ("site", "federation.md"),
     "self-hosting": ("site", "self-hosting.md"),
     "api-reference": ("site", "api-reference.md"),

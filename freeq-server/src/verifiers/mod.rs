@@ -13,6 +13,7 @@
 
 pub mod bluesky;
 pub mod github;
+pub mod moderation;
 
 use axum::Router;
 use ed25519_dalek::SigningKey;
@@ -28,6 +29,8 @@ pub struct VerifierState {
     pub github: Option<GitHubConfig>,
     /// Pending verification flows: state_token → PendingVerification.
     pub pending: std::sync::Mutex<std::collections::HashMap<String, PendingVerification>>,
+    /// Moderator roster: channel → active appointments.
+    pub mod_roster: std::sync::Mutex<moderation::ModRoster>,
 }
 
 #[derive(Clone)]
@@ -67,6 +70,9 @@ pub fn router(
         issuer_did: issuer_did.clone(),
         github,
         pending: std::sync::Mutex::new(std::collections::HashMap::new()),
+        mod_roster: std::sync::Mutex::new(moderation::ModRoster {
+            channels: std::collections::HashMap::new(),
+        }),
     });
 
     let mut app = Router::new()
@@ -78,6 +84,9 @@ pub fn router(
 
     // Bluesky follower verifier — always available (uses public API, no config needed)
     app = app.merge(bluesky::routes());
+
+    // Moderation verifier — always available
+    app = app.merge(moderation::routes());
 
     // GitHub verifier — only if OAuth credentials are configured
     if state.github.is_some() {

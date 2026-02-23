@@ -125,6 +125,7 @@ pub(super) fn handle_privmsg(
                 // +m: must be voiced or op to send
                 if ch.moderated
                     && !ch.ops.contains(&conn.id)
+                    && !ch.halfops.contains(&conn.id)
                     && !ch.voiced.contains(&conn.id)
                 {
                     let nick = conn.nick_or_star();
