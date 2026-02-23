@@ -121,8 +121,15 @@ export function JoinGateModal() {
 
   const handleJoin = () => {
     setJoining(true);
-    joinChannel(channel);
-    setTimeout(close, 500);
+    // Must send POLICY ACCEPT first to create the attestation,
+    // then JOIN. The /check endpoint evaluates hypothetically
+    // but doesn't create the attestation — ACCEPT does that.
+    rawCommand(`POLICY ${channel} ACCEPT`);
+    // Give the server a moment to process ACCEPT, then JOIN
+    setTimeout(() => {
+      joinChannel(channel);
+      setTimeout(close, 500);
+    }, 300);
   };
 
   return (
