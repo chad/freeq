@@ -602,13 +602,27 @@ export function MessageList() {
             </>
           ) : activeChannel.startsWith('#') ? (
             <>
-              <div className="text-lg text-fg-muted font-medium">Welcome to {activeChannel}</div>
-              <div className="text-sm mt-1 text-center">This is the beginning of the channel. Say hello! 👋</div>
+              <div className="text-3xl mb-2">👋</div>
+              <div className="text-xl text-fg font-bold">Welcome to {activeChannel}</div>
+              <div className="text-sm mt-2 text-center max-w-xs leading-relaxed">
+                This is the very beginning of <span className="text-accent font-medium">{activeChannel}</span>.
+                Start a conversation!
+              </div>
+              <div className="flex gap-2 mt-4">
+                <button onClick={() => {
+                  navigator.clipboard.writeText(`https://irc.freeq.at/join/${encodeURIComponent(activeChannel)}`);
+                }} className="text-xs bg-bg-tertiary border border-border rounded-lg px-3 py-1.5 text-fg-dim hover:text-fg hover:border-accent">
+                  🔗 Copy invite link
+                </button>
+              </div>
             </>
           ) : (
             <>
-              <div className="text-lg text-fg-muted font-medium">Conversation with {activeChannel}</div>
-              <div className="text-sm mt-1 text-center">Messages are end-to-end between you two.</div>
+              <div className="text-3xl mb-2">💬</div>
+              <div className="text-xl text-fg font-bold">Conversation with {activeChannel}</div>
+              <div className="text-sm mt-2 text-center max-w-xs leading-relaxed text-fg-dim">
+                Direct messages are private between you and <span className="text-fg-muted">{activeChannel}</span>.
+              </div>
             </>
           )}
         </div>

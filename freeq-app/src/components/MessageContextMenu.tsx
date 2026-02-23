@@ -63,6 +63,11 @@ export function MessageContextMenu({ msg, channel, position, onClose, onReply, o
       <div className="h-px bg-border mx-2 my-1" />
       <MenuItem icon="📋" label="Copy Text" onClick={copyText} />
       <MenuItem icon="🔗" label="Copy Link" onClick={copyLink} />
+      <MenuItem icon="🦋" label="Share to Bluesky" onClick={() => {
+        const bskyUrl = `https://bsky.app/intent/compose?text=${encodeURIComponent(`"${msg.text.slice(0, 200)}" — ${msg.from} on freeq`)}`;
+        window.open(bskyUrl, '_blank');
+        onClose();
+      }} />
       {msg.isSelf && !msg.isSystem && (
         <>
           <div className="h-px bg-border mx-2 my-1" />

@@ -361,7 +361,7 @@ function handleLine(rawLine: string) {
       if (isDM) {
         store.incrementMentions(bufName);
       }
-      if (isMention || isDM) {
+      if ((isMention || isDM) && !useStore.getState().mutedChannels.has(bufName.toLowerCase())) {
         notify(
           isDM ? `DM from ${from}` : bufName,
           `${from}: ${text.slice(0, 100)}`,

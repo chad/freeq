@@ -190,6 +190,7 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/users/{nick}/whois", get(api_user_whois))
         .route("/api/v1/upload", axum::routing::post(api_upload))
         .route("/api/v1/og", get(api_og_preview))
+        .route("/join/{channel}", get(channel_invite_page))
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)) // 12MB
         .layer(CorsLayer::permissive());
 
@@ -1040,6 +1041,81 @@ async fn api_upload(
     })))
 }
 
+
+// ── Channel invite page ────────────────────────────────────────────────
+
+async fn channel_invite_page(
+    Path(channel): Path<String>,
+    State(state): State<Arc<SharedState>>,
+) -> impl IntoResponse {
+    let channel = if channel.starts_with('#') || channel.starts_with("%23") {
+        channel.replace("%23", "#")
+    } else {
+        format!("#{channel}")
+    };
+
+    // Get channel info
+    let (member_count, topic_text) = {
+        let channels = state.channels.lock().unwrap();
+        let key = channel.to_lowercase();
+        match channels.get(&key) {
+            Some(ch) => (ch.members.len(), ch.topic.as_ref().map(|t| t.text.clone())),
+            None => (0, None),
+        }
+    };
+
+    let server = &state.config.server_name;
+    let topic_html = topic_text.as_deref().unwrap_or("No topic set");
+    let channel_display = channel.trim_start_matches('#');
+
+    Html(format!(r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{channel} — freeq</title>
+<meta property="og:title" content="{channel} on freeq">
+<meta property="og:description" content="{topic_html} — {member_count} members online">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://{server}/join/{channel_display}">
+<meta property="og:image" content="https://{server}/freeq.png">
+<meta name="twitter:card" content="summary">
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0c0c0f;color:#e8e8ed;min-height:100vh;display:flex;align-items:center;justify-content:center}}
+.card{{background:#131318;border:1px solid #1e1e2e;border-radius:20px;padding:48px;max-width:460px;width:90vw;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5)}}
+.logo{{width:64px;height:64px;margin:0 auto 16px}}
+h1{{font-size:28px;margin-bottom:4px}}
+h1 .accent{{color:#00d4aa}}
+.channel{{font-size:36px;font-weight:800;color:#00d4aa;margin:24px 0 8px;letter-spacing:-0.5px}}
+.topic{{color:#9898b0;font-size:15px;margin-bottom:24px;line-height:1.5}}
+.stats{{color:#555570;font-size:13px;margin-bottom:32px}}
+.stats span{{color:#9898b0}}
+.btn{{display:inline-block;background:#00d4aa;color:#000;font-size:18px;font-weight:700;padding:14px 40px;border-radius:12px;text-decoration:none;transition:all 0.2s}}
+.btn:hover{{background:#00f0c0;box-shadow:0 0 24px rgba(0,212,170,0.2)}}
+.alt{{color:#555570;font-size:12px;margin-top:20px}}
+.alt a{{color:#00d4aa;text-decoration:none}}
+.alt a:hover{{text-decoration:underline}}
+.badge{{display:inline-flex;align-items:center;gap:4px;background:#00d4aa15;color:#00d4aa;font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;margin-bottom:16px}}
+</style>
+</head>
+<body>
+<div class="card">
+  <img src="/freeq.png" alt="freeq" class="logo">
+  <div class="badge">IRC + AT Protocol</div>
+  <h1><span class="accent">free</span>q</h1>
+  <div class="channel">#{channel_display}</div>
+  <div class="topic">{topic_html}</div>
+  <div class="stats"><span>{member_count}</span> members online on <span>{server}</span></div>
+  <a href="https://{server}/#auto-join={channel}" class="btn">Join Channel</a>
+  <div class="alt">
+    Or connect with any IRC client: <code>{server}:6667</code><br>
+    <a href="https://freeq.at" target="_blank">Learn more about freeq</a>
+  </div>
+</div>
+</body>
+</html>"##)).into_response()
+}
 
 // ── OG metadata proxy (replaces allorigins.win privacy leak) ──────────
 

@@ -20,6 +20,7 @@ import { ChannelSettingsPanel } from './components/ChannelSettingsPanel';
 import { KeyboardShortcuts } from './components/KeyboardShortcuts';
 import { ToastContainer } from './components/Toast';
 import { FileDropOverlay } from './components/FileDropOverlay';
+import { InstallPrompt } from './components/InstallPrompt';
 
 export default function App() {
   const registered = useStore((s) => s.registered);
@@ -153,6 +154,7 @@ export default function App() {
       <KeyboardShortcuts open={shortcuts} onClose={() => setShortcuts(false)} />
       <ToastContainer />
       <FileDropOverlay />
+      <InstallPrompt />
     </div>
   );
 }

@@ -41,7 +41,19 @@ export function ConnectScreen() {
   const [handle, setHandle] = useState(() => localStorage.getItem(LS_HANDLE) || '');
   const [nick, setNick] = useState(() => 'web' + Math.floor(Math.random() * 99999));
   const [atNick, setAtNick] = useState(''); // derived nick for AT login, editable
-  const [channels, setChannels] = useState(() => localStorage.getItem(LS_CHANNELS) || '#freeq');
+  const [channels, setChannels] = useState(() => {
+    // Check for auto-join from invite link (e.g. #auto-join=#channel)
+    const hash = window.location.hash;
+    if (hash.startsWith('#auto-join=')) {
+      const ch = decodeURIComponent(hash.slice('#auto-join='.length));
+      window.location.hash = '';
+      const existing = localStorage.getItem(LS_CHANNELS) || '';
+      const merged = new Set(existing.split(',').map(s => s.trim()).filter(Boolean));
+      merged.add(ch);
+      return [...merged].join(',');
+    }
+    return localStorage.getItem(LS_CHANNELS) || '#freeq';
+  });
   const isTauri = !!(window as any).__TAURI_INTERNALS__;
   const [server, setServer] = useState(() => {
     if (isTauri) return 'wss://irc.freeq.at/irc';

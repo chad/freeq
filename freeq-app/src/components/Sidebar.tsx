@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useStore } from '../store';
-import { joinChannel, disconnect } from '../irc/client';
+import { joinChannel, partChannel, disconnect } from '../irc/client';
 import { fetchProfile, getCachedProfile } from '../lib/profiles';
 
 interface SidebarProps {
@@ -18,8 +18,13 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
   const [joinInput, setJoinInput] = useState('');
   const [showJoin, setShowJoin] = useState(false);
 
+  const favorites = useStore((s) => s.favorites);
+  useStore((s) => s.mutedChannels); // subscribe for re-render
+
   const allJoined = [...channels.values()].filter((ch) => ch.isJoined);
-  const chanList = allJoined.filter((ch) => ch.name.startsWith('#') || ch.name.startsWith('&')).sort((a, b) => a.name.localeCompare(b.name));
+  const allChans = allJoined.filter((ch) => ch.name.startsWith('#') || ch.name.startsWith('&')).sort((a, b) => a.name.localeCompare(b.name));
+  const favList = allChans.filter((ch) => favorites.has(ch.name.toLowerCase()));
+  const chanList = allChans.filter((ch) => !favorites.has(ch.name.toLowerCase()));
   const dmList = allJoined.filter((ch) => !ch.name.startsWith('#') && !ch.name.startsWith('&') && ch.name !== 'server').sort((a, b) => a.name.localeCompare(b.name));
 
   const handleJoin = () => {
@@ -96,6 +101,18 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
               className="w-full bg-bg-tertiary border border-border rounded px-2 py-1 text-sm text-fg outline-none focus:border-accent placeholder:text-fg-dim"
             />
           </div>
+        )}
+
+        {/* Favorites */}
+        {favList.length > 0 && (
+          <>
+            <div className="mt-3 mb-1 px-2">
+              <span className="text-xs uppercase tracking-wider text-fg-dim font-bold flex items-center gap-1">
+                <span className="text-warning text-[10px]">★</span> Favorites
+              </span>
+            </div>
+            {favList.map((ch) => <ChannelButton key={ch.name} ch={ch as any} isActive={activeChannel.toLowerCase() === ch.name.toLowerCase()} onSelect={setActive} icon="#" />)}
+          </>
         )}
 
         {chanList.map((ch) => <ChannelButton key={ch.name} ch={ch as any} isActive={activeChannel.toLowerCase() === ch.name.toLowerCase()} onSelect={setActive} icon="#" />)}
@@ -180,6 +197,9 @@ function ChannelButton({ ch, isActive, onSelect, icon, showPreview }: {
   icon: string;
   showPreview?: boolean;
 }) {
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const isFav = useStore((s) => s.favorites.has(ch.name.toLowerCase()));
+  const isMuted = useStore((s) => s.mutedChannels.has(ch.name.toLowerCase()));
   const hasMention = ch.mentionCount > 0;
   const hasUnread = ch.unreadCount > 0;
 
@@ -189,9 +209,13 @@ function ChannelButton({ ch, isActive, onSelect, icon, showPreview }: {
   const lastTime = lastMsg ? formatSidebarTime(new Date(lastMsg.timestamp)) : null;
 
   return (
+    <>
     <button
       onClick={() => onSelect(ch.name)}
+      onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
       className={`w-full text-left px-3 py-2 rounded-lg flex items-center gap-2.5 ${
+        isMuted ? 'opacity-40 ' : ''
+      }${
         isActive
           ? 'bg-surface text-fg'
           : hasMention
@@ -235,6 +259,70 @@ function ChannelButton({ ch, isActive, onSelect, icon, showPreview }: {
         <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-fg-muted" />
       )}
     </button>
+    {ctxMenu && <SidebarContextMenu
+      channel={ch.name}
+      isFav={isFav}
+      isMuted={isMuted}
+      isChannel={ch.name.startsWith('#')}
+      position={ctxMenu}
+      onClose={() => setCtxMenu(null)}
+    />}
+    </>
+  );
+}
+
+function SidebarContextMenu({ channel, isFav, isMuted, isChannel, position, onClose }: {
+  channel: string;
+  isFav: boolean;
+  isMuted: boolean;
+  isChannel: boolean;
+  position: { x: number; y: number };
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      className="fixed z-50 bg-bg-secondary border border-border rounded-xl shadow-2xl py-1.5 min-w-[160px] animate-fadeIn"
+      style={{ left: Math.min(position.x, window.innerWidth - 180), top: Math.min(position.y, window.innerHeight - 200) }}
+    >
+      {isChannel && (
+        <button onClick={() => { useStore.getState().toggleFavorite(channel); onClose(); }}
+          className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-bg-tertiary text-fg-muted hover:text-fg">
+          <span className="w-5 text-center">{isFav ? '★' : '☆'}</span>
+          {isFav ? 'Remove from Favorites' : 'Add to Favorites'}
+        </button>
+      )}
+      <button onClick={() => { useStore.getState().toggleMuted(channel); onClose(); }}
+        className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-bg-tertiary text-fg-muted hover:text-fg">
+        <span className="w-5 text-center">{isMuted ? '🔔' : '🔇'}</span>
+        {isMuted ? 'Unmute' : 'Mute notifications'}
+      </button>
+      <button onClick={() => {
+          navigator.clipboard.writeText(`https://irc.freeq.at/join/${encodeURIComponent(channel)}`);
+          onClose();
+        }}
+        className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-bg-tertiary text-fg-muted hover:text-fg">
+        <span className="w-5 text-center">🔗</span>
+        Copy invite link
+      </button>
+      <div className="h-px bg-border mx-2 my-1" />
+      {isChannel && (
+        <button onClick={() => { partChannel(channel); onClose(); }}
+          className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-danger/10 text-danger">
+          <span className="w-5 text-center">🚪</span>
+          Leave channel
+        </button>
+      )}
+    </div>
   );
 }
 

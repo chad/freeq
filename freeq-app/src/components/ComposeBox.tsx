@@ -3,6 +3,7 @@ import { useStore } from '../store';
 import { sendMessage, sendReply, sendEdit, joinChannel, partChannel, setTopic, setMode, kickUser, inviteUser, setAway, rawCommand, sendWhois } from '../irc/client';
 import { EmojiPicker } from './EmojiPicker';
 import { SlashCommands, getCommandCount } from './SlashCommands';
+import { FormatToolbar } from './FormatToolbar';
 
 // Max file size: 10MB
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
@@ -22,6 +23,23 @@ export function ComposeBox() {
   const [showEmoji, setShowEmoji] = useState(false);
   const [autocomplete, setAutocomplete] = useState<{ items: string[]; selected: number; startPos: number } | null>(null);
   const [slashCmd, setSlashCmd] = useState<{ filter: string; selected: number } | null>(null);
+  const [showFormatBar, setShowFormatBar] = useState(false);
+
+  const applyFormat = (prefix: string, suffix: string) => {
+    const el = inputRef.current;
+    if (!el) return;
+    const start = el.selectionStart || 0;
+    const end = el.selectionEnd || 0;
+    const selected = text.slice(start, end);
+    const newText = text.slice(0, start) + prefix + selected + suffix + text.slice(end);
+    setText(newText);
+    // Place cursor after the formatted text
+    requestAnimationFrame(() => {
+      el.focus();
+      const cursorPos = selected ? start + prefix.length + selected.length + suffix.length : start + prefix.length;
+      el.setSelectionRange(cursorPos, cursorPos);
+    });
+  };
   const [pendingUpload, setPendingUpload] = useState<PendingUpload | null>(null);
   const [crossPost, setCrossPost] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -587,8 +605,21 @@ export function ComposeBox() {
           😊
         </button>
 
+        {/* Format toggle */}
+        <button
+          onClick={() => setShowFormatBar(!showFormatBar)}
+          className={`w-10 h-10 rounded-lg flex items-center justify-center text-sm shrink-0 ${
+            showFormatBar ? 'text-accent bg-accent/10' : 'text-fg-dim hover:text-fg-muted hover:bg-bg-tertiary'
+          }`}
+          title="Formatting"
+        >
+          Aa
+        </button>
+
         {/* Compose area */}
-        <div className="flex-1 bg-bg-tertiary rounded-lg border border-border focus-within:border-accent/50 flex items-end">
+        <div className="flex-1 bg-bg-tertiary rounded-lg border border-border focus-within:border-accent/50 flex flex-col">
+          {showFormatBar && <FormatToolbar onFormat={applyFormat} />}
+          <div className="flex items-end">
           <textarea
             data-testid="compose-input"
             ref={inputRef}
@@ -608,6 +639,7 @@ export function ComposeBox() {
             autoComplete="off"
             spellCheck
           />
+          </div>
         </div>
 
         {/* Send */}
