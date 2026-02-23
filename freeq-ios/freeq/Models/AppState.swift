@@ -121,6 +121,15 @@ class AppState: ObservableObject {
         return nil
     }
 
+    /// Whether we have a saved session that should auto-reconnect
+    var hasSavedSession: Bool {
+        let lastLogin = UserDefaults.standard.double(forKey: "freeq.lastLogin")
+        let twoWeeks: TimeInterval = 14 * 24 * 60 * 60
+        return lastLogin > 0
+            && Date().timeIntervalSince1970 - lastLogin < twoWeeks
+            && !nick.isEmpty
+    }
+
     init() {
         if let savedNick = UserDefaults.standard.string(forKey: "freeq.nick") {
             nick = savedNick
@@ -134,6 +143,9 @@ class AppState: ObservableObject {
         if let savedReadPositions = UserDefaults.standard.dictionary(forKey: "freeq.readPositions") as? [String: String] {
             lastReadMessageIds = savedReadPositions
         }
+        if let savedDID = UserDefaults.standard.string(forKey: "freeq.did") {
+            authenticatedDID = savedDID
+        }
         isDarkTheme = UserDefaults.standard.object(forKey: "freeq.darkTheme") as? Bool ?? true
 
         // Prune stale typing indicators every 3 seconds
@@ -142,6 +154,12 @@ class AppState: ObservableObject {
                 self?.pruneTypingIndicators()
             }
         }
+    }
+
+    /// Reconnect with saved session (no SASL — connects as guest with saved nick)
+    func reconnectSavedSession() {
+        guard hasSavedSession, connectionState == .disconnected else { return }
+        connect(nick: nick)
     }
 
     func connect(nick: String) {
@@ -184,6 +202,19 @@ class AppState: ObservableObject {
             self.activeChannel = nil
             self.replyingTo = nil
             self.editingMessage = nil
+        }
+    }
+
+    /// Full logout — clears saved session so ConnectView shows next launch
+    func logout() {
+        disconnect()
+        UserDefaults.standard.removeObject(forKey: "freeq.lastLogin")
+        UserDefaults.standard.removeObject(forKey: "freeq.did")
+        UserDefaults.standard.removeObject(forKey: "freeq.nick")
+        UserDefaults.standard.removeObject(forKey: "freeq.handle")
+        DispatchQueue.main.async {
+            self.authenticatedDID = nil
+            self.nick = ""
         }
     }
 
@@ -331,6 +362,7 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
 
         case .authenticated(let did):
             state.authenticatedDID = did
+            UserDefaults.standard.set(did, forKey: "freeq.did")
 
         case .authFailed(let reason):
             state.errorMessage = "Auth failed: \(reason)"
@@ -461,6 +493,14 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
             state.connectionState = .disconnected
             if !reason.isEmpty {
                 state.errorMessage = "Disconnected: \(reason)"
+            }
+            // Auto-reconnect if we have a saved session (e.g. network blip)
+            if state.hasSavedSession {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                    if state.connectionState == .disconnected && state.hasSavedSession {
+                        state.reconnectSavedSession()
+                    }
+                }
             }
         }
     }

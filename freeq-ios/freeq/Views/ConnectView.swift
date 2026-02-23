@@ -277,23 +277,8 @@ struct ConnectView: View {
             nickFocused = false
         }
         .preferredColorScheme(.dark)
-        .onAppear {
-            // Auto-login if session is within 2 weeks
-            // Delay slightly to ensure the window is in the scene hierarchy
-            // (ASWebAuthenticationSession error 3 = presentationContextInvalid)
-            let lastLogin = UserDefaults.standard.double(forKey: "freeq.lastLogin")
-            let twoWeeks: TimeInterval = 14 * 24 * 60 * 60
-            if lastLogin > 0,
-               Date().timeIntervalSince1970 - lastLogin < twoWeeks,
-               !handle.isEmpty,
-               appState.connectionState == .disconnected,
-               !loading {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    guard appState.connectionState == .disconnected, !loading else { return }
-                    startLogin()
-                }
-            }
-        }
+        // No auto-login here — ContentView handles session persistence
+        // ConnectView only shows when user needs to explicitly log in
     }
 
     private func errorRow(_ text: String) -> some View {

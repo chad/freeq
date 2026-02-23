@@ -140,12 +140,23 @@ struct SettingsTab: View {
                             .foregroundColor(Theme.textMuted)
                     }
 
-                    // Disconnect
+                    // Disconnect / Logout
                     Section {
                         Button(action: { appState.disconnect() }) {
                             HStack {
                                 Spacer()
                                 Text("Disconnect")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundColor(Theme.textSecondary)
+                                Spacer()
+                            }
+                        }
+                        .listRowBackground(Theme.bgSecondary)
+
+                        Button(action: { appState.logout() }) {
+                            HStack {
+                                Spacer()
+                                Text("Log Out")
                                     .font(.system(size: 16, weight: .medium))
                                     .foregroundColor(Theme.danger)
                                 Spacer()
