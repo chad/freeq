@@ -308,7 +308,7 @@ private fun JoinChannelDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
-                val popularChannels = listOf("#general", "#freeq", "#dev", "#music", "#random")
+                val popularChannels = listOf("#general", "#freeq", "#dev", "#music", "#random", "#crypto", "#gaming")
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     popularChannels.forEach { ch ->
                         val isJoined = appState.channels.any { it.name.equals(ch, ignoreCase = true) }

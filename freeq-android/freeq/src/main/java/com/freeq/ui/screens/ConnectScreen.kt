@@ -29,7 +29,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.Image
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -97,21 +99,14 @@ fun ConnectScreen(appState: AppState) {
                             .background(FreeqColors.accent.copy(alpha = 0.15f))
                             .blur(30.dp)
                     )
-                    // Logo circle
-                    Box(
+                    // Logo
+                    Image(
+                        painter = painterResource(id = com.freeq.R.drawable.freeq_logo),
+                        contentDescription = "freeq logo",
                         modifier = Modifier
                             .size(100.dp)
                             .clip(CircleShape)
-                            .background(FreeqColors.accent.copy(alpha = 0.2f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "fq",
-                            fontSize = 36.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = FreeqColors.accent
-                        )
-                    }
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))

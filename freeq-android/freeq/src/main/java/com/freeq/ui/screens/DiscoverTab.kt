@@ -23,12 +23,12 @@ import com.freeq.model.AppState
 
 private val popularChannels = listOf(
     "#general" to "General discussion",
-    "#freeq" to "About freeq",
-    "#dev" to "Development talk",
-    "#music" to "Music sharing",
+    "#freeq" to "freeq development & support",
+    "#dev" to "Programming & technology",
+    "#music" to "Music recommendations",
     "#random" to "Off-topic chat",
-    "#crypto" to "Cryptocurrency",
-    "#gaming" to "Gaming discussion",
+    "#crypto" to "Cryptocurrency discussion",
+    "#gaming" to "Games & gaming",
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
