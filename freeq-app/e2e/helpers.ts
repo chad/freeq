@@ -1,7 +1,7 @@
 /**
  * Shared helpers for freeq E2E tests.
  */
-import { Page, expect } from '@playwright/test';
+import { Page, expect, BrowserContext, Browser } from '@playwright/test';
 
 const TS = Date.now().toString(36);
 let counter = 0;
@@ -16,13 +16,17 @@ export function uniqueChannel(): string {
   return `#pw-${TS}-${counter++}`;
 }
 
-/** Connect as guest and wait for registration */
-export async function connectGuest(page: Page, nick: string, channel: string) {
-  // Dismiss onboarding tour and install prompt for clean tests
+/** Set up localStorage before page load to skip onboarding */
+export async function prepPage(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem('freeq-onboarding-done', '1');
     localStorage.setItem('freeq-install-dismissed', '1');
   });
+}
+
+/** Connect as guest and wait for registration */
+export async function connectGuest(page: Page, nick: string, channel: string) {
+  await prepPage(page);
   await page.goto('/');
 
   // Switch to Guest tab
@@ -44,7 +48,6 @@ export async function connectGuest(page: Page, nick: string, channel: string) {
   await expect(page.getByTestId('sidebar')).toBeVisible({ timeout: 15_000 });
 
   // Wait for first channel to appear in sidebar
-  // channel might be comma-separated — just check the first one
   const firstChannel = channel.split(',')[0].trim();
   await expect(page.getByTestId('sidebar').getByText(firstChannel)).toBeVisible({ timeout: 10_000 });
 }
@@ -70,4 +73,58 @@ export async function expectMessage(page: Page, text: string, timeout = 10_000) 
 /** Wait for a system/status message */
 export async function expectSystemMessage(page: Page, text: string, timeout = 10_000) {
   await expect(page.getByText(text, { exact: false })).toBeVisible({ timeout });
+}
+
+/** Open the sidebar on mobile (no-op on desktop if already visible) */
+export async function openSidebar(page: Page) {
+  const sidebar = page.getByTestId('sidebar');
+  const isInViewport = await sidebar.evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    return rect.right > 0 && rect.left < window.innerWidth;
+  }).catch(() => false);
+
+  if (!isInViewport) {
+    const hamburger = page.locator('header button').first();
+    await hamburger.click();
+    await page.waitForTimeout(300);
+  }
+  return sidebar;
+}
+
+/** Create a second browser context + page, connected as guest */
+export async function connectSecondUser(browser: Browser, nick: string, channel: string) {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  await connectGuest(page, nick, channel);
+  return { ctx, page };
+}
+
+/** Switch to a channel via sidebar click. Closes sidebar on mobile after click. */
+export async function switchChannel(page: Page, channel: string) {
+  const sidebar = await openSidebar(page);
+  await sidebar.getByText(channel).click();
+  await page.waitForTimeout(300);
+
+  // On mobile, sidebar may stay open — close it by clicking the backdrop or pressing Escape
+  const isMobile = (page.viewportSize()?.width || 1280) < 768;
+  if (isMobile) {
+    // Click on the backdrop/overlay if it exists, or press Escape
+    const backdrop = page.locator('[class*="backdrop"], [class*="overlay"]');
+    if (await backdrop.count() > 0 && await backdrop.first().isVisible()) {
+      await backdrop.first().click();
+    }
+    await page.waitForTimeout(200);
+    // If sidebar is still covering compose, try pressing Escape
+    const compose = page.getByTestId('compose-input');
+    const isClickable = await compose.evaluate((el) => {
+      const rect = el.getBoundingClientRect();
+      const topEl = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      return el.contains(topEl) || el === topEl;
+    }).catch(() => false);
+    if (!isClickable) {
+      // Click somewhere in the main content area to dismiss sidebar
+      await page.mouse.click(page.viewportSize()!.width - 10, page.viewportSize()!.height / 2);
+      await page.waitForTimeout(200);
+    }
+  }
 }

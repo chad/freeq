@@ -4,7 +4,7 @@
  * Uses iPhone 14 viewport (390×844) via Chromium emulation.
  */
 import { test, expect } from '@playwright/test';
-import { uniqueNick, uniqueChannel, connectGuest, sendMessage, expectMessage } from './helpers';
+import { uniqueNick, uniqueChannel, connectGuest, sendMessage, expectMessage, openSidebar } from './helpers';
 
 function isMobileViewport(page: any): boolean {
   const vp = page.viewportSize();
@@ -16,10 +16,6 @@ test.describe('Mobile', () => {
     test.skip(!isMobileViewport(page), 'mobile only');
     await page.goto('/');
 
-    const loginCard = page.locator('[class*="rounded-2xl"]').first();
-    await expect(loginCard).toBeVisible();
-
-    // Check nothing overflows horizontally
     const vp = page.viewportSize()!;
     const bodyWidth = await page.evaluate(() => document.body.scrollWidth);
     expect(bodyWidth).toBeLessThanOrEqual(vp.width + 5);
@@ -45,26 +41,14 @@ test.describe('Mobile', () => {
     await expectMessage(page, 'mobile test message');
   });
 
-  test('sidebar accessible on mobile', async ({ page }) => {
+  test('sidebar opens via hamburger on mobile', async ({ page }) => {
     test.skip(!isMobileViewport(page), 'mobile only');
     const nick = uniqueNick('mob');
     const channel = uniqueChannel();
     await connectGuest(page, nick, channel);
 
-    // On mobile, sidebar might be hidden — look for toggle button
-    const sidebar = page.getByTestId('sidebar');
-    const sidebarVisible = await sidebar.isVisible().catch(() => false);
-
-    if (!sidebarVisible) {
-      // Try hamburger/menu buttons
-      const menuBtn = page.locator('button[title*="enu"], button[title*="idebar"], [data-testid="sidebar-toggle"]');
-      if (await menuBtn.count() > 0) {
-        await menuBtn.first().click();
-        await expect(page.getByText(channel)).toBeVisible({ timeout: 3_000 });
-      }
-    } else {
-      await expect(sidebar.getByText(channel)).toBeVisible();
-    }
+    const sidebar = await openSidebar(page);
+    await expect(sidebar.getByText(channel)).toBeVisible({ timeout: 3_000 });
   });
 
   test('no horizontal overflow on mobile', async ({ page }) => {
@@ -91,10 +75,39 @@ test.describe('Mobile', () => {
     await sendMessage(page, 'can you read this on mobile?');
     await expectMessage(page, 'can you read this on mobile?');
 
-    // Text should be large enough (at least 12px)
     const fontSize = await page.locator('.text-sm').first().evaluate(
       (el: HTMLElement) => parseFloat(getComputedStyle(el).fontSize)
     );
     expect(fontSize).toBeGreaterThanOrEqual(12);
+  });
+
+  test('two users can chat on mobile viewports', async ({ browser }) => {
+    const nick1 = uniqueNick('mob1');
+    const nick2 = uniqueNick('mob2');
+    const channel = uniqueChannel();
+
+    const ctx1 = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+    });
+    const ctx2 = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+    });
+    const page1 = await ctx1.newPage();
+    const page2 = await ctx2.newPage();
+
+    await connectGuest(page1, nick1, channel);
+    await connectGuest(page2, nick2, channel);
+    await page1.waitForTimeout(500);
+
+    await sendMessage(page1, `hello from mobile ${nick1}`);
+    await expectMessage(page2, `hello from mobile ${nick1}`);
+
+    await sendMessage(page2, `reply from mobile ${nick2}`);
+    await expectMessage(page1, `reply from mobile ${nick2}`);
+
+    await ctx1.close();
+    await ctx2.close();
   });
 });

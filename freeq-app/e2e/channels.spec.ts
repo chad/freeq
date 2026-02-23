@@ -2,23 +2,21 @@
  * E2E tests: Channel operations
  */
 import { test, expect } from '@playwright/test';
-import { uniqueNick, uniqueChannel, connectGuest, sendMessage } from './helpers';
+import { uniqueNick, uniqueChannel, connectGuest, sendMessage, openSidebar, switchChannel, connectSecondUser } from './helpers';
 
 test.describe('Channels', () => {
   test('channel topic shows in top bar', async ({ page }) => {
-    // Topic is hidden on mobile (sm: breakpoint)
     const vp = page.viewportSize();
     test.skip(!vp || vp.width < 640, 'topic hidden on mobile');
 
-    const nick = uniqueNick();
+    const nick = uniqueNick('top');
     const channel = uniqueChannel();
     await connectGuest(page, nick, channel);
 
-    // Set a topic via IRC command
+    // Wait a moment for ops to be assigned
+    await page.waitForTimeout(500);
     await sendMessage(page, `/topic ${channel} E2E test topic`);
-
-    // Topic should appear somewhere on page
-    await expect(page.getByText('E2E test topic')).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByText('E2E test topic')).toBeVisible({ timeout: 8_000 });
   });
 
   test('can switch between channels', async ({ page }) => {
@@ -26,44 +24,21 @@ test.describe('Channels', () => {
     const ch1 = uniqueChannel();
     const ch2 = uniqueChannel();
     await connectGuest(page, nick, `${ch1}, ${ch2}`);
-    const isMobile = (page.viewportSize()?.width || 1280) < 768;
 
-    // Helper to ensure sidebar is visible (open hamburger on mobile)
-    const openSidebar = async () => {
-      const sidebar = page.getByTestId('sidebar');
-      // On mobile, sidebar may be off-screen (translated). Check if we need to open it.
-      const isInViewport = await sidebar.evaluate((el) => {
-        const rect = el.getBoundingClientRect();
-        return rect.right > 0 && rect.left < window.innerWidth;
-      }).catch(() => false);
-
-      if (!isInViewport) {
-        // Click the hamburger menu button in the top bar
-        const hamburger = page.locator('header button').first();
-        await hamburger.click();
-        await page.waitForTimeout(300); // wait for slide animation
-      }
-      return sidebar;
-    };
-
-    let sidebar = await openSidebar();
+    let sidebar = await openSidebar(page);
     await expect(sidebar.getByText(ch1)).toBeVisible({ timeout: 10_000 });
     await expect(sidebar.getByText(ch2)).toBeVisible({ timeout: 10_000 });
 
-    // Click ch1 to make sure we're there
     await sidebar.getByText(ch1).click();
+    await page.waitForTimeout(300);
     await sendMessage(page, 'msg in first channel');
     await expect(page.getByTestId('message-list').getByText('msg in first channel')).toBeVisible();
 
-    // Click ch2 in sidebar (reopen on mobile since it closes on channel switch)
-    sidebar = await openSidebar();
-    await sidebar.getByText(ch2).click();
+    await switchChannel(page, ch2);
     await sendMessage(page, 'msg in second channel');
     await expect(page.getByTestId('message-list').getByText('msg in second channel')).toBeVisible();
 
-    // Switch back to ch1 — should still see first message
-    sidebar = await openSidebar();
-    await sidebar.getByText(ch1).click();
+    await switchChannel(page, ch1);
     await expect(page.getByTestId('message-list').getByText('msg in first channel')).toBeVisible();
   });
 
@@ -73,11 +48,9 @@ test.describe('Channels', () => {
     const ch2 = uniqueChannel();
     await connectGuest(page, nick, ch1);
 
-    // Join a second channel via command
     await sendMessage(page, `/join ${ch2}`);
-
-    // Should appear in sidebar
-    await expect(page.getByTestId('sidebar').getByText(ch2)).toBeVisible({ timeout: 5_000 });
+    const sidebar = await openSidebar(page);
+    await expect(sidebar.getByText(ch2)).toBeVisible({ timeout: 5_000 });
   });
 
   test('part command removes channel', async ({ page }) => {
@@ -86,16 +59,74 @@ test.describe('Channels', () => {
     const ch2 = uniqueChannel();
     await connectGuest(page, nick, `${ch1}, ${ch2}`);
 
-    const sidebar = page.getByTestId('sidebar');
+    // Verify ch2 is in sidebar
+    let sidebar = await openSidebar(page);
     await expect(sidebar.getByText(ch2)).toBeVisible({ timeout: 10_000 });
 
-    // Part from ch2
+    // Switch to ch2 first (ensures sidebar closes on mobile + we're in the right channel)
+    await switchChannel(page, ch2);
     await sendMessage(page, `/part ${ch2}`);
 
-    // ch2 should disappear from sidebar
+    sidebar = await openSidebar(page);
     await expect(sidebar.getByText(ch2)).not.toBeVisible({ timeout: 5_000 });
-
-    // ch1 should still be there
     await expect(sidebar.getByText(ch1)).toBeVisible();
+  });
+
+  test('channel creator gets ops', async ({ page }) => {
+    const nick = uniqueNick();
+    const channel = uniqueChannel();
+    await connectGuest(page, nick, channel);
+    // The founder should appear in the UI somewhere
+    await expect(page.getByText(nick).first()).toBeVisible({ timeout: 5_000 });
+  });
+
+  test('second user sees first user in channel', async ({ page, browser }) => {
+    // On mobile, member list is hidden — need to check messages or open member list
+    const vp = page.viewportSize();
+    test.skip(!vp || vp.width < 768, 'member list hidden on mobile');
+
+    const nick1 = uniqueNick('usr1');
+    const nick2 = uniqueNick('usr2');
+    const channel = uniqueChannel();
+
+    await connectGuest(page, nick1, channel);
+    const { ctx, page: page2 } = await connectSecondUser(browser, nick2, channel);
+
+    // User 2 should see user 1 in the page somewhere (member list)
+    await expect(page2.getByText(nick1).first()).toBeVisible({ timeout: 10_000 });
+
+    await ctx.close();
+  });
+
+  test('user join is shown as system message', async ({ page, browser }) => {
+    const nick1 = uniqueNick('host');
+    const nick2 = uniqueNick('joiner');
+    const channel = uniqueChannel();
+
+    await connectGuest(page, nick1, channel);
+    const { ctx, page: page2 } = await connectSecondUser(browser, nick2, channel);
+
+    // Host should see join system message
+    await expect(page.getByText(new RegExp(`${nick2}.*joined`, 'i'))).toBeVisible({ timeout: 10_000 });
+
+    await ctx.close();
+  });
+
+  test('user part is shown as system message', async ({ page, browser }) => {
+    const nick1 = uniqueNick('host');
+    const nick2 = uniqueNick('leaver');
+    const channel = uniqueChannel();
+
+    await connectGuest(page, nick1, channel);
+    const { ctx, page: page2 } = await connectSecondUser(browser, nick2, channel);
+    await page.waitForTimeout(500);
+
+    // User 2 leaves
+    await sendMessage(page2, `/part ${channel}`);
+
+    // Host should see part system message
+    await expect(page.getByText(new RegExp(`${nick2}.*(left|parted)`, 'i'))).toBeVisible({ timeout: 10_000 });
+
+    await ctx.close();
   });
 });

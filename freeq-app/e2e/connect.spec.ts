@@ -2,14 +2,12 @@
  * E2E tests: Connection + Login flow
  */
 import { test, expect } from '@playwright/test';
-import { uniqueNick, uniqueChannel, connectGuest } from './helpers';
+import { uniqueNick, uniqueChannel, connectGuest, prepPage } from './helpers';
 
 test.describe('Connection', () => {
   test('shows login screen on first load', async ({ page }) => {
     await page.goto('/');
-    // Should see the freeq heading
     await expect(page.getByRole('heading', { name: 'freeq' })).toBeVisible();
-    // Should see AT Protocol and Guest tabs
     await expect(page.getByRole('button', { name: 'AT Protocol', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Guest' })).toBeVisible();
   });
@@ -25,8 +23,6 @@ test.describe('Connection', () => {
     const nick = uniqueNick();
     const channel = uniqueChannel();
     await connectGuest(page, nick, channel);
-
-    // Should see the channel in the sidebar
     await expect(page.getByTestId('sidebar').getByText(channel)).toBeVisible();
   });
 
@@ -44,5 +40,15 @@ test.describe('Connection', () => {
     await page.getByText('Advanced settings').click();
     await expect(page.getByText('WebSocket URL')).toBeVisible();
     await expect(page.getByText('Server HTTP Origin')).toBeVisible();
+  });
+
+  test('guest can join multiple channels on connect', async ({ page }) => {
+    const nick = uniqueNick();
+    const ch1 = uniqueChannel();
+    const ch2 = uniqueChannel();
+    await connectGuest(page, nick, `${ch1}, ${ch2}`);
+    const sidebar = page.getByTestId('sidebar');
+    await expect(sidebar.getByText(ch1)).toBeVisible({ timeout: 10_000 });
+    await expect(sidebar.getByText(ch2)).toBeVisible({ timeout: 10_000 });
   });
 });
