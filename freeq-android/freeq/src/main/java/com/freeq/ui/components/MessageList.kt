@@ -133,10 +133,17 @@ private fun MessageBubble(
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val isOwn = msg.from.equals(appState.nick.value, ignoreCase = true)
+    val isMention = !isOwn && appState.nick.value.isNotEmpty() &&
+            msg.text.contains(appState.nick.value, ignoreCase = true)
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                if (isMention) Modifier.background(
+                    MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                ) else Modifier
+            )
             .padding(
                 start = 16.dp,
                 end = 16.dp,
