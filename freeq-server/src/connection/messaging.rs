@@ -533,7 +533,15 @@ fn handle_edit(
             }
         }
         _ => {
-            // Message not found — silently ignore (may be too old / pruned)
+            // Message not found (no DB, pruned, or wrong msgid) — reject
+            let reply = Message::from_server(
+                &state.server_name,
+                "FAIL",
+                vec!["EDIT", "MESSAGE_NOT_FOUND", "Original message not found"],
+            );
+            if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+                let _ = tx.try_send(format!("{reply}\r\n"));
+            }
             return;
         }
     }
@@ -664,7 +672,16 @@ fn handle_delete(
             }
         }
         _ => {
-            return; // Message not found
+            // Message not found (no DB, pruned, or wrong msgid) — reject
+            let reply = Message::from_server(
+                &state.server_name,
+                "FAIL",
+                vec!["DELETE", "MESSAGE_NOT_FOUND", "Original message not found"],
+            );
+            if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+                let _ = tx.try_send(format!("{reply}\r\n"));
+            }
+            return;
         }
     }
 
