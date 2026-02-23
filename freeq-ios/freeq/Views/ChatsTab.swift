@@ -110,10 +110,23 @@ struct ChatsTab: View {
 // MARK: - Chat Row
 
 struct ChatRow: View {
+    @EnvironmentObject var appState: AppState
     @ObservedObject var conversation: ChannelState
     let unreadCount: Int
 
     private var isChannel: Bool { conversation.name.hasPrefix("#") }
+
+    /// Check if this DM contact is online in any shared channel
+    private var isOnline: Bool {
+        guard !isChannel else { return false }
+        let nick = conversation.name.lowercased()
+        for ch in appState.channels {
+            if ch.members.contains(where: { $0.nick.lowercased() == nick }) {
+                return true
+            }
+        }
+        return false
+    }
 
     private var lastMessage: ChatMessage? {
         conversation.messages.last(where: { !$0.from.isEmpty && !$0.isDeleted })
@@ -137,18 +150,30 @@ struct ChatRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // Avatar / Icon
-            if isChannel {
-                ZStack {
-                    Circle()
-                        .fill(Theme.accent.opacity(0.15))
-                        .frame(width: 50, height: 50)
-                    Text("#")
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
-                        .foregroundColor(Theme.accent)
+            // Avatar / Icon with presence dot for DMs
+            ZStack(alignment: .bottomTrailing) {
+                if isChannel {
+                    ZStack {
+                        Circle()
+                            .fill(Theme.accent.opacity(0.15))
+                            .frame(width: 50, height: 50)
+                        Text("#")
+                            .font(.system(size: 22, weight: .bold, design: .rounded))
+                            .foregroundColor(Theme.accent)
+                    }
+                } else {
+                    UserAvatar(nick: conversation.name, size: 50)
                 }
-            } else {
-                UserAvatar(nick: conversation.name, size: 50)
+
+                // Online/away dot for DMs
+                if !isChannel {
+                    Circle()
+                        .fill(isOnline ? Theme.success : Theme.textMuted.opacity(0.3))
+                        .frame(width: 14, height: 14)
+                        .overlay(
+                            Circle().stroke(Theme.bgSecondary, lineWidth: 2)
+                        )
+                }
             }
 
             // Content
@@ -158,6 +183,13 @@ struct ChatRow: View {
                         .font(.system(size: 16, weight: unreadCount > 0 ? .bold : .regular))
                         .foregroundColor(Theme.textPrimary)
                         .lineLimit(1)
+
+                    // Member count for channels
+                    if isChannel && conversation.members.count > 0 {
+                        Text("\(conversation.members.count)")
+                            .font(.system(size: 11))
+                            .foregroundColor(Theme.textMuted)
+                    }
 
                     Spacer()
 

@@ -18,6 +18,8 @@ import { ThreadView } from './components/ThreadView';
 import { JoinGateModal } from './components/JoinGateModal';
 import { ChannelSettingsPanel } from './components/ChannelSettingsPanel';
 import { KeyboardShortcuts } from './components/KeyboardShortcuts';
+import { ToastContainer } from './components/Toast';
+import { FileDropOverlay } from './components/FileDropOverlay';
 
 export default function App() {
   const registered = useStore((s) => s.registered);
@@ -149,6 +151,8 @@ export default function App() {
       <JoinGateModal />
       <ChannelSettingsPanel />
       <KeyboardShortcuts open={shortcuts} onClose={() => setShortcuts(false)} />
+      <ToastContainer />
+      <FileDropOverlay />
     </div>
   );
 }

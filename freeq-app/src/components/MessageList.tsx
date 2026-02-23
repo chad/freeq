@@ -493,6 +493,34 @@ function Reactions({ msg, channel }: { msg: Message; channel: string }) {
   );
 }
 
+// ── Typing indicator ──
+
+function TypingIndicatorBar({ channel }: { channel: string }) {
+  const channels = useStore((s) => s.channels);
+  const ch = channels.get(channel.toLowerCase());
+  if (!ch) return null;
+
+  const typers = [...ch.members.values()].filter((m) => m.typing).map((m) => m.nick);
+  if (typers.length === 0) return null;
+
+  const text = typers.length === 1
+    ? `${typers[0]} is typing`
+    : typers.length === 2
+    ? `${typers[0]} and ${typers[1]} are typing`
+    : `${typers[0]} and ${typers.length - 1} others are typing`;
+
+  return (
+    <div className="px-4 py-1.5 flex items-center gap-2 text-xs text-fg-dim animate-fadeIn">
+      <span className="flex gap-0.5">
+        <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: '0ms' }} />
+        <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: '150ms' }} />
+        <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: '300ms' }} />
+      </span>
+      <span className="text-fg-muted">{text}</span>
+    </div>
+  );
+}
+
 // ── Main export ──
 
 export function MessageList() {
@@ -585,7 +613,7 @@ export function MessageList() {
         {messages.map((msg, i) => (
           <div key={msg.id}>
             {lastReadMsgId && i > 0 && messages[i - 1].id === lastReadMsgId && !msg.isSelf && (
-              <div className="flex items-center gap-3 px-4 my-3">
+              <div className="flex items-center gap-3 px-4 my-3" id="unread-marker">
                 <div className="flex-1 h-px bg-danger/40" />
                 <span className="text-xs font-bold text-danger/70 uppercase tracking-wider">New</span>
                 <div className="flex-1 h-px bg-danger/40" />
@@ -601,6 +629,7 @@ export function MessageList() {
             )}
           </div>
         ))}
+        <TypingIndicatorBar channel={activeChannel} />
       </div>
 
       {/* Scroll to bottom button */}

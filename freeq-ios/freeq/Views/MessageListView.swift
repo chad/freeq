@@ -8,73 +8,128 @@ struct MessageListView: View {
     @State private var threadMessage: ChatMessage? = nil
     @StateObject private var avatarCache = AvatarCache.shared
 
+    @State private var showScrollButton = false
+    @State private var lastReadId: String? = nil
+
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                // Pull to load older messages
-                Button(action: {
-                    appState.requestHistory(channel: channel.name)
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                }) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "arrow.up.circle")
-                            .font(.system(size: 13))
-                        Text("Load older messages")
-                            .font(.system(size: 13))
-                    }
-                    .foregroundColor(Theme.textMuted)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                }
-                .buttonStyle(.plain)
-
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(channel.messages.enumerated()), id: \.element.id) { idx, msg in
-                        let showHeader = shouldShowHeader(at: idx)
-                        let showDate = shouldShowDateSeparator(at: idx)
-
-                        if showDate {
-                            dateSeparator(for: msg.timestamp)
+            ZStack(alignment: .bottom) {
+                ScrollView {
+                    // Pull to load older messages
+                    Button(action: {
+                        appState.requestHistory(channel: channel.name)
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "arrow.up.circle")
+                                .font(.system(size: 13))
+                            Text("Load older messages")
+                                .font(.system(size: 13))
                         }
+                        .foregroundColor(Theme.textMuted)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.plain)
 
-                        if msg.from.isEmpty {
-                            systemMessage(msg)
-                        } else if msg.isDeleted {
-                            deletedMessage(msg, showHeader: showHeader)
-                        } else {
-                            messageRow(msg, showHeader: showHeader)
-                                .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                    Button {
-                                        appState.replyingTo = msg
-                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                    } label: {
-                                        Label("Reply", systemImage: "arrowshape.turn.up.left")
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(channel.messages.enumerated()), id: \.element.id) { idx, msg in
+                            let showHeader = shouldShowHeader(at: idx)
+                            let showDate = shouldShowDateSeparator(at: idx)
+
+                            if showDate {
+                                dateSeparator(for: msg.timestamp)
+                            }
+
+                            // Unread separator
+                            if let readId = lastReadId, idx > 0,
+                               channel.messages[idx - 1].id == readId,
+                               msg.from.lowercased() != appState.nick.lowercased() {
+                                unreadSeparator
+                            }
+
+                            if msg.from.isEmpty {
+                                systemMessage(msg)
+                            } else if msg.isDeleted {
+                                deletedMessage(msg, showHeader: showHeader)
+                            } else {
+                                messageRow(msg, showHeader: showHeader)
+                                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                        Button {
+                                            appState.replyingTo = msg
+                                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                        } label: {
+                                            Label("Reply", systemImage: "arrowshape.turn.up.left")
+                                        }
+                                        .tint(Theme.accent)
                                     }
-                                    .tint(Theme.accent)
-                                }
-                                .contextMenu { messageContextMenu(msg) }
+                                    .contextMenu { messageContextMenu(msg) }
+                            }
                         }
                     }
-                }
-                .padding(.top, 8)
-                .padding(.bottom, 4)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
 
-                // Typing indicator
-                if !channel.activeTypers.isEmpty {
-                    typingIndicator
+                    // Typing indicator
+                    if !channel.activeTypers.isEmpty {
+                        typingIndicator
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 4)
+                    }
+
+                    // Invisible anchor for scroll detection
+                    GeometryReader { geo in
+                        Color.clear
+                            .preference(key: ScrollOffsetKey.self, value: geo.frame(in: .global).minY)
+                    }
+                    .frame(height: 1)
+                    .id("bottom-anchor")
+                }
+                .background(Theme.bgPrimary)
+                .onPreferenceChange(ScrollOffsetKey.self) { value in
+                    // Show scroll button when not at bottom
+                    let screenHeight = UIScreen.main.bounds.height
+                    showScrollButton = value < -100
+                }
+
+                // Scroll to bottom button
+                if showScrollButton {
+                    Button(action: {
+                        if let last = channel.messages.last {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo(last.id, anchor: .bottom)
+                            }
+                        }
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 12, weight: .bold))
+                            Text("New messages")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                        .foregroundColor(Theme.accent)
                         .padding(.horizontal, 16)
-                        .padding(.bottom, 4)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(20)
+                        .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+                    }
+                    .padding(.bottom, 8)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .animation(.spring(response: 0.3), value: showScrollButton)
                 }
             }
-            .background(Theme.bgPrimary)
             .onChange(of: channel.messages.count) {
-                if let last = channel.messages.last {
+                if !showScrollButton, let last = channel.messages.last {
                     withAnimation(.easeOut(duration: 0.15)) {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
             }
             .onAppear {
+                // Capture current read position before marking read
+                lastReadId = UserDefaults.standard.string(forKey: "freeq.lastRead.\(channel.name)")
                 appState.markRead(channel.name)
                 // Scroll to bottom on appear
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -116,6 +171,12 @@ struct MessageListView: View {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }) {
             Label("Reply", systemImage: "arrowshape.turn.up.left")
+        }
+
+        Button(action: {
+            threadMessage = msg
+        }) {
+            Label("Thread", systemImage: "text.bubble")
         }
 
         Button(action: {
@@ -191,6 +252,21 @@ struct MessageListView: View {
             }
         }
         .padding(.leading, 68)
+    }
+
+    // MARK: - Unread Separator
+
+    private var unreadSeparator: some View {
+        HStack(spacing: 8) {
+            Rectangle().fill(Color.red.opacity(0.4)).frame(height: 1)
+            Text("NEW")
+                .font(.system(size: 10, weight: .heavy))
+                .foregroundColor(.red.opacity(0.7))
+                .tracking(1)
+            Rectangle().fill(Color.red.opacity(0.4)).frame(height: 1)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
     }
 
     // MARK: - Message Grouping
@@ -634,4 +710,12 @@ struct EmojiPickerSheet: View {
 private struct ProfileNickTarget: Identifiable {
     let nick: String
     var id: String { nick }
+}
+
+// Preference key for scroll offset detection
+private struct ScrollOffsetKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
 }

@@ -107,6 +107,16 @@ export function ComposeBox() {
 
   // ── File upload ──
 
+  // Listen for file drops from FileDropOverlay
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const file = (e as CustomEvent).detail?.file;
+      if (file) handleFileSelect(file);
+    };
+    window.addEventListener('freeq-file-drop', handler);
+    return () => window.removeEventListener('freeq-file-drop', handler);
+  }, []);
+
   const handleFileSelect = useCallback((file: File) => {
     if (!authDid) {
       useStore.getState().addSystemMessage(activeChannel, 'File upload requires AT Protocol authentication');
