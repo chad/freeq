@@ -66,7 +66,7 @@ SLUG_MAP = {
     "future": ("repo", "FutureDirection.md"),
     "web-infra": ("repo", "proposal-web-infra.md"),
     "whats-new": ("repo", "WHATS-NEW.md"),
-    "demo": ("repo", "DEMO.md"),
+    "demo": ("site", "demo.md"),
 }
 
 
