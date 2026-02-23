@@ -14,6 +14,8 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const connectionState = useStore((s) => s.connectionState);
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
+  const density = useStore((s) => s.messageDensity);
+  const setDensity = useStore((s) => s.setMessageDensity);
 
   const [notifs, setNotifs] = useState(true);
   const [sounds, setSounds] = useState(true);
@@ -63,6 +65,20 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 >
                   ☀️ Light
                 </button>
+              </div>
+            </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-fg-muted">Message density</span>
+              <div className="flex gap-1 bg-bg rounded-lg p-0.5">
+                {(['cozy', 'default', 'compact'] as const).map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => setDensity(d)}
+                    className={`px-2 py-1 text-xs rounded-md capitalize ${density === d ? 'bg-surface text-fg' : 'text-fg-dim'}`}
+                  >
+                    {d}
+                  </button>
+                ))}
               </div>
             </div>
           </Section>

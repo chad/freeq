@@ -300,7 +300,7 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
 
   return (
     <div
-      className={`group px-4 pt-3 pb-1 hover:bg-white/[0.02] flex gap-3 relative ${
+      className={`msg-full group px-4 pt-3 pb-1 hover:bg-white/[0.02] flex gap-3 relative ${
         isMention ? 'bg-accent/[0.04] border-l-2 border-accent' : ''
       }`}
       onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
@@ -530,6 +530,7 @@ export function MessageList() {
     return s.channels.get(s.activeChannel.toLowerCase())?.messages || [];
   });
   const lastReadMsgId = useStore((s) => s.channels.get(s.activeChannel.toLowerCase())?.lastReadMsgId);
+  const density = useStore((s) => s.messageDensity);
   const ref = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
@@ -584,7 +585,10 @@ export function MessageList() {
   }, []);
 
   return (
-    <div key={activeChannel} ref={ref} data-testid="message-list" className="flex-1 overflow-y-auto relative" onScroll={onScroll}>
+    <div key={activeChannel} ref={ref} data-testid="message-list" className={`flex-1 overflow-y-auto relative ${
+      density === 'compact' ? 'text-[14px] [&_.msg-full]:pt-1.5 [&_.msg-full]:pb-0' :
+      density === 'cozy' ? 'text-[16px] [&_.msg-full]:pt-4 [&_.msg-full]:pb-2' : ''
+    }`} onScroll={onScroll}>
       {messages.length === 0 && (
         <div className="flex flex-col items-center justify-center h-full text-fg-dim px-8">
           <img src="/freeq.png" alt="freeq" className="w-14 h-14 mb-4 opacity-20" />

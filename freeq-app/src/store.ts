@@ -105,6 +105,7 @@ export interface Store {
   replyTo: ReplyContext | null;
   editingMsg: EditContext | null;
   theme: 'dark' | 'light';
+  messageDensity: 'default' | 'compact' | 'cozy';
   searchOpen: boolean;
   searchQuery: string;
   channelListOpen: boolean;
@@ -158,6 +159,7 @@ export interface Store {
   setReplyTo: (ctx: ReplyContext | null) => void;
   setEditingMsg: (ctx: EditContext | null) => void;
   setTheme: (theme: 'dark' | 'light') => void;
+  setMessageDensity: (d: 'default' | 'compact' | 'cozy') => void;
   setSearchOpen: (open: boolean) => void;
   setSearchQuery: (query: string) => void;
   setChannelListOpen: (open: boolean) => void;
@@ -211,6 +213,7 @@ export const useStore = create<Store>((set, get) => ({
   replyTo: null,
   editingMsg: null,
   theme: (localStorage.getItem('freeq-theme') as 'dark' | 'light') || 'dark',
+  messageDensity: (localStorage.getItem('freeq-density') as 'default' | 'compact' | 'cozy') || 'default',
   searchOpen: false,
   searchQuery: '',
   channelListOpen: false,
@@ -258,7 +261,7 @@ export const useStore = create<Store>((set, get) => ({
     threadChannel: null,
     joinGateChannel: null,
     channelSettingsOpen: null,
-    theme: s.theme, // preserve theme across reconnects
+    theme: s.theme, messageDensity: s.messageDensity, // preserve across reconnects
   })),
 
   // Channels
@@ -557,6 +560,10 @@ export const useStore = create<Store>((set, get) => ({
   setTheme: (theme) => {
     localStorage.setItem('freeq-theme', theme);
     set({ theme });
+  },
+  setMessageDensity: (d) => {
+    localStorage.setItem('freeq-density', d);
+    set({ messageDensity: d });
   },
   setSearchOpen: (open) => set({ searchOpen: open, searchQuery: open ? '' : '' }),
   setSearchQuery: (query) => set({ searchQuery: query }),
