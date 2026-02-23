@@ -13,25 +13,17 @@ const ogCache = new Map<string, OGData | null>();
 async function fetchOG(url: string): Promise<OGData | null> {
   if (ogCache.has(url)) return ogCache.get(url) || null;
   try {
-    // Use a CORS proxy or server endpoint. For now, try fetching directly
-    // (works for some sites) and fall back to allorigins proxy.
-    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
-    const resp = await fetch(proxyUrl, { signal: AbortSignal.timeout(5000) });
+    // Use server-side OG proxy (no privacy leak to third-party services)
+    const proxyUrl = `/api/v1/og?url=${encodeURIComponent(url)}`;
+    const resp = await fetch(proxyUrl, { signal: AbortSignal.timeout(6000) });
     if (!resp.ok) { ogCache.set(url, null); return null; }
-    const html = await resp.text();
-
-    const get = (prop: string): string | undefined => {
-      // Match both property="og:X" and name="og:X"
-      const re = new RegExp(`<meta[^>]*(?:property|name)=["']${prop}["'][^>]*content=["']([^"']*)["']`, 'i');
-      const re2 = new RegExp(`<meta[^>]*content=["']([^"']*)["'][^>]*(?:property|name)=["']${prop}["']`, 'i');
-      return re.exec(html)?.[1] || re2.exec(html)?.[1];
-    };
+    const json = await resp.json();
 
     const data: OGData = {
-      title: get('og:title') || get('twitter:title'),
-      description: get('og:description') || get('twitter:description') || get('description'),
-      image: get('og:image') || get('twitter:image'),
-      siteName: get('og:site_name'),
+      title: json.title || undefined,
+      description: json.description || undefined,
+      image: json.image || undefined,
+      siteName: json.site_name || undefined,
     };
 
     // Only cache if we got something useful

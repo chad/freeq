@@ -312,6 +312,8 @@ pub struct SharedState {
     pub config: ServerConfig,
     /// Plugin manager for server extensions.
     pub plugin_manager: PluginManager,
+    /// Policy engine for channel governance (if enabled).
+    pub policy_engine: Option<Arc<crate::policy::PolicyEngine>>,
 }
 
 impl SharedState {
@@ -554,6 +556,23 @@ impl Server {
             db: db.map(Mutex::new),
             config: self.config.clone(),
             plugin_manager,
+            policy_engine: {
+                // Initialize policy engine alongside the main DB
+                let policy_db_path = self.config.db_path.as_ref()
+                    .map(|p| p.replace(".db", "-policy.db"))
+                    .unwrap_or_else(|| ":memory:".to_string());
+                match crate::policy::PolicyStore::open(&policy_db_path) {
+                    Ok(store) => {
+                        let authority_did = format!("did:web:{}", self.config.server_name);
+                        Some(Arc::new(crate::policy::PolicyEngine::new(store, authority_did)))
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to initialize policy engine: {e}");
+                        None
+                    }
+                }
+            },
+
         }))
     }
 
@@ -722,6 +741,26 @@ impl Server {
                 loop {
                     interval.tick().await;
                     reconcile_crdt_to_local(&reconcile_state).await;
+                }
+            });
+        }
+
+        // Policy revalidation: periodically invalidate expired attestations
+        // and kick users whose continuous validity has expired.
+        if state.policy_engine.is_some() {
+            let policy_state = Arc::clone(&state);
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                interval.tick().await; // skip first tick
+                loop {
+                    interval.tick().await;
+                    if let Some(ref engine) = policy_state.policy_engine {
+                        match engine.revalidate_expired() {
+                            Ok(0) => {}
+                            Ok(n) => tracing::info!("Invalidated {n} expired policy attestations"),
+                            Err(e) => tracing::warn!("Policy revalidation error: {e}"),
+                        }
+                    }
                 }
             });
         }
@@ -949,6 +988,7 @@ async fn process_s2s_message(
         S2sMessage::Mode { event_id, origin, .. } => (event_id.clone(), origin.clone()),
         S2sMessage::ChannelCreated { event_id, origin, .. } => (event_id.clone(), origin.clone()),
         S2sMessage::Kick { event_id, origin, .. } => (event_id.clone(), origin.clone()),
+        S2sMessage::PolicySync { event_id, origin, .. } => (event_id.clone(), origin.clone()),
         S2sMessage::CrdtSync { origin, .. } => (String::new(), origin.clone()),
         S2sMessage::PeerDisconnected { .. } => (String::new(), String::new()),
         S2sMessage::Hello { .. } | S2sMessage::SyncRequest | S2sMessage::SyncResponse { .. } => {
@@ -1699,6 +1739,31 @@ async fn process_s2s_message(
             for session_id in &affected_sessions {
                 if let Some(tx) = conns.get(session_id) {
                     let _ = tx.try_send(line.clone());
+                }
+            }
+        }
+
+        S2sMessage::PolicySync { channel, policy_json, authority_set_json, .. } => {
+            // A peer has created/updated/cleared a policy — apply locally
+            if let Some(ref engine) = state.policy_engine {
+                let channel_key = channel.to_lowercase();
+                if let Some(ref pj) = policy_json {
+                    // Policy created or updated
+                    if let Ok(policy) = serde_json::from_str::<crate::policy::PolicyDocument>(pj) {
+                        // Store the authority set if provided
+                        if let Some(ref asj) = authority_set_json {
+                            if let Ok(auth_set) = serde_json::from_str::<crate::policy::AuthoritySet>(asj) {
+                                let _ = engine.store().store_authority_set(auth_set);
+                            }
+                        }
+                        // Store the policy
+                        let _ = engine.store().store_policy(policy);
+                        tracing::info!(channel = %channel_key, "S2S PolicySync: policy updated from peer");
+                    }
+                } else {
+                    // Policy cleared
+                    let _ = engine.remove_policy(&channel_key);
+                    tracing::info!(channel = %channel_key, "S2S PolicySync: policy cleared from peer");
                 }
             }
         }

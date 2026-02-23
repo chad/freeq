@@ -2,38 +2,90 @@
 {% set nav_active = 'docs' %}
 {% block title %}Documentation{% endblock %}
 
+{% block head %}
+<style>
+.doc-sections { display: grid; grid-template-columns: 1fr; gap: 0; }
+.doc-section { margin-bottom: 32px; }
+.doc-section h2 { border: none; padding-top: 0; margin-bottom: 12px; }
+.doc-section table { margin: 0; }
+.doc-section td:first-child { white-space: nowrap; width: 220px; }
+.doc-section td:first-child a { font-weight: 600; }
+.badge {
+  display: inline-block; font-size: 9px; text-transform: uppercase; letter-spacing: .5px;
+  padding: 1px 6px; border-radius: 3px; margin-left: 6px; vertical-align: middle;
+}
+.badge-new { background: rgba(0,229,255,.15); color: var(--cyan); }
+.badge-deep { background: rgba(168,85,247,.15); color: var(--purple); }
+</style>
+{% endblock %}
+
 {% block body %}
 <div class="container">
 <h1>Documentation</h1>
-<p>Technical documentation for the freeq IRC server and ecosystem.</p>
+<p>Guides, references, and deep dives for the freeq IRC server and ecosystem.</p>
 
-<h2>Protocol</h2>
-<table>
-<tr><td><a href="/docs/protocol/">Protocol Notes</a></td><td style="color:var(--fg3)">SASL ATPROTO-CHALLENGE mechanism, DID extensions, transport stack, plugin hooks</td></tr>
-<tr><td><a href="/docs/features/">Feature Catalog</a></td><td style="color:var(--fg3)">Complete list of every implemented feature with status</td></tr>
-<tr><td><a href="/docs/limitations/">Known Limitations</a></td><td style="color:var(--fg3)">Explicit gaps and missing features</td></tr>
-</table>
+<div class="doc-sections">
 
-<h2>Architecture</h2>
+<div class="doc-section">
+<h2>Start here</h2>
 <table>
-<tr><td><a href="/docs/architecture/">Architecture Decisions</a></td><td style="color:var(--fg3)">Design rationale and tradeoffs</td></tr>
-<tr><td><a href="/docs/s2s/">S2S Federation</a></td><td style="color:var(--fg3)">Server-to-server protocol analysis and audit</td></tr>
-<tr><td><a href="/docs/web-infra/">Web Infrastructure</a></td><td style="color:var(--fg3)">WebSocket, REST API, and web client proposal</td></tr>
+<tr><td><a href="/docs/what-is-freeq/">What is freeq?</a> <span class="badge badge-new">new</span></td><td style="color:var(--fg3)">What this is, how it differs from IRC and Slack/Discord, and why it matters</td></tr>
+<tr><td><a href="/docs/getting-started/">Getting Started</a> <span class="badge badge-new">new</span></td><td style="color:var(--fg3)">Connect as a user, run your own server, build your first bot</td></tr>
+<tr><td><a href="/connect/">Connection Guide</a></td><td style="color:var(--fg3)">Every supported transport and client</td></tr>
 </table>
+</div>
 
-<h2>Guides</h2>
+<div class="doc-section">
+<h2>Clients</h2>
 <table>
-<tr><td><a href="/connect/">Connection Guide</a></td><td style="color:var(--fg3)">How to connect with every supported client and transport</td></tr>
-<tr><td><a href="/sdk/">SDK Documentation</a></td><td style="color:var(--fg3)">Building clients, bots, and integrations</td></tr>
+<tr><td><a href="/docs/web-client/">Web Client</a> <span class="badge badge-new">new</span></td><td style="color:var(--fg3)">Slack-class web app — reactions, threads, media, search, and AT Protocol login</td></tr>
+<tr><td><a href="/docs/ios-app/">iOS App</a> <span class="badge badge-new">new</span></td><td style="color:var(--fg3)">Native SwiftUI app via Rust FFI with full feature parity</td></tr>
+<tr><td><a href="/docs/whats-new/">What's Different from IRC</a></td><td style="color:var(--fg3)">DID identity, persistent ops, modern features for newcomers</td></tr>
 </table>
+</div>
 
-<h2>Roadmap</h2>
+<div class="doc-section">
+<h2>Identity & Security</h2>
 <table>
-<tr><td><a href="/docs/future/">Future Direction</a></td><td style="color:var(--fg3)">Planned features and long-term vision</td></tr>
+<tr><td><a href="/docs/authentication/">Authentication</a> <span class="badge badge-new">new</span></td><td style="color:var(--fg3)">AT Protocol SASL, OAuth, web tokens, DID-based identity</td></tr>
+<tr><td><a href="/docs/policy-framework/">Policy Framework</a> <span class="badge badge-new">new</span></td><td style="color:var(--fg3)">Cryptographic channel governance, verifiable credentials, transparency logs</td></tr>
+<tr><td><a href="/docs/verifiers/">Credential Verifiers</a> <span class="badge badge-new">new</span></td><td style="color:var(--fg3)">GitHub verifier, building custom verifiers, decoupled architecture</td></tr>
+<tr><td><a href="/docs/demo/">Policy Demo</a></td><td style="color:var(--fg3)">Interactive walkthrough of the policy framework</td></tr>
 </table>
+</div>
+
+<div class="doc-section">
+<h2>Building</h2>
+<table>
+<tr><td><a href="/sdk/">SDK Documentation</a></td><td style="color:var(--fg3)">Rust SDK for clients, bots, and integrations</td></tr>
+<tr><td><a href="/docs/bots/">Bot Framework</a> <span class="badge badge-new">new</span></td><td style="color:var(--fg3)">Build IRC bots, webhooks, and LLM-powered chat personas</td></tr>
+<tr><td><a href="/docs/api-reference/">REST API Reference</a> <span class="badge badge-new">new</span></td><td style="color:var(--fg3)">Health, channels, history, users, upload, policy, and credentials endpoints</td></tr>
+</table>
+</div>
+
+<div class="doc-section">
+<h2>Infrastructure</h2>
+<table>
+<tr><td><a href="/docs/self-hosting/">Self-Hosting Guide</a> <span class="badge badge-new">new</span></td><td style="color:var(--fg3)">Run your own server with TLS, nginx, systemd, and credential verifiers</td></tr>
+<tr><td><a href="/docs/federation/">Federation</a> <span class="badge badge-new">new</span></td><td style="color:var(--fg3)">Server-to-server via iroh QUIC with CRDT convergence</td></tr>
+</table>
+</div>
+
+<div class="doc-section">
+<h2>Deep dives</h2>
+<table>
+<tr><td><a href="/docs/protocol/">Protocol Notes</a> <span class="badge badge-deep">deep</span></td><td style="color:var(--fg3)">SASL ATPROTO-CHALLENGE mechanism, DID extensions, transport stack, plugin hooks</td></tr>
+<tr><td><a href="/docs/features/">Feature Catalog</a> <span class="badge badge-deep">deep</span></td><td style="color:var(--fg3)">Complete list of every implemented feature with status</td></tr>
+<tr><td><a href="/docs/architecture/">Architecture Decisions</a> <span class="badge badge-deep">deep</span></td><td style="color:var(--fg3)">Design rationale, tradeoffs, and engineering choices</td></tr>
+<tr><td><a href="/docs/s2s/">S2S Federation Audit</a> <span class="badge badge-deep">deep</span></td><td style="color:var(--fg3)">Server-to-server protocol analysis and correctness audit</td></tr>
+<tr><td><a href="/docs/limitations/">Known Limitations</a> <span class="badge badge-deep">deep</span></td><td style="color:var(--fg3)">Explicit gaps and missing features</td></tr>
+<tr><td><a href="/docs/future/">Future Direction</a> <span class="badge badge-deep">deep</span></td><td style="color:var(--fg3)">Planned features and long-term vision</td></tr>
+</table>
+</div>
+
+</div>
 
 <h2>Source</h2>
-<p>All documentation lives in the <a href="https://github.com/chad/freeq/tree/main/docs">docs/</a>
-directory of the repository.</p>
+<p>All documentation lives in the <a href="https://github.com/chad/freeq">GitHub repository</a>. Site docs are in <code>freeq-site/docs/</code>, technical docs in <code>docs/</code>.</p>
 </div>
 {% endblock %}

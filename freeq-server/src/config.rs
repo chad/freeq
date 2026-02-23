@@ -93,6 +93,17 @@ pub struct ServerConfig {
     /// with peers that don't send DID metadata.
     #[arg(long)]
     pub require_did_for_ops: bool,
+
+    /// GitHub OAuth App Client ID (for credential verification).
+    /// Create one at https://github.com/settings/developers
+    /// Can also be set via GITHUB_CLIENT_ID environment variable.
+    #[arg(long, env = "GITHUB_CLIENT_ID")]
+    pub github_client_id: Option<String>,
+
+    /// GitHub OAuth App Client Secret.
+    /// Can also be set via GITHUB_CLIENT_SECRET environment variable.
+    #[arg(long, env = "GITHUB_CLIENT_SECRET")]
+    pub github_client_secret: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -117,6 +128,8 @@ impl Default for ServerConfig {
             plugins: vec![],
             plugin_dir: None,
             require_did_for_ops: false,
+            github_client_id: None,
+            github_client_secret: None,
         }
     }
 }

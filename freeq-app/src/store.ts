@@ -105,6 +105,11 @@ export interface Store {
   replyTo: ReplyContext | null;
   editingMsg: EditContext | null;
   theme: 'dark' | 'light';
+  messageDensity: 'default' | 'compact' | 'cozy';
+  favorites: Set<string>; // lowercase channel names
+  mutedChannels: Set<string>; // lowercase channel names
+  bookmarks: { channel: string; msgId: string; from: string; text: string; timestamp: Date }[];
+  bookmarksPanelOpen: boolean;
   searchOpen: boolean;
   searchQuery: string;
   channelListOpen: boolean;
@@ -158,6 +163,14 @@ export interface Store {
   setReplyTo: (ctx: ReplyContext | null) => void;
   setEditingMsg: (ctx: EditContext | null) => void;
   setTheme: (theme: 'dark' | 'light') => void;
+  setMessageDensity: (d: 'default' | 'compact' | 'cozy') => void;
+  toggleFavorite: (channel: string) => void;
+  toggleMuted: (channel: string) => void;
+  isFavorite: (channel: string) => boolean;
+  isMuted: (channel: string) => boolean;
+  addBookmark: (channel: string, msgId: string, from: string, text: string, timestamp: Date) => void;
+  removeBookmark: (msgId: string) => void;
+  setBookmarksPanelOpen: (open: boolean) => void;
   setSearchOpen: (open: boolean) => void;
   setSearchQuery: (query: string) => void;
   setChannelListOpen: (open: boolean) => void;
@@ -166,6 +179,14 @@ export interface Store {
   setLightboxUrl: (url: string | null) => void;
   openThread: (msgId: string, channel: string) => void;
   closeThread: () => void;
+
+  // Join gate
+  joinGateChannel: string | null;
+  setJoinGateChannel: (channel: string | null) => void;
+
+  // Channel settings
+  channelSettingsOpen: string | null;
+  setChannelSettingsOpen: (channel: string | null) => void;
 }
 
 function getOrCreateChannel(channels: Map<string, Channel>, name: string): Channel {
@@ -203,6 +224,11 @@ export const useStore = create<Store>((set, get) => ({
   replyTo: null,
   editingMsg: null,
   theme: (localStorage.getItem('freeq-theme') as 'dark' | 'light') || 'dark',
+  messageDensity: (localStorage.getItem('freeq-density') as 'default' | 'compact' | 'cozy') || 'default',
+  favorites: new Set(JSON.parse(localStorage.getItem('freeq-favorites') || '[]')),
+  mutedChannels: new Set(JSON.parse(localStorage.getItem('freeq-muted') || '[]')),
+  bookmarks: JSON.parse(localStorage.getItem('freeq-bookmarks') || '[]').map((b: any) => ({ ...b, timestamp: new Date(b.timestamp) })),
+  bookmarksPanelOpen: false,
   searchOpen: false,
   searchQuery: '',
   channelListOpen: false,
@@ -210,6 +236,8 @@ export const useStore = create<Store>((set, get) => ({
   lightboxUrl: null,
   threadMsgId: null,
   threadChannel: null,
+  joinGateChannel: null,
+  channelSettingsOpen: null,
 
   // Connection
   setConnectionState: (state) => set({ connectionState: state }),
@@ -246,7 +274,9 @@ export const useStore = create<Store>((set, get) => ({
     lightboxUrl: null,
     threadMsgId: null,
     threadChannel: null,
-    theme: s.theme, // preserve theme across reconnects
+    joinGateChannel: null,
+    channelSettingsOpen: null,
+    theme: s.theme, messageDensity: s.messageDensity, favorites: s.favorites, mutedChannels: s.mutedChannels, bookmarks: s.bookmarks, bookmarksPanelOpen: false, // preserve across reconnects
   })),
 
   // Channels
@@ -546,6 +576,38 @@ export const useStore = create<Store>((set, get) => ({
     localStorage.setItem('freeq-theme', theme);
     set({ theme });
   },
+  setMessageDensity: (d) => {
+    localStorage.setItem('freeq-density', d);
+    set({ messageDensity: d });
+  },
+  toggleFavorite: (channel) => set((s) => {
+    const favs = new Set(s.favorites);
+    const key = channel.toLowerCase();
+    if (favs.has(key)) favs.delete(key); else favs.add(key);
+    localStorage.setItem('freeq-favorites', JSON.stringify([...favs]));
+    return { favorites: favs };
+  }),
+  toggleMuted: (channel) => set((s) => {
+    const muted = new Set(s.mutedChannels);
+    const key = channel.toLowerCase();
+    if (muted.has(key)) muted.delete(key); else muted.add(key);
+    localStorage.setItem('freeq-muted', JSON.stringify([...muted]));
+    return { mutedChannels: muted };
+  }),
+  isFavorite: (channel) => get().favorites.has(channel.toLowerCase()),
+  isMuted: (channel) => get().mutedChannels.has(channel.toLowerCase()),
+  addBookmark: (channel, msgId, from, text, timestamp) => set((s) => {
+    if (s.bookmarks.some((b) => b.msgId === msgId)) return s;
+    const bookmarks = [...s.bookmarks, { channel, msgId, from, text, timestamp }];
+    localStorage.setItem('freeq-bookmarks', JSON.stringify(bookmarks));
+    return { bookmarks };
+  }),
+  removeBookmark: (msgId) => set((s) => {
+    const bookmarks = s.bookmarks.filter((b) => b.msgId !== msgId);
+    localStorage.setItem('freeq-bookmarks', JSON.stringify(bookmarks));
+    return { bookmarks };
+  }),
+  setBookmarksPanelOpen: (open) => set({ bookmarksPanelOpen: open }),
   setSearchOpen: (open) => set({ searchOpen: open, searchQuery: open ? '' : '' }),
   setSearchQuery: (query) => set({ searchQuery: query }),
   setChannelListOpen: (open) => set({ channelListOpen: open }),
@@ -556,4 +618,6 @@ export const useStore = create<Store>((set, get) => ({
   setLightboxUrl: (url) => set({ lightboxUrl: url }),
   openThread: (msgId, channel) => set({ threadMsgId: msgId, threadChannel: channel }),
   closeThread: () => set({ threadMsgId: null, threadChannel: null }),
+  setJoinGateChannel: (channel) => set({ joinGateChannel: channel }),
+  setChannelSettingsOpen: (channel) => set({ channelSettingsOpen: channel }),
 }));

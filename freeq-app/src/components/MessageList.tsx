@@ -6,6 +6,7 @@ import { EmojiPicker } from './EmojiPicker';
 import { UserPopover } from './UserPopover';
 import { BlueskyEmbed } from './BlueskyEmbed';
 import { LinkPreview } from './LinkPreview';
+import { MessageContextMenu } from './MessageContextMenu';
 
 // ── Colors ──
 
@@ -71,6 +72,101 @@ function textWithoutImages(text: string, imageUrls: string[]): string {
   return result;
 }
 
+/** Parse text into typed segments for safe React rendering (no dangerouslySetInnerHTML). */
+interface TextSegment {
+  type: 'text' | 'link' | 'code' | 'codeblock' | 'bold' | 'italic' | 'strike';
+  content: string;
+  href?: string;
+}
+
+function parseTextSegments(text: string): TextSegment[] {
+  const segments: TextSegment[] = [];
+  // Tokenize by splitting on markdown patterns
+  // Order matters: code blocks first, then inline code, then other formatting
+  const patterns: { re: RegExp; type: TextSegment['type']; group: number }[] = [
+    { re: /```([\s\S]*?)```/g, type: 'codeblock', group: 1 },
+    { re: /`([^`]+)`/g, type: 'code', group: 1 },
+    { re: /(https?:\/\/[^\s<]+)/g, type: 'link', group: 1 },
+    { re: /\*\*(.+?)\*\*/g, type: 'bold', group: 1 },
+    { re: /(?<!\*)\*([^*]+)\*(?!\*)/g, type: 'italic', group: 1 },
+    { re: /~~(.+?)~~/g, type: 'strike', group: 1 },
+  ];
+
+  // Build a combined list of all matches with positions
+  const matches: { start: number; end: number; type: TextSegment['type']; content: string; full: string }[] = [];
+  for (const p of patterns) {
+    p.re.lastIndex = 0;
+    let m;
+    while ((m = p.re.exec(text)) !== null) {
+      matches.push({
+        start: m.index,
+        end: m.index + m[0].length,
+        type: p.type,
+        content: m[p.group],
+        full: m[0],
+      });
+    }
+  }
+
+  // Sort by start position, remove overlapping
+  matches.sort((a, b) => a.start - b.start);
+  const filtered: typeof matches = [];
+  let lastEnd = 0;
+  for (const m of matches) {
+    if (m.start >= lastEnd) {
+      filtered.push(m);
+      lastEnd = m.end;
+    }
+  }
+
+  // Build segments
+  let pos = 0;
+  for (const m of filtered) {
+    if (m.start > pos) {
+      segments.push({ type: 'text', content: text.slice(pos, m.start) });
+    }
+    if (m.type === 'link') {
+      segments.push({ type: 'link', content: m.content, href: m.content });
+    } else {
+      segments.push({ type: m.type, content: m.content });
+    }
+    pos = m.end;
+  }
+  if (pos < text.length) {
+    segments.push({ type: 'text', content: text.slice(pos) });
+  }
+
+  return segments;
+}
+
+/** Render text segments as React elements (XSS-safe — no innerHTML). */
+function renderTextSafe(text: string): React.ReactElement {
+  const segments = parseTextSegments(text);
+  return (
+    <>
+      {segments.map((seg, i) => {
+        switch (seg.type) {
+          case 'link':
+            return <a key={i} href={seg.href} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline break-all">{seg.content}</a>;
+          case 'codeblock':
+            return <pre key={i} className="bg-surface rounded px-2 py-1.5 my-1 text-[13px] font-mono overflow-x-auto">{seg.content}</pre>;
+          case 'code':
+            return <code key={i} className="bg-surface px-1 py-0.5 rounded text-[13px] font-mono text-pink">{seg.content}</code>;
+          case 'bold':
+            return <strong key={i}>{seg.content}</strong>;
+          case 'italic':
+            return <em key={i}>{seg.content}</em>;
+          case 'strike':
+            return <del key={i} className="text-fg-dim">{seg.content}</del>;
+          default:
+            return <span key={i}>{seg.content}</span>;
+        }
+      })}
+    </>
+  );
+}
+
+// Keep old renderText for system messages that need innerHTML (server notices with URLs)
 function renderText(text: string): string {
   const escaped = text
     .replace(/&/g, '&amp;')
@@ -80,18 +176,7 @@ function renderText(text: string): string {
     .replace(
       /(https?:\/\/[^\s<]+)/g,
       '<a href="$1" target="_blank" rel="noopener" class="text-accent hover:underline break-all">$1</a>',
-    )
-    .replace(
-      /```([\s\S]*?)```/g,
-      '<pre class="bg-surface rounded px-2 py-1.5 my-1 text-[13px] font-mono overflow-x-auto">$1</pre>',
-    )
-    .replace(
-      /`([^`]+)`/g,
-      '<code class="bg-surface px-1 py-0.5 rounded text-[13px] font-mono text-pink">$1</code>',
-    )
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>')
-    .replace(/~~(.+?)~~/g, '<del class="text-fg-dim">$1</del>');
+    );
 }
 
 // ── Message content (text + inline images) ──
@@ -121,10 +206,9 @@ function MessageContent({ msg }: { msg: Message }) {
       {msg.replyTo && <ReplyBadge msgId={msg.replyTo} />}
 
       {cleanText && (
-        <div
-          className="text-[15px] leading-relaxed [&_pre]:my-1 [&_a]:break-all"
-          dangerouslySetInnerHTML={{ __html: renderText(cleanText) }}
-        />
+        <div className="text-[15px] leading-relaxed [&_pre]:my-1 [&_a]:break-all">
+          {renderTextSafe(cleanText)}
+        </div>
       )}
 
       {/* Inline images */}
@@ -266,7 +350,8 @@ function SystemMessage({ msg }: { msg: Message }) {
     <div className="px-4 py-1 flex items-start gap-3">
       <span className="w-10 shrink-0" />
       <span className="text-fg-dim text-sm">
-        <span className="opacity-60">—</span> {msg.text}
+        <span className="opacity-60">—</span>{' '}
+        <span dangerouslySetInnerHTML={{ __html: renderText(msg.text) }} />
       </span>
     </div>
   );
@@ -281,6 +366,7 @@ interface MessageProps {
 function FullMessage({ msg, channel, onNickClick }: MessageProps) {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [pickerPos, setPickerPos] = useState<{ x: number; y: number } | undefined>();
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const color = msg.isSelf ? '#b18cff' : nickColor(msg.from);
   const currentNick = getNick();
   const isMention = !msg.isSelf && msg.text.toLowerCase().includes(currentNick.toLowerCase());
@@ -296,9 +382,12 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
   };
 
   return (
-    <div className={`group px-4 pt-3 pb-1 hover:bg-white/[0.02] flex gap-3 relative ${
-      isMention ? 'bg-accent/[0.04] border-l-2 border-accent' : ''
-    }`}>
+    <div
+      className={`msg-full group px-4 pt-3 pb-1 hover:bg-white/[0.02] flex gap-3 relative ${
+        isMention ? 'bg-accent/[0.04] border-l-2 border-accent' : ''
+      }`}
+      onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
+    >
       <div
         className="cursor-pointer mt-0.5"
         onClick={(e) => onNickClick(msg.from, member?.did, e)}
@@ -319,7 +408,7 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
           {member?.away != null && (
             <span className="text-xs text-fg-dim bg-warning/10 text-warning px-1.5 py-0.5 rounded">away</span>
           )}
-          <span className="text-xs text-fg-dim whitespace-nowrap">{formatTime(msg.timestamp)}</span>
+          <span className="text-xs text-fg-dim whitespace-nowrap cursor-default" title={msg.timestamp.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}>{formatTime(msg.timestamp)}</span>
           {msg.editOf && <span className="text-xs text-fg-dim">(edited)</span>}
         </div>
         <MessageContent msg={msg} />
@@ -353,6 +442,19 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
           />
         </div>
       )}
+
+      {ctxMenu && (
+        <MessageContextMenu
+          msg={msg}
+          channel={channel}
+          position={ctxMenu}
+          onClose={() => setCtxMenu(null)}
+          onReply={() => useStore.getState().setReplyTo({ msgId: msg.id, from: msg.from, text: msg.text, channel })}
+          onEdit={() => useStore.getState().setEditingMsg({ msgId: msg.id, text: msg.text, channel })}
+          onThread={() => useStore.getState().openThread(msg.id, channel)}
+          onReact={openEmojiPicker}
+        />
+      )}
     </div>
   );
 }
@@ -360,6 +462,7 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
 function GroupedMessage({ msg, channel }: MessageProps) {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [pickerPos, setPickerPos] = useState<{ x: number; y: number } | undefined>();
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const currentNick = getNick();
   const isMention = !msg.isSelf && msg.text.toLowerCase().includes(currentNick.toLowerCase());
 
@@ -369,10 +472,13 @@ function GroupedMessage({ msg, channel }: MessageProps) {
   };
 
   return (
-    <div className={`group px-4 py-0.5 hover:bg-white/[0.02] flex gap-3 relative ${
-      isMention ? 'bg-accent/[0.04] border-l-2 border-accent' : ''
-    }`}>
-      <span className="w-10 shrink-0 text-right text-[11px] text-fg-dim opacity-0 group-hover:opacity-100 leading-[24px]">
+    <div
+      className={`group px-4 py-0.5 hover:bg-white/[0.02] flex gap-3 relative ${
+        isMention ? 'bg-accent/[0.04] border-l-2 border-accent' : ''
+      }`}
+      onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
+    >
+      <span className="w-10 shrink-0 text-right text-[11px] text-fg-dim opacity-0 group-hover:opacity-100 leading-[24px] cursor-default" title={msg.timestamp.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}>
         {formatTime(msg.timestamp)}
       </span>
       <div className="min-w-0 flex-1">
@@ -402,6 +508,19 @@ function GroupedMessage({ msg, channel }: MessageProps) {
             onClose={() => setShowEmojiPicker(false)}
           />
         </div>
+      )}
+
+      {ctxMenu && (
+        <MessageContextMenu
+          msg={msg}
+          channel={channel}
+          position={ctxMenu}
+          onClose={() => setCtxMenu(null)}
+          onReply={() => useStore.getState().setReplyTo({ msgId: msg.id, from: msg.from, text: msg.text, channel })}
+          onEdit={() => useStore.getState().setEditingMsg({ msgId: msg.id, text: msg.text, channel })}
+          onThread={() => useStore.getState().openThread(msg.id, channel)}
+          onReact={(e: React.MouseEvent) => { setPickerPos({ x: e.clientX, y: e.clientY }); setShowEmojiPicker(true); }}
+        />
       )}
     </div>
   );
@@ -457,6 +576,34 @@ function Reactions({ msg, channel }: { msg: Message; channel: string }) {
   );
 }
 
+// ── Typing indicator ──
+
+function TypingIndicatorBar({ channel }: { channel: string }) {
+  const channels = useStore((s) => s.channels);
+  const ch = channels.get(channel.toLowerCase());
+  if (!ch) return null;
+
+  const typers = [...ch.members.values()].filter((m) => m.typing).map((m) => m.nick);
+  if (typers.length === 0) return null;
+
+  const text = typers.length === 1
+    ? `${typers[0]} is typing`
+    : typers.length === 2
+    ? `${typers[0]} and ${typers[1]} are typing`
+    : `${typers[0]} and ${typers.length - 1} others are typing`;
+
+  return (
+    <div className="px-4 py-1.5 flex items-center gap-2 text-xs text-fg-dim animate-fadeIn">
+      <span className="flex gap-0.5">
+        <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: '0ms' }} />
+        <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: '150ms' }} />
+        <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: '300ms' }} />
+      </span>
+      <span className="text-fg-muted">{text}</span>
+    </div>
+  );
+}
+
 // ── Main export ──
 
 export function MessageList() {
@@ -466,15 +613,19 @@ export function MessageList() {
     return s.channels.get(s.activeChannel.toLowerCase())?.messages || [];
   });
   const lastReadMsgId = useStore((s) => s.channels.get(s.activeChannel.toLowerCase())?.lastReadMsgId);
+  const density = useStore((s) => s.messageDensity);
   const ref = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [popover, setPopover] = useState<{ nick: string; did?: string; pos: { x: number; y: number } } | null>(null);
 
   // Track whether user has scrolled up (unstick from bottom)
   const handleScroll = useCallback(() => {
     const el = ref.current;
     if (!el) return;
-    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    stickToBottomRef.current = atBottom;
+    setShowScrollBtn(!atBottom);
   }, []);
 
   // Scroll to bottom when messages change (if stuck to bottom)
@@ -517,15 +668,45 @@ export function MessageList() {
   }, []);
 
   return (
-    <div key={activeChannel} ref={ref} data-testid="message-list" className="flex-1 overflow-y-auto" onScroll={onScroll}>
+    <div key={activeChannel} ref={ref} data-testid="message-list" className={`flex-1 overflow-y-auto relative ${
+      density === 'compact' ? 'text-[14px] [&_.msg-full]:pt-1.5 [&_.msg-full]:pb-0' :
+      density === 'cozy' ? 'text-[16px] [&_.msg-full]:pt-4 [&_.msg-full]:pb-2' : ''
+    }`} onScroll={onScroll}>
       {messages.length === 0 && (
-        <div className="flex flex-col items-center justify-center h-full text-fg-dim">
-          <img src="/freeq.png" alt="freeq" className="w-12 h-12 mb-3 opacity-30" />
-          <div className="text-base">
-            {activeChannel === 'server' ? 'Server messages will appear here' : 'No messages yet'}
-          </div>
-          {activeChannel !== 'server' && (
-            <div className="text-sm mt-1 text-fg-dim">Be the first to say something!</div>
+        <div className="flex flex-col items-center justify-center h-full text-fg-dim px-8">
+          <img src="/freeq.png" alt="freeq" className="w-14 h-14 mb-4 opacity-20" />
+          {activeChannel === 'server' ? (
+            <>
+              <div className="text-base text-fg-muted font-medium">Welcome to freeq</div>
+              <div className="text-sm mt-1 text-center">Server messages and notices will appear here.</div>
+              <div className="text-xs mt-3 text-center space-y-1">
+                <div><kbd className="px-1.5 py-0.5 text-xs bg-bg-tertiary border border-border rounded font-mono">⌘K</kbd> Quick switch · <kbd className="px-1.5 py-0.5 text-xs bg-bg-tertiary border border-border rounded font-mono">⌘/</kbd> Shortcuts</div>
+              </div>
+            </>
+          ) : activeChannel.startsWith('#') ? (
+            <>
+              <div className="text-3xl mb-2">👋</div>
+              <div className="text-xl text-fg font-bold">Welcome to {activeChannel}</div>
+              <div className="text-sm mt-2 text-center max-w-xs leading-relaxed">
+                This is the very beginning of <span className="text-accent font-medium">{activeChannel}</span>.
+                Start a conversation!
+              </div>
+              <div className="flex gap-2 mt-4">
+                <button onClick={() => {
+                  navigator.clipboard.writeText(`https://irc.freeq.at/join/${encodeURIComponent(activeChannel)}`);
+                }} className="text-xs bg-bg-tertiary border border-border rounded-lg px-3 py-1.5 text-fg-dim hover:text-fg hover:border-accent">
+                  🔗 Copy invite link
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-3xl mb-2">💬</div>
+              <div className="text-xl text-fg font-bold">Conversation with {activeChannel}</div>
+              <div className="text-sm mt-2 text-center max-w-xs leading-relaxed text-fg-dim">
+                Direct messages are private between you and <span className="text-fg-muted">{activeChannel}</span>.
+              </div>
+            </>
           )}
         </div>
       )}
@@ -533,7 +714,7 @@ export function MessageList() {
         {messages.map((msg, i) => (
           <div key={msg.id}>
             {lastReadMsgId && i > 0 && messages[i - 1].id === lastReadMsgId && !msg.isSelf && (
-              <div className="flex items-center gap-3 px-4 my-3">
+              <div className="flex items-center gap-3 px-4 my-3" id="unread-marker">
                 <div className="flex-1 h-px bg-danger/40" />
                 <span className="text-xs font-bold text-danger/70 uppercase tracking-wider">New</span>
                 <div className="flex-1 h-px bg-danger/40" />
@@ -549,7 +730,27 @@ export function MessageList() {
             )}
           </div>
         ))}
+        <TypingIndicatorBar channel={activeChannel} />
       </div>
+
+      {/* Scroll to bottom button */}
+      {showScrollBtn && (
+        <button
+          onClick={() => {
+            if (ref.current) {
+              ref.current.scrollTop = ref.current.scrollHeight;
+              stickToBottomRef.current = true;
+              setShowScrollBtn(false);
+            }
+          }}
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-bg-secondary border border-border rounded-full px-4 py-2 shadow-xl flex items-center gap-2 text-sm text-fg-muted hover:text-fg hover:border-accent transition-all z-10 animate-fadeIn"
+        >
+          <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+            <path fillRule="evenodd" d="M8 1a.5.5 0 01.5.5v11.793l3.146-3.147a.5.5 0 01.708.708l-4 4a.5.5 0 01-.708 0l-4-4a.5.5 0 01.708-.708L7.5 13.293V1.5A.5.5 0 018 1z"/>
+          </svg>
+          New messages
+        </button>
+      )}
 
       {popover && (
         <UserPopover

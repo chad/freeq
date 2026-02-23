@@ -8,6 +8,8 @@ pub mod irc;
 pub mod iroh;
 pub mod msgid;
 pub mod plugin;
+pub mod policy;
+pub mod verifiers;
 pub mod s2s;
 pub mod sasl;
 pub mod server;

@@ -24,6 +24,7 @@ dirs = { workspace = true }
 ratatui-image = { version = "10", optional = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 reqwest = { workspace = true }
+open = "5"
 
 [features]
 default = []

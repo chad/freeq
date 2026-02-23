@@ -225,10 +225,17 @@ pub(super) fn handle_who(
                         else if ch.voiced.contains(session) { "+" }
                         else { "" };
                     let flags = format!("{away_flag}{op_flag}");
+                    // Include DID in realname if authenticated
+                    let did_info = state.session_dids.lock().unwrap()
+                        .get(session).cloned();
+                    let realname = match did_info {
+                        Some(did) => format!("0 {did}"),
+                        None => "0 IRC User".to_string(),
+                    };
                     let reply = Message::from_server(
                         server_name,
                         irc::RPL_WHOREPLY,
-                        vec![nick, &channel, user, host, server_name, member_nick, &flags, "0 IRC User"],
+                        vec![nick, &channel, user, host, server_name, member_nick, &flags, &realname],
                     );
                     send(state, session_id, format!("{reply}\r\n"));
                 }
@@ -246,10 +253,16 @@ pub(super) fn handle_who(
         if let Some(ref session) = target_session {
             let away = state.session_away.lock().unwrap();
             let away_flag = if away.contains_key(session) { "G" } else { "H" };
+            let did_info = state.session_dids.lock().unwrap()
+                .get(session).cloned();
+            let realname = match did_info {
+                Some(did) => format!("0 {did}"),
+                None => "0 IRC User".to_string(),
+            };
             let reply = Message::from_server(
                 server_name,
                 irc::RPL_WHOREPLY,
-                vec![nick, "*", "~u", "host", server_name, target, away_flag, "0 IRC User"],
+                vec![nick, "*", "~u", "host", server_name, target, away_flag, &realname],
             );
             send(state, session_id, format!("{reply}\r\n"));
         }

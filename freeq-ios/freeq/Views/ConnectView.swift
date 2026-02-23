@@ -3,7 +3,7 @@ import AuthenticationServices
 
 struct ConnectView: View {
     @EnvironmentObject var appState: AppState
-    @State private var handle: String = ""
+    @State private var handle: String = UserDefaults.standard.string(forKey: "freeq.handle") ?? ""
     @State private var loading = false
     @State private var error: String? = nil
     @State private var showGuestLogin = false
@@ -277,6 +277,18 @@ struct ConnectView: View {
             nickFocused = false
         }
         .preferredColorScheme(.dark)
+        .onAppear {
+            // Auto-login if session is within 2 weeks
+            let lastLogin = UserDefaults.standard.double(forKey: "freeq.lastLogin")
+            let twoWeeks: TimeInterval = 14 * 24 * 60 * 60
+            if lastLogin > 0,
+               Date().timeIntervalSince1970 - lastLogin < twoWeeks,
+               !handle.isEmpty,
+               appState.connectionState == .disconnected,
+               !loading {
+                startLogin()
+            }
+        }
     }
 
     private func errorRow(_ text: String) -> some View {
@@ -326,6 +338,10 @@ struct ConnectView: View {
                     error = "Invalid response from server"
                     return
                 }
+
+                // Save handle + login time for session persistence
+                UserDefaults.standard.set(handle, forKey: "freeq.handle")
+                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "freeq.lastLogin")
 
                 appState.pendingWebToken = token
                 appState.authenticatedDID = did

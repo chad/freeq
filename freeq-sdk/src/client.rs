@@ -172,17 +172,17 @@ pub async fn establish_connection(
     let use_tls = config.tls || config.server_addr.ends_with(":6697");
     let mode = if use_tls { "TLS" } else { "plain" };
 
-    eprintln!("  Resolving {}...", config.server_addr);
+    tracing::debug!("Resolving {}...", config.server_addr);
     let tcp = TcpStream::connect(&config.server_addr).await
         .map_err(|e| anyhow::anyhow!("TCP connect to {} failed: {e}", config.server_addr))?;
-    eprintln!("  TCP connected to {} ({mode})", config.server_addr);
+    tracing::debug!("TCP connected to {} ({mode})", config.server_addr);
 
     if use_tls {
         let tls_config = if config.tls_insecure {
-            eprintln!("  TLS: insecure mode (skipping cert verification)");
+            tracing::debug!("TLS: insecure mode (skipping cert verification)");
             rustls_insecure_config()
         } else {
-            eprintln!("  TLS: verifying server certificate...");
+            tracing::debug!("TLS: verifying server certificate...");
             rustls_default_config()
         };
         let connector = TlsConnector::from(Arc::new(tls_config));
@@ -194,7 +194,7 @@ pub async fn establish_connection(
         let dns_name = rustls::pki_types::ServerName::try_from(server_name.to_string())?;
         let tls_stream = connector.connect(dns_name, tcp).await
             .map_err(|e| anyhow::anyhow!("TLS handshake with {} failed: {e}", config.server_addr))?;
-        eprintln!("  TLS handshake complete");
+        tracing::debug!("TLS handshake complete");
         Ok(EstablishedConnection::Tls(tls_stream))
     } else {
         Ok(EstablishedConnection::Plain(tcp))
@@ -222,21 +222,21 @@ pub const IROH_ALPN: &[u8] = b"freeq/iroh/1";
 pub async fn establish_iroh_connection(addr: &str) -> Result<EstablishedConnection> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    eprintln!("  Creating iroh endpoint...");
+    tracing::debug!("Creating iroh endpoint...");
     let endpoint = iroh::Endpoint::bind().await?;
 
-    eprintln!("  Connecting to iroh peer {addr}...");
+    tracing::debug!("Connecting to iroh peer {addr}...");
     // Parse the endpoint ID (public key) and create an address.
     // Iroh's relay/discovery system handles finding the actual network path.
     let endpoint_id: iroh::EndpointId = addr.parse()
         .map_err(|e| anyhow::anyhow!("Invalid iroh endpoint ID '{addr}': {e}"))?;
     let endpoint_addr = iroh::EndpointAddr::new(endpoint_id);
     let conn = endpoint.connect(endpoint_addr, IROH_ALPN).await?;
-    eprintln!("  Iroh QUIC connection established (encrypted)");
+    tracing::debug!("Iroh QUIC connection established (encrypted)");
 
     let (send, recv) = conn.open_bi().await
         .map_err(|e| anyhow::anyhow!("Failed to open bidirectional stream: {e}"))?;
-    eprintln!("  Bidirectional stream open, ready for IRC");
+    tracing::debug!("Bidirectional stream open, ready for IRC");
 
     // Bridge QUIC send/recv to a DuplexStream that the IRC handler can use.
     // irc_side goes to the IRC protocol handler.
@@ -550,7 +550,6 @@ where
     let mut registered = false;
     let mut web_token = config.web_token.clone();
     let mut authenticated_did: Option<String> = None;
-    eprintln!("[SDK] run_irc: web_token={}, signer={}", web_token.is_some(), signer.is_some());
     let mut pending_commands: Vec<Command> = Vec::new();
     let mut line_buf = String::new();
     let mut last_activity = tokio::time::Instant::now();
@@ -821,14 +820,22 @@ where
                         }
                         "PRIVMSG" | "NOTICE" => {
                             if msg.params.len() >= 2 {
-                                let from = msg.prefix.as_deref()
-                                    .and_then(|p| p.split('!').next())
-                                    .unwrap_or("")
-                                    .to_string();
-                                let target = msg.params[0].clone();
-                                let text = msg.params[1].clone();
-                                let tags = msg.tags.clone();
-                                let _ = event_tx.send(Event::Message { from, target, text, tags }).await;
+                                let prefix = msg.prefix.as_deref().unwrap_or("");
+                                let is_server_notice = msg.command == "NOTICE"
+                                    && !prefix.contains('!');
+                                if is_server_notice {
+                                    // Server NOTICE (no hostmask in prefix) → ServerNotice
+                                    let text = msg.params[1].clone();
+                                    let _ = event_tx.send(Event::ServerNotice { text }).await;
+                                } else {
+                                    let from = prefix.split('!').next()
+                                        .unwrap_or("")
+                                        .to_string();
+                                    let target = msg.params[0].clone();
+                                    let text = msg.params[1].clone();
+                                    let tags = msg.tags.clone();
+                                    let _ = event_tx.send(Event::Message { from, target, text, tags }).await;
+                                }
                             }
                         }
                         "TAGMSG" => {
@@ -841,7 +848,22 @@ where
                                 let _ = event_tx.send(Event::TagMsg { from, target, tags: msg.tags.clone() }).await;
                             }
                         }
-                        _ => {}
+                        _ => {
+                            // Emit server error numerics (4xx, 5xx, 6xx, 9xx)
+                            // and unrecognized commands as ServerNotice so the
+                            // UI can display them.
+                            if let Ok(num) = msg.command.parse::<u16>() {
+                                if (400..700).contains(&num) || (900..1000).contains(&num) {
+                                    // Skip our nick (param[0]) and join the rest
+                                    let text = if msg.params.len() > 1 {
+                                        msg.params[1..].join(" ")
+                                    } else {
+                                        msg.params.join(" ")
+                                    };
+                                    let _ = event_tx.send(Event::ServerNotice { text }).await;
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -917,9 +939,7 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
             }
             if caps_str.contains("sasl") && (signer.is_some() || web_token.is_some()) {
                 req_caps.push("sasl");
-                eprintln!("[SDK] Requesting SASL (web_token={})", web_token.is_some());
             } else {
-                eprintln!("[SDK] NOT requesting SASL: sasl_in_caps={}, signer={}, web_token={}", caps_str.contains("sasl"), signer.is_some(), web_token.is_some());
             }
             if req_caps.is_empty() {
                 // eprintln!("  No caps to request, sending CAP END");

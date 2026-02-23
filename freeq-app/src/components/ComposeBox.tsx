@@ -2,6 +2,8 @@ import { useState, useRef, useCallback, useEffect, useMemo, type KeyboardEvent, 
 import { useStore } from '../store';
 import { sendMessage, sendReply, sendEdit, joinChannel, partChannel, setTopic, setMode, kickUser, inviteUser, setAway, rawCommand, sendWhois } from '../irc/client';
 import { EmojiPicker } from './EmojiPicker';
+import { SlashCommands, getCommandCount } from './SlashCommands';
+import { FormatToolbar } from './FormatToolbar';
 
 // Max file size: 10MB
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
@@ -20,6 +22,24 @@ export function ComposeBox() {
   const [historyPos, setHistoryPos] = useState(-1);
   const [showEmoji, setShowEmoji] = useState(false);
   const [autocomplete, setAutocomplete] = useState<{ items: string[]; selected: number; startPos: number } | null>(null);
+  const [slashCmd, setSlashCmd] = useState<{ filter: string; selected: number } | null>(null);
+  const [showFormatBar, setShowFormatBar] = useState(false);
+
+  const applyFormat = (prefix: string, suffix: string) => {
+    const el = inputRef.current;
+    if (!el) return;
+    const start = el.selectionStart || 0;
+    const end = el.selectionEnd || 0;
+    const selected = text.slice(start, end);
+    const newText = text.slice(0, start) + prefix + selected + suffix + text.slice(end);
+    setText(newText);
+    // Place cursor after the formatted text
+    requestAnimationFrame(() => {
+      el.focus();
+      const cursorPos = selected ? start + prefix.length + selected.length + suffix.length : start + prefix.length;
+      el.setSelectionRange(cursorPos, cursorPos);
+    });
+  };
   const [pendingUpload, setPendingUpload] = useState<PendingUpload | null>(null);
   const [crossPost, setCrossPost] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -104,6 +124,16 @@ export function ComposeBox() {
   };
 
   // ── File upload ──
+
+  // Listen for file drops from FileDropOverlay
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const file = (e as CustomEvent).detail?.file;
+      if (file) handleFileSelect(file);
+    };
+    window.addEventListener('freeq-file-drop', handler);
+    return () => window.removeEventListener('freeq-file-drop', handler);
+  }, []);
 
   const handleFileSelect = useCallback((file: File) => {
     if (!authDid) {
@@ -277,6 +307,44 @@ export function ComposeBox() {
       return;
     }
 
+    // Slash command autocomplete
+    if (slashCmd) {
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        // Don't select if it's an exact match and Enter (user wants to submit)
+        // Only intercept Tab, or Enter when there's a partial filter
+        if (e.key === 'Tab' || (slashCmd.filter && getCommandCount(slashCmd.filter) > 0)) {
+          // Let the SlashCommands component handle via onSelect
+          // Actually we need to select here
+          e.preventDefault();
+          // Get the filtered list and pick the selected one
+          const filter = slashCmd.filter.toLowerCase();
+          const COMMANDS = ['join','part','topic','invite','kick','op','deop','voice','mode','msg','me','whois','away','policy','raw','help'];
+          const filtered = filter ? COMMANDS.filter(c => c.startsWith(filter)) : COMMANDS;
+          if (filtered[slashCmd.selected]) {
+            setText(`/${filtered[slashCmd.selected]} `);
+            setSlashCmd(null);
+            setTimeout(onInput, 0);
+          }
+          return;
+        }
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const count = getCommandCount(slashCmd.filter);
+        setSlashCmd({ ...slashCmd, selected: Math.min(slashCmd.selected + 1, count - 1) });
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSlashCmd({ ...slashCmd, selected: Math.max(slashCmd.selected - 1, 0) });
+        return;
+      }
+      if (e.key === 'Escape') {
+        setSlashCmd(null);
+        return;
+      }
+    }
+
     // Autocomplete navigation
     if (autocomplete) {
       if (e.key === 'Enter') {
@@ -347,6 +415,20 @@ export function ComposeBox() {
       el.style.height = 'auto';
       el.style.height = Math.min(el.scrollHeight, 120) + 'px';
       updateAutocomplete(el.value, el.selectionStart || 0);
+
+      // Slash command autocomplete
+      const val = el.value;
+      if (val.startsWith('/') && !val.includes(' ')) {
+        const filter = val.slice(1);
+        const count = getCommandCount(filter);
+        if (count > 0) {
+          setSlashCmd({ filter, selected: 0 });
+        } else {
+          setSlashCmd(null);
+        }
+      } else {
+        setSlashCmd(null);
+      }
     }
   };
 
@@ -450,6 +532,19 @@ export function ComposeBox() {
         </div>
       )}
 
+      {/* Slash command autocomplete */}
+      {slashCmd && (
+        <SlashCommands
+          filter={slashCmd.filter}
+          selected={slashCmd.selected}
+          onSelect={(cmd) => {
+            setText(`/${cmd} `);
+            setSlashCmd(null);
+            inputRef.current?.focus();
+          }}
+        />
+      )}
+
       {/* Autocomplete dropdown */}
       {autocomplete && (
         <div className="absolute bottom-full left-3 mb-1 bg-bg-secondary border border-border rounded-lg shadow-2xl overflow-hidden animate-fadeIn z-20 min-w-[200px]">
@@ -510,8 +605,21 @@ export function ComposeBox() {
           😊
         </button>
 
+        {/* Format toggle */}
+        <button
+          onClick={() => setShowFormatBar(!showFormatBar)}
+          className={`w-10 h-10 rounded-lg flex items-center justify-center text-sm shrink-0 ${
+            showFormatBar ? 'text-accent bg-accent/10' : 'text-fg-dim hover:text-fg-muted hover:bg-bg-tertiary'
+          }`}
+          title="Formatting"
+        >
+          Aa
+        </button>
+
         {/* Compose area */}
-        <div className="flex-1 bg-bg-tertiary rounded-lg border border-border focus-within:border-accent/50 flex items-end">
+        <div className="flex-1 bg-bg-tertiary rounded-lg border border-border focus-within:border-accent/50 flex flex-col">
+          {showFormatBar && <FormatToolbar onFormat={applyFormat} />}
+          <div className="flex items-end">
           <textarea
             data-testid="compose-input"
             ref={inputRef}
@@ -531,6 +639,7 @@ export function ComposeBox() {
             autoComplete="off"
             spellCheck
           />
+          </div>
         </div>
 
         {/* Send */}
@@ -626,6 +735,13 @@ function handleCommand(text: string, activeChannel: string) {
       store.addSystemMessage(activeChannel, '/kick user  ·  /op user  ·  /voice user  ·  /invite user');
       store.addSystemMessage(activeChannel, '/whois user  ·  /away reason  ·  /me action');
       store.addSystemMessage(activeChannel, '/msg user text  ·  /mode +o user  ·  /raw IRC_LINE');
+      store.addSystemMessage(activeChannel, '── Policy ──');
+      store.addSystemMessage(activeChannel, '/policy #ch SET <rules>  ·  /policy #ch INFO  ·  /policy #ch ACCEPT');
+      store.addSystemMessage(activeChannel, '/policy #ch REQUIRE <type> issuer=... url=... label=...');
+      store.addSystemMessage(activeChannel, '/policy #ch SET-ROLE <role> <json>  ·  /policy #ch CLEAR');
+      store.addSystemMessage(activeChannel, '/policy #ch VERIFY github <org-or-owner/repo>');
+      store.addSystemMessage(activeChannel, '── Shortcuts ──');
+      store.addSystemMessage(activeChannel, '⌘K quick switch  ·  ⌘F search  ·  ⌘/ shortcuts  ·  ↑ edit last');
       break;
     default:
       rawCommand(`${cmd.toUpperCase()}${args ? ' ' + args : ''}`);

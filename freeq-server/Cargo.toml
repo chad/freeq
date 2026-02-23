@@ -34,6 +34,13 @@ axum = { workspace = true }
 tower-http = { workspace = true }
 iroh = { workspace = true }
 sha2 = { workspace = true }
+hmac = "0.12"
+hex = "0.4"
+url = "2"
+urlencoding = "2"
+regex = "1"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+bs58 = "0.5"
 percent-encoding = { workspace = true }
 iroh-quinn = { workspace = true }
 automerge = { workspace = true }

@@ -18,6 +18,11 @@ export function uniqueChannel(): string {
 
 /** Connect as guest and wait for registration */
 export async function connectGuest(page: Page, nick: string, channel: string) {
+  // Dismiss onboarding tour and install prompt for clean tests
+  await page.addInitScript(() => {
+    localStorage.setItem('freeq-onboarding-done', '1');
+    localStorage.setItem('freeq-install-dismissed', '1');
+  });
   await page.goto('/');
 
   // Switch to Guest tab

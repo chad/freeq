@@ -15,16 +15,24 @@ function playSound() {
   if (!soundEnabled) return;
   try {
     if (!audioCtx) audioCtx = new AudioContext();
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    osc.frequency.value = 800;
-    osc.type = 'sine';
-    gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
-    osc.start(audioCtx.currentTime);
-    osc.stop(audioCtx.currentTime + 0.15);
+    const t = audioCtx.currentTime;
+
+    // Two-tone chime (C5 → E5)
+    const notes = [523.25, 659.25];
+    notes.forEach((freq, i) => {
+      const osc = audioCtx!.createOscillator();
+      const gain = audioCtx!.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx!.destination);
+      osc.frequency.value = freq;
+      osc.type = 'sine';
+      const start = t + i * 0.08;
+      gain.gain.setValueAtTime(0, start);
+      gain.gain.linearRampToValueAtTime(0.08, start + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.2);
+      osc.start(start);
+      osc.stop(start + 0.2);
+    });
   } catch { /* ignore */ }
 }
 

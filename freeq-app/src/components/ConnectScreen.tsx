@@ -41,7 +41,19 @@ export function ConnectScreen() {
   const [handle, setHandle] = useState(() => localStorage.getItem(LS_HANDLE) || '');
   const [nick, setNick] = useState(() => 'web' + Math.floor(Math.random() * 99999));
   const [atNick, setAtNick] = useState(''); // derived nick for AT login, editable
-  const [channels, setChannels] = useState(() => localStorage.getItem(LS_CHANNELS) || '#freeq');
+  const [channels, setChannels] = useState(() => {
+    // Check for auto-join from invite link (e.g. #auto-join=#channel)
+    const hash = window.location.hash;
+    if (hash.startsWith('#auto-join=')) {
+      const ch = decodeURIComponent(hash.slice('#auto-join='.length));
+      window.location.hash = '';
+      const existing = localStorage.getItem(LS_CHANNELS) || '';
+      const merged = new Set(existing.split(',').map(s => s.trim()).filter(Boolean));
+      merged.add(ch);
+      return [...merged].join(',');
+    }
+    return localStorage.getItem(LS_CHANNELS) || '#freeq';
+  });
   const isTauri = !!(window as any).__TAURI_INTERNALS__;
   const [server, setServer] = useState(() => {
     if (isTauri) return 'wss://irc.freeq.at/irc';
@@ -401,6 +413,9 @@ export function ConnectScreen() {
           <span className="text-border">·</span>
           <a href="https://freeq.at/docs/" target="_blank" className="text-fg-dim hover:text-fg-muted">Docs</a>
         </div>
+
+        {/* Live social proof */}
+        <ServerStats />
       </div>
     </div>
   );
@@ -418,6 +433,30 @@ interface OAuthResultData {
  * Wait for OAuth result from popup window.
  * Tries BroadcastChannel, postMessage, and localStorage polling.
  */
+function ServerStats() {
+  const [stats, setStats] = useState<{ connections: number; channels: number } | null>(null);
+
+  useEffect(() => {
+    fetch('/api/v1/health')
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => d && setStats(d))
+      .catch(() => {});
+  }, []);
+
+  if (!stats || stats.connections === 0) return null;
+
+  return (
+    <div className="text-center mt-3 animate-fadeIn">
+      <div className="inline-flex items-center gap-2 bg-bg/60 rounded-full px-3 py-1.5 border border-border/50">
+        <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
+        <span className="text-[11px] text-fg-dim">
+          <span className="text-fg-muted font-medium">{stats.connections}</span> online · <span className="text-fg-muted font-medium">{stats.channels}</span> channels
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function waitForOAuthResult(popup: Window | null): Promise<OAuthResultData | null> {
   return new Promise((resolve) => {
     let resolved = false;

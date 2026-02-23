@@ -19,6 +19,7 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
   const memberCount = ch?.members.size || 0;
   const isChannel = activeChannel !== 'server' && activeChannel.startsWith('#');
   const isDM = activeChannel !== 'server' && !activeChannel.startsWith('#');
+  const setChannelSettings = useStore((s) => s.setChannelSettingsOpen);
 
   const startEdit = () => {
     setTopicDraft(topic);
@@ -50,6 +51,19 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
           {isChannel ? (ch?.name || activeChannel).replace(/^#/, '') : isDM ? activeChannel : 'Server'}
         </span>
       </div>
+
+      {/* Identity stats */}
+      {isChannel && ch && (() => {
+        const verified = [...ch.members.values()].filter((m) => m.did).length;
+        return verified > 0 ? (
+          <span className="text-xs text-success/80 shrink-0 flex items-center gap-1" title={`${verified} AT Protocol verified`}>
+            <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 0a8 8 0 100 16A8 8 0 008 0zm3.78 5.97l-4.5 5a.75.75 0 01-1.06.02l-2-1.86a.75.75 0 011.02-1.1l1.45 1.35 3.98-4.43a.75.75 0 011.11 1.02z"/>
+            </svg>
+            {verified}
+          </span>
+        ) : null;
+      })()}
 
       {/* Separator */}
       {isChannel && <div className="w-px h-5 bg-border" />}
@@ -83,6 +97,19 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
           <span className="flex-1" />
         )}
       </div>
+
+      {/* Settings gear */}
+      {isChannel && (
+        <button
+          onClick={() => setChannelSettings(ch?.name || activeChannel)}
+          className="text-fg-dim hover:text-fg-muted p-1.5 rounded-lg hover:bg-bg-tertiary transition-colors"
+          title="Channel settings"
+        >
+          <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" />
+          </svg>
+        </button>
+      )}
 
       {/* Member list toggle */}
       {isChannel && (

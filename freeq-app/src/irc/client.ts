@@ -353,9 +353,20 @@ function handleLine(rawLine: string) {
       store.addMessage(bufName, message);
 
       // Mention detection + notification
-      if (!message.isSelf && text.toLowerCase().includes(nick.toLowerCase())) {
+      const isMention = !message.isSelf && text.toLowerCase().includes(nick.toLowerCase());
+      const isDM = !isChannel && !message.isSelf;
+      if (isMention) {
         store.incrementMentions(bufName);
-        notify(bufName, `${from}: ${text.slice(0, 100)}`);
+      }
+      if (isDM) {
+        store.incrementMentions(bufName);
+      }
+      if ((isMention || isDM) && !useStore.getState().mutedChannels.has(bufName.toLowerCase())) {
+        notify(
+          isDM ? `DM from ${from}` : bufName,
+          `${from}: ${text.slice(0, 100)}`,
+          () => useStore.getState().setActiveChannel(bufName),
+        );
       }
       break;
     }
@@ -492,6 +503,16 @@ function handleLine(rawLine: string) {
     case '473': store.addSystemMessage('server', `Cannot join ${msg.params[1]} (invite only)`); break;
     case '474': store.addSystemMessage('server', `Cannot join ${msg.params[1]} (banned)`); break;
     case '475': store.addSystemMessage('server', `Cannot join ${msg.params[1]} (bad key)`); break;
+    case '477': {
+      const ch = msg.params[1] || '';
+      const reason = msg.params[2] || 'Policy acceptance required';
+      store.addSystemMessage('server', `Cannot join ${ch}: ${reason}`);
+      // Open the join gate modal if user has a DID (authenticated)
+      if (useStore.getState().authDid) {
+        useStore.getState().setJoinGateChannel(ch);
+      }
+      break;
+    }
     case '482': store.addSystemMessage(msg.params[1] || 'server', msg.params[2] || 'Not operator'); break;
 
     // ── WHOIS ──

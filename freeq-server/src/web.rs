@@ -189,8 +189,27 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/users/{nick}", get(api_user))
         .route("/api/v1/users/{nick}/whois", get(api_user_whois))
         .route("/api/v1/upload", axum::routing::post(api_upload))
+        .route("/api/v1/og", get(api_og_preview))
+        .route("/join/{channel}", get(channel_invite_page))
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)) // 12MB
         .layer(CorsLayer::permissive());
+
+    // Policy API endpoints
+    if state.policy_engine.is_some() {
+        app = app.merge(crate::policy::api::routes());
+    }
+
+    // Build verifier router (stashed, merged after .with_state())
+    let verifier_router = {
+        let github_config = state.config.github_client_id.as_ref().map(|id| {
+            crate::verifiers::GitHubConfig {
+                client_id: id.clone(),
+                client_secret: state.config.github_client_secret.clone().unwrap_or_default(),
+            }
+        });
+        let issuer_did = format!("did:web:{}:verify", state.config.server_name);
+        crate::verifiers::router(issuer_did, github_config).map(|(r, _)| r)
+    };
 
     // Serve static web client files if the directory exists
     if let Some(ref web_dir) = state.config.web_static_dir {
@@ -208,7 +227,12 @@ pub fn router(state: Arc<SharedState>) -> Router {
         }
     }
 
-    app.with_state(state)
+    // Apply state, then merge verifier (which has its own state already applied)
+    let mut final_app = app.with_state(state);
+    if let Some(vr) = verifier_router {
+        final_app = final_app.merge(vr);
+    }
+    final_app
 }
 
 // ── WebSocket handler ──────────────────────────────────────────────────
@@ -527,6 +551,18 @@ fn derive_web_origin(headers: &axum::http::HeaderMap) -> (String, String) {
     };
     let origin = format!("{scheme}://{host}");
     (origin, scheme.to_string())
+}
+
+/// Derive web origin from server config (for startup-time use, no headers available).
+fn derive_web_origin_from_config(config: &crate::config::ServerConfig) -> (String, String) {
+    let addr = config.web_addr.as_deref().unwrap_or("127.0.0.1:8080");
+    let host = addr.replace("localhost", "127.0.0.1");
+    let scheme = if host.starts_with("127.") || host.starts_with("0.0.0.0") {
+        "http"
+    } else {
+        "https"
+    };
+    (format!("{scheme}://{host}"), scheme.to_string())
 }
 
 /// Build OAuth client_id. Loopback uses http://localhost?... form;
@@ -1003,4 +1039,172 @@ async fn api_upload(
         "content_type": result.mime_type,
         "size": result.size,
     })))
+}
+
+
+// ── Channel invite page ────────────────────────────────────────────────
+
+async fn channel_invite_page(
+    Path(channel): Path<String>,
+    State(state): State<Arc<SharedState>>,
+) -> impl IntoResponse {
+    let channel = if channel.starts_with('#') || channel.starts_with("%23") {
+        channel.replace("%23", "#")
+    } else {
+        format!("#{channel}")
+    };
+
+    // Get channel info
+    let (member_count, topic_text) = {
+        let channels = state.channels.lock().unwrap();
+        let key = channel.to_lowercase();
+        match channels.get(&key) {
+            Some(ch) => (ch.members.len(), ch.topic.as_ref().map(|t| t.text.clone())),
+            None => (0, None),
+        }
+    };
+
+    let server = &state.config.server_name;
+    let topic_html = topic_text.as_deref().unwrap_or("No topic set");
+    let channel_display = channel.trim_start_matches('#');
+
+    Html(format!(r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{channel} — freeq</title>
+<meta property="og:title" content="{channel} on freeq">
+<meta property="og:description" content="{topic_html} — {member_count} members online">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://{server}/join/{channel_display}">
+<meta property="og:image" content="https://{server}/freeq.png">
+<meta name="twitter:card" content="summary">
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0c0c0f;color:#e8e8ed;min-height:100vh;display:flex;align-items:center;justify-content:center}}
+.card{{background:#131318;border:1px solid #1e1e2e;border-radius:20px;padding:48px;max-width:460px;width:90vw;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,0.5)}}
+.logo{{width:64px;height:64px;margin:0 auto 16px}}
+h1{{font-size:28px;margin-bottom:4px}}
+h1 .accent{{color:#00d4aa}}
+.channel{{font-size:36px;font-weight:800;color:#00d4aa;margin:24px 0 8px;letter-spacing:-0.5px}}
+.topic{{color:#9898b0;font-size:15px;margin-bottom:24px;line-height:1.5}}
+.stats{{color:#555570;font-size:13px;margin-bottom:32px}}
+.stats span{{color:#9898b0}}
+.btn{{display:inline-block;background:#00d4aa;color:#000;font-size:18px;font-weight:700;padding:14px 40px;border-radius:12px;text-decoration:none;transition:all 0.2s}}
+.btn:hover{{background:#00f0c0;box-shadow:0 0 24px rgba(0,212,170,0.2)}}
+.alt{{color:#555570;font-size:12px;margin-top:20px}}
+.alt a{{color:#00d4aa;text-decoration:none}}
+.alt a:hover{{text-decoration:underline}}
+.badge{{display:inline-flex;align-items:center;gap:4px;background:#00d4aa15;color:#00d4aa;font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;margin-bottom:16px}}
+</style>
+</head>
+<body>
+<div class="card">
+  <img src="/freeq.png" alt="freeq" class="logo">
+  <div class="badge">IRC + AT Protocol</div>
+  <h1><span class="accent">free</span>q</h1>
+  <div class="channel">#{channel_display}</div>
+  <div class="topic">{topic_html}</div>
+  <div class="stats"><span>{member_count}</span> members online on <span>{server}</span></div>
+  <a href="https://{server}/#auto-join={channel}" class="btn">Join Channel</a>
+  <div class="alt">
+    Or connect with any IRC client: <code>{server}:6667</code><br>
+    <a href="https://freeq.at" target="_blank">Learn more about freeq</a>
+  </div>
+</div>
+</body>
+</html>"##)).into_response()
+}
+
+// ── OG metadata proxy (replaces allorigins.win privacy leak) ──────────
+
+#[derive(Deserialize)]
+struct OgQuery {
+    url: String,
+}
+
+/// Fetch OpenGraph metadata from a URL and return as JSON.
+/// Avoids clients leaking browsing data to third-party proxy services.
+async fn api_og_preview(Query(q): Query<OgQuery>) -> impl IntoResponse {
+    // Validate URL
+    let url = match url::Url::parse(&q.url) {
+        Ok(u) if u.scheme() == "http" || u.scheme() == "https" => u,
+        _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid URL"}))).into_response(),
+    };
+
+    // Fetch with timeout
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .build()
+        .unwrap();
+
+    let resp = match client.get(url.as_str())
+        .header("User-Agent", "freeq/1.0 (link preview)")
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": "Fetch failed"}))).into_response(),
+    };
+
+    // Only process HTML
+    let ct = resp.headers().get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !ct.contains("text/html") {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Not HTML"}))).into_response();
+    }
+
+    // Limit body size to 256KB
+    let body = match resp.bytes().await {
+        Ok(b) if b.len() <= 256 * 1024 => String::from_utf8_lossy(&b).to_string(),
+        _ => return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": "Body too large"}))).into_response(),
+    };
+
+    // Parse OG tags
+    let get_meta = |prop: &str| -> Option<String> {
+        let patterns = [
+            format!(r#"<meta[^>]*(?:property|name)=["']{prop}["'][^>]*content=["']([^"']*)["']"#),
+            format!(r#"<meta[^>]*content=["']([^"']*)["'][^>]*(?:property|name)=["']{prop}["']"#),
+        ];
+        for pat in &patterns {
+            if let Ok(re) = regex::Regex::new(pat) {
+                if let Some(caps) = re.captures(&body) {
+                    return caps.get(1).map(|m| decode_html_entities(m.as_str()));
+                }
+            }
+        }
+        None
+    };
+
+    // Also try <title> tag
+    let title = get_meta("og:title")
+        .or_else(|| {
+            regex::Regex::new(r"<title[^>]*>([^<]+)</title>")
+                .ok()
+                .and_then(|re| re.captures(&body))
+                .and_then(|caps| caps.get(1))
+                .map(|m| decode_html_entities(m.as_str()))
+        });
+
+    Json(serde_json::json!({
+        "title": title,
+        "description": get_meta("og:description").or_else(|| get_meta("description")),
+        "image": get_meta("og:image"),
+        "site_name": get_meta("og:site_name"),
+    })).into_response()
+}
+
+fn decode_html_entities(s: &str) -> String {
+    s.replace("&amp;", "&")
+     .replace("&lt;", "<")
+     .replace("&gt;", ">")
+     .replace("&quot;", "\"")
+     .replace("&#39;", "'")
+     .replace("&apos;", "'")
+     .replace("&#x27;", "'")
+     .replace("&#x2F;", "/")
+     .replace("&nbsp;", " ")
 }

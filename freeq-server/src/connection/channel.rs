@@ -92,6 +92,60 @@ pub(super) fn handle_join(
         }
     }
 
+    // ─── Policy check ─────────────────────────────────────────────────
+    // If the channel has a policy, check if the user has a valid attestation.
+    // Channels without policies are open (backwards compatible).
+    // `policy_role` captures the attestation role for mode mapping after join.
+    let mut policy_role: Option<String> = None;
+    if let Some(ref engine) = state.policy_engine {
+        if let Ok(Some(_policy)) = engine.get_policy(channel) {
+            // Channel has a policy — user must have a valid attestation
+            match did {
+                Some(user_did) => {
+                    match engine.check_membership(channel, user_did) {
+                        Ok(Some(attestation)) => {
+                            // Valid attestation — allow join, capture role
+                            policy_role = Some(attestation.role.clone());
+                        }
+                        Ok(None) => {
+                            // No attestation — reject with informative message
+                            let reply = Message::from_server(
+                                server_name,
+                                "477", // ERR_NEEDREGGEDNICK (repurposed: need policy acceptance)
+                                vec![
+                                    nick,
+                                    channel,
+                                    "This channel requires policy acceptance — use POLICY <channel> ACCEPT",
+                                ],
+                            );
+                            send(state, session_id, format!("{reply}\r\n"));
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::warn!(channel, did = user_did, error = %e, "Policy check failed");
+                            // Fail-open on engine errors (don't break IRC)
+                        }
+                    }
+                }
+                None => {
+                    // Guest user (no DID) — check if policy allows unauthenticated join
+                    // For now, guests cannot join policy-gated channels
+                    let reply = Message::from_server(
+                        server_name,
+                        "477",
+                        vec![
+                            nick,
+                            channel,
+                            "This channel requires authentication — sign in to join",
+                        ],
+                    );
+                    send(state, session_id, format!("{reply}\r\n"));
+                    return;
+                }
+            }
+        }
+    }
+
     {
         let mut channels = state.channels.lock().unwrap();
         let ch = channels.entry(channel.to_string()).or_default();
@@ -144,6 +198,26 @@ pub(super) fn handle_join(
                 && !has_any_ops;
             if should_op || is_truly_empty {
                 ch.ops.insert(session_id.to_string());
+            }
+        }
+    }
+
+    // ─── Policy role → IRC mode mapping ────────────────────────────────
+    // If user joined via policy and has an elevated role, grant IRC modes.
+    if let Some(ref role) = policy_role {
+        let mut channels = state.channels.lock().unwrap();
+        if let Some(ch) = channels.get_mut(channel) {
+            match role.as_str() {
+                "op" | "admin" | "owner" | "moderator" => {
+                    ch.ops.insert(session_id.to_string());
+                    if let Some(d) = did {
+                        ch.did_ops.insert(d.to_string());
+                    }
+                }
+                "voice" | "voiced" | "speaker" => {
+                    ch.voiced.insert(session_id.to_string());
+                }
+                _ => {} // "member" gets no special mode
             }
         }
     }

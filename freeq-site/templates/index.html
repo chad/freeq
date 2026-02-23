@@ -9,7 +9,7 @@
 .hero-logo { width: 140px; height: 140px; border-radius: 28px; margin-bottom: 24px; filter: drop-shadow(0 0 40px rgba(0,229,255,.2)) drop-shadow(0 0 80px rgba(244,114,182,.1)); }
 .hero h1 { font-size: 52px; color: var(--fg); margin-bottom: 4px; letter-spacing: -1px; }
 .hero .tagline { font-size: 18px; color: var(--fg2); margin-bottom: 8px; }
-.hero .sub { font-size: 14px; color: var(--fg3); max-width: 560px; margin: 0 auto 32px; }
+.hero .sub { font-size: 14px; color: var(--fg3); max-width: 620px; margin: 0 auto 32px; line-height: 1.8; }
 .hero .cta { display: inline-flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
 .hero .cta a {
   display: inline-block; padding: 10px 24px; border-radius: 4px;
@@ -30,7 +30,7 @@
 .quick-connect .row .k { color: var(--fg3); }
 .quick-connect .row .v { color: var(--cyan); }
 
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; padding: 48px 24px; max-width: 960px; margin: 0 auto; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px; padding: 48px 24px; max-width: 1100px; margin: 0 auto; }
 .card {
   background: var(--surface); border: 1px solid var(--overlay); border-radius: 8px;
   padding: 24px; transition: border-color .2s, box-shadow .2s;
@@ -43,6 +43,15 @@
 
 .section { padding: 32px 24px; max-width: 900px; margin: 0 auto; }
 .section h2 { border: none; padding-top: 0; text-align: center; color: var(--fg3); font-size: 14px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 24px; }
+
+.platforms { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; max-width: 900px; margin: 0 auto; padding: 0 24px 48px; }
+.platform {
+  background: var(--surface); border: 1px solid var(--overlay); border-radius: 8px;
+  padding: 20px; text-align: center;
+}
+.platform .icon { font-size: 32px; margin-bottom: 8px; }
+.platform h4 { color: var(--fg); font-size: 14px; margin-bottom: 4px; }
+.platform p { color: var(--fg3); font-size: 12px; margin: 0; }
 
 @media (max-width: 640px) {
   .hero { padding: 48px 16px 32px; }
@@ -57,14 +66,13 @@
 <div class="hero">
   <img class="hero-logo" src="/static/freeq-180.png" alt="freeq">
   <h1>freeq</h1>
-  <div class="tagline">IRC with identity</div>
+  <div class="tagline">IRC, rebuilt with identity</div>
   <div class="sub">
-    Authenticate with your Bluesky account. Your DID is your identity.
-    Standard IRC clients work unchanged. Everything else is optional.
+    Sign in with your Bluesky account. Your DID is your identity — permanent, portable, and cryptographically yours. Standard IRC clients work unchanged. Modern clients get reactions, threads, media, and governance. No walled gardens. No lock-in. Just chat.
   </div>
   <div class="cta">
     <a href="https://irc.freeq.at" class="primary">Open Web Client</a>
-    <a href="/connect/" class="secondary">Connect →</a>
+    <a href="/docs/what-is-freeq/" class="secondary">Learn more →</a>
   </div>
   <div class="quick-connect">
     <div class="label">Quick Connect</div>
@@ -75,37 +83,93 @@
   </div>
 </div>
 
+<div class="section">
+  <h2>Clients for every platform</h2>
+</div>
+<div class="platforms">
+  <div class="platform">
+    <div class="icon">🌐</div>
+    <h4>Web</h4>
+    <p>Slack-class UX with reactions, threads, media, and AT Protocol login.</p>
+  </div>
+  <div class="platform">
+    <div class="icon">🖥</div>
+    <h4>Desktop</h4>
+    <p>Native Tauri app for macOS. Same web client, native performance.</p>
+  </div>
+  <div class="platform">
+    <div class="icon">📱</div>
+    <h4>iOS</h4>
+    <p>Native SwiftUI app via Rust FFI. Full feature parity.</p>
+  </div>
+  <div class="platform">
+    <div class="icon">⌨️</div>
+    <h4>Terminal</h4>
+    <p>TUI client with inline images, reactions, and AT Protocol auth.</p>
+  </div>
+  <div class="platform">
+    <div class="icon">🔌</div>
+    <h4>Any IRC client</h4>
+    <p>irssi, WeeChat, Hexchat, mIRC — connect as guest, no changes needed.</p>
+  </div>
+  <div class="platform">
+    <div class="icon">🤖</div>
+    <h4>Bots</h4>
+    <p>Rust SDK + bot framework. LLM-powered personas in 50 lines.</p>
+  </div>
+</div>
+
 <div class="cards">
   <div class="card">
-    <div class="icon">🔌</div>
-    <h3>Connect</h3>
-    <p>TCP, TLS, WebSocket, or iroh QUIC. Use any standard IRC client — irssi, WeeChat, Hexchat, mIRC — or the built-in web client. No special software required for guests.</p>
-    <a href="/connect/">Connection guide →</a>
+    <div class="icon">🔑</div>
+    <h3>AT Protocol Identity</h3>
+    <p>Your Bluesky DID is your IRC identity. Permanent nick ownership. Persistent ops. Verified badges. No NickServ, no passwords.</p>
+    <a href="/docs/authentication/">How authentication works →</a>
   </div>
   <div class="card">
-    <div class="icon">🔑</div>
-    <h3>Authenticate</h3>
-    <p>Sign in with your AT Protocol identity via SASL. Your DID owns your nick, persists across reconnects, and works across federated servers. Private keys never leave your device.</p>
+    <div class="icon">💬</div>
+    <h3>Modern messaging</h3>
+    <p>Reactions, threads, message editing, deletion, typing indicators, inline images, Bluesky embeds, YouTube thumbnails. All over standard IRC protocol.</p>
+    <a href="/docs/web-client/">Web client features →</a>
+  </div>
+  <div class="card">
+    <div class="icon">🏛</div>
+    <h3>Channel Governance</h3>
+    <p>Cryptographic policies with verifiable credentials. Require GitHub membership, accept a code of conduct, or bring your own verifier. Every decision is signed and auditable.</p>
+    <a href="/docs/policy-framework/">Policy framework →</a>
+  </div>
+  <div class="card">
+    <div class="icon">🌐</div>
+    <h3>Federation</h3>
+    <p>Server-to-server over iroh QUIC. CRDT state convergence via Automerge. Channels, messages, and policies sync across servers automatically.</p>
+    <a href="/docs/federation/">Federation guide →</a>
+  </div>
+  <div class="card">
+    <div class="icon">🔒</div>
+    <h3>End-to-end encryption</h3>
+    <p>AES-256-GCM encrypted channels with DID-based key distribution. P2P encrypted DMs via iroh — the server never sees the content.</p>
     <a href="/docs/protocol/">Protocol details →</a>
   </div>
   <div class="card">
     <div class="icon">🛠</div>
-    <h3>Build</h3>
-    <p>Rust SDK with a bot framework, E2EE, media uploads, and P2P encrypted DMs. The <code>(ClientHandle, Receiver&lt;Event&gt;)</code> pattern makes it easy to build anything.</p>
-    <a href="/sdk/">SDK docs →</a>
+    <h3>Build anything</h3>
+    <p>Rust SDK, bot framework, plugin system, REST API, and media uploads. Build integrations, custom bots, or entirely new clients.</p>
+    <a href="/docs/bots/">Bot framework →</a>
   </div>
 </div>
 
 <div class="section">
-  <h2>What's different</h2>
+  <h2>What makes freeq different</h2>
   <table>
     <tr><td style="color:var(--cyan)">✓</td><td>AT Protocol SASL authentication — your Bluesky DID is your IRC identity</td></tr>
-    <tr><td style="color:var(--cyan)">✓</td><td>DID-based nick ownership, channel ops, bans, and invites</td></tr>
-    <tr><td style="color:var(--cyan)">✓</td><td>End-to-end encrypted channels (AES-256-GCM) and DID-based group encryption</td></tr>
-    <tr><td style="color:var(--cyan)">✓</td><td>Peer-to-peer encrypted DMs via iroh QUIC — no server in the middle</td></tr>
-    <tr><td style="color:var(--cyan)">✓</td><td>Server-to-server federation with CRDT state convergence</td></tr>
-    <tr><td style="color:var(--cyan)">✓</td><td>IRCv3 capabilities: message-tags, server-time, batch, chathistory, account-notify</td></tr>
-    <tr><td style="color:var(--cyan)">✓</td><td>Plugin system for custom server behavior</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>DID-based nick ownership, channel ops, bans, and invites — persistent across reconnects</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>Cryptographic channel policies with verifiable credentials and transparency logs</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>End-to-end encrypted channels (AES-256-GCM) and P2P encrypted DMs</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>Server-to-server federation with CRDT state convergence via iroh QUIC</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>Message editing, deletion, reactions, threads, and inline media</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>IRCv3 capabilities: message-tags, server-time, batch, chathistory, echo-message, away-notify</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>Native web, desktop, iOS, and TUI clients with full feature parity</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>Rust SDK + bot framework for building integrations</td></tr>
     <tr><td style="color:var(--cyan)">✓</td><td>100% backward compatible — standard IRC clients connect as guests</td></tr>
   </table>
 </div>

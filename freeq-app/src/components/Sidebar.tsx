@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useStore } from '../store';
-import { joinChannel, disconnect } from '../irc/client';
+import { joinChannel, partChannel, disconnect } from '../irc/client';
 import { fetchProfile, getCachedProfile } from '../lib/profiles';
 
 interface SidebarProps {
@@ -18,8 +18,13 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
   const [joinInput, setJoinInput] = useState('');
   const [showJoin, setShowJoin] = useState(false);
 
+  const favorites = useStore((s) => s.favorites);
+  useStore((s) => s.mutedChannels); // subscribe for re-render
+
   const allJoined = [...channels.values()].filter((ch) => ch.isJoined);
-  const chanList = allJoined.filter((ch) => ch.name.startsWith('#') || ch.name.startsWith('&')).sort((a, b) => a.name.localeCompare(b.name));
+  const allChans = allJoined.filter((ch) => ch.name.startsWith('#') || ch.name.startsWith('&')).sort((a, b) => a.name.localeCompare(b.name));
+  const favList = allChans.filter((ch) => favorites.has(ch.name.toLowerCase()));
+  const chanList = allChans.filter((ch) => !favorites.has(ch.name.toLowerCase()));
   const dmList = allJoined.filter((ch) => !ch.name.startsWith('#') && !ch.name.startsWith('&') && ch.name !== 'server').sort((a, b) => a.name.localeCompare(b.name));
 
   const handleJoin = () => {
@@ -98,7 +103,19 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
           </div>
         )}
 
-        {chanList.map((ch) => <ChannelButton key={ch.name} ch={ch} isActive={activeChannel.toLowerCase() === ch.name.toLowerCase()} onSelect={setActive} icon="#" />)}
+        {/* Favorites */}
+        {favList.length > 0 && (
+          <>
+            <div className="mt-3 mb-1 px-2">
+              <span className="text-xs uppercase tracking-wider text-fg-dim font-bold flex items-center gap-1">
+                <span className="text-warning text-[10px]">★</span> Favorites
+              </span>
+            </div>
+            {favList.map((ch) => <ChannelButton key={ch.name} ch={ch as any} isActive={activeChannel.toLowerCase() === ch.name.toLowerCase()} onSelect={setActive} icon="#" />)}
+          </>
+        )}
+
+        {chanList.map((ch) => <ChannelButton key={ch.name} ch={ch as any} isActive={activeChannel.toLowerCase() === ch.name.toLowerCase()} onSelect={setActive} icon="#" />)}
 
         {/* DMs */}
         {dmList.length > 0 && (
@@ -108,7 +125,7 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
                 Messages
               </span>
             </div>
-            {dmList.map((ch) => <ChannelButton key={ch.name} ch={ch} isActive={activeChannel.toLowerCase() === ch.name.toLowerCase()} onSelect={setActive} icon="@" />)}
+            {dmList.map((ch) => <ChannelButton key={ch.name} ch={ch as any} isActive={activeChannel.toLowerCase() === ch.name.toLowerCase()} onSelect={setActive} icon="@" showPreview />)}
           </>
         )}
       </nav>
@@ -125,6 +142,15 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
               </div>
             )}
           </div>
+          <button
+            onClick={() => useStore.getState().setBookmarksPanelOpen(true)}
+            className="text-fg-dim hover:text-fg-muted p-1"
+            title="Bookmarks (⌘B)"
+          >
+            <svg className="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M2 2a2 2 0 012-2h8a2 2 0 012 2v13.5a.5.5 0 01-.777.416L8 13.101l-5.223 2.815A.5.5 0 012 15.5V2zm2-1a1 1 0 00-1 1v12.566l4.723-2.482a.5.5 0 01.554 0L13 14.566V2a1 1 0 00-1-1H4z"/>
+            </svg>
+          </button>
           <button
             onClick={onOpenSettings}
             className="text-fg-dim hover:text-fg-muted p-1"
@@ -173,18 +199,32 @@ function SelfAvatar({ nick, did }: { nick: string; did: string | null }) {
   );
 }
 
-function ChannelButton({ ch, isActive, onSelect, icon }: {
-  ch: { name: string; mentionCount: number; unreadCount: number };
+function ChannelButton({ ch, isActive, onSelect, icon, showPreview }: {
+  ch: { name: string; mentionCount: number; unreadCount: number; messages: any[]; members: Map<string, any> };
   isActive: boolean;
   onSelect: (name: string) => void;
   icon: string;
+  showPreview?: boolean;
 }) {
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const isFav = useStore((s) => s.favorites.has(ch.name.toLowerCase()));
+  const isMuted = useStore((s) => s.mutedChannels.has(ch.name.toLowerCase()));
   const hasMention = ch.mentionCount > 0;
   const hasUnread = ch.unreadCount > 0;
+
+  // Last message preview for DMs
+  const lastMsg = showPreview ? ch.messages.filter((m: any) => !m.isSystem).slice(-1)[0] : null;
+  const preview = lastMsg ? `${lastMsg.from}: ${lastMsg.text}` : null;
+  const lastTime = lastMsg ? formatSidebarTime(new Date(lastMsg.timestamp)) : null;
+
   return (
+    <>
     <button
       onClick={() => onSelect(ch.name)}
-      className={`w-full text-left px-3 py-2 rounded-lg text-[15px] flex items-center gap-2.5 ${
+      onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
+      className={`w-full text-left px-3 py-2 rounded-lg flex items-center gap-2.5 ${
+        isMuted ? 'opacity-40 ' : ''
+      }${
         isActive
           ? 'bg-surface text-fg'
           : hasMention
@@ -194,16 +234,131 @@ function ChannelButton({ ch, isActive, onSelect, icon }: {
               : 'text-fg-dim hover:text-fg-muted hover:bg-bg-tertiary'
       }`}
     >
-      <span className={`shrink-0 text-[15px] font-medium ${isActive ? 'text-accent' : 'opacity-50'}`}>{icon}</span>
-      <span className="truncate">{ch.name.replace(/^[#&]/, '')}</span>
+      {/* Icon / DM avatar */}
+      {showPreview ? (
+        <div className="relative shrink-0">
+          <div className="w-8 h-8 rounded-full bg-surface flex items-center justify-center text-accent font-bold text-sm">
+            {(ch.name[0] || '?').toUpperCase()}
+          </div>
+          <OnlineDot nick={ch.name} />
+        </div>
+      ) : (
+        <span className={`shrink-0 text-[15px] font-medium ${isActive ? 'text-accent' : 'opacity-50'}`}>{icon}</span>
+      )}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1">
+          <span className="truncate text-[15px]">{ch.name.replace(/^[#&]/, '')}</span>
+          {!showPreview && ch.members.size > 0 && (
+            <span className="text-[10px] text-fg-dim ml-auto shrink-0">{ch.members.size}</span>
+          )}
+          {showPreview && lastTime && (
+            <span className="text-[10px] text-fg-dim ml-auto shrink-0">{lastTime}</span>
+          )}
+        </div>
+        {showPreview && preview && (
+          <div className="text-xs text-fg-dim truncate mt-0.5">{preview.slice(0, 50)}</div>
+        )}
+      </div>
       {hasMention && (
-        <span className="ml-auto shrink-0 bg-danger text-white text-xs min-w-[20px] text-center px-1.5 py-0.5 rounded-full font-bold">
+        <span className="shrink-0 bg-danger text-white text-xs min-w-[20px] text-center px-1.5 py-0.5 rounded-full font-bold">
           {ch.mentionCount}
         </span>
       )}
       {!hasMention && hasUnread && (
-        <span className="ml-auto shrink-0 w-1.5 h-1.5 rounded-full bg-fg-muted" />
+        <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-fg-muted" />
       )}
     </button>
+    {ctxMenu && <SidebarContextMenu
+      channel={ch.name}
+      isFav={isFav}
+      isMuted={isMuted}
+      isChannel={ch.name.startsWith('#')}
+      position={ctxMenu}
+      onClose={() => setCtxMenu(null)}
+    />}
+    </>
   );
+}
+
+function SidebarContextMenu({ channel, isFav, isMuted, isChannel, position, onClose }: {
+  channel: string;
+  isFav: boolean;
+  isMuted: boolean;
+  isChannel: boolean;
+  position: { x: number; y: number };
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [onClose]);
+
+  return (
+    <div
+      ref={ref}
+      className="fixed z-50 bg-bg-secondary border border-border rounded-xl shadow-2xl py-1.5 min-w-[160px] animate-fadeIn"
+      style={{ left: Math.min(position.x, window.innerWidth - 180), top: Math.min(position.y, window.innerHeight - 200) }}
+    >
+      {isChannel && (
+        <button onClick={() => { useStore.getState().toggleFavorite(channel); onClose(); }}
+          className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-bg-tertiary text-fg-muted hover:text-fg">
+          <span className="w-5 text-center">{isFav ? '★' : '☆'}</span>
+          {isFav ? 'Remove from Favorites' : 'Add to Favorites'}
+        </button>
+      )}
+      <button onClick={() => { useStore.getState().toggleMuted(channel); onClose(); }}
+        className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-bg-tertiary text-fg-muted hover:text-fg">
+        <span className="w-5 text-center">{isMuted ? '🔔' : '🔇'}</span>
+        {isMuted ? 'Unmute' : 'Mute notifications'}
+      </button>
+      <button onClick={() => {
+          navigator.clipboard.writeText(`https://irc.freeq.at/join/${encodeURIComponent(channel)}`);
+          onClose();
+        }}
+        className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-bg-tertiary text-fg-muted hover:text-fg">
+        <span className="w-5 text-center">🔗</span>
+        Copy invite link
+      </button>
+      <div className="h-px bg-border mx-2 my-1" />
+      {isChannel && (
+        <button onClick={() => { partChannel(channel); onClose(); }}
+          className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-danger/10 text-danger">
+          <span className="w-5 text-center">🚪</span>
+          Leave channel
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Shows a green/yellow online dot for a DM contact. */
+function OnlineDot({ nick }: { nick: string }) {
+  const channels = useStore((s) => s.channels);
+  // Check if this nick is online in any shared channel
+  for (const [, ch] of channels) {
+    const member = ch.members.get(nick.toLowerCase());
+    if (member) {
+      const isAway = member.away != null;
+      return (
+        <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-bg-secondary ${
+          isAway ? 'bg-warning' : 'bg-success'
+        }`} />
+      );
+    }
+  }
+  return null;
+}
+
+function formatSidebarTime(d: Date): string {
+  const now = new Date();
+  const diff = now.getTime() - d.getTime();
+  if (diff < 60000) return 'now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
+  if (diff < 86400000) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (diff < 604800000) return d.toLocaleDateString([], { weekday: 'short' });
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }

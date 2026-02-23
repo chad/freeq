@@ -97,7 +97,7 @@ impl FreeqClient {
     }
 
     pub fn set_web_token(&self, token: String) -> Result<(), FreeqError> {
-        eprintln!("[FFI] set_web_token called, token len={}", token.len());
+        tracing::debug!("[FFI] set_web_token called, token len={}", token.len());
         *self.web_token.lock().unwrap() = Some(token);
         Ok(())
     }
@@ -105,7 +105,7 @@ impl FreeqClient {
     pub fn connect(&self) -> Result<(), FreeqError> {
         let nick = self.nick.lock().unwrap().clone();
         let web_token = self.web_token.lock().unwrap().take();
-        eprintln!("[FFI] connect: nick={}, web_token={}", nick, web_token.is_some());
+        tracing::debug!("[FFI] connect: nick={}, web_token={}", nick, web_token.is_some());
         let config = freeq_sdk::client::ConnectConfig {
             server_addr: self.server.clone(),
             nick: nick.clone(),
