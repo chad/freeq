@@ -24,6 +24,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.net.Uri
 import com.freeq.model.AppState
 import com.freeq.ui.theme.FreeqColors
 import com.freeq.ui.theme.Theme
@@ -35,6 +36,7 @@ fun ComposeBar(
 ) {
     var text by remember { mutableStateOf("") }
     var completions by remember { mutableStateOf<List<String>>(emptyList()) }
+    var photoUri by remember { mutableStateOf<Uri?>(null) }
     val haptic = LocalHapticFeedback.current
 
     val replyingTo by appState.replyingTo
@@ -138,6 +140,13 @@ fun ComposeBar(
                     }
                     Text(placeholder, fontSize = 15.sp)
                 },
+                leadingIcon = {
+                    // Photo picker inside text field
+                    PhotoPickerButton(
+                        appState = appState,
+                        onPhotoPicked = { uri -> photoUri = uri }
+                    )
+                },
                 maxLines = 6,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
                 keyboardActions = KeyboardActions(
@@ -183,6 +192,16 @@ fun ComposeBar(
                 )
             }
         }
+    }
+
+    // Photo preview sheet
+    photoUri?.let { uri ->
+        ImagePreviewSheet(
+            uri = uri,
+            appState = appState,
+            onDismiss = { photoUri = null },
+            onSent = { photoUri = null }
+        )
     }
 }
 
