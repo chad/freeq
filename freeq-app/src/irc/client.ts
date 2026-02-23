@@ -236,8 +236,22 @@ function handleLine(rawLine: string) {
     }
 
     // ── Registration ──
-    case '001':
-      nick = msg.params[0] || nick;
+    case '001': {
+      const serverNick = msg.params[0] || nick;
+
+      // If we were authenticated but server gave us a Guest nick,
+      // it means our identity was lost (web-token consumed on previous session).
+      // Disconnect cleanly instead of lingering as a ghost Guest.
+      const wasAuthenticated = localStorage.getItem('freeq-handle');
+      if (wasAuthenticated && /^Guest\d+$/i.test(serverNick)) {
+        raw('QUIT :Session expired');
+        transport?.disconnect();
+        transport = null;
+        // Don't reset to login screen — just stop reconnecting as a ghost
+        return;
+      }
+
+      nick = serverNick;
       store.setNick(nick);
       store.setRegistered(true);
       // Auto-join channels (first connect uses autoJoinChannels, reconnects use joinedChannels)
@@ -249,6 +263,7 @@ function handleLine(rawLine: string) {
       }
       autoJoinChannels = [];
       break;
+    }
     case '433': // Nick in use
       nick += '_';
       raw(`NICK ${nick}`);

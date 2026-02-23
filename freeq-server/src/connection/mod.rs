@@ -227,9 +227,15 @@ where
         }
     });
 
-    let send = |state: &Arc<SharedState>, session_id: &str, msg: String| {
+    // Track whether our own send channel is healthy
+    let send_healthy = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let send_healthy_ref = send_healthy.clone();
+    let send = move |state: &Arc<SharedState>, session_id: &str, msg: String| {
         if let Some(tx) = state.connections.lock().unwrap().get(session_id) {
-            let _ = tx.try_send(msg);
+            if tx.try_send(msg).is_err() {
+                tracing::warn!(session_id, "Send buffer full or closed");
+                send_healthy_ref.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
         }
     };
 
@@ -246,6 +252,12 @@ where
     let rate_refill: f64 = 10.0; // tokens per second
 
     loop {
+        // Check if our send channel is dead (buffer full = stuck client)
+        if !send_healthy.load(std::sync::atomic::Ordering::Relaxed) {
+            tracing::info!(%session_id, "Send channel unhealthy, disconnecting");
+            break;
+        }
+
         line_buf.clear();
         let read_result = tokio::time::timeout(
             ping_interval,
