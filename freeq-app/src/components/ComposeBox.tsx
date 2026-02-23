@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo, type KeyboardEvent, 
 import { useStore } from '../store';
 import { sendMessage, sendReply, sendEdit, joinChannel, partChannel, setTopic, setMode, kickUser, inviteUser, setAway, rawCommand, sendWhois } from '../irc/client';
 import { EmojiPicker } from './EmojiPicker';
+import { SlashCommands, getCommandCount } from './SlashCommands';
 
 // Max file size: 10MB
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
@@ -20,6 +21,7 @@ export function ComposeBox() {
   const [historyPos, setHistoryPos] = useState(-1);
   const [showEmoji, setShowEmoji] = useState(false);
   const [autocomplete, setAutocomplete] = useState<{ items: string[]; selected: number; startPos: number } | null>(null);
+  const [slashCmd, setSlashCmd] = useState<{ filter: string; selected: number } | null>(null);
   const [pendingUpload, setPendingUpload] = useState<PendingUpload | null>(null);
   const [crossPost, setCrossPost] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -277,6 +279,44 @@ export function ComposeBox() {
       return;
     }
 
+    // Slash command autocomplete
+    if (slashCmd) {
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        // Don't select if it's an exact match and Enter (user wants to submit)
+        // Only intercept Tab, or Enter when there's a partial filter
+        if (e.key === 'Tab' || (slashCmd.filter && getCommandCount(slashCmd.filter) > 0)) {
+          // Let the SlashCommands component handle via onSelect
+          // Actually we need to select here
+          e.preventDefault();
+          // Get the filtered list and pick the selected one
+          const filter = slashCmd.filter.toLowerCase();
+          const COMMANDS = ['join','part','topic','invite','kick','op','deop','voice','mode','msg','me','whois','away','policy','raw','help'];
+          const filtered = filter ? COMMANDS.filter(c => c.startsWith(filter)) : COMMANDS;
+          if (filtered[slashCmd.selected]) {
+            setText(`/${filtered[slashCmd.selected]} `);
+            setSlashCmd(null);
+            setTimeout(onInput, 0);
+          }
+          return;
+        }
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const count = getCommandCount(slashCmd.filter);
+        setSlashCmd({ ...slashCmd, selected: Math.min(slashCmd.selected + 1, count - 1) });
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSlashCmd({ ...slashCmd, selected: Math.max(slashCmd.selected - 1, 0) });
+        return;
+      }
+      if (e.key === 'Escape') {
+        setSlashCmd(null);
+        return;
+      }
+    }
+
     // Autocomplete navigation
     if (autocomplete) {
       if (e.key === 'Enter') {
@@ -347,6 +387,20 @@ export function ComposeBox() {
       el.style.height = 'auto';
       el.style.height = Math.min(el.scrollHeight, 120) + 'px';
       updateAutocomplete(el.value, el.selectionStart || 0);
+
+      // Slash command autocomplete
+      const val = el.value;
+      if (val.startsWith('/') && !val.includes(' ')) {
+        const filter = val.slice(1);
+        const count = getCommandCount(filter);
+        if (count > 0) {
+          setSlashCmd({ filter, selected: 0 });
+        } else {
+          setSlashCmd(null);
+        }
+      } else {
+        setSlashCmd(null);
+      }
     }
   };
 
@@ -448,6 +502,19 @@ export function ComposeBox() {
             </button>
           )}
         </div>
+      )}
+
+      {/* Slash command autocomplete */}
+      {slashCmd && (
+        <SlashCommands
+          filter={slashCmd.filter}
+          selected={slashCmd.selected}
+          onSelect={(cmd) => {
+            setText(`/${cmd} `);
+            setSlashCmd(null);
+            inputRef.current?.focus();
+          }}
+        />
       )}
 
       {/* Autocomplete dropdown */}

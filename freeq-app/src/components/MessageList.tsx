@@ -6,6 +6,7 @@ import { EmojiPicker } from './EmojiPicker';
 import { UserPopover } from './UserPopover';
 import { BlueskyEmbed } from './BlueskyEmbed';
 import { LinkPreview } from './LinkPreview';
+import { MessageContextMenu } from './MessageContextMenu';
 
 // ── Colors ──
 
@@ -282,6 +283,7 @@ interface MessageProps {
 function FullMessage({ msg, channel, onNickClick }: MessageProps) {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [pickerPos, setPickerPos] = useState<{ x: number; y: number } | undefined>();
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const color = msg.isSelf ? '#b18cff' : nickColor(msg.from);
   const currentNick = getNick();
   const isMention = !msg.isSelf && msg.text.toLowerCase().includes(currentNick.toLowerCase());
@@ -297,9 +299,12 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
   };
 
   return (
-    <div className={`group px-4 pt-3 pb-1 hover:bg-white/[0.02] flex gap-3 relative ${
-      isMention ? 'bg-accent/[0.04] border-l-2 border-accent' : ''
-    }`}>
+    <div
+      className={`group px-4 pt-3 pb-1 hover:bg-white/[0.02] flex gap-3 relative ${
+        isMention ? 'bg-accent/[0.04] border-l-2 border-accent' : ''
+      }`}
+      onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
+    >
       <div
         className="cursor-pointer mt-0.5"
         onClick={(e) => onNickClick(msg.from, member?.did, e)}
@@ -354,6 +359,19 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
           />
         </div>
       )}
+
+      {ctxMenu && (
+        <MessageContextMenu
+          msg={msg}
+          channel={channel}
+          position={ctxMenu}
+          onClose={() => setCtxMenu(null)}
+          onReply={() => useStore.getState().setReplyTo({ msgId: msg.id, from: msg.from, text: msg.text, channel })}
+          onEdit={() => useStore.getState().setEditingMsg({ msgId: msg.id, text: msg.text, channel })}
+          onThread={() => useStore.getState().openThread(msg.id, channel)}
+          onReact={openEmojiPicker}
+        />
+      )}
     </div>
   );
 }
@@ -361,6 +379,7 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
 function GroupedMessage({ msg, channel }: MessageProps) {
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [pickerPos, setPickerPos] = useState<{ x: number; y: number } | undefined>();
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const currentNick = getNick();
   const isMention = !msg.isSelf && msg.text.toLowerCase().includes(currentNick.toLowerCase());
 
@@ -370,9 +389,12 @@ function GroupedMessage({ msg, channel }: MessageProps) {
   };
 
   return (
-    <div className={`group px-4 py-0.5 hover:bg-white/[0.02] flex gap-3 relative ${
-      isMention ? 'bg-accent/[0.04] border-l-2 border-accent' : ''
-    }`}>
+    <div
+      className={`group px-4 py-0.5 hover:bg-white/[0.02] flex gap-3 relative ${
+        isMention ? 'bg-accent/[0.04] border-l-2 border-accent' : ''
+      }`}
+      onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
+    >
       <span className="w-10 shrink-0 text-right text-[11px] text-fg-dim opacity-0 group-hover:opacity-100 leading-[24px] cursor-default" title={msg.timestamp.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}>
         {formatTime(msg.timestamp)}
       </span>
@@ -403,6 +425,19 @@ function GroupedMessage({ msg, channel }: MessageProps) {
             onClose={() => setShowEmojiPicker(false)}
           />
         </div>
+      )}
+
+      {ctxMenu && (
+        <MessageContextMenu
+          msg={msg}
+          channel={channel}
+          position={ctxMenu}
+          onClose={() => setCtxMenu(null)}
+          onReply={() => useStore.getState().setReplyTo({ msgId: msg.id, from: msg.from, text: msg.text, channel })}
+          onEdit={() => useStore.getState().setEditingMsg({ msgId: msg.id, text: msg.text, channel })}
+          onThread={() => useStore.getState().openThread(msg.id, channel)}
+          onReact={(e: React.MouseEvent) => { setPickerPos({ x: e.clientX, y: e.clientY }); setShowEmojiPicker(true); }}
+        />
       )}
     </div>
   );
@@ -469,13 +504,16 @@ export function MessageList() {
   const lastReadMsgId = useStore((s) => s.channels.get(s.activeChannel.toLowerCase())?.lastReadMsgId);
   const ref = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [popover, setPopover] = useState<{ nick: string; did?: string; pos: { x: number; y: number } } | null>(null);
 
   // Track whether user has scrolled up (unstick from bottom)
   const handleScroll = useCallback(() => {
     const el = ref.current;
     if (!el) return;
-    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    stickToBottomRef.current = atBottom;
+    setShowScrollBtn(!atBottom);
   }, []);
 
   // Scroll to bottom when messages change (if stuck to bottom)
@@ -518,7 +556,7 @@ export function MessageList() {
   }, []);
 
   return (
-    <div key={activeChannel} ref={ref} data-testid="message-list" className="flex-1 overflow-y-auto" onScroll={onScroll}>
+    <div key={activeChannel} ref={ref} data-testid="message-list" className="flex-1 overflow-y-auto relative" onScroll={onScroll}>
       {messages.length === 0 && (
         <div className="flex flex-col items-center justify-center h-full text-fg-dim px-8">
           <img src="/freeq.png" alt="freeq" className="w-14 h-14 mb-4 opacity-20" />
@@ -564,6 +602,25 @@ export function MessageList() {
           </div>
         ))}
       </div>
+
+      {/* Scroll to bottom button */}
+      {showScrollBtn && (
+        <button
+          onClick={() => {
+            if (ref.current) {
+              ref.current.scrollTop = ref.current.scrollHeight;
+              stickToBottomRef.current = true;
+              setShowScrollBtn(false);
+            }
+          }}
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-bg-secondary border border-border rounded-full px-4 py-2 shadow-xl flex items-center gap-2 text-sm text-fg-muted hover:text-fg hover:border-accent transition-all z-10 animate-fadeIn"
+        >
+          <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+            <path fillRule="evenodd" d="M8 1a.5.5 0 01.5.5v11.793l3.146-3.147a.5.5 0 01.708.708l-4 4a.5.5 0 01-.708 0l-4-4a.5.5 0 01.708-.708L7.5 13.293V1.5A.5.5 0 018 1z"/>
+          </svg>
+          New messages
+        </button>
+      )}
 
       {popover && (
         <UserPopover

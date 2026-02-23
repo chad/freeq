@@ -186,6 +186,7 @@ function ChannelButton({ ch, isActive, onSelect, icon, showPreview }: {
   // Last message preview for DMs
   const lastMsg = showPreview ? ch.messages.filter((m: any) => !m.isSystem).slice(-1)[0] : null;
   const preview = lastMsg ? `${lastMsg.from}: ${lastMsg.text}` : null;
+  const lastTime = lastMsg ? formatSidebarTime(new Date(lastMsg.timestamp)) : null;
 
   return (
     <button
@@ -200,12 +201,25 @@ function ChannelButton({ ch, isActive, onSelect, icon, showPreview }: {
               : 'text-fg-dim hover:text-fg-muted hover:bg-bg-tertiary'
       }`}
     >
-      <span className={`shrink-0 text-[15px] font-medium ${isActive ? 'text-accent' : 'opacity-50'}`}>{icon}</span>
+      {/* Icon / DM avatar */}
+      {showPreview ? (
+        <div className="relative shrink-0">
+          <div className="w-8 h-8 rounded-full bg-surface flex items-center justify-center text-accent font-bold text-sm">
+            {(ch.name[0] || '?').toUpperCase()}
+          </div>
+          <OnlineDot nick={ch.name} />
+        </div>
+      ) : (
+        <span className={`shrink-0 text-[15px] font-medium ${isActive ? 'text-accent' : 'opacity-50'}`}>{icon}</span>
+      )}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1">
           <span className="truncate text-[15px]">{ch.name.replace(/^[#&]/, '')}</span>
           {!showPreview && ch.members.size > 0 && (
             <span className="text-[10px] text-fg-dim ml-auto shrink-0">{ch.members.size}</span>
+          )}
+          {showPreview && lastTime && (
+            <span className="text-[10px] text-fg-dim ml-auto shrink-0">{lastTime}</span>
           )}
         </div>
         {showPreview && preview && (
@@ -222,4 +236,32 @@ function ChannelButton({ ch, isActive, onSelect, icon, showPreview }: {
       )}
     </button>
   );
+}
+
+/** Shows a green/yellow online dot for a DM contact. */
+function OnlineDot({ nick }: { nick: string }) {
+  const channels = useStore((s) => s.channels);
+  // Check if this nick is online in any shared channel
+  for (const [, ch] of channels) {
+    const member = ch.members.get(nick.toLowerCase());
+    if (member) {
+      const isAway = member.away != null;
+      return (
+        <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-bg-secondary ${
+          isAway ? 'bg-warning' : 'bg-success'
+        }`} />
+      );
+    }
+  }
+  return null;
+}
+
+function formatSidebarTime(d: Date): string {
+  const now = new Date();
+  const diff = now.getTime() - d.getTime();
+  if (diff < 60000) return 'now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
+  if (diff < 86400000) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (diff < 604800000) return d.toLocaleDateString([], { weekday: 'short' });
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
