@@ -187,8 +187,11 @@ async fn handle_event(
             from,
             target,
             text,
-            tags: _,
+            tags,
         } => {
+            if tags.contains_key("batch") {
+                return Ok(());
+            }
             // Ignore our own messages
             if from == bot_nick {
                 return Ok(());

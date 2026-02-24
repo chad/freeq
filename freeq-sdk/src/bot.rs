@@ -205,6 +205,10 @@ impl Bot {
                 text,
                 tags,
             } => {
+                // Ignore CHATHISTORY batches (avoid replaying history)
+                if tags.contains_key("batch") {
+                    return;
+                }
                 let is_channel = target.starts_with('#') || target.starts_with('&');
                 let sender_did = tags.get("account").cloned();
 

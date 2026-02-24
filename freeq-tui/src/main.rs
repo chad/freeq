@@ -669,6 +669,7 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
             let _ = was_encrypted; // may be used later for UI indicators
 
             let timestamp = format_timestamp(&tags);
+            let timestamp_ms = parse_timestamp_ms(&tags);
             let batch_id = tags.get("batch");
             let in_batch = batch_id.map(|id| app.batches.contains_key(id)).unwrap_or(false);
 
@@ -684,7 +685,7 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
                     } else {
                         target.clone()
                     };
-                    push_line_to_buffer(app, batch_id, &buf_name, crate::app::BufferLine {
+                    push_line_to_buffer(app, batch_id, &buf_name, timestamp_ms, crate::app::BufferLine {
                         timestamp: timestamp.clone(),
                         from: String::new(),
                         text: format!("* {from} {action}"),
@@ -709,7 +710,7 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
                 if let Some(ref url) = img_url {
                     fetch_image_if_needed(&app.image_cache, url);
                 }
-                push_line_to_buffer(app, batch_id, &buf_name, crate::app::BufferLine {
+                push_line_to_buffer(app, batch_id, &buf_name, timestamp_ms, crate::app::BufferLine {
                     timestamp: timestamp.clone(),
                     from: from.clone(),
                     text: display,
@@ -726,7 +727,7 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
                         target.clone()
                     };
                     let display = format_link_preview(&preview);
-                    push_line_to_buffer(app, batch_id, &buf_name, crate::app::BufferLine {
+                    push_line_to_buffer(app, batch_id, &buf_name, timestamp_ms, crate::app::BufferLine {
                         timestamp: timestamp.clone(),
                         from: from.clone(),
                         text: display,
@@ -739,7 +740,7 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
                     } else {
                         target.clone()
                     };
-                    push_line_to_buffer(app, batch_id, &buf_name, crate::app::BufferLine {
+                    push_line_to_buffer(app, batch_id, &buf_name, timestamp_ms, crate::app::BufferLine {
                         timestamp: timestamp.clone(),
                         from: from.clone(),
                         text: text.clone(),
@@ -1671,15 +1672,25 @@ fn format_timestamp(tags: &std::collections::HashMap<String, String>) -> String 
     chrono::Local::now().format("%H:%M:%S").to_string()
 }
 
+fn parse_timestamp_ms(tags: &std::collections::HashMap<String, String>) -> i64 {
+    if let Some(ts) = tags.get("time") {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
+            return dt.timestamp_millis();
+        }
+    }
+    chrono::Local::now().timestamp_millis()
+}
+
 fn push_line_to_buffer(
     app: &mut crate::app::App,
     batch_id: Option<&String>,
     buf_name: &str,
+    timestamp_ms: i64,
     line: crate::app::BufferLine,
 ) {
     if let Some(id) = batch_id {
         if app.batches.contains_key(id) {
-            app.add_batch_line(id, line);
+            app.add_batch_line(id, timestamp_ms, line);
             return;
         }
     }

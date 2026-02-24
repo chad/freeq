@@ -55,7 +55,7 @@ pub struct Buffer {
 #[derive(Debug, Clone)]
 pub struct BatchBuffer {
     pub target: String,
-    pub lines: Vec<BufferLine>,
+    pub lines: Vec<(i64, BufferLine)>,
 }
 
 impl Buffer {
@@ -301,18 +301,19 @@ impl App {
     }
 
     /// Add a line to a batch by ID.
-    pub fn add_batch_line(&mut self, id: &str, line: BufferLine) {
+    pub fn add_batch_line(&mut self, id: &str, timestamp_ms: i64, line: BufferLine) {
         if let Some(batch) = self.batches.get_mut(id) {
-            batch.lines.push(line);
+            batch.lines.push((timestamp_ms, line));
         }
     }
 
     /// Flush a batch into its target buffer (prepended as history).
     pub fn end_batch(&mut self, id: &str) {
-        if let Some(batch) = self.batches.remove(id) {
+        if let Some(mut batch) = self.batches.remove(id) {
             let buf = self.buffer_mut(&batch.target);
+            batch.lines.sort_by(|a, b| a.0.cmp(&b.0));
             // Prepend in order (oldest first)
-            for line in batch.lines.into_iter().rev() {
+            for (_, line) in batch.lines.into_iter().rev() {
                 buf.messages.push_front(line);
                 if buf.messages.len() > MAX_MESSAGES {
                     buf.messages.pop_back();

@@ -604,6 +604,14 @@ export const useStore = create<Store>((set, get) => ({
     const existingIds = new Set(ch.messages.map((m) => m.id));
     const newMsgs = batch.messages.filter((m) => !m.id || !existingIds.has(m.id));
 
+    // Sort batch messages by timestamp (oldest first)
+    newMsgs.sort((a, b) => {
+      const ta = a.timestamp?.getTime?.() ?? 0;
+      const tb = b.timestamp?.getTime?.() ?? 0;
+      if (ta !== tb) return ta - tb;
+      return (a.id || '').localeCompare(b.id || '');
+    });
+
     // Batch messages go at the beginning (history)
     ch.messages = [...newMsgs, ...ch.messages].slice(-1000);
     channels.set(batch.target.toLowerCase(), ch);

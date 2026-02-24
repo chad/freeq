@@ -24,6 +24,16 @@ pub(super) fn handle_tagmsg(
     }
 
     let hostmask = conn.hostmask();
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let time_tag = chrono::DateTime::from_timestamp(timestamp as i64, 0)
+        .unwrap_or_default()
+        .format("%Y-%m-%dT%H:%M:%S.000Z")
+        .to_string();
+
     let tag_msg = irc::Message {
         tags: tags.clone(),
         prefix: Some(hostmask.clone()),
@@ -31,6 +41,16 @@ pub(super) fn handle_tagmsg(
         params: vec![target.to_string()],
     };
     let tagged_line = format!("{tag_msg}\r\n");
+
+    let mut tags_with_time = tags.clone();
+    tags_with_time.insert("time".to_string(), time_tag);
+    let tag_msg_with_time = irc::Message {
+        tags: tags_with_time,
+        prefix: Some(hostmask.clone()),
+        command: "TAGMSG".to_string(),
+        params: vec![target.to_string()],
+    };
+    let tagged_line_with_time = format!("{tag_msg_with_time}\r\n");
 
     // Generate a PRIVMSG fallback for plain clients (server-side downgrade).
     // Only for known tag types — unknown TAGMSGs are silently dropped for plain clients.
@@ -47,6 +67,7 @@ pub(super) fn handle_tagmsg(
             .unwrap_or_default();
 
         let tag_caps = state.cap_message_tags.lock().unwrap();
+        let time_caps = state.cap_server_time.lock().unwrap();
         let echo_caps = state.cap_echo_message.lock().unwrap();
         let conns = state.connections.lock().unwrap();
         for member_session in &members {
@@ -56,7 +77,12 @@ pub(super) fn handle_tagmsg(
             }
             if let Some(tx) = conns.get(member_session) {
                 if tag_caps.contains(member_session) {
-                    let _ = tx.try_send(tagged_line.clone());
+                    let line = if time_caps.contains(member_session) {
+                        &tagged_line_with_time
+                    } else {
+                        &tagged_line
+                    };
+                    let _ = tx.try_send(line.clone());
                 } else if let Some(ref fallback) = plain_fallback {
                     let _ = tx.try_send(fallback.clone());
                 }
@@ -72,8 +98,11 @@ pub(super) fn handle_tagmsg(
         match relay_to_nick(state, &from_nick, target, &tag_text, super::helpers::s2s_next_event_id(state)) {
             RouteResult::Local(ref session) => {
                 if let Some(tx) = state.connections.lock().unwrap().get(session) {
-                    if state.cap_message_tags.lock().unwrap().contains(session) {
-                        let _ = tx.try_send(tagged_line.clone());
+                    let has_tags = state.cap_message_tags.lock().unwrap().contains(session);
+                    let has_time = state.cap_server_time.lock().unwrap().contains(session);
+                    if has_tags {
+                        let line = if has_time { &tagged_line_with_time } else { &tagged_line };
+                        let _ = tx.try_send(line.clone());
                     } else if let Some(ref fallback) = plain_fallback {
                         let _ = tx.try_send(fallback.clone());
                     }
