@@ -459,7 +459,7 @@ private fun fetchBskyPost(handle: String, rkey: String): BskyPost? {
         BskyPost(
             authorName = author.optString("displayName", ""),
             authorHandle = author.optString("handle", handle),
-            authorAvatar = author.optString("avatar", null),
+            authorAvatar = author.optString("avatar").takeIf { it.isNotEmpty() },
             text = record.optString("text", ""),
             imageUrl = imageUrl,
             likeCount = post.optInt("likeCount", 0),

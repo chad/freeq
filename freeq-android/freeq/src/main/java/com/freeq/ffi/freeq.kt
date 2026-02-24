@@ -1780,6 +1780,7 @@ data class IrcMessage (
     var `text`: kotlin.String, 
     var `msgid`: kotlin.String?, 
     var `replyTo`: kotlin.String?, 
+    var `replacesMsgid`: kotlin.String?, 
     var `isAction`: kotlin.Boolean, 
     var `timestampMs`: kotlin.Long
 ) {
@@ -1798,6 +1799,7 @@ public object FfiConverterTypeIrcMessage: FfiConverterRustBuffer<IrcMessage> {
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterLong.read(buf),
         )
@@ -1809,6 +1811,7 @@ public object FfiConverterTypeIrcMessage: FfiConverterRustBuffer<IrcMessage> {
             FfiConverterString.allocationSize(value.`text`) +
             FfiConverterOptionalString.allocationSize(value.`msgid`) +
             FfiConverterOptionalString.allocationSize(value.`replyTo`) +
+            FfiConverterOptionalString.allocationSize(value.`replacesMsgid`) +
             FfiConverterBoolean.allocationSize(value.`isAction`) +
             FfiConverterLong.allocationSize(value.`timestampMs`)
     )
@@ -1819,6 +1822,7 @@ public object FfiConverterTypeIrcMessage: FfiConverterRustBuffer<IrcMessage> {
             FfiConverterString.write(value.`text`, buf)
             FfiConverterOptionalString.write(value.`msgid`, buf)
             FfiConverterOptionalString.write(value.`replyTo`, buf)
+            FfiConverterOptionalString.write(value.`replacesMsgid`, buf)
             FfiConverterBoolean.write(value.`isAction`, buf)
             FfiConverterLong.write(value.`timestampMs`, buf)
     }

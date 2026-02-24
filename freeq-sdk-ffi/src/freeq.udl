@@ -6,6 +6,7 @@ dictionary IrcMessage {
     string text;
     string? msgid;
     string? reply_to;
+    string? replaces_msgid;
     boolean is_action;
     i64 timestamp_ms;
 };

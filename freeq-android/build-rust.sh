@@ -12,8 +12,18 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# Prefer rustup-managed cargo/rustc over Homebrew
+# Prefer rustup-managed cargo/rustc over Homebrew (which lacks Android targets)
 export PATH="$HOME/.cargo/bin:$PATH"
+# If Homebrew rustc still wins, force rustup's rustc
+if rustc --print sysroot 2>/dev/null | grep -q Cellar; then
+    for tc in "$HOME/.rustup"/toolchains/stable-*; do
+        if [ -x "$tc/bin/rustc" ]; then
+            export RUSTC="$tc/bin/rustc"
+            echo "==> Overriding Homebrew rustc with: $RUSTC"
+            break
+        fi
+    done
+fi
 
 # Auto-detect NDK if not set
 if [ -z "${ANDROID_NDK_HOME:-}" ]; then
@@ -46,7 +56,7 @@ cargo build -p freeq-sdk-ffi --bin uniffi-bindgen
 
 echo "==> Generating Kotlin bindings..."
 cargo run -p freeq-sdk-ffi --bin uniffi-bindgen -- generate \
-    --library target/release/libfreeq_sdk_ffi.dylib \
+    freeq-sdk-ffi/src/freeq.udl \
     --language kotlin \
     --config freeq-sdk-ffi/uniffi.toml \
     --out-dir "$GEN_DIR"

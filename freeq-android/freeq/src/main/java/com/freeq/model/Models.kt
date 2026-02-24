@@ -248,6 +248,12 @@ class AppState(application: Application) : AndroidViewModel(application) {
 
     fun deleteMessage(target: String, msgId: String) {
         sendRaw("@+draft/delete=$msgId TAGMSG $target")
+        val ch = channels.firstOrNull { it.name.equals(target, ignoreCase = true) }
+            ?: dmBuffers.firstOrNull { it.name.equals(target, ignoreCase = true) }
+        val idx = ch?.findMessage(msgId)
+        if (ch != null && idx != null) {
+            ch.messages[idx] = ch.messages[idx].copy(isDeleted = true)
+        }
     }
 
     fun sendTyping(target: String) {
@@ -405,6 +411,26 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
             is FreeqEvent.Message -> {
                 val ircMsg = event.msg
                 val isSelf = ircMsg.fromNick.equals(state.nick.value, ignoreCase = true)
+
+                // Edit: update existing message in-place
+                val editTarget = ircMsg.replacesMsgid
+                if (editTarget != null) {
+                    val ch = if (ircMsg.target.startsWith("#")) {
+                        state.channels.firstOrNull { it.name.equals(ircMsg.target, ignoreCase = true) }
+                    } else {
+                        val bufferName = if (isSelf) ircMsg.target else ircMsg.fromNick
+                        state.dmBuffers.firstOrNull { it.name.equals(bufferName, ignoreCase = true) }
+                    }
+                    val idx = ch?.findMessage(editTarget)
+                    if (ch != null && idx != null) {
+                        ch.messages[idx] = ch.messages[idx].copy(
+                            text = ircMsg.text,
+                            isEdited = true
+                        )
+                    }
+                    ch?.typingUsers?.remove(ircMsg.fromNick)
+                    return
+                }
 
                 val msg = ChatMessage(
                     id = ircMsg.msgid ?: UUID.randomUUID().toString(),

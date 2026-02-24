@@ -21,6 +21,7 @@ pub struct IrcMessage {
     pub text: String,
     pub msgid: Option<String>,
     pub reply_to: Option<String>,
+    pub replaces_msgid: Option<String>,
     pub is_action: bool,
     pub timestamp_ms: i64,
 }
@@ -231,6 +232,7 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
         Event::Message { from, target, text, tags } => {
             let msgid = tags.get("msgid").cloned();
             let reply_to = tags.get("+reply").cloned();
+            let replaces_msgid = tags.get("+draft/edit").cloned();
             let is_action = text.starts_with("\x01ACTION ") && text.ends_with('\x01');
             let clean_text = if is_action {
                 text.trim_start_matches("\x01ACTION ").trim_end_matches('\x01').to_string()
@@ -248,6 +250,7 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
                     text: clean_text,
                     msgid,
                     reply_to,
+                    replaces_msgid,
                     is_action,
                     timestamp_ms: ts,
                 },

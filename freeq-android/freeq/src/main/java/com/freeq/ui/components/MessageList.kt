@@ -118,7 +118,7 @@ fun MessageList(
 
                 // Deleted message
                 if (msg.isDeleted) {
-                    DeletedMessage()
+                    DeletedMessage(msg.from)
                     return@itemsIndexed
                 }
 
@@ -270,14 +270,6 @@ private fun MessageBubble(
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
-                        if (msg.isEdited) {
-                            Text(
-                                text = "(edited)",
-                                fontSize = 11.sp,
-                                fontStyle = FontStyle.Italic,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                            )
-                        }
                     }
                 }
 
@@ -288,6 +280,15 @@ private fun MessageBubble(
                     fromNick = msg.from,
                     onImageClick = onImageClick
                 )
+
+                if (msg.isEdited) {
+                    Text(
+                        text = "(edited)",
+                        fontSize = 11.sp,
+                        fontStyle = FontStyle.Italic,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    )
+                }
 
                 // Reactions
                 if (msg.reactions.isNotEmpty()) {
@@ -463,9 +464,9 @@ private fun SystemMessage(text: String) {
 }
 
 @Composable
-private fun DeletedMessage() {
+private fun DeletedMessage(from: String) {
     Text(
-        text = "Message deleted",
+        text = "Message from $from deleted",
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 64.dp, vertical = 2.dp),
