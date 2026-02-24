@@ -238,7 +238,13 @@ async fn run_reply_loop(handle: client::ClientHandle, path: String, default_targ
 }
 
 fn read_reply_entries(path: &str, offset: &mut u64) -> anyhow::Result<Vec<ReplyEntry>> {
-    let mut file = OpenOptions::new().read(true).create(true).open(path)?;
+    let mut file = match OpenOptions::new().read(true).open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Vec::new());
+        }
+        Err(err) => return Err(err.into()),
+    };
     let len = file.metadata()?.len();
     if len < *offset {
         *offset = 0;

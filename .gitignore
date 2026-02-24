@@ -6,6 +6,7 @@ freeq.db*
 .claude/
 .entire/
 tests.log
+scripts/pi-bridge.env
 
 # freeq-app
 freeq-app/node_modules/
