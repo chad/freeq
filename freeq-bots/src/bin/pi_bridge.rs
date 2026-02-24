@@ -18,6 +18,7 @@ struct Config {
     outbox_path: String,
     reply_inbox_path: String,
     bot_nick: Option<String>,
+    guest_mode: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +57,7 @@ async fn main() -> anyhow::Result<()> {
         reply_inbox_path: std::env::var("PI_REPLY_INBOX")
             .unwrap_or_else(|_| "/tmp/freeq-pi-replies.jsonl".to_string()),
         bot_nick: std::env::var("PI_BOT_NICK").ok(),
+        guest_mode: matches!(std::env::var("PI_BOT_GUEST").as_deref(), Ok("1") | Ok("true") | Ok("yes")),
     };
 
     loop {
@@ -67,8 +69,15 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn run_once(cfg: Config) -> anyhow::Result<()> {
-    let session = fetch_broker_session(&cfg).await?;
-    let nick = cfg.bot_nick.clone().unwrap_or_else(|| session.nick.clone());
+    let (nick, web_token) = if cfg.guest_mode {
+        let nick = cfg.bot_nick.clone().unwrap_or_else(|| "pi-bridge".to_string());
+        tracing::info!(nick = %nick, "pi-bridge guest mode");
+        (nick, None)
+    } else {
+        let session = fetch_broker_session(&cfg).await?;
+        let nick = cfg.bot_nick.clone().unwrap_or_else(|| session.nick.clone());
+        (nick, Some(session.token))
+    };
 
     let config = ConnectConfig {
         server_addr: cfg.server_addr.clone(),
@@ -77,7 +86,7 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
         realname: "freeq pi bridge".to_string(),
         tls: cfg.server_addr.ends_with(":6697") || cfg.server_addr.ends_with(":443"),
         tls_insecure: false,
-        web_token: Some(session.token),
+        web_token,
     };
 
     let (handle, mut events) = client::connect(config, None);
