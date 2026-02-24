@@ -51,8 +51,15 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
           {isChannel ? (ch?.name || activeChannel).replace(/^#/, '') : isDM ? activeChannel : 'Server'}
         </span>
         {ch?.isEncrypted && (
-          <span className="text-success text-xs shrink-0" title="End-to-end encrypted">🔒</span>
+          <span className="text-success text-xs shrink-0" title="End-to-end encrypted channel">🔒</span>
         )}
+        {isDM && !ch?.isEncrypted && (() => {
+          // Show lock if DM partner has a DID (E2EE capable)
+          const partnerDid = ch?.members.values().next().value?.did;
+          return partnerDid ? (
+            <span className="text-success text-xs shrink-0" title="End-to-end encrypted DM">🔒</span>
+          ) : null;
+        })()}
       </div>
 
       {/* Identity stats */}

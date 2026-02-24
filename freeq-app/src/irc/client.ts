@@ -84,25 +84,54 @@ export function setSaslCredentials(token: string, did: string, pdsUrl: string, m
   saslMethod = method;
 }
 
+/** Resolve a nick to a DID by searching member lists across all channels. */
+function didForNick(targetNick: string): string | undefined {
+  const store = useStore.getState();
+  const lower = targetNick.toLowerCase();
+  for (const ch of store.channels.values()) {
+    const m = ch.members.get(lower);
+    if (m?.did) return m.did;
+  }
+  return undefined;
+}
+
 export function sendMessage(target: string, text: string) {
+  const isChannel = target.startsWith('#') || target.startsWith('&');
+
   // Check if channel has E2EE key — if so, encrypt before sending
   if (e2ee.hasChannelKey(target)) {
     e2ee.encryptChannel(target, text).then((encrypted) => {
       if (encrypted) {
-        // Send with +encrypted tag so server knows (for +E enforcement)
         const line = format('PRIVMSG', [target, encrypted], { '+encrypted': '' });
         raw(line);
       } else {
-        // Encryption failed, send plaintext
         raw(`PRIVMSG ${target} :${text}`);
       }
     });
+  }
+  // DM to an AT-authenticated user: encrypt with Double Ratchet
+  else if (!isChannel && e2ee.isE2eeReady()) {
+    const remoteDid = didForNick(target);
+    if (remoteDid) {
+      const origin = window.location.origin;
+      e2ee.encryptMessage(remoteDid, text, origin).then((encrypted) => {
+        if (encrypted) {
+          const line = format('PRIVMSG', [target, encrypted], { '+encrypted': '' });
+          raw(line);
+        } else {
+          // No pre-key bundle or session failed — send plaintext
+          raw(`PRIVMSG ${target} :${text}`);
+        }
+      });
+    } else {
+      // Guest user (no DID) — plaintext
+      raw(`PRIVMSG ${target} :${text}`);
+    }
   } else {
     raw(`PRIVMSG ${target} :${text}`);
   }
 
   // Ensure DM buffer exists
-  const isChannel = target.startsWith('#') || target.startsWith('&');
   if (!isChannel) {
     const store = useStore.getState();
     if (!store.channels.has(target.toLowerCase())) {
@@ -112,6 +141,7 @@ export function sendMessage(target: string, text: string) {
 
   // If we have echo-message, server will echo it back.
   // Otherwise, add it locally (show plaintext, not ciphertext).
+  const willEncrypt = e2ee.hasChannelKey(target) || (!isChannel && e2ee.isE2eeReady() && !!didForNick(target));
   if (!ackedCaps.has('echo-message')) {
     useStore.getState().addMessage(target, {
       id: crypto.randomUUID(),
@@ -120,7 +150,7 @@ export function sendMessage(target: string, text: string) {
       timestamp: new Date(),
       tags: {},
       isSelf: true,
-      encrypted: e2ee.hasChannelKey(target),
+      encrypted: willEncrypt,
     });
   }
 }
@@ -392,13 +422,21 @@ async function handleLine(rawLine: string) {
       }
       // ENC3: DM Double Ratchet encryption
       else if (e2ee.isEncrypted(text) && !isChannel) {
-        const remoteDid = store.channels.get(bufName.toLowerCase())?.members.values().next().value?.did;
+        // For echo-message (isSelf), remote is the target; otherwise it's the sender
+        const remoteNick = isSelf ? target : from;
+        const remoteDid = didForNick(remoteNick);
         if (remoteDid) {
           const plain = await e2ee.decryptMessage(remoteDid, text);
           if (plain !== null) {
             displayText = plain;
             isEncryptedMsg = true;
+          } else {
+            displayText = '🔒 [encrypted DM — could not decrypt]';
+            isEncryptedMsg = true;
           }
+        } else {
+          displayText = '🔒 [encrypted DM — unknown sender identity]';
+          isEncryptedMsg = true;
         }
       }
       if (msg.tags['+encrypted']) isEncryptedMsg = true;
@@ -418,6 +456,12 @@ async function handleLine(rawLine: string) {
       // Ensure DM buffer exists
       if (!isChannel && !store.channels.has(bufName.toLowerCase())) {
         store.addChannel(bufName);
+      }
+
+      // Background WHOIS for DM partners to learn their DID (enables E2EE)
+      if (!isChannel && !isSelf && !didForNick(from) && !backgroundWhois.has(from.toLowerCase())) {
+        backgroundWhois.add(from.toLowerCase());
+        raw(`WHOIS ${from}`);
       }
 
       store.addMessage(bufName, message);

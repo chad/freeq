@@ -248,7 +248,9 @@ function ChannelButton({ ch, isActive, onSelect, icon, showPreview }: {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1">
           <span className="truncate text-[15px]">{ch.name.replace(/^[#&]/, '')}</span>
-          {ch.isEncrypted && <span className="text-[10px] text-success shrink-0" title="End-to-end encrypted">🔒</span>}
+          {(ch.isEncrypted || (!ch.name.startsWith('#') && ch.members.values().next().value?.did)) && (
+            <span className="text-[10px] text-success shrink-0" title="End-to-end encrypted">🔒</span>
+          )}
           {!showPreview && ch.members.size > 0 && (
             <span className="text-[10px] text-fg-dim ml-auto shrink-0">{ch.members.size}</span>
           )}
