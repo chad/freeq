@@ -90,9 +90,14 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
 
     while let Some(event) = events.recv().await {
         match event {
-            Event::Registered { .. } => {
+            Event::Connected => {
+                tracing::info!("pi-bridge connected");
+            }
+            Event::Registered { nick: confirmed } => {
+                tracing::info!(nick = %confirmed, "pi-bridge registered");
                 registered = true;
                 if let Some(ch) = &channel {
+                    tracing::info!(channel = %ch, "joining control channel");
                     let _ = handle.join(ch).await;
                 }
                 if !reply_task_started {
@@ -104,6 +109,23 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
                         run_reply_loop(reply_handle, reply_path, reply_channel).await;
                     });
                 }
+            }
+            Event::Authenticated { did } => {
+                tracing::info!(%did, "pi-bridge authenticated");
+            }
+            Event::AuthFailed { reason } => {
+                tracing::warn!(%reason, "pi-bridge auth failed");
+            }
+            Event::NickChanged { old_nick, new_nick } => {
+                tracing::info!(from = %old_nick, to = %new_nick, "pi-bridge nick changed");
+            }
+            Event::Joined { channel, nick: joined_nick } => {
+                if joined_nick.eq_ignore_ascii_case(&nick) {
+                    tracing::info!(channel = %channel, "pi-bridge joined channel");
+                }
+            }
+            Event::ServerNotice { text } => {
+                tracing::info!(notice = %text, "server notice");
             }
             Event::RawLine(line) => {
                 // Parse ACCOUNT notify: :nick!user@host ACCOUNT did
