@@ -99,6 +99,7 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
                 if let Some(ch) = &channel {
                     tracing::info!(channel = %ch, "joining control channel");
                     let _ = handle.join(ch).await;
+                    let _ = handle.privmsg(ch, "pi-bridge online").await;
                 }
                 if !reply_task_started {
                     reply_task_started = true;
