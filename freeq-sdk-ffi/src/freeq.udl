@@ -6,6 +6,7 @@ dictionary IrcMessage {
     string text;
     string? msgid;
     string? reply_to;
+    string? batch_id;
     boolean is_action;
     i64 timestamp_ms;
 };
@@ -35,6 +36,8 @@ interface FreeqEvent {
     ModeChanged(string channel, string mode, string? arg, string set_by);
     Kicked(string channel, string nick, string by, string reason);
     UserQuit(string nick, string reason);
+    BatchStart(string id, string batch_type, string target);
+    BatchEnd(string id);
     Notice(string text);
     Disconnected(string reason);
 };

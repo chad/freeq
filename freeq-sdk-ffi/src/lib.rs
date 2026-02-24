@@ -21,6 +21,7 @@ pub struct IrcMessage {
     pub text: String,
     pub msgid: Option<String>,
     pub reply_to: Option<String>,
+    pub batch_id: Option<String>,
     pub is_action: bool,
     pub timestamp_ms: i64,
 }
@@ -49,6 +50,8 @@ pub enum FreeqEvent {
     ModeChanged { channel: String, mode: String, arg: Option<String>, set_by: String },
     Kicked { channel: String, nick: String, by: String, reason: String },
     UserQuit { nick: String, reason: String },
+    BatchStart { id: String, batch_type: String, target: String },
+    BatchEnd { id: String },
     Notice { text: String },
     Disconnected { reason: String },
 }
@@ -231,6 +234,7 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
         Event::Message { from, target, text, tags } => {
             let msgid = tags.get("msgid").cloned();
             let reply_to = tags.get("+reply").cloned();
+            let batch_id = tags.get("batch").cloned();
             let is_action = text.starts_with("\x01ACTION ") && text.ends_with('\x01');
             let clean_text = if is_action {
                 text.trim_start_matches("\x01ACTION ").trim_end_matches('\x01').to_string()
@@ -248,6 +252,7 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
                     text: clean_text,
                     msgid,
                     reply_to,
+                    batch_id,
                     is_action,
                     timestamp_ms: ts,
                 },
@@ -278,6 +283,12 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
         },
         Event::ServerNotice { text } => FreeqEvent::Notice { text: text.clone() },
         Event::UserQuit { nick, reason } => FreeqEvent::UserQuit { nick: nick.clone(), reason: reason.clone() },
+        Event::BatchStart { id, batch_type, target } => FreeqEvent::BatchStart {
+            id: id.clone(),
+            batch_type: batch_type.clone(),
+            target: target.clone(),
+        },
+        Event::BatchEnd { id } => FreeqEvent::BatchEnd { id: id.clone() },
         Event::Disconnected { reason } => FreeqEvent::Disconnected { reason: reason.clone() },
         Event::Invited { channel, by } => FreeqEvent::Notice { text: format!("{by} invited you to {channel}") },
         _ => FreeqEvent::Notice { text: String::new() },

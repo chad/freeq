@@ -84,6 +84,11 @@ enum ConnectionState {
 
 /// Main application state — bridges the Rust SDK to SwiftUI.
 class AppState: ObservableObject {
+    struct BatchBuffer {
+        let target: String
+        var messages: [ChatMessage]
+    }
+
     @Published var connectionState: ConnectionState = .disconnected
     @Published var nick: String = ""
     @Published var serverAddress: String = "irc.freeq.at:6667"
@@ -94,6 +99,9 @@ class AppState: ObservableObject {
     @Published var dmBuffers: [ChannelState] = []
     @Published var autoJoinChannels: [String] = ["#general"]
     @Published var unreadCounts: [String: Int] = [:]
+
+    // In-flight CHATHISTORY batches
+    private var batches: [String: BatchBuffer] = [:]
 
     /// For reply UI
     @Published var replyingTo: ChatMessage? = nil
@@ -419,6 +427,13 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 replyTo: ircMsg.replyTo
             )
 
+            // If part of CHATHISTORY batch, buffer it for later merge
+            if let batchId = ircMsg.batchId, var batch = state.batches[batchId] {
+                batch.messages.append(msg)
+                state.batches[batchId] = batch
+                return
+            }
+
             if target.hasPrefix("#") {
                 let ch = state.getOrCreateChannel(target)
                 ch.appendIfNew(msg)
@@ -478,6 +493,20 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                     isAction: false, timestamp: Date(), replyTo: nil
                 ))
                 ch.members.removeAll { $0.nick.lowercased() == nick.lowercased() }
+            }
+
+        case .batchStart(let id, _, let target):
+            state.batches[id] = AppState.BatchBuffer(target: target, messages: [])
+
+        case .batchEnd(let id):
+            guard let batch = state.batches.removeValue(forKey: id) else { return }
+            let sorted = batch.messages.sorted { $0.timestamp < $1.timestamp }
+            if batch.target.hasPrefix("#") {
+                let ch = state.getOrCreateChannel(batch.target)
+                for msg in sorted { ch.appendIfNew(msg) }
+            } else {
+                let dm = state.getOrCreateDM(batch.target)
+                for msg in sorted { dm.appendIfNew(msg) }
             }
 
         case .userQuit(let nick, _):
