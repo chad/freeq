@@ -138,7 +138,7 @@ class AppState: ObservableObject {
     @Published var unreadCounts: [String: Int] = [:]
 
     // In-flight CHATHISTORY batches
-    private var batches: [String: BatchBuffer] = [:]
+    fileprivate var batches: [String: BatchBuffer] = [:]
 
     /// For reply UI
     @Published var replyingTo: ChatMessage? = nil
@@ -380,7 +380,7 @@ class AppState: ObservableObject {
         }
     }
 
-    private func updateAwayStatus(nick: String, awayMsg: String?) {
+    fileprivate func updateAwayStatus(nick: String, awayMsg: String?) {
         for ch in channels {
             if let idx = ch.members.firstIndex(where: { $0.nick.lowercased() == nick.lowercased() }) {
                 let m = ch.members[idx]
@@ -398,7 +398,7 @@ class AppState: ObservableObject {
         return nil
     }
 
-    private func renameUser(oldNick: String, newNick: String) {
+    fileprivate func renameUser(oldNick: String, newNick: String) {
         for ch in channels {
             if let idx = ch.members.firstIndex(where: { $0.nick.lowercased() == oldNick.lowercased() }) {
                 let m = ch.members[idx]
