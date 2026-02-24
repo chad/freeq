@@ -21,6 +21,7 @@ pub struct IrcMessage {
     pub text: String,
     pub msgid: Option<String>,
     pub reply_to: Option<String>,
+    pub replaces_msgid: Option<String>,
     pub edit_of: Option<String>,
     pub batch_id: Option<String>,
     pub is_action: bool,
@@ -130,7 +131,7 @@ impl FreeqClient {
             server_addr: self.server.clone(),
             nick: nick.clone(),
             user: nick.clone(),
-            realname: "freeq iOS".to_string(),
+            realname: "freeq".to_string(),
             tls: self.server.contains(":6697") || self.server.contains(":443"),
             tls_insecure: false,
             web_token,
@@ -251,6 +252,7 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
         Event::Message { from, target, text, tags } => {
             let msgid = tags.get("msgid").cloned();
             let reply_to = tags.get("+reply").cloned();
+            let replaces_msgid = tags.get("+draft/edit").cloned();
             let edit_of = tags.get("+draft/edit").cloned();
             let batch_id = tags.get("batch").cloned();
             let is_action = text.starts_with("\x01ACTION ") && text.ends_with('\x01');
@@ -270,6 +272,7 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
                     text: clean_text,
                     msgid,
                     reply_to,
+                    replaces_msgid,
                     edit_of,
                     batch_id,
                     is_action,

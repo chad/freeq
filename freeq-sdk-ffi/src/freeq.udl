@@ -6,6 +6,7 @@ dictionary IrcMessage {
     string text;
     string? msgid;
     string? reply_to;
+    string? replaces_msgid;
     string? edit_of;
     string? batch_id;
     boolean is_action;

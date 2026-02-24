@@ -1,0 +1,156 @@
+package com.freeq.ui.navigation
+
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
+import com.freeq.model.AppState
+import com.freeq.ui.screens.ChatsTab
+import com.freeq.ui.screens.ChatDetailScreen
+import com.freeq.ui.screens.DiscoverTab
+import com.freeq.ui.screens.SettingsTab
+
+private enum class Tab(val route: String, val label: String) {
+    Chats("chats", "Chats"),
+    Discover("discover", "Discover"),
+    Settings("settings", "Settings")
+}
+
+@Composable
+fun MainScreen(appState: AppState) {
+    val navController = rememberNavController()
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
+
+    // Hide bottom bar when in chat detail
+    val showBottomBar = currentRoute in listOf(Tab.Chats.route, Tab.Discover.route, Tab.Settings.route)
+
+    val totalUnread = appState.unreadCounts.values.sum()
+
+    // Handle pending navigation from notification tap
+    val pendingNav = appState.pendingNavigation.value
+    LaunchedEffect(pendingNav) {
+        if (pendingNav != null) {
+            appState.pendingNavigation.value = null
+            appState.activeChannel.value = pendingNav
+            navController.navigate("chat/$pendingNav") {
+                launchSingleTop = true
+            }
+        }
+    }
+
+    Scaffold(
+        bottomBar = {
+            if (showBottomBar) {
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                ) {
+                    NavigationBarItem(
+                        icon = {
+                            BadgedBox(badge = {
+                                if (totalUnread > 0) {
+                                    Badge { Text("$totalUnread") }
+                                }
+                            }) {
+                                Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Chats")
+                            }
+                        },
+                        label = { Text(Tab.Chats.label) },
+                        selected = currentRoute == Tab.Chats.route,
+                        onClick = {
+                            navController.navigate(Tab.Chats.route) {
+                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        )
+                    )
+
+                    NavigationBarItem(
+                        icon = { Icon(Icons.Default.Explore, contentDescription = "Discover") },
+                        label = { Text(Tab.Discover.label) },
+                        selected = currentRoute == Tab.Discover.route,
+                        onClick = {
+                            navController.navigate(Tab.Discover.route) {
+                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        )
+                    )
+
+                    NavigationBarItem(
+                        icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+                        label = { Text(Tab.Settings.label) },
+                        selected = currentRoute == Tab.Settings.route,
+                        onClick = {
+                            navController.navigate(Tab.Settings.route) {
+                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                            indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                        )
+                    )
+                }
+            }
+        }
+    ) { innerPadding ->
+        NavHost(
+            navController = navController,
+            startDestination = Tab.Chats.route,
+            modifier = Modifier.padding(innerPadding)
+        ) {
+            composable(Tab.Chats.route) {
+                ChatsTab(
+                    appState = appState,
+                    onChannelClick = { channelName ->
+                        appState.activeChannel.value = channelName
+                        navController.navigate("chat/$channelName")
+                    }
+                )
+            }
+            composable(Tab.Discover.route) {
+                DiscoverTab(appState = appState)
+            }
+            composable(Tab.Settings.route) {
+                SettingsTab(appState = appState)
+            }
+            composable("chat/{channelName}") { backStackEntry ->
+                val channelName = backStackEntry.arguments?.getString("channelName") ?: return@composable
+                ChatDetailScreen(
+                    appState = appState,
+                    channelName = channelName,
+                    onBack = { navController.popBackStack() },
+                    onNavigateToChat = { nick ->
+                        navController.navigate("chat/$nick")
+                    }
+                )
+            }
+        }
+    }
+}

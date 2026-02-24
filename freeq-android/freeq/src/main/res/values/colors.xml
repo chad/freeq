@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Accent -->
+    <color name="accent">#FF6C63FF</color>
+    <color name="accent_light">#FF8B83FF</color>
+
+    <!-- Dark theme backgrounds -->
+    <color name="bg_primary_dark">#FF1A1A2E</color>
+    <color name="bg_secondary_dark">#FF16162A</color>
+    <color name="bg_tertiary_dark">#FF1E1E3A</color>
+
+    <!-- Light theme backgrounds -->
+    <color name="bg_primary_light">#FFFFFFFF</color>
+    <color name="bg_secondary_light">#FFF5F5F7</color>
+    <color name="bg_tertiary_light">#FFEBEBF0</color>
+
+    <!-- Status colors -->
+    <color name="success">#FF43B581</color>
+    <color name="warning">#FFFAA61A</color>
+    <color name="danger">#FFF04747</color>
+</resources>
