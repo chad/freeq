@@ -220,21 +220,57 @@ impl HttpResolver {
     }
 
     async fn resolve_handle(&self, handle: &str) -> Result<String> {
+        // Try HTTP well-known first (self-hosted domains)
         let url = format!("https://{handle}/.well-known/atproto-did");
         tracing::debug!("Resolving handle {handle} via {url}");
-        let did = self
+        let well_known_result = async {
+            let did = self
+                .client
+                .get(&url)
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await
+                .context("HTTP request failed")?
+                .error_for_status()?
+                .text()
+                .await
+                .context("Failed to read response")?;
+            let did = did.trim().to_string();
+            if !did.starts_with("did:") {
+                bail!("Invalid DID: {did}");
+            }
+            Ok::<String, anyhow::Error>(did)
+        }
+        .await;
+
+        if let Ok(did) = well_known_result {
+            return Ok(did);
+        }
+
+        // Fall back to public Bluesky API (resolves via DNS TXT _atproto.{handle})
+        tracing::debug!("Well-known failed for {handle}, falling back to public API");
+        let api_url = format!(
+            "https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle={}",
+            handle
+        );
+        let resp: serde_json::Value = self
             .client
-            .get(&url)
+            .get(&api_url)
+            .timeout(std::time::Duration::from_secs(10))
             .send()
             .await
-            .context("Failed to resolve handle")?
-            .error_for_status()?
-            .text()
+            .context("Failed to resolve handle via public API")?
+            .error_for_status()
+            .context("Public API returned error")?
+            .json()
             .await
-            .context("Failed to read handle resolution response")?;
-        let did = did.trim().to_string();
+            .context("Failed to parse public API response")?;
+        let did = resp["did"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("No DID in public API response"))?
+            .to_string();
         if !did.starts_with("did:") {
-            bail!("Handle resolution returned invalid DID: {did}");
+            bail!("Public API returned invalid DID: {did}");
         }
         Ok(did)
     }

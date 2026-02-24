@@ -95,6 +95,24 @@ function didForNick(targetNick: string): string | undefined {
   return undefined;
 }
 
+/**
+ * Cache of plaintext for outgoing encrypted messages, keyed by ciphertext.
+ * Needed because echo-message returns our own ciphertext and we can't
+ * decrypt what we encrypted (Double Ratchet is asymmetric: send ≠ recv chain).
+ * Entries auto-expire after 60 seconds.
+ */
+const echoPlaintextCache = new Map<string, { plaintext: string; ts: number }>();
+function cacheEchoPlaintext(ciphertext: string, plaintext: string) {
+  echoPlaintextCache.set(ciphertext, { plaintext, ts: Date.now() });
+  // Prune old entries
+  if (echoPlaintextCache.size > 100) {
+    const now = Date.now();
+    for (const [k, v] of echoPlaintextCache) {
+      if (now - v.ts > 60_000) echoPlaintextCache.delete(k);
+    }
+  }
+}
+
 export function sendMessage(target: string, text: string) {
   const isChannel = target.startsWith('#') || target.startsWith('&');
 
@@ -102,6 +120,7 @@ export function sendMessage(target: string, text: string) {
   if (e2ee.hasChannelKey(target)) {
     e2ee.encryptChannel(target, text).then((encrypted) => {
       if (encrypted) {
+        cacheEchoPlaintext(encrypted, text);
         const line = format('PRIVMSG', [target, encrypted], { '+encrypted': '' });
         raw(line);
       } else {
@@ -116,15 +135,14 @@ export function sendMessage(target: string, text: string) {
       const origin = window.location.origin;
       e2ee.encryptMessage(remoteDid, text, origin).then((encrypted) => {
         if (encrypted) {
+          cacheEchoPlaintext(encrypted, text);
           const line = format('PRIVMSG', [target, encrypted], { '+encrypted': '' });
           raw(line);
         } else {
-          // No pre-key bundle or session failed — send plaintext
           raw(`PRIVMSG ${target} :${text}`);
         }
       });
     } else {
-      // Guest user (no DID) — plaintext
       raw(`PRIVMSG ${target} :${text}`);
     }
   } else {
@@ -408,23 +426,27 @@ async function handleLine(rawLine: string) {
       let displayText = isAction ? text.slice(8, -1) : text;
       let isEncryptedMsg = false;
 
+      // Check echo cache first — our own encrypted messages echoed back
+      const cachedPlain = echoPlaintextCache.get(text);
+      if (cachedPlain && isSelf) {
+        displayText = cachedPlain.plaintext;
+        isEncryptedMsg = true;
+        echoPlaintextCache.delete(text);
+      }
       // ENC1: channel passphrase-based encryption
-      if (e2ee.isENC1(text) && isChannel) {
+      else if (e2ee.isENC1(text) && isChannel) {
         const plain = await e2ee.decryptChannel(target, text);
         if (plain !== null) {
           displayText = plain;
           isEncryptedMsg = true;
         } else {
-          // Can't decrypt — show as ciphertext with warning
           displayText = '🔒 [encrypted message — use /encrypt <passphrase> to decrypt]';
           isEncryptedMsg = true;
         }
       }
-      // ENC3: DM Double Ratchet encryption
-      else if (e2ee.isEncrypted(text) && !isChannel) {
-        // For echo-message (isSelf), remote is the target; otherwise it's the sender
-        const remoteNick = isSelf ? target : from;
-        const remoteDid = didForNick(remoteNick);
+      // ENC3: DM Double Ratchet encryption (from someone else)
+      else if (e2ee.isEncrypted(text) && !isChannel && !isSelf) {
+        const remoteDid = didForNick(from);
         if (remoteDid) {
           const plain = await e2ee.decryptMessage(remoteDid, text);
           if (plain !== null) {
@@ -438,6 +460,11 @@ async function handleLine(rawLine: string) {
           displayText = '🔒 [encrypted DM — unknown sender identity]';
           isEncryptedMsg = true;
         }
+      }
+      // ENC3: own echo that wasn't in cache (e.g. CHATHISTORY)
+      else if (e2ee.isEncrypted(text) && !isChannel && isSelf) {
+        displayText = '🔒 [encrypted message]';
+        isEncryptedMsg = true;
       }
       if (msg.tags['+encrypted']) isEncryptedMsg = true;
 
