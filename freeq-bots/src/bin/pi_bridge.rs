@@ -42,6 +42,12 @@ struct ReplyEntry {
     text: String,
 }
 
+#[derive(Clone)]
+struct PendingCommand {
+    target: String,
+    text: String,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
@@ -91,6 +97,7 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
 
     let (handle, mut events) = client::connect(config, None);
     let mut nick_dids: HashMap<String, String> = HashMap::new();
+    let mut pending: HashMap<String, PendingCommand> = HashMap::new();
 
     // Join control channel after registration
     let channel = cfg.channel.clone();
@@ -145,7 +152,22 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
             }
             Event::WhoisReply { nick, info } => {
                 if let Some(did) = parse_whois_did(&info) {
-                    nick_dids.insert(nick.to_lowercase(), did);
+                    let key = nick.to_lowercase();
+                    nick_dids.insert(key.clone(), did.clone());
+                    if let Some(cmd) = pending.remove(&key) {
+                        if did == cfg.allowed_did {
+                            write_outbox(&cfg.outbox_path, &OutboxEntry {
+                                ts: chrono::Utc::now().timestamp(),
+                                from: nick.clone(),
+                                did: did.clone(),
+                                target: cmd.target.clone(),
+                                text: cmd.text.clone(),
+                            })?;
+                            let _ = handle.privmsg(&cmd.target, "✅ queued").await;
+                        } else {
+                            let _ = handle.privmsg(&cmd.target, "Access denied.").await;
+                        }
+                    }
                 }
             }
             Event::Message { from, target, text, tags } => {
@@ -171,8 +193,12 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
                 let did = match nick_dids.get(&from.to_lowercase()) {
                     Some(d) => d.clone(),
                     None => {
+                        pending.insert(from.to_lowercase(), PendingCommand {
+                            target: target.clone(),
+                            text: payload.clone(),
+                        });
                         let _ = handle.raw(&format!("WHOIS {from}")).await;
-                        let _ = handle.privmsg(&target, "Auth pending — try again in a moment.").await;
+                        let _ = handle.privmsg(&target, "Auth pending — resolving DID…").await;
                         continue;
                     }
                 };
