@@ -158,6 +158,7 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
                     nick_dids.insert(key.clone(), did.clone());
                     if let Some(cmd) = pending.remove(&key) {
                         if did == cfg.allowed_did {
+                            tracing::info!(from = %nick, did = %did, "pi command authorized after WHOIS");
                             dispatch_command(&cfg, &OutboxEntry {
                                 ts: chrono::Utc::now().timestamp(),
                                 from: nick.clone(),
@@ -165,8 +166,10 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
                                 target: cmd.target.clone(),
                                 text: cmd.text.clone(),
                             })?;
+                            tracing::info!(from = %nick, "pi command queued after WHOIS");
                             let _ = handle.privmsg(&cmd.target, "✅ queued").await;
                         } else {
+                            tracing::warn!(from = %nick, did = %did, "pi command denied after WHOIS");
                             let _ = handle.privmsg(&cmd.target, "Access denied.").await;
                         }
                     }
@@ -192,9 +195,12 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
                     continue;
                 }
 
+                tracing::info!(from = %from, target = %target, "pi command received");
+
                 let did = match nick_dids.get(&from.to_lowercase()) {
                     Some(d) => d.clone(),
                     None => {
+                        tracing::info!(from = %from, "resolving DID via WHOIS");
                         pending.insert(from.to_lowercase(), PendingCommand {
                             target: target.clone(),
                             text: payload.clone(),
@@ -206,10 +212,12 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
                 };
 
                 if did != cfg.allowed_did {
+                    tracing::warn!(from = %from, did = %did, "pi command denied");
                     let _ = handle.privmsg(&target, "Access denied.").await;
                     continue;
                 }
 
+                tracing::info!(from = %from, did = %did, "pi command authorized");
                 dispatch_command(&cfg, &OutboxEntry {
                     ts: chrono::Utc::now().timestamp(),
                     from: from.clone(),
@@ -218,6 +226,7 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
                     text: payload.clone(),
                 })?;
 
+                tracing::info!(from = %from, "pi command queued");
                 let _ = handle.privmsg(&target, "✅ queued").await;
             }
             Event::Disconnected { reason } => {
@@ -257,9 +266,12 @@ fn write_outbox(path: &str, entry: &OutboxEntry) -> anyhow::Result<()> {
 
 fn dispatch_command(cfg: &Config, entry: &OutboxEntry) -> anyhow::Result<()> {
     write_outbox(&cfg.outbox_path, entry)?;
+    tracing::info!(target = %entry.target, "pi command written to outbox");
     if let Some(ref fifo) = cfg.fifo_path {
         if let Err(err) = write_fifo(fifo, &entry.text) {
             tracing::warn!(error = %err, fifo = %fifo, "Failed to write to FIFO");
+        } else {
+            tracing::info!(fifo = %fifo, "pi command written to FIFO");
         }
     }
     Ok(())
