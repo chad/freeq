@@ -99,9 +99,13 @@ struct ThreadView: View {
                                             .textSelection(.enabled)
 
                                         if msg.isEdited {
-                                            Text("(edited)")
-                                                .font(.system(size: 11))
-                                                .foregroundColor(Theme.textMuted)
+                                            Text("edited")
+                                                .font(.system(size: 10, weight: .semibold))
+                                                .foregroundColor(Theme.accent)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Theme.accent.opacity(0.12))
+                                                .cornerRadius(6)
                                         }
 
                                         // Reactions

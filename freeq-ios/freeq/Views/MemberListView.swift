@@ -122,6 +122,15 @@ struct MemberListView: View {
                             .font(.system(size: 14, weight: .medium))
                             .foregroundColor(member.isAway ? Theme.textMuted : Theme.textPrimary)
                             .lineLimit(1)
+                        if member.isAway {
+                            Text("Away")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(Theme.warning)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Theme.warning.opacity(0.15))
+                                .cornerRadius(6)
+                        }
                     }
                     if member.isAway, let away = member.awayMsg {
                         Text(away)

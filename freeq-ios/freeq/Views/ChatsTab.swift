@@ -182,7 +182,7 @@ struct ChatRow: View {
             // Content
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(conversation.name)
+                    Text(isChannel ? conversation.name : "@" + conversation.name)
                         .font(.system(size: 16, weight: unreadCount > 0 ? .bold : .regular))
                         .foregroundColor(Theme.textPrimary)
                         .lineLimit(1)
