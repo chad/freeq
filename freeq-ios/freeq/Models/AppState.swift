@@ -201,9 +201,14 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Reconnect with saved session (no SASL — connects as guest with saved nick)
+    /// Reconnect with saved session (requires SASL web-token)
     func reconnectSavedSession() {
         guard hasSavedSession, connectionState == .disconnected else { return }
+        // Never reconnect as guest — require a valid web-token
+        guard pendingWebToken != nil else {
+            errorMessage = "Session expired. Please log in again."
+            return
+        }
         connect(nick: nick)
     }
 
@@ -457,6 +462,12 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
 
         case .registered(let nick):
             state.connectionState = .registered
+            // If we expected an authenticated session but got Guest, disconnect
+            if state.authenticatedDID != nil && nick.lowercased().hasPrefix("guest") {
+                state.errorMessage = "Session expired. Please log in again."
+                state.disconnect()
+                return
+            }
             state.nick = nick
             // Auto-join saved channels
             for channel in state.autoJoinChannels {
