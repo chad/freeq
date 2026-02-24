@@ -17,6 +17,7 @@ struct Config {
     prefix: String,
     outbox_path: String,
     reply_inbox_path: String,
+    bot_nick: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -54,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
         outbox_path: std::env::var("PI_OUTBOX").unwrap_or_else(|_| "/tmp/freeq-pi-queue.jsonl".to_string()),
         reply_inbox_path: std::env::var("PI_REPLY_INBOX")
             .unwrap_or_else(|_| "/tmp/freeq-pi-replies.jsonl".to_string()),
+        bot_nick: std::env::var("PI_BOT_NICK").ok(),
     };
 
     loop {
@@ -66,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
 
 async fn run_once(cfg: Config) -> anyhow::Result<()> {
     let session = fetch_broker_session(&cfg).await?;
-    let nick = session.nick.clone();
+    let nick = cfg.bot_nick.clone().unwrap_or_else(|| session.nick.clone());
 
     let config = ConnectConfig {
         server_addr: cfg.server_addr.clone(),
