@@ -368,6 +368,92 @@ async function advanceChainKey(chainKey: number[]): Promise<Uint8Array> {
 
 // ── Base64url ──
 
+// ── Channel Encryption (ENC1: passphrase-based) ──
+// Compatible with SDK e2ee.rs and TUI /encrypt command.
+// Key = HKDF-SHA256(passphrase, SHA-256(channel_name), "freeq-e2ee-v1")
+
+const ENC1_PREFIX = 'ENC1:';
+const channelKeys = new Map<string, Uint8Array>(); // channel (lowercase) → AES-256 key
+
+/** Check if text is ENC1 encrypted. */
+export function isENC1(text: string): boolean {
+  return text.startsWith(ENC1_PREFIX);
+}
+
+/** Check if a channel has an encryption key set. */
+export function hasChannelKey(channel: string): boolean {
+  return channelKeys.has(channel.toLowerCase());
+}
+
+/** Set a passphrase for a channel. Derives AES-256 key via HKDF. */
+export async function setChannelKey(channel: string, passphrase: string): Promise<void> {
+  const chanLower = channel.toLowerCase();
+  // salt = SHA-256(channel name)
+  const salt = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(chanLower)));
+  // IKM = passphrase bytes
+  const ikm = new TextEncoder().encode(passphrase);
+  const baseKey = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
+  const bits = await (crypto.subtle as any).deriveBits(
+    { name: 'HKDF', hash: 'SHA-256', salt, info: new TextEncoder().encode('freeq-e2ee-v1') },
+    baseKey, 256,
+  );
+  channelKeys.set(chanLower, new Uint8Array(bits));
+}
+
+/** Remove the encryption key for a channel. */
+export function removeChannelKey(channel: string): void {
+  channelKeys.delete(channel.toLowerCase());
+}
+
+/** Encrypt a message for a channel (ENC1 format). */
+export async function encryptChannel(channel: string, plaintext: string): Promise<string | null> {
+  const key = channelKeys.get(channel.toLowerCase());
+  if (!key) return null;
+
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const cryptoKey = await (crypto.subtle as any).importKey('raw', key, { name: 'AES-GCM' }, false, ['encrypt']);
+  const ct = new Uint8Array(await (crypto.subtle as any).encrypt(
+    { name: 'AES-GCM', iv }, cryptoKey, new TextEncoder().encode(plaintext),
+  ));
+
+  // Use standard base64 (not url-safe) to match Rust SDK
+  const nonceB64 = btoa(String.fromCharCode(...iv));
+  const ctB64 = btoa(String.fromCharCode(...ct));
+  return `${ENC1_PREFIX}${nonceB64}:${ctB64}`;
+}
+
+/** Decrypt an ENC1 message. */
+export async function decryptChannel(channel: string, wire: string): Promise<string | null> {
+  const key = channelKeys.get(channel.toLowerCase());
+  if (!key) return null;
+  if (!wire.startsWith(ENC1_PREFIX)) return null;
+
+  try {
+    const body = wire.slice(ENC1_PREFIX.length);
+    const sep = body.indexOf(':');
+    if (sep === -1) return null;
+
+    const nonceB64 = body.slice(0, sep);
+    const ctB64 = body.slice(sep + 1);
+
+    const nonce = Uint8Array.from(atob(nonceB64), c => c.charCodeAt(0));
+    const ct = Uint8Array.from(atob(ctB64), c => c.charCodeAt(0));
+
+    if (nonce.length !== 12) return null;
+
+    const cryptoKey = await (crypto.subtle as any).importKey('raw', key, { name: 'AES-GCM' }, false, ['decrypt']);
+    const plain = await (crypto.subtle as any).decrypt(
+      { name: 'AES-GCM', iv: nonce }, cryptoKey, ct,
+    );
+    return new TextDecoder().decode(plain);
+  } catch (e) {
+    console.warn('[e2ee] ENC1 decrypt failed:', e);
+    return null;
+  }
+}
+
+// ── Base64url ──
+
 function toB64(data: Uint8Array): string {
   return btoa(String.fromCharCode(...data))
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');

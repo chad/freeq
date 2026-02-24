@@ -85,7 +85,21 @@ export function setSaslCredentials(token: string, did: string, pdsUrl: string, m
 }
 
 export function sendMessage(target: string, text: string) {
-  raw(`PRIVMSG ${target} :${text}`);
+  // Check if channel has E2EE key — if so, encrypt before sending
+  if (e2ee.hasChannelKey(target)) {
+    e2ee.encryptChannel(target, text).then((encrypted) => {
+      if (encrypted) {
+        // Send with +encrypted tag so server knows (for +E enforcement)
+        const line = format('PRIVMSG', [target, encrypted], { '+encrypted': '' });
+        raw(line);
+      } else {
+        // Encryption failed, send plaintext
+        raw(`PRIVMSG ${target} :${text}`);
+      }
+    });
+  } else {
+    raw(`PRIVMSG ${target} :${text}`);
+  }
 
   // Ensure DM buffer exists
   const isChannel = target.startsWith('#') || target.startsWith('&');
@@ -97,7 +111,7 @@ export function sendMessage(target: string, text: string) {
   }
 
   // If we have echo-message, server will echo it back.
-  // Otherwise, add it locally.
+  // Otherwise, add it locally (show plaintext, not ciphertext).
   if (!ackedCaps.has('echo-message')) {
     useStore.getState().addMessage(target, {
       id: crypto.randomUUID(),
@@ -106,6 +120,7 @@ export function sendMessage(target: string, text: string) {
       timestamp: new Date(),
       tags: {},
       isSelf: true,
+      encrypted: e2ee.hasChannelKey(target),
     });
   }
 }
@@ -362,8 +377,21 @@ async function handleLine(rawLine: string) {
       // Decrypt E2EE messages
       let displayText = isAction ? text.slice(8, -1) : text;
       let isEncryptedMsg = false;
-      if (e2ee.isEncrypted(text) && !isChannel) {
-        // Look up the remote DID for this nick
+
+      // ENC1: channel passphrase-based encryption
+      if (e2ee.isENC1(text) && isChannel) {
+        const plain = await e2ee.decryptChannel(target, text);
+        if (plain !== null) {
+          displayText = plain;
+          isEncryptedMsg = true;
+        } else {
+          // Can't decrypt — show as ciphertext with warning
+          displayText = '🔒 [encrypted message — use /encrypt <passphrase> to decrypt]';
+          isEncryptedMsg = true;
+        }
+      }
+      // ENC3: DM Double Ratchet encryption
+      else if (e2ee.isEncrypted(text) && !isChannel) {
         const remoteDid = store.channels.get(bufName.toLowerCase())?.members.values().next().value?.did;
         if (remoteDid) {
           const plain = await e2ee.decryptMessage(remoteDid, text);
