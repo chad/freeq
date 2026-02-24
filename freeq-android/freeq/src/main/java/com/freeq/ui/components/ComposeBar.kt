@@ -125,8 +125,8 @@ fun ComposeBar(
             OutlinedTextField(
                 value = text,
                 onValueChange = { newText ->
-                    text = newText
-                    completions = updateCompletions(newText, appState)
+                    text = replaceEmojiShortcodes(newText)
+                    completions = updateCompletions(text, appState)
                     if (newText.isNotEmpty()) {
                         activeChannel?.let { appState.sendTyping(it) }
                     }

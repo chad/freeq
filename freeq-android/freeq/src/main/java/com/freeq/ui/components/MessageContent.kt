@@ -54,6 +54,94 @@ private val BSKY_POST_PATTERN = Regex(
 private val URL_PATTERN = Regex(
     """https?://\S+"""
 )
+internal val EMOJI_SHORTCODE = Regex(""":([a-zA-Z0-9_+-]+):""")
+internal val EMOJI_MAP = mapOf(
+    "smile" to "😊", "grin" to "😁", "laugh" to "😂", "joy" to "😂",
+    "rofl" to "🤣", "wink" to "😉", "blush" to "😊", "heart_eyes" to "😍",
+    "kissing_heart" to "😘", "thinking" to "🤔", "shushing" to "🤫",
+    "raised_eyebrow" to "🤨", "neutral" to "😐", "expressionless" to "😑",
+    "unamused" to "😒", "rolling_eyes" to "🙄", "grimace" to "😬",
+    "relieved" to "😌", "pensive" to "😔", "sleepy" to "😴",
+    "drool" to "🤤", "yum" to "😋", "stuck_out_tongue" to "😛",
+    "sunglasses" to "😎", "nerd" to "🤓", "confused" to "😕",
+    "worried" to "😟", "frown" to "☹️", "open_mouth" to "😮",
+    "hushed" to "😯", "astonished" to "😲", "flushed" to "😳",
+    "scream" to "😱", "fearful" to "😨", "cold_sweat" to "😰",
+    "cry" to "😢", "sob" to "😭", "angry" to "😠", "rage" to "🤬",
+    "swear" to "🤬", "skull" to "💀", "poop" to "💩",
+    "clown" to "🤡", "ghost" to "👻", "alien" to "👽",
+    "robot" to "🤖", "wave" to "👋", "ok_hand" to "👌",
+    "pinch" to "🤏", "v" to "✌️", "crossed_fingers" to "🤞",
+    "love_you" to "🤟", "metal" to "🤘", "point_left" to "👈",
+    "point_right" to "👉", "point_up" to "👆", "point_down" to "👇",
+    "middle_finger" to "🖕", "thumbsup" to "👍", "thumbup" to "👍",
+    "+1" to "👍", "thumbsdown" to "👎", "thumbdown" to "👎",
+    "-1" to "👎", "fist" to "✊", "punch" to "👊",
+    "clap" to "👏", "raised_hands" to "🙌", "pray" to "🙏",
+    "handshake" to "🤝", "muscle" to "💪", "flex" to "💪",
+    "heart" to "❤️", "red_heart" to "❤️", "orange_heart" to "🧡",
+    "yellow_heart" to "💛", "green_heart" to "💚", "blue_heart" to "💙",
+    "purple_heart" to "💜", "black_heart" to "🖤", "white_heart" to "🤍",
+    "broken_heart" to "💔", "fire" to "🔥", "flame" to "🔥",
+    "100" to "💯", "star" to "⭐", "sparkles" to "✨",
+    "boom" to "💥", "collision" to "💥", "zap" to "⚡",
+    "sun" to "☀️", "moon" to "🌙", "rainbow" to "🌈",
+    "cloud" to "☁️", "rain" to "🌧️", "snow" to "❄️",
+    "eyes" to "👀", "eye" to "👁️", "brain" to "🧠",
+    "check" to "✅", "white_check_mark" to "✅", "x" to "❌",
+    "warning" to "⚠️", "question" to "❓", "exclamation" to "❗",
+    "pin" to "📌", "pushpin" to "📌", "link" to "🔗",
+    "lock" to "🔒", "unlock" to "🔓", "key" to "🔑",
+    "bulb" to "💡", "lightbulb" to "💡", "mag" to "🔍",
+    "bell" to "🔔", "megaphone" to "📣", "speech_balloon" to "💬",
+    "thought_balloon" to "💭", "zzz" to "💤",
+    "tada" to "🎉", "party" to "🎉", "confetti" to "🎊",
+    "balloon" to "🎈", "gift" to "🎁", "trophy" to "🏆",
+    "medal" to "🏅", "crown" to "👑",
+    "rocket" to "🚀", "airplane" to "✈️", "car" to "🚗",
+    "ship" to "🚢", "bike" to "🚲",
+    "coffee" to "☕", "tea" to "🍵", "beer" to "🍺", "beers" to "🍻",
+    "wine" to "🍷", "cocktail" to "🍸", "pizza" to "🍕",
+    "burger" to "🍔", "fries" to "🍟", "hotdog" to "🌭",
+    "taco" to "🌮", "burrito" to "🌯", "sushi" to "🍣",
+    "cookie" to "🍪", "cake" to "🎂", "ice_cream" to "🍦",
+    "donut" to "🍩", "apple" to "🍎", "banana" to "🍌",
+    "dog" to "🐕", "cat" to "🐈", "bug" to "🐛",
+    "butterfly" to "🦋", "snake" to "🐍", "dragon" to "🐉",
+    "unicorn" to "🦄", "bee" to "🐝", "penguin" to "🐧",
+    "monkey" to "🐒", "fox" to "🦊", "panda" to "🐼",
+    "pig" to "🐷", "frog" to "🐸", "chicken" to "🐔",
+    "whale" to "🐋", "dolphin" to "🐬", "fish" to "🐟",
+    "octopus" to "🐙", "crab" to "🦀", "shrimp" to "🦐",
+    "music" to "🎵", "notes" to "🎶", "guitar" to "🎸",
+    "mic" to "🎤", "headphones" to "🎧", "drum" to "🥁",
+    "computer" to "💻", "phone" to "📱", "keyboard" to "⌨️",
+    "gear" to "⚙️", "wrench" to "🔧", "hammer" to "🔨",
+    "sword" to "⚔️", "shield" to "🛡️", "bow" to "🏹",
+    "flag" to "🏁", "checkered_flag" to "🏁",
+    "thumbs_up" to "👍", "thumbs_down" to "👎",
+    "ok" to "👌", "peace" to "✌️", "shrug" to "🤷",
+    "facepalm" to "🤦", "lol" to "😂", "lmao" to "🤣",
+    "xd" to "😆", "haha" to "😄", "hmm" to "🤔",
+    "sus" to "🤨", "cap" to "🧢", "no_cap" to "🚫🧢",
+    "goat" to "🐐", "W" to "🏆", "L" to "❌",
+    "skull_emoji" to "💀", "dead" to "💀", "rip" to "🪦",
+    "salute" to "🫡", "moai" to "🗿", "nerd_face" to "🤓",
+    "hot" to "🥵", "cold" to "🥶", "sick" to "🤮",
+    "money" to "💰", "dollar" to "💵", "gem" to "💎",
+    "ring" to "💍", "clock" to "🕐", "hourglass" to "⏳",
+    "earth" to "🌍", "world" to "🌍", "map" to "🗺️",
+    "house" to "🏠", "tent" to "⛺", "mountain" to "⛰️",
+    "tree" to "🌳", "flower" to "🌸", "rose" to "🌹",
+    "seedling" to "🌱", "leaf" to "🍃", "cactus" to "🌵",
+    "poop_emoji" to "💩", "shit" to "💩"
+)
+
+internal fun replaceEmojiShortcodes(text: String): String {
+    return EMOJI_SHORTCODE.replace(text) { match ->
+        EMOJI_MAP[match.groupValues[1].lowercase()] ?: match.value
+    }
+}
 
 @Composable
 fun MessageContent(
@@ -63,21 +151,22 @@ fun MessageContent(
     onImageClick: ((String) -> Unit)? = null
 ) {
     val uriHandler = LocalUriHandler.current
+    val displayText = replaceEmojiShortcodes(text)
 
     // Priority: image > Bluesky post > YouTube > generic link
-    val imageUrl = IMAGE_PATTERN.find(text)?.value ?: CDN_PATTERN.find(text)?.value
-    val bskyMatch = if (imageUrl == null) BSKY_POST_PATTERN.find(text) else null
-    val ytMatch = if (imageUrl == null && bskyMatch == null) YOUTUBE_PATTERN.find(text) else null
-    val linkUrl = if (imageUrl == null && bskyMatch == null && ytMatch == null) URL_PATTERN.find(text)?.value else null
+    val imageUrl = IMAGE_PATTERN.find(displayText)?.value ?: CDN_PATTERN.find(displayText)?.value
+    val bskyMatch = if (imageUrl == null) BSKY_POST_PATTERN.find(displayText) else null
+    val ytMatch = if (imageUrl == null && bskyMatch == null) YOUTUBE_PATTERN.find(displayText) else null
+    val linkUrl = if (imageUrl == null && bskyMatch == null && ytMatch == null) URL_PATTERN.find(displayText)?.value else null
 
     val embedUrl = imageUrl
-        ?: bskyMatch?.let { URL_PATTERN.find(text)?.value }
-        ?: ytMatch?.let { URL_PATTERN.find(text)?.value }
+        ?: bskyMatch?.let { URL_PATTERN.find(displayText)?.value }
+        ?: ytMatch?.let { URL_PATTERN.find(displayText)?.value }
         ?: linkUrl
-    val remainingText = embedUrl?.let { text.replace(it, "").trim() } ?: text
+    val remainingText = embedUrl?.let { displayText.replace(it, "").trim() } ?: displayText
 
     // Text portion
-    val showText = if (embedUrl != null) remainingText else text
+    val showText = if (embedUrl != null) remainingText else displayText
     if (showText.isNotEmpty()) {
         SelectionContainer {
             if (isAction) {
