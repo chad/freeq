@@ -15,7 +15,9 @@ dictionary IrcMessage {
 dictionary IrcMember {
     string nick;
     boolean is_op;
+    boolean is_halfop;
     boolean is_voiced;
+    string? away_msg;
 };
 
 dictionary ChannelTopic {
@@ -42,6 +44,8 @@ interface FreeqEvent {
     AuthFailed(string reason);
     Joined(string channel, string nick);
     Parted(string channel, string nick);
+    NickChanged(string old_nick, string new_nick);
+    AwayChanged(string nick, string? away_msg);
     Message(IrcMessage msg);
     TagMsg(TagMessage msg);
     Names(string channel, sequence<IrcMember> members);

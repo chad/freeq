@@ -940,13 +940,31 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
                 .filter(|name| *name != "status")
                 .filter(|name| {
                     app.buffers.get(*name)
-                        .map(|b| b.nicks.iter().any(|m| m.trim_start_matches(&['@', '+'][..]) == nick))
+                        .map(|b| b.nicks.iter().any(|m| m.trim_start_matches(&['@', '+', '%'][..]) == nick))
                         .unwrap_or(false)
                 })
                 .cloned()
                 .collect();
             for name in buf_names {
                 app.buffer_mut(&name).push_system(&msg);
+            }
+        }
+        Event::NickChanged { old_nick, new_nick } => {
+            let msg = format!("{old_nick} is now known as {new_nick}");
+            for (name, buf) in app.buffers.iter_mut() {
+                if name == "status" { continue; }
+                let mut updated = false;
+                for n in &mut buf.nicks {
+                    let bare = n.trim_start_matches(&['@', '+', '%'][..]);
+                    if bare.eq_ignore_ascii_case(&old_nick) {
+                        let prefix = n.chars().next().filter(|c| *c == '@' || *c == '+' || *c == '%').map(|c| c.to_string()).unwrap_or_default();
+                        *n = format!("{prefix}{new_nick}");
+                        updated = true;
+                    }
+                }
+                if updated {
+                    buf.push_system(&msg);
+                }
             }
         }
         Event::RawLine(ref line) => {

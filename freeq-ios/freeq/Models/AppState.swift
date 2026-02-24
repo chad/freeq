@@ -91,15 +91,20 @@ class ChannelState: ObservableObject, Identifiable {
 struct MemberInfo: Identifiable, Equatable {
     let nick: String
     let isOp: Bool
+    let isHalfop: Bool
     let isVoiced: Bool
+    let awayMsg: String?
 
     var id: String { nick }
 
     var prefix: String {
         if isOp { return "@" }
+        if isHalfop { return "%" }
         if isVoiced { return "+" }
         return ""
     }
+
+    var isAway: Bool { awayMsg != nil }
 }
 
 /// Connection state.
@@ -370,6 +375,50 @@ class AppState: ObservableObject {
             }
         }
     }
+
+    private func updateAwayStatus(nick: String, awayMsg: String?) {
+        for ch in channels {
+            if let idx = ch.members.firstIndex(where: { $0.nick.lowercased() == nick.lowercased() }) {
+                let m = ch.members[idx]
+                ch.members[idx] = MemberInfo(nick: m.nick, isOp: m.isOp, isHalfop: m.isHalfop, isVoiced: m.isVoiced, awayMsg: awayMsg)
+            }
+        }
+    }
+
+    private func renameUser(oldNick: String, newNick: String) {
+        for ch in channels {
+            if let idx = ch.members.firstIndex(where: { $0.nick.lowercased() == oldNick.lowercased() }) {
+                let m = ch.members[idx]
+                ch.members[idx] = MemberInfo(nick: newNick, isOp: m.isOp, isHalfop: m.isHalfop, isVoiced: m.isVoiced, awayMsg: m.awayMsg)
+            }
+            if let ts = ch.typingUsers.removeValue(forKey: oldNick) {
+                ch.typingUsers[newNick] = ts
+            }
+        }
+
+        if let idx = dmBuffers.firstIndex(where: { $0.name.lowercased() == oldNick.lowercased() }) {
+            let old = dmBuffers[idx]
+            let renamed = ChannelState(name: newNick)
+            renamed.messages = old.messages
+            renamed.members = old.members
+            renamed.topic = old.topic
+            renamed.typingUsers = old.typingUsers
+            dmBuffers.remove(at: idx)
+            dmBuffers.append(renamed)
+
+            if let count = unreadCounts.removeValue(forKey: old.name) {
+                unreadCounts[newNick] = count
+            }
+            if let last = lastReadMessageIds.removeValue(forKey: old.name) {
+                lastReadMessageIds[newNick] = last
+                UserDefaults.standard.set(lastReadMessageIds, forKey: "freeq.readPositions")
+            }
+        }
+
+        if activeChannel?.lowercased() == oldNick.lowercased() {
+            activeChannel = newNick
+        }
+    }
 }
 
 /// Bridges Rust SDK events to SwiftUI state updates on main thread.
@@ -427,6 +476,9 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                     isAction: false, timestamp: Date(), replyTo: nil
                 )
                 ch.appendIfNew(msg)
+                if !ch.members.contains(where: { $0.nick.lowercased() == nick.lowercased() }) {
+                    ch.members.append(MemberInfo(nick: nick, isOp: false, isHalfop: false, isVoiced: false, awayMsg: nil))
+                }
             }
 
         case .parted(let channel, let nick):
@@ -520,7 +572,9 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
 
         case .names(let channel, let members):
             let ch = state.getOrCreateChannel(channel)
-            ch.members = members.map { MemberInfo(nick: $0.nick, isOp: $0.isOp, isVoiced: $0.isVoiced) }
+            ch.members = members.map {
+                MemberInfo(nick: $0.nick, isOp: $0.isOp, isHalfop: $0.isHalfop, isVoiced: $0.isVoiced, awayMsg: $0.awayMsg)
+            }
             // Prefetch avatars for all channel members
             let nicks = members.map { $0.nick }
             Task { @MainActor in
@@ -535,15 +589,16 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
             guard let nick = arg else { break }
             let ch = state.getOrCreateChannel(channel)
             if let idx = ch.members.firstIndex(where: { $0.nick.lowercased() == nick.lowercased() }) {
-                var member = ch.members[idx]
+                let member = ch.members[idx]
                 switch mode {
-                case "+o": member = MemberInfo(nick: member.nick, isOp: true, isVoiced: member.isVoiced)
-                case "-o": member = MemberInfo(nick: member.nick, isOp: false, isVoiced: member.isVoiced)
-                case "+v": member = MemberInfo(nick: member.nick, isOp: member.isOp, isVoiced: true)
-                case "-v": member = MemberInfo(nick: member.nick, isOp: member.isOp, isVoiced: false)
+                case "+o": ch.members[idx] = MemberInfo(nick: member.nick, isOp: true, isHalfop: false, isVoiced: member.isVoiced, awayMsg: member.awayMsg)
+                case "-o": ch.members[idx] = MemberInfo(nick: member.nick, isOp: false, isHalfop: member.isHalfop, isVoiced: member.isVoiced, awayMsg: member.awayMsg)
+                case "+h": ch.members[idx] = MemberInfo(nick: member.nick, isOp: member.isOp, isHalfop: true, isVoiced: member.isVoiced, awayMsg: member.awayMsg)
+                case "-h": ch.members[idx] = MemberInfo(nick: member.nick, isOp: member.isOp, isHalfop: false, isVoiced: member.isVoiced, awayMsg: member.awayMsg)
+                case "+v": ch.members[idx] = MemberInfo(nick: member.nick, isOp: member.isOp, isHalfop: member.isHalfop, isVoiced: true, awayMsg: member.awayMsg)
+                case "-v": ch.members[idx] = MemberInfo(nick: member.nick, isOp: member.isOp, isHalfop: member.isHalfop, isVoiced: false, awayMsg: member.awayMsg)
                 default: break
                 }
-                ch.members[idx] = member
             }
 
         case .kicked(let channel, let nick, let by, let reason):
@@ -624,6 +679,12 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 let dm = state.getOrCreateDM(batch.target)
                 for msg in sorted { dm.appendIfNew(msg) }
             }
+
+        case .nickChanged(let oldNick, let newNick):
+            state.renameUser(oldNick: oldNick, newNick: newNick)
+
+        case .awayChanged(let nick, let awayMsg):
+            state.updateAwayStatus(nick: nick, awayMsg: awayMsg)
 
         case .userQuit(let nick, _):
             for ch in state.channels {

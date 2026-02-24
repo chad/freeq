@@ -76,6 +76,12 @@ pub enum Event {
         away_msg: Option<String>,
     },
 
+    /// A user changed nick.
+    NickChanged {
+        old_nick: String,
+        new_nick: String,
+    },
+
     /// We were invited to a channel.
     Invited {
         channel: String,

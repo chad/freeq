@@ -682,6 +682,16 @@ where
                                 .to_string();
                             let _ = event_tx.send(Event::Parted { channel, nick }).await;
                         }
+                        "NICK" => {
+                            let old_nick = msg.prefix.as_deref()
+                                .and_then(|p| p.split('!').next())
+                                .unwrap_or("")
+                                .to_string();
+                            let new_nick = msg.params.first().cloned().unwrap_or_default();
+                            if !old_nick.is_empty() && !new_nick.is_empty() {
+                                let _ = event_tx.send(Event::NickChanged { old_nick, new_nick }).await;
+                            }
+                        }
                         // MODE change
                         "MODE" => {
                             if msg.params.len() >= 2 {

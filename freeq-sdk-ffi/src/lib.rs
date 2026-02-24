@@ -41,7 +41,9 @@ pub struct TagMessage {
 pub struct IrcMember {
     pub nick: String,
     pub is_op: bool,
+    pub is_halfop: bool,
     pub is_voiced: bool,
+    pub away_msg: Option<String>,
 }
 
 pub struct ChannelTopic {
@@ -56,6 +58,8 @@ pub enum FreeqEvent {
     AuthFailed { reason: String },
     Joined { channel: String, nick: String },
     Parted { channel: String, nick: String },
+    NickChanged { old_nick: String, new_nick: String },
+    AwayChanged { nick: String, away_msg: Option<String> },
     Message { msg: IrcMessage },
     TagMsg { msg: TagMessage },
     Names { channel: String, members: Vec<IrcMember> },
@@ -288,14 +292,16 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
         }
         Event::Names { channel, nicks } => {
             let members = nicks.iter().map(|n| {
-                let (is_op, is_voiced, nick) = if n.starts_with('@') {
-                    (true, false, n[1..].to_string())
+                let (is_op, is_halfop, is_voiced, nick) = if n.starts_with('@') {
+                    (true, false, false, n[1..].to_string())
+                } else if n.starts_with('%') {
+                    (false, true, false, n[1..].to_string())
                 } else if n.starts_with('+') {
-                    (false, true, n[1..].to_string())
+                    (false, false, true, n[1..].to_string())
                 } else {
-                    (false, false, n.clone())
+                    (false, false, false, n.clone())
                 };
-                IrcMember { nick, is_op, is_voiced }
+                IrcMember { nick, is_op, is_halfop, is_voiced, away_msg: None }
             }).collect();
             FreeqEvent::Names { channel: channel.clone(), members }
         }
@@ -311,6 +317,14 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
         },
         Event::ServerNotice { text } => FreeqEvent::Notice { text: text.clone() },
         Event::UserQuit { nick, reason } => FreeqEvent::UserQuit { nick: nick.clone(), reason: reason.clone() },
+        Event::NickChanged { old_nick, new_nick } => FreeqEvent::NickChanged {
+            old_nick: old_nick.clone(),
+            new_nick: new_nick.clone(),
+        },
+        Event::AwayChanged { nick, away_msg } => FreeqEvent::AwayChanged {
+            nick: nick.clone(),
+            away_msg: away_msg.clone(),
+        },
         Event::BatchStart { id, batch_type, target } => FreeqEvent::BatchStart {
             id: id.clone(),
             batch_type: batch_type.clone(),
