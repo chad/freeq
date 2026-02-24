@@ -6,6 +6,7 @@ members = [
     "freeq-sdk-ffi",
     "freeq-tui",
     "freeq-bots",
+    "freeq-auth-broker",
 ]
 exclude = [
     "freeq-app/src-tauri",

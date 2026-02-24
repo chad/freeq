@@ -129,6 +129,7 @@ class AppState: ObservableObject {
     @Published var connectionState: ConnectionState = .disconnected
     @Published var nick: String = ""
     @Published var serverAddress: String = "irc.freeq.at:6667"
+    @Published var authBrokerBase: String = "https://auth.freeq.at"
     @Published var channels: [ChannelState] = []
     @Published var activeChannel: String? = nil
     @Published var errorMessage: String? = nil
@@ -148,6 +149,8 @@ class AppState: ObservableObject {
     @Published var lightboxURL: URL? = nil
     /// Pending web-token for SASL auth (from AT Protocol OAuth)
     var pendingWebToken: String? = nil
+    /// Persistent broker session token
+    var brokerToken: String? = nil
 
     /// Read position tracking — channel name -> last read message ID
     @Published var lastReadMessageIds: [String: String] = [:]
@@ -191,6 +194,12 @@ class AppState: ObservableObject {
         if let savedDID = UserDefaults.standard.string(forKey: "freeq.did") {
             authenticatedDID = savedDID
         }
+        if let savedBroker = UserDefaults.standard.string(forKey: "freeq.brokerToken") {
+            brokerToken = savedBroker
+        }
+        if let savedBrokerBase = UserDefaults.standard.string(forKey: "freeq.brokerBase") {
+            authBrokerBase = savedBrokerBase
+        }
         isDarkTheme = UserDefaults.standard.object(forKey: "freeq.darkTheme") as? Bool ?? true
 
         // Prune stale typing indicators every 3 seconds
@@ -204,12 +213,30 @@ class AppState: ObservableObject {
     /// Reconnect with saved session (requires SASL web-token)
     func reconnectSavedSession() {
         guard hasSavedSession, connectionState == .disconnected else { return }
-        // Never reconnect as guest — require a valid web-token
-        guard pendingWebToken != nil else {
+        if pendingWebToken != nil {
+            connect(nick: nick)
+            return
+        }
+        // Fetch a fresh web-token from broker
+        guard let brokerToken else {
             errorMessage = "Session expired. Please log in again."
             return
         }
-        connect(nick: nick)
+        Task {
+            do {
+                let session = try await fetchBrokerSession(brokerToken: brokerToken)
+                await MainActor.run {
+                    self.pendingWebToken = session.token
+                    self.authenticatedDID = session.did
+                    UserDefaults.standard.set(session.did, forKey: "freeq.did")
+                    self.connect(nick: session.nick)
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = "Session expired. Please log in again."
+                }
+            }
+        }
     }
 
     func connect(nick: String) {
@@ -219,6 +246,7 @@ class AppState: ObservableObject {
 
         UserDefaults.standard.set(nick, forKey: "freeq.nick")
         UserDefaults.standard.set(serverAddress, forKey: "freeq.server")
+        UserDefaults.standard.set(authBrokerBase, forKey: "freeq.brokerBase")
 
         do {
             let handler = SwiftEventHandler(appState: self)
@@ -332,6 +360,25 @@ class AppState: ObservableObject {
         } else {
             sendRaw("CHATHISTORY LATEST \(channel) * 50")
         }
+    }
+
+    struct BrokerSessionResponse: Decodable {
+        let token: String
+        let nick: String
+        let did: String
+        let handle: String
+    }
+
+    private func fetchBrokerSession(brokerToken: String) async throws -> BrokerSessionResponse {
+        let url = URL(string: "\(authBrokerBase)/session")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["broker_token": brokerToken])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200 else { throw NSError(domain: "Broker", code: status) }
+        return try JSONDecoder().decode(BrokerSessionResponse.self, from: data)
     }
 
     func markRead(_ channel: String) {
