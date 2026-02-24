@@ -133,10 +133,10 @@
     <a href="/docs/web-client/">Web client features →</a>
   </div>
   <div class="card">
-    <div class="icon">🏛</div>
-    <h3>Channel Governance</h3>
-    <p>Cryptographic policies with verifiable credentials. Require GitHub membership, accept a code of conduct, or bring your own verifier. Every decision is signed and auditable.</p>
-    <a href="/docs/policy-framework/">Policy framework →</a>
+    <div class="icon">🛡</div>
+    <h3>Moderation &amp; Governance</h3>
+    <p>Cryptographic channel policies with verifiable credentials. Appoint moderators, require GitHub org membership, gate on Bluesky follows, or bring your own verifier. Every decision is signed and auditable.</p>
+    <a href="/docs/moderation/">Moderation guide →</a>
   </div>
   <div class="card">
     <div class="icon">🌐</div>
@@ -145,32 +145,34 @@
     <a href="/docs/federation/">Federation guide →</a>
   </div>
   <div class="card">
-    <div class="icon">🔒</div>
-    <h3>End-to-end encryption</h3>
-    <p>AES-256-GCM encrypted channels with DID-based key distribution. P2P encrypted DMs via iroh — the server never sees the content.</p>
-    <a href="/docs/protocol/">Protocol details →</a>
+    <div class="icon">🔌</div>
+    <h3>Fully extensible</h3>
+    <p>Rust SDK, bot framework, REST API, media uploads, and a decoupled verifier architecture. Build bots, custom moderation services, or entirely new clients — no server changes needed.</p>
+    <a href="/docs/verifiers/">Verifier architecture →</a>
   </div>
   <div class="card">
     <div class="icon">🛠</div>
-    <h3>Build anything</h3>
-    <p>Rust SDK, bot framework, plugin system, REST API, and media uploads. Build integrations, custom bots, or entirely new clients.</p>
-    <a href="/docs/bots/">Bot framework →</a>
+    <h3>Self-host it</h3>
+    <p>Single Rust binary. SQLite persistence. TLS, nginx, systemd. Add your own credential verifiers. Federate with other freeq servers or run standalone.</p>
+    <a href="/docs/self-hosting/">Self-hosting guide →</a>
   </div>
 </div>
 
 <div class="section">
   <h2>What makes freeq different</h2>
   <table>
-    <tr><td style="color:var(--cyan)">✓</td><td>AT Protocol SASL authentication — your Bluesky DID is your IRC identity</td></tr>
-    <tr><td style="color:var(--cyan)">✓</td><td>DID-based nick ownership, channel ops, bans, and invites — persistent across reconnects</td></tr>
-    <tr><td style="color:var(--cyan)">✓</td><td>Cryptographic channel policies with verifiable credentials and transparency logs</td></tr>
-    <tr><td style="color:var(--cyan)">✓</td><td>End-to-end encrypted channels (AES-256-GCM) and P2P encrypted DMs</td></tr>
-    <tr><td style="color:var(--cyan)">✓</td><td>Server-to-server federation with CRDT state convergence via iroh QUIC</td></tr>
-    <tr><td style="color:var(--cyan)">✓</td><td>Message editing, deletion, reactions, threads, and inline media</td></tr>
-    <tr><td style="color:var(--cyan)">✓</td><td>IRCv3 capabilities: message-tags, server-time, batch, chathistory, echo-message, away-notify</td></tr>
-    <tr><td style="color:var(--cyan)">✓</td><td>Native web, desktop, iOS, and TUI clients with full feature parity</td></tr>
-    <tr><td style="color:var(--cyan)">✓</td><td>Rust SDK + bot framework for building integrations</td></tr>
-    <tr><td style="color:var(--cyan)">✓</td><td>100% backward compatible — standard IRC clients connect as guests</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>Sign in with Bluesky — your DID is your IRC identity, permanent and portable</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>DID-based nick ownership, persistent ops, and verified badges across reconnects and servers</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>Credential-based moderation — appoint halfops via signed credentials from any verifier</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>Channel policies with verifiable credentials — gate joins on GitHub org, Bluesky follows, or custom verifiers</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>Server-to-server federation via iroh QUIC with CRDT state convergence</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>Reactions, threads, message editing, deletion, typing indicators, and inline media</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>Image uploads, Bluesky post embeds, YouTube thumbnails, and link previews</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>Web, desktop (Tauri), iOS (SwiftUI), and TUI clients — plus any standard IRC client as guest</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>Decoupled verifier architecture — build third-party credential issuers with zero server changes</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>IRCv3: message-tags, server-time, chathistory, echo-message, away-notify, batch</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>Rust SDK + bot framework — LLM-powered personas in 50 lines of code</td></tr>
+    <tr><td style="color:var(--cyan)">✓</td><td>100% backward compatible — irssi, WeeChat, Hexchat all work unchanged</td></tr>
   </table>
 </div>
 {% endblock %}
