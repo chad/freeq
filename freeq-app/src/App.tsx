@@ -56,6 +56,19 @@ export default function App() {
     }
   }, [activeChannel]);
 
+  // Ensure modals close when we disconnect
+  useEffect(() => {
+    if (!registered) {
+      setQuickSwitcher(false);
+      setSettings(false);
+      setShortcuts(false);
+      useStore.getState().setSearchOpen(false);
+      useStore.getState().setChannelListOpen(false);
+      useStore.getState().setLightboxUrl(null);
+      useStore.getState().closeThread();
+    }
+  }, [registered]);
+
   // Total unread for title badge
   const totalUnread = [...channels.values()].reduce((sum, ch) => sum + ch.unreadCount, 0);
   setUnreadCount(totalUnread);
@@ -68,7 +81,7 @@ export default function App() {
     if (sorted[n]) setActive(sorted[n].name);
   }, [channels, setActive]);
 
-  useKeyboard({
+  useKeyboard(registered ? {
     'mod+k': () => setQuickSwitcher(true),
     'mod+f': () => useStore.getState().setSearchOpen(true),
     'mod+/': () => setShortcuts(true),
@@ -91,7 +104,7 @@ export default function App() {
       useStore.getState().setLightboxUrl(null);
       useStore.getState().closeThread();
     },
-  }, [channels, switchToNth]);
+  } : {}, [channels, switchToNth, registered]);
 
   if (!registered) {
     return (
