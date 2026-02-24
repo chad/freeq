@@ -63,6 +63,8 @@ pub struct ChannelState {
     pub no_ext_msg: bool,
     /// Channel mode: +m = moderated (only voiced/ops can send).
     pub moderated: bool,
+    /// Channel mode: +E = encrypted only (messages must have +encrypted tag).
+    pub encrypted_only: bool,
     /// Channel key (+k) — password required to join.
     pub key: Option<String>,
 }
@@ -316,6 +318,9 @@ pub struct SharedState {
     pub plugin_manager: PluginManager,
     /// Policy engine for channel governance (if enabled).
     pub policy_engine: Option<Arc<crate::policy::PolicyEngine>>,
+    /// E2EE pre-key bundles: DID → PreKeyBundle JSON.
+    /// Clients upload their bundles; other clients fetch to start encrypted sessions.
+    pub prekey_bundles: Mutex<HashMap<String, serde_json::Value>>,
 }
 
 impl SharedState {
@@ -574,7 +579,7 @@ impl Server {
                     }
                 }
             },
-
+            prekey_bundles: Mutex::new(HashMap::new()),
         }))
     }
 

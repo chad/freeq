@@ -17,6 +17,7 @@ export interface Message {
   editOf?: string;
   deleted?: boolean;
   reactions?: Map<string, Set<string>>; // emoji → nicks
+  encrypted?: boolean; // true if this message was E2EE encrypted
 }
 
 export interface Member {
@@ -39,6 +40,7 @@ export interface Channel {
   members: Map<string, Member>;
   messages: Message[];
   modes: Set<string>;
+  isEncrypted: boolean; // true if +E mode or all DMs with this user are encrypted
   unreadCount: number;
   mentionCount: number;
   lastReadMsgId?: string; // last message seen when channel was active
@@ -201,6 +203,7 @@ function getOrCreateChannel(channels: Map<string, Channel>, name: string): Chann
       members: new Map(),
       messages: [],
       modes: new Set(),
+      isEncrypted: false,
       unreadCount: 0,
       mentionCount: 0,
       isJoined: false,
@@ -451,6 +454,8 @@ export const useStore = create<Store>((set, get) => ({
       // Channel modes
       if (adding) ch.modes.add(modeChar);
       else ch.modes.delete(modeChar);
+      // Track encryption mode
+      if (modeChar === 'E') ch.isEncrypted = adding;
     }
     channels.set(channel.toLowerCase(), { ...ch });
     return { channels };

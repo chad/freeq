@@ -50,6 +50,9 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
         <span className="font-bold text-base text-fg truncate">
           {isChannel ? (ch?.name || activeChannel).replace(/^#/, '') : isDM ? activeChannel : 'Server'}
         </span>
+        {ch?.isEncrypted && (
+          <span className="text-success text-xs shrink-0" title="End-to-end encrypted">🔒</span>
+        )}
       </div>
 
       {/* Identity stats */}

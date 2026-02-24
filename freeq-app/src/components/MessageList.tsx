@@ -410,6 +410,7 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
           )}
           <span className="text-xs text-fg-dim whitespace-nowrap cursor-default" title={msg.timestamp.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}>{formatTime(msg.timestamp)}</span>
           {msg.editOf && <span className="text-xs text-fg-dim">(edited)</span>}
+          {msg.encrypted && <span className="text-[10px] text-success" title="End-to-end encrypted">🔒</span>}
         </div>
         <MessageContent msg={msg} />
         <Reactions msg={msg} channel={channel} />

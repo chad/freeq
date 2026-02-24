@@ -47,6 +47,7 @@ axum = { version = "0.8", features = ["ws", "multipart"] }
 tower-http = { version = "0.6", features = ["cors", "fs"] }
 aes-gcm = "0.10"
 hkdf = "0.12"
+hmac = "0.12"
 iroh = "0.96"
 iroh-quinn = "0.16"
 automerge = "0.5"

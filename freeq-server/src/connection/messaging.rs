@@ -139,6 +139,19 @@ pub(super) fn handle_privmsg(
                     }
                     return;
                 }
+                // +E: encrypted-only mode
+                if ch.encrypted_only && !tags.contains_key("+encrypted") {
+                    let nick = conn.nick_or_star();
+                    let reply = Message::from_server(
+                        &state.server_name,
+                        irc::ERR_CANNOTSENDTOCHAN,
+                        vec![nick, target, "Cannot send to channel (+E) — messages must be encrypted"],
+                    );
+                    if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+                        let _ = tx.try_send(format!("{reply}\r\n"));
+                    }
+                    return;
+                }
             }
         }
 

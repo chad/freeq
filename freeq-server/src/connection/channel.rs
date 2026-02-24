@@ -498,6 +498,7 @@ pub(super) fn handle_mode(
             if ch.topic_locked { m.push('t'); }
             if ch.invite_only { m.push('i'); }
             if ch.moderated { m.push('m'); }
+            if ch.encrypted_only { m.push('E'); }
             if ch.key.is_some() { m.push('k'); }
             m
         } else {
@@ -533,7 +534,7 @@ pub(super) fn handle_mode(
 
     // Halfops can only set +v/-v — not +o, +h, +m, +t, +i, +k, +n
     if is_halfop && !is_op {
-        let has_restricted = mode_str.chars().any(|c| matches!(c, 'o' | 'h' | 'm' | 't' | 'i' | 'k' | 'n'));
+        let has_restricted = mode_str.chars().any(|c| matches!(c, 'o' | 'h' | 'm' | 't' | 'i' | 'k' | 'n' | 'E'));
         if has_restricted {
             let reply = Message::from_server(
                 server_name,
@@ -871,6 +872,22 @@ pub(super) fn handle_mode(
                 let mode_msg = format!(":{hostmask} MODE {channel} {sign}m\r\n");
                 broadcast_to_channel(state, channel, &mode_msg);
                 s2s_broadcast_mode(state, conn, channel, &format!("{sign}m"), None);
+            }
+            'E' => {
+                {
+                    let mut channels = state.channels.lock().unwrap();
+                    if let Some(chan) = channels.get_mut(channel) {
+                        chan.encrypted_only = adding;
+                        let ch_clone = chan.clone();
+                        drop(channels);
+                        state.with_db(|db| db.save_channel(channel, &ch_clone));
+                    }
+                }
+                let sign = if adding { "+" } else { "-" };
+                let hostmask = conn.hostmask();
+                let mode_msg = format!(":{hostmask} MODE {channel} {sign}E\r\n");
+                broadcast_to_channel(state, channel, &mode_msg);
+                s2s_broadcast_mode(state, conn, channel, &format!("{sign}E"), None);
             }
             _ => {
                 let mode_char = ch.to_string();

@@ -10,6 +10,7 @@ import { Transport, type TransportState } from './transport';
 import { useStore, type Message } from '../store';
 import { notify } from '../lib/notifications';
 import { prefetchProfiles } from '../lib/profiles';
+import * as e2ee from '../lib/e2ee';
 
 // ── State ──
 
@@ -193,7 +194,7 @@ function raw(line: string) {
   transport?.send(line);
 }
 
-function handleLine(rawLine: string) {
+async function handleLine(rawLine: string) {
   const msg = parse(rawLine);
   const store = useStore.getState();
   const from = prefixNick(msg.prefix);
@@ -210,7 +211,14 @@ function handleLine(rawLine: string) {
       break;
     case '900':
       store.setAuth(saslDid, msg.params[msg.params.length - 1]);
-      if (saslDid) prefetchProfiles([saslDid]);
+      if (saslDid) {
+        prefetchProfiles([saslDid]);
+        // Initialize E2EE keys for this DID
+        const origin = window.location.origin;
+        e2ee.initialize(saslDid, origin).catch((e) =>
+          console.warn('[e2ee] Init failed:', e)
+        );
+      }
       break;
     case '903':
       raw('CAP END');
@@ -351,15 +359,32 @@ function handleLine(rawLine: string) {
         break;
       }
 
+      // Decrypt E2EE messages
+      let displayText = isAction ? text.slice(8, -1) : text;
+      let isEncryptedMsg = false;
+      if (e2ee.isEncrypted(text) && !isChannel) {
+        // Look up the remote DID for this nick
+        const remoteDid = store.channels.get(bufName.toLowerCase())?.members.values().next().value?.did;
+        if (remoteDid) {
+          const plain = await e2ee.decryptMessage(remoteDid, text);
+          if (plain !== null) {
+            displayText = plain;
+            isEncryptedMsg = true;
+          }
+        }
+      }
+      if (msg.tags['+encrypted']) isEncryptedMsg = true;
+
       const message: Message = {
         id: msg.tags['msgid'] || crypto.randomUUID(),
         from,
-        text: isAction ? text.slice(8, -1) : text,
+        text: displayText,
         timestamp: msg.tags['time'] ? new Date(msg.tags['time']) : new Date(),
         tags: msg.tags,
         isAction,
         isSelf: isSelf,
         replyTo: msg.tags['+reply'],
+        encrypted: isEncryptedMsg,
       };
 
       // Ensure DM buffer exists
