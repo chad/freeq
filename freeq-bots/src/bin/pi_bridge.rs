@@ -19,6 +19,7 @@ struct Config {
     reply_inbox_path: String,
     bot_nick: Option<String>,
     guest_mode: bool,
+    fifo_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +65,7 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or_else(|_| "/tmp/freeq-pi-replies.jsonl".to_string()),
         bot_nick: std::env::var("PI_BOT_NICK").ok(),
         guest_mode: matches!(std::env::var("PI_BOT_GUEST").as_deref(), Ok("1") | Ok("true") | Ok("yes")),
+        fifo_path: std::env::var("PI_FIFO").ok(),
     };
 
     loop {
@@ -156,7 +158,7 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
                     nick_dids.insert(key.clone(), did.clone());
                     if let Some(cmd) = pending.remove(&key) {
                         if did == cfg.allowed_did {
-                            write_outbox(&cfg.outbox_path, &OutboxEntry {
+                            dispatch_command(&cfg, &OutboxEntry {
                                 ts: chrono::Utc::now().timestamp(),
                                 from: nick.clone(),
                                 did: did.clone(),
@@ -208,7 +210,7 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
                     continue;
                 }
 
-                write_outbox(&cfg.outbox_path, &OutboxEntry {
+                dispatch_command(&cfg, &OutboxEntry {
                     ts: chrono::Utc::now().timestamp(),
                     from: from.clone(),
                     did,
@@ -250,6 +252,22 @@ fn write_outbox(path: &str, entry: &OutboxEntry) -> anyhow::Result<()> {
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     let line = serde_json::to_string(entry)?;
     writeln!(file, "{line}")?;
+    Ok(())
+}
+
+fn dispatch_command(cfg: &Config, entry: &OutboxEntry) -> anyhow::Result<()> {
+    write_outbox(&cfg.outbox_path, entry)?;
+    if let Some(ref fifo) = cfg.fifo_path {
+        if let Err(err) = write_fifo(fifo, &entry.text) {
+            tracing::warn!(error = %err, fifo = %fifo, "Failed to write to FIFO");
+        }
+    }
+    Ok(())
+}
+
+fn write_fifo(path: &str, text: &str) -> anyhow::Result<()> {
+    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+    writeln!(file, "{text}")?;
     Ok(())
 }
 

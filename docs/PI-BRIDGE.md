@@ -32,7 +32,18 @@ Optional:
 PI_ALLOWED_DID=did:plc:... \
 PI_BROKER_TOKEN=... \
 PI_CHANNEL=#pi-control \
+PI_FIFO=/tmp/freeq-pi.fifo \
 cargo run -p freeq-bots --bin pi_bridge
+```
+
+## Run a live pi session (FIFO bridge)
+
+This creates a FIFO and merges keyboard input + IRC commands into the pi session.
+
+```bash
+PI_CMD=pi \
+PI_FIFO=/tmp/freeq-pi.fifo \
+./scripts/run-pi-session.sh
 ```
 
 ## Send a command
