@@ -43,6 +43,10 @@ class ChannelState: ObservableObject, Identifiable {
         messages.firstIndex(where: { $0.id == id })
     }
 
+    func memberInfo(for nick: String) -> MemberInfo? {
+        members.first(where: { $0.nick.lowercased() == nick.lowercased() })
+    }
+
     /// Append a message only if its ID hasn't been seen before.
     /// Inserts in timestamp order to handle CHATHISTORY arriving after live messages.
     func appendIfNew(_ msg: ChatMessage) {
@@ -383,6 +387,15 @@ class AppState: ObservableObject {
                 ch.members[idx] = MemberInfo(nick: m.nick, isOp: m.isOp, isHalfop: m.isHalfop, isVoiced: m.isVoiced, awayMsg: awayMsg)
             }
         }
+    }
+
+    func awayMessage(for nick: String) -> String? {
+        for ch in channels {
+            if let m = ch.members.first(where: { $0.nick.lowercased() == nick.lowercased() }) {
+                return m.awayMsg
+            }
+        }
+        return nil
     }
 
     private func renameUser(oldNick: String, newNick: String) {

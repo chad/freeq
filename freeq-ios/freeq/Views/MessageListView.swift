@@ -388,7 +388,7 @@ struct MessageListView: View {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Button(action: { profileNick = msg.from }) {
                                 HStack(spacing: 4) {
-                                    Text(msg.from)
+                                    Text((channel.memberInfo(for: msg.from)?.prefix ?? "") + msg.from)
                                         .font(.system(size: 15, weight: .bold))
                                         .foregroundColor(Theme.nickColor(for: msg.from))
 
