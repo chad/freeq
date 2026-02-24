@@ -6,6 +6,7 @@ dictionary IrcMessage {
     string text;
     string? msgid;
     string? reply_to;
+    string? edit_of;
     string? batch_id;
     boolean is_action;
     i64 timestamp_ms;
@@ -22,6 +23,17 @@ dictionary ChannelTopic {
     string? set_by;
 };
 
+dictionary TagEntry {
+    string key;
+    string value;
+};
+
+dictionary TagMessage {
+    string from;
+    string target;
+    sequence<TagEntry> tags;
+};
+
 [Enum]
 interface FreeqEvent {
     Connected();
@@ -31,6 +43,7 @@ interface FreeqEvent {
     Joined(string channel, string nick);
     Parted(string channel, string nick);
     Message(IrcMessage msg);
+    TagMsg(TagMessage msg);
     Names(string channel, sequence<IrcMember> members);
     TopicChanged(string channel, ChannelTopic topic);
     ModeChanged(string channel, string mode, string? arg, string set_by);

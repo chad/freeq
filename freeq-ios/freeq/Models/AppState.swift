@@ -3,7 +3,7 @@ import SwiftUI
 
 /// A single chat message.
 struct ChatMessage: Identifiable, Equatable {
-    let id: String  // msgid or UUID
+    var id: String  // msgid or UUID
     let from: String
     var text: String
     let isAction: Bool
@@ -55,6 +55,34 @@ class ChannelState: ObservableObject, Identifiable {
             messages.insert(msg, at: idx)
         } else {
             messages.append(msg)
+        }
+    }
+
+    func applyEdit(originalId: String, newId: String?, newText: String) {
+        if let idx = findMessage(byId: originalId) {
+            messages[idx].text = newText
+            messages[idx].isEdited = true
+            if let newId = newId {
+                messages[idx].id = newId
+                messageIds.insert(newId)
+            }
+        }
+    }
+
+    func applyDelete(msgId: String) {
+        if let idx = findMessage(byId: msgId) {
+            messages[idx].isDeleted = true
+            messages[idx].text = ""
+        }
+    }
+
+    func applyReaction(msgId: String, emoji: String, from: String) {
+        if let idx = findMessage(byId: msgId) {
+            var reactions = messages[idx].reactions
+            var nicks = reactions[emoji] ?? Set<String>()
+            nicks.insert(from)
+            reactions[emoji] = nicks
+            messages[idx].reactions = reactions
         }
     }
 }
@@ -283,8 +311,13 @@ class AppState: ObservableObject {
         sendRaw("@+typing=active TAGMSG \(target)")
     }
 
-    func requestHistory(channel: String) {
-        sendRaw("CHATHISTORY LATEST \(channel) * 50")
+    func requestHistory(channel: String, before: Date? = nil) {
+        if let before = before {
+            let iso = ISO8601DateFormatter().string(from: before)
+            sendRaw("CHATHISTORY BEFORE \(channel) timestamp=\(iso) 50")
+        } else {
+            sendRaw("CHATHISTORY LATEST \(channel) * 50")
+        }
     }
 
     func markRead(_ channel: String) {
@@ -427,6 +460,31 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 replyTo: ircMsg.replyTo
             )
 
+            // Handle edits
+            if let editOf = ircMsg.editOf {
+                if let batchId = ircMsg.batchId, var batch = state.batches[batchId] {
+                    if let idx = batch.messages.firstIndex(where: { $0.id == editOf }) {
+                        batch.messages[idx].text = ircMsg.text
+                        batch.messages[idx].isEdited = true
+                        if let newId = ircMsg.msgid { batch.messages[idx].id = newId }
+                    } else {
+                        batch.messages.append(msg)
+                    }
+                    state.batches[batchId] = batch
+                    return
+                }
+
+                if target.hasPrefix("#") {
+                    let ch = state.getOrCreateChannel(target)
+                    ch.applyEdit(originalId: editOf, newId: ircMsg.msgid, newText: ircMsg.text)
+                } else {
+                    let bufferName = isSelf ? target : from
+                    let dm = state.getOrCreateDM(bufferName)
+                    dm.applyEdit(originalId: editOf, newId: ircMsg.msgid, newText: ircMsg.text)
+                }
+                return
+            }
+
             // If part of CHATHISTORY batch, buffer it for later merge
             if let batchId = ircMsg.batchId, var batch = state.batches[batchId] {
                 batch.messages.append(msg)
@@ -473,8 +531,20 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
             let ch = state.getOrCreateChannel(channel)
             ch.topic = topic.text
 
-        case .modeChanged(_, _, _, _):
-            break
+        case .modeChanged(let channel, let mode, let arg, _):
+            guard let nick = arg else { break }
+            let ch = state.getOrCreateChannel(channel)
+            if let idx = ch.members.firstIndex(where: { $0.nick.lowercased() == nick.lowercased() }) {
+                var member = ch.members[idx]
+                switch mode {
+                case "+o": member = MemberInfo(nick: member.nick, isOp: true, isVoiced: member.isVoiced)
+                case "-o": member = MemberInfo(nick: member.nick, isOp: false, isVoiced: member.isVoiced)
+                case "+v": member = MemberInfo(nick: member.nick, isOp: member.isOp, isVoiced: true)
+                case "-v": member = MemberInfo(nick: member.nick, isOp: member.isOp, isVoiced: false)
+                default: break
+                }
+                ch.members[idx] = member
+            }
 
         case .kicked(let channel, let nick, let by, let reason):
             if nick.lowercased() == state.nick.lowercased() {
@@ -493,6 +563,52 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                     isAction: false, timestamp: Date(), replyTo: nil
                 ))
                 ch.members.removeAll { $0.nick.lowercased() == nick.lowercased() }
+            }
+
+        case .batchStart(let id, _, let target):
+            state.batches[id] = AppState.BatchBuffer(target: target, messages: [])
+
+        case .batchEnd(let id):
+            guard let batch = state.batches.removeValue(forKey: id) else { return }
+            let sorted = batch.messages.sorted { $0.timestamp < $1.timestamp }
+            if batch.target.hasPrefix("#") {
+                let ch = state.getOrCreateChannel(batch.target)
+                for msg in sorted { ch.appendIfNew(msg) }
+            } else {
+                let dm = state.getOrCreateDM(batch.target)
+                for msg in sorted { dm.appendIfNew(msg) }
+            }
+
+        case .tagMsg(let tagMsg):
+            let tags = Dictionary(uniqueKeysWithValues: tagMsg.tags.map { ($0.key, $0.value) })
+            let target = tagMsg.target
+            let from = tagMsg.from
+
+            // Typing indicators
+            if let typing = tags["+typing"] {
+                if from.lowercased() != state.nick.lowercased() {
+                    let bufferName = target.hasPrefix("#") ? target : from
+                    let ch = bufferName.hasPrefix("#") ? state.getOrCreateChannel(bufferName) : state.getOrCreateDM(bufferName)
+                    if typing == "active" {
+                        ch.typingUsers[from] = Date()
+                    } else if typing == "done" {
+                        ch.typingUsers.removeValue(forKey: from)
+                    }
+                }
+            }
+
+            // Message deletion
+            if let deleteId = tags["+draft/delete"] {
+                let bufferName = target.hasPrefix("#") ? target : from
+                let ch = bufferName.hasPrefix("#") ? state.getOrCreateChannel(bufferName) : state.getOrCreateDM(bufferName)
+                ch.applyDelete(msgId: deleteId)
+            }
+
+            // Reactions
+            if let emoji = tags["+react"], let replyId = tags["+reply"] {
+                let bufferName = target.hasPrefix("#") ? target : from
+                let ch = bufferName.hasPrefix("#") ? state.getOrCreateChannel(bufferName) : state.getOrCreateDM(bufferName)
+                ch.applyReaction(msgId: replyId, emoji: emoji, from: from)
             }
 
         case .batchStart(let id, _, let target):

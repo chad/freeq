@@ -21,9 +21,21 @@ pub struct IrcMessage {
     pub text: String,
     pub msgid: Option<String>,
     pub reply_to: Option<String>,
+    pub edit_of: Option<String>,
     pub batch_id: Option<String>,
     pub is_action: bool,
     pub timestamp_ms: i64,
+}
+
+pub struct TagEntry {
+    pub key: String,
+    pub value: String,
+}
+
+pub struct TagMessage {
+    pub from: String,
+    pub target: String,
+    pub tags: Vec<TagEntry>,
 }
 
 pub struct IrcMember {
@@ -45,6 +57,7 @@ pub enum FreeqEvent {
     Joined { channel: String, nick: String },
     Parted { channel: String, nick: String },
     Message { msg: IrcMessage },
+    TagMsg { msg: TagMessage },
     Names { channel: String, members: Vec<IrcMember> },
     TopicChanged { channel: String, topic: ChannelTopic },
     ModeChanged { channel: String, mode: String, arg: Option<String>, set_by: String },
@@ -234,6 +247,7 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
         Event::Message { from, target, text, tags } => {
             let msgid = tags.get("msgid").cloned();
             let reply_to = tags.get("+reply").cloned();
+            let edit_of = tags.get("+draft/edit").cloned();
             let batch_id = tags.get("batch").cloned();
             let is_action = text.starts_with("\x01ACTION ") && text.ends_with('\x01');
             let clean_text = if is_action {
@@ -252,9 +266,23 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
                     text: clean_text,
                     msgid,
                     reply_to,
+                    edit_of,
                     batch_id,
                     is_action,
                     timestamp_ms: ts,
+                },
+            }
+        }
+        Event::TagMsg { from, target, tags } => {
+            let tag_entries = tags.iter().map(|(k, v)| TagEntry {
+                key: k.clone(),
+                value: v.clone(),
+            }).collect::<Vec<_>>();
+            FreeqEvent::TagMsg {
+                msg: TagMessage {
+                    from: from.clone(),
+                    target: target.clone(),
+                    tags: tag_entries,
                 },
             }
         }

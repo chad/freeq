@@ -17,7 +17,8 @@ struct MessageListView: View {
                 ScrollView {
                     // Pull to load older messages
                     Button(action: {
-                        appState.requestHistory(channel: channel.name)
+                        let oldest = channel.messages.first?.timestamp
+                        appState.requestHistory(channel: channel.name, before: oldest)
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }) {
                         HStack(spacing: 6) {
