@@ -668,6 +668,10 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
             };
             let _ = was_encrypted; // may be used later for UI indicators
 
+            let timestamp = format_timestamp(&tags);
+            let batch_id = tags.get("batch");
+            let in_batch = batch_id.map(|id| app.batches.contains_key(id)).unwrap_or(false);
+
             // Check for media attachment in tags
             let media = freeq_sdk::media::MediaAttachment::from_tags(&tags);
 
@@ -680,8 +684,8 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
                     } else {
                         target.clone()
                     };
-                    app.buffer_mut(&buf_name).push(crate::app::BufferLine {
-                        timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                    push_line_to_buffer(app, batch_id, &buf_name, crate::app::BufferLine {
+                        timestamp: timestamp.clone(),
                         from: String::new(),
                         text: format!("* {from} {action}"),
                         is_system: true,
@@ -705,8 +709,8 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
                 if let Some(ref url) = img_url {
                     fetch_image_if_needed(&app.image_cache, url);
                 }
-                app.buffer_mut(&buf_name).push(crate::app::BufferLine {
-                    timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                push_line_to_buffer(app, batch_id, &buf_name, crate::app::BufferLine {
+                    timestamp: timestamp.clone(),
                     from: from.clone(),
                     text: display,
                     is_system: false,
@@ -722,28 +726,47 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
                         target.clone()
                     };
                     let display = format_link_preview(&preview);
-                    app.buffer_mut(&buf_name).push(crate::app::BufferLine {
-                        timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                    push_line_to_buffer(app, batch_id, &buf_name, crate::app::BufferLine {
+                        timestamp: timestamp.clone(),
                         from: from.clone(),
                         text: display,
                         is_system: false,
                         image_url: None,
                     });
                 } else {
-                    app.chat_msg(&target, &from, &text);
+                    let buf_name = if !target.starts_with('#') && !target.starts_with('&') {
+                        if from == app.nick { target.clone() } else { from.clone() }
+                    } else {
+                        target.clone()
+                    };
+                    push_line_to_buffer(app, batch_id, &buf_name, crate::app::BufferLine {
+                        timestamp: timestamp.clone(),
+                        from: from.clone(),
+                        text: text.clone(),
+                        is_system: false,
+                        image_url: None,
+                    });
 
                     // Auto-fetch link previews for URLs in messages (from others)
-                    if from != app.nick && let Some(url) = extract_url(&text) {
-                        let handle_clone = handle.clone();
-                        let target_clone = target.clone();
-                        tokio::spawn(async move {
-                            if let Ok(preview) = freeq_sdk::media::fetch_link_preview(&url).await {
-                                let _ = handle_clone.send_link_preview(&target_clone, &preview).await;
-                            }
-                        });
+                    if !in_batch && from != app.nick {
+                        if let Some(url) = extract_url(&text) {
+                            let handle_clone = handle.clone();
+                            let target_clone = target.clone();
+                            tokio::spawn(async move {
+                                if let Ok(preview) = freeq_sdk::media::fetch_link_preview(&url).await {
+                                    let _ = handle_clone.send_link_preview(&target_clone, &preview).await;
+                                }
+                            });
+                        }
                     }
                 }
             }
+        }
+        Event::BatchStart { id, batch_type: _, target } => {
+            app.start_batch(&id, &target);
+        }
+        Event::BatchEnd { id } => {
+            app.end_batch(&id);
         }
         Event::TagMsg { from, target, tags } => {
             // Handle reactions
@@ -1639,6 +1662,30 @@ fn fetch_image_if_needed(cache: &crate::app::ImageCache, url: &str) {
 }
 
 /// Format a media attachment for display in the TUI.
+fn format_timestamp(tags: &std::collections::HashMap<String, String>) -> String {
+    if let Some(ts) = tags.get("time") {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
+            return dt.with_timezone(&chrono::Local).format("%H:%M:%S").to_string();
+        }
+    }
+    chrono::Local::now().format("%H:%M:%S").to_string()
+}
+
+fn push_line_to_buffer(
+    app: &mut crate::app::App,
+    batch_id: Option<&String>,
+    buf_name: &str,
+    line: crate::app::BufferLine,
+) {
+    if let Some(id) = batch_id {
+        if app.batches.contains_key(id) {
+            app.add_batch_line(id, line);
+            return;
+        }
+    }
+    app.buffer_mut(buf_name).push(line);
+}
+
 fn format_link_preview(preview: &freeq_sdk::media::LinkPreview) -> String {
     let mut parts = vec!["🔗".to_string()];
     if let Some(ref title) = preview.title {

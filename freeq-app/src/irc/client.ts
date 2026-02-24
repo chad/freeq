@@ -491,6 +491,13 @@ async function handleLine(rawLine: string) {
         raw(`WHOIS ${from}`);
       }
 
+      // If this message is part of a batch (CHATHISTORY), add to batch buffer
+      const batchId = msg.tags['batch'];
+      if (batchId && store.batches.has(batchId)) {
+        store.addBatchMessage(batchId, message);
+        break;
+      }
+
       store.addMessage(bufName, message);
 
       // Mention detection + notification

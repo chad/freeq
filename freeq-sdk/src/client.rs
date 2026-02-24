@@ -631,6 +631,21 @@ where
                             let _ = event_tx.send(Event::AuthFailed { reason }).await;
                             writer.write_all(b"CAP END\r\n").await?;
                         }
+                        "BATCH" => {
+                            if let Some(ref_id) = msg.params.get(0) {
+                                if let Some(id) = ref_id.strip_prefix('+') {
+                                    let batch_type = msg.params.get(1).cloned().unwrap_or_default();
+                                    let target = msg.params.get(2).cloned().unwrap_or_default();
+                                    let _ = event_tx.send(Event::BatchStart {
+                                        id: id.to_string(),
+                                        batch_type,
+                                        target,
+                                    }).await;
+                                } else if let Some(id) = ref_id.strip_prefix('-') {
+                                    let _ = event_tx.send(Event::BatchEnd { id: id.to_string() }).await;
+                                }
+                            }
+                        }
                         "001" => {
                             let nick = msg.params.first().cloned().unwrap_or_default();
                             let _ = event_tx.send(Event::Registered { nick }).await;

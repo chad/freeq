@@ -35,6 +35,18 @@ pub enum Event {
         tags: std::collections::HashMap<String, String>,
     },
 
+    /// BATCH start (e.g., chathistory)
+    BatchStart {
+        id: String,
+        batch_type: String,
+        target: String,
+    },
+
+    /// BATCH end
+    BatchEnd {
+        id: String,
+    },
+
     /// NAMES list for a channel.
     Names {
         channel: String,

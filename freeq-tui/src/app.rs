@@ -51,6 +51,13 @@ pub struct Buffer {
     pub scroll: u16,
 }
 
+/// In-progress BATCH buffer (e.g., CHATHISTORY).
+#[derive(Debug, Clone)]
+pub struct BatchBuffer {
+    pub target: String,
+    pub lines: Vec<BufferLine>,
+}
+
 impl Buffer {
     fn new(name: &str) -> Self {
         Self {
@@ -137,6 +144,8 @@ pub struct App {
     pub channel_keys: HashMap<String, [u8; 32]>,
     /// Named buffers, keyed by lowercase name. "status" is always present.
     pub buffers: BTreeMap<String, Buffer>,
+    /// In-progress batch buffers (chathistory), keyed by batch ID.
+    pub batches: HashMap<String, BatchBuffer>,
     /// Currently active buffer key.
     pub active_buffer: String,
     /// Line editor (handles input, cursor, emacs/vi keybindings).
@@ -215,6 +224,7 @@ impl App {
         Self {
             channel_keys: HashMap::new(),
             buffers,
+            batches: HashMap::new(),
             active_buffer: "status".to_string(),
             editor: LineEditor::new(mode),
             connection_state: "connecting".to_string(),
@@ -280,6 +290,35 @@ impl App {
             is_system: false,
             image_url: None,
         });
+    }
+
+    /// Start a BATCH (e.g., CHATHISTORY).
+    pub fn start_batch(&mut self, id: &str, target: &str) {
+        self.batches.insert(id.to_string(), BatchBuffer {
+            target: target.to_string(),
+            lines: Vec::new(),
+        });
+    }
+
+    /// Add a line to a batch by ID.
+    pub fn add_batch_line(&mut self, id: &str, line: BufferLine) {
+        if let Some(batch) = self.batches.get_mut(id) {
+            batch.lines.push(line);
+        }
+    }
+
+    /// Flush a batch into its target buffer (prepended as history).
+    pub fn end_batch(&mut self, id: &str) {
+        if let Some(batch) = self.batches.remove(id) {
+            let buf = self.buffer_mut(&batch.target);
+            // Prepend in order (oldest first)
+            for line in batch.lines.into_iter().rev() {
+                buf.messages.push_front(line);
+                if buf.messages.len() > MAX_MESSAGES {
+                    buf.messages.pop_back();
+                }
+            }
+        }
     }
 
     /// Switch to the next buffer.

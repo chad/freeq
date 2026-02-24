@@ -158,6 +158,7 @@ export interface Store {
 
   // Actions — batches
   startBatch: (id: string, type: string, target: string) => void;
+  addBatchMessage: (id: string, msg: Message) => void;
   endBatch: (id: string) => void;
 
   // Actions — whois
@@ -498,14 +499,28 @@ export const useStore = create<Store>((set, get) => ({
   editMessage: (channel, originalMsgId, newText, newMsgId) => set((s) => {
     const channels = new Map(s.channels);
     const ch = channels.get(channel.toLowerCase());
-    if (!ch) return { channels };
-    ch.messages = ch.messages.map((m) =>
-      m.id === originalMsgId
-        ? { ...m, text: newText, id: newMsgId || m.id, editOf: originalMsgId }
-        : m
-    );
-    channels.set(channel.toLowerCase(), { ...ch });
-    return { channels };
+    if (ch) {
+      ch.messages = ch.messages.map((m) =>
+        m.id === originalMsgId
+          ? { ...m, text: newText, id: newMsgId || m.id, editOf: originalMsgId }
+          : m
+      );
+      channels.set(channel.toLowerCase(), { ...ch });
+    }
+
+    // Also update in-flight batch messages (CHATHISTORY) for this channel
+    const batches = new Map(s.batches);
+    for (const [id, batch] of batches) {
+      if (batch.target.toLowerCase() !== channel.toLowerCase()) continue;
+      batch.messages = batch.messages.map((m) =>
+        m.id === originalMsgId
+          ? { ...m, text: newText, id: newMsgId || m.id, editOf: originalMsgId }
+          : m
+      );
+      batches.set(id, batch);
+    }
+
+    return { channels, batches };
   }),
 
   deleteMessage: (channel, msgId) => set((s) => {
@@ -566,6 +581,15 @@ export const useStore = create<Store>((set, get) => ({
     return { batches };
   }),
 
+  addBatchMessage: (id, msg) => set((s) => {
+    const batches = new Map(s.batches);
+    const batch = batches.get(id);
+    if (!batch) return { batches };
+    batch.messages = [...batch.messages, msg];
+    batches.set(id, batch);
+    return { batches };
+  }),
+
   endBatch: (id) => set((s) => {
     const batches = new Map(s.batches);
     const batch = batches.get(id);
@@ -575,8 +599,13 @@ export const useStore = create<Store>((set, get) => ({
     // Flush batch messages to the channel
     const channels = new Map(s.channels);
     const ch = getOrCreateChannel(channels, batch.target);
+
+    // Dedup by msgid when merging history
+    const existingIds = new Set(ch.messages.map((m) => m.id));
+    const newMsgs = batch.messages.filter((m) => !m.id || !existingIds.has(m.id));
+
     // Batch messages go at the beginning (history)
-    ch.messages = [...batch.messages, ...ch.messages].slice(-1000);
+    ch.messages = [...newMsgs, ...ch.messages].slice(-1000);
     channels.set(batch.target.toLowerCase(), ch);
     return { channels, batches };
   }),
