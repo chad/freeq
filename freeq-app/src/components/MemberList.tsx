@@ -23,14 +23,15 @@ export function MemberList() {
   if (!ch || activeChannel === 'server') return null;
 
   const members = [...ch.members.values()].sort((a, b) => {
-    const wa = a.isOp ? 0 : a.isVoiced ? 1 : 2;
-    const wb = b.isOp ? 0 : b.isVoiced ? 1 : 2;
+    const wa = a.isOp ? 0 : a.isHalfop ? 1 : a.isVoiced ? 2 : 3;
+    const wb = b.isOp ? 0 : b.isHalfop ? 1 : b.isVoiced ? 2 : 3;
     return wa - wb || a.nick.localeCompare(b.nick);
   });
 
   const ops = members.filter((m) => m.isOp);
-  const voiced = members.filter((m) => !m.isOp && m.isVoiced);
-  const regular = members.filter((m) => !m.isOp && !m.isVoiced);
+  const halfops = members.filter((m) => !m.isOp && m.isHalfop);
+  const voiced = members.filter((m) => !m.isOp && !m.isHalfop && m.isVoiced);
+  const regular = members.filter((m) => !m.isOp && !m.isHalfop && !m.isVoiced);
 
   const onMemberClick = (nick: string, did: string | undefined, e: React.MouseEvent) => {
     setPopover({ nick, did, pos: { x: e.clientX, y: e.clientY } });
@@ -44,12 +45,17 @@ export function MemberList() {
             {ops.map((m) => <MemberItem key={m.nick} member={m} onClick={onMemberClick} />)}
           </Section>
         )}
+        {halfops.length > 0 && (
+          <Section label={`Moderators — ${halfops.length}`}>
+            {halfops.map((m) => <MemberItem key={m.nick} member={m} onClick={onMemberClick} />)}
+          </Section>
+        )}
         {voiced.length > 0 && (
           <Section label={`Voiced — ${voiced.length}`}>
             {voiced.map((m) => <MemberItem key={m.nick} member={m} onClick={onMemberClick} />)}
           </Section>
         )}
-        <Section label={`${ops.length > 0 || voiced.length > 0 ? 'Members' : 'Online'} — ${regular.length}`}>
+        <Section label={`${ops.length > 0 || halfops.length > 0 || voiced.length > 0 ? 'Members' : 'Online'} — ${regular.length}`}>
           {regular.map((m) => <MemberItem key={m.nick} member={m} onClick={onMemberClick} />)}
         </Section>
       </div>
@@ -82,6 +88,7 @@ interface MemberItemProps {
     nick: string;
     did?: string;
     isOp: boolean;
+    isHalfop: boolean;
     isVoiced: boolean;
     away?: string | null;
     typing?: boolean;
@@ -108,7 +115,8 @@ function MemberItem({ member, onClick }: MemberItemProps) {
 
       <div className="min-w-0 flex-1 flex items-center gap-1">
         {member.isOp && <span className="text-success text-xs font-bold">@</span>}
-        {!member.isOp && member.isVoiced && <span className="text-warning text-xs font-bold">+</span>}
+        {!member.isOp && member.isHalfop && <span className="text-accent text-xs font-bold">%</span>}
+        {!member.isOp && !member.isHalfop && member.isVoiced && <span className="text-warning text-xs font-bold">+</span>}
 
         <span className={`truncate text-[15px] ${
           member.away ? 'text-fg-dim' : 'text-fg-muted group-hover:text-fg'

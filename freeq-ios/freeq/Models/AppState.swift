@@ -3,7 +3,7 @@ import SwiftUI
 
 /// A single chat message.
 struct ChatMessage: Identifiable, Equatable {
-    let id: String  // msgid or UUID
+    var id: String  // msgid or UUID
     let from: String
     var text: String
     let isAction: Bool
@@ -43,6 +43,10 @@ class ChannelState: ObservableObject, Identifiable {
         messages.firstIndex(where: { $0.id == id })
     }
 
+    func memberInfo(for nick: String) -> MemberInfo? {
+        members.first(where: { $0.nick.lowercased() == nick.lowercased() })
+    }
+
     /// Append a message only if its ID hasn't been seen before.
     /// Inserts in timestamp order to handle CHATHISTORY arriving after live messages.
     func appendIfNew(_ msg: ChatMessage) {
@@ -57,21 +61,54 @@ class ChannelState: ObservableObject, Identifiable {
             messages.append(msg)
         }
     }
+
+    func applyEdit(originalId: String, newId: String?, newText: String) {
+        if let idx = findMessage(byId: originalId) {
+            messages[idx].text = newText
+            messages[idx].isEdited = true
+            if let newId = newId {
+                messages[idx].id = newId
+                messageIds.insert(newId)
+            }
+        }
+    }
+
+    func applyDelete(msgId: String) {
+        if let idx = findMessage(byId: msgId) {
+            messages[idx].isDeleted = true
+            messages[idx].text = ""
+        }
+    }
+
+    func applyReaction(msgId: String, emoji: String, from: String) {
+        if let idx = findMessage(byId: msgId) {
+            var reactions = messages[idx].reactions
+            var nicks = reactions[emoji] ?? Set<String>()
+            nicks.insert(from)
+            reactions[emoji] = nicks
+            messages[idx].reactions = reactions
+        }
+    }
 }
 
 /// Member info for the member list.
 struct MemberInfo: Identifiable, Equatable {
     let nick: String
     let isOp: Bool
+    let isHalfop: Bool
     let isVoiced: Bool
+    let awayMsg: String?
 
     var id: String { nick }
 
     var prefix: String {
         if isOp { return "@" }
+        if isHalfop { return "%" }
         if isVoiced { return "+" }
         return ""
     }
+
+    var isAway: Bool { awayMsg != nil }
 }
 
 /// Connection state.
@@ -84,9 +121,15 @@ enum ConnectionState {
 
 /// Main application state — bridges the Rust SDK to SwiftUI.
 class AppState: ObservableObject {
+    struct BatchBuffer {
+        let target: String
+        var messages: [ChatMessage]
+    }
+
     @Published var connectionState: ConnectionState = .disconnected
     @Published var nick: String = ""
     @Published var serverAddress: String = "irc.freeq.at:6667"
+    @Published var authBrokerBase: String = "https://auth.freeq.at"
     @Published var channels: [ChannelState] = []
     @Published var activeChannel: String? = nil
     @Published var errorMessage: String? = nil
@@ -94,6 +137,9 @@ class AppState: ObservableObject {
     @Published var dmBuffers: [ChannelState] = []
     @Published var autoJoinChannels: [String] = ["#general"]
     @Published var unreadCounts: [String: Int] = [:]
+
+    // In-flight CHATHISTORY batches
+    fileprivate var batches: [String: BatchBuffer] = [:]
 
     /// For reply UI
     @Published var replyingTo: ChatMessage? = nil
@@ -103,6 +149,8 @@ class AppState: ObservableObject {
     @Published var lightboxURL: URL? = nil
     /// Pending web-token for SASL auth (from AT Protocol OAuth)
     var pendingWebToken: String? = nil
+    /// Persistent broker session token
+    var brokerToken: String? = nil
 
     /// Read position tracking — channel name -> last read message ID
     @Published var lastReadMessageIds: [String: String] = [:]
@@ -146,6 +194,12 @@ class AppState: ObservableObject {
         if let savedDID = UserDefaults.standard.string(forKey: "freeq.did") {
             authenticatedDID = savedDID
         }
+        if let savedBroker = UserDefaults.standard.string(forKey: "freeq.brokerToken") {
+            brokerToken = savedBroker
+        }
+        if let savedBrokerBase = UserDefaults.standard.string(forKey: "freeq.brokerBase") {
+            authBrokerBase = savedBrokerBase
+        }
         isDarkTheme = UserDefaults.standard.object(forKey: "freeq.darkTheme") as? Bool ?? true
 
         // Prune stale typing indicators every 3 seconds
@@ -156,10 +210,33 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Reconnect with saved session (no SASL — connects as guest with saved nick)
+    /// Reconnect with saved session (requires SASL web-token)
     func reconnectSavedSession() {
         guard hasSavedSession, connectionState == .disconnected else { return }
-        connect(nick: nick)
+        if pendingWebToken != nil {
+            connect(nick: nick)
+            return
+        }
+        // Fetch a fresh web-token from broker
+        guard let brokerToken else {
+            errorMessage = "Session expired. Please log in again."
+            return
+        }
+        Task {
+            do {
+                let session = try await fetchBrokerSession(brokerToken: brokerToken)
+                await MainActor.run {
+                    self.pendingWebToken = session.token
+                    self.authenticatedDID = session.did
+                    UserDefaults.standard.set(session.did, forKey: "freeq.did")
+                    self.connect(nick: session.nick)
+                }
+            } catch {
+                await MainActor.run {
+                    self.errorMessage = "Session expired. Please log in again."
+                }
+            }
+        }
     }
 
     func connect(nick: String) {
@@ -169,6 +246,7 @@ class AppState: ObservableObject {
 
         UserDefaults.standard.set(nick, forKey: "freeq.nick")
         UserDefaults.standard.set(serverAddress, forKey: "freeq.server")
+        UserDefaults.standard.set(authBrokerBase, forKey: "freeq.brokerBase")
 
         do {
             let handler = SwiftEventHandler(appState: self)
@@ -275,8 +353,32 @@ class AppState: ObservableObject {
         sendRaw("@+typing=active TAGMSG \(target)")
     }
 
-    func requestHistory(channel: String) {
-        sendRaw("CHATHISTORY LATEST \(channel) * 50")
+    func requestHistory(channel: String, before: Date? = nil) {
+        if let before = before {
+            let iso = ISO8601DateFormatter().string(from: before)
+            sendRaw("CHATHISTORY BEFORE \(channel) timestamp=\(iso) 50")
+        } else {
+            sendRaw("CHATHISTORY LATEST \(channel) * 50")
+        }
+    }
+
+    struct BrokerSessionResponse: Decodable {
+        let token: String
+        let nick: String
+        let did: String
+        let handle: String
+    }
+
+    private func fetchBrokerSession(brokerToken: String) async throws -> BrokerSessionResponse {
+        let url = URL(string: "\(authBrokerBase)/session")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["broker_token": brokerToken])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200 else { throw NSError(domain: "Broker", code: status) }
+        return try JSONDecoder().decode(BrokerSessionResponse.self, from: data)
     }
 
     func markRead(_ channel: String) {
@@ -329,6 +431,59 @@ class AppState: ObservableObject {
             }
         }
     }
+
+    fileprivate func updateAwayStatus(nick: String, awayMsg: String?) {
+        for ch in channels {
+            if let idx = ch.members.firstIndex(where: { $0.nick.lowercased() == nick.lowercased() }) {
+                let m = ch.members[idx]
+                ch.members[idx] = MemberInfo(nick: m.nick, isOp: m.isOp, isHalfop: m.isHalfop, isVoiced: m.isVoiced, awayMsg: awayMsg)
+            }
+        }
+    }
+
+    func awayMessage(for nick: String) -> String? {
+        for ch in channels {
+            if let m = ch.members.first(where: { $0.nick.lowercased() == nick.lowercased() }) {
+                return m.awayMsg
+            }
+        }
+        return nil
+    }
+
+    fileprivate func renameUser(oldNick: String, newNick: String) {
+        for ch in channels {
+            if let idx = ch.members.firstIndex(where: { $0.nick.lowercased() == oldNick.lowercased() }) {
+                let m = ch.members[idx]
+                ch.members[idx] = MemberInfo(nick: newNick, isOp: m.isOp, isHalfop: m.isHalfop, isVoiced: m.isVoiced, awayMsg: m.awayMsg)
+            }
+            if let ts = ch.typingUsers.removeValue(forKey: oldNick) {
+                ch.typingUsers[newNick] = ts
+            }
+        }
+
+        if let idx = dmBuffers.firstIndex(where: { $0.name.lowercased() == oldNick.lowercased() }) {
+            let old = dmBuffers[idx]
+            let renamed = ChannelState(name: newNick)
+            renamed.messages = old.messages
+            renamed.members = old.members
+            renamed.topic = old.topic
+            renamed.typingUsers = old.typingUsers
+            dmBuffers.remove(at: idx)
+            dmBuffers.append(renamed)
+
+            if let count = unreadCounts.removeValue(forKey: old.name) {
+                unreadCounts[newNick] = count
+            }
+            if let last = lastReadMessageIds.removeValue(forKey: old.name) {
+                lastReadMessageIds[newNick] = last
+                UserDefaults.standard.set(lastReadMessageIds, forKey: "freeq.readPositions")
+            }
+        }
+
+        if activeChannel?.lowercased() == oldNick.lowercased() {
+            activeChannel = newNick
+        }
+    }
 }
 
 /// Bridges Rust SDK events to SwiftUI state updates on main thread.
@@ -354,6 +509,12 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
 
         case .registered(let nick):
             state.connectionState = .registered
+            // If we expected an authenticated session but got Guest, disconnect
+            if state.authenticatedDID != nil && nick.lowercased().hasPrefix("guest") {
+                state.errorMessage = "Session expired. Please log in again."
+                state.disconnect()
+                return
+            }
             state.nick = nick
             // Auto-join saved channels
             for channel in state.autoJoinChannels {
@@ -386,6 +547,9 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                     isAction: false, timestamp: Date(), replyTo: nil
                 )
                 ch.appendIfNew(msg)
+                if !ch.members.contains(where: { $0.nick.lowercased() == nick.lowercased() }) {
+                    ch.members.append(MemberInfo(nick: nick, isOp: false, isHalfop: false, isVoiced: false, awayMsg: nil))
+                }
             }
 
         case .parted(let channel, let nick):
@@ -419,6 +583,38 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 replyTo: ircMsg.replyTo
             )
 
+            // Handle edits
+            if let editOf = ircMsg.editOf {
+                if let batchId = ircMsg.batchId, var batch = state.batches[batchId] {
+                    if let idx = batch.messages.firstIndex(where: { $0.id == editOf }) {
+                        batch.messages[idx].text = ircMsg.text
+                        batch.messages[idx].isEdited = true
+                        if let newId = ircMsg.msgid { batch.messages[idx].id = newId }
+                    } else {
+                        batch.messages.append(msg)
+                    }
+                    state.batches[batchId] = batch
+                    return
+                }
+
+                if target.hasPrefix("#") {
+                    let ch = state.getOrCreateChannel(target)
+                    ch.applyEdit(originalId: editOf, newId: ircMsg.msgid, newText: ircMsg.text)
+                } else {
+                    let bufferName = isSelf ? target : from
+                    let dm = state.getOrCreateDM(bufferName)
+                    dm.applyEdit(originalId: editOf, newId: ircMsg.msgid, newText: ircMsg.text)
+                }
+                return
+            }
+
+            // If part of CHATHISTORY batch, buffer it for later merge
+            if let batchId = ircMsg.batchId, var batch = state.batches[batchId] {
+                batch.messages.append(msg)
+                state.batches[batchId] = batch
+                return
+            }
+
             if target.hasPrefix("#") {
                 let ch = state.getOrCreateChannel(target)
                 ch.appendIfNew(msg)
@@ -447,7 +643,9 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
 
         case .names(let channel, let members):
             let ch = state.getOrCreateChannel(channel)
-            ch.members = members.map { MemberInfo(nick: $0.nick, isOp: $0.isOp, isVoiced: $0.isVoiced) }
+            ch.members = members.map {
+                MemberInfo(nick: $0.nick, isOp: $0.isOp, isHalfop: $0.isHalfop, isVoiced: $0.isVoiced, awayMsg: $0.awayMsg)
+            }
             // Prefetch avatars for all channel members
             let nicks = members.map { $0.nick }
             Task { @MainActor in
@@ -458,8 +656,21 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
             let ch = state.getOrCreateChannel(channel)
             ch.topic = topic.text
 
-        case .modeChanged(_, _, _, _):
-            break
+        case .modeChanged(let channel, let mode, let arg, _):
+            guard let nick = arg else { break }
+            let ch = state.getOrCreateChannel(channel)
+            if let idx = ch.members.firstIndex(where: { $0.nick.lowercased() == nick.lowercased() }) {
+                let member = ch.members[idx]
+                switch mode {
+                case "+o": ch.members[idx] = MemberInfo(nick: member.nick, isOp: true, isHalfop: false, isVoiced: member.isVoiced, awayMsg: member.awayMsg)
+                case "-o": ch.members[idx] = MemberInfo(nick: member.nick, isOp: false, isHalfop: member.isHalfop, isVoiced: member.isVoiced, awayMsg: member.awayMsg)
+                case "+h": ch.members[idx] = MemberInfo(nick: member.nick, isOp: member.isOp, isHalfop: true, isVoiced: member.isVoiced, awayMsg: member.awayMsg)
+                case "-h": ch.members[idx] = MemberInfo(nick: member.nick, isOp: member.isOp, isHalfop: false, isVoiced: member.isVoiced, awayMsg: member.awayMsg)
+                case "+v": ch.members[idx] = MemberInfo(nick: member.nick, isOp: member.isOp, isHalfop: member.isHalfop, isVoiced: true, awayMsg: member.awayMsg)
+                case "-v": ch.members[idx] = MemberInfo(nick: member.nick, isOp: member.isOp, isHalfop: member.isHalfop, isVoiced: false, awayMsg: member.awayMsg)
+                default: break
+                }
+            }
 
         case .kicked(let channel, let nick, let by, let reason):
             if nick.lowercased() == state.nick.lowercased() {
@@ -479,6 +690,72 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 ))
                 ch.members.removeAll { $0.nick.lowercased() == nick.lowercased() }
             }
+
+        case .batchStart(let id, _, let target):
+            state.batches[id] = AppState.BatchBuffer(target: target, messages: [])
+
+        case .batchEnd(let id):
+            guard let batch = state.batches.removeValue(forKey: id) else { return }
+            let sorted = batch.messages.sorted { $0.timestamp < $1.timestamp }
+            if batch.target.hasPrefix("#") {
+                let ch = state.getOrCreateChannel(batch.target)
+                for msg in sorted { ch.appendIfNew(msg) }
+            } else {
+                let dm = state.getOrCreateDM(batch.target)
+                for msg in sorted { dm.appendIfNew(msg) }
+            }
+
+        case .tagMsg(let tagMsg):
+            let tags = Dictionary(uniqueKeysWithValues: tagMsg.tags.map { ($0.key, $0.value) })
+            let target = tagMsg.target
+            let from = tagMsg.from
+
+            // Typing indicators
+            if let typing = tags["+typing"] {
+                if from.lowercased() != state.nick.lowercased() {
+                    let bufferName = target.hasPrefix("#") ? target : from
+                    let ch = bufferName.hasPrefix("#") ? state.getOrCreateChannel(bufferName) : state.getOrCreateDM(bufferName)
+                    if typing == "active" {
+                        ch.typingUsers[from] = Date()
+                    } else if typing == "done" {
+                        ch.typingUsers.removeValue(forKey: from)
+                    }
+                }
+            }
+
+            // Message deletion
+            if let deleteId = tags["+draft/delete"] {
+                let bufferName = target.hasPrefix("#") ? target : from
+                let ch = bufferName.hasPrefix("#") ? state.getOrCreateChannel(bufferName) : state.getOrCreateDM(bufferName)
+                ch.applyDelete(msgId: deleteId)
+            }
+
+            // Reactions
+            if let emoji = tags["+react"], let replyId = tags["+reply"] {
+                let bufferName = target.hasPrefix("#") ? target : from
+                let ch = bufferName.hasPrefix("#") ? state.getOrCreateChannel(bufferName) : state.getOrCreateDM(bufferName)
+                ch.applyReaction(msgId: replyId, emoji: emoji, from: from)
+            }
+
+        case .batchStart(let id, _, let target):
+            state.batches[id] = AppState.BatchBuffer(target: target, messages: [])
+
+        case .batchEnd(let id):
+            guard let batch = state.batches.removeValue(forKey: id) else { return }
+            let sorted = batch.messages.sorted { $0.timestamp < $1.timestamp }
+            if batch.target.hasPrefix("#") {
+                let ch = state.getOrCreateChannel(batch.target)
+                for msg in sorted { ch.appendIfNew(msg) }
+            } else {
+                let dm = state.getOrCreateDM(batch.target)
+                for msg in sorted { dm.appendIfNew(msg) }
+            }
+
+        case .nickChanged(let oldNick, let newNick):
+            state.renameUser(oldNick: oldNick, newNick: newNick)
+
+        case .awayChanged(let nick, let awayMsg):
+            state.updateAwayStatus(nick: nick, awayMsg: awayMsg)
 
         case .userQuit(let nick, _):
             for ch in state.channels {

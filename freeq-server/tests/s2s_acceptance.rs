@@ -5287,3 +5287,110 @@ async fn single_server_edge12_moderated_blocks_unvoiced() {
     let _ = h_op.quit(Some("done")).await;
     let _ = h_user.quit(Some("done")).await;
 }
+
+// ─── EDGE13: Halfop (+h) behavior ──────────────────────────────────────
+#[tokio::test]
+async fn single_server_edge13_halfop_behavior() {
+    let addr = match std::env::var("SERVER") {
+        Ok(a) => a,
+        _ => { eprintln!("SKIP: no SERVER set"); return; }
+    };
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+    let ch = format!("#_zqhalf_{}", ts % 100000);
+    let nick_op = format!("_zqhop_{}", ts % 100000);
+    let nick_halfop = format!("_zqhho_{}", ts % 100000);
+    let nick_user = format!("_zqhus_{}", ts % 100000);
+
+    // Op creates channel
+    let (h_op, mut rx_op) = connect_guest(&addr, &nick_op).await;
+    h_op.raw(&format!("JOIN {}", ch)).await.unwrap();
+    wait_joined(&mut rx_op, &ch).await;
+    drain(&mut rx_op).await;
+
+    // Halfop joins
+    let (h_half, mut rx_half) = connect_guest(&addr, &nick_halfop).await;
+    h_half.raw(&format!("JOIN {}", ch)).await.unwrap();
+    wait_joined(&mut rx_half, &ch).await;
+    drain(&mut rx_half).await;
+    drain(&mut rx_op).await;
+
+    // Regular user joins
+    let (h_user, mut rx_user) = connect_guest(&addr, &nick_user).await;
+    h_user.raw(&format!("JOIN {}", ch)).await.unwrap();
+    wait_joined(&mut rx_user, &ch).await;
+    drain(&mut rx_user).await;
+    drain(&mut rx_op).await;
+    drain(&mut rx_half).await;
+
+    // Op grants halfop
+    h_op.raw(&format!("MODE {} +h {}", ch, nick_halfop)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Halfop should see MODE change
+    let _mode_event = wait_for(
+        &mut rx_half,
+        |e| matches!(e, Event::ModeChanged { .. }),
+        "halfop MODE +h",
+    ).await;
+    eprintln!("  ✓ Halfop received +h mode change");
+    drain(&mut rx_op).await;
+    drain(&mut rx_user).await;
+
+    // Halfop CAN kick regular user
+    h_half.raw(&format!("KICK {} {} :halfop kick", ch, nick_user)).await.unwrap();
+    let _kick_event = wait_for(
+        &mut rx_user,
+        |e| matches!(e, Event::Kicked { .. }),
+        "user kicked by halfop",
+    ).await;
+    eprintln!("  ✓ Halfop can kick regular user");
+    drain(&mut rx_half).await;
+    drain(&mut rx_op).await;
+
+    // Rejoin user
+    h_user.raw(&format!("JOIN {}", ch)).await.unwrap();
+    wait_joined(&mut rx_user, &ch).await;
+    drain(&mut rx_user).await;
+    drain(&mut rx_op).await;
+    drain(&mut rx_half).await;
+
+    // Halfop CANNOT kick the op
+    h_half.raw(&format!("KICK {} {} :halfop vs op", ch, nick_op)).await.unwrap();
+    wait_notice_containing(&mut rx_half, "operator").await;
+    eprintln!("  ✓ Halfop cannot kick op");
+
+    // Halfop CAN voice a user (+v)
+    h_half.raw(&format!("MODE {} +v {}", ch, nick_user)).await.unwrap();
+    let _voice_event = wait_for(
+        &mut rx_user,
+        |e| matches!(e, Event::ModeChanged { .. }),
+        "voice set by halfop",
+    ).await;
+    eprintln!("  ✓ Halfop can set +v");
+    drain(&mut rx_half).await;
+    drain(&mut rx_op).await;
+
+    // Halfop CANNOT set +o
+    h_half.raw(&format!("MODE {} +o {}", ch, nick_user)).await.unwrap();
+    wait_notice_containing(&mut rx_half, "Moderators can only set").await;
+    eprintln!("  ✓ Halfop cannot set +o");
+
+    // Halfop CANNOT set channel mode +m
+    h_half.raw(&format!("MODE {} +m", ch)).await.unwrap();
+    wait_notice_containing(&mut rx_half, "Moderators can only set").await;
+    eprintln!("  ✓ Halfop cannot set +m");
+
+    // Halfop CAN send in +m channel
+    h_op.raw(&format!("MODE {} +m", ch)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    drain(&mut rx_op).await;
+    drain(&mut rx_half).await;
+    drain(&mut rx_user).await;
+
+    h_half.privmsg(&ch, "halfop speaks in moderated").await.unwrap();
+    wait_message_containing(&mut rx_op, "halfop speaks in moderated").await;
+    eprintln!("  ✓ Halfop can speak in +m channel");
+
+    let _ = h_op.quit(Some("done")).await;
+    let _ = h_half.quit(Some("done")).await;
+    let _ = h_user.quit(Some("done")).await;
+}

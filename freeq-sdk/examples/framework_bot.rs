@@ -76,6 +76,7 @@ async fn main() -> Result<()> {
         realname: "Freeq Framework Bot".to_string(),
         tls: args.tls,
         tls_insecure: false,
+        web_token: None,
     };
 
     let conn = client::establish_connection(&config).await?;

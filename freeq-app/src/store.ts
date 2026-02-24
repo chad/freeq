@@ -17,6 +17,7 @@ export interface Message {
   editOf?: string;
   deleted?: boolean;
   reactions?: Map<string, Set<string>>; // emoji → nicks
+  encrypted?: boolean; // true if this message was E2EE encrypted
 }
 
 export interface Member {
@@ -26,6 +27,7 @@ export interface Member {
   displayName?: string;
   avatarUrl?: string;
   isOp: boolean;
+  isHalfop: boolean;
   isVoiced: boolean;
   away?: string | null;
   typing?: boolean;
@@ -38,6 +40,7 @@ export interface Channel {
   members: Map<string, Member>;
   messages: Message[];
   modes: Set<string>;
+  isEncrypted: boolean; // true if +E mode or all DMs with this user are encrypted
   unreadCount: number;
   mentionCount: number;
   lastReadMsgId?: string; // last message seen when channel was active
@@ -155,6 +158,7 @@ export interface Store {
 
   // Actions — batches
   startBatch: (id: string, type: string, target: string) => void;
+  addBatchMessage: (id: string, msg: Message) => void;
   endBatch: (id: string) => void;
 
   // Actions — whois
@@ -200,6 +204,7 @@ function getOrCreateChannel(channels: Map<string, Channel>, name: string): Chann
       members: new Map(),
       messages: [],
       modes: new Set(),
+      isEncrypted: false,
       unreadCount: 0,
       mentionCount: 0,
       isJoined: false,
@@ -342,6 +347,7 @@ export const useStore = create<Store>((set, get) => ({
       displayName: member.displayName ?? existing?.displayName,
       avatarUrl: member.avatarUrl ?? existing?.avatarUrl,
       isOp: member.isOp ?? existing?.isOp ?? false,
+      isHalfop: member.isHalfop ?? existing?.isHalfop ?? false,
       isVoiced: member.isVoiced ?? existing?.isVoiced ?? false,
       away: existing?.away,
     });
@@ -436,11 +442,12 @@ export const useStore = create<Store>((set, get) => ({
     const adding = mode.startsWith('+');
     const modeChar = mode.replace(/^[+-]/, '');
 
-    // User modes (+o, +v)
-    if ((modeChar === 'o' || modeChar === 'v') && arg) {
+    // User modes (+o, +h, +v)
+    if ((modeChar === 'o' || modeChar === 'h' || modeChar === 'v') && arg) {
       const member = ch.members.get(arg.toLowerCase());
       if (member) {
         if (modeChar === 'o') member.isOp = adding;
+        if (modeChar === 'h') member.isHalfop = adding;
         if (modeChar === 'v') member.isVoiced = adding;
         ch.members.set(arg.toLowerCase(), { ...member });
       }
@@ -448,6 +455,8 @@ export const useStore = create<Store>((set, get) => ({
       // Channel modes
       if (adding) ch.modes.add(modeChar);
       else ch.modes.delete(modeChar);
+      // Track encryption mode
+      if (modeChar === 'E') ch.isEncrypted = adding;
     }
     channels.set(channel.toLowerCase(), { ...ch });
     return { channels };
@@ -490,14 +499,28 @@ export const useStore = create<Store>((set, get) => ({
   editMessage: (channel, originalMsgId, newText, newMsgId) => set((s) => {
     const channels = new Map(s.channels);
     const ch = channels.get(channel.toLowerCase());
-    if (!ch) return { channels };
-    ch.messages = ch.messages.map((m) =>
-      m.id === originalMsgId
-        ? { ...m, text: newText, id: newMsgId || m.id, editOf: originalMsgId }
-        : m
-    );
-    channels.set(channel.toLowerCase(), { ...ch });
-    return { channels };
+    if (ch) {
+      ch.messages = ch.messages.map((m) =>
+        m.id === originalMsgId
+          ? { ...m, text: newText, id: newMsgId || m.id, editOf: originalMsgId }
+          : m
+      );
+      channels.set(channel.toLowerCase(), { ...ch });
+    }
+
+    // Also update in-flight batch messages (CHATHISTORY) for this channel
+    const batches = new Map(s.batches);
+    for (const [id, batch] of batches) {
+      if (batch.target.toLowerCase() !== channel.toLowerCase()) continue;
+      batch.messages = batch.messages.map((m) =>
+        m.id === originalMsgId
+          ? { ...m, text: newText, id: newMsgId || m.id, editOf: originalMsgId }
+          : m
+      );
+      batches.set(id, batch);
+    }
+
+    return { channels, batches };
   }),
 
   deleteMessage: (channel, msgId) => set((s) => {
@@ -558,6 +581,15 @@ export const useStore = create<Store>((set, get) => ({
     return { batches };
   }),
 
+  addBatchMessage: (id, msg) => set((s) => {
+    const batches = new Map(s.batches);
+    const batch = batches.get(id);
+    if (!batch) return { batches };
+    batch.messages = [...batch.messages, msg];
+    batches.set(id, batch);
+    return { batches };
+  }),
+
   endBatch: (id) => set((s) => {
     const batches = new Map(s.batches);
     const batch = batches.get(id);
@@ -567,8 +599,21 @@ export const useStore = create<Store>((set, get) => ({
     // Flush batch messages to the channel
     const channels = new Map(s.channels);
     const ch = getOrCreateChannel(channels, batch.target);
+
+    // Dedup by msgid when merging history
+    const existingIds = new Set(ch.messages.map((m) => m.id));
+    const newMsgs = batch.messages.filter((m) => !m.id || !existingIds.has(m.id));
+
+    // Sort batch messages by timestamp (oldest first)
+    newMsgs.sort((a, b) => {
+      const ta = a.timestamp?.getTime?.() ?? 0;
+      const tb = b.timestamp?.getTime?.() ?? 0;
+      if (ta !== tb) return ta - tb;
+      return (a.id || '').localeCompare(b.id || '');
+    });
+
     // Batch messages go at the beginning (history)
-    ch.messages = [...batch.messages, ...ch.messages].slice(-1000);
+    ch.messages = [...newMsgs, ...ch.messages].slice(-1000);
     channels.set(batch.target.toLowerCase(), ch);
     return { channels, batches };
   }),

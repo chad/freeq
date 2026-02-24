@@ -60,6 +60,16 @@ const VERIFIER_PRESETS: {
     placeholder: 'handle.bsky.social',
     paramLabel: 'Bluesky Handle',
   },
+  {
+    id: 'moderator',
+    label: 'Moderator',
+    icon: '🛡️',
+    description: 'Appoint moderators who can kick/ban users and set voice (+h)',
+    credentialType: 'channel_moderator',
+    buildUrl: (_) => '/verify/mod/start',
+    placeholder: '',
+    paramLabel: '',
+  },
 ];
 
 export function ChannelSettingsPanel() {
@@ -413,7 +423,7 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
                           <span className="text-yellow-400 text-xs">⚡</span>
                         )}
                         <span className="text-sm font-medium text-fg">{role}</span>
-                        <span className="text-xs text-fg-dim">→ {role === 'op' || role === 'admin' || role === 'owner' ? '+o' : role === 'voice' ? '+v' : 'no mode'}</span>
+                        <span className="text-xs text-fg-dim">→ {role === 'op' || role === 'admin' || role === 'owner' ? '+o' : role === 'moderator' || role === 'halfop' ? '+h' : role === 'voice' ? '+v' : 'no mode'}</span>
                       </div>
                       <p className="text-xs text-fg-dim ml-5">{describeRequirements(req)}</p>
                     </div>
@@ -436,6 +446,7 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
                       className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-fg focus:outline-none focus:border-accent"
                     >
                       <option value="op">Op (+o)</option>
+                      <option value="moderator">Moderator (+h)</option>
                       <option value="voice">Voice (+v)</option>
                       <option value="admin">Admin (+o)</option>
                     </select>

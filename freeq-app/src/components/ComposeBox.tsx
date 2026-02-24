@@ -320,7 +320,7 @@ export function ComposeBox() {
           e.preventDefault();
           // Get the filtered list and pick the selected one
           const filter = slashCmd.filter.toLowerCase();
-          const COMMANDS = ['join','part','topic','invite','kick','op','deop','voice','mode','msg','me','whois','away','policy','raw','help'];
+          const COMMANDS = ['join','part','topic','invite','kick','op','deop','voice','mode','msg','me','whois','away','encrypt','decrypt','policy','raw','help'];
           const filtered = filter ? COMMANDS.filter(c => c.startsWith(filter)) : COMMANDS;
           if (filtered[slashCmd.selected]) {
             setText(`/${filtered[slashCmd.selected]} `);
@@ -634,7 +634,9 @@ export function ComposeBox() {
                 ? 'Add a caption (optional)...'
                 : activeChannel === 'server'
                   ? 'Type /help for commands...'
-                  : `Message ${ch?.name || activeChannel}`
+                  : ch?.isEncrypted
+                    ? `🔒 Message ${ch?.name || activeChannel} (encrypted)`
+                    : `Message ${ch?.name || activeChannel}`
             }
             rows={1}
             className="flex-1 bg-transparent px-3 py-2.5 text-base text-fg outline-none placeholder:text-fg-dim resize-none min-h-[44px] max-h-[140px] leading-relaxed"
@@ -737,6 +739,8 @@ function handleCommand(text: string, activeChannel: string) {
       store.addSystemMessage(activeChannel, '/kick user  ·  /op user  ·  /voice user  ·  /invite user');
       store.addSystemMessage(activeChannel, '/whois user  ·  /away reason  ·  /me action');
       store.addSystemMessage(activeChannel, '/msg user text  ·  /mode +o user  ·  /raw IRC_LINE');
+      store.addSystemMessage(activeChannel, '── Encryption ──');
+      store.addSystemMessage(activeChannel, '/encrypt passphrase  ·  /decrypt  — E2EE for channels');
       store.addSystemMessage(activeChannel, '── Policy ──');
       store.addSystemMessage(activeChannel, '/policy #ch SET <rules>  ·  /policy #ch INFO  ·  /policy #ch ACCEPT');
       store.addSystemMessage(activeChannel, '/policy #ch REQUIRE <type> issuer=... url=... label=...');
@@ -745,6 +749,38 @@ function handleCommand(text: string, activeChannel: string) {
       store.addSystemMessage(activeChannel, '── Shortcuts ──');
       store.addSystemMessage(activeChannel, '⌘K quick switch  ·  ⌘F search  ·  ⌘/ shortcuts  ·  ↑ edit last');
       break;
+    case 'encrypt': case 'e2ee': {
+      if (!args.trim()) {
+        store.addSystemMessage(activeChannel, 'Usage: /encrypt <passphrase> — enables E2EE for this channel');
+        break;
+      }
+      import('../lib/e2ee').then(async (e2eeLib) => {
+        await e2eeLib.setChannelKey(target, args.trim());
+        store.addSystemMessage(activeChannel, '🔒 End-to-end encryption enabled. All messages you send will be encrypted.');
+        store.addSystemMessage(activeChannel, 'Others need the same passphrase to read your messages.');
+        // Mark channel as encrypted in store
+        const channels = new Map(store.channels);
+        const ch = channels.get(activeChannel.toLowerCase());
+        if (ch) {
+          channels.set(activeChannel.toLowerCase(), { ...ch, isEncrypted: true });
+          useStore.setState({ channels });
+        }
+      });
+      break;
+    }
+    case 'decrypt': case 'unencrypt': {
+      import('../lib/e2ee').then((e2eeLib) => {
+        e2eeLib.removeChannelKey(target);
+        store.addSystemMessage(activeChannel, '🔓 Encryption disabled for this channel.');
+        const channels = new Map(store.channels);
+        const ch = channels.get(activeChannel.toLowerCase());
+        if (ch) {
+          channels.set(activeChannel.toLowerCase(), { ...ch, isEncrypted: false });
+          useStore.setState({ channels });
+        }
+      });
+      break;
+    }
     default:
       rawCommand(`${cmd.toUpperCase()}${args ? ' ' + args : ''}`);
   }

@@ -35,6 +35,18 @@ pub enum Event {
         tags: std::collections::HashMap<String, String>,
     },
 
+    /// BATCH start (e.g., chathistory)
+    BatchStart {
+        id: String,
+        batch_type: String,
+        target: String,
+    },
+
+    /// BATCH end
+    BatchEnd {
+        id: String,
+    },
+
     /// NAMES list for a channel.
     Names {
         channel: String,
@@ -62,6 +74,12 @@ pub enum Event {
     AwayChanged {
         nick: String,
         away_msg: Option<String>,
+    },
+
+    /// A user changed nick.
+    NickChanged {
+        old_nick: String,
+        new_nick: String,
     },
 
     /// We were invited to a channel.

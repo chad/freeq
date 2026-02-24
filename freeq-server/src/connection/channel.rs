@@ -208,11 +208,14 @@ pub(super) fn handle_join(
         let mut channels = state.channels.lock().unwrap();
         if let Some(ch) = channels.get_mut(channel) {
             match role.as_str() {
-                "op" | "admin" | "owner" | "moderator" => {
+                "op" | "admin" | "owner" => {
                     ch.ops.insert(session_id.to_string());
                     if let Some(d) = did {
                         ch.did_ops.insert(d.to_string());
                     }
+                }
+                "moderator" | "halfop" => {
+                    ch.halfops.insert(session_id.to_string());
                 }
                 "voice" | "voiced" | "speaker" => {
                     ch.voiced.insert(session_id.to_string());
@@ -222,14 +225,15 @@ pub(super) fn handle_join(
         }
     }
 
-    // Broadcast MODE +o to existing channel members if the joiner was auto-opped
+    // Broadcast MODE +o/+h to existing channel members if the joiner was auto-opped/halfopped
     {
-        let is_op = state.channels.lock().unwrap()
+        let (is_op, is_halfop) = state.channels.lock().unwrap()
             .get(channel)
-            .map(|ch| ch.ops.contains(session_id))
-            .unwrap_or(false);
-        if is_op {
-            let mode_msg = format!(":{server_name} MODE {channel} +o {nick}\r\n");
+            .map(|ch| (ch.ops.contains(session_id), ch.halfops.contains(session_id)))
+            .unwrap_or((false, false));
+        let auto_mode = if is_op { Some("+o") } else if is_halfop { Some("+h") } else { None };
+        if let Some(mode) = auto_mode {
+            let mode_msg = format!(":{server_name} MODE {channel} {mode} {nick}\r\n");
             let channels = state.channels.lock().unwrap();
             if let Some(ch) = channels.get(channel) {
                 let members: Vec<String> = ch.members.iter().cloned().collect();
@@ -494,6 +498,7 @@ pub(super) fn handle_mode(
             if ch.topic_locked { m.push('t'); }
             if ch.invite_only { m.push('i'); }
             if ch.moderated { m.push('m'); }
+            if ch.encrypted_only { m.push('E'); }
             if ch.key.is_some() { m.push('k'); }
             m
         } else {
@@ -508,16 +513,16 @@ pub(super) fn handle_mode(
         return;
     };
 
-    // Only ops can change modes
-    let is_op = state
+    // Check privileges: ops can do anything, halfops can set +v only
+    let (is_op, is_halfop) = state
         .channels
         .lock()
         .unwrap()
         .get(channel)
-        .map(|ch| ch.ops.contains(session_id))
-        .unwrap_or(false);
+        .map(|ch| (ch.ops.contains(session_id), ch.halfops.contains(session_id)))
+        .unwrap_or((false, false));
 
-    if !is_op {
+    if !is_op && !is_halfop {
         let reply = Message::from_server(
             server_name,
             irc::ERR_CHANOPRIVSNEEDED,
@@ -527,13 +532,27 @@ pub(super) fn handle_mode(
         return;
     }
 
+    // Halfops can only set +v/-v — not +o, +h, +m, +t, +i, +k, +n
+    if is_halfop && !is_op {
+        let has_restricted = mode_str.chars().any(|c| matches!(c, 'o' | 'h' | 'm' | 't' | 'i' | 'k' | 'n' | 'E'));
+        if has_restricted {
+            let reply = Message::from_server(
+                server_name,
+                irc::ERR_CHANOPRIVSNEEDED,
+                vec![nick, channel, "Moderators can only set +v/-v"],
+            );
+            send(state, session_id, format!("{reply}\r\n"));
+            return;
+        }
+    }
+
     // Parse mode string: +o, -o, +v, -v, +t, -t
     let mut adding = true;
     for ch in mode_str.chars() {
         match ch {
             '+' => adding = true,
             '-' => adding = false,
-            'o' | 'v' => {
+            'o' | 'h' | 'v' => {
                 let Some(target_nick) = mode_arg else {
                     let reply = Message::from_server(
                         server_name,
@@ -552,7 +571,11 @@ pub(super) fn handle_mode(
                         {
                             let mut channels = state.channels.lock().unwrap();
                             if let Some(chan) = channels.get_mut(channel) {
-                                let set = if ch == 'o' { &mut chan.ops } else { &mut chan.voiced };
+                                let set = match ch {
+                                    'o' => &mut chan.ops,
+                                    'h' => &mut chan.halfops,
+                                    _ => &mut chan.voiced,
+                                };
                                 if adding {
                                     set.insert(target_session.clone());
                                 } else {
@@ -850,6 +873,22 @@ pub(super) fn handle_mode(
                 broadcast_to_channel(state, channel, &mode_msg);
                 s2s_broadcast_mode(state, conn, channel, &format!("{sign}m"), None);
             }
+            'E' => {
+                {
+                    let mut channels = state.channels.lock().unwrap();
+                    if let Some(chan) = channels.get_mut(channel) {
+                        chan.encrypted_only = adding;
+                        let ch_clone = chan.clone();
+                        drop(channels);
+                        state.with_db(|db| db.save_channel(channel, &ch_clone));
+                    }
+                }
+                let sign = if adding { "+" } else { "-" };
+                let hostmask = conn.hostmask();
+                let mode_msg = format!(":{hostmask} MODE {channel} {sign}E\r\n");
+                broadcast_to_channel(state, channel, &mode_msg);
+                s2s_broadcast_mode(state, conn, channel, &format!("{sign}E"), None);
+            }
             _ => {
                 let mode_char = ch.to_string();
                 let reply = Message::from_server(
@@ -876,14 +915,14 @@ pub(super) fn handle_kick(
 ) {
     let nick = conn.nick_or_star();
 
-    // Verify kicker is in the channel and is an op
-    let (in_channel, is_op) = state
+    // Verify kicker is in the channel and is an op or halfop
+    let (in_channel, is_op, is_halfop) = state
         .channels
         .lock()
         .unwrap()
         .get(channel)
-        .map(|ch| (ch.members.contains(session_id), ch.ops.contains(session_id)))
-        .unwrap_or((false, false));
+        .map(|ch| (ch.members.contains(session_id), ch.ops.contains(session_id), ch.halfops.contains(session_id)))
+        .unwrap_or((false, false, false));
 
     if !in_channel {
         let reply = Message::from_server(
@@ -895,7 +934,7 @@ pub(super) fn handle_kick(
         return;
     }
 
-    if !is_op {
+    if !is_op && !is_halfop {
         let reply = Message::from_server(
             server_name,
             irc::ERR_CHANOPRIVSNEEDED,
@@ -903,6 +942,32 @@ pub(super) fn handle_kick(
         );
         send(state, session_id, format!("{reply}\r\n"));
         return;
+    }
+
+    // Halfops cannot kick ops or other halfops
+    if is_halfop && !is_op {
+        let target_is_protected = state.channels.lock().unwrap()
+            .get(channel)
+            .map(|ch| {
+                // Find target session ID
+                let target_lower = target_nick.to_lowercase();
+                let n2s = state.nick_to_session.lock().unwrap();
+                n2s.iter()
+                    .find(|(n, _)| n.to_lowercase() == target_lower)
+                    .map(|(_, sid)| ch.ops.contains(sid) || ch.halfops.contains(sid))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+
+        if target_is_protected {
+            let reply = Message::from_server(
+                server_name,
+                irc::ERR_CHANOPRIVSNEEDED,
+                vec![nick, channel, "Cannot kick a channel operator or moderator"],
+            );
+            send(state, session_id, format!("{reply}\r\n"));
+            return;
+        }
     }
 
     // Resolve target via federated channel roster
@@ -921,6 +986,7 @@ pub(super) fn handle_kick(
                     ch.members.remove(&target_session);
                     ch.ops.remove(&target_session);
                     ch.voiced.remove(&target_session);
+                    ch.halfops.remove(&target_session);
                 }
             }
         }

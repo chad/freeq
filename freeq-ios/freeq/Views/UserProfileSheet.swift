@@ -31,6 +31,22 @@ struct UserProfileSheet: View {
                                 }
                             }
 
+                            if let away = appState.awayMessage(for: nick) {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(Theme.warning)
+                                        .frame(width: 8, height: 8)
+                                    Text("Away")
+                                        .font(.system(size: 12, weight: .semibold))
+                                        .foregroundColor(Theme.warning)
+                                }
+                                if !away.isEmpty {
+                                    Text(away)
+                                        .font(.system(size: 13))
+                                        .foregroundColor(Theme.textMuted)
+                                }
+                            }
+
                             if let p = profile {
                                 if let displayName = p.displayName, !displayName.isEmpty {
                                     Text(displayName)

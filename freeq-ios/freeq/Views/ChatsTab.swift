@@ -117,15 +117,18 @@ struct ChatRow: View {
     private var isChannel: Bool { conversation.name.hasPrefix("#") }
 
     /// Check if this DM contact is online in any shared channel
-    private var isOnline: Bool {
-        guard !isChannel else { return false }
+    private var presence: (online: Bool, away: Bool) {
+        guard !isChannel else { return (false, false) }
         let nick = conversation.name.lowercased()
+        var found = false
+        var away = false
         for ch in appState.channels {
-            if ch.members.contains(where: { $0.nick.lowercased() == nick }) {
-                return true
+            if let m = ch.members.first(where: { $0.nick.lowercased() == nick }) {
+                found = true
+                away = away || m.isAway
             }
         }
-        return false
+        return (found, away)
     }
 
     private var lastMessage: ChatMessage? {
@@ -168,7 +171,7 @@ struct ChatRow: View {
                 // Online/away dot for DMs
                 if !isChannel {
                     Circle()
-                        .fill(isOnline ? Theme.success : Theme.textMuted.opacity(0.3))
+                        .fill(presence.online ? (presence.away ? Theme.warning : Theme.success) : Theme.textMuted.opacity(0.3))
                         .frame(width: 14, height: 14)
                         .overlay(
                             Circle().stroke(Theme.bgSecondary, lineWidth: 2)
@@ -179,7 +182,7 @@ struct ChatRow: View {
             // Content
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(conversation.name)
+                    Text(isChannel ? conversation.name : "@" + conversation.name)
                         .font(.system(size: 16, weight: unreadCount > 0 ? .bold : .regular))
                         .foregroundColor(Theme.textPrimary)
                         .lineLimit(1)

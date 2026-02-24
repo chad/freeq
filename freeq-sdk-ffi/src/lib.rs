@@ -22,14 +22,29 @@ pub struct IrcMessage {
     pub msgid: Option<String>,
     pub reply_to: Option<String>,
     pub replaces_msgid: Option<String>,
+    pub edit_of: Option<String>,
+    pub batch_id: Option<String>,
     pub is_action: bool,
     pub timestamp_ms: i64,
+}
+
+pub struct TagEntry {
+    pub key: String,
+    pub value: String,
+}
+
+pub struct TagMessage {
+    pub from: String,
+    pub target: String,
+    pub tags: Vec<TagEntry>,
 }
 
 pub struct IrcMember {
     pub nick: String,
     pub is_op: bool,
+    pub is_halfop: bool,
     pub is_voiced: bool,
+    pub away_msg: Option<String>,
 }
 
 pub struct ChannelTopic {
@@ -44,12 +59,17 @@ pub enum FreeqEvent {
     AuthFailed { reason: String },
     Joined { channel: String, nick: String },
     Parted { channel: String, nick: String },
+    NickChanged { old_nick: String, new_nick: String },
+    AwayChanged { nick: String, away_msg: Option<String> },
     Message { msg: IrcMessage },
+    TagMsg { msg: TagMessage },
     Names { channel: String, members: Vec<IrcMember> },
     TopicChanged { channel: String, topic: ChannelTopic },
     ModeChanged { channel: String, mode: String, arg: Option<String>, set_by: String },
     Kicked { channel: String, nick: String, by: String, reason: String },
     UserQuit { nick: String, reason: String },
+    BatchStart { id: String, batch_type: String, target: String },
+    BatchEnd { id: String },
     Notice { text: String },
     Disconnected { reason: String },
 }
@@ -233,6 +253,8 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
             let msgid = tags.get("msgid").cloned();
             let reply_to = tags.get("+reply").cloned();
             let replaces_msgid = tags.get("+draft/edit").cloned();
+            let edit_of = tags.get("+draft/edit").cloned();
+            let batch_id = tags.get("batch").cloned();
             let is_action = text.starts_with("\x01ACTION ") && text.ends_with('\x01');
             let clean_text = if is_action {
                 text.trim_start_matches("\x01ACTION ").trim_end_matches('\x01').to_string()
@@ -251,21 +273,38 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
                     msgid,
                     reply_to,
                     replaces_msgid,
+                    edit_of,
+                    batch_id,
                     is_action,
                     timestamp_ms: ts,
                 },
             }
         }
+        Event::TagMsg { from, target, tags } => {
+            let tag_entries = tags.iter().map(|(k, v)| TagEntry {
+                key: k.clone(),
+                value: v.clone(),
+            }).collect::<Vec<_>>();
+            FreeqEvent::TagMsg {
+                msg: TagMessage {
+                    from: from.clone(),
+                    target: target.clone(),
+                    tags: tag_entries,
+                },
+            }
+        }
         Event::Names { channel, nicks } => {
             let members = nicks.iter().map(|n| {
-                let (is_op, is_voiced, nick) = if n.starts_with('@') {
-                    (true, false, n[1..].to_string())
+                let (is_op, is_halfop, is_voiced, nick) = if n.starts_with('@') {
+                    (true, false, false, n[1..].to_string())
+                } else if n.starts_with('%') {
+                    (false, true, false, n[1..].to_string())
                 } else if n.starts_with('+') {
-                    (false, true, n[1..].to_string())
+                    (false, false, true, n[1..].to_string())
                 } else {
-                    (false, false, n.clone())
+                    (false, false, false, n.clone())
                 };
-                IrcMember { nick, is_op, is_voiced }
+                IrcMember { nick, is_op, is_halfop, is_voiced, away_msg: None }
             }).collect();
             FreeqEvent::Names { channel: channel.clone(), members }
         }
@@ -281,6 +320,20 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
         },
         Event::ServerNotice { text } => FreeqEvent::Notice { text: text.clone() },
         Event::UserQuit { nick, reason } => FreeqEvent::UserQuit { nick: nick.clone(), reason: reason.clone() },
+        Event::NickChanged { old_nick, new_nick } => FreeqEvent::NickChanged {
+            old_nick: old_nick.clone(),
+            new_nick: new_nick.clone(),
+        },
+        Event::AwayChanged { nick, away_msg } => FreeqEvent::AwayChanged {
+            nick: nick.clone(),
+            away_msg: away_msg.clone(),
+        },
+        Event::BatchStart { id, batch_type, target } => FreeqEvent::BatchStart {
+            id: id.clone(),
+            batch_type: batch_type.clone(),
+            target: target.clone(),
+        },
+        Event::BatchEnd { id } => FreeqEvent::BatchEnd { id: id.clone() },
         Event::Disconnected { reason } => FreeqEvent::Disconnected { reason: reason.clone() },
         Event::Invited { channel, by } => FreeqEvent::Notice { text: format!("{by} invited you to {channel}") },
         _ => FreeqEvent::Notice { text: String::new() },

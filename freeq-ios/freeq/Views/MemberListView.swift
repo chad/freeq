@@ -8,12 +8,16 @@ struct MemberListView: View {
         channel.members.filter { $0.isOp }.sorted { $0.nick.lowercased() < $1.nick.lowercased() }
     }
 
+    private var halfops: [MemberInfo] {
+        channel.members.filter { $0.isHalfop && !$0.isOp }.sorted { $0.nick.lowercased() < $1.nick.lowercased() }
+    }
+
     private var voiced: [MemberInfo] {
-        channel.members.filter { $0.isVoiced && !$0.isOp }.sorted { $0.nick.lowercased() < $1.nick.lowercased() }
+        channel.members.filter { $0.isVoiced && !$0.isOp && !$0.isHalfop }.sorted { $0.nick.lowercased() < $1.nick.lowercased() }
     }
 
     private var regular: [MemberInfo] {
-        channel.members.filter { !$0.isOp && !$0.isVoiced }.sorted { $0.nick.lowercased() < $1.nick.lowercased() }
+        channel.members.filter { !$0.isOp && !$0.isHalfop && !$0.isVoiced }.sorted { $0.nick.lowercased() < $1.nick.lowercased() }
     }
 
     var body: some View {
@@ -39,6 +43,9 @@ struct MemberListView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     if !ops.isEmpty {
                         memberSection("OPERATORS — \(ops.count)", members: ops)
+                    }
+                    if !halfops.isEmpty {
+                        memberSection("MODERATORS — \(halfops.count)", members: halfops)
                     }
                     if !voiced.isEmpty {
                         memberSection("VOICED — \(voiced.count)", members: voiced)
@@ -90,7 +97,7 @@ struct MemberListView: View {
                 UserAvatar(nick: member.nick, size: 32)
                     .overlay(
                         Circle()
-                            .fill(Theme.success)
+                            .fill(member.isAway ? Theme.warning : Theme.success)
                             .frame(width: 10, height: 10)
                             .overlay(
                                 Circle()
@@ -106,10 +113,29 @@ struct MemberListView: View {
                             Image(systemName: "shield.fill")
                                 .font(.system(size: 9))
                                 .foregroundColor(Theme.warning)
+                        } else if member.isHalfop {
+                            Image(systemName: "shield.lefthalf.filled")
+                                .font(.system(size: 9))
+                                .foregroundColor(Theme.accent)
                         }
                         Text(member.nick)
                             .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(Theme.textPrimary)
+                            .foregroundColor(member.isAway ? Theme.textMuted : Theme.textPrimary)
+                            .lineLimit(1)
+                        if member.isAway {
+                            Text("Away")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(Theme.warning)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Theme.warning.opacity(0.15))
+                                .cornerRadius(6)
+                        }
+                    }
+                    if member.isAway, let away = member.awayMsg {
+                        Text(away)
+                            .font(.system(size: 11))
+                            .foregroundColor(Theme.textMuted)
                             .lineLimit(1)
                     }
                 }

@@ -17,7 +17,8 @@ struct MessageListView: View {
                 ScrollView {
                     // Pull to load older messages
                     Button(action: {
-                        appState.requestHistory(channel: channel.name)
+                        let oldest = channel.messages.first?.timestamp
+                        appState.requestHistory(channel: channel.name, before: oldest)
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }) {
                         HStack(spacing: 6) {
@@ -387,7 +388,7 @@ struct MessageListView: View {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Button(action: { profileNick = msg.from }) {
                                 HStack(spacing: 4) {
-                                    Text(msg.from)
+                                    Text((channel.memberInfo(for: msg.from)?.prefix ?? "") + msg.from)
                                         .font(.system(size: 15, weight: .bold))
                                         .foregroundColor(Theme.nickColor(for: msg.from))
 
@@ -404,9 +405,13 @@ struct MessageListView: View {
                                 .foregroundColor(Theme.textMuted)
 
                             if msg.isEdited {
-                                Text("(edited)")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(Theme.textMuted)
+                                Text("edited")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(Theme.accent)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Theme.accent.opacity(0.12))
+                                    .cornerRadius(6)
                             }
                         }
 

@@ -28,6 +28,8 @@ pub struct ChannelState {
     pub remote_members: HashMap<String, RemoteMember>,
     /// Session IDs of channel operators (ephemeral, per-session).
     pub ops: HashSet<String>,
+    /// Session IDs of halfops/moderators (+h). Can kick/ban regular users, set +v.
+    pub halfops: HashSet<String>,
     /// Session IDs of voiced users.
     pub voiced: HashSet<String>,
 
@@ -61,6 +63,8 @@ pub struct ChannelState {
     pub no_ext_msg: bool,
     /// Channel mode: +m = moderated (only voiced/ops can send).
     pub moderated: bool,
+    /// Channel mode: +E = encrypted only (messages must have +encrypted tag).
+    pub encrypted_only: bool,
     /// Channel key (+k) — password required to join.
     pub key: Option<String>,
 }
@@ -314,6 +318,9 @@ pub struct SharedState {
     pub plugin_manager: PluginManager,
     /// Policy engine for channel governance (if enabled).
     pub policy_engine: Option<Arc<crate::policy::PolicyEngine>>,
+    /// E2EE pre-key bundles: DID → PreKeyBundle JSON.
+    /// Clients upload their bundles; other clients fetch to start encrypted sessions.
+    pub prekey_bundles: Mutex<HashMap<String, serde_json::Value>>,
 }
 
 impl SharedState {
@@ -572,7 +579,7 @@ impl Server {
                     }
                 }
             },
-
+            prekey_bundles: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -941,6 +948,7 @@ async fn process_s2s_message(
             .filter_map(|s| {
                 reverse.get(s).map(|n| {
                     let prefix = if ch.ops.contains(s) { "@" }
+                        else if ch.halfops.contains(s) { "%" }
                         else if ch.voiced.contains(s) { "+" }
                         else { "" };
                     format!("{prefix}{n}")
@@ -1696,6 +1704,7 @@ async fn process_s2s_message(
                     let removed = ch.members.remove(sid);
                     ch.ops.remove(sid);
                     ch.voiced.remove(sid);
+                    ch.halfops.remove(sid);
                     tracing::info!(
                         nick = %nick, channel = %channel_key, removed = removed,
                         "S2S Kick: removed local user from channel"

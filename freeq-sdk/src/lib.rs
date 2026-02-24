@@ -21,6 +21,8 @@ pub mod did;
 pub mod e2ee;
 pub mod e2ee_did;
 pub mod event;
+pub mod ratchet;
+pub mod x3dh;
 pub mod irc;
 pub mod media;
 pub mod oauth;

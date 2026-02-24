@@ -24,6 +24,16 @@ pub(super) fn handle_tagmsg(
     }
 
     let hostmask = conn.hostmask();
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let time_tag = chrono::DateTime::from_timestamp(timestamp as i64, 0)
+        .unwrap_or_default()
+        .format("%Y-%m-%dT%H:%M:%S.000Z")
+        .to_string();
+
     let tag_msg = irc::Message {
         tags: tags.clone(),
         prefix: Some(hostmask.clone()),
@@ -31,6 +41,16 @@ pub(super) fn handle_tagmsg(
         params: vec![target.to_string()],
     };
     let tagged_line = format!("{tag_msg}\r\n");
+
+    let mut tags_with_time = tags.clone();
+    tags_with_time.insert("time".to_string(), time_tag);
+    let tag_msg_with_time = irc::Message {
+        tags: tags_with_time,
+        prefix: Some(hostmask.clone()),
+        command: "TAGMSG".to_string(),
+        params: vec![target.to_string()],
+    };
+    let tagged_line_with_time = format!("{tag_msg_with_time}\r\n");
 
     // Generate a PRIVMSG fallback for plain clients (server-side downgrade).
     // Only for known tag types — unknown TAGMSGs are silently dropped for plain clients.
@@ -47,6 +67,7 @@ pub(super) fn handle_tagmsg(
             .unwrap_or_default();
 
         let tag_caps = state.cap_message_tags.lock().unwrap();
+        let time_caps = state.cap_server_time.lock().unwrap();
         let echo_caps = state.cap_echo_message.lock().unwrap();
         let conns = state.connections.lock().unwrap();
         for member_session in &members {
@@ -56,7 +77,12 @@ pub(super) fn handle_tagmsg(
             }
             if let Some(tx) = conns.get(member_session) {
                 if tag_caps.contains(member_session) {
-                    let _ = tx.try_send(tagged_line.clone());
+                    let line = if time_caps.contains(member_session) {
+                        &tagged_line_with_time
+                    } else {
+                        &tagged_line
+                    };
+                    let _ = tx.try_send(line.clone());
                 } else if let Some(ref fallback) = plain_fallback {
                     let _ = tx.try_send(fallback.clone());
                 }
@@ -72,8 +98,11 @@ pub(super) fn handle_tagmsg(
         match relay_to_nick(state, &from_nick, target, &tag_text, super::helpers::s2s_next_event_id(state)) {
             RouteResult::Local(ref session) => {
                 if let Some(tx) = state.connections.lock().unwrap().get(session) {
-                    if state.cap_message_tags.lock().unwrap().contains(session) {
-                        let _ = tx.try_send(tagged_line.clone());
+                    let has_tags = state.cap_message_tags.lock().unwrap().contains(session);
+                    let has_time = state.cap_server_time.lock().unwrap().contains(session);
+                    if has_tags {
+                        let line = if has_time { &tagged_line_with_time } else { &tagged_line };
+                        let _ = tx.try_send(line.clone());
                     } else if let Some(ref fallback) = plain_fallback {
                         let _ = tx.try_send(fallback.clone());
                     }
@@ -97,6 +126,15 @@ pub(super) fn handle_privmsg(
     state: &Arc<SharedState>,
 ) {
     let hostmask = conn.hostmask();
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let time_tag = chrono::DateTime::from_timestamp(timestamp as i64, 0)
+        .unwrap_or_default()
+        .format("%Y-%m-%dT%H:%M:%S.000Z")
+        .to_string();
 
     // ── Message editing (+draft/edit=<msgid>) ──
     if let Some(original_msgid) = tags.get("+draft/edit") {
@@ -125,6 +163,7 @@ pub(super) fn handle_privmsg(
                 // +m: must be voiced or op to send
                 if ch.moderated
                     && !ch.ops.contains(&conn.id)
+                    && !ch.halfops.contains(&conn.id)
                     && !ch.voiced.contains(&conn.id)
                 {
                     let nick = conn.nick_or_star();
@@ -132,6 +171,19 @@ pub(super) fn handle_privmsg(
                         &state.server_name,
                         irc::ERR_CANNOTSENDTOCHAN,
                         vec![nick, target, "Cannot send to channel (+m)"],
+                    );
+                    if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+                        let _ = tx.try_send(format!("{reply}\r\n"));
+                    }
+                    return;
+                }
+                // +E: encrypted-only mode
+                if ch.encrypted_only && !tags.contains_key("+encrypted") {
+                    let nick = conn.nick_or_star();
+                    let reply = Message::from_server(
+                        &state.server_name,
+                        irc::ERR_CANNOTSENDTOCHAN,
+                        vec![nick, target, "Cannot send to channel (+E) — messages must be encrypted"],
                     );
                     if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
                         let _ = tx.try_send(format!("{reply}\r\n"));
@@ -162,13 +214,25 @@ pub(super) fn handle_privmsg(
         // Build tags with msgid injected (for tag-capable clients)
         let mut full_tags = tags.clone();
         full_tags.insert("msgid".to_string(), msgid.clone());
+        let mut full_tags_with_time = full_tags.clone();
+        full_tags_with_time.insert("time".to_string(), time_tag.clone());
 
         // Plain line (no tags) for clients that don't support message-tags
         let plain_line = format!(":{hostmask} {command} {target} :{text}\r\n");
-        // Tagged line for clients that negotiated message-tags (always has at least msgid)
+        // Tagged line for clients that negotiated message-tags (no server-time)
         let tagged_line = {
             let tag_msg = irc::Message {
                 tags: full_tags.clone(),
+                prefix: Some(hostmask.clone()),
+                command: command.to_string(),
+                params: vec![target.to_string(), text.to_string()],
+            };
+            format!("{tag_msg}\r\n")
+        };
+        // Tagged line with server-time
+        let tagged_line_with_time = {
+            let tag_msg = irc::Message {
+                tags: full_tags_with_time.clone(),
                 prefix: Some(hostmask.clone()),
                 command: command.to_string(),
                 params: vec![target.to_string(), text.to_string()],
@@ -179,10 +243,6 @@ pub(super) fn handle_privmsg(
         // Store in channel history
         if command == "PRIVMSG" {
             use crate::server::{HistoryMessage, MAX_HISTORY};
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
             let mut channels = state.channels.lock().unwrap();
             if let Some(ch) = channels.get_mut(target) {
                 ch.history.push_back(HistoryMessage {
@@ -215,6 +275,7 @@ pub(super) fn handle_privmsg(
             .unwrap_or_default();
 
         let tag_caps = state.cap_message_tags.lock().unwrap();
+        let time_caps = state.cap_server_time.lock().unwrap();
         let echo_caps = state.cap_echo_message.lock().unwrap();
         let conns = state.connections.lock().unwrap();
         for member_session in &members {
@@ -224,7 +285,11 @@ pub(super) fn handle_privmsg(
             }
             if let Some(tx) = conns.get(member_session) {
                 let line = if tag_caps.contains(member_session) {
-                    &tagged_line
+                    if time_caps.contains(member_session) {
+                        &tagged_line_with_time
+                    } else {
+                        &tagged_line
+                    }
                 } else {
                     &plain_line
                 };
@@ -249,11 +314,22 @@ pub(super) fn handle_privmsg(
         let pm_msgid = crate::msgid::generate();
         let mut pm_tags = tags.clone();
         pm_tags.insert("msgid".to_string(), pm_msgid.clone());
+        let mut pm_tags_with_time = pm_tags.clone();
+        pm_tags_with_time.insert("time".to_string(), time_tag.clone());
 
         let plain_line = format!(":{hostmask} {command} {target} :{text}\r\n");
         let tagged_line = {
             let tag_msg = irc::Message {
-                tags: pm_tags,
+                tags: pm_tags.clone(),
+                prefix: Some(hostmask.clone()),
+                command: command.to_string(),
+                params: vec![target.to_string(), text.to_string()],
+            };
+            format!("{tag_msg}\r\n")
+        };
+        let tagged_line_with_time = {
+            let tag_msg = irc::Message {
+                tags: pm_tags_with_time,
                 prefix: Some(hostmask.clone()),
                 command: command.to_string(),
                 params: vec![target.to_string(), text.to_string()],
@@ -284,17 +360,23 @@ pub(super) fn handle_privmsg(
                 // Collect cap info, then send (avoid holding locks across sends)
                 let target_has_tags = state.cap_message_tags.lock().unwrap().contains(session);
                 let sender_has_tags = state.cap_message_tags.lock().unwrap().contains(&conn.id);
+                let target_has_time = state.cap_server_time.lock().unwrap().contains(session);
+                let sender_has_time = state.cap_server_time.lock().unwrap().contains(&conn.id);
                 let sender_has_echo = state.cap_echo_message.lock().unwrap().contains(&conn.id);
 
                 let conns = state.connections.lock().unwrap();
                 // Deliver to target
-                let line = if target_has_tags { &tagged_line } else { &plain_line };
+                let line = if target_has_tags {
+                    if target_has_time { &tagged_line_with_time } else { &tagged_line }
+                } else { &plain_line };
                 if let Some(tx) = conns.get(session) {
                     let _ = tx.try_send(line.clone());
                 }
                 // echo-message: echo DM back to sender
                 if sender_has_echo {
-                    let echo_line = if sender_has_tags { &tagged_line } else { &plain_line };
+                    let echo_line = if sender_has_tags {
+                        if sender_has_time { &tagged_line_with_time } else { &tagged_line }
+                    } else { &plain_line };
                     if let Some(tx) = conns.get(&conn.id) {
                         let _ = tx.try_send(echo_line.clone());
                     }
@@ -307,7 +389,10 @@ pub(super) fn handle_privmsg(
                 let sender_has_echo = state.cap_echo_message.lock().unwrap().contains(&conn.id);
                 if sender_has_echo {
                     let sender_has_tags = state.cap_message_tags.lock().unwrap().contains(&conn.id);
-                    let echo_line = if sender_has_tags { &tagged_line } else { &plain_line };
+                    let sender_has_time = state.cap_server_time.lock().unwrap().contains(&conn.id);
+                    let echo_line = if sender_has_tags {
+                        if sender_has_time { &tagged_line_with_time } else { &tagged_line }
+                    } else { &plain_line };
                     if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
                         let _ = tx.try_send(echo_line.clone());
                     }
@@ -440,8 +525,8 @@ pub(super) fn handle_chathistory(
         _ => vec![],
     };
 
-    // Send as a batch
-    let batch_id = format!("ch{}", session_id.len());
+    // Send as a batch (unique ID per request)
+    let batch_id = format!("ch{}", crate::msgid::generate());
     if has_batch {
         send(state, session_id, format!(
             ":{server_name} BATCH +{batch_id} chathistory {target}\r\n"
@@ -454,6 +539,9 @@ pub(super) fn handle_chathistory(
         if has_tags {
             if let Some(ref mid) = row.msgid {
                 tags.insert("msgid".to_string(), mid.clone());
+            }
+            if let Some(ref replaces) = row.replaces_msgid {
+                tags.entry("+draft/edit".to_string()).or_insert_with(|| replaces.clone());
             }
         }
         if has_time {
@@ -567,13 +655,29 @@ fn handle_edit(
         format!("{tag_msg}\r\n")
     };
 
-    // Store in DB
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
+    let time_tag = chrono::DateTime::from_timestamp(timestamp as i64, 0)
+        .unwrap_or_default()
+        .format("%Y-%m-%dT%H:%M:%S.000Z")
+        .to_string();
+    let mut full_tags_with_time = full_tags.clone();
+    full_tags_with_time.insert("time".to_string(), time_tag);
+    let tagged_line_with_time = {
+        let tag_msg = irc::Message {
+            tags: full_tags_with_time,
+            prefix: Some(hostmask.clone()),
+            command: "PRIVMSG".to_string(),
+            params: vec![target.to_string(), new_text.to_string()],
+        };
+        format!("{tag_msg}\r\n")
+    };
+
+    // Store in DB
     let store_tags: std::collections::HashMap<String, String> = tags.iter()
-        .filter(|(k, _)| *k != "+draft/edit" && *k != "msgid")
+        .filter(|(k, _)| *k != "msgid")
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     state.with_db(|db| db.insert_edit(target, &hostmask, new_text, timestamp, &store_tags, &edit_msgid, original_msgid));
@@ -601,6 +705,7 @@ fn handle_edit(
         .unwrap_or_default();
 
     let tag_caps = state.cap_message_tags.lock().unwrap();
+    let time_caps = state.cap_server_time.lock().unwrap();
     let echo_caps = state.cap_echo_message.lock().unwrap();
     let conns = state.connections.lock().unwrap();
     for sid in &members {
@@ -608,7 +713,9 @@ fn handle_edit(
             continue;
         }
         if let Some(tx) = conns.get(sid) {
-            let line = if tag_caps.contains(sid) { &tagged_line } else { &plain_line };
+            let line = if tag_caps.contains(sid) {
+                if time_caps.contains(sid) { &tagged_line_with_time } else { &tagged_line }
+            } else { &plain_line };
             let _ = tx.try_send(line.clone());
         }
     }

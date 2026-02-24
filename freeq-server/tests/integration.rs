@@ -1879,3 +1879,94 @@ async fn persistence_nick_ownership_survives_restart() {
         server_handle.abort();
     }
 }
+
+// ── Test: Halfop (+h) behavior ──────────────────────────────────────
+
+#[tokio::test]
+async fn halfop_mode() {
+    let (addr, _server_handle) = start_test_server(empty_resolver()).await;
+
+    // Op creates channel
+    let config_op = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "halftest_op".to_string(),
+        user: "halftest_op".to_string(),
+        realname: "Op".to_string(),
+        ..Default::default()
+    };
+    let (handle_op, mut events_op) = client::connect(config_op, None);
+    expect_event(&mut events_op, 5000, |e| matches!(e, Event::Registered { .. }), "op registered").await;
+    handle_op.join("#halftest").await.unwrap();
+    expect_event(&mut events_op, 5000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#halftest"), "op joined").await;
+
+    // Halfop user joins
+    let config_half = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "halftest_mod".to_string(),
+        user: "halftest_mod".to_string(),
+        realname: "Mod".to_string(),
+        ..Default::default()
+    };
+    let (handle_half, mut events_half) = client::connect(config_half, None);
+    expect_event(&mut events_half, 5000, |e| matches!(e, Event::Registered { .. }), "mod registered").await;
+    handle_half.join("#halftest").await.unwrap();
+    expect_event(&mut events_half, 5000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#halftest"), "mod joined").await;
+
+    // Regular user joins
+    let config_user = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "halftest_user".to_string(),
+        user: "halftest_user".to_string(),
+        realname: "User".to_string(),
+        ..Default::default()
+    };
+    let (handle_user, mut events_user) = client::connect(config_user, None);
+    expect_event(&mut events_user, 5000, |e| matches!(e, Event::Registered { .. }), "user registered").await;
+    handle_user.join("#halftest").await.unwrap();
+    expect_event(&mut events_user, 5000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#halftest"), "user joined").await;
+
+    // Drain any pending events
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    while events_op.try_recv().is_ok() {}
+    while events_half.try_recv().is_ok() {}
+    while events_user.try_recv().is_ok() {}
+
+    // Op grants +h to mod
+    handle_op.raw("MODE #halftest +h halftest_mod").await.unwrap();
+    expect_event(&mut events_half, 5000, |e| matches!(e, Event::ModeChanged { channel, mode, .. } if channel == "#halftest" && mode == "+h"), "mod gets +h").await;
+
+    // Halfop can kick regular user
+    handle_half.raw("KICK #halftest halftest_user :moderated").await.unwrap();
+    expect_event(&mut events_user, 5000, |e| matches!(e, Event::Kicked { channel, .. } if channel == "#halftest"), "user kicked by halfop").await;
+
+    // User rejoins
+    handle_user.join("#halftest").await.unwrap();
+    expect_event(&mut events_user, 5000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#halftest"), "user rejoined").await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    while events_half.try_recv().is_ok() {}
+
+    // Halfop CANNOT kick op
+    handle_half.raw("KICK #halftest halftest_op :nope").await.unwrap();
+    expect_event(&mut events_half, 5000, |e| matches!(e, Event::ServerNotice { text } if text.contains("operator")), "halfop can't kick op").await;
+
+    // Halfop can set +v
+    handle_half.raw("MODE #halftest +v halftest_user").await.unwrap();
+    expect_event(&mut events_user, 5000, |e| matches!(e, Event::ModeChanged { mode, .. } if mode == "+v"), "halfop sets +v").await;
+
+    // Halfop CANNOT set +o
+    handle_half.raw("MODE #halftest +o halftest_user").await.unwrap();
+    expect_event(&mut events_half, 5000, |e| matches!(e, Event::ServerNotice { text } if text.contains("Moderators can only set")), "halfop can't set +o").await;
+
+    // Halfop CANNOT set +m
+    handle_half.raw("MODE #halftest +m").await.unwrap();
+    expect_event(&mut events_half, 5000, |e| matches!(e, Event::ServerNotice { text } if text.contains("Moderators can only set")), "halfop can't set +m").await;
+
+    // Op sets +m, halfop can still speak
+    handle_op.raw("MODE #halftest +m").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    while events_op.try_recv().is_ok() {}
+    while events_half.try_recv().is_ok() {}
+
+    handle_half.privmsg("#halftest", "halfop can speak").await.unwrap();
+    expect_event(&mut events_op, 5000, |e| matches!(e, Event::Message { text, .. } if text == "halfop can speak"), "halfop speaks in +m").await;
+}

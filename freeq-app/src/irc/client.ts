@@ -10,6 +10,7 @@ import { Transport, type TransportState } from './transport';
 import { useStore, type Message } from '../store';
 import { notify } from '../lib/notifications';
 import { prefetchProfiles } from '../lib/profiles';
+import * as e2ee from '../lib/e2ee';
 
 // ── State ──
 
@@ -83,11 +84,72 @@ export function setSaslCredentials(token: string, did: string, pdsUrl: string, m
   saslMethod = method;
 }
 
+/** Resolve a nick to a DID by searching member lists across all channels. */
+function didForNick(targetNick: string): string | undefined {
+  const store = useStore.getState();
+  const lower = targetNick.toLowerCase();
+  for (const ch of store.channels.values()) {
+    const m = ch.members.get(lower);
+    if (m?.did) return m.did;
+  }
+  return undefined;
+}
+
+/**
+ * Cache of plaintext for outgoing encrypted messages, keyed by ciphertext.
+ * Needed because echo-message returns our own ciphertext and we can't
+ * decrypt what we encrypted (Double Ratchet is asymmetric: send ≠ recv chain).
+ * Entries auto-expire after 60 seconds.
+ */
+const echoPlaintextCache = new Map<string, { plaintext: string; ts: number }>();
+function cacheEchoPlaintext(ciphertext: string, plaintext: string) {
+  echoPlaintextCache.set(ciphertext, { plaintext, ts: Date.now() });
+  // Prune old entries
+  if (echoPlaintextCache.size > 100) {
+    const now = Date.now();
+    for (const [k, v] of echoPlaintextCache) {
+      if (now - v.ts > 60_000) echoPlaintextCache.delete(k);
+    }
+  }
+}
+
 export function sendMessage(target: string, text: string) {
-  raw(`PRIVMSG ${target} :${text}`);
+  const isChannel = target.startsWith('#') || target.startsWith('&');
+
+  // Check if channel has E2EE key — if so, encrypt before sending
+  if (e2ee.hasChannelKey(target)) {
+    e2ee.encryptChannel(target, text).then((encrypted) => {
+      if (encrypted) {
+        cacheEchoPlaintext(encrypted, text);
+        const line = format('PRIVMSG', [target, encrypted], { '+encrypted': '' });
+        raw(line);
+      } else {
+        raw(`PRIVMSG ${target} :${text}`);
+      }
+    });
+  }
+  // DM to an AT-authenticated user: encrypt with Double Ratchet
+  else if (!isChannel && e2ee.isE2eeReady()) {
+    const remoteDid = didForNick(target);
+    if (remoteDid) {
+      const origin = window.location.origin;
+      e2ee.encryptMessage(remoteDid, text, origin).then((encrypted) => {
+        if (encrypted) {
+          cacheEchoPlaintext(encrypted, text);
+          const line = format('PRIVMSG', [target, encrypted], { '+encrypted': '' });
+          raw(line);
+        } else {
+          raw(`PRIVMSG ${target} :${text}`);
+        }
+      });
+    } else {
+      raw(`PRIVMSG ${target} :${text}`);
+    }
+  } else {
+    raw(`PRIVMSG ${target} :${text}`);
+  }
 
   // Ensure DM buffer exists
-  const isChannel = target.startsWith('#') || target.startsWith('&');
   if (!isChannel) {
     const store = useStore.getState();
     if (!store.channels.has(target.toLowerCase())) {
@@ -96,7 +158,8 @@ export function sendMessage(target: string, text: string) {
   }
 
   // If we have echo-message, server will echo it back.
-  // Otherwise, add it locally.
+  // Otherwise, add it locally (show plaintext, not ciphertext).
+  const willEncrypt = e2ee.hasChannelKey(target) || (!isChannel && e2ee.isE2eeReady() && !!didForNick(target));
   if (!ackedCaps.has('echo-message')) {
     useStore.getState().addMessage(target, {
       id: crypto.randomUUID(),
@@ -105,6 +168,7 @@ export function sendMessage(target: string, text: string) {
       timestamp: new Date(),
       tags: {},
       isSelf: true,
+      encrypted: willEncrypt,
     });
   }
 }
@@ -193,7 +257,7 @@ function raw(line: string) {
   transport?.send(line);
 }
 
-function handleLine(rawLine: string) {
+async function handleLine(rawLine: string) {
   const msg = parse(rawLine);
   const store = useStore.getState();
   const from = prefixNick(msg.prefix);
@@ -210,7 +274,14 @@ function handleLine(rawLine: string) {
       break;
     case '900':
       store.setAuth(saslDid, msg.params[msg.params.length - 1]);
-      if (saslDid) prefetchProfiles([saslDid]);
+      if (saslDid) {
+        prefetchProfiles([saslDid]);
+        // Initialize E2EE keys for this DID
+        const origin = window.location.origin;
+        e2ee.initialize(saslDid, origin).catch((e) =>
+          console.warn('[e2ee] Init failed:', e)
+        );
+      }
       break;
     case '903':
       raw('CAP END');
@@ -293,6 +364,7 @@ function handleLine(rawLine: string) {
         nick: from,
         did: joinDid,
         isOp: false,
+        isHalfop: false,
         isVoiced: false,
       });
       if (joinDid) prefetchProfiles([joinDid]);
@@ -350,20 +422,80 @@ function handleLine(rawLine: string) {
         break;
       }
 
+      // Decrypt E2EE messages
+      let displayText = isAction ? text.slice(8, -1) : text;
+      let isEncryptedMsg = false;
+
+      // Check echo cache first — our own encrypted messages echoed back
+      const cachedPlain = echoPlaintextCache.get(text);
+      if (cachedPlain && isSelf) {
+        displayText = cachedPlain.plaintext;
+        isEncryptedMsg = true;
+        echoPlaintextCache.delete(text);
+      }
+      // ENC1: channel passphrase-based encryption
+      else if (e2ee.isENC1(text) && isChannel) {
+        const plain = await e2ee.decryptChannel(target, text);
+        if (plain !== null) {
+          displayText = plain;
+          isEncryptedMsg = true;
+        } else {
+          displayText = '🔒 [encrypted message — use /encrypt <passphrase> to decrypt]';
+          isEncryptedMsg = true;
+        }
+      }
+      // ENC3: DM Double Ratchet encryption (from someone else)
+      else if (e2ee.isEncrypted(text) && !isChannel && !isSelf) {
+        const remoteDid = didForNick(from);
+        if (remoteDid) {
+          const plain = await e2ee.decryptMessage(remoteDid, text);
+          if (plain !== null) {
+            displayText = plain;
+            isEncryptedMsg = true;
+          } else {
+            displayText = '🔒 [encrypted DM — could not decrypt]';
+            isEncryptedMsg = true;
+          }
+        } else {
+          displayText = '🔒 [encrypted DM — unknown sender identity]';
+          isEncryptedMsg = true;
+        }
+      }
+      // ENC3: own echo that wasn't in cache (e.g. CHATHISTORY)
+      else if (e2ee.isEncrypted(text) && !isChannel && isSelf) {
+        displayText = '🔒 [encrypted message]';
+        isEncryptedMsg = true;
+      }
+      if (msg.tags['+encrypted']) isEncryptedMsg = true;
+
       const message: Message = {
         id: msg.tags['msgid'] || crypto.randomUUID(),
         from,
-        text: isAction ? text.slice(8, -1) : text,
+        text: displayText,
         timestamp: msg.tags['time'] ? new Date(msg.tags['time']) : new Date(),
         tags: msg.tags,
         isAction,
         isSelf: isSelf,
         replyTo: msg.tags['+reply'],
+        encrypted: isEncryptedMsg,
       };
 
       // Ensure DM buffer exists
       if (!isChannel && !store.channels.has(bufName.toLowerCase())) {
         store.addChannel(bufName);
+      }
+
+      // Background WHOIS for DM partners to learn their DID (enables E2EE)
+      if (!isChannel && !isSelf && !didForNick(from) && !backgroundWhois.has(from.toLowerCase())) {
+        backgroundWhois.add(from.toLowerCase());
+        raw(`WHOIS ${from}`);
+      }
+
+      // If this message is part of a batch (CHATHISTORY), add to batch buffer
+      const batchId = msg.tags['batch'];
+      if (batchId && store.batches.has(batchId)) {
+        store.addBatchMessage(batchId, message);
+        break;
       }
 
       store.addMessage(bufName, message);
@@ -450,9 +582,10 @@ function handleLine(rawLine: string) {
       const nicks = (msg.params[3] || '').split(' ').filter(Boolean);
       for (const n of nicks) {
         const isOp = n.startsWith('@');
+        const isHalfop = n.startsWith('%');
         const isVoiced = n.startsWith('+');
-        const bare = n.replace(/^[@+]/, '');
-        store.addMember(channel, { nick: bare, isOp, isVoiced });
+        const bare = n.replace(/^[@%+]/, '');
+        store.addMember(channel, { nick: bare, isOp, isHalfop, isVoiced });
       }
       break;
     }

@@ -16,7 +16,7 @@ use axum::extract::ws::{Message as WsMessage, WebSocket};
 use axum::extract::{Path, Query, State, WebSocketUpgrade};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Json, Redirect};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Router;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
@@ -180,6 +180,8 @@ pub fn router(state: Arc<SharedState>) -> Router {
         // OAuth endpoints for web client
         .route("/auth/login", get(auth_login))
         .route("/auth/callback", get(auth_callback))
+        .route("/auth/broker/web-token", post(auth_broker_web_token))
+        .route("/auth/broker/session", post(auth_broker_session))
         .route("/client-metadata.json", get(client_metadata))
         // REST API (read-only, v1)
         .route("/api/v1/health", get(api_health))
@@ -190,6 +192,8 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/users/{nick}/whois", get(api_user_whois))
         .route("/api/v1/upload", axum::routing::post(api_upload))
         .route("/api/v1/og", get(api_og_preview))
+        .route("/api/v1/keys/{did}", get(api_get_keys))
+        .route("/api/v1/keys", axum::routing::post(api_upload_keys))
         .route("/join/{channel}", get(channel_invite_page))
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)) // 12MB
         .layer(CorsLayer::permissive());
@@ -508,6 +512,99 @@ async fn api_user_whois(
         handle,
         channels,
     }))
+}
+
+// ── Auth broker endpoints ───────────────────────────────────────────────
+
+#[derive(Deserialize, Serialize)]
+struct BrokerTokenRequest {
+    did: String,
+    handle: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct BrokerSessionRequest {
+    did: String,
+    handle: String,
+    pds_url: String,
+    access_token: String,
+    dpop_key_b64: String,
+    dpop_nonce: Option<String>,
+}
+
+#[derive(Serialize)]
+struct BrokerTokenResponse {
+    token: String,
+    nick: String,
+    did: String,
+    handle: String,
+}
+
+async fn auth_broker_web_token(
+    State(state): State<Arc<SharedState>>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<BrokerTokenRequest>,
+) -> Result<Json<BrokerTokenResponse>, (StatusCode, String)> {
+    let secret = state.config.broker_shared_secret.clone()
+        .ok_or((StatusCode::FORBIDDEN, "Broker auth not configured".to_string()))?;
+    verify_broker_signature(&secret, &headers, &req)?;
+
+    let token = generate_random_string(32);
+    state.web_auth_tokens.lock().unwrap().insert(
+        token.clone(),
+        (req.did.clone(), req.handle.clone(), std::time::Instant::now()),
+    );
+    let nick = mobile_nick_from_handle(&req.handle);
+    Ok(Json(BrokerTokenResponse { token, nick, did: req.did, handle: req.handle }))
+}
+
+async fn auth_broker_session(
+    State(state): State<Arc<SharedState>>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<BrokerSessionRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let secret = state.config.broker_shared_secret.clone()
+        .ok_or((StatusCode::FORBIDDEN, "Broker auth not configured".to_string()))?;
+    verify_broker_signature(&secret, &headers, &req)?;
+
+    state.web_sessions.lock().unwrap().insert(req.did.clone(), crate::server::WebSession {
+        did: req.did.clone(),
+        handle: req.handle.clone(),
+        pds_url: req.pds_url.clone(),
+        access_token: req.access_token.clone(),
+        dpop_key_b64: req.dpop_key_b64.clone(),
+        dpop_nonce: req.dpop_nonce.clone(),
+        created_at: std::time::Instant::now(),
+    });
+
+    Ok(Json(serde_json::json!({"ok": true})))
+}
+
+fn verify_broker_signature<T: Serialize>(
+    secret: &str,
+    headers: &axum::http::HeaderMap,
+    body: &T,
+) -> Result<(), (StatusCode, String)> {
+    use base64::Engine;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let sig = headers.get("x-broker-signature")
+        .and_then(|v| v.to_str().ok())
+        .ok_or((StatusCode::UNAUTHORIZED, "Missing broker signature".to_string()))?;
+
+    let body_bytes = serde_json::to_vec(body)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid body".to_string()))?;
+
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "HMAC init failed".to_string()))?;
+    mac.update(&body_bytes);
+    let expected = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+
+    if expected != sig {
+        return Err((StatusCode::UNAUTHORIZED, "Invalid broker signature".to_string()));
+    }
+    Ok(())
 }
 
 // ── OAuth client metadata ──────────────────────────────────────────────
@@ -1207,4 +1304,53 @@ fn decode_html_entities(s: &str) -> String {
      .replace("&#x27;", "'")
      .replace("&#x2F;", "/")
      .replace("&nbsp;", " ")
+}
+
+// ── E2EE Pre-Key Bundle API ────────────────────────────────────────
+
+/// GET /api/v1/keys/{did} — Fetch a user's pre-key bundle.
+async fn api_get_keys(
+    State(state): State<Arc<crate::server::SharedState>>,
+    axum::extract::Path(did): axum::extract::Path<String>,
+) -> impl axum::response::IntoResponse {
+    let bundles = state.prekey_bundles.lock().unwrap();
+    match bundles.get(&did) {
+        Some(bundle) => (
+            axum::http::StatusCode::OK,
+            axum::Json(serde_json::json!({ "bundle": bundle })),
+        ),
+        None => (
+            axum::http::StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({ "error": "No pre-key bundle for this DID" })),
+        ),
+    }
+}
+
+/// POST /api/v1/keys — Upload a pre-key bundle.
+///
+/// Body: `{ "did": "did:plc:...", "bundle": { ... } }`
+///
+/// The DID must match the authenticated session. In practice, this is
+/// called after SASL authentication when the client generates encryption keys.
+async fn api_upload_keys(
+    State(state): State<Arc<crate::server::SharedState>>,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> impl axum::response::IntoResponse {
+    let did = body.get("did").and_then(|v| v.as_str());
+    let bundle = body.get("bundle");
+
+    match (did, bundle) {
+        (Some(did), Some(bundle)) => {
+            state.prekey_bundles.lock().unwrap()
+                .insert(did.to_string(), bundle.clone());
+            (
+                axum::http::StatusCode::OK,
+                axum::Json(serde_json::json!({ "ok": true })),
+            )
+        }
+        _ => (
+            axum::http::StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({ "error": "Missing 'did' or 'bundle'" })),
+        ),
+    }
 }

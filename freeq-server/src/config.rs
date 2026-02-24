@@ -104,6 +104,12 @@ pub struct ServerConfig {
     /// Can also be set via GITHUB_CLIENT_SECRET environment variable.
     #[arg(long, env = "GITHUB_CLIENT_SECRET")]
     pub github_client_secret: Option<String>,
+
+    /// Shared secret for the auth broker (HMAC-SHA256 over request body).
+    /// If set, enables /auth/broker/* endpoints.
+    #[arg(long, env = "BROKER_SHARED_SECRET")]
+    pub broker_shared_secret: Option<String>,
+
 }
 
 impl Default for ServerConfig {
@@ -130,6 +136,7 @@ impl Default for ServerConfig {
             require_did_for_ops: false,
             github_client_id: None,
             github_client_secret: None,
+            broker_shared_secret: None,
         }
     }
 }

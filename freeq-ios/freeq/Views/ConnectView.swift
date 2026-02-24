@@ -298,7 +298,7 @@ struct ConnectView: View {
         loading = true
         error = nil
 
-        let serverBase = "https://irc.freeq.at"
+        let serverBase = appState.authBrokerBase
         let loginURL = "\(serverBase)/auth/login?handle=\(handle.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? handle)&mobile=1"
 
         guard let url = URL(string: loginURL) else {
@@ -322,6 +322,7 @@ struct ConnectView: View {
                 guard let callbackURL = callbackURL,
                       let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
                       let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
+                      let brokerToken = components.queryItems?.first(where: { $0.name == "broker_token" })?.value,
                       let nick = components.queryItems?.first(where: { $0.name == "nick" })?.value,
                       let did = components.queryItems?.first(where: { $0.name == "did" })?.value
                 else {
@@ -332,8 +333,10 @@ struct ConnectView: View {
                 // Save handle + login time for session persistence
                 UserDefaults.standard.set(handle, forKey: "freeq.handle")
                 UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "freeq.lastLogin")
+                UserDefaults.standard.set(brokerToken, forKey: "freeq.brokerToken")
 
                 appState.pendingWebToken = token
+                appState.brokerToken = brokerToken
                 appState.authenticatedDID = did
                 appState.serverAddress = "irc.freeq.at:6667"
                 appState.connect(nick: nick)

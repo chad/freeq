@@ -52,6 +52,7 @@ async fn main() -> Result<()> {
         realname: "Freeq Echo Bot".to_string(),
         tls: args.tls,
         tls_insecure: false,
+        web_token: None,
     })
     .await?;
 
@@ -62,6 +63,7 @@ async fn main() -> Result<()> {
         realname: "Freeq Echo Bot".to_string(),
         tls: args.tls,
         tls_insecure: false,
+        web_token: None,
     };
 
     // No signer = guest mode (no AT Protocol authentication)

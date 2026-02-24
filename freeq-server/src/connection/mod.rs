@@ -778,6 +778,7 @@ where
             ch.members.remove(&session_id);
             ch.ops.remove(&session_id);
             ch.voiced.remove(&session_id);
+            ch.halfops.remove(&session_id);
         }
         channels.retain(|_, ch| {
             !ch.members.is_empty()

@@ -631,6 +631,21 @@ where
                             let _ = event_tx.send(Event::AuthFailed { reason }).await;
                             writer.write_all(b"CAP END\r\n").await?;
                         }
+                        "BATCH" => {
+                            if let Some(ref_id) = msg.params.get(0) {
+                                if let Some(id) = ref_id.strip_prefix('+') {
+                                    let batch_type = msg.params.get(1).cloned().unwrap_or_default();
+                                    let target = msg.params.get(2).cloned().unwrap_or_default();
+                                    let _ = event_tx.send(Event::BatchStart {
+                                        id: id.to_string(),
+                                        batch_type,
+                                        target,
+                                    }).await;
+                                } else if let Some(id) = ref_id.strip_prefix('-') {
+                                    let _ = event_tx.send(Event::BatchEnd { id: id.to_string() }).await;
+                                }
+                            }
+                        }
                         "001" => {
                             let nick = msg.params.first().cloned().unwrap_or_default();
                             let _ = event_tx.send(Event::Registered { nick }).await;
@@ -666,6 +681,16 @@ where
                                 .unwrap_or("")
                                 .to_string();
                             let _ = event_tx.send(Event::Parted { channel, nick }).await;
+                        }
+                        "NICK" => {
+                            let old_nick = msg.prefix.as_deref()
+                                .and_then(|p| p.split('!').next())
+                                .unwrap_or("")
+                                .to_string();
+                            let new_nick = msg.params.first().cloned().unwrap_or_default();
+                            if !old_nick.is_empty() && !new_nick.is_empty() {
+                                let _ = event_tx.send(Event::NickChanged { old_nick, new_nick }).await;
+                            }
                         }
                         // MODE change
                         "MODE" => {
