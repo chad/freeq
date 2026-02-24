@@ -100,6 +100,7 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
     let (handle, mut events) = client::connect(config, None);
     let mut nick_dids: HashMap<String, String> = HashMap::new();
     let mut pending: HashMap<String, PendingCommand> = HashMap::new();
+    let mut current_nick = nick.clone();
 
     // Join control channel after registration
     let channel = cfg.channel.clone();
@@ -113,6 +114,7 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
             }
             Event::Registered { nick: confirmed } => {
                 tracing::info!(nick = %confirmed, "pi-bridge registered");
+                current_nick = confirmed;
                 registered = true;
                 if let Some(ch) = &channel {
                     tracing::info!(channel = %ch, "joining control channel");
@@ -137,9 +139,12 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
             }
             Event::NickChanged { old_nick, new_nick } => {
                 tracing::info!(from = %old_nick, to = %new_nick, "pi-bridge nick changed");
+                if old_nick.eq_ignore_ascii_case(&current_nick) {
+                    current_nick = new_nick;
+                }
             }
             Event::Joined { channel, nick: joined_nick } => {
-                if joined_nick.eq_ignore_ascii_case(&nick) {
+                if joined_nick.eq_ignore_ascii_case(&current_nick) {
                     tracing::info!(channel = %channel, "pi-bridge joined channel");
                 }
             }
@@ -149,10 +154,12 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
             Event::RawLine(line) => {
                 // Parse ACCOUNT notify: :nick!user@host ACCOUNT did
                 if let Some((nick, did)) = parse_account_notify(&line) {
+                    tracing::info!(nick = %nick, did = %did, "account notify");
                     nick_dids.insert(nick.to_lowercase(), did);
                 }
             }
             Event::WhoisReply { nick, info } => {
+                tracing::info!(nick = %nick, info = %info, "whois reply");
                 if let Some(did) = parse_whois_did(&info) {
                     let key = nick.to_lowercase();
                     nick_dids.insert(key.clone(), did.clone());
@@ -180,7 +187,7 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
 
                 // Only accept DM or control channel
                 if let Some(ch) = &channel {
-                    if !target.eq_ignore_ascii_case(ch) && !target.eq_ignore_ascii_case(&nick) {
+                    if !target.eq_ignore_ascii_case(ch) && !target.eq_ignore_ascii_case(&current_nick) {
                         continue;
                     }
                 }
