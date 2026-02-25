@@ -407,7 +407,7 @@ async fn auth_login(
         authorization_endpoint, urlencod(&client_id), urlencod(request_uri)
     );
 
-    tracing::info!(handle = %handle, did = %did, "OAuth login started");
+    tracing::info!(handle = %handle, did = %did, popup = %is_popup, return_to = ?return_to, "OAuth login started");
     Ok(Redirect::temporary(&auth_url))
 }
 
@@ -420,6 +420,7 @@ async fn auth_callback(
         pending_map.remove(&q.state)
     };
     let pending = pending.ok_or((StatusCode::BAD_REQUEST, "Invalid state".to_string()))?;
+    tracing::info!(popup = %pending.popup, return_to = ?pending.return_to, "OAuth callback pending state");
 
     let dpop_key = DpopKey::from_base64url(&pending.dpop_key_b64)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid DPoP key: {e}")))?;
@@ -522,6 +523,7 @@ async fn auth_callback(
         if let Some(ref return_to) = pending.return_to {
             let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&result).unwrap_or_default());
             let redirect = format!("{return_to}#oauth={payload}");
+            tracing::info!(redirect = %redirect, "OAuth callback redirecting to app");
             return Ok(Html(format!(
                 r#"<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" content=\"0;url={redirect}\"></head><body><script>window.location.href = \"{redirect}\";</script><p>Redirecting to freeq...</p></body></html>"#
             )));
