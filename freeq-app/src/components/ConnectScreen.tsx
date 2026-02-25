@@ -222,7 +222,10 @@ export function ConnectScreen() {
       try { localStorage.removeItem('freeq-oauth-result'); } catch { /* ignore */ }
 
       // Use webOrigin for auth URLs (same-origin in browser, explicit server in Tauri)
-      const authUrl = `${brokerOrigin}/auth/login?handle=${encodeURIComponent(h)}&return_to=${encodeURIComponent(window.location.origin)}`;
+      const baseAuthUrl = `${brokerOrigin}/auth/login?handle=${encodeURIComponent(h)}`;
+      const authUrl = isTauri
+        ? `${baseAuthUrl}&return_to=${encodeURIComponent(window.location.origin)}`
+        : baseAuthUrl;
 
       if (isTauri) {
         // In Tauri, navigate the main window to the OAuth URL.
