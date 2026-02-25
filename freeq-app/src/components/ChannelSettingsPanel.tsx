@@ -6,6 +6,7 @@ interface PolicyInfo {
   policy?: {
     channel_id: string;
     version: number;
+    policy_id?: string;
     requirements: any;
     role_requirements: Record<string, any>;
     credential_endpoints: Record<string, {
