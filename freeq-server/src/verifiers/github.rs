@@ -382,10 +382,16 @@ async fn issue_credential(
     };
 
     let vc_json = serde_json::to_string_pretty(&vc).unwrap_or_default();
-    let callback_status = if callback_result {
-        "<p style='color:#0a0'>✓ Credential automatically delivered to the server. You can close this window.</p>"
+    let (callback_status, auto_close_js) = if callback_result {
+        (
+            "<p style='color:#0a0'>✓ Verified! This window will close automatically.</p>",
+            "setTimeout(function() { window.close(); }, 1500);",
+        )
     } else {
-        "<p>Credential was not auto-delivered. Copy it and present manually.</p>"
+        (
+            "<p>Credential was not auto-delivered. Copy it and present manually.</p>",
+            "",
+        )
     };
 
     let html = format!(
@@ -401,6 +407,8 @@ button:hover {{ background: #444; }}
 <script>
 if (window.opener) {{
     window.opener.postMessage({{ type: 'freeq-credential', status: 'verified', credential_type: '{credential_type}' }}, '*');
+    // Auto-close popup after a brief delay if credential was auto-delivered
+    {auto_close_js}
 }}
 </script>
 </head><body>

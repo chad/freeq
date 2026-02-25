@@ -77,8 +77,13 @@ pub fn router(
 
     let mut app = Router::new()
         // DID document — any client can resolve this to get our public key
+        // Serve at both .well-known path and did:web spec path (/verify/did.json)
         .route(
             "/verify/.well-known/did.json",
+            axum::routing::get(did_document),
+        )
+        .route(
+            "/verify/did.json",
             axum::routing::get(did_document),
         );
 
