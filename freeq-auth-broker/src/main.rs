@@ -187,6 +187,10 @@ struct AuthLoginQuery {
     popup: Option<String>,
 }
 
+fn is_truthy(value: Option<&str>) -> bool {
+    matches!(value, Some("1") | Some("true") | Some("yes"))
+}
+
 #[derive(Deserialize)]
 struct AuthCallbackQuery {
     state: String,
@@ -375,7 +379,8 @@ async fn auth_login(
 
     let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
     let mut return_to = q.return_to.clone();
-    let is_popup = matches!(q.popup.as_deref(), Some("1"));
+    let is_popup = is_truthy(q.popup.as_deref());
+    let is_mobile = is_truthy(q.mobile.as_deref());
     if !is_popup && return_to.is_none() {
         if let Some(referer) = headers.get("referer").and_then(|v| v.to_str().ok()) {
             if let Ok(url) = url::Url::parse(referer) {
@@ -383,11 +388,11 @@ async fn auth_login(
             }
         }
     }
-    if !is_popup && return_to.is_none() && !matches!(q.mobile.as_deref(), Some("1")) {
+    if !is_popup && return_to.is_none() && !is_mobile {
         return_to = Some("https://irc.freeq.at".to_string());
     }
 
-    tracing::info!(handle = %handle, did = %did, popup = %is_popup, return_to = ?return_to, "OAuth login started (popup flag)");
+    tracing::info!(handle = %handle, did = %did, popup = %is_popup, return_to = ?return_to, "OAuth login params");
 
     state.pending.lock().await.insert(oauth_state.clone(), PendingAuth {
         handle: handle.clone(),
@@ -399,7 +404,7 @@ async fn auth_login(
         token_endpoint: token_endpoint.to_string(),
         dpop_key_b64: dpop_key.to_base64url(),
         dpop_nonce: dpop_nonce.clone(),
-        mobile: q.mobile.as_deref() == Some("1"),
+        mobile: is_mobile,
         return_to,
         popup: is_popup,
     });
@@ -421,7 +426,7 @@ async fn auth_callback(
         pending_map.remove(&q.state)
     };
     let pending = pending.ok_or((StatusCode::BAD_REQUEST, "Invalid state".to_string()))?;
-    tracing::info!(popup = %pending.popup, return_to = ?pending.return_to, "OAuth callback pending state (popup flag)");
+    tracing::info!(popup = %pending.popup, return_to = ?pending.return_to, "OAuth callback params");
 
     let dpop_key = DpopKey::from_base64url(&pending.dpop_key_b64)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid DPoP key: {e}")))?;
