@@ -273,7 +273,7 @@ async fn main() {
 }
 
 async fn health() -> &'static str {
-    "ok"
+    "ok-v3"
 }
 
 async fn client_metadata(State(state): State<Arc<BrokerState>>) -> Json<serde_json::Value> {
