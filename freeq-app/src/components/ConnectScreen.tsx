@@ -119,6 +119,16 @@ export function ConnectScreen() {
   // The callback page stores the result in localStorage and redirects to /.
   // No "pending" flag needed — if a result exists, consume it.
   useEffect(() => {
+    const hash = window.location.hash;
+    if (hash.startsWith('#oauth=')) {
+      const payload = hash.slice('#oauth='.length);
+      try {
+        const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+        localStorage.setItem('freeq-oauth-result', json);
+      } catch { /* ignore */ }
+      window.location.hash = '';
+    }
+
     const raw = localStorage.getItem('freeq-oauth-result');
     if (!raw) return;
     localStorage.removeItem('freeq-oauth-result');
@@ -212,7 +222,7 @@ export function ConnectScreen() {
       try { localStorage.removeItem('freeq-oauth-result'); } catch { /* ignore */ }
 
       // Use webOrigin for auth URLs (same-origin in browser, explicit server in Tauri)
-      const authUrl = `${brokerOrigin}/auth/login?handle=${encodeURIComponent(h)}`;
+      const authUrl = `${brokerOrigin}/auth/login?handle=${encodeURIComponent(h)}&return_to=${encodeURIComponent(window.location.origin)}`;
 
       if (isTauri) {
         // In Tauri, navigate the main window to the OAuth URL.

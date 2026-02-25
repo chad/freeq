@@ -41,6 +41,7 @@ struct PendingAuth {
     dpop_key_b64: String,
     dpop_nonce: Option<String>,
     mobile: bool,
+    return_to: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +182,7 @@ fn pds_endpoint(doc: &DidDocument) -> Option<String> {
 struct AuthLoginQuery {
     handle: String,
     mobile: Option<String>,
+    return_to: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -380,6 +382,7 @@ async fn auth_login(
         dpop_key_b64: dpop_key.to_base64url(),
         dpop_nonce: dpop_nonce.clone(),
         mobile: q.mobile.as_deref() == Some("1"),
+        return_to: q.return_to.clone(),
     });
 
     let auth_url = format!(
@@ -489,14 +492,24 @@ async fn auth_callback(
         )));
     }
 
-    Ok(Html(oauth_result_page("Authentication successful!", Some(&serde_json::json!({
+    let result = serde_json::json!({
         "token": web_token,
         "broker_token": broker_token,
         "nick": nick,
         "did": pending.did,
         "handle": pending.handle,
         "pds_url": pending.pds_url,
-    })))) )
+    });
+
+    if let Some(ref return_to) = pending.return_to {
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&result).unwrap_or_default());
+        let redirect = format!("{return_to}#oauth={payload}");
+        return Ok(Html(format!(
+            r#"<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" content=\"0;url={redirect}\"></head><body><script>window.location.href = \"{redirect}\";</script><p>Redirecting to freeq...</p></body></html>"#
+        )));
+    }
+
+    Ok(Html(oauth_result_page("Authentication successful!", Some(&result))))
 }
 
 async fn session(
