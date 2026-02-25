@@ -22,7 +22,8 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Never cache: WebSocket, API, OAuth
+  // Never cache: non-GET, WebSocket, API, OAuth
+  if (event.request.method !== 'GET') return;
   if (url.pathname.startsWith('/irc') || url.pathname.startsWith('/api') || url.pathname.startsWith('/auth')) {
     return;
   }
