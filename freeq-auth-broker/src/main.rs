@@ -448,6 +448,7 @@ async fn auth_callback(
         None => return Ok(Html(oauth_result_page("Invalid OAuth state", None)).into_response()),
     };
     tracing::info!(popup = %pending.popup, return_to = ?pending.return_to, "BROKER_CALLBACK_PARAMS_V3");
+    let return_to = pending.return_to.clone().unwrap_or_else(|| "https://irc.freeq.at".to_string());
 
     let dpop_key = DpopKey::from_base64url(&pending.dpop_key_b64)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid DPoP key: {e}")))?;
@@ -546,14 +547,10 @@ async fn auth_callback(
         "pds_url": pending.pds_url,
     });
 
-    if let Some(ref return_to) = pending.return_to {
-        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&result).unwrap_or_default());
-        let redirect = format!("{return_to}#oauth={payload}");
-        tracing::info!(redirect = %redirect, "OAuth callback redirecting to app");
-        return Ok(Redirect::temporary(&redirect).into_response());
-    }
-
-    Ok(Html(oauth_result_page("Authentication successful!", Some(&result))).into_response())
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&result).unwrap_or_default());
+    let redirect = format!("{return_to}#oauth={payload}");
+    tracing::info!(redirect = %redirect, "OAuth callback redirecting to app");
+    Ok(Redirect::temporary(&redirect).into_response())
 }
 
 async fn session(
