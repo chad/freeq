@@ -537,13 +537,19 @@ function waitForOAuthResult(popup: Window | null): Promise<OAuthResultData | nul
     try {
       bc = new BroadcastChannel('freeq-oauth');
       bc.onmessage = (ev) => {
-        if (ev.data?.type === 'freeq-oauth' && ev.data.result) done(ev.data.result);
+        if (ev.data?.type === 'freeq-oauth') {
+          const result = ev.data.result || ev.data.payload;
+          if (result) done(result);
+        }
       };
     } catch { /* BroadcastChannel not supported */ }
 
     // Method 2: postMessage from popup (server callback sends type: 'freeq-oauth')
     const onMessage = (ev: MessageEvent) => {
-      if (ev.data?.type === 'freeq-oauth' && ev.data.result) done(ev.data.result);
+      if (ev.data?.type === 'freeq-oauth') {
+        const result = ev.data.result || ev.data.payload;
+        if (result) done(result);
+      }
     };
     window.addEventListener('message', onMessage);
 
