@@ -381,7 +381,7 @@ async fn auth_login(
         }
     }
     if return_to.is_none() && !matches!(q.mobile.as_deref(), Some("1")) {
-        return_to = Some("https://app.freeq.at".to_string());
+        return_to = Some("https://irc.freeq.at".to_string());
     }
 
     state.pending.lock().await.insert(oauth_state.clone(), PendingAuth {
