@@ -102,6 +102,16 @@ pub(super) fn handle_join(
             // Channel has a policy — user must have a valid attestation
             match did {
                 Some(user_did) => {
+                    // DID ops and founders bypass policy checks
+                    let is_did_op = {
+                        let channels = state.channels.lock().unwrap();
+                        channels.get(&channel.to_ascii_lowercase()).map_or(false, |ch| {
+                            ch.founder_did.as_deref() == Some(user_did) || ch.did_ops.contains(user_did)
+                        })
+                    };
+                    if is_did_op {
+                        policy_role = Some("op".to_string());
+                    } else {
                     match engine.check_membership(channel, user_did) {
                         Ok(Some(attestation)) => {
                             // Valid attestation — allow join, capture role
@@ -126,6 +136,7 @@ pub(super) fn handle_join(
                             // Fail-open on engine errors (don't break IRC)
                         }
                     }
+                    } // end else (non-DID-op)
                 }
                 None => {
                     // Guest user (no DID) — check if policy allows unauthenticated join
