@@ -124,7 +124,10 @@ export function ConnectScreen() {
       const payload = hash.slice('#oauth='.length);
       try {
         const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
-        localStorage.setItem('freeq-oauth-result', json);
+        // Inject _ts so the staleness check below knows when we received the result
+        const parsed = JSON.parse(json);
+        parsed._ts = Date.now();
+        localStorage.setItem('freeq-oauth-result', JSON.stringify(parsed));
       } catch { /* ignore */ }
       window.location.hash = '';
     }
