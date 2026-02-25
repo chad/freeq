@@ -253,6 +253,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/health", get(health))
+        .route("/health-v3", get(health_v3))
         .route("/client-metadata.json", get(client_metadata))
         .route("/auth/login", get(auth_login))
         .route("/auth/callback", get(auth_callback))
@@ -273,6 +274,10 @@ async fn main() {
 }
 
 async fn health() -> &'static str {
+    "ok-v3"
+}
+
+async fn health_v3() -> &'static str {
     "ok-v3"
 }
 
