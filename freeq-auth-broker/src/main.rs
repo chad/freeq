@@ -183,6 +183,7 @@ struct AuthLoginQuery {
     handle: String,
     mobile: Option<String>,
     return_to: Option<String>,
+    popup: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -373,14 +374,15 @@ async fn auth_login(
 
     let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
     let mut return_to = q.return_to.clone();
-    if return_to.is_none() {
+    let is_popup = matches!(q.popup.as_deref(), Some("1"));
+    if !is_popup && return_to.is_none() {
         if let Some(referer) = headers.get("referer").and_then(|v| v.to_str().ok()) {
             if let Ok(url) = url::Url::parse(referer) {
                 return_to = Some(url.origin().ascii_serialization());
             }
         }
     }
-    if return_to.is_none() && !matches!(q.mobile.as_deref(), Some("1")) {
+    if !is_popup && return_to.is_none() && !matches!(q.mobile.as_deref(), Some("1")) {
         return_to = Some("https://irc.freeq.at".to_string());
     }
 

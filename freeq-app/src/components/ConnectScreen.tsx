@@ -225,7 +225,7 @@ export function ConnectScreen() {
       const baseAuthUrl = `${brokerOrigin}/auth/login?handle=${encodeURIComponent(h)}`;
       const authUrl = isTauri
         ? `${baseAuthUrl}&return_to=${encodeURIComponent(window.location.origin)}`
-        : baseAuthUrl;
+        : `${baseAuthUrl}&popup=1`;
 
       if (isTauri) {
         // In Tauri, navigate the main window to the OAuth URL.
