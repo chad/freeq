@@ -8,6 +8,13 @@ freeq.db*
 tests.log
 scripts/pi-bridge.env
 
+# Secrets / keys
+freeq-server/certs/*.pem
+freeq-server/certs/*.key
+*.secret
+*.p12
+broker.db
+
 # freeq-app
 freeq-app/node_modules/
 freeq-app/dist/
