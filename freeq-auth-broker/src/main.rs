@@ -8,6 +8,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use tower_http::cors::CorsLayer;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -245,6 +246,7 @@ async fn main() {
         .route("/auth/login", get(auth_login))
         .route("/auth/callback", get(auth_callback))
         .route("/session", post(session))
+        .layer(CorsLayer::permissive())
         .with_state(state);
 
     let addr = std::env::var("BROKER_ADDR").unwrap_or_else(|_| {
@@ -493,6 +495,7 @@ async fn auth_callback(
         "nick": nick,
         "did": pending.did,
         "handle": pending.handle,
+        "pds_url": pending.pds_url,
     })))) )
 }
 
@@ -535,7 +538,12 @@ async fn session(
         tracing::warn!(error = %e, "Failed to refresh web session on server");
     }
 
-    Ok(Json(BrokerSessionResponse { token: web_token, nick, did: record.did, handle: record.handle }))
+    Ok(Json(BrokerSessionResponse {
+        token: web_token,
+        nick,
+        did: record.did,
+        handle: record.handle,
+    }))
 }
 
 async fn get_session(state: &Arc<BrokerState>, broker_token: &str) -> Option<BrokerSessionRecord> {

@@ -4,6 +4,23 @@ import { useStore } from '../store';
 
 type LoginMode = 'at-proto' | 'guest';
 
+type OAuthResultData = {
+  did?: string;
+  handle?: string;
+  token?: string;
+  web_token?: string;
+  access_jwt?: string;
+  broker_token?: string;
+  pds_url?: string;
+};
+
+type BrokerSessionResponse = {
+  token: string;
+  nick: string;
+  did: string;
+  handle: string;
+};
+
 // Default AT Protocol hosting suffixes — strip these to get short nick
 const DEFAULT_SUFFIXES = [
   '.bsky.social',
@@ -31,6 +48,8 @@ function nickFromHandle(handle: string): string {
 // localStorage keys
 const LS_HANDLE = 'freeq-handle';
 const LS_CHANNELS = 'freeq-channels';
+const LS_BROKER_TOKEN = 'freeq-broker-token';
+const LS_BROKER_BASE = 'freeq-broker-base';
 
 export function ConnectScreen() {
   const registered = useStore((s) => s.registered);
@@ -69,6 +88,14 @@ export function ConnectScreen() {
     const host = loc.host.replace('localhost', '127.0.0.1');
     return `${loc.protocol}//${host}`;
   });
+  const [brokerOrigin, setBrokerOrigin] = useState(() => {
+    const stored = localStorage.getItem(LS_BROKER_BASE);
+    if (stored) return stored;
+    if (isTauri) return 'https://auth.freeq.at';
+    const host = window.location.host;
+    if (host.endsWith('freeq.at')) return 'https://auth.freeq.at';
+    return webOrigin;
+  });
   const [error, setError] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [oauthPending, setOauthPending] = useState(false);
@@ -103,18 +130,55 @@ export function ConnectScreen() {
       const age = result._ts ? Date.now() - result._ts : Infinity;
       if (age > 5 * 60 * 1000) return;
       if (result?.did) {
+        if (result.broker_token) {
+          localStorage.setItem(LS_BROKER_TOKEN, result.broker_token);
+          localStorage.setItem(LS_BROKER_BASE, brokerOrigin);
+        }
         setAutoConnecting(true);
         const h = localStorage.getItem(LS_HANDLE) || result.handle || '';
         const ch = (localStorage.getItem(LS_CHANNELS) || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
         const finalNick = nickFromHandle(result.handle || h);
-        setSaslCredentials(result.web_token || result.access_jwt, result.did, result.pds_url, 'web-token');
+        const token = result.web_token || result.token || result.access_jwt || '';
+        setSaslCredentials(token, result.did, result.pds_url || '', 'web-token');
         const loc = window.location;
         const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
         const host = loc.host.replace('localhost', '127.0.0.1');
         connect(`${proto}//${host}/irc`, finalNick, ch);
       }
     } catch { /* ignore parse errors */ }
-  }, []);
+  }, [brokerOrigin]);
+
+  // Attempt broker session refresh on load (persistent login)
+  useEffect(() => {
+    if (registered || oauthPending || autoConnecting) return;
+    const brokerToken = localStorage.getItem(LS_BROKER_TOKEN);
+    if (!brokerToken) return;
+
+    setAutoConnecting(true);
+    const ch = (localStorage.getItem(LS_CHANNELS) || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
+
+    fetch(`${brokerOrigin}/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ broker_token: brokerToken }),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error(await res.text());
+        }
+        return res.json();
+      })
+      .then((session: BrokerSessionResponse) => {
+        localStorage.setItem(LS_HANDLE, session.handle || localStorage.getItem(LS_HANDLE) || '');
+        setSaslCredentials(session.token, session.did, '', 'web-token');
+        const finalNick = nickFromHandle(session.handle || localStorage.getItem(LS_HANDLE) || session.nick);
+        connect(server, finalNick, ch);
+      })
+      .catch(() => {
+        localStorage.removeItem(LS_BROKER_TOKEN);
+        setAutoConnecting(false);
+      });
+  }, [registered, oauthPending, autoConnecting, brokerOrigin, server]);
 
   // Clear autoConnecting on auth failure or disconnect
   useEffect(() => {
@@ -142,12 +206,13 @@ export function ConnectScreen() {
       // Persist handle + channels for next visit
       localStorage.setItem(LS_HANDLE, h);
       localStorage.setItem(LS_CHANNELS, channels);
+      localStorage.setItem(LS_BROKER_BASE, brokerOrigin);
 
       // Clear any stale OAuth result
       try { localStorage.removeItem('freeq-oauth-result'); } catch { /* ignore */ }
 
       // Use webOrigin for auth URLs (same-origin in browser, explicit server in Tauri)
-      const authUrl = `${webOrigin}/auth/login?handle=${encodeURIComponent(h)}`;
+      const authUrl = `${brokerOrigin}/auth/login?handle=${encodeURIComponent(h)}`;
 
       if (isTauri) {
         // In Tauri, navigate the main window to the OAuth URL.
@@ -171,7 +236,13 @@ export function ConnectScreen() {
       }
 
       // Set SASL credentials using the one-time web auth token
-      setSaslCredentials(result.web_token || result.access_jwt, result.did, result.pds_url, 'web-token');
+      const token = result.web_token || result.token || result.access_jwt || '';
+      setSaslCredentials(token, result.did, result.pds_url || '', 'web-token');
+
+      if (result.broker_token) {
+        localStorage.setItem(LS_BROKER_TOKEN, result.broker_token);
+        localStorage.setItem(LS_BROKER_BASE, brokerOrigin);
+      }
 
       // Use the editable nick, falling back to derived from server-returned handle
       const finalNick = atNick.trim() || nickFromHandle(result.handle || h);
