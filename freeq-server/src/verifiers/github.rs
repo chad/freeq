@@ -420,6 +420,11 @@ if (window.opener) {{
 }
 
 fn error_page(msg: &str) -> axum::response::Response {
+    let safe_msg = msg
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;");
     let html = format!(
         r#"<!DOCTYPE html><html><head><title>freeq — Error</title>
 <style>
@@ -428,7 +433,7 @@ h1 {{ color: #f44; }}
 p {{ white-space: pre-wrap; text-align: left; }}
 </style></head><body>
 <h1>Verification Failed</h1>
-<p>{msg}</p>
+<p>{safe_msg}</p>
 </body></html>"#,
     );
     axum::response::Html(html).into_response()

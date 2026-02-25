@@ -1,4 +1,4 @@
-name = 'freeq-auth-broker'
+name = 'freeq-auth-broker-v2'
 post_import = ''
 env = []
 include = []

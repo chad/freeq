@@ -690,6 +690,27 @@ pub(super) fn handle_policy(
                 return;
             }
 
+            // Validate URL: must be a path or https URL, no HTML/script injection
+            let decoded_url = urlencoding::decode(&url).unwrap_or(std::borrow::Cow::Borrowed(&url));
+            if decoded_url.contains('<') || decoded_url.contains('>') || decoded_url.contains('"') || decoded_url.contains("javascript:") {
+                let reply = Message::from_server(
+                    server_name,
+                    "NOTICE",
+                    vec![nick, "Invalid URL: contains forbidden characters"],
+                );
+                send_fn(state, session_id, format!("{reply}\r\n"));
+                return;
+            }
+            if !url.starts_with('/') && !url.starts_with("https://") {
+                let reply = Message::from_server(
+                    server_name,
+                    "NOTICE",
+                    vec![nick, "URL must be a relative path (/) or https:// URL"],
+                );
+                send_fn(state, session_id, format!("{reply}\r\n"));
+                return;
+            }
+
             // Get current policy and add credential endpoint
             let current = match engine.get_policy(channel) {
                 Ok(Some(p)) => p,
