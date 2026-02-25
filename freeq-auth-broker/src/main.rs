@@ -4,7 +4,7 @@ use std::time::SystemTime;
 use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
-    response::{Html, Redirect},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -413,19 +413,19 @@ async fn auth_login(
 async fn auth_callback(
     Query(q): Query<AuthCallbackQuery>,
     State(state): State<Arc<BrokerState>>,
-) -> Result<Html<String>, (StatusCode, String)> {
+) -> Result<Response, (StatusCode, String)> {
     if let Some(err) = q.error.as_deref() {
         let detail = q.error_description.as_deref().unwrap_or(err);
-        return Ok(Html(oauth_result_page(&format!("OAuth error: {detail}"), None)));
+        return Ok(Html(oauth_result_page(&format!("OAuth error: {detail}"), None)).into_response());
     }
 
     let state_value = match q.state.as_deref() {
         Some(s) => s,
-        None => return Ok(Html(oauth_result_page("OAuth callback missing state", None))),
+        None => return Ok(Html(oauth_result_page("OAuth callback missing state", None)).into_response()),
     };
     let code = match q.code.as_deref() {
         Some(c) => c,
-        None => return Ok(Html(oauth_result_page("OAuth callback missing code", None))),
+        None => return Ok(Html(oauth_result_page("OAuth callback missing code", None)).into_response()),
     };
 
     let pending = {
@@ -434,7 +434,7 @@ async fn auth_callback(
     };
     let pending = match pending {
         Some(p) => p,
-        None => return Ok(Html(oauth_result_page("Invalid OAuth state", None))),
+        None => return Ok(Html(oauth_result_page("Invalid OAuth state", None)).into_response()),
     };
     tracing::info!(popup = %pending.popup, return_to = ?pending.return_to, "BROKER_CALLBACK_PARAMS_V3");
 
@@ -468,14 +468,14 @@ async fn auth_callback(
             .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token retry failed: {e}")))?;
         if !resp2.status().is_success() {
             let text = resp2.text().await.unwrap_or_default();
-            return Ok(Html(oauth_result_page(&format!("Token exchange failed: {text}"), None)));
+            return Ok(Html(oauth_result_page(&format!("Token exchange failed: {text}"), None)).into_response());
         }
         resp2.json().await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token parse failed: {e}")))?
     } else if status.is_success() {
         resp.json().await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token parse failed: {e}")))?
     } else {
         let text = resp.text().await.unwrap_or_default();
-        return Ok(Html(oauth_result_page(&format!("Token exchange failed ({status}): {text}"), None)));
+        return Ok(Html(oauth_result_page(&format!("Token exchange failed ({status}): {text}"), None)).into_response());
     };
 
     let refresh_token = token_resp["refresh_token"].as_str()
@@ -523,7 +523,7 @@ async fn auth_callback(
         );
         return Ok(Html(format!(
             r#"<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" content=\"0;url={redirect}\"></head><body><script>window.location.href = \"{redirect}\";</script><p>Redirecting to freeq app...</p></body></html>"#
-        )));
+        )).into_response());
     }
 
     let result = serde_json::json!({
@@ -540,9 +540,7 @@ async fn auth_callback(
             let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&result).unwrap_or_default());
             let redirect = format!("{return_to}#oauth={payload}");
             tracing::info!(redirect = %redirect, "OAuth callback redirecting to app");
-            return Ok(Html(format!(
-                r#"<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" content=\"0;url={redirect}\"></head><body><script>window.location.href = \"{redirect}\";</script><p>Redirecting to freeq...</p></body></html>"#
-            )));
+            return Ok(Redirect::temporary(&redirect).into_response());
         }
     }
 
@@ -552,7 +550,7 @@ async fn auth_callback(
         "Authentication successful!"
     };
 
-    Ok(Html(oauth_result_page(message, Some(&result))))
+    Ok(Html(oauth_result_page(message, Some(&result))).into_response())
 }
 
 async fn session(
