@@ -90,7 +90,20 @@ pub(super) fn ghost_same_did(
         tracing::info!(did = %did, old_session = %old_session, "Ghosted old session for same DID");
     }
 
-    // After ghosting, reclaim the desired nick if we got a fallback (e.g. nick_).
+    // After ghosting, ensure our nick is in nick_to_session.
+    // It may not be there if the server deferred insertion during CAP/SASL
+    // negotiation (nick was in use by the ghost we just killed).
+    if let Some(ref nick) = conn.nick {
+        let mut nts = state.nick_to_session.lock().unwrap();
+        let nick_lower = nick.to_lowercase();
+        let already_mapped = nts.keys().any(|k| k.to_lowercase() == nick_lower);
+        if !already_mapped {
+            nts.insert(nick.clone(), session_id.to_string());
+            tracing::info!(nick = %nick, "Registered nick after ghost");
+        }
+    }
+
+    // Also reclaim if we got a fallback nick with trailing '_'.
     let reclaim = conn.nick.as_ref()
         .filter(|n| n.ends_with('_'))
         .map(|n| (n.clone(), n.trim_end_matches('_').to_string()));

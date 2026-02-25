@@ -362,12 +362,23 @@ where
                     };
 
                     if in_use {
-                        let reply = Message::from_server(
-                            &server_name,
-                            irc::ERR_NICKNAMEINUSE,
-                            vec![conn.nick_or_star(), nick, "Nickname is already in use"],
-                        );
-                        send(&state, &session_id, format!("{reply}\r\n"));
+                        // During CAP/SASL negotiation, allow the nick if it's owned
+                        // by a DID (the ghost at SASL completion will free it).
+                        // This prevents the client from getting a _-suffixed nick.
+                        let allow_during_negotiation = (conn.cap_negotiating || conn.sasl_in_progress)
+                            && owner_did.is_some();
+                        if !allow_during_negotiation {
+                            let reply = Message::from_server(
+                                &server_name,
+                                irc::ERR_NICKNAMEINUSE,
+                                vec![conn.nick_or_star(), nick, "Nickname is already in use"],
+                            );
+                            send(&state, &session_id, format!("{reply}\r\n"));
+                        } else {
+                            // Stash desired nick — don't insert into nick_to_session yet.
+                            // ghost_same_did will handle the swap at SASL success.
+                            conn.nick = Some(nick.clone());
+                        }
                     } else if nick_stolen {
                         let reply = Message::from_server(
                             &server_name,

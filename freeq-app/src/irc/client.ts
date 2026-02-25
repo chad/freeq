@@ -375,7 +375,7 @@ async function handleLine(rawLine: string) {
       autoJoinChannels = [];
       break;
     }
-    case '433': // Nick in use
+    case '433': // Nick in use — append underscore and retry
       nick += '_';
       raw(`NICK ${nick}`);
       break;
