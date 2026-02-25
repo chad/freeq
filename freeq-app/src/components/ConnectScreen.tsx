@@ -228,36 +228,7 @@ export function ConnectScreen() {
       // Same-window flow (more reliable than popup in browsers)
       localStorage.setItem('freeq-oauth-pending', '1');
       window.location.href = authUrl;
-      return;
-
-      // Browser popup flow (kept for reference)
-      // const popup = window.open(`${baseAuthUrl}&popup=1`, 'freeq-auth', 'width=500,height=700');
-      // const result = await waitForOAuthResult(popup);
-
-      if (!result || !result.did) {
-        setError('Authentication failed — no result received');
-        setOauthPending(false);
-        return;
-      }
-
-      // Set SASL credentials using the one-time web auth token
-      const token = result.web_token || result.token || result.access_jwt || '';
-      setSaslCredentials(token, result.did, result.pds_url || '', 'web-token');
-
-      if (result.broker_token) {
-        localStorage.setItem(LS_BROKER_TOKEN, result.broker_token);
-        localStorage.setItem(LS_BROKER_BASE, brokerOrigin);
-      }
-
-      // Use the editable nick, falling back to derived from server-returned handle
-      const finalNick = atNick.trim() || nickFromHandle(result.handle || h);
-
-      // Switch from oauthPending to autoConnecting — keeps spinner showing
-      // through the connection + SASL + registration phase
-      setOauthPending(false);
-      setAutoConnecting(true);
-      connect(server, finalNick, chans);
-    } catch (e) {
+      return;    } catch (e) {
       setError(`OAuth error: ${e}`);
       setOauthPending(false);
     }
@@ -525,58 +496,3 @@ function ServerStats() {
   );
 }
 
-function waitForOAuthResult(popup: Window | null): Promise<OAuthResultData | null> {
-  return new Promise((resolve) => {
-    let resolved = false;
-    const done = (data: OAuthResultData | null) => {
-      if (resolved) return;
-      resolved = true;
-      cleanup();
-      // Close the popup from the main window (more reliable than self-close)
-      try { popup?.close(); } catch { /* ignore */ }
-      resolve(data);
-    };
-
-    // Method 1: BroadcastChannel (server callback sends type: 'freeq-oauth')
-    let bc: BroadcastChannel | null = null;
-    try {
-      bc = new BroadcastChannel('freeq-oauth');
-      bc.onmessage = (ev) => {
-        if (ev.data?.type === 'freeq-oauth') {
-          const result = ev.data.result || ev.data.payload;
-          if (result) done(result);
-        }
-      };
-    } catch { /* BroadcastChannel not supported */ }
-
-    // Method 2: postMessage from popup (server callback sends type: 'freeq-oauth')
-    const onMessage = (ev: MessageEvent) => {
-      if (ev.data?.type === 'freeq-oauth') {
-        const result = ev.data.result || ev.data.payload;
-        if (result) done(result);
-      }
-    };
-    window.addEventListener('message', onMessage);
-
-    // Method 3: localStorage polling (fallback — always works)
-    const poll = setInterval(() => {
-      try {
-        const raw = localStorage.getItem('freeq-oauth-result');
-        if (raw) {
-          localStorage.removeItem('freeq-oauth-result');
-          done(JSON.parse(raw));
-        }
-      } catch { /* ignore */ }
-    }, 200);
-
-    // Timeout after 5 minutes
-    const timeout = setTimeout(() => done(null), 5 * 60 * 1000);
-
-    function cleanup() {
-      bc?.close();
-      window.removeEventListener('message', onMessage);
-      clearInterval(poll);
-      clearTimeout(timeout);
-    }
-  });
-}
