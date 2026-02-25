@@ -193,8 +193,11 @@ fn is_truthy(value: Option<&str>) -> bool {
 
 #[derive(Deserialize)]
 struct AuthCallbackQuery {
-    state: String,
-    code: String,
+    state: Option<String>,
+    code: Option<String>,
+    error: Option<String>,
+    error_description: Option<String>,
+    iss: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -421,11 +424,28 @@ async fn auth_callback(
     Query(q): Query<AuthCallbackQuery>,
     State(state): State<Arc<BrokerState>>,
 ) -> Result<Html<String>, (StatusCode, String)> {
+    if let Some(err) = q.error.as_deref() {
+        let detail = q.error_description.as_deref().unwrap_or(err);
+        return Ok(Html(oauth_result_page(&format!("OAuth error: {detail}"), None)));
+    }
+
+    let state_value = match q.state.as_deref() {
+        Some(s) => s,
+        None => return Ok(Html(oauth_result_page("OAuth callback missing state", None))),
+    };
+    let code = match q.code.as_deref() {
+        Some(c) => c,
+        None => return Ok(Html(oauth_result_page("OAuth callback missing code", None))),
+    };
+
     let pending = {
         let mut pending_map = state.pending.lock().await;
-        pending_map.remove(&q.state)
+        pending_map.remove(state_value)
     };
-    let pending = pending.ok_or((StatusCode::BAD_REQUEST, "Invalid state".to_string()))?;
+    let pending = match pending {
+        Some(p) => p,
+        None => return Ok(Html(oauth_result_page("Invalid OAuth state", None))),
+    };
     tracing::info!(popup = %pending.popup, return_to = ?pending.return_to, "OAuth callback params");
 
     let dpop_key = DpopKey::from_base64url(&pending.dpop_key_b64)
@@ -433,7 +453,7 @@ async fn auth_callback(
 
     let params = [
         ("grant_type", "authorization_code"),
-        ("code", q.code.as_str()),
+        ("code", code),
         ("redirect_uri", pending.redirect_uri.as_str()),
         ("client_id", pending.client_id.as_str()),
         ("code_verifier", pending.code_verifier.as_str()),
