@@ -48,9 +48,34 @@ export function connect(url: string, desiredNick: string, channels?: string[]) {
       useStore.getState().setConnectionState(s);
       if (s === 'connected') {
         ackedCaps = new Set(); // reset caps for new connection
-        raw('CAP LS 302');
-        raw(`NICK ${nick}`);
-        raw(`USER ${nick} 0 * :freeq web app`);
+        // If we have a broker token and SASL credentials, refresh the web-token
+        // before registering (web-tokens are one-time use).
+        const brokerToken = localStorage.getItem('freeq-broker-token');
+        const brokerBase = localStorage.getItem('freeq-broker-base');
+        if (brokerToken && brokerBase && saslDid) {
+          fetch(`${brokerBase}/session`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ broker_token: brokerToken }),
+          })
+            .then(r => r.ok ? r.json() : Promise.reject('broker refresh failed'))
+            .then((session: { token: string; nick: string; did: string; handle: string }) => {
+              saslToken = session.token;
+              raw('CAP LS 302');
+              raw(`NICK ${nick}`);
+              raw(`USER ${nick} 0 * :freeq web app`);
+            })
+            .catch(() => {
+              // Broker refresh failed — try with existing token anyway
+              raw('CAP LS 302');
+              raw(`NICK ${nick}`);
+              raw(`USER ${nick} 0 * :freeq web app`);
+            });
+        } else {
+          raw('CAP LS 302');
+          raw(`NICK ${nick}`);
+          raw(`USER ${nick} 0 * :freeq web app`);
+        }
       }
     },
   });
@@ -311,14 +336,15 @@ async function handleLine(rawLine: string) {
       const serverNick = msg.params[0] || nick;
 
       // If we were authenticated but server gave us a Guest nick,
-      // it means our identity was lost (web-token consumed on previous session).
-      // Disconnect cleanly instead of lingering as a ghost Guest.
+      // the web-token was consumed or expired. Clear broker token so next
+      // reconnect goes back to the login screen instead of looping.
       const wasAuthenticated = localStorage.getItem('freeq-handle');
       if (wasAuthenticated && /^Guest\d+$/i.test(serverNick)) {
+        localStorage.removeItem('freeq-broker-token');
         raw('QUIT :Session expired');
         transport?.disconnect();
         transport = null;
-        // Don't reset to login screen — just stop reconnecting as a ghost
+        useStore.getState().fullReset();
         return;
       }
 
