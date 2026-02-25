@@ -381,19 +381,9 @@ async fn auth_login(
         .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No request_uri in PAR response".to_string()))?;
 
     let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
-    let mut return_to = q.return_to.clone();
+    let return_to = q.return_to.clone();
     let is_popup = is_truthy(q.popup.as_deref());
     let is_mobile = is_truthy(q.mobile.as_deref());
-    if !is_popup && return_to.is_none() {
-        if let Some(referer) = headers.get("referer").and_then(|v| v.to_str().ok()) {
-            if let Ok(url) = url::Url::parse(referer) {
-                return_to = Some(url.origin().ascii_serialization());
-            }
-        }
-    }
-    if !is_popup && return_to.is_none() && !is_mobile {
-        return_to = Some("https://irc.freeq.at".to_string());
-    }
 
     tracing::info!(handle = %handle, did = %did, popup = %is_popup, return_to = ?return_to, "OAuth login params v2");
 
