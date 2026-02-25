@@ -151,13 +151,12 @@ pub(super) async fn handle_authenticate(
         if let Some(response) = sasl::decode_response(param) {
             // Check for web-token method first (server-side OAuth pre-verified)
             let web_token_result = if response.method.as_deref() == Some("web-token") {
-                let mut tokens = state.web_auth_tokens.lock().unwrap();
-                if let Some((did, _handle, created)) = tokens.remove(&response.signature) {
-                    // One-time use: token is consumed on first successful auth.
-                    // Reusable tokens caused ghost loops (reconnect → ghost → reconnect).
+                let tokens = state.web_auth_tokens.lock().unwrap();
+                if let Some((did, _handle, created)) = tokens.get(&response.signature) {
+                    // Reusable within TTL — allows reconnect with same token.
+                    // Broker issues fresh tokens on each /session call anyway.
                     if created.elapsed() < std::time::Duration::from_secs(300) {
-                        // DID comes from the token store — no need to trust the client's DID field.
-                        Some(Ok(did))
+                        Some(Ok(did.clone()))
                     } else {
                         Some(Err("Web auth token expired".to_string()))
                     }

@@ -321,6 +321,8 @@ pub struct SharedState {
     /// E2EE pre-key bundles: DID → PreKeyBundle JSON.
     /// Clients upload their bundles; other clients fetch to start encrypted sessions.
     pub prekey_bundles: Mutex<HashMap<String, serde_json::Value>>,
+    /// Per-IP active connection count (for connection limiting).
+    pub ip_connections: Mutex<HashMap<std::net::IpAddr, u32>>,
 }
 
 impl SharedState {
@@ -580,6 +582,7 @@ impl Server {
                 }
             },
             prekey_bundles: Mutex::new(HashMap::new()),
+            ip_connections: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -748,6 +751,9 @@ impl Server {
                 loop {
                     interval.tick().await;
                     reconcile_crdt_to_local(&reconcile_state).await;
+                    // Prune expired web auth tokens (TTL 5 min)
+                    reconcile_state.web_auth_tokens.lock().unwrap()
+                        .retain(|_, (_, _, created)| created.elapsed() < std::time::Duration::from_secs(300));
                 }
             });
         }
@@ -786,12 +792,31 @@ impl Server {
         }
 
         // Accept plain connections
+        const MAX_CONNS_PER_IP: u32 = 20;
         loop {
-            let (stream, _addr) = plain_listener.accept().await?;
+            let (stream, addr) = plain_listener.accept().await?;
+            let ip = addr.ip();
             let state = Arc::clone(&state);
+            // Per-IP connection limit
+            {
+                let mut ip_conns = state.ip_connections.lock().unwrap();
+                let count = ip_conns.entry(ip).or_insert(0);
+                if *count >= MAX_CONNS_PER_IP {
+                    tracing::warn!(%ip, "Connection rejected: per-IP limit reached");
+                    continue;
+                }
+                *count += 1;
+            }
             tokio::spawn(async move {
-                if let Err(e) = connection::handle(stream, state).await {
+                let result = connection::handle(stream, Arc::clone(&state)).await;
+                if let Err(e) = result {
                     tracing::error!("Connection error: {e}");
+                }
+                // Decrement IP counter on disconnect
+                let mut ip_conns = state.ip_connections.lock().unwrap();
+                if let Some(count) = ip_conns.get_mut(&ip) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 { ip_conns.remove(&ip); }
                 }
             });
         }

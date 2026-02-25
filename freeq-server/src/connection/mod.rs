@@ -114,7 +114,28 @@ impl Connection {
     pub(crate) fn hostmask(&self) -> String {
         let nick = self.nick.as_deref().unwrap_or("*");
         let user = self.user.as_deref().unwrap_or("~u");
-        format!("{nick}!{user}@host")
+        let host = self.cloaked_host();
+        format!("{nick}!{user}@{host}")
+    }
+
+    /// Generate a cloaked hostname.
+    /// Authenticated users: shortened DID (e.g. "did/plc/4qsy..xmns")
+    /// Guests: "freeq/guest"
+    pub(crate) fn cloaked_host(&self) -> String {
+        if let Some(ref did) = self.authenticated_did {
+            // e.g. did:plc:4qsyxmnsblo4luuycm3572bq → plc/4qsyxmns
+            let short = did.strip_prefix("did:").unwrap_or(did);
+            let parts: Vec<&str> = short.splitn(2, ':').collect();
+            if parts.len() == 2 {
+                let method = parts[0];
+                let id = &parts[1][..parts[1].len().min(8)];
+                format!("freeq/{method}/{id}")
+            } else {
+                "freeq/did".to_string()
+            }
+        } else {
+            "freeq/guest".to_string()
+        }
     }
 }
 
@@ -368,7 +389,7 @@ where
 
                         if conn.registered {
                             let hostmask = if let Some(ref old) = old_nick {
-                                format!("{old}!~{}@host", conn.user.as_deref().unwrap_or("u"))
+                                format!("{old}!~{}@{}", conn.user.as_deref().unwrap_or("u"), conn.cloaked_host())
                             } else {
                                 conn.hostmask()
                             };
@@ -653,7 +674,9 @@ where
                             channels.values().any(|ch| ch.ops.contains(sid))
                         };
                         let prefix = if is_op { "*" } else { "" };
-                        replies.push(format!("{nick}{prefix}=+{nick}@host"));
+                        let did = state.session_dids.lock().unwrap().get(sid).cloned();
+                        let host = helpers::cloaked_host_for_did(did.as_deref());
+                        replies.push(format!("{nick}{prefix}=+{nick}@{host}"));
                     }
                 }
                 let reply = Message::from_server(

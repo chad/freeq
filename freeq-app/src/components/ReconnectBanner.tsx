@@ -1,5 +1,5 @@
 import { useStore } from '../store';
-import { disconnect } from '../irc/client';
+import { disconnect, reconnect } from '../irc/client';
 
 export function ReconnectBanner() {
   const connectionState = useStore((s) => s.connectionState);
@@ -47,6 +47,18 @@ export function ReconnectBanner() {
         <>
           <span>●</span>
           Disconnected
+          <button
+            onClick={() => reconnect()}
+            className="ml-2 px-2 py-0.5 rounded bg-danger/20 hover:bg-danger/30 text-danger font-medium transition-colors"
+          >
+            Reconnect
+          </button>
+          <button
+            onClick={() => disconnect()}
+            className="px-2 py-0.5 rounded hover:bg-danger/10 text-danger/60 transition-colors"
+          >
+            Sign out
+          </button>
         </>
       )}
     </div>

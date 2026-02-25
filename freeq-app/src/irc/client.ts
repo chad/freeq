@@ -16,6 +16,7 @@ import * as e2ee from '../lib/e2ee';
 
 let transport: Transport | null = null;
 let nick = '';
+let lastUrl = '';
 let ackedCaps = new Set<string>();
 
 // SASL state (set before connect when doing OAuth)
@@ -37,6 +38,7 @@ const backgroundWhois = new Set<string>();
 
 export function connect(url: string, desiredNick: string, channels?: string[]) {
   nick = desiredNick;
+  lastUrl = url;
   autoJoinChannels = channels || [];
   const store = useStore.getState();
   store.reset();
@@ -100,6 +102,18 @@ export function disconnect() {
   saslMethod = '';
   joinedChannels.clear();
   useStore.getState().fullReset();
+}
+
+/** Force an immediate reconnect (e.g. from the reconnect button). */
+export function reconnect() {
+  if (!lastUrl || !nick) return;
+  transport?.disconnect();
+  transport = null;
+  // Re-run connect with existing state — broker token refresh happens in onStateChange
+  const channels = [...joinedChannels];
+  const store = useStore.getState();
+  store.reset();
+  connect(lastUrl, nick, channels);
 }
 
 export function setSaslCredentials(token: string, did: string, pdsUrl: string, method: string) {

@@ -3,6 +3,23 @@
 
 use std::sync::Arc;
 use crate::server::{RemoteMember, SharedState};
+
+/// Generate a cloaked hostname from an optional DID.
+pub fn cloaked_host_for_did(did: Option<&str>) -> String {
+    if let Some(did) = did {
+        let short = did.strip_prefix("did:").unwrap_or(did);
+        let parts: Vec<&str> = short.splitn(2, ':').collect();
+        if parts.len() == 2 {
+            let method = parts[0];
+            let id = &parts[1][..parts[1].len().min(8)];
+            format!("freeq/{method}/{id}")
+        } else {
+            "freeq/did".to_string()
+        }
+    } else {
+        "freeq/guest".to_string()
+    }
+}
 use super::Connection;
 
 /// Resolved target of a nick within a channel's roster.
@@ -177,7 +194,8 @@ pub(crate) fn broadcast_account_notify(
     nick: &str,
     did: &str,
 ) {
-    let hostmask = format!("{nick}!~u@host");
+    let host = cloaked_host_for_did(Some(did));
+    let hostmask = format!("{nick}!~u@{host}");
     let line = format!(":{hostmask} ACCOUNT {did}\r\n");
 
     // Find all channels this user is in

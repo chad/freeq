@@ -44,8 +44,9 @@ pub(super) fn ghost_same_did(
                 .filter(|(_, ch)| ch.members.contains(old_session))
                 .map(|(name, _)| name.clone())
                 .collect();
+            let host = super::helpers::cloaked_host_for_did(Some(did.as_str()));
             let quit_msg = format!(
-                ":{old_nick}!~u@host QUIT :Ghosted (same identity reconnected)\r\n"
+                ":{old_nick}!~u@{host} QUIT :Ghosted (same identity reconnected)\r\n"
             );
             for ch_name in &channels {
                 let members: Vec<String> = state.channels.lock().unwrap()

@@ -13,12 +13,39 @@ Users authenticate with their Bluesky identity via a custom SASL mechanism
 users get their DID bound to their connection — visible via WHOIS, enforced
 for nick ownership, and usable for DID-based bans, invites, and persistent ops.
 
+**Try it now:** [irc.freeq.at](https://irc.freeq.at)
+
+## Web Client
+
+The web client at `irc.freeq.at` provides:
+
+- **AT Protocol OAuth login** — sign in with your Bluesky identity
+- **Channel policy gates** — channels can require credential verification to join
+- **GitHub verification** — prove repo collaborator or org membership status
+- **Bluesky social graph gates** — prove you follow someone (no OAuth needed)
+- **Moderator appointments** — ops issue signed credentials for halfop (+h)
+- **Automatic role escalation** — credentials auto-grant IRC modes (op, halfop, voice)
+- **Shareable invite links** — `https://irc.freeq.at/join/#channel`
+- **Message editing, deletion, reactions, threads**
+- **End-to-end encrypted channels**
+
+### Demo Channels
+
+| Channel | Policy | What it demonstrates |
+|---------|--------|---------------------|
+| `#demo-follow` | Must follow @chadfowler.com on Bluesky | Social graph verification (zero OAuth) |
+| `#demo-github` | Open join, `chad/freeq` collaborators get auto-op | Layered credentials + role escalation |
+| `#demo-moderation` | Open join, moderators appointed via credentials | Credential-based moderation pipeline |
+
 ## Architecture
 
 ```
-freeq-server/     IRC server with SASL, WebSocket, iroh, S2S federation
-freeq-sdk/     Reusable client SDK (connect, auth, events, E2EE, P2P)
-freeq-tui/     Terminal UI client built on the SDK
+freeq-server/       IRC server with SASL, WebSocket, iroh, S2S federation
+freeq-app/          React web client (Vite + Tailwind)
+freeq-auth-broker/  AT Protocol OAuth broker (persistent sessions)
+freeq-sdk/          Reusable client SDK (connect, auth, events, E2EE, P2P)
+freeq-tui/          Terminal UI client built on the SDK
+freeq-site/         Marketing site (freeq.at)
 ```
 
 The SDK exposes a `(ClientHandle, Receiver<Event>)` pattern — any UI or bot
