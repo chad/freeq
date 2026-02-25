@@ -395,7 +395,7 @@ async fn auth_login(
         return_to = Some("https://irc.freeq.at".to_string());
     }
 
-    tracing::info!(handle = %handle, did = %did, popup = %is_popup, return_to = ?return_to, "OAuth login params");
+    tracing::info!(handle = %handle, did = %did, popup = %is_popup, return_to = ?return_to, "OAuth login params v2");
 
     state.pending.lock().await.insert(oauth_state.clone(), PendingAuth {
         handle: handle.clone(),
@@ -446,7 +446,7 @@ async fn auth_callback(
         Some(p) => p,
         None => return Ok(Html(oauth_result_page("Invalid OAuth state", None))),
     };
-    tracing::info!(popup = %pending.popup, return_to = ?pending.return_to, "OAuth callback params");
+    tracing::info!(popup = %pending.popup, return_to = ?pending.return_to, "OAuth callback params v2");
 
     let dpop_key = DpopKey::from_base64url(&pending.dpop_key_b64)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid DPoP key: {e}")))?;
