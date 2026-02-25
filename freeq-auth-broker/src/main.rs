@@ -381,9 +381,20 @@ async fn auth_login(
         .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No request_uri in PAR response".to_string()))?;
 
     let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
-    let return_to = q.return_to.clone();
+    let mut return_to = q.return_to.clone();
     let is_popup = is_truthy(q.popup.as_deref());
     let is_mobile = is_truthy(q.mobile.as_deref());
+
+    if return_to.is_none() {
+        if let Some(referer) = headers.get("referer").and_then(|v| v.to_str().ok()) {
+            if let Ok(url) = url::Url::parse(referer) {
+                return_to = Some(url.origin().ascii_serialization());
+            }
+        }
+    }
+    if return_to.is_none() && !is_mobile {
+        return_to = Some("https://irc.freeq.at".to_string());
+    }
 
     tracing::info!(handle = %handle, did = %did, popup = %is_popup, return_to = ?return_to, "BROKER_LOGIN_PARAMS_V3");
 
@@ -535,22 +546,14 @@ async fn auth_callback(
         "pds_url": pending.pds_url,
     });
 
-    if !pending.popup {
-        if let Some(ref return_to) = pending.return_to {
-            let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&result).unwrap_or_default());
-            let redirect = format!("{return_to}#oauth={payload}");
-            tracing::info!(redirect = %redirect, "OAuth callback redirecting to app");
-            return Ok(Redirect::temporary(&redirect).into_response());
-        }
+    if let Some(ref return_to) = pending.return_to {
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&result).unwrap_or_default());
+        let redirect = format!("{return_to}#oauth={payload}");
+        tracing::info!(redirect = %redirect, "OAuth callback redirecting to app");
+        return Ok(Redirect::temporary(&redirect).into_response());
     }
 
-    let message = if pending.popup {
-        "Authentication successful! You can close this window."
-    } else {
-        "Authentication successful!"
-    };
-
-    Ok(Html(oauth_result_page(message, Some(&result))).into_response())
+    Ok(Html(oauth_result_page("Authentication successful!", Some(&result))).into_response())
 }
 
 async fn session(
@@ -738,19 +741,7 @@ fn init_db(db: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
-fn oauth_result_page(message: &str, result: Option<&serde_json::Value>) -> String {
-    let script = if let Some(r) = result {
-        let json = serde_json::to_string(r).unwrap_or_default();
-        format!(r#"<script>
-            try {{
-                var resultWithTs = {json};
-                resultWithTs._ts = Date.now();
-                window.opener && window.opener.postMessage({{ type: 'freeq-oauth', payload: resultWithTs }}, '*');
-                localStorage.setItem('freeq-oauth-result', JSON.stringify(resultWithTs));
-            }} catch (e) {{}}
-        </script>"#)
-    } else { String::new() };
-
+fn oauth_result_page(message: &str, _result: Option<&serde_json::Value>) -> String {
     format!(
         r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>freeq auth</title>
         <style>
@@ -759,9 +750,7 @@ fn oauth_result_page(message: &str, result: Option<&serde_json::Value>) -> Strin
         h1 {{ color: #89b4fa; font-size: 20px; }}
         p {{ color: #a6adc8; }}
         </style></head>
-        <body><div class="box"><h1>freeq</h1><p>{message}</p></div>
-        {script}
-        </body></html>"#
+        <body><div class="box"><h1>freeq</h1><p>{message}</p></div></body></html>"#
     )
 }
 
