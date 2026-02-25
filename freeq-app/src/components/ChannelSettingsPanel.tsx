@@ -269,6 +269,16 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
                   )}
                 </div>
                 <p className="text-sm text-fg-muted">{describeRequirements(policy.policy.requirements)}</p>
+                <details className="mt-2">
+                  <summary className="text-[10px] text-fg-dim cursor-pointer hover:text-fg-muted">
+                    Policy DSL · {policy.policy.policy_id?.slice(0, 12)}…
+                  </summary>
+                  <pre className="mt-1 text-[10px] text-fg-dim font-mono bg-bg-tertiary rounded p-2 overflow-x-auto whitespace-pre-wrap break-all">
+{describeRequirementsTechnical(policy.policy.requirements)}
+{'\n'}policy_id={policy.policy.policy_id}
+{'\n'}version={policy.policy.version}
+                  </pre>
+                </details>
               </div>
             ) : (
               <p className="text-sm text-fg-dim">No policy set. Add rules to gate channel access.</p>
@@ -426,6 +436,7 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
                         <span className="text-xs text-fg-dim">→ {role === 'op' || role === 'admin' || role === 'owner' ? '+o' : role === 'moderator' || role === 'halfop' ? '+h' : role === 'voice' ? '+v' : 'no mode'}</span>
                       </div>
                       <p className="text-xs text-fg-dim ml-5">{describeRequirements(req)}</p>
+                      <p className="text-[10px] text-fg-dim ml-5 font-mono opacity-60 mt-0.5">{describeRequirementsTechnical(req)}</p>
                     </div>
                   ))}
                 </div>
@@ -484,23 +495,50 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
   );
 }
 
+/** Friendly credential type labels. */
+const CRED_LABELS: Record<string, string> = {
+  github_repo: 'GitHub repo collaborator',
+  github_membership: 'GitHub org member',
+  bluesky_follower: 'Bluesky follower',
+  channel_moderator: 'Moderator appointment',
+};
+
 /** Describe a requirement tree as human-readable text. */
 function describeRequirements(req: any): string {
   if (!req) return 'None';
   switch (req.type) {
     case 'ACCEPT':
-      return `Accept rules (hash: ${req.hash?.slice(0, 12)}…)`;
-    case 'PRESENT':
-      return `Credential: ${req.credential_type}${req.issuer ? ` from ${req.issuer.slice(0, 30)}…` : ''}`;
+      return `Accept channel rules`;
+    case 'PRESENT': {
+      const label = CRED_LABELS[req.credential_type] || req.credential_type?.replace(/_/g, ' ');
+      return `Require ${label} credential`;
+    }
     case 'PROVE':
       return `Prove: ${req.proof_type}`;
     case 'ALL':
-      return (req.requirements || []).map(describeRequirements).join(' AND ');
+      return (req.requirements || []).map(describeRequirements).join(' + ');
     case 'ANY':
-      return (req.requirements || []).map(describeRequirements).join(' OR ');
+      return 'Any of: ' + (req.requirements || []).map(describeRequirements).join(' or ');
     case 'NOT':
-      return `NOT (${describeRequirements(req.requirement)})`;
+      return `Not: ${describeRequirements(req.requirement)}`;
     default:
       return JSON.stringify(req).slice(0, 60);
+  }
+}
+
+/** Describe a requirement with technical details for the tooltip/detail view. */
+function describeRequirementsTechnical(req: any): string {
+  if (!req) return '';
+  switch (req.type) {
+    case 'ACCEPT':
+      return `ACCEPT hash=${req.hash?.slice(0, 16)}…`;
+    case 'PRESENT':
+      return `PRESENT type=${req.credential_type} issuer=${req.issuer || 'any'}`;
+    case 'ALL':
+      return `ALL(${(req.requirements || []).map(describeRequirementsTechnical).join(', ')})`;
+    case 'ANY':
+      return `ANY(${(req.requirements || []).map(describeRequirementsTechnical).join(', ')})`;
+    default:
+      return JSON.stringify(req).slice(0, 80);
   }
 }

@@ -232,6 +232,57 @@ export function JoinGateModal() {
   );
 }
 
+/** Map raw requirement data to human-friendly text. */
+function friendlyRequirement(req: RequirementStatus): { title: string; subtitle: string } {
+  if (req.requirement_type === 'accept') {
+    return {
+      title: 'Accept channel rules',
+      subtitle: 'Read and agree to the community guidelines',
+    };
+  }
+  if (req.requirement_type === 'present') {
+    // Parse credential type from description
+    const credMatch = req.description.match(/Credential:\s*(\S+)/);
+    const credType = credMatch?.[1] || '';
+    const issuerMatch = req.description.match(/from\s+(did:\S+)/);
+    const issuer = issuerMatch?.[1] || '';
+
+    const friendly: Record<string, { title: string; subtitle: string }> = {
+      github_repo: {
+        title: 'Verify GitHub access',
+        subtitle: 'Prove you\'re a collaborator on the linked repository',
+      },
+      github_membership: {
+        title: 'Verify GitHub org membership',
+        subtitle: 'Prove you\'re a member of the linked organization',
+      },
+      bluesky_follower: {
+        title: 'Verify Bluesky follow',
+        subtitle: 'Follow the required account on Bluesky',
+      },
+      channel_moderator: {
+        title: 'Moderator credential required',
+        subtitle: 'A channel operator must appoint you as a moderator',
+      },
+    };
+
+    if (friendly[credType]) {
+      return friendly[credType];
+    }
+    return {
+      title: `Present ${credType.replace(/_/g, ' ')} credential`,
+      subtitle: issuer ? `Issued by ${issuer.split(':').slice(0, 3).join(':')}…` : 'External verification required',
+    };
+  }
+  if (req.requirement_type === 'prove') {
+    return {
+      title: 'Provide proof',
+      subtitle: req.description,
+    };
+  }
+  return { title: req.description, subtitle: '' };
+}
+
 function RequirementRow({
   req,
   accepting,
@@ -262,8 +313,11 @@ function RequirementRow({
 
       {/* Content */}
       <div className="flex-1 min-w-0">
-        <p className={`text-sm ${req.satisfied ? 'text-fg-muted' : 'text-fg'}`}>
-          {req.description}
+        <p className={`text-sm font-medium ${req.satisfied ? 'text-fg-muted' : 'text-fg'}`}>
+          {friendlyRequirement(req).title}
+        </p>
+        <p className="text-xs text-fg-dim mt-0.5">
+          {friendlyRequirement(req).subtitle}
         </p>
 
         {/* Action button */}
