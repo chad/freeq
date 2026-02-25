@@ -385,7 +385,7 @@ async fn auth_login(
     let is_popup = is_truthy(q.popup.as_deref());
     let is_mobile = is_truthy(q.mobile.as_deref());
 
-    tracing::info!(handle = %handle, did = %did, popup = %is_popup, return_to = ?return_to, "OAuth login params v2");
+    tracing::info!(handle = %handle, did = %did, popup = %is_popup, return_to = ?return_to, "BROKER_LOGIN_PARAMS_V3");
 
     state.pending.lock().await.insert(oauth_state.clone(), PendingAuth {
         handle: handle.clone(),
@@ -436,7 +436,7 @@ async fn auth_callback(
         Some(p) => p,
         None => return Ok(Html(oauth_result_page("Invalid OAuth state", None))),
     };
-    tracing::info!(popup = %pending.popup, return_to = ?pending.return_to, "OAuth callback params v2");
+    tracing::info!(popup = %pending.popup, return_to = ?pending.return_to, "BROKER_CALLBACK_PARAMS_V3");
 
     let dpop_key = DpopKey::from_base64url(&pending.dpop_key_b64)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid DPoP key: {e}")))?;
