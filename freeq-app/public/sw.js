@@ -1,5 +1,5 @@
 // Service worker — app shell cache + offline support
-const CACHE_NAME = 'freeq-v2';
+const CACHE_NAME = 'freeq-v3';
 
 self.addEventListener('install', (event) => {
   // Pre-cache the app shell (index.html)
