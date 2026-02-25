@@ -223,24 +223,16 @@ export function ConnectScreen() {
 
       // Use webOrigin for auth URLs (same-origin in browser, explicit server in Tauri)
       const baseAuthUrl = `${brokerOrigin}/auth/login?handle=${encodeURIComponent(h)}`;
-      const authUrl = isTauri
-        ? `${baseAuthUrl}&return_to=${encodeURIComponent(window.location.origin)}`
-        : `${baseAuthUrl}&popup=1`;
+      const authUrl = `${baseAuthUrl}&return_to=${encodeURIComponent(window.location.origin)}`;
 
-      if (isTauri) {
-        // In Tauri, navigate the main window to the OAuth URL.
-        // The callback page will store the result and redirect back to /
-        // where the on-mount effect picks it up.
-        localStorage.setItem('freeq-oauth-pending', '1');
-        window.location.href = authUrl;
-        return;
-      }
+      // Same-window flow (more reliable than popup in browsers)
+      localStorage.setItem('freeq-oauth-pending', '1');
+      window.location.href = authUrl;
+      return;
 
-      // Browser: open OAuth popup
-      const popup = window.open(authUrl, 'freeq-auth', 'width=500,height=700');
-
-      // Listen for OAuth result via BroadcastChannel
-      const result = await waitForOAuthResult(popup);
+      // Browser popup flow (kept for reference)
+      // const popup = window.open(`${baseAuthUrl}&popup=1`, 'freeq-auth', 'width=500,height=700');
+      // const result = await waitForOAuthResult(popup);
 
       if (!result || !result.did) {
         setError('Authentication failed — no result received');
