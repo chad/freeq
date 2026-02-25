@@ -3,7 +3,7 @@ use std::time::SystemTime;
 
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{Html, Redirect},
     routing::{get, post},
     Json, Router,
@@ -290,6 +290,7 @@ async fn client_metadata(State(state): State<Arc<BrokerState>>) -> Json<serde_js
 async fn auth_login(
     Query(q): Query<AuthLoginQuery>,
     State(state): State<Arc<BrokerState>>,
+    headers: HeaderMap,
 ) -> Result<Redirect, (StatusCode, String)> {
     let handle = q.handle.trim().to_string();
     let did = resolve_handle(&handle).await
@@ -371,6 +372,15 @@ async fn auth_login(
         .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No request_uri in PAR response".to_string()))?;
 
     let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let mut return_to = q.return_to.clone();
+    if return_to.is_none() {
+        if let Some(referer) = headers.get("referer").and_then(|v| v.to_str().ok()) {
+            if let Ok(url) = url::Url::parse(referer) {
+                return_to = Some(url.origin().ascii_serialization());
+            }
+        }
+    }
+
     state.pending.lock().await.insert(oauth_state.clone(), PendingAuth {
         handle: handle.clone(),
         did: did.clone(),
@@ -382,7 +392,7 @@ async fn auth_login(
         dpop_key_b64: dpop_key.to_base64url(),
         dpop_nonce: dpop_nonce.clone(),
         mobile: q.mobile.as_deref() == Some("1"),
-        return_to: q.return_to.clone(),
+        return_to,
     });
 
     let auth_url = format!(
@@ -546,6 +556,7 @@ async fn session(
         dpop_key_b64: record.dpop_key_b64.clone(),
         dpop_nonce: dpop_nonce.clone(),
         mobile: true,
+        return_to: None,
     };
     if let Err(e) = push_web_session_with_token(&state.config, &pending, &access_token, dpop_nonce.clone()).await {
         tracing::warn!(error = %e, "Failed to refresh web session on server");
