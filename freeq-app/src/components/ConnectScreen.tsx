@@ -88,7 +88,7 @@ export function ConnectScreen() {
     const host = loc.host.replace('localhost', '127.0.0.1');
     return `${loc.protocol}//${host}`;
   });
-  const [brokerOrigin, setBrokerOrigin] = useState(() => {
+  const [brokerOrigin] = useState(() => {
     const stored = localStorage.getItem(LS_BROKER_BASE);
     if (stored) return stored;
     if (isTauri) return 'https://auth.freeq.at';
@@ -490,14 +490,6 @@ export function ConnectScreen() {
       </div>
     </div>
   );
-}
-
-interface OAuthResultData {
-  did: string;
-  handle: string;
-  access_jwt: string;
-  pds_url: string;
-  web_token?: string;
 }
 
 /**
