@@ -232,6 +232,16 @@ export function JoinGateModal() {
   );
 }
 
+/** Extract a query param from a URL string. */
+function extractParam(url: string | undefined, param: string): string | null {
+  if (!url) return null;
+  try {
+    // Handle relative URLs
+    const full = url.startsWith('/') ? `https://x${url}` : url;
+    return new URL(full).searchParams.get(param);
+  } catch { return null; }
+}
+
 /** Map raw requirement data to human-friendly text. */
 function friendlyRequirement(req: RequirementStatus): { title: string; subtitle: string } {
   if (req.requirement_type === 'accept') {
@@ -244,35 +254,41 @@ function friendlyRequirement(req: RequirementStatus): { title: string; subtitle:
     // Parse credential type from description
     const credMatch = req.description.match(/Credential:\s*(\S+)/);
     const credType = credMatch?.[1] || '';
-    const issuerMatch = req.description.match(/from\s+(did:\S+)/);
-    const issuer = issuerMatch?.[1] || '';
+    const url = req.action?.url;
 
-    const friendly: Record<string, { title: string; subtitle: string }> = {
-      github_repo: {
-        title: 'Verify GitHub access',
-        subtitle: 'Prove you\'re a collaborator on the linked repository',
-      },
-      github_membership: {
-        title: 'Verify GitHub org membership',
-        subtitle: 'Prove you\'re a member of the linked organization',
-      },
-      bluesky_follower: {
-        title: 'Verify Bluesky follow',
-        subtitle: 'Follow the required account on Bluesky',
-      },
-      channel_moderator: {
-        title: 'Moderator credential required',
-        subtitle: 'A channel operator must appoint you as a moderator',
-      },
-    };
-
-    if (friendly[credType]) {
-      return friendly[credType];
+    switch (credType) {
+      case 'github_repo': {
+        const repo = extractParam(url, 'repo');
+        return {
+          title: 'Verify GitHub access',
+          subtitle: repo ? `Collaborator on ${repo}` : 'Prove you\'re a collaborator on the linked repository',
+        };
+      }
+      case 'github_membership': {
+        const org = extractParam(url, 'org');
+        return {
+          title: 'Verify GitHub org membership',
+          subtitle: org ? `Member of ${org}` : 'Prove you\'re a member of the linked organization',
+        };
+      }
+      case 'bluesky_follower': {
+        const target = extractParam(url, 'target');
+        return {
+          title: 'Verify Bluesky follow',
+          subtitle: target ? `Follow @${target}` : 'Follow the required account on Bluesky',
+        };
+      }
+      case 'channel_moderator':
+        return {
+          title: 'Moderator credential required',
+          subtitle: 'A channel operator must appoint you as a moderator',
+        };
+      default:
+        return {
+          title: `Present ${credType.replace(/_/g, ' ')} credential`,
+          subtitle: 'External verification required',
+        };
     }
-    return {
-      title: `Present ${credType.replace(/_/g, ' ')} credential`,
-      subtitle: issuer ? `Issued by ${issuer.split(':').slice(0, 3).join(':')}…` : 'External verification required',
-    };
   }
   if (req.requirement_type === 'prove') {
     return {
