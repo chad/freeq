@@ -37,6 +37,11 @@ const backgroundWhois = new Set<string>();
 // ── Public API (called by UI) ──
 
 export function connect(url: string, desiredNick: string, channels?: string[]) {
+  // Clean up any existing transport to prevent duplicate connections
+  if (transport) {
+    try { transport.disconnect(); } catch { /* ignore */ }
+    transport = null;
+  }
   nick = desiredNick;
   lastUrl = url;
   autoJoinChannels = channels || [];
