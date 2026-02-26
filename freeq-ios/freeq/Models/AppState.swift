@@ -171,7 +171,7 @@ class AppState: ObservableObject {
     private var client: FreeqClient? = nil
     private var typingTimer: Timer? = nil
     private var lastTypingSent: Date = .distantPast
-    private var reconnectAttempts: Int = 0
+    fileprivate var reconnectAttempts: Int = 0
 
     var activeChannelState: ChannelState? {
         if let name = activeChannel {
@@ -725,7 +725,9 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                     state.activeChannel = state.channels.first?.name
                 }
                 state.errorMessage = "Kicked from \(channel) by \(by): \(reason)"
-                ToastManager.shared.show("Kicked from \(channel)", icon: "xmark.circle.fill")
+                Task { @MainActor in
+                    ToastManager.shared.show("Kicked from \(channel)", icon: "xmark.circle.fill")
+                }
             } else {
                 let ch = state.getOrCreateChannel(channel)
                 ch.appendIfNew(ChatMessage(
