@@ -197,6 +197,7 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/keys", axum::routing::post(api_upload_keys))
         .route("/api/v1/signing-key", get(api_signing_key))
         .route("/api/v1/signing-keys/{did}", get(api_did_signing_key))
+        .route("/api/v1/verify/{msgid}", get(api_verify_message))
         .route("/auth/mobile", get(auth_mobile_redirect))
         .route("/join/{channel}", get(channel_invite_page))
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)) // 12MB
@@ -398,6 +399,127 @@ async fn api_did_signing_key(
     } else {
         Err(axum::http::StatusCode::NOT_FOUND)
     }
+}
+
+/// Verify a message's cryptographic signature by msgid.
+/// Returns the message, signature, verification result, and the math to prove it.
+async fn api_verify_message(
+    State(state): State<Arc<SharedState>>,
+    axum::extract::Path(msgid): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
+    // Search all channel histories for this msgid
+    let channels = state.channels.lock();
+    let mut found = None;
+    let mut found_channel = String::new();
+    for (ch_name, ch) in channels.iter() {
+        for msg in ch.history.iter() {
+            if msg.msgid.as_deref() == Some(&msgid) {
+                found = Some(msg.clone());
+                found_channel = ch_name.clone();
+                break;
+            }
+        }
+        if found.is_some() { break; }
+    }
+    drop(channels);
+
+    let msg = found.ok_or((
+        axum::http::StatusCode::NOT_FOUND,
+        format!("Message {msgid} not found in recent history"),
+    ))?;
+
+    let sig_b64 = msg.tags.get("+freeq.at/sig").cloned();
+    let sender_nick = msg.from.split('!').next().unwrap_or(&msg.from);
+
+    // Resolve sender's DID
+    let sender_did = state.nick_owners.lock()
+        .iter()
+        .find(|(_, did)| {
+            state.did_nicks.lock().get(*did).map(|n| n == sender_nick).unwrap_or(false)
+        })
+        .map(|(_, did)| did.clone())
+        // Also check active sessions
+        .or_else(|| {
+            let n2s = state.nick_to_session.lock();
+            let session = n2s.iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(sender_nick))
+                .map(|(_, s)| s.clone());
+            session.and_then(|s| state.session_dids.lock().get(&s).cloned())
+        });
+
+    let canonical = sender_did.as_ref().map(|did| {
+        format!("{did}\0{found_channel}\0{}\0{}", msg.text, msg.timestamp)
+    });
+
+    // Try to verify: first against client session key, then server key
+    let mut verification = serde_json::json!(null);
+    if let (Some(sig_b64), Some(canonical_str)) = (&sig_b64, &canonical) {
+        use base64::Engine;
+        if let Ok(sig_bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(sig_b64) {
+            if sig_bytes.len() == 64 {
+                let sig_array: [u8; 64] = sig_bytes.try_into().unwrap();
+                let sig = ed25519_dalek::Signature::from_bytes(&sig_array);
+                let canonical_bytes = canonical_str.as_bytes();
+
+                // Try client session key first
+                let mut verified_by = "none";
+                if let Some(ref did) = sender_did {
+                    if let Some(pubkey_b64) = state.did_msg_keys.lock().get(did) {
+                        if let Ok(pk_bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(pubkey_b64) {
+                            if pk_bytes.len() == 32 {
+                                let pk_arr: [u8; 32] = pk_bytes.try_into().unwrap();
+                                if let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(&pk_arr) {
+                                    use ed25519_dalek::Verifier;
+                                    if vk.verify(canonical_bytes, &sig).is_ok() {
+                                        verified_by = "client-session-key";
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Fall back to server key
+                if verified_by == "none" {
+                    use ed25519_dalek::Verifier;
+                    let server_vk = state.msg_signing_key.verifying_key();
+                    if server_vk.verify(canonical_bytes, &sig).is_ok() {
+                        verified_by = "server-key";
+                    }
+                }
+
+                let server_pubkey = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .encode(state.msg_signing_key.verifying_key().as_bytes());
+                let client_pubkey = sender_did.as_ref()
+                    .and_then(|did| state.did_msg_keys.lock().get(did).cloned());
+
+                verification = serde_json::json!({
+                    "valid": verified_by != "none",
+                    "verified_by": verified_by,
+                    "server_public_key": server_pubkey,
+                    "client_public_key": client_pubkey,
+                });
+            }
+        }
+    }
+
+    let canonical_hex = canonical.as_ref().map(|c| {
+        c.as_bytes().iter().map(|b| format!("{:02x}", b)).collect::<String>()
+    });
+
+    Ok(Json(serde_json::json!({
+        "msgid": msgid,
+        "channel": found_channel,
+        "from": msg.from,
+        "text": msg.text,
+        "timestamp": msg.timestamp,
+        "sender_did": sender_did,
+        "signature": sig_b64,
+        "canonical_form": canonical,
+        "canonical_hex": canonical_hex,
+        "verification": verification,
+        "how_to_verify": "echo -n '<canonical_form>' | openssl dgst -ed25519 -verify <pubkey.pem> -signature <sig.bin>"
+    })))
 }
 
 async fn api_health(State(state): State<Arc<SharedState>>) -> Json<HealthResponse> {
