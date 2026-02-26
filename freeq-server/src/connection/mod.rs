@@ -214,7 +214,6 @@ where
     state
         .connections
         .lock()
-        .unwrap()
         .insert(session_id.clone(), tx);
 
     let server_name = state.server_name.clone();
@@ -252,7 +251,7 @@ where
     let send_healthy = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let send_healthy_ref = send_healthy.clone();
     let send = move |state: &Arc<SharedState>, session_id: &str, msg: String| {
-        if let Some(tx) = state.connections.lock().unwrap().get(session_id) {
+        if let Some(tx) = state.connections.lock().get(session_id) {
             if tx.try_send(msg).is_err() {
                 tracing::warn!(session_id, "Send buffer full or closed");
                 send_healthy_ref.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -348,10 +347,10 @@ where
             "NICK" => {
                 if let Some(nick) = msg.params.first() {
                     let nick_lower = nick.to_lowercase();
-                    let in_use = state.nick_to_session.lock().unwrap()
+                    let in_use = state.nick_to_session.lock()
                         .keys().any(|k| k.to_lowercase() == nick_lower);
 
-                    let owner_did = state.nick_owners.lock().unwrap().get(&nick_lower).cloned();
+                    let owner_did = state.nick_owners.lock().get(&nick_lower).cloned();
                     let my_did = conn.authenticated_did.as_deref();
                     let nick_stolen = if conn.cap_negotiating || conn.sasl_in_progress {
                         false
@@ -389,12 +388,11 @@ where
                     } else {
                         let old_nick = conn.nick.clone();
                         if let Some(ref old) = old_nick {
-                            state.nick_to_session.lock().unwrap().remove(old);
+                            state.nick_to_session.lock().remove(old);
                         }
                         state
                             .nick_to_session
                             .lock()
-                            .unwrap()
                             .insert(nick.clone(), session_id.clone());
                         conn.nick = Some(nick.clone());
 
@@ -409,8 +407,8 @@ where
 
                             let mut notified = std::collections::HashSet::new();
                             notified.insert(session_id.clone());
-                            let channels = state.channels.lock().unwrap();
-                            let conns = state.connections.lock().unwrap();
+                            let channels = state.channels.lock();
+                            let conns = state.connections.lock();
                             for ch in channels.values() {
                                 if ch.members.contains(&session_id) {
                                     for member in &ch.members {
@@ -437,7 +435,7 @@ where
 
                             // Broadcast to S2S
                             if let Some(ref old) = old_nick {
-                                let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+                                let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
                                 s2s_broadcast(&state, crate::s2s::S2sMessage::NickChange {
                                     event_id: s2s_next_event_id(&state),
                                     old: old.clone(),
@@ -678,14 +676,14 @@ where
                 if !conn.registered { continue; }
                 let mut replies = Vec::new();
                 for nick in msg.params.iter().take(5) {
-                    let n2s = state.nick_to_session.lock().unwrap();
+                    let n2s = state.nick_to_session.lock();
                     if let Some(sid) = n2s.get(nick) {
                         let is_op = {
-                            let channels = state.channels.lock().unwrap();
+                            let channels = state.channels.lock();
                             channels.values().any(|ch| ch.ops.contains(sid))
                         };
                         let prefix = if is_op { "*" } else { "" };
-                        let did = state.session_dids.lock().unwrap().get(sid).cloned();
+                        let did = state.session_dids.lock().get(sid).cloned();
                         let host = helpers::cloaked_host_for_did(did.as_deref());
                         replies.push(format!("{nick}{prefix}=+{nick}@{host}"));
                     }
@@ -698,7 +696,7 @@ where
             }
             "ISON" => {
                 if !conn.registered { continue; }
-                let n2s = state.nick_to_session.lock().unwrap();
+                let n2s = state.nick_to_session.lock();
                 let online: Vec<&str> = msg.params.iter()
                     .filter(|nick| n2s.contains_key(*nick))
                     .map(|s| s.as_str())
@@ -764,8 +762,8 @@ where
     if let Some(ref nick) = conn.nick {
         let hostmask = conn.hostmask();
         let quit_msg = format!(":{hostmask} QUIT :Connection closed\r\n");
-        let channels = state.channels.lock().unwrap();
-        let conns = state.connections.lock().unwrap();
+        let channels = state.channels.lock();
+        let conns = state.connections.lock();
         for ch in channels.values() {
             if ch.members.contains(&session_id) {
                 for member in &ch.members {
@@ -778,12 +776,12 @@ where
         }
         drop(conns);
         drop(channels);
-        state.nick_to_session.lock().unwrap().remove(nick);
+        state.nick_to_session.lock().remove(nick);
     }
 
     // Broadcast QUIT to S2S peers
     if let Some(ref nick) = conn.nick {
-        let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+        let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
         s2s_broadcast(&state, crate::s2s::S2sMessage::Quit {
             event_id: s2s_next_event_id(&state),
             nick: nick.clone(),
@@ -793,21 +791,21 @@ where
     }
 
     tracing::info!(%session_id, "Connection closed");
-    state.connections.lock().unwrap().remove(&session_id);
-    state.session_dids.lock().unwrap().remove(&session_id);
-    state.session_handles.lock().unwrap().remove(&session_id);
-    state.session_iroh_ids.lock().unwrap().remove(&session_id);
-    state.session_away.lock().unwrap().remove(&session_id);
-    state.cap_message_tags.lock().unwrap().remove(&session_id);
-    state.cap_multi_prefix.lock().unwrap().remove(&session_id);
-    state.cap_echo_message.lock().unwrap().remove(&session_id);
-    state.cap_server_time.lock().unwrap().remove(&session_id);
-    state.cap_batch.lock().unwrap().remove(&session_id);
-    state.cap_account_notify.lock().unwrap().remove(&session_id);
-    state.cap_extended_join.lock().unwrap().remove(&session_id);
-    state.cap_away_notify.lock().unwrap().remove(&session_id);
+    state.connections.lock().remove(&session_id);
+    state.session_dids.lock().remove(&session_id);
+    state.session_handles.lock().remove(&session_id);
+    state.session_iroh_ids.lock().remove(&session_id);
+    state.session_away.lock().remove(&session_id);
+    state.cap_message_tags.lock().remove(&session_id);
+    state.cap_multi_prefix.lock().remove(&session_id);
+    state.cap_echo_message.lock().remove(&session_id);
+    state.cap_server_time.lock().remove(&session_id);
+    state.cap_batch.lock().remove(&session_id);
+    state.cap_account_notify.lock().remove(&session_id);
+    state.cap_extended_join.lock().remove(&session_id);
+    state.cap_away_notify.lock().remove(&session_id);
     {
-        let mut channels = state.channels.lock().unwrap();
+        let mut channels = state.channels.lock();
         for ch in channels.values_mut() {
             ch.members.remove(&session_id);
             ch.ops.remove(&session_id);

@@ -150,7 +150,7 @@ pub(super) fn handle_policy(
                     }
 
                     // Broadcast policy to S2S peers
-                    let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+                    let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
                     let auth_set_json = engine.store()
                         .get_authority_set(&policy.authority_set_hash)
                         .ok()
@@ -254,7 +254,7 @@ pub(super) fn handle_policy(
                     send_fn(state, session_id, format!("{reply}\r\n"));
 
                     // Broadcast to S2S
-                    let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+                    let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
                     let auth_set_json = engine.store()
                         .get_authority_set(&policy.authority_set_hash)
                         .ok()
@@ -441,7 +441,7 @@ pub(super) fn handle_policy(
                         "NOTICE",
                         vec![&nick_c, &msg_text],
                     );
-                    let conns = state_c.connections.lock().unwrap();
+                    let conns = state_c.connections.lock();
                     if let Some(tx) = conns.get(&session_c) {
                         let _ = tx.try_send(format!("{reply}\r\n"));
                     }
@@ -611,7 +611,7 @@ pub(super) fn handle_policy(
                     send_fn(state, session_id, format!("{reply}\r\n"));
 
                     // Broadcast clear to S2S peers
-                    let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+                    let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
                     s2s_broadcast(state, crate::s2s::S2sMessage::PolicySync {
                         event_id: s2s_next_event_id(state),
                         channel: channel.to_string(),
@@ -785,7 +785,7 @@ pub(super) fn handle_policy(
                     send_fn(state, session_id, format!("{reply}\r\n"));
 
                     // Broadcast to S2S
-                    let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+                    let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
                     s2s_broadcast(state, crate::s2s::S2sMessage::PolicySync {
                         event_id: s2s_next_event_id(state),
                         channel: channel.to_string(),
@@ -823,7 +823,7 @@ fn is_channel_op(
     session_id: &str,
     did: Option<&str>,
 ) -> bool {
-    let channels = state.channels.lock().unwrap();
+    let channels = state.channels.lock();
     if let Some(ch) = channels.get(channel) {
         if ch.ops.contains(session_id) {
             return true;

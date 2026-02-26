@@ -19,7 +19,7 @@ use freeq_sdk::pds;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 /// A challenge issued by the server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,7 +77,7 @@ impl ChallengeStore {
         let raw_bytes = serde_json::to_vec(&challenge).expect("challenge serialization");
         let encoded = URL_SAFE_NO_PAD.encode(&raw_bytes);
 
-        self.pending.lock().unwrap().insert(
+        self.pending.lock().insert(
             session_id.to_string(),
             StoredChallenge {
                 challenge,
@@ -91,7 +91,7 @@ impl ChallengeStore {
     /// Consume a challenge for verification. Returns None if the challenge
     /// doesn't exist, has already been used, or has expired.
     pub fn take(&self, session_id: &str) -> Option<(Challenge, Vec<u8>)> {
-        let stored = self.pending.lock().unwrap().remove(session_id)?;
+        let stored = self.pending.lock().remove(session_id)?;
 
         let now = Utc::now().timestamp();
         if (now - stored.challenge.timestamp).unsigned_abs() > self.timeout_secs {
@@ -379,7 +379,7 @@ mod tests {
             timestamp: Utc::now().timestamp() - 120, // 2 minutes ago
         };
         let raw = serde_json::to_vec(&old_challenge).unwrap();
-        store.pending.lock().unwrap().insert(
+        store.pending.lock().insert(
             "sess-old".to_string(),
             StoredChallenge {
                 challenge: old_challenge,

@@ -43,6 +43,7 @@ ed25519-dalek = { version = "2", features = ["rand_core"] }
 bs58 = "0.5"
 percent-encoding = { workspace = true }
 iroh-quinn = { workspace = true }
+parking_lot = "0.12"
 automerge = { workspace = true }
 toml = "0.8"
 

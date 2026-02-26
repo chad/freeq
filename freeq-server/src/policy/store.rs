@@ -5,7 +5,7 @@
 use super::canonical;
 use super::types::*;
 use rusqlite::{params, Connection, OptionalExtension};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 pub struct PolicyStore {
     db: Mutex<Connection>,
@@ -24,7 +24,7 @@ impl PolicyStore {
     }
 
     fn migrate(&self) -> Result<(), rusqlite::Error> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         db.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS policies (
@@ -140,7 +140,7 @@ impl PolicyStore {
         let json = serde_json::to_string(&policy)
             .map_err(|e| PolicyError::Serialization(e.to_string()))?;
 
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         db.execute(
             "INSERT INTO policies (policy_id, channel_id, version, effective_at, previous_policy_hash, authority_set_hash, document_json)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -164,7 +164,7 @@ impl PolicyStore {
         &self,
         channel_id: &str,
     ) -> Result<Option<PolicyDocument>, PolicyError> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         let json: Option<String> = db
             .query_row(
                 "SELECT document_json FROM policies WHERE channel_id = ?1 ORDER BY version DESC LIMIT 1",
@@ -189,7 +189,7 @@ impl PolicyStore {
         &self,
         policy_id: &str,
     ) -> Result<Option<PolicyDocument>, PolicyError> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         let json: Option<String> = db
             .query_row(
                 "SELECT document_json FROM policies WHERE policy_id = ?1",
@@ -214,7 +214,7 @@ impl PolicyStore {
         &self,
         channel_id: &str,
     ) -> Result<Vec<PolicyDocument>, PolicyError> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         let mut stmt = db
             .prepare("SELECT document_json FROM policies WHERE channel_id = ?1 ORDER BY version ASC")
             .map_err(|e| PolicyError::Database(e.to_string()))?;
@@ -247,7 +247,7 @@ impl PolicyStore {
         let json = serde_json::to_string(&auth_set)
             .map_err(|e| PolicyError::Serialization(e.to_string()))?;
 
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         db.execute(
             "INSERT INTO authority_sets (authority_set_hash, channel_id, document_json, previous_authority_set_hash)
              VALUES (?1, ?2, ?3, ?4)",
@@ -268,7 +268,7 @@ impl PolicyStore {
         &self,
         hash: &str,
     ) -> Result<Option<AuthoritySet>, PolicyError> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         let json: Option<String> = db
             .query_row(
                 "SELECT document_json FROM authority_sets WHERE authority_set_hash = ?1",
@@ -295,7 +295,7 @@ impl PolicyStore {
         let json = serde_json::to_string(receipt)
             .map_err(|e| PolicyError::Serialization(e.to_string()))?;
 
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         db.execute(
             "INSERT OR REPLACE INTO join_receipts (join_id, channel_id, policy_id, subject_did, receipt_json, state, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, 'JOIN_PENDING', datetime('now'))",
@@ -324,7 +324,7 @@ impl PolicyStore {
             .unwrap_or("JOIN_FAILED")
             .to_string();
 
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         db.execute(
             "UPDATE join_receipts SET state = ?1, updated_at = datetime('now') WHERE join_id = ?2",
             params![state_str, join_id],
@@ -336,7 +336,7 @@ impl PolicyStore {
 
     /// Get a join receipt by join_id.
     pub fn get_join_receipt(&self, join_id: &str) -> Result<Option<JoinReceipt>, PolicyError> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         let json: Option<String> = db
             .query_row(
                 "SELECT receipt_json FROM join_receipts WHERE join_id = ?1",
@@ -368,7 +368,7 @@ impl PolicyStore {
         let attestation_hash = canonical::hash_canonical(attestation)
             .map_err(|e| PolicyError::Serialization(e.to_string()))?;
 
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
 
         // Store attestation
         db.execute(
@@ -415,7 +415,7 @@ impl PolicyStore {
         channel_id: &str,
         subject_did: &str,
     ) -> Result<Option<MembershipAttestation>, PolicyError> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         let json: Option<String> = db
             .query_row(
                 "SELECT attestation_json FROM membership_attestations
@@ -442,7 +442,7 @@ impl PolicyStore {
         &self,
         channel_id: &str,
     ) -> Result<Vec<MembershipAttestation>, PolicyError> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         let mut stmt = db
             .prepare(
                 "SELECT attestation_json FROM membership_attestations
@@ -466,7 +466,7 @@ impl PolicyStore {
 
     /// Get expired attestations (continuous validity model, past their expires_at).
     pub fn get_expired_attestations(&self) -> Result<Vec<MembershipAttestation>, PolicyError> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         let now = chrono::Utc::now().to_rfc3339();
         let mut stmt = db
             .prepare(
@@ -490,7 +490,7 @@ impl PolicyStore {
 
     /// Mark an attestation as invalid (expired/revoked).
     pub fn invalidate_attestation(&self, attestation_id: &str) -> Result<(), PolicyError> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         db.execute(
             "UPDATE membership_attestations SET state = 'INVALID' WHERE attestation_id = ?1",
             params![attestation_id],
@@ -503,7 +503,7 @@ impl PolicyStore {
     /// Remove all policy data for a channel.
     /// Returns true if anything was removed.
     pub fn remove_channel_policy(&self, channel_id: &str) -> Result<bool, PolicyError> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         let total: usize = ["policies", "membership_attestations", "join_receipts", "transparency_log"]
             .iter()
             .map(|table| {
@@ -524,7 +524,7 @@ impl PolicyStore {
         channel_id: &str,
         since: Option<i64>,
     ) -> Result<Vec<TransparencyLogEntry>, PolicyError> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         let mut stmt = db
             .prepare(
                 "SELECT entry_version, channel_id, policy_id, attestation_hash, issued_at, issuer_authority_id
@@ -562,7 +562,7 @@ impl PolicyStore {
         issuer: &str,
         metadata: &serde_json::Value,
     ) -> Result<(), PolicyError> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         db.execute(
             "INSERT INTO credentials (subject_did, credential_type, issuer, metadata_json, issued_at)
              VALUES (?1, ?2, ?3, ?4, datetime('now'))
@@ -584,7 +584,7 @@ impl PolicyStore {
         &self,
         subject_did: &str,
     ) -> Result<Vec<StoredCredential>, PolicyError> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         let mut stmt = db
             .prepare(
                 "SELECT credential_type, issuer, metadata_json, issued_at
@@ -616,7 +616,7 @@ impl PolicyStore {
         credential_type: &str,
         issuer: &str,
     ) -> Result<bool, PolicyError> {
-        let db = self.db.lock().unwrap();
+        let db = self.db.lock();
         let n = db.execute(
             "UPDATE credentials SET revoked = 1 WHERE subject_did = ?1 AND credential_type = ?2 AND issuer = ?3",
             params![subject_did, credential_type, issuer],

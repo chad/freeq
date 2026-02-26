@@ -23,7 +23,7 @@ pub(super) fn handle_cap(
             conn.cap_negotiating = true;
             // Build capability list, including iroh endpoint ID if available
             let mut caps = String::from("sasl message-tags multi-prefix echo-message server-time batch draft/chathistory account-notify extended-join away-notify");
-            if let Some(ref iroh_id) = *state.server_iroh_id.lock().unwrap() {
+            if let Some(ref iroh_id) = *state.server_iroh_id.lock() {
                 caps.push_str(&format!(" iroh={iroh_id}"));
             }
             let reply = Message::from_server(
@@ -47,27 +47,27 @@ pub(super) fn handle_cap(
                         }
                         "message-tags" => {
                             conn.cap_message_tags = true;
-                            state.cap_message_tags.lock().unwrap().insert(session_id.to_string());
+                            state.cap_message_tags.lock().insert(session_id.to_string());
                             acked.push("message-tags");
                         }
                         "multi-prefix" => {
                             conn.cap_multi_prefix = true;
-                            state.cap_multi_prefix.lock().unwrap().insert(session_id.to_string());
+                            state.cap_multi_prefix.lock().insert(session_id.to_string());
                             acked.push("multi-prefix");
                         }
                         "echo-message" => {
                             conn.cap_echo_message = true;
-                            state.cap_echo_message.lock().unwrap().insert(session_id.to_string());
+                            state.cap_echo_message.lock().insert(session_id.to_string());
                             acked.push("echo-message");
                         }
                         "server-time" => {
                             conn.cap_server_time = true;
-                            state.cap_server_time.lock().unwrap().insert(session_id.to_string());
+                            state.cap_server_time.lock().insert(session_id.to_string());
                             acked.push("server-time");
                         }
                         "batch" => {
                             conn.cap_batch = true;
-                            state.cap_batch.lock().unwrap().insert(session_id.to_string());
+                            state.cap_batch.lock().insert(session_id.to_string());
                             acked.push("batch");
                         }
                         "draft/chathistory" => {
@@ -76,17 +76,17 @@ pub(super) fn handle_cap(
                         }
                         "account-notify" => {
                             conn.cap_account_notify = true;
-                            state.cap_account_notify.lock().unwrap().insert(session_id.to_string());
+                            state.cap_account_notify.lock().insert(session_id.to_string());
                             acked.push("account-notify");
                         }
                         "extended-join" => {
                             conn.cap_extended_join = true;
-                            state.cap_extended_join.lock().unwrap().insert(session_id.to_string());
+                            state.cap_extended_join.lock().insert(session_id.to_string());
                             acked.push("extended-join");
                         }
                         "away-notify" => {
                             conn.cap_away_notify = true;
-                            state.cap_away_notify.lock().unwrap().insert(session_id.to_string());
+                            state.cap_away_notify.lock().insert(session_id.to_string());
                             acked.push("away-notify");
                         }
                         _ => { all_ok = false; }
@@ -151,7 +151,7 @@ pub(super) async fn handle_authenticate(
         if let Some(response) = sasl::decode_response(param) {
             // Check for web-token method first (server-side OAuth pre-verified)
             let web_token_result = if response.method.as_deref() == Some("web-token") {
-                let tokens = state.web_auth_tokens.lock().unwrap();
+                let tokens = state.web_auth_tokens.lock();
                 if let Some((did, _handle, created)) = tokens.get(&response.signature) {
                     // Reusable within TTL — allows reconnect with same token.
                     // Broker issues fresh tokens on each /session call anyway.
@@ -187,7 +187,6 @@ pub(super) async fn handle_authenticate(
                             state
                                 .session_dids
                                 .lock()
-                                .unwrap()
                                 .insert(session_id.to_string(), did.clone());
 
                             // Ghost any old sessions with the same DID.
@@ -197,8 +196,8 @@ pub(super) async fn handle_authenticate(
                             // Bind nick to DID (persistent identity-nick)
                             if let Some(ref nick) = conn.nick {
                                 let nick_lower = nick.to_lowercase();
-                                state.did_nicks.lock().unwrap().insert(did.clone(), nick_lower.clone());
-                                state.nick_owners.lock().unwrap().insert(nick_lower.clone(), did.clone());
+                                state.did_nicks.lock().insert(did.clone(), nick_lower.clone());
+                                state.nick_owners.lock().insert(nick_lower.clone(), did.clone());
                                 let nick_l = nick_lower.clone();
                                 let did_c = did.clone();
                                 let state_c = Arc::clone(state);
@@ -221,7 +220,7 @@ pub(super) async fn handle_authenticate(
                                         for aka in &doc.also_known_as {
                                             if let Some(handle) = aka.strip_prefix("at://") {
                                                 resolved_handle = Some(handle.to_string());
-                                                state_clone.session_handles.lock().unwrap()
+                                                state_clone.session_handles.lock()
                                                     .insert(sid.clone(), handle.to_string());
                                                 break;
                                             }
@@ -237,11 +236,11 @@ pub(super) async fn handle_authenticate(
                                     };
                                     let result = state_clone.plugin_manager.on_auth(&auth_event);
                                     if let Some(override_did) = result.override_did {
-                                        state_clone.session_dids.lock().unwrap()
+                                        state_clone.session_dids.lock()
                                             .insert(sid.clone(), override_did);
                                     }
                                     if let Some(override_handle) = result.override_handle {
-                                        state_clone.session_handles.lock().unwrap()
+                                        state_clone.session_handles.lock()
                                             .insert(sid.clone(), override_handle);
                                     }
                                 });

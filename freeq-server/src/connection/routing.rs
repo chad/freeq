@@ -60,7 +60,7 @@ pub(crate) fn relay_to_nick(
     // 1. Local delivery (case-insensitive nick lookup)
     let target_lower = target.to_lowercase();
     let local_session = {
-        let n2s = state.nick_to_session.lock().unwrap();
+        let n2s = state.nick_to_session.lock();
         n2s.iter()
             .find(|(n, _)| n.to_lowercase() == target_lower)
             .map(|(_, sid)| sid.clone())
@@ -70,10 +70,10 @@ pub(crate) fn relay_to_nick(
     }
 
     // 2. S2S relay (if federation active)
-    let has_s2s = state.s2s_manager.lock().unwrap().is_some();
+    let has_s2s = state.s2s_manager.lock().is_some();
     if has_s2s {
-        let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
-        let manager = state.s2s_manager.lock().unwrap().clone();
+        let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
+        let manager = state.s2s_manager.lock().clone();
         if let Some(m) = manager {
             m.broadcast(crate::s2s::S2sMessage::Privmsg {
                 event_id,

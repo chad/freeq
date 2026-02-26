@@ -21,14 +21,13 @@ pub(super) fn handle_whois(
     let target_session = state
         .nick_to_session
         .lock()
-        .unwrap()
         .get(target_nick)
         .cloned();
 
     let Some(target_session) = target_session else {
         // Check if this is a remote user (from S2S)
         let remote_info: Option<crate::server::RemoteMember> = {
-            let channels = state.channels.lock().unwrap();
+            let channels = state.channels.lock();
             channels.values()
                 .find_map(|ch| ch.remote_members.get(target_nick).cloned())
         };
@@ -76,7 +75,7 @@ pub(super) fn handle_whois(
 
             // Show channels they're in
             let user_channels: Vec<String> = {
-                let channels = state.channels.lock().unwrap();
+                let channels = state.channels.lock();
                 channels.iter()
                     .filter(|(_, ch)| ch.remote_members.contains_key(target_nick))
                     .map(|(name, ch)| {
@@ -139,7 +138,6 @@ pub(super) fn handle_whois(
     let did = state
         .session_dids
         .lock()
-        .unwrap()
         .get(&target_session)
         .cloned();
 
@@ -157,7 +155,6 @@ pub(super) fn handle_whois(
         let handle = state
             .session_handles
             .lock()
-            .unwrap()
             .get(&target_session)
             .cloned();
         if let Some(handle) = handle {
@@ -175,7 +172,6 @@ pub(super) fn handle_whois(
     let iroh_id = state
         .session_iroh_ids
         .lock()
-        .unwrap()
         .get(&target_session)
         .cloned();
     if let Some(iroh_id) = iroh_id {
@@ -209,12 +205,12 @@ pub(super) fn handle_who(
 
     if target.starts_with('#') || target.starts_with('&') {
         let channel = normalize_channel(target);
-        let channels = state.channels.lock().unwrap();
+        let channels = state.channels.lock();
         if let Some(ch) = channels.get(&channel) {
-            let n2s = state.nick_to_session.lock().unwrap();
+            let n2s = state.nick_to_session.lock();
             let reverse: std::collections::HashMap<&String, &String> =
                 n2s.iter().map(|(n, s)| (s, n)).collect();
-            let away = state.session_away.lock().unwrap();
+            let away = state.session_away.lock();
 
             for session in &ch.members {
                 if let Some(member_nick) = reverse.get(session) {
@@ -226,7 +222,7 @@ pub(super) fn handle_who(
                         else { "" };
                     let flags = format!("{away_flag}{op_flag}");
                     // Include DID in realname if authenticated
-                    let did_info = state.session_dids.lock().unwrap()
+                    let did_info = state.session_dids.lock()
                         .get(session).cloned();
                     let realname = match did_info {
                         Some(did) => format!("0 {did}"),
@@ -249,11 +245,11 @@ pub(super) fn handle_who(
         send(state, session_id, format!("{end}\r\n"));
     } else {
         // WHO for a nick
-        let target_session = state.nick_to_session.lock().unwrap().get(target).cloned();
+        let target_session = state.nick_to_session.lock().get(target).cloned();
         if let Some(ref session) = target_session {
-            let away = state.session_away.lock().unwrap();
+            let away = state.session_away.lock();
             let away_flag = if away.contains_key(session) { "G" } else { "H" };
-            let did_info = state.session_dids.lock().unwrap()
+            let did_info = state.session_dids.lock()
                 .get(session).cloned();
             let realname = match did_info {
                 Some(did) => format!("0 {did}"),
@@ -286,12 +282,12 @@ pub(super) fn handle_lusers(
     send: &impl Fn(&Arc<SharedState>, &str, String),
 ) {
     let nick = conn.nick_or_star();
-    let user_count = state.connections.lock().unwrap().len();
-    let channel_count = state.channels.lock().unwrap().len();
+    let user_count = state.connections.lock().len();
+    let channel_count = state.channels.lock().len();
 
     // Count remote users across all channels (deduplicated)
     let remote_count = {
-        let channels = state.channels.lock().unwrap();
+        let channels = state.channels.lock();
         let mut remote_nicks = std::collections::HashSet::new();
         for ch in channels.values() {
             for nick in ch.remote_members.keys() {
@@ -341,7 +337,7 @@ pub(super) fn handle_away(
 
     match away_msg {
         Some(msg) if !msg.is_empty() => {
-            state.session_away.lock().unwrap()
+            state.session_away.lock()
                 .insert(session_id.to_string(), msg.to_string());
             let reply = Message::from_server(
                 server_name,
@@ -354,7 +350,7 @@ pub(super) fn handle_away(
             broadcast_away(state, session_id, &hostmask, Some(msg));
         }
         _ => {
-            state.session_away.lock().unwrap().remove(session_id);
+            state.session_away.lock().remove(session_id);
             let reply = Message::from_server(
                 server_name,
                 irc::RPL_UNAWAY,
@@ -375,7 +371,7 @@ fn broadcast_away(
     hostmask: &str,
     away_msg: Option<&str>,
 ) {
-    let away_caps = state.cap_away_notify.lock().unwrap();
+    let away_caps = state.cap_away_notify.lock();
     if away_caps.is_empty() {
         return;
     }
@@ -388,7 +384,7 @@ fn broadcast_away(
 
     // Find all channels this user is in, collect their members
     let mut targets = std::collections::HashSet::new();
-    let channels = state.channels.lock().unwrap();
+    let channels = state.channels.lock();
     for ch in channels.values() {
         if ch.members.contains(session_id) {
             for member in &ch.members {
@@ -400,7 +396,7 @@ fn broadcast_away(
     }
     drop(channels);
 
-    let conns = state.connections.lock().unwrap();
+    let conns = state.connections.lock();
     for sid in &targets {
         if let Some(tx) = conns.get(sid) {
             let _ = tx.try_send(line.clone());

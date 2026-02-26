@@ -55,12 +55,15 @@ export function connect(url: string, desiredNick: string, channels?: string[]) {
         const brokerToken = localStorage.getItem('freeq-broker-token');
         const brokerBase = localStorage.getItem('freeq-broker-base');
         if (brokerToken && brokerBase && saslDid) {
+          const ctrl = new AbortController();
+          const tm = setTimeout(() => ctrl.abort(), 5000);
           fetch(`${brokerBase}/session`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ broker_token: brokerToken }),
+            signal: ctrl.signal,
           })
-            .then(r => r.ok ? r.json() : Promise.reject('broker refresh failed'))
+            .then(r => { clearTimeout(tm); return r.ok ? r.json() : Promise.reject('broker refresh failed'); })
             .then((session: { token: string; nick: string; did: string; handle: string }) => {
               saslToken = session.token;
               raw('CAP LS 302');
@@ -68,7 +71,12 @@ export function connect(url: string, desiredNick: string, channels?: string[]) {
               raw(`USER ${nick} 0 * :freeq web app`);
             })
             .catch(() => {
-              // Broker refresh failed — try with existing token anyway
+              clearTimeout(tm);
+              // Broker refresh failed — register without SASL (guest mode)
+              // Don't try with stale token, it'll just fail with 904
+              saslToken = '';
+              saslDid = '';
+              saslMethod = '';
               raw('CAP LS 302');
               raw(`NICK ${nick}`);
               raw(`USER ${nick} 0 * :freeq web app`);

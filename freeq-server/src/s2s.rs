@@ -482,7 +482,7 @@ pub async fn handle_incoming_s2s(
     conn: iroh::endpoint::Connection,
     state: Arc<SharedState>,
 ) {
-    let manager = state.s2s_manager.lock().unwrap().clone();
+    let manager = state.s2s_manager.lock().clone();
     let manager = match manager {
         Some(m) => m,
         None => {

@@ -28,7 +28,8 @@ use axum::{
 use clap::Parser;
 use ed25519_dalek::SigningKey;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 #[derive(Parser)]
 struct Args {
@@ -148,7 +149,7 @@ async fn github_start(
 ) -> Result<Redirect, (StatusCode, String)> {
     let state_token: String = hex::encode(rand::random::<[u8; 16]>());
 
-    state.pending.lock().unwrap().insert(
+    state.pending.lock().insert(
         state_token.clone(),
         PendingVerify {
             subject_did: q.subject_did,
@@ -182,7 +183,7 @@ async fn github_callback(
         None => return axum::response::Html(String::from("<h1>Error</h1><p>No state</p>")).into_response(),
     };
 
-    let pending = state.pending.lock().unwrap().remove(&oauth_state);
+    let pending = state.pending.lock().remove(&oauth_state);
     let pending = match pending {
         Some(p) if p.created_at.elapsed() < std::time::Duration::from_secs(300) => p,
         _ => return axum::response::Html(String::from("<h1>Error</h1><p>Expired or unknown</p>")).into_response(),

@@ -1,5 +1,7 @@
 // Service worker — app shell cache + offline support
-const CACHE_NAME = 'freeq-v4';
+// CACHE_VERSION is replaced at build time by the build script.
+// Each deploy produces a unique sw.js → browser re-installs → activate clears old cache.
+const CACHE_NAME = 'freeq-__BUILD_HASH__';
 
 self.addEventListener('install', (event) => {
   // Pre-cache the app shell (index.html)

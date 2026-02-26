@@ -51,13 +51,13 @@ pub(super) fn resolve_channel_target(
 
     // Check local: case-insensitive nick → session, session ∈ channel.members
     let local_session = {
-        let n2s = state.nick_to_session.lock().unwrap();
+        let n2s = state.nick_to_session.lock();
         n2s.iter()
             .find(|(n, _)| n.to_lowercase() == nick_lower)
             .map(|(_, sid)| sid.clone())
     };
     if let Some(ref sid) = local_session {
-        let in_channel = state.channels.lock().unwrap()
+        let in_channel = state.channels.lock()
             .get(channel)
             .map(|ch| ch.members.contains(sid))
             .unwrap_or(false);
@@ -67,7 +67,7 @@ pub(super) fn resolve_channel_target(
     }
 
     // Check remote: case-insensitive nick ∈ channel.remote_members
-    let remote = state.channels.lock().unwrap()
+    let remote = state.channels.lock()
         .get(channel)
         .and_then(|ch| {
             ch.remote_members.iter()
@@ -106,7 +106,7 @@ pub(super) fn resolve_network_target(
 
     // Check local first (case-insensitive)
     let local_sid = {
-        let n2s = state.nick_to_session.lock().unwrap();
+        let n2s = state.nick_to_session.lock();
         n2s.iter()
             .find(|(n, _)| n.to_lowercase() == nick_lower)
             .map(|(_, sid)| sid.clone())
@@ -116,7 +116,7 @@ pub(super) fn resolve_network_target(
     }
 
     // Check all channels' remote_members (case-insensitive)
-    let channels = state.channels.lock().unwrap();
+    let channels = state.channels.lock();
     for ch in channels.values() {
         let rm = ch.remote_members.iter()
             .find(|(n, _)| n.to_lowercase() == nick_lower)
@@ -135,7 +135,7 @@ pub(super) fn normalize_channel(name: &str) -> String {
 
 
 pub(super) fn s2s_broadcast(state: &Arc<SharedState>, msg: crate::s2s::S2sMessage) {
-    let manager = state.s2s_manager.lock().unwrap().clone();
+    let manager = state.s2s_manager.lock().clone();
     if let Some(manager) = manager {
         manager.broadcast(msg);
     }
@@ -143,7 +143,7 @@ pub(super) fn s2s_broadcast(state: &Arc<SharedState>, msg: crate::s2s::S2sMessag
 
 /// Generate a unique event ID for outgoing S2S messages.
 pub(super) fn s2s_next_event_id(state: &Arc<SharedState>) -> String {
-    let manager = state.s2s_manager.lock().unwrap().clone();
+    let manager = state.s2s_manager.lock().clone();
     match manager {
         Some(m) => m.next_event_id(),
         None => String::new(),
@@ -159,7 +159,7 @@ pub(super) fn s2s_broadcast_mode(
     arg: Option<&str>,
 ) {
     let event_id = s2s_next_event_id(state);
-    let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+    let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
     s2s_broadcast(state, crate::s2s::S2sMessage::Mode {
         event_id,
         channel: channel.to_string(),
@@ -174,12 +174,11 @@ pub(super) fn broadcast_to_channel(state: &Arc<SharedState>, channel: &str, msg:
     let members: Vec<String> = state
         .channels
         .lock()
-        .unwrap()
         .get(channel)
         .map(|ch| ch.members.iter().cloned().collect())
         .unwrap_or_default();
 
-    let conns = state.connections.lock().unwrap();
+    let conns = state.connections.lock();
     for member_session in &members {
         if let Some(tx) = conns.get(member_session) {
             let _ = tx.try_send(msg.to_string());
@@ -199,12 +198,12 @@ pub(crate) fn broadcast_account_notify(
     let line = format!(":{hostmask} ACCOUNT {did}\r\n");
 
     // Find all channels this user is in
-    let channels = state.channels.lock().unwrap();
+    let channels = state.channels.lock();
     let mut notified = std::collections::HashSet::new();
     for ch in channels.values() {
         if ch.members.contains(session_id) {
-            let cap_set = state.cap_account_notify.lock().unwrap();
-            let conns = state.connections.lock().unwrap();
+            let cap_set = state.cap_account_notify.lock();
+            let conns = state.connections.lock();
             for member_sid in &ch.members {
                 if member_sid != session_id && !notified.contains(member_sid) {
                     if cap_set.contains(member_sid) {

@@ -2,7 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
@@ -334,7 +335,7 @@ impl SharedState {
         F: FnOnce(&Db) -> rusqlite::Result<R>,
     {
         self.db.as_ref().and_then(|db| {
-            let db = db.lock().unwrap();
+            let db = db.lock();
             match f(&db) {
                 Ok(r) => Some(r),
                 Err(e) => {
@@ -355,7 +356,7 @@ impl SharedState {
 
     /// Get our iroh endpoint ID (used as CRDT peer identity).
     fn crdt_origin_peer(&self) -> String {
-        self.server_iroh_id.lock().unwrap().clone()
+        self.server_iroh_id.lock().clone()
             .unwrap_or_else(|| self.server_name.clone())
     }
 
@@ -400,7 +401,7 @@ impl SharedState {
     /// Generate CRDT sync messages for all peers and broadcast them.
     /// Sync state is keyed by **iroh endpoint ID** (cryptographic identity).
     pub async fn crdt_broadcast_sync(&self) {
-        let manager = self.s2s_manager.lock().unwrap().clone();
+        let manager = self.s2s_manager.lock().clone();
         let manager = match manager {
             Some(m) => m,
             None => return,
@@ -441,7 +442,7 @@ impl SharedState {
     /// This avoids broadcast amplification storms where receiving from one peer
     /// triggers messages to all peers, which all respond, etc.
     pub async fn crdt_sync_with_peer(&self, peer_id: &str) {
-        let manager = self.s2s_manager.lock().unwrap().clone();
+        let manager = self.s2s_manager.lock().clone();
         let manager = match manager {
             Some(m) => m,
             None => return,
@@ -640,7 +641,7 @@ impl Server {
                     endpoint.online().await;
                     let id = endpoint.id();
                     tracing::info!("Iroh ready. Connect with: --iroh-addr {id}");
-                    *state.server_iroh_id.lock().unwrap() = Some(id.to_string());
+                    *state.server_iroh_id.lock() = Some(id.to_string());
 
                     // Re-key the CRDT actor to the iroh endpoint ID.
                     // This MUST happen before any S2S connections, so founder
@@ -665,7 +666,7 @@ impl Server {
             match crate::s2s::start(s2s_state, endpoint.clone()).await {
                 Ok((manager, mut s2s_rx)) => {
                     // Store manager in shared state so iroh accept loop can route S2S
-                    *state.s2s_manager.lock().unwrap() = Some(Arc::clone(&manager));
+                    *state.s2s_manager.lock() = Some(Arc::clone(&manager));
 
                     // Connect to configured peers with auto-reconnection
                     for peer_id in &self.config.s2s_peers {
@@ -709,7 +710,7 @@ impl Server {
 
         // Store iroh endpoint in shared state to keep it alive
         if let Some(endpoint) = iroh_endpoint {
-            *state.iroh_endpoint.lock().unwrap() = Some(endpoint);
+            *state.iroh_endpoint.lock() = Some(endpoint);
         }
 
         // Start periodic CRDT maintenance tasks:
@@ -752,7 +753,7 @@ impl Server {
                     interval.tick().await;
                     reconcile_crdt_to_local(&reconcile_state).await;
                     // Prune expired web auth tokens (TTL 5 min)
-                    reconcile_state.web_auth_tokens.lock().unwrap()
+                    reconcile_state.web_auth_tokens.lock()
                         .retain(|_, (_, _, created)| created.elapsed() < std::time::Duration::from_secs(300));
                 }
             });
@@ -799,7 +800,7 @@ impl Server {
             let state = Arc::clone(&state);
             // Per-IP connection limit
             {
-                let mut ip_conns = state.ip_connections.lock().unwrap();
+                let mut ip_conns = state.ip_connections.lock();
                 let count = ip_conns.entry(ip).or_insert(0);
                 if *count >= MAX_CONNS_PER_IP {
                     tracing::warn!(%ip, "Connection rejected: per-IP limit reached");
@@ -813,7 +814,7 @@ impl Server {
                     tracing::error!("Connection error: {e}");
                 }
                 // Decrement IP counter on disconnect
-                let mut ip_conns = state.ip_connections.lock().unwrap();
+                let mut ip_conns = state.ip_connections.lock();
                 if let Some(count) = ip_conns.get_mut(&ip) {
                     *count = count.saturating_sub(1);
                     if *count == 0 { ip_conns.remove(&ip); }
@@ -947,9 +948,9 @@ async fn process_s2s_message(
     /// Deliver a raw IRC line to all local members of a channel.
     fn deliver_to_channel(state: &SharedState, channel: &str, line: &str) {
         let channel_key = channel.to_lowercase();
-        let channels = state.channels.lock().unwrap();
+        let channels = state.channels.lock();
         if let Some(ch) = channels.get(&channel_key) {
-            let conns = state.connections.lock().unwrap();
+            let conns = state.connections.lock();
             for session_id in &ch.members {
                 if let Some(tx) = conns.get(session_id) {
                     let _ = tx.try_send(line.to_string());
@@ -960,14 +961,14 @@ async fn process_s2s_message(
 
     /// Send NAMES update to all local members of a channel (for nick list refresh).
     fn send_names_update(state: &SharedState, channel: &str) {
-        let channels = state.channels.lock().unwrap();
+        let channels = state.channels.lock();
         let ch = match channels.get(channel) {
             Some(ch) => ch,
             None => return,
         };
 
         // Build nick list (local + remote)
-        let n2s = state.nick_to_session.lock().unwrap();
+        let n2s = state.nick_to_session.lock();
         let reverse: HashMap<&String, &String> = n2s.iter().map(|(n, s)| (s, n)).collect();
         let mut nick_list: Vec<String> = ch.members.iter()
             .filter_map(|s| {
@@ -993,7 +994,7 @@ async fn process_s2s_message(
         let local_members: Vec<String> = ch.members.iter().cloned().collect();
         drop(channels);
 
-        let conns = state.connections.lock().unwrap();
+        let conns = state.connections.lock();
         for session_id in &local_members {
             // Look up this member's nick for the reply prefix
             let member_nick = reverse.get(session_id).map(|n| n.as_str()).unwrap_or("*");
@@ -1082,13 +1083,13 @@ async fn process_s2s_message(
             if target.starts_with('#') || target.starts_with('&') {
                 // Enforce +n and +m on incoming S2S messages
                 let channel_key = target.to_lowercase();
-                let channels = state.channels.lock().unwrap();
+                let channels = state.channels.lock();
                 if let Some(ch) = channels.get(&channel_key) {
                     if ch.no_ext_msg {
                         let nick = from.split('!').next().unwrap_or(&from);
                         let is_member = ch.has_remote_member(nick)
                             || ch.members.iter().any(|sid| {
-                                state.nick_to_session.lock().unwrap()
+                                state.nick_to_session.lock()
                                     .iter().any(|(n, s)| n.to_lowercase() == nick.to_lowercase() && s == sid)
                             });
                         if !is_member {
@@ -1116,7 +1117,7 @@ async fn process_s2s_message(
                         .as_secs();
                     let mut tags = HashMap::new();
                     tags.insert("msgid".to_string(), msgid.clone());
-                    let mut channels = state.channels.lock().unwrap();
+                    let mut channels = state.channels.lock();
                     if let Some(ch) = channels.get_mut(&channel_key) {
                         ch.history.push_back(HistoryMessage {
                             from: from.clone(),
@@ -1136,12 +1137,12 @@ async fn process_s2s_message(
 
                 // Deliver to local members with tag-awareness
                 let members: Vec<String> = state
-                    .channels.lock().unwrap()
+                    .channels.lock()
                     .get(&channel_key)
                     .map(|ch| ch.members.iter().cloned().collect())
                     .unwrap_or_default();
-                let tag_caps = state.cap_message_tags.lock().unwrap();
-                let conns = state.connections.lock().unwrap();
+                let tag_caps = state.cap_message_tags.lock();
+                let conns = state.connections.lock();
                 for sid in &members {
                     if let Some(tx) = conns.get(sid) {
                         let line = if tag_caps.contains(sid) { &tagged_line } else { &plain_line };
@@ -1150,16 +1151,16 @@ async fn process_s2s_message(
                 }
             } else {
                 // Case-insensitive nick lookup for PM delivery
-                let n2s = state.nick_to_session.lock().unwrap();
+                let n2s = state.nick_to_session.lock();
                 let target_lower = target.to_lowercase();
                 let sid = n2s.iter()
                     .find(|(n, _)| n.to_lowercase() == target_lower)
                     .map(|(_, s)| s.clone());
                 drop(n2s);
                 if let Some(sid) = sid {
-                    let has_tags = state.cap_message_tags.lock().unwrap().contains(&sid);
+                    let has_tags = state.cap_message_tags.lock().contains(&sid);
                     let line = if has_tags { &tagged_line } else { &plain_line };
-                    let conns = state.connections.lock().unwrap();
+                    let conns = state.connections.lock();
                     if let Some(tx) = conns.get(&sid) {
                         let _ = tx.try_send(line.clone());
                     }
@@ -1173,7 +1174,7 @@ async fn process_s2s_message(
             // Presence is S2S-event-only (NOT in CRDT — avoids ghost users)
             // Idempotent: set-based, don't assume not present
             {
-                let mut channels = state.channels.lock().unwrap();
+                let mut channels = state.channels.lock();
                 let ch = channels.entry(channel.clone()).or_default();
                 ch.remote_members.insert(nick.clone(), RemoteMember {
                     origin: origin.clone(),
@@ -1192,7 +1193,7 @@ async fn process_s2s_message(
             let channel = channel.to_lowercase();
             // Presence is S2S-event-only. Idempotent: remove if present.
             {
-                let mut channels = state.channels.lock().unwrap();
+                let mut channels = state.channels.lock();
                 if let Some(ch) = channels.get_mut(&channel) {
                     ch.remove_remote_member(&nick);
                 }
@@ -1207,7 +1208,7 @@ async fn process_s2s_message(
             // Remove remote member from all channels (idempotent)
             let mut affected_channels = Vec::new();
             {
-                let mut channels = state.channels.lock().unwrap();
+                let mut channels = state.channels.lock();
                 for (name, ch) in channels.iter_mut() {
                     if ch.remove_remote_member(&nick).is_some() {
                         affected_channels.push(name.clone());
@@ -1231,7 +1232,7 @@ async fn process_s2s_message(
 
             // Enforce +t locally
             {
-                let channels = state.channels.lock().unwrap();
+                let channels = state.channels.lock();
                 if let Some(ch) = channels.get(&channel) {
                     if ch.topic_locked {
                         // The remote server already checked +t authorization before
@@ -1264,7 +1265,7 @@ async fn process_s2s_message(
 
             // Write to CRDT (source of truth)
             let setter_did = {
-                let channels = state.channels.lock().unwrap();
+                let channels = state.channels.lock();
                 channels.get(&channel).and_then(|ch| {
                     ch.remote_member(&set_by).and_then(|rm| rm.did.clone())
                 })
@@ -1273,7 +1274,7 @@ async fn process_s2s_message(
 
             // Apply locally for immediate UX (CRDT is authoritative if they diverge)
             {
-                let mut channels = state.channels.lock().unwrap();
+                let mut channels = state.channels.lock();
                 let ch = channels.entry(channel.clone()).or_default();
                 ch.topic = Some(TopicInfo::new(topic.clone(), set_by.clone()));
             }
@@ -1286,7 +1287,7 @@ async fn process_s2s_message(
             let channel = channel.to_lowercase();
             let has_local_members;
             {
-                let mut channels = state.channels.lock().unwrap();
+                let mut channels = state.channels.lock();
                 let ch = channels.entry(channel.clone()).or_default();
 
                 // ── Authority gating ───────────────────────────────────
@@ -1351,7 +1352,7 @@ async fn process_s2s_message(
                 // Re-op local members
                 has_local_members = !ch.members.is_empty();
                 let members: Vec<String> = ch.members.iter().cloned().collect();
-                let dids = state.session_dids.lock().unwrap();
+                let dids = state.session_dids.lock();
                 for session_id in &members {
                     if let Some(did) = dids.get(session_id) {
                         if ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did) {
@@ -1380,11 +1381,11 @@ async fn process_s2s_message(
 
         S2sMessage::SyncRequest => {
             let response = {
-                let channels = state.channels.lock().unwrap();
-                let n2s = state.nick_to_session.lock().unwrap();
+                let channels = state.channels.lock();
+                let n2s = state.nick_to_session.lock();
                 let s2n: HashMap<&String, &String> = n2s.iter().map(|(n, s)| (s, n)).collect();
 
-                let dids = state.session_dids.lock().unwrap();
+                let dids = state.session_dids.lock();
                 let channel_info: Vec<crate::s2s::ChannelInfo> = channels.iter().map(|(name, ch)| {
                     let nicks: Vec<String> = ch.members.iter()
                         .filter_map(|sid| s2n.get(sid).map(|n| (*n).clone()))
@@ -1430,7 +1431,7 @@ async fn process_s2s_message(
             );
             let mut updated_channels = Vec::new();
             {
-                let mut channels = state.channels.lock().unwrap();
+                let mut channels = state.channels.lock();
 
                 // Clear stale remote members from this peer before merging.
                 // SyncResponse is a full state snapshot — any remote members
@@ -1545,7 +1546,7 @@ async fn process_s2s_message(
                         }
                     }
 
-                    let dids = state.session_dids.lock().unwrap();
+                    let dids = state.session_dids.lock();
                     let members: Vec<String> = ch.members.iter().cloned().collect();
 
                     // First pass: grant ops to DID-backed users with authority
@@ -1589,7 +1590,7 @@ async fn process_s2s_message(
 
             for channel in &updated_channels {
                 send_names_update(state, channel);
-                let topic_info = state.channels.lock().unwrap()
+                let topic_info = state.channels.lock()
                     .get(channel)
                     .and_then(|ch| ch.topic.as_ref().map(|t| (t.text.clone(), t.set_by.clone())));
                 if let Some((topic, _set_by)) = topic_info {
@@ -1597,11 +1598,11 @@ async fn process_s2s_message(
                         ":{} 332 * {} :{}\r\n",
                         state.server_name, channel, topic,
                     );
-                    let members: Vec<String> = state.channels.lock().unwrap()
+                    let members: Vec<String> = state.channels.lock()
                         .get(channel)
                         .map(|ch| ch.members.iter().cloned().collect())
                         .unwrap_or_default();
-                    let conns = state.connections.lock().unwrap();
+                    let conns = state.connections.lock();
                     for session_id in &members {
                         if let Some(tx) = conns.get(session_id) {
                             let _ = tx.try_send(line.clone());
@@ -1614,7 +1615,7 @@ async fn process_s2s_message(
         S2sMessage::Mode { channel, mode, arg, set_by, .. } => {
             let channel = channel.to_lowercase();
             {
-                let mut channels = state.channels.lock().unwrap();
+                let mut channels = state.channels.lock();
                 if let Some(ch) = channels.get_mut(&channel) {
                     let adding = mode.starts_with('+');
                     let mode_char = mode.chars().last().unwrap_or(' ');
@@ -1636,7 +1637,7 @@ async fn process_s2s_message(
                             if let Some(ref target_nick) = arg {
                                 // Case-insensitive local nick lookup
                                 let target_sid = {
-                                    let n2s = state.nick_to_session.lock().unwrap();
+                                    let n2s = state.nick_to_session.lock();
                                     let lower = target_nick.to_lowercase();
                                     n2s.iter()
                                         .find(|(n, _)| n.to_lowercase() == lower)
@@ -1656,7 +1657,7 @@ async fn process_s2s_message(
 
                                     // +o/-o with DID: also update did_ops for persistence
                                     if mode_char == 'o' {
-                                        if let Some(did) = state.session_dids.lock().unwrap()
+                                        if let Some(did) = state.session_dids.lock()
                                             .get(sid).cloned()
                                         {
                                             if !adding && ch.founder_did.as_deref() == Some(&did) {
@@ -1714,7 +1715,7 @@ async fn process_s2s_message(
             // Case-insensitive nick lookup: IRC nicks are case-insensitive
             // but nick_to_session stores them in original case.
             let target_session = {
-                let n2s = state.nick_to_session.lock().unwrap();
+                let n2s = state.nick_to_session.lock();
                 let nick_lower = nick.to_lowercase();
                 n2s.iter()
                     .find(|(n, _)| n.to_lowercase() == nick_lower)
@@ -1724,7 +1725,7 @@ async fn process_s2s_message(
             if let Some(ref sid) = target_session {
                 // Target is local — broadcast KICK to channel, remove member
                 deliver_to_channel(state, &channel_key, &kick_line);
-                let mut channels = state.channels.lock().unwrap();
+                let mut channels = state.channels.lock();
                 if let Some(ch) = channels.get_mut(&channel_key) {
                     let removed = ch.members.remove(sid);
                     ch.ops.remove(sid);
@@ -1743,7 +1744,7 @@ async fn process_s2s_message(
             } else {
                 // Target is a remote member from another peer — remove and notify locals
                 let removed = {
-                    let mut channels = state.channels.lock().unwrap();
+                    let mut channels = state.channels.lock();
                     channels.get_mut(&channel_key)
                         .and_then(|ch| ch.remove_remote_member(&nick))
                         .is_some()
@@ -1757,7 +1758,7 @@ async fn process_s2s_message(
         S2sMessage::NickChange { old, new, .. } => {
             let line = format!(":{old}!remote@s2s NICK :{new}\r\n");
 
-            let mut channels = state.channels.lock().unwrap();
+            let mut channels = state.channels.lock();
             let mut affected_sessions = std::collections::HashSet::new();
             for ch in channels.values_mut() {
                 if let Some(rm) = ch.remove_remote_member(&old) {
@@ -1769,7 +1770,7 @@ async fn process_s2s_message(
             }
             drop(channels);
 
-            let conns = state.connections.lock().unwrap();
+            let conns = state.connections.lock();
             for session_id in &affected_sessions {
                 if let Some(tx) = conns.get(session_id) {
                     let _ = tx.try_send(line.clone());
@@ -1841,7 +1842,7 @@ async fn process_s2s_message(
             // Clean up all remote_members whose origin matches this peer.
             // Without this, users from a disconnected server linger as ghosts
             // in channel rosters until they individually Part/Quit.
-            let mut channels = state.channels.lock().unwrap();
+            let mut channels = state.channels.lock();
             let mut cleaned = 0usize;
             let mut affected_channels = Vec::new();
             for (name, ch) in channels.iter_mut() {
@@ -1878,7 +1879,7 @@ async fn process_s2s_message(
 async fn reconcile_crdt_to_local(state: &Arc<SharedState>) {
     // Get list of channels
     let channel_names: Vec<String> = {
-        state.channels.lock().unwrap().keys().cloned().collect()
+        state.channels.lock().keys().cloned().collect()
     };
 
     let mut reconciled = 0u32;
@@ -1887,7 +1888,7 @@ async fn reconcile_crdt_to_local(state: &Arc<SharedState>) {
         // Reconcile topic: if CRDT has a topic and it differs from local, adopt CRDT's
         if let Some((crdt_topic, crdt_setter)) = state.cluster_doc.channel_topic(channel_name).await {
             let needs_update = {
-                let channels = state.channels.lock().unwrap();
+                let channels = state.channels.lock();
                 channels.get(channel_name)
                     .map(|ch| {
                         ch.topic.as_ref()
@@ -1897,7 +1898,7 @@ async fn reconcile_crdt_to_local(state: &Arc<SharedState>) {
                     .unwrap_or(false)
             };
             if needs_update {
-                let mut channels = state.channels.lock().unwrap();
+                let mut channels = state.channels.lock();
                 if let Some(ch) = channels.get_mut(channel_name) {
                     ch.topic = Some(TopicInfo::new(crdt_topic, crdt_setter));
                     reconciled += 1;
@@ -1908,13 +1909,13 @@ async fn reconcile_crdt_to_local(state: &Arc<SharedState>) {
         // Reconcile founder
         if let Some(crdt_founder) = state.cluster_doc.founder(channel_name).await {
             let needs_update = {
-                let channels = state.channels.lock().unwrap();
+                let channels = state.channels.lock();
                 channels.get(channel_name)
                     .map(|ch| ch.founder_did.as_deref() != Some(&crdt_founder))
                     .unwrap_or(false)
             };
             if needs_update {
-                let mut channels = state.channels.lock().unwrap();
+                let mut channels = state.channels.lock();
                 if let Some(ch) = channels.get_mut(channel_name) {
                     tracing::info!(
                         channel = %channel_name,
@@ -1926,7 +1927,7 @@ async fn reconcile_crdt_to_local(state: &Arc<SharedState>) {
                     // Re-evaluate local ops: grant to DID-backed users with authority.
                     // Only revoke guest auto-ops if an authority-backed user is now
                     // opped (locally or remotely) — don't orphan the channel.
-                    let dids = state.session_dids.lock().unwrap();
+                    let dids = state.session_dids.lock();
                     let members: Vec<String> = ch.members.iter().cloned().collect();
                     let mut did_ops_granted = false;
                     for session_id in &members {
@@ -1956,7 +1957,7 @@ async fn reconcile_crdt_to_local(state: &Arc<SharedState>) {
         // Reconcile DID ops: CRDT is additive authority
         let crdt_ops = state.cluster_doc.channel_did_ops(channel_name).await;
         if !crdt_ops.is_empty() {
-            let mut channels = state.channels.lock().unwrap();
+            let mut channels = state.channels.lock();
             if let Some(ch) = channels.get_mut(channel_name) {
                 for did in &crdt_ops {
                     if ch.did_ops.insert(did.clone()) {
@@ -1966,7 +1967,7 @@ async fn reconcile_crdt_to_local(state: &Arc<SharedState>) {
                 // Re-evaluate local ops: grant to DID-backed users with authority.
                 // Revoke guest/non-authority auto-ops only if someone with real
                 // authority now has ops (don't orphan the channel).
-                let dids = state.session_dids.lock().unwrap();
+                let dids = state.session_dids.lock();
                 let members: Vec<String> = ch.members.iter().cloned().collect();
                 let mut did_ops_granted = false;
                 for session_id in &members {

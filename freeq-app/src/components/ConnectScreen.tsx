@@ -170,12 +170,16 @@ export function ConnectScreen() {
     setAutoConnecting(true);
     const ch = (localStorage.getItem(LS_CHANNELS) || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
     fetch(`${brokerOrigin}/session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ broker_token: brokerToken }),
+      signal: controller.signal,
     })
       .then(async (res) => {
+        clearTimeout(timeout);
         if (!res.ok) {
           throw new Error(await res.text());
         }
@@ -187,9 +191,13 @@ export function ConnectScreen() {
         const finalNick = nickFromHandle(session.handle || localStorage.getItem(LS_HANDLE) || session.nick);
         connect(server, finalNick, ch);
       })
-      .catch(() => {
+      .catch((e) => {
+        clearTimeout(timeout);
         localStorage.removeItem(LS_BROKER_TOKEN);
         setAutoConnecting(false);
+        if (e?.name === 'AbortError') {
+          setError('Authentication service unavailable. Try again or connect as guest.');
+        }
       });
   }, [registered, oauthPending, autoConnecting, brokerOrigin, server]);
 
@@ -228,10 +236,19 @@ export function ConnectScreen() {
       const baseAuthUrl = `${brokerOrigin}/auth/login?handle=${encodeURIComponent(h)}`;
       const authUrl = `${baseAuthUrl}&return_to=${encodeURIComponent(window.location.origin)}`;
 
+      // Pre-flight check: verify broker is reachable before redirecting
+      const check = await fetch(`${brokerOrigin}/health`, { signal: AbortSignal.timeout(5000) }).catch(() => null);
+      if (!check?.ok) {
+        setError('Authentication service unavailable. Try again later or connect as guest.');
+        setOauthPending(false);
+        return;
+      }
+
       // Same-window flow (more reliable than popup in browsers)
       localStorage.setItem('freeq-oauth-pending', '1');
       window.location.href = authUrl;
-      return;    } catch (e) {
+      return;
+    } catch (e) {
       setError(`OAuth error: ${e}`);
       setOauthPending(false);
     }

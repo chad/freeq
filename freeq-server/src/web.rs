@@ -196,7 +196,26 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/keys", axum::routing::post(api_upload_keys))
         .route("/join/{channel}", get(channel_invite_page))
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)) // 12MB
-        .layer(CorsLayer::permissive());
+        .layer(axum::middleware::from_fn(security_headers))
+        .layer({
+            use tower_http::cors::AllowOrigin;
+            use axum::http::{Method, header};
+            let origins = [
+                "https://irc.freeq.at",
+                "https://auth.freeq.at",
+                "https://freeq.at",
+                "http://127.0.0.1:5173",  // vite dev
+                "http://localhost:5173",
+            ];
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::list(
+                    origins.iter().filter_map(|o| o.parse().ok())
+                ))
+                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+                .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION,
+                    "X-Broker-Signature".parse().unwrap()])
+                .allow_credentials(true)
+        });
 
     // Policy API endpoints
     if state.policy_engine.is_some() {
@@ -212,7 +231,10 @@ pub fn router(state: Arc<SharedState>) -> Router {
             }
         });
         let issuer_did = format!("did:web:{}:verify", state.config.server_name);
-        crate::verifiers::router(issuer_did, github_config).map(|(r, _)| r)
+        let data_dir = state.config.db_path.as_ref()
+            .map(|p| std::path::Path::new(p).parent().unwrap_or(std::path::Path::new(".")))
+            .unwrap_or(std::path::Path::new("."));
+        crate::verifiers::router(issuer_did, github_config, data_dir).map(|(r, _)| r)
     };
 
     // Serve static web client files if the directory exists
@@ -320,8 +342,8 @@ static START_TIME: std::sync::OnceLock<SystemTime> = std::sync::OnceLock::new();
 async fn api_health(State(state): State<Arc<SharedState>>) -> Json<HealthResponse> {
     let start = START_TIME.get_or_init(SystemTime::now);
     let uptime = start.elapsed().unwrap_or_default().as_secs();
-    let connections = state.connections.lock().unwrap().len();
-    let channels = state.channels.lock().unwrap().len();
+    let connections = state.connections.lock().len();
+    let channels = state.channels.lock().len();
     Json(HealthResponse {
         server_name: state.server_name.clone(),
         connections,
@@ -331,7 +353,7 @@ async fn api_health(State(state): State<Arc<SharedState>>) -> Json<HealthRespons
 }
 
 async fn api_channels(State(state): State<Arc<SharedState>>) -> Json<Vec<ChannelInfo>> {
-    let channels = state.channels.lock().unwrap();
+    let channels = state.channels.lock();
     let list: Vec<ChannelInfo> = channels
         .iter()
         .map(|(name, ch)| ChannelInfo {
@@ -375,7 +397,7 @@ async fn api_channel_history(
         }
         None => {
             // No database — fall back to in-memory history
-            let channels = state.channels.lock().unwrap();
+            let channels = state.channels.lock();
             match channels.get(&channel) {
                 Some(ch) => {
                     let resp: Vec<MessageResponse> = ch
@@ -414,7 +436,7 @@ async fn api_channel_topic(
         format!("#{name}")
     };
 
-    let channels = state.channels.lock().unwrap();
+    let channels = state.channels.lock();
     match channels.get(&channel) {
         Some(ch) => Ok(Json(ChannelTopicResponse {
             channel,
@@ -430,15 +452,14 @@ async fn api_user(
     Path(nick): Path<String>,
     State(state): State<Arc<SharedState>>,
 ) -> Result<Json<UserResponse>, StatusCode> {
-    let session = state.nick_to_session.lock().unwrap().get(&nick).cloned();
+    let session = state.nick_to_session.lock().get(&nick).cloned();
     let online = session.is_some();
 
     let (did, handle) = if let Some(ref session_id) = session {
-        let did = state.session_dids.lock().unwrap().get(session_id).cloned();
+        let did = state.session_dids.lock().get(session_id).cloned();
         let handle = state
             .session_handles
             .lock()
-            .unwrap()
             .get(session_id)
             .cloned();
         (did, handle)
@@ -446,7 +467,6 @@ async fn api_user(
         let did = state
             .nick_owners
             .lock()
-            .unwrap()
             .get(&nick.to_lowercase())
             .cloned();
         (did, None)
@@ -468,15 +488,14 @@ async fn api_user_whois(
     Path(nick): Path<String>,
     State(state): State<Arc<SharedState>>,
 ) -> Result<Json<WhoisResponse>, StatusCode> {
-    let session = state.nick_to_session.lock().unwrap().get(&nick).cloned();
+    let session = state.nick_to_session.lock().get(&nick).cloned();
     let online = session.is_some();
 
     let (did, handle) = if let Some(ref session_id) = session {
-        let did = state.session_dids.lock().unwrap().get(session_id).cloned();
+        let did = state.session_dids.lock().get(session_id).cloned();
         let handle = state
             .session_handles
             .lock()
-            .unwrap()
             .get(session_id)
             .cloned();
         (did, handle)
@@ -484,7 +503,6 @@ async fn api_user_whois(
         let did = state
             .nick_owners
             .lock()
-            .unwrap()
             .get(&nick.to_lowercase())
             .cloned();
         (did, None)
@@ -495,7 +513,7 @@ async fn api_user_whois(
     }
 
     let channels = if let Some(ref session_id) = session {
-        let chans = state.channels.lock().unwrap();
+        let chans = state.channels.lock();
         chans
             .iter()
             .filter(|(_, ch)| ch.members.contains(session_id))
@@ -550,7 +568,7 @@ async fn auth_broker_web_token(
     verify_broker_signature(&secret, &headers, &req)?;
 
     let token = generate_random_string(32);
-    state.web_auth_tokens.lock().unwrap().insert(
+    state.web_auth_tokens.lock().insert(
         token.clone(),
         (req.did.clone(), req.handle.clone(), std::time::Instant::now()),
     );
@@ -567,7 +585,7 @@ async fn auth_broker_session(
         .ok_or((StatusCode::FORBIDDEN, "Broker auth not configured".to_string()))?;
     verify_broker_signature(&secret, &headers, &req)?;
 
-    state.web_sessions.lock().unwrap().insert(req.did.clone(), crate::server::WebSession {
+    state.web_sessions.lock().insert(req.did.clone(), crate::server::WebSession {
         did: req.did.clone(),
         handle: req.handle.clone(),
         pds_url: req.pds_url.clone(),
@@ -790,7 +808,7 @@ async fn auth_login(
 
     // Store pending session
     let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
-    state.oauth_pending.lock().unwrap().insert(oauth_state.clone(), crate::server::OAuthPending {
+    state.oauth_pending.lock().insert(oauth_state.clone(), crate::server::OAuthPending {
         handle: handle.clone(),
         did: did.clone(),
         pds_url: pds_url.clone(),
@@ -841,7 +859,7 @@ async fn auth_callback(
         .ok_or_else(|| (StatusCode::BAD_REQUEST, "Missing state".to_string()))?;
 
     // Look up pending session
-    let pending = state.oauth_pending.lock().unwrap().remove(oauth_state)
+    let pending = state.oauth_pending.lock().remove(oauth_state)
         .ok_or_else(|| (StatusCode::BAD_REQUEST, "Unknown or expired OAuth state".to_string()))?;
 
     // Check expiry (5 minutes)
@@ -896,7 +914,7 @@ async fn auth_callback(
 
     // Generate a one-time web auth token for SASL
     let web_token = generate_random_string(32);
-    state.web_auth_tokens.lock().unwrap().insert(
+    state.web_auth_tokens.lock().insert(
         web_token.clone(),
         (pending.did.clone(), pending.handle.clone(), std::time::Instant::now()),
     );
@@ -910,7 +928,7 @@ async fn auth_callback(
     };
 
     // Store web session for server-proxied operations (media upload)
-    state.web_sessions.lock().unwrap().insert(pending.did.clone(), crate::server::WebSession {
+    state.web_sessions.lock().insert(pending.did.clone(), crate::server::WebSession {
         did: pending.did.clone(),
         handle: pending.handle.clone(),
         pds_url: pending.pds_url.clone(),
@@ -1102,7 +1120,7 @@ async fn api_upload(
     }
 
     // Look up the user's web session
-    let session = state.web_sessions.lock().unwrap().get(&did).cloned()
+    let session = state.web_sessions.lock().get(&did).cloned()
         .ok_or_else(|| (StatusCode::UNAUTHORIZED, "No active session for this DID — please re-authenticate".into()))?;
 
     // Sessions persist until server restart (in-memory only).
@@ -1153,7 +1171,7 @@ async fn channel_invite_page(
 
     // Get channel info
     let (member_count, topic_text) = {
-        let channels = state.channels.lock().unwrap();
+        let channels = state.channels.lock();
         let key = channel.to_lowercase();
         match channels.get(&key) {
             Some(ch) => (ch.members.len(), ch.topic.as_ref().map(|t| t.text.clone())),
@@ -1313,7 +1331,7 @@ async fn api_get_keys(
     State(state): State<Arc<crate::server::SharedState>>,
     axum::extract::Path(did): axum::extract::Path<String>,
 ) -> impl axum::response::IntoResponse {
-    let bundles = state.prekey_bundles.lock().unwrap();
+    let bundles = state.prekey_bundles.lock();
     match bundles.get(&did) {
         Some(bundle) => (
             axum::http::StatusCode::OK,
@@ -1341,7 +1359,7 @@ async fn api_upload_keys(
 
     match (did, bundle) {
         (Some(did), Some(bundle)) => {
-            state.prekey_bundles.lock().unwrap()
+            state.prekey_bundles.lock()
                 .insert(did.to_string(), bundle.clone());
             (
                 axum::http::StatusCode::OK,
@@ -1353,4 +1371,25 @@ async fn api_upload_keys(
             axum::Json(serde_json::json!({ "error": "Missing 'did' or 'bundle'" })),
         ),
     }
+}
+
+/// Security headers middleware.
+async fn security_headers(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut resp = next.run(req).await;
+    let headers = resp.headers_mut();
+    headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
+    headers.insert("X-Frame-Options", "DENY".parse().unwrap());
+    headers.insert("Referrer-Policy", "strict-origin-when-cross-origin".parse().unwrap());
+    headers.insert(
+        "Strict-Transport-Security",
+        "max-age=63072000; includeSubDomains; preload".parse().unwrap(),
+    );
+    headers.insert(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' wss: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'".parse().unwrap(),
+    );
+    resp
 }

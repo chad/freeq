@@ -23,7 +23,7 @@ pub(super) fn ghost_same_did(
 
     let mut sessions_to_ghost = Vec::new();
     {
-        let session_dids = state.session_dids.lock().unwrap();
+        let session_dids = state.session_dids.lock();
         for (sid, d) in session_dids.iter() {
             if *d == did && sid != session_id {
                 sessions_to_ghost.push(sid.clone());
@@ -33,13 +33,13 @@ pub(super) fn ghost_same_did(
 
     for old_session in &sessions_to_ghost {
         // Find old nick
-        let old_nick = state.nick_to_session.lock().unwrap()
+        let old_nick = state.nick_to_session.lock()
             .iter()
             .find(|(_, s)| *s == old_session)
             .map(|(n, _)| n.clone());
         if let Some(ref old_nick) = old_nick {
             // Send QUIT to all channels the old session is in
-            let channels: Vec<String> = state.channels.lock().unwrap()
+            let channels: Vec<String> = state.channels.lock()
                 .iter()
                 .filter(|(_, ch)| ch.members.contains(old_session))
                 .map(|(name, _)| name.clone())
@@ -49,11 +49,11 @@ pub(super) fn ghost_same_did(
                 ":{old_nick}!~u@{host} QUIT :Ghosted (same identity reconnected)\r\n"
             );
             for ch_name in &channels {
-                let members: Vec<String> = state.channels.lock().unwrap()
+                let members: Vec<String> = state.channels.lock()
                     .get(ch_name)
                     .map(|ch| ch.members.iter().cloned().collect())
                     .unwrap_or_default();
-                let conns = state.connections.lock().unwrap();
+                let conns = state.connections.lock();
                 for member_session in &members {
                     if member_session != old_session {
                         if let Some(tx) = conns.get(member_session) {
@@ -63,7 +63,7 @@ pub(super) fn ghost_same_did(
                 }
             }
             // Remove from channels
-            let mut channels_lock = state.channels.lock().unwrap();
+            let mut channels_lock = state.channels.lock();
             for ch_name in &channels {
                 if let Some(ch) = channels_lock.get_mut(ch_name) {
                     ch.members.remove(old_session);
@@ -74,19 +74,19 @@ pub(super) fn ghost_same_did(
             }
             drop(channels_lock);
             // Remove nick mapping
-            state.nick_to_session.lock().unwrap().remove(old_nick);
+            state.nick_to_session.lock().remove(old_nick);
         }
         // Clean up session metadata
-        state.session_dids.lock().unwrap().remove(old_session);
-        state.session_handles.lock().unwrap().remove(old_session);
-        state.session_iroh_ids.lock().unwrap().remove(old_session);
+        state.session_dids.lock().remove(old_session);
+        state.session_handles.lock().remove(old_session);
+        state.session_iroh_ids.lock().remove(old_session);
         // Send ERROR to old session and close it
-        if let Some(tx) = state.connections.lock().unwrap().get(old_session) {
+        if let Some(tx) = state.connections.lock().get(old_session) {
             let _ = tx.try_send(
                 "ERROR :Closing link (same identity reconnected)\r\n".to_string()
             );
         }
-        state.connections.lock().unwrap().remove(old_session);
+        state.connections.lock().remove(old_session);
         tracing::info!(did = %did, old_session = %old_session, "Ghosted old session for same DID");
     }
 
@@ -94,7 +94,7 @@ pub(super) fn ghost_same_did(
     // It may not be there if the server deferred insertion during CAP/SASL
     // negotiation (nick was in use by the ghost we just killed).
     if let Some(ref nick) = conn.nick {
-        let mut nts = state.nick_to_session.lock().unwrap();
+        let mut nts = state.nick_to_session.lock();
         let nick_lower = nick.to_lowercase();
         let already_mapped = nts.keys().any(|k| k.to_lowercase() == nick_lower);
         if !already_mapped {
@@ -108,11 +108,11 @@ pub(super) fn ghost_same_did(
         .filter(|n| n.ends_with('_'))
         .map(|n| (n.clone(), n.trim_end_matches('_').to_string()));
     if let Some((current_nick, desired)) = reclaim {
-        let nick_free = !state.nick_to_session.lock().unwrap()
+        let nick_free = !state.nick_to_session.lock()
             .keys().any(|k| k.to_lowercase() == desired.to_lowercase());
         if nick_free {
-            state.nick_to_session.lock().unwrap().remove(&current_nick);
-            state.nick_to_session.lock().unwrap()
+            state.nick_to_session.lock().remove(&current_nick);
+            state.nick_to_session.lock()
                 .insert(desired.clone(), session_id.to_string());
             tracing::info!(old = %current_nick, new = %desired, "Reclaimed nick after ghost");
             conn.nick = Some(desired);
@@ -139,7 +139,7 @@ pub(super) fn try_complete_registration(
     // but didn't authenticate as the owner, force-rename them.
     if let Some(ref nick) = conn.nick {
         let nick_lower = nick.to_lowercase();
-        let owner_did = state.nick_owners.lock().unwrap().get(&nick_lower).cloned();
+        let owner_did = state.nick_owners.lock().get(&nick_lower).cloned();
         if let Some(owner) = owner_did {
             let is_owner = conn.authenticated_did.as_ref().is_some_and(|d| d == &owner);
             if !is_owner {
@@ -154,8 +154,8 @@ pub(super) fn try_complete_registration(
                     vec!["*", &format!("Nick {nick} is registered — renamed to {guest_nick}. Authenticate to reclaim.")],
                 );
                 send(state, session_id, format!("{notice}\r\n"));
-                state.nick_to_session.lock().unwrap().remove(nick);
-                state.nick_to_session.lock().unwrap().insert(guest_nick.clone(), session_id.to_string());
+                state.nick_to_session.lock().remove(nick);
+                state.nick_to_session.lock().insert(guest_nick.clone(), session_id.to_string());
                 conn.nick = Some(guest_nick);
             }
         }
@@ -171,7 +171,7 @@ pub(super) fn try_complete_registration(
 
     // Store iroh endpoint ID in shared state for WHOIS lookups
     if let Some(ref iroh_id) = conn.iroh_endpoint_id {
-        state.session_iroh_ids.lock().unwrap()
+        state.session_iroh_ids.lock()
             .insert(session_id.to_string(), iroh_id.clone());
     }
 

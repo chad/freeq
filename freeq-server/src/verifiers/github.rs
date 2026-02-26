@@ -65,7 +65,7 @@ async fn start(
         params.insert("repo".into(), serde_json::Value::String(repo.clone()));
     }
 
-    state.pending.lock().unwrap().insert(
+    state.pending.lock().insert(
         state_token.clone(),
         PendingVerification {
             subject_did: q.subject_did,
@@ -100,7 +100,7 @@ async fn callback(
     };
 
     // Look up pending
-    let pending = state.pending.lock().unwrap().remove(&oauth_state);
+    let pending = state.pending.lock().remove(&oauth_state);
     let pending = match pending {
         Some(p) if p.created_at.elapsed() < std::time::Duration::from_secs(300) => p,
         Some(_) => return error_page("Verification expired. Please try again."),

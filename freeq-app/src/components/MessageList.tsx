@@ -166,18 +166,7 @@ function renderTextSafe(text: string): React.ReactElement {
   );
 }
 
-// Keep old renderText for system messages that need innerHTML (server notices with URLs)
-function renderText(text: string): string {
-  const escaped = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-  return escaped
-    .replace(
-      /(https?:\/\/[^\s<]+)/g,
-      '<a href="$1" target="_blank" rel="noopener" class="text-accent hover:underline break-all">$1</a>',
-    );
-}
+
 
 // ── Message content (text + inline images) ──
 
@@ -351,7 +340,7 @@ function SystemMessage({ msg }: { msg: Message }) {
       <span className="w-10 shrink-0" />
       <span className="text-fg-dim text-sm">
         <span className="opacity-60">—</span>{' '}
-        <span dangerouslySetInnerHTML={{ __html: renderText(msg.text) }} />
+        {renderTextSafe(msg.text)}
       </span>
     </div>
   );

@@ -61,15 +61,15 @@ pub(super) fn handle_tagmsg(
     // Rich clients get TAGMSG, plain clients get fallback PRIVMSG (if any)
     if target.starts_with('#') || target.starts_with('&') {
         let members: Vec<String> = state
-            .channels.lock().unwrap()
+            .channels.lock()
             .get(target)
             .map(|ch| ch.members.iter().cloned().collect())
             .unwrap_or_default();
 
-        let tag_caps = state.cap_message_tags.lock().unwrap();
-        let time_caps = state.cap_server_time.lock().unwrap();
-        let echo_caps = state.cap_echo_message.lock().unwrap();
-        let conns = state.connections.lock().unwrap();
+        let tag_caps = state.cap_message_tags.lock();
+        let time_caps = state.cap_server_time.lock();
+        let echo_caps = state.cap_echo_message.lock();
+        let conns = state.connections.lock();
         for member_session in &members {
             // Skip sender unless they have echo-message
             if member_session == &conn.id && !echo_caps.contains(member_session) {
@@ -97,9 +97,9 @@ pub(super) fn handle_tagmsg(
         let tag_text = plain_fallback.as_deref().unwrap_or("").to_string();
         match relay_to_nick(state, &from_nick, target, &tag_text, super::helpers::s2s_next_event_id(state)) {
             RouteResult::Local(ref session) => {
-                if let Some(tx) = state.connections.lock().unwrap().get(session) {
-                    let has_tags = state.cap_message_tags.lock().unwrap().contains(session);
-                    let has_time = state.cap_server_time.lock().unwrap().contains(session);
+                if let Some(tx) = state.connections.lock().get(session) {
+                    let has_tags = state.cap_message_tags.lock().contains(session);
+                    let has_time = state.cap_server_time.lock().contains(session);
                     if has_tags {
                         let line = if has_time { &tagged_line_with_time } else { &tagged_line };
                         let _ = tx.try_send(line.clone());
@@ -145,7 +145,7 @@ pub(super) fn handle_privmsg(
     if target.starts_with('#') || target.starts_with('&') {
         // Channel message — enforce +n (no external messages) and +m (moderated)
         {
-            let channels = state.channels.lock().unwrap();
+            let channels = state.channels.lock();
             if let Some(ch) = channels.get(target) {
                 // +n: must be a member to send
                 if ch.no_ext_msg && !ch.members.contains(&conn.id) {
@@ -155,7 +155,7 @@ pub(super) fn handle_privmsg(
                         irc::ERR_CANNOTSENDTOCHAN,
                         vec![nick, target, "Cannot send to channel (+n)"],
                     );
-                    if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+                    if let Some(tx) = state.connections.lock().get(&conn.id) {
                         let _ = tx.try_send(format!("{reply}\r\n"));
                     }
                     return;
@@ -172,7 +172,7 @@ pub(super) fn handle_privmsg(
                         irc::ERR_CANNOTSENDTOCHAN,
                         vec![nick, target, "Cannot send to channel (+m)"],
                     );
-                    if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+                    if let Some(tx) = state.connections.lock().get(&conn.id) {
                         let _ = tx.try_send(format!("{reply}\r\n"));
                     }
                     return;
@@ -185,7 +185,7 @@ pub(super) fn handle_privmsg(
                         irc::ERR_CANNOTSENDTOCHAN,
                         vec![nick, target, "Cannot send to channel (+E) — messages must be encrypted"],
                     );
-                    if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+                    if let Some(tx) = state.connections.lock().get(&conn.id) {
                         let _ = tx.try_send(format!("{reply}\r\n"));
                     }
                     return;
@@ -243,7 +243,7 @@ pub(super) fn handle_privmsg(
         // Store in channel history
         if command == "PRIVMSG" {
             use crate::server::{HistoryMessage, MAX_HISTORY};
-            let mut channels = state.channels.lock().unwrap();
+            let mut channels = state.channels.lock();
             if let Some(ch) = channels.get_mut(target) {
                 ch.history.push_back(HistoryMessage {
                     from: hostmask.clone(),
@@ -269,15 +269,14 @@ pub(super) fn handle_privmsg(
         let members: Vec<String> = state
             .channels
             .lock()
-            .unwrap()
             .get(target)
             .map(|ch| ch.members.iter().cloned().collect())
             .unwrap_or_default();
 
-        let tag_caps = state.cap_message_tags.lock().unwrap();
-        let time_caps = state.cap_server_time.lock().unwrap();
-        let echo_caps = state.cap_echo_message.lock().unwrap();
-        let conns = state.connections.lock().unwrap();
+        let tag_caps = state.cap_message_tags.lock();
+        let time_caps = state.cap_server_time.lock();
+        let echo_caps = state.cap_echo_message.lock();
+        let conns = state.connections.lock();
         for member_session in &members {
             // echo-message: include sender if they requested it
             if member_session == &conn.id && !echo_caps.contains(member_session) {
@@ -299,7 +298,7 @@ pub(super) fn handle_privmsg(
 
         // Broadcast channel PRIVMSG to S2S peers
         if command == "PRIVMSG" {
-            let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+            let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
             s2s_broadcast(state, crate::s2s::S2sMessage::Privmsg {
                 event_id: s2s_next_event_id(state),
                 from: conn.nick.as_deref().unwrap_or("*").to_string(),
@@ -345,26 +344,26 @@ pub(super) fn handle_privmsg(
             RouteResult::Local(ref session) => {
                 // Target is local — deliver directly
                 // Send RPL_AWAY if target is away
-                if let Some(away_msg) = state.session_away.lock().unwrap().get(session) {
+                if let Some(away_msg) = state.session_away.lock().get(session) {
                     let nick = conn.nick_or_star();
                     let reply = Message::from_server(
                         &state.server_name,
                         irc::RPL_AWAY,
                         vec![nick, target, away_msg],
                     );
-                    if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+                    if let Some(tx) = state.connections.lock().get(&conn.id) {
                         let _ = tx.try_send(format!("{reply}\r\n"));
                     }
                 }
 
                 // Collect cap info, then send (avoid holding locks across sends)
-                let target_has_tags = state.cap_message_tags.lock().unwrap().contains(session);
-                let sender_has_tags = state.cap_message_tags.lock().unwrap().contains(&conn.id);
-                let target_has_time = state.cap_server_time.lock().unwrap().contains(session);
-                let sender_has_time = state.cap_server_time.lock().unwrap().contains(&conn.id);
-                let sender_has_echo = state.cap_echo_message.lock().unwrap().contains(&conn.id);
+                let target_has_tags = state.cap_message_tags.lock().contains(session);
+                let sender_has_tags = state.cap_message_tags.lock().contains(&conn.id);
+                let target_has_time = state.cap_server_time.lock().contains(session);
+                let sender_has_time = state.cap_server_time.lock().contains(&conn.id);
+                let sender_has_echo = state.cap_echo_message.lock().contains(&conn.id);
 
-                let conns = state.connections.lock().unwrap();
+                let conns = state.connections.lock();
                 // Deliver to target
                 let line = if target_has_tags {
                     if target_has_time { &tagged_line_with_time } else { &tagged_line }
@@ -386,14 +385,14 @@ pub(super) fn handle_privmsg(
                 // Sent to S2S peers — receiving server will deliver.
                 // No ERR_NOSUCHNICK: we can't know if it arrived (same as email).
                 // echo-message: echo DM back to sender even for relayed messages
-                let sender_has_echo = state.cap_echo_message.lock().unwrap().contains(&conn.id);
+                let sender_has_echo = state.cap_echo_message.lock().contains(&conn.id);
                 if sender_has_echo {
-                    let sender_has_tags = state.cap_message_tags.lock().unwrap().contains(&conn.id);
-                    let sender_has_time = state.cap_server_time.lock().unwrap().contains(&conn.id);
+                    let sender_has_tags = state.cap_message_tags.lock().contains(&conn.id);
+                    let sender_has_time = state.cap_server_time.lock().contains(&conn.id);
                     let echo_line = if sender_has_tags {
                         if sender_has_time { &tagged_line_with_time } else { &tagged_line }
                     } else { &plain_line };
-                    if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+                    if let Some(tx) = state.connections.lock().get(&conn.id) {
                         let _ = tx.try_send(echo_line.clone());
                     }
                 }
@@ -406,7 +405,7 @@ pub(super) fn handle_privmsg(
                     irc::ERR_NOSUCHNICK,
                     vec![nick, target, "No such nick/channel"],
                 );
-                if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+                if let Some(tx) = state.connections.lock().get(&conn.id) {
                     let _ = tx.try_send(format!("{reply}\r\n"));
                 }
             }
@@ -451,7 +450,7 @@ pub(super) fn handle_chathistory(
 
     // Verify user is a member of the channel
     {
-        let channels = state.channels.lock().unwrap();
+        let channels = state.channels.lock();
         if let Some(ch) = channels.get(&target) {
             if !ch.members.contains(session_id) {
                 let reply = Message::from_server(
@@ -473,9 +472,9 @@ pub(super) fn handle_chathistory(
         }
     }
 
-    let has_tags = state.cap_message_tags.lock().unwrap().contains(session_id);
-    let has_time = state.cap_server_time.lock().unwrap().contains(session_id);
-    let has_batch = state.cap_batch.lock().unwrap().contains(session_id);
+    let has_tags = state.cap_message_tags.lock().contains(session_id);
+    let has_time = state.cap_server_time.lock().contains(session_id);
+    let has_batch = state.cap_batch.lock().contains(session_id);
 
     // Fetch messages from DB based on subcommand
     let messages: Vec<crate::db::MessageRow> = match subcmd.as_str() {
@@ -611,7 +610,7 @@ fn handle_edit(
                     "FAIL",
                     vec!["EDIT", "AUTHOR_MISMATCH", "You can only edit your own messages"],
                 );
-                if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+                if let Some(tx) = state.connections.lock().get(&conn.id) {
                     let _ = tx.try_send(format!("{reply}\r\n"));
                 }
                 return;
@@ -627,7 +626,7 @@ fn handle_edit(
                 "FAIL",
                 vec!["EDIT", "MESSAGE_NOT_FOUND", "Original message not found"],
             );
-            if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+            if let Some(tx) = state.connections.lock().get(&conn.id) {
                 let _ = tx.try_send(format!("{reply}\r\n"));
             }
             return;
@@ -684,7 +683,7 @@ fn handle_edit(
 
     // Update in-memory history: replace the original message text
     {
-        let mut channels = state.channels.lock().unwrap();
+        let mut channels = state.channels.lock();
         if let Some(ch) = channels.get_mut(target) {
             // Find and update the original message in history
             for hist in ch.history.iter_mut() {
@@ -699,15 +698,15 @@ fn handle_edit(
 
     // Deliver to channel members
     let members: Vec<String> = state
-        .channels.lock().unwrap()
+        .channels.lock()
         .get(target)
         .map(|ch| ch.members.iter().cloned().collect())
         .unwrap_or_default();
 
-    let tag_caps = state.cap_message_tags.lock().unwrap();
-    let time_caps = state.cap_server_time.lock().unwrap();
-    let echo_caps = state.cap_echo_message.lock().unwrap();
-    let conns = state.connections.lock().unwrap();
+    let tag_caps = state.cap_message_tags.lock();
+    let time_caps = state.cap_server_time.lock();
+    let echo_caps = state.cap_echo_message.lock();
+    let conns = state.connections.lock();
     for sid in &members {
         if sid == &conn.id && !echo_caps.contains(sid) {
             continue;
@@ -721,7 +720,7 @@ fn handle_edit(
     }
 
     // Broadcast to S2S peers
-    let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+    let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
     s2s_broadcast(state, crate::s2s::S2sMessage::Privmsg {
         event_id: s2s_next_event_id(state),
         from: nick.to_string(),
@@ -758,7 +757,7 @@ fn handle_delete(
             let current_nick = nick;
             if !original_nick.eq_ignore_ascii_case(current_nick) {
                 // Also allow ops to delete messages
-                let is_op = state.channels.lock().unwrap()
+                let is_op = state.channels.lock()
                     .get(target)
                     .map(|ch| ch.ops.contains(&conn.id))
                     .unwrap_or(false);
@@ -768,7 +767,7 @@ fn handle_delete(
                         "FAIL",
                         vec!["DELETE", "AUTHOR_MISMATCH", "You can only delete your own messages"],
                     );
-                    if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+                    if let Some(tx) = state.connections.lock().get(&conn.id) {
                         let _ = tx.try_send(format!("{reply}\r\n"));
                     }
                     return;
@@ -785,7 +784,7 @@ fn handle_delete(
                 "FAIL",
                 vec!["DELETE", "MESSAGE_NOT_FOUND", "Original message not found"],
             );
-            if let Some(tx) = state.connections.lock().unwrap().get(&conn.id) {
+            if let Some(tx) = state.connections.lock().get(&conn.id) {
                 let _ = tx.try_send(format!("{reply}\r\n"));
             }
             return;
@@ -797,7 +796,7 @@ fn handle_delete(
 
     // Remove from in-memory history
     {
-        let mut channels = state.channels.lock().unwrap();
+        let mut channels = state.channels.lock();
         if let Some(ch) = channels.get_mut(target) {
             ch.history.retain(|h| h.msgid.as_deref() != Some(original_msgid));
         }
@@ -818,13 +817,13 @@ fn handle_delete(
 
     // Deliver to tag-capable channel members only (plain clients can't see deletes)
     let members: Vec<String> = state
-        .channels.lock().unwrap()
+        .channels.lock()
         .get(target)
         .map(|ch| ch.members.iter().cloned().collect())
         .unwrap_or_default();
 
-    let tag_caps = state.cap_message_tags.lock().unwrap();
-    let conns = state.connections.lock().unwrap();
+    let tag_caps = state.cap_message_tags.lock();
+    let conns = state.connections.lock();
     for sid in &members {
         if sid == &conn.id {
             continue; // Don't echo delete back to sender

@@ -25,7 +25,7 @@ pub(super) fn handle_join(
     // channel already exists on the federation and the joining user
     // should NOT get auto-ops (unless they have DID-based authority).
     let is_new_channel = {
-        let channels = state.channels.lock().unwrap();
+        let channels = state.channels.lock();
         match channels.get(channel) {
             None => true,
             Some(ch) => {
@@ -41,7 +41,7 @@ pub(super) fn handle_join(
     };
 
     if !is_new_channel {
-        let channels = state.channels.lock().unwrap();
+        let channels = state.channels.lock();
         if let Some(ch) = channels.get(channel) {
             // Check channel key (+k)
             if let Some(ref key) = ch.key
@@ -80,7 +80,7 @@ pub(super) fn handle_join(
                 }
                 // Consume the invite (all forms: session, DID, nick)
                 drop(channels);
-                let mut channels = state.channels.lock().unwrap();
+                let mut channels = state.channels.lock();
                 if let Some(ch) = channels.get_mut(channel) {
                     ch.invites.remove(session_id);
                     if let Some(d) = did {
@@ -104,7 +104,7 @@ pub(super) fn handle_join(
                 Some(user_did) => {
                     // DID ops and founders bypass policy checks
                     let is_did_op = {
-                        let channels = state.channels.lock().unwrap();
+                        let channels = state.channels.lock();
                         channels.get(&channel.to_ascii_lowercase()).map_or(false, |ch| {
                             ch.founder_did.as_deref() == Some(user_did) || ch.did_ops.contains(user_did)
                         })
@@ -158,7 +158,7 @@ pub(super) fn handle_join(
     }
 
     {
-        let mut channels = state.channels.lock().unwrap();
+        let mut channels = state.channels.lock();
         let ch = channels.entry(channel.to_string()).or_default();
         ch.members.insert(session_id.to_string());
         // NOTE: Presence is NOT in CRDT (avoids ghost users on crash).
@@ -216,7 +216,7 @@ pub(super) fn handle_join(
     // ─── Policy role → IRC mode mapping ────────────────────────────────
     // If user joined via policy and has an elevated role, grant IRC modes.
     if let Some(ref role) = policy_role {
-        let mut channels = state.channels.lock().unwrap();
+        let mut channels = state.channels.lock();
         if let Some(ch) = channels.get_mut(channel) {
             match role.as_str() {
                 "op" | "admin" | "owner" => {
@@ -238,18 +238,18 @@ pub(super) fn handle_join(
 
     // Broadcast MODE +o/+h to existing channel members if the joiner was auto-opped/halfopped
     {
-        let (is_op, is_halfop) = state.channels.lock().unwrap()
+        let (is_op, is_halfop) = state.channels.lock()
             .get(channel)
             .map(|ch| (ch.ops.contains(session_id), ch.halfops.contains(session_id)))
             .unwrap_or((false, false));
         let auto_mode = if is_op { Some("+o") } else if is_halfop { Some("+h") } else { None };
         if let Some(mode) = auto_mode {
             let mode_msg = format!(":{server_name} MODE {channel} {mode} {nick}\r\n");
-            let channels = state.channels.lock().unwrap();
+            let channels = state.channels.lock();
             if let Some(ch) = channels.get(channel) {
                 let members: Vec<String> = ch.members.iter().cloned().collect();
                 drop(channels);
-                let conns = state.connections.lock().unwrap();
+                let conns = state.connections.lock();
                 for member_session in &members {
                     if let Some(tx) = conns.get(member_session) {
                         let _ = tx.try_send(mode_msg.clone());
@@ -275,13 +275,12 @@ pub(super) fn handle_join(
     let members: Vec<String> = state
         .channels
         .lock()
-        .unwrap()
         .get(channel)
         .map(|ch| ch.members.iter().cloned().collect())
         .unwrap_or_default();
 
-    let ext_set = state.cap_extended_join.lock().unwrap();
-    let conns = state.connections.lock().unwrap();
+    let ext_set = state.cap_extended_join.lock();
+    let conns = state.connections.lock();
     for member_session in &members {
         if let Some(tx) = conns.get(member_session) {
             if ext_set.contains(member_session) {
@@ -295,10 +294,10 @@ pub(super) fn handle_join(
     drop(ext_set);
 
     // Broadcast JOIN to S2S peers
-    let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+    let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
     // Look up AT handle for the joining user
-    let handle = state.session_handles.lock().unwrap().get(session_id).cloned();
-    let user_is_op = state.channels.lock().unwrap()
+    let handle = state.session_handles.lock().get(session_id).cloned();
+    let user_is_op = state.channels.lock()
         .get(channel)
         .map(|ch| ch.ops.contains(session_id))
         .unwrap_or(false);
@@ -314,7 +313,7 @@ pub(super) fn handle_join(
 
     // If this was a new channel creation, broadcast founder info
     if is_new_channel {
-        let channels = state.channels.lock().unwrap();
+        let channels = state.channels.lock();
         if let Some(ch) = channels.get(channel) {
             s2s_broadcast(state, crate::s2s::S2sMessage::ChannelCreated {
                 event_id: s2s_next_event_id(state),
@@ -329,7 +328,7 @@ pub(super) fn handle_join(
 
     // Send topic if set (332 + 333)
     {
-        let channels = state.channels.lock().unwrap();
+        let channels = state.channels.lock();
         if let Some(ch) = channels.get(channel)
             && let Some(ref topic) = ch.topic {
                 let rpl_topic = Message::from_server(
@@ -350,10 +349,10 @@ pub(super) fn handle_join(
 
     // Replay recent message history with server-time + batch when supported
     {
-        let has_tags_cap = state.cap_message_tags.lock().unwrap().contains(session_id);
-        let has_time_cap = state.cap_server_time.lock().unwrap().contains(session_id);
-        let has_batch_cap = state.cap_batch.lock().unwrap().contains(session_id);
-        let channels = state.channels.lock().unwrap();
+        let has_tags_cap = state.cap_message_tags.lock().contains(session_id);
+        let has_time_cap = state.cap_server_time.lock().contains(session_id);
+        let has_batch_cap = state.cap_batch.lock().contains(session_id);
+        let channels = state.channels.lock();
         if let Some(ch) = channels.get(channel)
             && !ch.history.is_empty()
         {
@@ -413,14 +412,14 @@ pub(super) fn handle_join(
     }
 
     let nick_list: Vec<String> = {
-        let channels = state.channels.lock().unwrap();
+        let channels = state.channels.lock();
         let (member_sessions, remote_members, ops, voiced) = match channels.get(channel) {
             Some(ch) => (ch.members.clone(), ch.remote_members.clone(), ch.ops.clone(), ch.voiced.clone()),
             None => Default::default(),
         };
         drop(channels);
         // Local members: look up nick from session ID
-        let nicks = state.nick_to_session.lock().unwrap();
+        let nicks = state.nick_to_session.lock();
         let reverse: std::collections::HashMap<&String, &String> =
             nicks.iter().map(|(n, s)| (s, n)).collect();
         let mut list: Vec<String> = member_sessions
@@ -439,7 +438,7 @@ pub(super) fn handle_join(
             })
             .collect();
         // Remote members from S2S peers (with @ prefix if op on home server or DID-based)
-        let channels_lock = state.channels.lock().unwrap();
+        let channels_lock = state.channels.lock();
         let ch_state = channels_lock.get(channel);
         for (nick, rm) in &remote_members {
             let is_op = rm.is_op || rm.did.as_ref().is_some_and(|d| {
@@ -485,7 +484,6 @@ pub(super) fn handle_mode(
     let in_channel = state
         .channels
         .lock()
-        .unwrap()
         .get(channel)
         .map(|ch| ch.members.contains(session_id))
         .unwrap_or(false);
@@ -502,7 +500,7 @@ pub(super) fn handle_mode(
 
     let Some(mode_str) = mode_str else {
         // Query channel modes
-        let channels = state.channels.lock().unwrap();
+        let channels = state.channels.lock();
         let modes = if let Some(ch) = channels.get(channel) {
             let mut m = String::from("+");
             if ch.no_ext_msg { m.push('n'); }
@@ -528,7 +526,6 @@ pub(super) fn handle_mode(
     let (is_op, is_halfop) = state
         .channels
         .lock()
-        .unwrap()
         .get(channel)
         .map(|ch| (ch.ops.contains(session_id), ch.halfops.contains(session_id)))
         .unwrap_or((false, false));
@@ -580,7 +577,7 @@ pub(super) fn handle_mode(
                     ChannelTarget::Local { session_id: target_session } => {
                         // Apply the mode locally
                         {
-                            let mut channels = state.channels.lock().unwrap();
+                            let mut channels = state.channels.lock();
                             if let Some(chan) = channels.get_mut(channel) {
                                 let set = match ch {
                                     'o' => &mut chan.ops,
@@ -597,7 +594,7 @@ pub(super) fn handle_mode(
                                 // user also updates did_ops, so ops survive reconnects
                                 // and work across S2S servers.
                                 if ch == 'o' {
-                                    let target_did = state.session_dids.lock().unwrap()
+                                    let target_did = state.session_dids.lock()
                                         .get(&target_session).cloned();
                                     if let Some(did) = target_did {
                                         // Don't allow de-opping the founder
@@ -606,7 +603,7 @@ pub(super) fn handle_mode(
                                         } else if adding {
                                             chan.did_ops.insert(did.clone());
                                             // CRDT grant so it propagates across federation
-                                            let granter_did = state.session_dids.lock().unwrap()
+                                            let granter_did = state.session_dids.lock()
                                                 .get(session_id).cloned();
                                             let state_clone = Arc::clone(state);
                                             let channel_name = channel.to_string();
@@ -645,7 +642,7 @@ pub(super) fn handle_mode(
                     ChannelTarget::Remote(rm) => {
                         // Apply ephemeral op/voice on the remote member locally
                         {
-                            let mut channels = state.channels.lock().unwrap();
+                            let mut channels = state.channels.lock();
                             if let Some(chan) = channels.get_mut(channel) {
                                 if ch == 'o' {
                                     if let Some(remote) = chan.remote_members.get_mut(target_nick) {
@@ -661,7 +658,7 @@ pub(super) fn handle_mode(
                         if ch == 'o' {
                             if let Some(ref did) = rm.did {
                                 {
-                                    let mut channels = state.channels.lock().unwrap();
+                                    let mut channels = state.channels.lock();
                                     if let Some(chan) = channels.get_mut(channel) {
                                         if !adding && chan.founder_did.as_deref() == Some(did.as_str()) {
                                             // Founder can't be de-opped
@@ -678,7 +675,7 @@ pub(super) fn handle_mode(
                                 }
 
                                 // CRDT propagation (persistent)
-                                let granter_did = state.session_dids.lock().unwrap()
+                                let granter_did = state.session_dids.lock()
                                     .get(session_id).cloned();
                                 let state_clone = Arc::clone(state);
                                 let channel_name = channel.to_string();
@@ -726,7 +723,7 @@ pub(super) fn handle_mode(
 
                 if adding && mode_arg.is_none() {
                     // +b with no arg: list bans
-                    let channels = state.channels.lock().unwrap();
+                    let channels = state.channels.lock();
                     if let Some(chan) = channels.get(channel) {
                         for ban in &chan.bans {
                             let reply = Message::from_server(
@@ -749,7 +746,7 @@ pub(super) fn handle_mode(
                 let mask = mode_arg.unwrap();
                 if adding {
                     let entry = BanEntry::new(mask.to_string(), conn.hostmask());
-                    let mut channels = state.channels.lock().unwrap();
+                    let mut channels = state.channels.lock();
                     if let Some(chan) = channels.get_mut(channel) {
                         // Don't duplicate
                         if !chan.bans.iter().any(|b| b.mask == mask) {
@@ -759,7 +756,7 @@ pub(super) fn handle_mode(
                         }
                     }
                 } else {
-                    let mut channels = state.channels.lock().unwrap();
+                    let mut channels = state.channels.lock();
                     if let Some(chan) = channels.get_mut(channel) {
                         chan.bans.retain(|b| b.mask != mask);
                     }
@@ -774,7 +771,7 @@ pub(super) fn handle_mode(
             }
             'i' => {
                 {
-                    let mut channels = state.channels.lock().unwrap();
+                    let mut channels = state.channels.lock();
                     if let Some(chan) = channels.get_mut(channel) {
                         chan.invite_only = adding;
                         if !adding {
@@ -793,7 +790,7 @@ pub(super) fn handle_mode(
             }
             't' => {
                 {
-                    let mut channels = state.channels.lock().unwrap();
+                    let mut channels = state.channels.lock();
                     if let Some(chan) = channels.get_mut(channel) {
                         chan.topic_locked = adding;
                         let ch_clone = chan.clone();
@@ -819,7 +816,7 @@ pub(super) fn handle_mode(
                         return;
                     };
                     {
-                        let mut channels = state.channels.lock().unwrap();
+                        let mut channels = state.channels.lock();
                         if let Some(chan) = channels.get_mut(channel) {
                             chan.key = Some(key.to_string());
                             let ch_clone = chan.clone();
@@ -833,7 +830,7 @@ pub(super) fn handle_mode(
                     s2s_broadcast_mode(state, conn, channel, "+k", Some(key));
                 } else {
                     let old_key = {
-                        let mut channels = state.channels.lock().unwrap();
+                        let mut channels = state.channels.lock();
                         if let Some(chan) = channels.get_mut(channel) {
                             let k = chan.key.take();
                             let ch_clone = chan.clone();
@@ -854,7 +851,7 @@ pub(super) fn handle_mode(
             }
             'n' => {
                 {
-                    let mut channels = state.channels.lock().unwrap();
+                    let mut channels = state.channels.lock();
                     if let Some(chan) = channels.get_mut(channel) {
                         chan.no_ext_msg = adding;
                         let ch_clone = chan.clone();
@@ -870,7 +867,7 @@ pub(super) fn handle_mode(
             }
             'm' => {
                 {
-                    let mut channels = state.channels.lock().unwrap();
+                    let mut channels = state.channels.lock();
                     if let Some(chan) = channels.get_mut(channel) {
                         chan.moderated = adding;
                         let ch_clone = chan.clone();
@@ -886,7 +883,7 @@ pub(super) fn handle_mode(
             }
             'E' => {
                 {
-                    let mut channels = state.channels.lock().unwrap();
+                    let mut channels = state.channels.lock();
                     if let Some(chan) = channels.get_mut(channel) {
                         chan.encrypted_only = adding;
                         let ch_clone = chan.clone();
@@ -930,7 +927,6 @@ pub(super) fn handle_kick(
     let (in_channel, is_op, is_halfop) = state
         .channels
         .lock()
-        .unwrap()
         .get(channel)
         .map(|ch| (ch.members.contains(session_id), ch.ops.contains(session_id), ch.halfops.contains(session_id)))
         .unwrap_or((false, false, false));
@@ -957,12 +953,12 @@ pub(super) fn handle_kick(
 
     // Halfops cannot kick ops or other halfops
     if is_halfop && !is_op {
-        let target_is_protected = state.channels.lock().unwrap()
+        let target_is_protected = state.channels.lock()
             .get(channel)
             .map(|ch| {
                 // Find target session ID
                 let target_lower = target_nick.to_lowercase();
-                let n2s = state.nick_to_session.lock().unwrap();
+                let n2s = state.nick_to_session.lock();
                 n2s.iter()
                     .find(|(n, _)| n.to_lowercase() == target_lower)
                     .map(|(_, sid)| ch.ops.contains(sid) || ch.halfops.contains(sid))
@@ -992,7 +988,7 @@ pub(super) fn handle_kick(
 
             // Remove target from channel
             {
-                let mut channels = state.channels.lock().unwrap();
+                let mut channels = state.channels.lock();
                 if let Some(ch) = channels.get_mut(channel) {
                     ch.members.remove(&target_session);
                     ch.ops.remove(&target_session);
@@ -1010,7 +1006,7 @@ pub(super) fn handle_kick(
 
             // Remove from our remote_members tracking (case-insensitive)
             {
-                let mut channels = state.channels.lock().unwrap();
+                let mut channels = state.channels.lock();
                 if let Some(ch) = channels.get_mut(channel) {
                     ch.remove_remote_member(target_nick);
                 }
@@ -1018,7 +1014,7 @@ pub(super) fn handle_kick(
 
             // Relay as a proper S2S Kick so remote server can enforce it
             // (carries kick reason, kicker identity — not a generic Part)
-            let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+            let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
             s2s_broadcast(state, crate::s2s::S2sMessage::Kick {
                 event_id: s2s_next_event_id(state),
                 nick: target_nick.to_string(),
@@ -1057,7 +1053,6 @@ pub(super) fn handle_invite(
     let (in_channel, is_op, is_invite_only) = state
         .channels
         .lock()
-        .unwrap()
         .get(channel)
         .map(|ch| (
             ch.members.contains(session_id),
@@ -1095,10 +1090,10 @@ pub(super) fn handle_invite(
         NetworkTarget::Local { session_id: target_sid } => {
             // Add invite by session ID + DID
             {
-                let mut channels = state.channels.lock().unwrap();
+                let mut channels = state.channels.lock();
                 if let Some(ch) = channels.get_mut(channel) {
                     ch.invites.insert(target_sid.clone());
-                    if let Some(did) = state.session_dids.lock().unwrap().get(&target_sid) {
+                    if let Some(did) = state.session_dids.lock().get(&target_sid) {
                         ch.invites.insert(did.clone());
                     }
                 }
@@ -1111,7 +1106,7 @@ pub(super) fn handle_invite(
             // Notify target
             let hostmask = conn.hostmask();
             let invite_msg = format!(":{hostmask} INVITE {target_nick} {channel}\r\n");
-            if let Some(tx) = state.connections.lock().unwrap().get(&target_sid) {
+            if let Some(tx) = state.connections.lock().get(&target_sid) {
                 let _ = tx.try_send(invite_msg);
             }
         }
@@ -1119,7 +1114,7 @@ pub(super) fn handle_invite(
         NetworkTarget::Remote(rm) => {
             // Add invite by DID if available (so it survives reconnect/rejoin)
             {
-                let mut channels = state.channels.lock().unwrap();
+                let mut channels = state.channels.lock();
                 if let Some(ch) = channels.get_mut(channel) {
                     if let Some(ref did) = rm.did {
                         ch.invites.insert(did.clone());
@@ -1165,7 +1160,6 @@ pub(super) fn handle_topic(
     let in_channel = state
         .channels
         .lock()
-        .unwrap()
         .get(channel)
         .map(|ch| ch.members.contains(session_id))
         .unwrap_or(false);
@@ -1184,7 +1178,7 @@ pub(super) fn handle_topic(
         Some(text) => {
             // Check +t: if topic_locked, only ops can set topic
             let (is_op, is_locked) = {
-                let channels = state.channels.lock().unwrap();
+                let channels = state.channels.lock();
                 channels.get(channel).map(|ch| {
                     (ch.ops.contains(session_id), ch.topic_locked)
                 }).unwrap_or((false, false))
@@ -1206,7 +1200,6 @@ pub(super) fn handle_topic(
             state
                 .channels
                 .lock()
-                .unwrap()
                 .entry(channel.to_string())
                 .and_modify(|ch| {
                     ch.topic = Some(topic);
@@ -1218,7 +1211,7 @@ pub(super) fn handle_topic(
                 let channel_c = channel.to_string();
                 let text_c = text.to_string();
                 let nick_c = nick.to_string();
-                let did_c = state.session_dids.lock().unwrap().get(session_id).cloned();
+                let did_c = state.session_dids.lock().get(session_id).cloned();
                 tokio::spawn(async move {
                     state_c.crdt_set_topic(&channel_c, &text_c, &nick_c, did_c.as_deref()).await;
                 });
@@ -1226,7 +1219,7 @@ pub(super) fn handle_topic(
 
             // Persist channel state
             {
-                let channels = state.channels.lock().unwrap();
+                let channels = state.channels.lock();
                 if let Some(ch) = channels.get(channel) {
                     let ch_clone = ch.clone();
                     drop(channels);
@@ -1241,12 +1234,11 @@ pub(super) fn handle_topic(
             let members: Vec<String> = state
                 .channels
                 .lock()
-                .unwrap()
                 .get(channel)
                 .map(|ch| ch.members.iter().cloned().collect())
                 .unwrap_or_default();
 
-            let conns = state.connections.lock().unwrap();
+            let conns = state.connections.lock();
             for member_session in &members {
                 if let Some(tx) = conns.get(member_session) {
                     let _ = tx.try_send(topic_msg.clone());
@@ -1254,7 +1246,7 @@ pub(super) fn handle_topic(
             }
 
             // Broadcast TOPIC to S2S peers
-            let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+            let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
             s2s_broadcast(state, crate::s2s::S2sMessage::Topic {
                 event_id: s2s_next_event_id(state),
                 channel: channel.to_string(),
@@ -1265,7 +1257,7 @@ pub(super) fn handle_topic(
         }
         None => {
             // Query the topic
-            let channels = state.channels.lock().unwrap();
+            let channels = state.channels.lock();
             if let Some(ch) = channels.get(channel) {
                 if let Some(ref topic) = ch.topic {
                     let rpl = Message::from_server(
@@ -1307,12 +1299,11 @@ pub(super) fn handle_part(
     let members: Vec<String> = state
         .channels
         .lock()
-        .unwrap()
         .get(channel)
         .map(|ch| ch.members.iter().cloned().collect())
         .unwrap_or_default();
 
-    let conns = state.connections.lock().unwrap();
+    let conns = state.connections.lock();
     for member_session in &members {
         if let Some(tx) = conns.get(member_session) {
             let _ = tx.try_send(part_msg.clone());
@@ -1323,7 +1314,6 @@ pub(super) fn handle_part(
     state
         .channels
         .lock()
-        .unwrap()
         .entry(channel.to_string())
         .and_modify(|ch| {
             ch.members.remove(session_id);
@@ -1333,7 +1323,7 @@ pub(super) fn handle_part(
 
     // Broadcast PART to S2S peers
     let event_id = s2s_next_event_id(state);
-    let origin = state.server_iroh_id.lock().unwrap().clone().unwrap_or_default();
+    let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
     s2s_broadcast(state, crate::s2s::S2sMessage::Part {
         event_id,
         nick: conn.nick.as_deref().unwrap_or("*").to_string(),
@@ -1352,16 +1342,16 @@ pub(super) fn handle_names(
     send: &impl Fn(&Arc<SharedState>, &str, String),
 ) {
     let nick = conn.nick_or_star();
-    let multi_prefix = state.cap_multi_prefix.lock().unwrap().contains(session_id);
+    let multi_prefix = state.cap_multi_prefix.lock().contains(session_id);
 
     let nick_list: Vec<String> = {
-        let channels = state.channels.lock().unwrap();
+        let channels = state.channels.lock();
         let (member_sessions, remote_members, ops, voiced) = match channels.get(channel) {
             Some(ch) => (ch.members.clone(), ch.remote_members.clone(), ch.ops.clone(), ch.voiced.clone()),
             None => Default::default(),
         };
         drop(channels);
-        let nicks = state.nick_to_session.lock().unwrap();
+        let nicks = state.nick_to_session.lock();
         let reverse: std::collections::HashMap<&String, &String> =
             nicks.iter().map(|(n, s)| (s, n)).collect();
         let mut list: Vec<String> = member_sessions
@@ -1384,7 +1374,7 @@ pub(super) fn handle_names(
                 })
             })
             .collect();
-        let channels_lock = state.channels.lock().unwrap();
+        let channels_lock = state.channels.lock();
         let ch_state = channels_lock.get(channel);
         for (nick, rm) in &remote_members {
             let is_op = rm.is_op || rm.did.as_ref().is_some_and(|d| {
@@ -1422,7 +1412,7 @@ pub(super) fn handle_list(
     send: &impl Fn(&Arc<SharedState>, &str, String),
 ) {
     let nick = conn.nick_or_star();
-    let channels = state.channels.lock().unwrap();
+    let channels = state.channels.lock();
     for (name, ch) in channels.iter() {
         let count = ch.members.len() + ch.remote_members.len();
         let topic = ch.topic.as_ref().map(|t| t.text.as_str()).unwrap_or("");

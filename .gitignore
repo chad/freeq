@@ -14,6 +14,7 @@ freeq-server/certs/*.key
 *.secret
 *.p12
 broker.db
+verifier-signing-key.secret
 
 # freeq-app
 freeq-app/node_modules/

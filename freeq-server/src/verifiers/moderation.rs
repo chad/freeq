@@ -25,7 +25,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 /// In-memory roster of active moderator appointments.
 /// In production, this would be backed by a database.
@@ -170,7 +170,7 @@ async fn appoint(
 
     // Store in roster
     {
-        let mut roster = state.mod_roster.lock().unwrap();
+        let mut roster = state.mod_roster.lock();
         let entries = roster.channels.entry(channel_lower.clone()).or_default();
         // Remove any existing appointment for this DID in this channel
         entries.retain(|a| a.subject_did != subject_did || a.revoked);
@@ -240,7 +240,7 @@ async fn revoke(
     Json(req): Json<RevokeRequest>,
 ) -> impl IntoResponse {
     let channel_lower = req.channel.to_lowercase();
-    let mut roster = state.mod_roster.lock().unwrap();
+    let mut roster = state.mod_roster.lock();
     if let Some(entries) = roster.channels.get_mut(&channel_lower) {
         for entry in entries.iter_mut() {
             if entry.subject_did == req.subject_did && !entry.revoked {
@@ -262,7 +262,7 @@ async fn roster(
     Query(query): Query<RosterQuery>,
 ) -> impl IntoResponse {
     let channel_lower = query.channel.to_lowercase();
-    let roster = state.mod_roster.lock().unwrap();
+    let roster = state.mod_roster.lock();
     let now = chrono::Utc::now();
     let active: Vec<&ModAppointment> = roster.channels
         .get(&channel_lower)

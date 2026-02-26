@@ -28,9 +28,9 @@ pub struct VerifierState {
     /// GitHub OAuth credentials (if configured).
     pub github: Option<GitHubConfig>,
     /// Pending verification flows: state_token → PendingVerification.
-    pub pending: std::sync::Mutex<std::collections::HashMap<String, PendingVerification>>,
+    pub pending: parking_lot::Mutex<std::collections::HashMap<String, PendingVerification>>,
     /// Moderator roster: channel → active appointments.
-    pub mod_roster: std::sync::Mutex<moderation::ModRoster>,
+    pub mod_roster: parking_lot::Mutex<moderation::ModRoster>,
 }
 
 #[derive(Clone)]
@@ -47,12 +47,35 @@ pub struct PendingVerification {
     pub created_at: std::time::Instant,
 }
 
+/// Load or generate a persistent signing key from the given path.
+fn load_or_generate_signing_key(path: &std::path::Path) -> SigningKey {
+    if path.exists() {
+        if let Ok(data) = std::fs::read(path) {
+            if let Ok(bytes) = <[u8; 32]>::try_from(data.as_slice()) {
+                let key = SigningKey::from_bytes(&bytes);
+                tracing::info!("Loaded existing verifier signing key from {}", path.display());
+                return key;
+            }
+        }
+        tracing::warn!("Corrupt signing key at {}, regenerating", path.display());
+    }
+    let key = SigningKey::generate(&mut rand::rngs::OsRng);
+    if let Err(e) = std::fs::write(path, key.to_bytes()) {
+        tracing::error!("Failed to persist signing key to {}: {}", path.display(), e);
+    } else {
+        tracing::info!("Generated and persisted new verifier signing key to {}", path.display());
+    }
+    key
+}
+
 /// Build the verifier router. Returns None if no verifiers are configured.
 pub fn router(
     issuer_did: String,
     github: Option<GitHubConfig>,
+    data_dir: &std::path::Path,
 ) -> Option<(Router<()>, Arc<VerifierState>)> {
-    let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+    let key_path = data_dir.join("verifier-signing-key.secret");
+    let signing_key = load_or_generate_signing_key(&key_path);
     let public_key = signing_key.verifying_key();
     let public_key_multibase = format!(
         "z{}",
@@ -69,8 +92,8 @@ pub fn router(
         signing_key,
         issuer_did: issuer_did.clone(),
         github,
-        pending: std::sync::Mutex::new(std::collections::HashMap::new()),
-        mod_roster: std::sync::Mutex::new(moderation::ModRoster {
+        pending: parking_lot::Mutex::new(std::collections::HashMap::new()),
+        mod_roster: parking_lot::Mutex::new(moderation::ModRoster {
             channels: std::collections::HashMap::new(),
         }),
     });
