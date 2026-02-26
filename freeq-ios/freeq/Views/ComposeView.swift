@@ -203,10 +203,16 @@ struct ComposeView: View {
 
         if trimmed.hasPrefix("/") {
             handleCommand(trimmed)
+            text = ""
         } else {
-            appState.sendMessage(target: target, text: trimmed)
+            if appState.sendMessage(target: target, text: trimmed) {
+                text = ""
+            } else {
+                // Send failed — keep text so user doesn't lose their message
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+                return
+            }
         }
-        text = ""
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 

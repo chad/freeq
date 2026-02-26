@@ -313,20 +313,20 @@ class AppState: ObservableObject {
         try? client?.part(channel: channel)
     }
 
-    func sendMessage(target: String, text: String) {
-        guard !text.isEmpty else { return }
+    /// Send a message. Returns true on success, false on failure (so caller can preserve text).
+    @discardableResult
+    func sendMessage(target: String, text: String) -> Bool {
+        guard !text.isEmpty else { return false }
         // Clear typing indicator for remote users
         sendRaw("@+typing=done TAGMSG \(target)")
         lastTypingSent = .distantPast
 
         // Check for edit mode
         if let editing = editingMessage {
-            sendRaw("PRIVMSG \(target) :\(text)\r\n")
-            // Actually send with edit tag via raw
             let escaped = text.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: " ")
             sendRaw("@+draft/edit=\(editing.id) PRIVMSG \(target) :\(escaped)")
             editingMessage = nil
-            return
+            return true
         }
 
         // Check for reply mode
@@ -334,11 +334,16 @@ class AppState: ObservableObject {
             let escaped = text.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: " ")
             sendRaw("@+reply=\(reply.id) PRIVMSG \(target) :\(escaped)")
             replyingTo = nil
-            return
+            return true
         }
 
-        do { try client?.sendMessage(target: target, text: text) }
-        catch { DispatchQueue.main.async { self.errorMessage = "Send failed" } }
+        do {
+            try client?.sendMessage(target: target, text: text)
+            return true
+        } catch {
+            DispatchQueue.main.async { self.errorMessage = "Send failed" }
+            return false
+        }
     }
 
     func sendRaw(_ line: String) {

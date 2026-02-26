@@ -3,33 +3,59 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
     @State private var hasAttemptedReconnect = false
+    @State private var reconnectTimedOut = false
+    @State private var reconnectSeconds = 0
+    @State private var reconnectTimer: Timer? = nil
 
     var body: some View {
         Group {
             switch appState.connectionState {
             case .disconnected:
-                if appState.hasSavedSession && !hasAttemptedReconnect {
-                    // Show a brief loading state while reconnecting
+                if appState.hasSavedSession && !hasAttemptedReconnect && !reconnectTimedOut {
                     reconnectingView
                         .onAppear {
                             hasAttemptedReconnect = true
+                            startReconnectTimer()
                             appState.reconnectSavedSession()
                         }
                 } else {
                     ConnectView()
+                        .onAppear { stopReconnectTimer() }
                 }
             case .connecting:
-                if appState.hasSavedSession {
+                if appState.hasSavedSession || hasAttemptedReconnect {
                     reconnectingView
+                        .onAppear { if reconnectTimer == nil { startReconnectTimer() } }
                 } else {
                     ConnectView()
                 }
             case .connected, .registered:
                 MainTabView()
-                    .onAppear { hasAttemptedReconnect = false }
+                    .onAppear {
+                        hasAttemptedReconnect = false
+                        reconnectTimedOut = false
+                        stopReconnectTimer()
+                    }
             }
         }
         .preferredColorScheme(appState.isDarkTheme ? .dark : .light)
+    }
+
+    private func startReconnectTimer() {
+        reconnectSeconds = 0
+        reconnectTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+            reconnectSeconds += 1
+            if reconnectSeconds >= 10 {
+                reconnectTimedOut = true
+                stopReconnectTimer()
+            }
+        }
+    }
+
+    private func stopReconnectTimer() {
+        reconnectTimer?.invalidate()
+        reconnectTimer = nil
+        reconnectSeconds = 0
     }
 
     private var reconnectingView: some View {
@@ -42,7 +68,21 @@ struct ContentView: View {
                 Text("Connecting...")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundColor(Theme.textMuted)
+
+                if reconnectSeconds >= 5 {
+                    Button(action: {
+                        reconnectTimedOut = true
+                        stopReconnectTimer()
+                        appState.disconnect()
+                    }) {
+                        Text("Cancel")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(Theme.accent)
+                    }
+                    .transition(.opacity)
+                }
             }
+            .animation(.easeInOut, value: reconnectSeconds >= 5)
         }
     }
 }

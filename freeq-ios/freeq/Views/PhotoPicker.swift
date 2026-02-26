@@ -190,6 +190,25 @@ struct ImagePreviewSheet: View {
             let did = appState.authenticatedDID ?? ""
             let serverBase = "https://irc.freeq.at"
 
+            // Ensure server has a fresh web session for this DID by calling broker
+            if let brokerToken = appState.brokerToken {
+                do {
+                    let brokerBase = appState.authBrokerBase
+                    let sessionURL = URL(string: "\(brokerBase)/session")!
+                    var sessionReq = URLRequest(url: sessionURL)
+                    sessionReq.httpMethod = "POST"
+                    sessionReq.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    sessionReq.httpBody = try JSONSerialization.data(withJSONObject: ["broker_token": brokerToken])
+                    let (_, sessionResp) = try await URLSession.shared.data(for: sessionReq)
+                    let sessionStatus = (sessionResp as? HTTPURLResponse)?.statusCode ?? 0
+                    if sessionStatus != 200 {
+                        print("Broker session refresh returned \(sessionStatus)")
+                    }
+                } catch {
+                    print("Broker session refresh failed: \(error)")
+                }
+            }
+
             let boundary = UUID().uuidString
             var body = Data()
 

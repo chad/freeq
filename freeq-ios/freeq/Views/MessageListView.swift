@@ -87,6 +87,18 @@ struct MessageListView: View {
                     .id("bottom-anchor")
                 }
                 .background(Theme.bgPrimary)
+                .scrollDismissesKeyboard(.interactively)
+                .refreshable {
+                    if appState.connectionState == .disconnected {
+                        appState.reconnectSavedSession()
+                        // Give it a moment so the spinner doesn't vanish instantly
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    } else {
+                        let oldest = channel.messages.first?.timestamp
+                        appState.requestHistory(channel: channel.name, before: oldest)
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                    }
+                }
                 .onPreferenceChange(ScrollOffsetKey.self) { value in
                     // value is the minY of the bottom anchor in global coords
                     // When at bottom, it's near screen height; when scrolled up, it goes large/positive
@@ -137,7 +149,7 @@ struct MessageListView: View {
             }
             .onAppear {
                 // Capture current read position before marking read
-                lastReadId = UserDefaults.standard.string(forKey: "freeq.lastRead.\(channel.name)")
+                lastReadId = appState.lastReadMessageIds[channel.name]
                 appState.markRead(channel.name)
                 scrollToBottom(proxy: proxy)
             }
@@ -663,18 +675,26 @@ struct MessageListView: View {
 
     // MARK: - Formatting
 
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "h:mm a"
+        return f
+    }()
+
+    private static let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMMM d, yyyy"
+        return f
+    }()
+
     private func formatTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "h:mm a"
-        return formatter.string(from: date)
+        Self.timeFormatter.string(from: date)
     }
 
     private func formatDate(_ date: Date) -> String {
         if Calendar.current.isDateInToday(date) { return "Today" }
         if Calendar.current.isDateInYesterday(date) { return "Yesterday" }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "MMMM d, yyyy"
-        return formatter.string(from: date)
+        return Self.dateFormatter.string(from: date)
     }
 }
 

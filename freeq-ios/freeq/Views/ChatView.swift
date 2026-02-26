@@ -14,7 +14,7 @@ struct ChatView: View {
 
             // Main chat area
             VStack(spacing: 0) {
-                // Network warning banner
+                // Network / connection warning banner
                 if !networkMonitor.isConnected {
                     HStack(spacing: 8) {
                         Image(systemName: "wifi.slash")
@@ -26,6 +26,27 @@ struct ChatView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
                     .background(Theme.danger)
+                } else if appState.connectionState == .disconnected {
+                    HStack(spacing: 10) {
+                        Image(systemName: "bolt.slash.fill")
+                            .font(.system(size: 12))
+                        Text("Disconnected")
+                            .font(.system(size: 13, weight: .medium))
+                        Spacer()
+                        Button(action: { appState.reconnectSavedSession() }) {
+                            Text("Reconnect")
+                                .font(.system(size: 13, weight: .semibold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 5)
+                                .background(Color.white.opacity(0.2))
+                                .cornerRadius(6)
+                        }
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Theme.warning)
                 }
 
                 TopBarView(
@@ -78,6 +99,19 @@ struct ChatView: View {
                 }
             }
         }
+        .gesture(
+            DragGesture(minimumDistance: 20, coordinateSpace: .global)
+                .onEnded { value in
+                    // Swipe right from left edge → open sidebar
+                    if value.startLocation.x < 40 && value.translation.width > 60 {
+                        showingSidebar = true
+                    }
+                    // Swipe left → close sidebar
+                    if showingSidebar && value.translation.width < -60 {
+                        showingSidebar = false
+                    }
+                }
+        )
         .animation(.easeInOut(duration: 0.2), value: showingSidebar)
         .animation(.easeInOut(duration: 0.2), value: showingMembers)
         .sheet(isPresented: $showingJoinSheet) {
