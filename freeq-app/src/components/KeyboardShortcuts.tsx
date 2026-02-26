@@ -7,6 +7,7 @@ const shortcuts = [
   { section: 'Navigation', items: [
     { keys: ['⌘', 'K'], desc: 'Quick switcher' },
     { keys: ['⌘', '1-9'], desc: 'Switch to channel by position' },
+    { keys: ['Alt', '↑/↓'], desc: 'Previous / next channel' },
     { keys: ['Esc'], desc: 'Close modal / cancel' },
   ]},
   { section: 'Messaging', items: [

@@ -90,7 +90,7 @@ export function UserPopover({ nick, did, position, onClose }: UserPopoverProps) 
           {effectiveDid && (
             <div
               className="text-[10px] text-fg-dim mt-1 font-mono break-all cursor-pointer hover:text-fg-muted"
-              onClick={() => navigator.clipboard.writeText(effectiveDid)}
+              onClick={() => { navigator.clipboard.writeText(effectiveDid); import('./Toast').then(m => m.showToast('DID copied', 'success', 2000)); }}
               title="Click to copy DID"
             >
               {effectiveDid}

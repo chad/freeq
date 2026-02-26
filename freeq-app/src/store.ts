@@ -116,6 +116,7 @@ export interface Store {
   bookmarks: { channel: string; msgId: string; from: string; text: string; timestamp: Date }[];
   bookmarksPanelOpen: boolean;
   searchOpen: boolean;
+  scrollToMsgId: string | null;
   searchQuery: string;
   channelListOpen: boolean;
   channelList: ChannelListEntry[];
@@ -181,6 +182,7 @@ export interface Store {
   removeBookmark: (msgId: string) => void;
   setBookmarksPanelOpen: (open: boolean) => void;
   setSearchOpen: (open: boolean) => void;
+  setScrollToMsgId: (id: string | null) => void;
   setSearchQuery: (query: string) => void;
   setChannelListOpen: (open: boolean) => void;
   setChannelList: (list: ChannelListEntry[]) => void;
@@ -242,6 +244,7 @@ export const useStore = create<Store>((set, get) => ({
   bookmarks: JSON.parse(localStorage.getItem('freeq-bookmarks') || '[]').map((b: any) => ({ ...b, timestamp: new Date(b.timestamp) })),
   bookmarksPanelOpen: false,
   searchOpen: false,
+  scrollToMsgId: null,
   searchQuery: '',
   channelListOpen: false,
   channelList: [],
@@ -677,6 +680,7 @@ export const useStore = create<Store>((set, get) => ({
   }),
   setBookmarksPanelOpen: (open) => set({ bookmarksPanelOpen: open }),
   setSearchOpen: (open) => set({ searchOpen: open, searchQuery: open ? '' : '' }),
+  setScrollToMsgId: (id) => set({ scrollToMsgId: id }),
   setSearchQuery: (query) => set({ searchQuery: query }),
   setChannelListOpen: (open) => set({ channelListOpen: open }),
   setChannelList: (list) => set({ channelList: list }),

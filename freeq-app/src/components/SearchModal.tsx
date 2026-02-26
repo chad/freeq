@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useMemo } from 'react';
 import { useStore, type Message } from '../store';
+// useStore imported above — also used imperatively for setScrollToMsgId
 
 export function SearchModal() {
   const open = useStore((s) => s.searchOpen);
@@ -79,7 +80,7 @@ export function SearchModal() {
                 onClick={() => {
                   setActive(r.channel);
                   setOpen(false);
-                  // TODO: scroll to message
+                  useStore.getState().setScrollToMsgId(r.msg.id);
                 }}
                 className="w-full text-left px-4 py-2.5 hover:bg-bg-tertiary border-b border-border/50 last:border-0"
               >

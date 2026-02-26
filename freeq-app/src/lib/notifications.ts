@@ -82,8 +82,53 @@ export function setUnreadCount(count: number) {
   updateTitleBadge();
 }
 
+// Favicon badge rendering
+const originalFavicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.href || '/favicon.png';
+let faviconCanvas: HTMLCanvasElement | null = null;
+
+function updateFaviconBadge() {
+  const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+  if (!link) return;
+
+  if (totalUnread <= 0) {
+    link.href = originalFavicon;
+    return;
+  }
+
+  if (!faviconCanvas) {
+    faviconCanvas = document.createElement('canvas');
+    faviconCanvas.width = 32;
+    faviconCanvas.height = 32;
+  }
+
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    const ctx = faviconCanvas!.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, 32, 32);
+    ctx.drawImage(img, 0, 0, 32, 32);
+    // Red dot
+    ctx.beginPath();
+    ctx.arc(24, 8, 8, 0, 2 * Math.PI);
+    ctx.fillStyle = '#ff5c5c';
+    ctx.fill();
+    // Count text (if small enough)
+    if (totalUnread <= 99) {
+      ctx.font = 'bold 11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff';
+      ctx.fillText(totalUnread > 9 ? '9+' : String(totalUnread), 24, 8.5);
+    }
+    link.href = faviconCanvas!.toDataURL('image/png');
+  };
+  img.src = originalFavicon;
+}
+
 function updateTitleBadge() {
   document.title = totalUnread > 0 ? `(${totalUnread}) ${originalTitle}` : originalTitle;
+  updateFaviconBadge();
 }
 
 // Clear badge when window gains focus

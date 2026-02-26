@@ -522,6 +522,28 @@ impl Server {
                 }
             }
 
+            // Prune empty channels (no history, no topic, no modes set)
+            let before = channels.len();
+            channels.retain(|name, ch| {
+                if ch.history.is_empty()
+                    && ch.topic.is_none()
+                    && !ch.invite_only
+                    && !ch.moderated
+                    && ch.key.is_none()
+                    && ch.bans.is_empty()
+                {
+                    // Don't prune if channel has policy (check later)
+                    let _ = db.delete_channel(name);
+                    false
+                } else {
+                    true
+                }
+            });
+            let pruned = before - channels.len();
+            if pruned > 0 {
+                tracing::info!("Pruned {pruned} empty channels ({} remaining)", channels.len());
+            }
+
             // Load DID-nick bindings
             let identities = db.load_identities()
                 .map_err(|e| anyhow::anyhow!("Failed to load identities: {e}"))?;

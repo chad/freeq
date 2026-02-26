@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useStore, type Message } from '../store';
 import { sendDelete } from '../irc/client';
+import { showToast } from './Toast';
 
 interface Props {
   msg: Message;
@@ -30,13 +31,13 @@ export function MessageContextMenu({ msg, channel, position, onClose, onReply, o
   }, [onClose]);
 
   const copyText = () => {
-    navigator.clipboard.writeText(msg.text);
+    navigator.clipboard.writeText(msg.text); showToast('Copied to clipboard', 'success', 2000);
     onClose();
   };
 
   const copyLink = () => {
     const url = `${window.location.origin}/#${channel}/${msg.id}`;
-    navigator.clipboard.writeText(url);
+    navigator.clipboard.writeText(url); showToast('Link copied', 'success', 2000);
     onClose();
   };
 

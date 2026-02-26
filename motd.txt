@@ -1,0 +1,10 @@
+Welcome to freeq — IRC with AT Protocol identity.
+
+Channels:
+  #freeq        Main channel — say hello!
+  #demo-follow  Bluesky follow-gated (must follow @freeq.at)
+  #demo-github  GitHub verification demo (auto-op with linked GitHub)
+  #demo-moderation  Moderator appointment demo
+
+Sign in with your Bluesky handle to get a verified identity.
+Docs & source: https://github.com/chad/freeq

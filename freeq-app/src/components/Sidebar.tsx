@@ -118,16 +118,24 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
         {chanList.map((ch) => <ChannelButton key={ch.name} ch={ch as any} isActive={activeChannel.toLowerCase() === ch.name.toLowerCase()} onSelect={setActive} icon="#" />)}
 
         {/* DMs */}
-        {dmList.length > 0 && (
+        {dmList.length > 0 && (() => {
+          const dmUnread = dmList.reduce((s, ch) => s + ch.unreadCount, 0);
+          return (
           <>
-            <div className="mt-3 mb-1 px-2">
+            <div className="mt-3 mb-1 px-2 flex items-center justify-between">
               <span className="text-xs uppercase tracking-wider text-fg-dim font-bold">
                 Messages
               </span>
+              {dmUnread > 0 && (
+                <span className="bg-danger text-white text-[10px] min-w-[16px] text-center px-1 py-0.5 rounded-full font-bold leading-none">
+                  {dmUnread}
+                </span>
+              )}
             </div>
             {dmList.map((ch) => <ChannelButton key={ch.name} ch={ch as any} isActive={activeChannel.toLowerCase() === ch.name.toLowerCase()} onSelect={setActive} icon="@" showPreview />)}
           </>
-        )}
+          );
+        })()}
       </nav>
 
       {/* User footer */}
@@ -320,6 +328,7 @@ function SidebarContextMenu({ channel, isFav, isMuted, isChannel, position, onCl
       </button>
       <button onClick={() => {
           navigator.clipboard.writeText(`https://irc.freeq.at/join/${encodeURIComponent(channel)}`);
+          import('./Toast').then(m => m.showToast('Invite link copied', 'success', 2000));
           onClose();
         }}
         className="w-full text-left px-3 py-1.5 text-sm flex items-center gap-2 hover:bg-bg-tertiary text-fg-muted hover:text-fg">

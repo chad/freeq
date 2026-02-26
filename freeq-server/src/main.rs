@@ -21,7 +21,7 @@ async fn main() -> Result<()> {
             .init();
     }
 
-    let config = freeq_server::config::ServerConfig::parse();
+    let mut config = freeq_server::config::ServerConfig::parse();
     tracing::info!("Starting IRC server on {}", config.listen_addr);
     if config.tls_enabled() {
         tracing::info!("TLS enabled on {}", config.tls_listen_addr);
@@ -33,6 +33,16 @@ async fn main() -> Result<()> {
         tracing::info!("Iroh transport enabled");
     }
 
+    // Resolve --motd-file into --motd
+    if let Some(ref path) = config.motd_file {
+        match std::fs::read_to_string(path) {
+            Ok(content) => {
+                tracing::info!("Loaded MOTD from {path}");
+                config.motd = Some(content);
+            }
+            Err(e) => tracing::warn!("Failed to read MOTD file {path}: {e}"),
+        }
+    }
     let server = freeq_server::server::Server::new(config);
     server.run().await
 }

@@ -71,6 +71,10 @@ pub struct ServerConfig {
     #[arg(long)]
     pub motd: Option<String>,
 
+    /// Path to a file containing the Message of the Day. Overrides --motd.
+    #[arg(long)]
+    pub motd_file: Option<String>,
+
     /// Directory containing web client static files (index.html, etc.).
     /// If set, files are served at the root path (/) of the web listener.
     /// Typically points to the freeq-web/ directory.
@@ -130,6 +134,7 @@ impl Default for ServerConfig {
             data_dir: None,
             max_messages_per_channel: 10000,
             motd: None,
+            motd_file: None,
             web_static_dir: None,
             plugins: vec![],
             plugin_dir: None,

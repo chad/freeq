@@ -179,7 +179,12 @@ function MessageContent({ msg }: { msg: Message }) {
   const setLightbox = useStore((s) => s.setLightboxUrl);
 
   if (msg.isAction) {
-    return <div className="text-fg-muted italic text-[15px] mt-0.5">{msg.text}</div>;
+    const color = msg.isSelf ? '#b18cff' : nickColor(msg.from);
+    return (
+      <div className="text-fg-muted italic text-[15px] mt-0.5">
+        <span style={{ color }} className="font-semibold not-italic">{'* '}{msg.from}</span>{' '}{msg.text}
+      </div>
+    );
   }
 
   const imageUrls = extractImageUrls(msg.text);
@@ -261,10 +266,13 @@ function ReplyBadge({ msgId }: { msgId: string }) {
   if (!original) return null;
 
   return (
-    <div className="flex items-center gap-2 text-sm text-fg-dim mb-1.5 pl-2 border-l-2 border-accent/30">
+    <button
+      onClick={() => useStore.getState().setScrollToMsgId(msgId)}
+      className="flex items-center gap-2 text-sm text-fg-dim mb-1.5 pl-2 border-l-2 border-accent/30 hover:bg-accent/5 rounded-r cursor-pointer w-full text-left"
+    >
       <span className="font-semibold text-fg-muted">{original.from}</span>
       <span className="truncate max-w-[300px]">{original.text}</span>
-    </div>
+    </button>
   );
 }
 
@@ -671,6 +679,32 @@ export function MessageList() {
     }
   }, [activeChannel, messages, handleScroll]);
 
+  // Scroll to a specific message (from search, reply click, etc.)
+  const scrollToMsgId = useStore((s) => s.scrollToMsgId);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!scrollToMsgId) return;
+    useStore.getState().setScrollToMsgId(null);
+    // Wait for render, then scroll
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`msg-${scrollToMsgId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setHighlightId(scrollToMsgId);
+        setTimeout(() => setHighlightId(null), 2000);
+      }
+    });
+  }, [scrollToMsgId]);
+
+  // Show brief skeleton on channel switch while CHATHISTORY loads
+  const [showSkeleton, setShowSkeleton] = useState(false);
+  useEffect(() => {
+    if (activeChannel === 'server') return;
+    setShowSkeleton(true);
+    const t = setTimeout(() => setShowSkeleton(false), 600);
+    return () => clearTimeout(t);
+  }, [activeChannel]);
+
   const onNickClick = useCallback((nick: string, did: string | undefined, e: React.MouseEvent) => {
     setPopover({ nick, did, pos: { x: e.clientX, y: e.clientY } });
   }, []);
@@ -680,7 +714,23 @@ export function MessageList() {
       density === 'compact' ? 'text-[14px] [&_.msg-full]:pt-1.5 [&_.msg-full]:pb-0' :
       density === 'cozy' ? 'text-[16px] [&_.msg-full]:pt-4 [&_.msg-full]:pb-2' : ''
     }`} onScroll={onScroll}>
-      {messages.length === 0 && (
+      {messages.length === 0 && showSkeleton && activeChannel !== 'server' && (
+        <div className="px-4 pt-4 space-y-4 animate-pulse">
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="flex gap-3">
+              <div className="w-10 h-10 rounded-full bg-surface shrink-0" />
+              <div className="flex-1 space-y-2 pt-1">
+                <div className="flex gap-2">
+                  <div className="h-3 w-20 bg-surface rounded" />
+                  <div className="h-3 w-12 bg-surface/50 rounded" />
+                </div>
+                <div className="h-3 bg-surface/70 rounded" style={{ width: `${40 + Math.random() * 50}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {messages.length === 0 && !showSkeleton && (
         <div className="flex flex-col items-center justify-center h-full text-fg-dim px-8">
           <img src="/freeq.png" alt="freeq" className="w-14 h-14 mb-4 opacity-20" />
           {activeChannel === 'server' ? (
@@ -712,6 +762,7 @@ export function MessageList() {
               <div className="flex gap-2 mt-4">
                 <button onClick={() => {
                   navigator.clipboard.writeText(`https://irc.freeq.at/join/${encodeURIComponent(activeChannel)}`);
+                  import('./Toast').then(m => m.showToast('Invite link copied', 'success', 2000));
                 }} className="text-xs bg-bg-tertiary border border-border rounded-lg px-3 py-1.5 text-fg-dim hover:text-fg hover:border-accent">
                   🔗 Copy invite link
                 </button>
@@ -729,8 +780,39 @@ export function MessageList() {
         </div>
       )}
       <div className="pb-2">
-        {messages.map((msg, i) => (
-          <div key={msg.id}>
+        {messages.map((msg, i) => {
+          // Collapse consecutive join/part/quit system messages
+          const isJoinPart = msg.isSystem && /^.+ (joined|left)$/.test(msg.text);
+          if (isJoinPart) {
+            // Skip if the previous message was also a join/part (we'll render them as a group)
+            const prev = i > 0 ? messages[i - 1] : null;
+            const prevIsJP = prev?.isSystem && /^.+ (joined|left)$/.test(prev.text);
+            const next = i < messages.length - 1 ? messages[i + 1] : null;
+            const nextIsJP = next?.isSystem && /^.+ (joined|left)$/.test(next.text);
+            if (prevIsJP) return null; // skip — rendered by the first in the group
+            if (nextIsJP) {
+              // First in a group — collect all consecutive
+              const group: Message[] = [msg];
+              for (let j = i + 1; j < messages.length; j++) {
+                const m = messages[j];
+                if (m.isSystem && /^.+ (joined|left)$/.test(m.text)) group.push(m);
+                else break;
+              }
+              const joins = group.filter(m => m.text.endsWith(' joined')).map(m => m.text.replace(' joined', ''));
+              const parts = group.filter(m => m.text.endsWith(' left')).map(m => m.text.replace(' left', ''));
+              const parts_list: string[] = [];
+              if (joins.length > 0) parts_list.push(`${joins.slice(0, 3).join(', ')}${joins.length > 3 ? ` and ${joins.length - 3} more` : ''} joined`);
+              if (parts.length > 0) parts_list.push(`${parts.slice(0, 3).join(', ')}${parts.length > 3 ? ` and ${parts.length - 3} more` : ''} left`);
+              return (
+                <div key={msg.id} id={`msg-${msg.id}`} className="px-4 py-0.5 flex items-start gap-3">
+                  <span className="w-10 shrink-0" />
+                  <span className="text-fg-dim text-xs opacity-60">— {parts_list.join('; ')}</span>
+                </div>
+              );
+            }
+          }
+          return (
+          <div key={msg.id} id={`msg-${msg.id}`} className={highlightId === msg.id ? 'bg-accent/10 transition-colors duration-1000' : ''}>
             {lastReadMsgId && i > 0 && messages[i - 1].id === lastReadMsgId && !msg.isSelf && (
               <div className="flex items-center gap-3 px-4 my-3" id="unread-marker">
                 <div className="flex-1 h-px bg-danger/40" />
@@ -747,7 +829,8 @@ export function MessageList() {
               <FullMessage msg={msg} channel={activeChannel} onNickClick={onNickClick} />
             )}
           </div>
-        ))}
+          );
+        })}
         <TypingIndicatorBar channel={activeChannel} />
       </div>
 

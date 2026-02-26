@@ -71,6 +71,21 @@ export default function App() {
     if (registered) requestPermission();
   }, [registered]);
 
+  // Handle invite link auto-join when already connected
+  useEffect(() => {
+    if (!registered) return;
+    const hash = window.location.hash;
+    if (hash.startsWith('#auto-join=')) {
+      const ch = decodeURIComponent(hash.slice('#auto-join='.length));
+      window.history.replaceState(null, '', window.location.pathname);
+      // Join and switch to the channel
+      import('./irc/client').then(({ joinChannel }) => {
+        joinChannel(ch);
+        setActive(ch);
+      });
+    }
+  }, [registered, setActive]);
+
   // Close sidebar and member list on mobile when switching channels
   useEffect(() => {
     if (window.innerWidth < 768) {
@@ -104,9 +119,20 @@ export default function App() {
     if (sorted[n]) setActive(sorted[n].name);
   }, [channels, setActive]);
 
+  const switchChannel = useCallback((dir: -1 | 1) => {
+    const sorted = [...channels.values()]
+      .filter((ch) => ch.isJoined)
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const idx = sorted.findIndex((ch) => ch.name.toLowerCase() === activeChannel.toLowerCase());
+    const next = sorted[idx + dir];
+    if (next) setActive(next.name);
+  }, [channels, activeChannel, setActive]);
+
   useKeyboard(registered ? {
     'mod+k': () => setQuickSwitcher(true),
     'mod+f': () => useStore.getState().setSearchOpen(true),
+    'alt+ArrowUp': () => switchChannel(-1),
+    'alt+ArrowDown': () => switchChannel(1),
     'mod+/': () => setShortcuts(true),
     'mod+b': () => useStore.getState().setBookmarksPanelOpen(true),
     'mod+1': () => switchToNth(0),
