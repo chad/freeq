@@ -23,7 +23,7 @@ freeq has encryption at multiple layers — transport, authentication, federatio
 | **Server ↔ Policy DB (at rest)** | ❌ No | Plaintext on disk | Channel policies, credentials |
 | **Message content (in transit)** | 🟡 Transport only | TLS protects the pipe, not the payload | Server sees plaintext; no E2E encryption yet |
 | **Message content (at rest)** | ❌ No | Stored as plaintext in SQLite | History, search, moderation all need plaintext today |
-| **Message signatures** | ✅ Yes (server-attested) | ed25519 via `+freeq.at/sig` IRCv3 tag | Server signs on behalf of verified DIDs; see details below |
+| **Message signatures** | ✅ Yes (client + server) | ed25519 via `+freeq.at/sig` IRCv3 tag | Client-side signing with session keys; server fallback for legacy clients |
 | **DM content** | 🟡 Transport only | Same as channel messages | Server can read DMs; no E2E yet |
 | **File uploads (in transit)** | ✅ Yes | HTTPS to server → HTTPS to PDS | Uploaded via TLS to server, proxied via TLS to AT Protocol PDS |
 | **File uploads (at rest)** | 🟡 PDS-dependent | Stored on user's PDS (Bluesky infra) | Not under freeq's control; PDS may or may not encrypt at rest |
@@ -126,9 +126,9 @@ The credential verifier's signing key is stored as a plaintext file on disk. It 
 
 ## Roadmap
 
-### Phase 1: Message Signing (P0) ✅ SHIPPED
+### Phase 1 + 1.5: Message Signing (P0) ✅ SHIPPED
 
-**Status**: Implemented (server-attested)
+**Status**: Implemented (client-side + server fallback)
 
 Every message from a DID-authenticated user is cryptographically signed:
 
@@ -142,9 +142,11 @@ Every message from a DID-authenticated user is cryptographically signed:
 - **Scope**: PRIVMSG, NOTICE, TOPIC, KICK
 - **Guest messages**: Unsigned — clearly distinguishable from verified messages
 
-Currently, the **server** signs messages on behalf of verified users (the server has validated their DID via SASL). This provides message provenance through federation but not true non-repudiation — the server holds the signing key and could theoretically forge signatures.
+**Client-side signing (Phase 1.5)** is now shipped. Clients (SDK, web, iOS) generate a per-session ed25519 keypair, register the public key with the server via `MSGSIG`, and sign every outgoing PRIVMSG. The server verifies the client's signature and relays it unchanged — the server **cannot forge** client-signed messages.
 
-**Phase 1.5** (next): Client-side signing with session-generated ed25519 keypairs, registered with the server during SASL. This will provide true non-repudiation — the server relays but cannot forge.
+For clients that don't support signing (legacy IRC clients), the server still signs as a fallback, providing message provenance through federation.
+
+Client session signing keys are published at `GET /api/v1/signing-keys/{did}` so any party can verify signatures independently.
 
 ### Phase 2: End-to-End Encryption for DMs
 
@@ -201,7 +203,7 @@ Trade-offs:
 | IP cloaking | ✅ | N/A | ✅ | ✅ | Varies |
 
 *Matrix E2E is opt-in and [has had verification UX issues](https://matrix.org/blog/2024/matrix-2-0/).  
-*Server-attested signatures shipped; client-side signing planned for Phase 1.5.
+*Client-side session key signing shipped; server fallback for legacy clients.
 
 ---
 
@@ -223,7 +225,7 @@ Trade-offs:
 - **Compromised server host**: Plaintext database on disk
 - **Metadata analysis**: Server knows who talks to whom, when, and how often
 - **Compromised PDS**: Uploaded media controlled by PDS operator
-- **Message forgery by server**: Server-attested signatures exist but the server holds the key; client-side signing (Phase 1.5) will close this gap
+- **Message forgery by server**: Closed for modern clients (client-side signing). Legacy clients still use server-attested signatures.
 
 ---
 

@@ -194,7 +194,7 @@ If something feels “too clever,” it’s probably wrong.
 ### P0 — Critical (do next)
 
 - [x] **`msgid` on all messages** — ✅ DONE. ULID on every PRIVMSG/NOTICE, carried in IRCv3 `msgid` tag, stored in DB + history, included in CHATHISTORY replay and JOIN history. S2S preserves msgid across federation.
-- [x] **Message signing by default** — ✅ DONE. Server-attested ed25519 signatures on all PRIVMSG/NOTICE from DID-authenticated users. Signature carried via `+freeq.at/sig=<base64url>` IRCv3 tag. Canonical form: `{sender_did}\0{target}\0{text}\0{timestamp}`. S2S carries signatures through federation. Guest messages are unsigned. Public key at `/api/v1/signing-key`. Web client shows signed badge (🔒). Phase 2: client-side signing with session keys.
+- [x] **Message signing by default** — ✅ DONE (Phase 1 + 1.5). Client-side ed25519 signing with session keys for true non-repudiation. SDK/web/iOS generate per-session ed25519 keypair, register via `MSGSIG`, sign every PRIVMSG with `+freeq.at/sig`. Server verifies client sigs and relays unchanged. Fallback: server signs if client doesn't support signing. Public keys at `/api/v1/signing-key` (server) and `/api/v1/signing-keys/{did}` (per-DID). Web client shows signed badge (🔒).
 
 ### P1 — High priority
 
