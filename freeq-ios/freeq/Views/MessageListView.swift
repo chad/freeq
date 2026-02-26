@@ -1026,11 +1026,14 @@ struct InlineVideoPlayer: View {
 
     private func downloadAndPlay() {
         guard !isDownloading else { return }
+
+        // Already downloaded — play immediately
         if let local = localURL {
             setupPlayer(local)
             return
         }
 
+        // Download first
         isDownloading = true
         loadError = false
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -1050,19 +1053,21 @@ struct InlineVideoPlayer: View {
                     .appendingPathComponent("video_\(url.absoluteString.hashValue).\(ext)")
                 try data.write(to: tempURL)
 
-                // Generate thumbnail from downloaded file
+                // Generate thumbnail from first frame
                 let asset = AVAsset(url: tempURL)
                 let generator = AVAssetImageGenerator(asset: asset)
                 generator.appliesPreferredTrackTransform = true
-                if let cgImage = try? generator.copyCGImage(at: .zero, actualTime: nil) {
-                    let thumb = UIImage(cgImage: cgImage)
-                    await MainActor.run { thumbnail = thumb }
-                }
+                generator.maximumSize = CGSize(width: 600, height: 600)
+                let cgImage = try? generator.copyCGImage(at: CMTime(seconds: 0.1, preferredTimescale: 600), actualTime: nil)
 
                 await MainActor.run {
+                    if let cgImage = cgImage {
+                        thumbnail = UIImage(cgImage: cgImage)
+                    }
                     localURL = tempURL
                     isDownloading = false
-                    setupPlayer(tempURL)
+                    // Don't auto-play — show thumbnail with play button.
+                    // Next tap plays instantly from local file.
                 }
             } catch {
                 await MainActor.run { isDownloading = false; loadError = true }
@@ -1076,6 +1081,7 @@ struct InlineVideoPlayer: View {
         let p = AVPlayer(url: fileURL)
         player = p
         p.play()
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 }
 
