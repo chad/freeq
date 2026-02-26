@@ -59,16 +59,16 @@ SLUG_MAP = {
     "self-hosting": ("site", "self-hosting.md"),
     "api-reference": ("site", "api-reference.md"),
     # Repo docs (existing technical docs)
-    "protocol": ("repo", "PROTOCOL.md"),
-    "features": ("repo", "Features.md"),
-    "limitations": ("repo", "KNOWN-LIMITATIONS.md"),
-    "architecture": ("repo", "architecture-decisions.md"),
-    "s2s": ("repo", "s2s-audit.md"),
-    "future": ("repo", "FutureDirection.md"),
-    "web-infra": ("repo", "proposal-web-infra.md"),
-    "whats-new": ("repo", "WHATS-NEW.md"),
+    "protocol": ("site", "PROTOCOL.md"),
+    "features": ("site", "Features.md"),
+    "limitations": ("site", "KNOWN-LIMITATIONS.md"),
+    "architecture": ("site", "architecture-decisions.md"),
+    "s2s": ("site", "s2s-audit.md"),
+    "future": ("site", "FutureDirection.md"),
+    "web-infra": ("site", "proposal-web-infra.md"),
+    "whats-new": ("site", "WHATS-NEW.md"),
     "demo": ("site", "demo.md"),
-    "encryption": ("repo", "ENCRYPTION.md"),
+    "encryption": ("site", "ENCRYPTION.md"),
 }
 
 
