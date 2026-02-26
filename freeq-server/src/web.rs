@@ -1215,6 +1215,7 @@ async fn channel_invite_page(
     let server = &state.config.server_name;
     let topic_html = topic_text.as_deref().unwrap_or("No topic set");
     let channel_display = channel.trim_start_matches('#');
+    let member_word = if member_count == 1 { "member" } else { "members" };
 
     Html(format!(r##"<!DOCTYPE html>
 <html lang="en">
@@ -1223,11 +1224,14 @@ async fn channel_invite_page(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{channel} — freeq</title>
 <meta property="og:title" content="{channel} on freeq">
-<meta property="og:description" content="{topic_html} — {member_count} members online">
+<meta property="og:description" content="{topic_html} — {member_count} {member_word} online">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://{server}/join/{channel_display}">
 <meta property="og:image" content="https://{server}/freeq.png">
 <meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="{channel} on freeq">
+<meta name="twitter:description" content="{topic_html} — {member_count} {member_word} online">
+<meta name="twitter:image" content="https://{server}/freeq.png">
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0c0c0f;color:#e8e8ed;min-height:100vh;display:flex;align-items:center;justify-content:center}}
@@ -1254,7 +1258,7 @@ h1 .accent{{color:#00d4aa}}
   <h1><span class="accent">free</span>q</h1>
   <div class="channel">#{channel_display}</div>
   <div class="topic">{topic_html}</div>
-  <div class="stats"><span>{member_count}</span> members online on <span>{server}</span></div>
+  <div class="stats"><span>{member_count}</span> {member_word} online on <span>{server}</span></div>
   <a href="https://{server}/#auto-join={channel}" class="btn">Join Channel</a>
   <div class="alt">
     Or connect with any IRC client: <code>{server}:6667</code><br>

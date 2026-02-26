@@ -75,10 +75,10 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
           <div className="flex items-center gap-0.5">
             <button
               onClick={() => useStore.getState().setChannelListOpen(true)}
-              className="text-fg-dim hover:text-fg-muted text-[10px] px-1"
+              className="text-fg-dim hover:text-accent text-lg leading-none px-1 transition-colors"
               title="Browse channels"
             >
-              ⊞
+              +
             </button>
             <button
               onClick={() => setShowJoin(!showJoin)}

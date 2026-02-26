@@ -4,6 +4,9 @@ import { useStore } from '../store';
 
 type LoginMode = 'at-proto' | 'guest';
 
+// Module-level counter survives ConnectScreen remounts
+let brokerAutoAttempts = 0;
+
 type OAuthResultData = {
   did?: string;
   handle?: string;
@@ -162,14 +165,13 @@ export function ConnectScreen() {
   }, [brokerOrigin]);
 
   // Attempt broker session refresh on load (persistent login)
-  const [brokerAttempts, setBrokerAttempts] = useState(0);
   useEffect(() => {
     if (registered || oauthPending || autoConnecting) return;
-    if (brokerAttempts >= 2) return; // Give up after 2 attempts
+    if (brokerAutoAttempts >= 1) return; // One shot — don't loop
     const brokerToken = localStorage.getItem(LS_BROKER_TOKEN);
     if (!brokerToken) return;
 
-    setBrokerAttempts(n => n + 1);
+    brokerAutoAttempts++;
     setAutoConnecting(true);
     const ch = (localStorage.getItem(LS_CHANNELS) || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
 
@@ -207,7 +209,7 @@ export function ConnectScreen() {
   // Clear autoConnecting on auth failure or disconnect
   useEffect(() => {
     if (!autoConnecting) return;
-    if (registered) { setAutoConnecting(false); return; }
+    if (registered) { setAutoConnecting(false); brokerAutoAttempts = 0; return; }
     if (authError) { setAutoConnecting(false); return; }
     // If we were connecting but dropped back to disconnected, give a brief grace period
     // then show the form. This prevents a permanent spinner if SASL fails.
@@ -305,8 +307,9 @@ export function ConnectScreen() {
           <h1 className="text-3xl font-bold tracking-tight">
             <span className="text-accent">free</span><span className="text-fg">q</span>
           </h1>
-          <p className="text-fg-dim text-xs mt-1">
-            IRC · AT Protocol · Open Identity
+          <p className="text-fg-dim text-xs mt-1 leading-relaxed">
+            Decentralized chat with verified identity.<br />
+            Sign in with Bluesky, or join as a guest.
           </p>
         </div>
 

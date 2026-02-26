@@ -46,6 +46,8 @@ export async function requestPermission(): Promise<boolean> {
   return result === 'granted';
 }
 
+let permissionRequested = false;
+
 export function notify(title: string, body: string, onClick?: () => void) {
   if (!enabled) return;
 
@@ -55,6 +57,13 @@ export function notify(title: string, body: string, onClick?: () => void) {
   // Update title badge
   totalUnread++;
   updateTitleBadge();
+
+  // Request permission on first mention (deferred from app start to avoid
+  // users instinctively blocking the prompt before they've used the app)
+  if (!permissionRequested && 'Notification' in window && Notification.permission === 'default') {
+    permissionRequested = true;
+    Notification.requestPermission();
+  }
 
   // Desktop notification (only if page not focused)
   if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {

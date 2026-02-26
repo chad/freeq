@@ -1,10 +1,23 @@
 import { useStore } from '../store';
 import { disconnect, reconnect } from '../irc/client';
+import { useState, useEffect } from 'react';
 
 export function ReconnectBanner() {
   const connectionState = useStore((s) => s.connectionState);
   const registered = useStore((s) => s.registered);
   const authDid = useStore((s) => s.authDid);
+  const [disconnectedSecs, setDisconnectedSecs] = useState(0);
+
+  // Track how long we've been disconnected
+  useEffect(() => {
+    if (connectionState === 'disconnected') {
+      setDisconnectedSecs(0);
+      const iv = setInterval(() => setDisconnectedSecs(s => s + 1), 1000);
+      return () => clearInterval(iv);
+    } else {
+      setDisconnectedSecs(0);
+    }
+  }, [connectionState]);
 
   // Show identity loss warning (reconnected as guest after having AT identity)
   const hadIdentity = !!localStorage.getItem('freeq-handle');
@@ -32,7 +45,7 @@ export function ReconnectBanner() {
   return (
     <div className={`flex items-center justify-center gap-2 py-1.5 text-xs font-medium shrink-0 ${
       connectionState === 'connecting'
-        ? 'bg-warning/10 text-warning'
+        ? 'bg-warning/5 text-warning'
         : 'bg-danger/10 text-danger'
     }`}>
       {connectionState === 'connecting' ? (
@@ -46,19 +59,21 @@ export function ReconnectBanner() {
       ) : (
         <>
           <span>●</span>
-          Disconnected
+          {disconnectedSecs < 5 ? 'Reconnecting...' : 'Connection lost'}
           <button
             onClick={() => reconnect()}
             className="ml-2 px-2 py-0.5 rounded bg-danger/20 hover:bg-danger/30 text-danger font-medium transition-colors"
           >
-            Reconnect
+            Reconnect now
           </button>
-          <button
-            onClick={() => disconnect()}
-            className="px-2 py-0.5 rounded hover:bg-danger/10 text-danger/60 transition-colors"
-          >
-            Sign out
-          </button>
+          {disconnectedSecs >= 10 && (
+            <button
+              onClick={() => disconnect()}
+              className="px-2 py-0.5 rounded hover:bg-danger/10 text-danger/60 transition-colors"
+            >
+              Sign out
+            </button>
+          )}
         </>
       )}
     </div>

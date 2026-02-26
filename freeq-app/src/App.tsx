@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useStore } from './store';
 import { useKeyboard } from './hooks/useKeyboard';
-import { setUnreadCount, requestPermission } from './lib/notifications';
+import { setUnreadCount } from './lib/notifications';
 import { ConnectScreen } from './components/ConnectScreen';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
@@ -11,6 +11,7 @@ import { MemberList } from './components/MemberList';
 import { QuickSwitcher } from './components/QuickSwitcher';
 import { SettingsPanel } from './components/SettingsPanel';
 import { ReconnectBanner } from './components/ReconnectBanner';
+import { GuestUpgradeBanner } from './components/GuestUpgradeBanner';
 import { ImageLightbox } from './components/ImageLightbox';
 import { SearchModal } from './components/SearchModal';
 import { ChannelListModal } from './components/ChannelListModal';
@@ -66,9 +67,23 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
 
+  // Mobile keyboard: resize layout when virtual keyboard appears
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const onResize = () => {
+      // When keyboard is open, visualViewport.height < window.innerHeight
+      const offset = window.innerHeight - vv.height;
+      document.documentElement.style.setProperty('--vk-offset', `${offset}px`);
+    };
+    vv.addEventListener('resize', onResize);
+    vv.addEventListener('scroll', onResize);
+    return () => { vv.removeEventListener('resize', onResize); vv.removeEventListener('scroll', onResize); };
+  }, []);
+
   // Request notification permission when registered
   useEffect(() => {
-    if (registered) requestPermission();
+    // Notification permission is deferred to first mention (see notifications.ts)
   }, [registered]);
 
   // Handle invite link auto-join when already connected
@@ -164,8 +179,9 @@ export default function App() {
   }
 
   return (
-    <div className="h-dvh flex flex-col bg-bg">
+    <div className="flex flex-col bg-bg" style={{ height: 'calc(100dvh - var(--vk-offset, 0px))' }}>
       <ReconnectBanner />
+      <GuestUpgradeBanner />
       <div className="flex flex-1 min-h-0">
         {/* Mobile sidebar overlay */}
         {sidebarOpen && (
