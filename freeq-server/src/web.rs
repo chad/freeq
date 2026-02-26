@@ -196,7 +196,6 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/keys", axum::routing::post(api_upload_keys))
         .route("/join/{channel}", get(channel_invite_page))
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)) // 12MB
-        .layer(axum::middleware::from_fn(security_headers))
         .layer({
             use tower_http::cors::AllowOrigin;
             use axum::http::{Method, header};
@@ -258,7 +257,9 @@ pub fn router(state: Arc<SharedState>) -> Router {
     if let Some(vr) = verifier_router {
         final_app = final_app.merge(vr);
     }
-    final_app
+    // Security headers as outermost layer so they apply to all responses
+    // including static files served via fallback_service
+    final_app.layer(axum::middleware::from_fn(security_headers))
 }
 
 // ── WebSocket handler ──────────────────────────────────────────────────
