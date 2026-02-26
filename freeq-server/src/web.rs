@@ -1483,9 +1483,12 @@ async fn security_headers(
         "Strict-Transport-Security",
         "max-age=63072000; includeSubDomains; preload".parse().unwrap(),
     );
-    headers.insert(
-        "Content-Security-Policy",
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' wss: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'".parse().unwrap(),
-    );
+    // Only set CSP if the handler didn't already set one (e.g. /auth/mobile needs inline scripts)
+    if !headers.contains_key("content-security-policy") {
+        headers.insert(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' wss: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'".parse().unwrap(),
+        );
+    }
     resp
 }
