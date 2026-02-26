@@ -50,6 +50,27 @@ export function connect(url: string, desiredNick: string, channels?: string[]) {
       useStore.getState().setConnectionState(s);
       if (s === 'connected') {
         ackedCaps = new Set(); // reset caps for new connection
+        let registrationSent = false;
+        const sendRegistration = (token?: string) => {
+          if (registrationSent) return;
+          registrationSent = true;
+          if (token) saslToken = token;
+          raw('CAP LS 302');
+          raw(`NICK ${nick}`);
+          raw(`USER ${nick} 0 * :freeq web app`);
+        };
+
+        // Safety net: if registration hasn't been sent in 8s, send it as guest
+        const safetyTimer = setTimeout(() => {
+          if (!registrationSent) {
+            console.warn('[irc] Registration safety timeout — sending as guest');
+            saslToken = '';
+            saslDid = '';
+            saslMethod = '';
+            sendRegistration();
+          }
+        }, 8000);
+
         // If we have a broker token and SASL credentials, refresh the web-token
         // before registering (web-tokens are one-time use).
         const brokerToken = localStorage.getItem('freeq-broker-token');
@@ -65,26 +86,21 @@ export function connect(url: string, desiredNick: string, channels?: string[]) {
           })
             .then(r => { clearTimeout(tm); return r.ok ? r.json() : Promise.reject('broker refresh failed'); })
             .then((session: { token: string; nick: string; did: string; handle: string }) => {
-              saslToken = session.token;
-              raw('CAP LS 302');
-              raw(`NICK ${nick}`);
-              raw(`USER ${nick} 0 * :freeq web app`);
+              clearTimeout(safetyTimer);
+              sendRegistration(session.token);
             })
             .catch(() => {
               clearTimeout(tm);
+              clearTimeout(safetyTimer);
               // Broker refresh failed — register without SASL (guest mode)
-              // Don't try with stale token, it'll just fail with 904
               saslToken = '';
               saslDid = '';
               saslMethod = '';
-              raw('CAP LS 302');
-              raw(`NICK ${nick}`);
-              raw(`USER ${nick} 0 * :freeq web app`);
+              sendRegistration();
             });
         } else {
-          raw('CAP LS 302');
-          raw(`NICK ${nick}`);
-          raw(`USER ${nick} 0 * :freeq web app`);
+          clearTimeout(safetyTimer);
+          sendRegistration();
         }
       }
     },
