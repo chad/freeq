@@ -336,6 +336,8 @@ struct MessageResponse {
     text: String,
     timestamp: u64,
     tags: std::collections::HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    msgid: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -573,6 +575,7 @@ async fn api_channel_history(
                     sender: r.sender,
                     text: r.text,
                     timestamp: r.timestamp,
+                    msgid: r.msgid,
                     tags: r.tags,
                 })
                 .collect();
@@ -598,6 +601,7 @@ async fn api_channel_history(
                             sender: m.from.clone(),
                             text: m.text.clone(),
                             timestamp: m.timestamp,
+                            msgid: m.msgid.clone(),
                             tags: m.tags.clone(),
                         })
                         .collect();
