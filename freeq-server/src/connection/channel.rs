@@ -418,14 +418,17 @@ pub(super) fn handle_join(
             None => Default::default(),
         };
         drop(channels);
-        // Local members: look up nick from session ID
+        // Local members: look up nick from session ID (deduplicated for multi-device)
         let nicks = state.nick_to_session.lock();
         let reverse: std::collections::HashMap<&String, &String> =
             nicks.iter().map(|(n, s)| (s, n)).collect();
+        let mut seen_nicks = std::collections::HashSet::new();
         let mut list: Vec<String> = member_sessions
             .iter()
             .filter_map(|s| {
-                reverse.get(s).map(|n| {
+                reverse.get(s).and_then(|n| {
+                    let nick_lower = n.to_lowercase();
+                    if !seen_nicks.insert(nick_lower) { return None; }
                     let prefix = if ops.contains(s) {
                         "@"
                     } else if voiced.contains(s) {
@@ -433,7 +436,7 @@ pub(super) fn handle_join(
                     } else {
                         ""
                     };
-                    format!("{prefix}{n}")
+                    Some(format!("{prefix}{n}"))
                 })
             })
             .collect();
@@ -1354,23 +1357,25 @@ pub(super) fn handle_names(
         let nicks = state.nick_to_session.lock();
         let reverse: std::collections::HashMap<&String, &String> =
             nicks.iter().map(|(n, s)| (s, n)).collect();
+        let mut seen_nicks = std::collections::HashSet::new();
         let mut list: Vec<String> = member_sessions
             .iter()
             .filter_map(|s| {
-                reverse.get(s).map(|n| {
+                reverse.get(s).and_then(|n| {
+                    // Deduplicate by nick (multi-device: same nick, multiple sessions)
+                    let nick_lower = n.to_lowercase();
+                    if !seen_nicks.insert(nick_lower) { return None; }
                     let prefix = if multi_prefix {
-                        // multi-prefix: show all applicable prefixes
                         let mut p = String::new();
                         if ops.contains(s) { p.push('@'); }
                         if voiced.contains(s) { p.push('+'); }
                         p
                     } else {
-                        // Standard: show highest prefix only
                         if ops.contains(s) { "@".to_string() }
                         else if voiced.contains(s) { "+".to_string() }
                         else { String::new() }
                     };
-                    format!("{prefix}{n}")
+                    Some(format!("{prefix}{n}"))
                 })
             })
             .collect();

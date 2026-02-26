@@ -267,6 +267,9 @@ pub struct SharedState {
     pub nick_to_session: Mutex<HashMap<String, String>>,
     /// session_id -> authenticated DID (for WHOIS lookups by other connections)
     pub session_dids: Mutex<HashMap<String, String>>,
+    /// DID -> all active session IDs for multi-device support.
+    /// A user can be connected from multiple devices simultaneously.
+    pub did_sessions: Mutex<HashMap<String, HashSet<String>>>,
     /// DID -> owned nick (persistent identity-nick binding).
     /// When a user authenticates, they claim their nick. No one else can use it.
     pub did_nicks: Mutex<HashMap<String, String>>,
@@ -566,6 +569,7 @@ impl Server {
             connections: Mutex::new(HashMap::new()),
             nick_to_session: Mutex::new(HashMap::new()),
             session_dids: Mutex::new(HashMap::new()),
+            did_sessions: Mutex::new(HashMap::new()),
             channels: Mutex::new(channels),
             did_nicks: Mutex::new(did_nicks),
             nick_owners: Mutex::new(nick_owners),

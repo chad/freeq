@@ -6,118 +6,175 @@ use crate::irc::{self, Message};
 use crate::server::SharedState;
 use super::Connection;
 
-/// Ghost all existing sessions with the same DID, then reclaim the nick
-/// if the current one is a fallback (ends with `_`).
+/// Attach a new session to existing sessions with the same DID.
+/// Instead of ghosting (killing) old sessions, this enables multi-device:
+/// - The new session shares the same nick
+/// - The new session is added to all channels the DID is already in
+/// - Messages fan out to all sessions for the DID
+/// - The user appears once in member lists
 ///
-/// Called at SASL success time so the old session is removed before NICK
-/// collision can block the new connection.
-pub(super) fn ghost_same_did(
+/// Called at SASL success time.
+pub(super) fn attach_same_did(
     conn: &mut Connection,
     state: &Arc<SharedState>,
     session_id: &str,
+    send: &impl Fn(&Arc<SharedState>, &str, String),
 ) {
     let did = match conn.authenticated_did.as_ref() {
         Some(d) => d.clone(),
         None => return,
     };
 
-    let mut sessions_to_ghost = Vec::new();
-    {
+    // Register this session in did_sessions
+    state.did_sessions.lock()
+        .entry(did.clone())
+        .or_default()
+        .insert(session_id.to_string());
+
+    // Find existing sessions for this DID
+    let existing_sessions: Vec<String> = {
         let session_dids = state.session_dids.lock();
-        for (sid, d) in session_dids.iter() {
-            if *d == did && sid != session_id {
-                sessions_to_ghost.push(sid.clone());
+        session_dids.iter()
+            .filter(|(sid, d)| d.as_str() == did && sid.as_str() != session_id)
+            .map(|(sid, _)| sid.clone())
+            .collect()
+    };
+
+    if existing_sessions.is_empty() {
+        // First session for this DID — normal registration
+        // Ensure nick is in nick_to_session
+        if let Some(ref nick) = conn.nick {
+            let mut nts = state.nick_to_session.lock();
+            let nick_lower = nick.to_lowercase();
+            let already_mapped = nts.keys().any(|k| k.to_lowercase() == nick_lower);
+            if !already_mapped {
+                nts.insert(nick.clone(), session_id.to_string());
+                tracing::info!(nick = %nick, "Registered nick for DID {did}");
+            }
+        }
+        // Reclaim if we got a fallback nick with trailing '_'
+        let reclaim = conn.nick.as_ref()
+            .filter(|n| n.ends_with('_'))
+            .map(|n| (n.clone(), n.trim_end_matches('_').to_string()));
+        if let Some((current_nick, desired)) = reclaim {
+            let nick_free = !state.nick_to_session.lock()
+                .keys().any(|k| k.to_lowercase() == desired.to_lowercase());
+            if nick_free {
+                state.nick_to_session.lock().remove(&current_nick);
+                state.nick_to_session.lock()
+                    .insert(desired.clone(), session_id.to_string());
+                tracing::info!(old = %current_nick, new = %desired, "Reclaimed nick");
+                conn.nick = Some(desired);
+            }
+        }
+        return;
+    }
+
+    // Multi-device attach: existing sessions exist for this DID
+    tracing::info!(did = %did, session = %session_id, existing = ?existing_sessions.len(),
+                   "Attaching additional session for DID");
+
+    // Find the canonical nick from existing sessions
+    let canonical_nick = {
+        let nts = state.nick_to_session.lock();
+        let sd = state.session_dids.lock();
+        nts.iter()
+            .find(|(_, sid)| sd.get(*sid).map_or(false, |d| d == &did))
+            .map(|(nick, _)| nick.clone())
+    };
+
+    // Adopt the canonical nick
+    if let Some(ref canon) = canonical_nick {
+        if conn.nick.as_ref().map(|n| n.to_lowercase()) != Some(canon.to_lowercase()) {
+            // Remove any nick mapping we created during CAP/SASL
+            if let Some(ref old_nick) = conn.nick {
+                state.nick_to_session.lock().remove(old_nick);
+            }
+            conn.nick = Some(canon.clone());
+        }
+    }
+
+    // Find all channels the DID is in via existing sessions
+    let channels_to_join: Vec<String> = {
+        let channels = state.channels.lock();
+        channels.iter()
+            .filter(|(_, ch)| {
+                existing_sessions.iter().any(|sid| ch.members.contains(sid))
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
+    };
+
+    // Add this session to those channels (silently — no JOIN broadcast)
+    {
+        let mut channels = state.channels.lock();
+        for ch_name in &channels_to_join {
+            if let Some(ch) = channels.get_mut(ch_name) {
+                ch.members.insert(session_id.to_string());
+                // Copy op/voice status from existing session
+                let is_op = existing_sessions.iter().any(|s| ch.ops.contains(s));
+                let is_voiced = existing_sessions.iter().any(|s| ch.voiced.contains(s));
+                if is_op { ch.ops.insert(session_id.to_string()); }
+                if is_voiced { ch.voiced.insert(session_id.to_string()); }
             }
         }
     }
 
-    for old_session in &sessions_to_ghost {
-        // Find old nick
-        let old_nick = state.nick_to_session.lock()
-            .iter()
-            .find(|(_, s)| *s == old_session)
-            .map(|(n, _)| n.clone());
-        if let Some(ref old_nick) = old_nick {
-            // Send QUIT to all channels the old session is in
-            let channels: Vec<String> = state.channels.lock()
-                .iter()
-                .filter(|(_, ch)| ch.members.contains(old_session))
-                .map(|(name, _)| name.clone())
-                .collect();
-            let host = super::helpers::cloaked_host_for_did(Some(did.as_str()));
-            let quit_msg = format!(
-                ":{old_nick}!~u@{host} QUIT :Ghosted (same identity reconnected)\r\n"
-            );
-            for ch_name in &channels {
-                let members: Vec<String> = state.channels.lock()
-                    .get(ch_name)
-                    .map(|ch| ch.members.iter().cloned().collect())
-                    .unwrap_or_default();
-                let conns = state.connections.lock();
-                for member_session in &members {
-                    if member_session != old_session {
-                        if let Some(tx) = conns.get(member_session) {
-                            let _ = tx.try_send(quit_msg.clone());
-                        }
-                    }
+    // Send the new session a replay of channel state so it knows where it is
+    let nick = conn.nick.as_deref().unwrap_or("*");
+    let server_name = &state.server_name;
+    for ch_name in &channels_to_join {
+        // Synthesize JOIN for the client
+        let host = super::helpers::cloaked_host_for_did(Some(did.as_str()));
+        send(state, session_id, format!(":{nick}!~u@{host} JOIN {ch_name}\r\n"));
+
+        // Send topic
+        let channels = state.channels.lock();
+        if let Some(ch) = channels.get(ch_name) {
+            if let Some(ref topic) = ch.topic {
+                let topic_msg = crate::irc::Message::from_server(
+                    server_name, crate::irc::RPL_TOPIC,
+                    vec![nick, ch_name, &topic.text],
+                );
+                send(state, session_id, format!("{topic_msg}\r\n"));
+            }
+            // Send NAMES
+            let nts = state.nick_to_session.lock();
+            let mut names: Vec<String> = Vec::new();
+            let mut seen_nicks = std::collections::HashSet::new();
+            for member_sid in &ch.members {
+                if let Some((member_nick, _)) = nts.iter().find(|(_, s)| *s == member_sid) {
+                    let nick_lower = member_nick.to_lowercase();
+                    if seen_nicks.contains(&nick_lower) { continue; }
+                    seen_nicks.insert(nick_lower);
+                    let prefix = if ch.ops.contains(member_sid) {
+                        "@"
+                    } else if ch.voiced.contains(member_sid) {
+                        "+"
+                    } else {
+                        ""
+                    };
+                    names.push(format!("{prefix}{member_nick}"));
                 }
             }
-            // Remove from channels
-            let mut channels_lock = state.channels.lock();
-            for ch_name in &channels {
-                if let Some(ch) = channels_lock.get_mut(ch_name) {
-                    ch.members.remove(old_session);
-                    ch.ops.remove(old_session);
-                    ch.voiced.remove(old_session);
-                    ch.halfops.remove(old_session);
-                }
-            }
-            drop(channels_lock);
-            // Remove nick mapping
-            state.nick_to_session.lock().remove(old_nick);
-        }
-        // Clean up session metadata
-        state.session_dids.lock().remove(old_session);
-        state.session_handles.lock().remove(old_session);
-        state.session_iroh_ids.lock().remove(old_session);
-        // Send ERROR to old session and close it
-        if let Some(tx) = state.connections.lock().get(old_session) {
-            let _ = tx.try_send(
-                "ERROR :Closing link (same identity reconnected)\r\n".to_string()
+            drop(channels);
+            let names_str = names.join(" ");
+            let names_msg = crate::irc::Message::from_server(
+                server_name, crate::irc::RPL_NAMREPLY,
+                vec![nick, "=", ch_name, &names_str],
             );
-        }
-        state.connections.lock().remove(old_session);
-        tracing::info!(did = %did, old_session = %old_session, "Ghosted old session for same DID");
-    }
-
-    // After ghosting, ensure our nick is in nick_to_session.
-    // It may not be there if the server deferred insertion during CAP/SASL
-    // negotiation (nick was in use by the ghost we just killed).
-    if let Some(ref nick) = conn.nick {
-        let mut nts = state.nick_to_session.lock();
-        let nick_lower = nick.to_lowercase();
-        let already_mapped = nts.keys().any(|k| k.to_lowercase() == nick_lower);
-        if !already_mapped {
-            nts.insert(nick.clone(), session_id.to_string());
-            tracing::info!(nick = %nick, "Registered nick after ghost");
+            let end_msg = crate::irc::Message::from_server(
+                server_name, crate::irc::RPL_ENDOFNAMES,
+                vec![nick, ch_name, "End of /NAMES list"],
+            );
+            send(state, session_id, format!("{names_msg}\r\n{end_msg}\r\n"));
+        } else {
+            drop(channels);
         }
     }
 
-    // Also reclaim if we got a fallback nick with trailing '_'.
-    let reclaim = conn.nick.as_ref()
-        .filter(|n| n.ends_with('_'))
-        .map(|n| (n.clone(), n.trim_end_matches('_').to_string()));
-    if let Some((current_nick, desired)) = reclaim {
-        let nick_free = !state.nick_to_session.lock()
-            .keys().any(|k| k.to_lowercase() == desired.to_lowercase());
-        if nick_free {
-            state.nick_to_session.lock().remove(&current_nick);
-            state.nick_to_session.lock()
-                .insert(desired.clone(), session_id.to_string());
-            tracing::info!(old = %current_nick, new = %desired, "Reclaimed nick after ghost");
-            conn.nick = Some(desired);
-        }
-    }
+    tracing::info!(did = %did, channels = ?channels_to_join.len(),
+                   "Session attached to {} existing channels", channels_to_join.len());
 }
 
 pub(super) fn try_complete_registration(
@@ -161,10 +218,10 @@ pub(super) fn try_complete_registration(
         }
     }
 
-    // Ghost + nick reclaim is handled at SASL success time (cap.rs).
+    // Multi-device attach is handled at SASL success time (cap.rs).
     // This catch-all covers edge cases where registration completes
     // without going through the SASL path.
-    ghost_same_did(conn, state, session_id);
+    attach_same_did(conn, state, session_id, send);
 
     conn.registered = true;
     let nick = conn.nick.as_deref().unwrap();

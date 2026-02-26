@@ -368,8 +368,21 @@ where
                         continue;
                     }
                     let nick_lower = nick.to_lowercase();
-                    let in_use = state.nick_to_session.lock()
-                        .keys().any(|k| k.to_lowercase() == nick_lower);
+                    let in_use_by_session = state.nick_to_session.lock()
+                        .iter()
+                        .find(|(k, _)| k.to_lowercase() == nick_lower)
+                        .map(|(_, sid)| sid.clone());
+                    let in_use = in_use_by_session.is_some();
+
+                    // Check if the nick is in use by the same DID (multi-device OK)
+                    let in_use_by_same_did = in_use_by_session.as_ref().map_or(false, |sid| {
+                        let session_dids = state.session_dids.lock();
+                        let my_did = conn.authenticated_did.as_deref();
+                        match (session_dids.get(sid), my_did) {
+                            (Some(other_did), Some(my)) => other_did == my,
+                            _ => false,
+                        }
+                    });
 
                     let owner_did = state.nick_owners.lock().get(&nick_lower).cloned();
                     let my_did = conn.authenticated_did.as_deref();
@@ -381,10 +394,9 @@ where
                         })
                     };
 
-                    if in_use {
+                    if in_use && !in_use_by_same_did {
                         // During CAP/SASL negotiation, allow the nick if it's owned
-                        // by a DID (the ghost at SASL completion will free it).
-                        // This prevents the client from getting a _-suffixed nick.
+                        // by a DID (attach_same_did will handle multi-device at SASL success).
                         let allow_during_negotiation = (conn.cap_negotiating || conn.sasl_in_progress)
                             && owner_did.is_some();
                         if !allow_during_negotiation {
@@ -396,9 +408,12 @@ where
                             send(&state, &session_id, format!("{reply}\r\n"));
                         } else {
                             // Stash desired nick — don't insert into nick_to_session yet.
-                            // ghost_same_did will handle the swap at SASL success.
+                            // attach_same_did will handle at SASL success.
                             conn.nick = Some(nick.clone());
                         }
+                    } else if in_use && in_use_by_same_did {
+                        // Same DID, multi-device — allow the nick, just stash it
+                        conn.nick = Some(nick.clone());
                     } else if nick_stolen {
                         let reply = Message::from_server(
                             &server_name,
@@ -779,42 +794,65 @@ where
         }
     }
 
-    // Cleanup — broadcast QUIT to all channels user was in
+    // Check if this DID has other active sessions (multi-device)
+    let did = conn.authenticated_did.as_deref();
+    let is_last_session_for_did = if let Some(d) = did {
+        let mut ds = state.did_sessions.lock();
+        if let Some(sessions) = ds.get_mut(d) {
+            sessions.remove(&session_id);
+            let remaining = sessions.len();
+            if sessions.is_empty() { ds.remove(d); }
+            remaining == 0
+        } else {
+            true
+        }
+    } else {
+        true // Guest sessions are always "last"
+    };
+
+    // Only broadcast QUIT and remove nick if this is the last session for the DID
     if let Some(ref nick) = conn.nick {
-        let hostmask = conn.hostmask();
-        let quit_msg = format!(":{hostmask} QUIT :Connection closed\r\n");
-        let channels = state.channels.lock();
-        let conns = state.connections.lock();
-        for ch in channels.values() {
-            if ch.members.contains(&session_id) {
-                for member in &ch.members {
-                    if member != &session_id
-                        && let Some(tx) = conns.get(member) {
-                            let _ = tx.try_send(quit_msg.clone());
-                        }
+        if is_last_session_for_did {
+            let hostmask = conn.hostmask();
+            let quit_msg = format!(":{hostmask} QUIT :Connection closed\r\n");
+            let channels = state.channels.lock();
+            let conns = state.connections.lock();
+            for ch in channels.values() {
+                if ch.members.contains(&session_id) {
+                    for member in &ch.members {
+                        if member != &session_id
+                            && let Some(tx) = conns.get(member) {
+                                let _ = tx.try_send(quit_msg.clone());
+                            }
+                    }
                 }
             }
-        }
-        drop(conns);
-        drop(channels);
-        state.nick_to_session.lock().remove(nick);
-    }
+            drop(conns);
+            drop(channels);
+            state.nick_to_session.lock().remove(nick);
 
-    // Broadcast QUIT to S2S peers
-    if let Some(ref nick) = conn.nick {
-        let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
-        s2s_broadcast(&state, crate::s2s::S2sMessage::Quit {
-            event_id: s2s_next_event_id(&state),
-            nick: nick.clone(),
-            reason: "Connection closed".to_string(),
-            origin,
-        });
+            // Broadcast QUIT to S2S peers only for last session
+            let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
+            s2s_broadcast(&state, crate::s2s::S2sMessage::Quit {
+                event_id: s2s_next_event_id(&state),
+                nick: nick.clone(),
+                reason: "Connection closed".to_string(),
+                origin,
+            });
+        } else {
+            tracing::info!(
+                %session_id,
+                nick = %nick,
+                "Session closed but other sessions remain for DID"
+            );
+        }
     }
 
     tracing::info!(
         %session_id,
         nick = conn.nick.as_deref().unwrap_or("-"),
         did = conn.authenticated_did.as_deref().unwrap_or("-"),
+        last_session = is_last_session_for_did,
         "Connection closed"
     );
     state.connections.lock().remove(&session_id);

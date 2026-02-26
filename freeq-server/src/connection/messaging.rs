@@ -367,7 +367,7 @@ pub(super) fn handle_privmsg(
         let from_nick = conn.nick.as_deref().unwrap_or("*").to_string();
         match relay_to_nick(state, &from_nick, target, text, s2s_next_event_id(state)) {
             RouteResult::Local(ref session) => {
-                // Target is local — deliver directly
+                // Target is local — deliver to ALL sessions for target's DID (multi-device)
                 // Send RPL_AWAY if target is away
                 if let Some(away_msg) = state.session_away.lock().get(session) {
                     let nick = conn.nick_or_star();
@@ -381,28 +381,65 @@ pub(super) fn handle_privmsg(
                     }
                 }
 
-                // Collect cap info, then send (avoid holding locks across sends)
-                let target_has_tags = state.cap_message_tags.lock().contains(session);
-                let sender_has_tags = state.cap_message_tags.lock().contains(&conn.id);
-                let target_has_time = state.cap_server_time.lock().contains(session);
-                let sender_has_time = state.cap_server_time.lock().contains(&conn.id);
-                let sender_has_echo = state.cap_echo_message.lock().contains(&conn.id);
+                // Find all sessions for target's DID
+                let target_sessions: Vec<String> = {
+                    let target_did = state.session_dids.lock().get(session).cloned();
+                    if let Some(ref did) = target_did {
+                        state.did_sessions.lock().get(did)
+                            .map(|s| s.iter().cloned().collect())
+                            .unwrap_or_else(|| vec![session.clone()])
+                    } else {
+                        vec![session.clone()] // Guest — single session
+                    }
+                };
 
                 let conns = state.connections.lock();
-                // Deliver to target
-                let line = if target_has_tags {
-                    if target_has_time { &tagged_line_with_time } else { &tagged_line }
-                } else { &plain_line };
-                if let Some(tx) = conns.get(session) {
-                    let _ = tx.try_send(line.clone());
-                }
-                // echo-message: echo DM back to sender
-                if sender_has_echo {
-                    let echo_line = if sender_has_tags {
-                        if sender_has_time { &tagged_line_with_time } else { &tagged_line }
+                // Deliver to all target sessions
+                for target_session in &target_sessions {
+                    let has_tags = state.cap_message_tags.lock().contains(target_session);
+                    let has_time = state.cap_server_time.lock().contains(target_session);
+                    let line = if has_tags {
+                        if has_time { &tagged_line_with_time } else { &tagged_line }
                     } else { &plain_line };
-                    if let Some(tx) = conns.get(&conn.id) {
-                        let _ = tx.try_send(echo_line.clone());
+                    if let Some(tx) = conns.get(target_session) {
+                        let _ = tx.try_send(line.clone());
+                    }
+                }
+
+                // echo-message: echo DM back to ALL sender's sessions
+                let sender_sessions: Vec<String> = {
+                    if let Some(ref did) = conn.authenticated_did {
+                        state.did_sessions.lock().get(did)
+                            .map(|s| s.iter().cloned().collect())
+                            .unwrap_or_else(|| vec![conn.id.clone()])
+                    } else {
+                        vec![conn.id.clone()]
+                    }
+                };
+                for sender_session in &sender_sessions {
+                    if sender_session == &conn.id {
+                        // Original sender — use echo-message cap
+                        let sender_has_echo = state.cap_echo_message.lock().contains(&conn.id);
+                        if sender_has_echo {
+                            let has_tags = state.cap_message_tags.lock().contains(&conn.id);
+                            let has_time = state.cap_server_time.lock().contains(&conn.id);
+                            let echo_line = if has_tags {
+                                if has_time { &tagged_line_with_time } else { &tagged_line }
+                            } else { &plain_line };
+                            if let Some(tx) = conns.get(&conn.id) {
+                                let _ = tx.try_send(echo_line.clone());
+                            }
+                        }
+                    } else {
+                        // Other sessions of sender — deliver as if they received it
+                        let has_tags = state.cap_message_tags.lock().contains(sender_session);
+                        let has_time = state.cap_server_time.lock().contains(sender_session);
+                        let line = if has_tags {
+                            if has_time { &tagged_line_with_time } else { &tagged_line }
+                        } else { &plain_line };
+                        if let Some(tx) = conns.get(sender_session) {
+                            let _ = tx.try_send(line.clone());
+                        }
                     }
                 }
             }
