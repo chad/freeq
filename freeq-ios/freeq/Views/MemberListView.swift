@@ -122,6 +122,12 @@ struct MemberListView: View {
                             .font(.system(size: 14, weight: .medium))
                             .foregroundColor(member.isAway ? Theme.textMuted : Theme.textPrimary)
                             .lineLimit(1)
+
+                        // Verified badge — Bluesky profile found
+                        if AvatarCache.shared.avatarURL(for: member.nick.lowercased()) != nil {
+                            VerifiedBadge(size: 11)
+                        }
+
                         if member.isAway {
                             Text("Away")
                                 .font(.system(size: 10, weight: .semibold))

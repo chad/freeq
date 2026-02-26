@@ -89,6 +89,11 @@ struct ChatView: View {
             SearchSheet()
                 .presentationDetents([.large])
         }
+        .sheet(isPresented: $appState.showMotd) {
+            MotdSheet()
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
         .preferredColorScheme(.dark)
     }
 

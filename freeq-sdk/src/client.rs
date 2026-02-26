@@ -879,9 +879,9 @@ where
                             let _ = event_tx.send(Event::ServerNotice { text }).await;
                         }
                         _ => {
-                            // Emit server error numerics (4xx, 5xx, 6xx, 9xx)
-                            // and unrecognized commands as ServerNotice so the
-                            // UI can display them.
+                            // Emit server error numerics (4xx, 5xx, 6xx, 9xx),
+                            // MOTD lines (372/375/376), and unrecognized commands
+                            // as ServerNotice so the UI can display them.
                             if let Ok(num) = msg.command.parse::<u16>() {
                                 if (400..700).contains(&num) || (900..1000).contains(&num) {
                                     // Skip our nick (param[0]) and join the rest
@@ -891,6 +891,20 @@ where
                                         msg.params.join(" ")
                                     };
                                     let _ = event_tx.send(Event::ServerNotice { text }).await;
+                                } else if num == 372 {
+                                    // MOTD body line — strip "- " prefix
+                                    let text = if msg.params.len() > 1 {
+                                        let body = msg.params[1..].join(" ");
+                                        let stripped = body.strip_prefix("- ").unwrap_or(&body);
+                                        format!("MOTD:{}", stripped)
+                                    } else {
+                                        "MOTD:".to_string()
+                                    };
+                                    let _ = event_tx.send(Event::ServerNotice { text }).await;
+                                } else if num == 375 {
+                                    let _ = event_tx.send(Event::ServerNotice { text: "MOTD:START".to_string() }).await;
+                                } else if num == 376 {
+                                    let _ = event_tx.send(Event::ServerNotice { text: "MOTD:END".to_string() }).await;
                                 }
                             }
                         }

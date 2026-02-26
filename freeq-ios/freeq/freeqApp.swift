@@ -4,6 +4,7 @@ import SwiftUI
 struct FreeqApp: App {
     @StateObject private var appState = AppState()
     @StateObject private var networkMonitor = NetworkMonitor()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -12,8 +13,12 @@ struct FreeqApp: App {
                 .environmentObject(networkMonitor)
                 .onAppear {
                     networkMonitor.bind(to: appState)
-                    NotificationManager.shared.requestPermission()
+                    // NOTE: notification permission is deferred until first mention
+                    // (see NotificationManager.requestPermissionIfNeeded)
                 }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            appState.handleScenePhase(newPhase)
         }
     }
 }

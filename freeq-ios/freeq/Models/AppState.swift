@@ -98,6 +98,7 @@ struct MemberInfo: Identifiable, Equatable {
     let isHalfop: Bool
     let isVoiced: Bool
     let awayMsg: String?
+    let did: String?
 
     var id: String { nick }
 
@@ -109,6 +110,7 @@ struct MemberInfo: Identifiable, Equatable {
     }
 
     var isAway: Bool { awayMsg != nil }
+    var isVerified: Bool { did != nil }
 }
 
 /// Connection state.
@@ -137,6 +139,11 @@ class AppState: ObservableObject {
     @Published var dmBuffers: [ChannelState] = []
     @Published var autoJoinChannels: [String] = ["#general"]
     @Published var unreadCounts: [String: Int] = [:]
+
+    /// MOTD lines collected from server
+    @Published var motdLines: [String] = []
+    @Published var showMotd: Bool = false
+    fileprivate var collectingMotd: Bool = false
 
     // In-flight CHATHISTORY batches
     fileprivate var batches: [String: BatchBuffer] = [:]
@@ -370,15 +377,23 @@ class AppState: ObservableObject {
     }
 
     private func fetchBrokerSession(brokerToken: String) async throws -> BrokerSessionResponse {
-        let url = URL(string: "\(authBrokerBase)/session")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: ["broker_token": brokerToken])
-        let (data, response) = try await URLSession.shared.data(for: request)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard status == 200 else { throw NSError(domain: "Broker", code: status) }
-        return try JSONDecoder().decode(BrokerSessionResponse.self, from: data)
+        // Retry once on 502 — DPoP nonce rotation causes the first call to fail
+        for attempt in 0..<2 {
+            let url = URL(string: "\(authBrokerBase)/session")!
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["broker_token": brokerToken])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            if status == 502 && attempt == 0 {
+                try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+                continue
+            }
+            guard status == 200 else { throw NSError(domain: "Broker", code: status) }
+            return try JSONDecoder().decode(BrokerSessionResponse.self, from: data)
+        }
+        throw NSError(domain: "Broker", code: 502)
     }
 
     func markRead(_ channel: String) {
@@ -394,6 +409,25 @@ class AppState: ObservableObject {
     func toggleTheme() {
         isDarkTheme.toggle()
         UserDefaults.standard.set(isDarkTheme, forKey: "freeq.darkTheme")
+    }
+
+    /// Called when the app transitions between foreground/background.
+    func handleScenePhase(_ phase: ScenePhase) {
+        switch phase {
+        case .active:
+            // Returning to foreground — reconnect if needed
+            NotificationManager.shared.clearBadge()
+            if connectionState == .disconnected && hasSavedSession {
+                reconnectSavedSession()
+            }
+        case .background:
+            // Going to background — nothing for now (WebSocket dies naturally)
+            break
+        case .inactive:
+            break
+        @unknown default:
+            break
+        }
     }
 
     func incrementUnread(_ channel: String) {
@@ -436,7 +470,7 @@ class AppState: ObservableObject {
         for ch in channels {
             if let idx = ch.members.firstIndex(where: { $0.nick.lowercased() == nick.lowercased() }) {
                 let m = ch.members[idx]
-                ch.members[idx] = MemberInfo(nick: m.nick, isOp: m.isOp, isHalfop: m.isHalfop, isVoiced: m.isVoiced, awayMsg: awayMsg)
+                ch.members[idx] = MemberInfo(nick: m.nick, isOp: m.isOp, isHalfop: m.isHalfop, isVoiced: m.isVoiced, awayMsg: awayMsg, did: m.did)
             }
         }
     }
@@ -454,7 +488,7 @@ class AppState: ObservableObject {
         for ch in channels {
             if let idx = ch.members.firstIndex(where: { $0.nick.lowercased() == oldNick.lowercased() }) {
                 let m = ch.members[idx]
-                ch.members[idx] = MemberInfo(nick: newNick, isOp: m.isOp, isHalfop: m.isHalfop, isVoiced: m.isVoiced, awayMsg: m.awayMsg)
+                ch.members[idx] = MemberInfo(nick: newNick, isOp: m.isOp, isHalfop: m.isHalfop, isVoiced: m.isVoiced, awayMsg: m.awayMsg, did: m.did)
             }
             if let ts = ch.typingUsers.removeValue(forKey: oldNick) {
                 ch.typingUsers[newNick] = ts
@@ -548,7 +582,7 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 )
                 ch.appendIfNew(msg)
                 if !ch.members.contains(where: { $0.nick.lowercased() == nick.lowercased() }) {
-                    ch.members.append(MemberInfo(nick: nick, isOp: false, isHalfop: false, isVoiced: false, awayMsg: nil))
+                    ch.members.append(MemberInfo(nick: nick, isOp: false, isHalfop: false, isVoiced: false, awayMsg: nil, did: nil))
                 }
             }
 
@@ -644,7 +678,7 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
         case .names(let channel, let members):
             let ch = state.getOrCreateChannel(channel)
             ch.members = members.map {
-                MemberInfo(nick: $0.nick, isOp: $0.isOp, isHalfop: $0.isHalfop, isVoiced: $0.isVoiced, awayMsg: $0.awayMsg)
+                MemberInfo(nick: $0.nick, isOp: $0.isOp, isHalfop: $0.isHalfop, isVoiced: $0.isVoiced, awayMsg: $0.awayMsg, did: nil)
             }
             // Prefetch avatars for all channel members
             let nicks = members.map { $0.nick }
@@ -662,12 +696,12 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
             if let idx = ch.members.firstIndex(where: { $0.nick.lowercased() == nick.lowercased() }) {
                 let member = ch.members[idx]
                 switch mode {
-                case "+o": ch.members[idx] = MemberInfo(nick: member.nick, isOp: true, isHalfop: false, isVoiced: member.isVoiced, awayMsg: member.awayMsg)
-                case "-o": ch.members[idx] = MemberInfo(nick: member.nick, isOp: false, isHalfop: member.isHalfop, isVoiced: member.isVoiced, awayMsg: member.awayMsg)
-                case "+h": ch.members[idx] = MemberInfo(nick: member.nick, isOp: member.isOp, isHalfop: true, isVoiced: member.isVoiced, awayMsg: member.awayMsg)
-                case "-h": ch.members[idx] = MemberInfo(nick: member.nick, isOp: member.isOp, isHalfop: false, isVoiced: member.isVoiced, awayMsg: member.awayMsg)
-                case "+v": ch.members[idx] = MemberInfo(nick: member.nick, isOp: member.isOp, isHalfop: member.isHalfop, isVoiced: true, awayMsg: member.awayMsg)
-                case "-v": ch.members[idx] = MemberInfo(nick: member.nick, isOp: member.isOp, isHalfop: member.isHalfop, isVoiced: false, awayMsg: member.awayMsg)
+                case "+o": ch.members[idx] = MemberInfo(nick: member.nick, isOp: true, isHalfop: false, isVoiced: member.isVoiced, awayMsg: member.awayMsg, did: member.did)
+                case "-o": ch.members[idx] = MemberInfo(nick: member.nick, isOp: false, isHalfop: member.isHalfop, isVoiced: member.isVoiced, awayMsg: member.awayMsg, did: member.did)
+                case "+h": ch.members[idx] = MemberInfo(nick: member.nick, isOp: member.isOp, isHalfop: true, isVoiced: member.isVoiced, awayMsg: member.awayMsg, did: member.did)
+                case "-h": ch.members[idx] = MemberInfo(nick: member.nick, isOp: member.isOp, isHalfop: false, isVoiced: member.isVoiced, awayMsg: member.awayMsg, did: member.did)
+                case "+v": ch.members[idx] = MemberInfo(nick: member.nick, isOp: member.isOp, isHalfop: member.isHalfop, isVoiced: true, awayMsg: member.awayMsg, did: member.did)
+                case "-v": ch.members[idx] = MemberInfo(nick: member.nick, isOp: member.isOp, isHalfop: member.isHalfop, isVoiced: false, awayMsg: member.awayMsg, did: member.did)
                 default: break
                 }
             }
@@ -737,20 +771,6 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 ch.applyReaction(msgId: replyId, emoji: emoji, from: from)
             }
 
-        case .batchStart(let id, _, let target):
-            state.batches[id] = AppState.BatchBuffer(target: target, messages: [])
-
-        case .batchEnd(let id):
-            guard let batch = state.batches.removeValue(forKey: id) else { return }
-            let sorted = batch.messages.sorted { $0.timestamp < $1.timestamp }
-            if batch.target.hasPrefix("#") {
-                let ch = state.getOrCreateChannel(batch.target)
-                for msg in sorted { ch.appendIfNew(msg) }
-            } else {
-                let dm = state.getOrCreateDM(batch.target)
-                for msg in sorted { dm.appendIfNew(msg) }
-            }
-
         case .nickChanged(let oldNick, let newNick):
             state.renameUser(oldNick: oldNick, newNick: newNick)
 
@@ -764,7 +784,22 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
             }
 
         case .notice(let text):
-            if !text.isEmpty { print("Notice: \(text)") }
+            // MOTD collection
+            if text == "MOTD:START" {
+                state.collectingMotd = true
+                state.motdLines = []
+            } else if text == "MOTD:END" {
+                state.collectingMotd = false
+                if !state.motdLines.isEmpty {
+                    state.showMotd = true
+                }
+            } else if text.hasPrefix("MOTD:") {
+                if state.collectingMotd {
+                    state.motdLines.append(String(text.dropFirst(5)))
+                }
+            } else if !text.isEmpty {
+                print("Notice: \(text)")
+            }
 
         case .disconnected(let reason):
             state.connectionState = .disconnected

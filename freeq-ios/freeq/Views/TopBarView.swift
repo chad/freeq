@@ -6,6 +6,7 @@ struct TopBarView: View {
     @Binding var showingJoinSheet: Bool
     @Binding var showingMembers: Bool
     @Binding var showingSearch: Bool
+    @State private var showingSettings = false
 
     var body: some View {
         HStack(spacing: 14) {
@@ -17,39 +18,46 @@ struct TopBarView: View {
                     .frame(width: 36, height: 36)
             }
 
-            // Channel info
-            VStack(alignment: .leading, spacing: 2) {
-                if let channel = appState.activeChannel {
-                    HStack(spacing: 6) {
-                        if channel.hasPrefix("#") {
-                            Text("#")
-                                .font(.system(size: 18, weight: .bold, design: .monospaced))
-                                .foregroundColor(Theme.textMuted)
-                            Text(String(channel.dropFirst()))
-                                .font(.system(size: 17, weight: .bold))
-                                .foregroundColor(Theme.textPrimary)
-                        } else {
-                            Circle()
-                                .fill(Theme.success)
-                                .frame(width: 8, height: 8)
-                            Text(channel)
-                                .font(.system(size: 17, weight: .bold))
-                                .foregroundColor(Theme.textPrimary)
-                        }
-                    }
-                } else {
-                    Text("freeq")
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundColor(Theme.textPrimary)
+            // Channel info — tap topic/name for settings
+            Button(action: {
+                if appState.activeChannel?.hasPrefix("#") == true {
+                    showingSettings = true
                 }
+            }) {
+                VStack(alignment: .leading, spacing: 2) {
+                    if let channel = appState.activeChannel {
+                        HStack(spacing: 6) {
+                            if channel.hasPrefix("#") {
+                                Text("#")
+                                    .font(.system(size: 18, weight: .bold, design: .monospaced))
+                                    .foregroundColor(Theme.textMuted)
+                                Text(String(channel.dropFirst()))
+                                    .font(.system(size: 17, weight: .bold))
+                                    .foregroundColor(Theme.textPrimary)
+                            } else {
+                                Circle()
+                                    .fill(Theme.success)
+                                    .frame(width: 8, height: 8)
+                                Text(channel)
+                                    .font(.system(size: 17, weight: .bold))
+                                    .foregroundColor(Theme.textPrimary)
+                            }
+                        }
+                    } else {
+                        Text("freeq")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundColor(Theme.textPrimary)
+                    }
 
-                if let topic = appState.activeChannelState?.topic, !topic.isEmpty {
-                    Text(topic)
-                        .font(.system(size: 12))
-                        .foregroundColor(Theme.textMuted)
-                        .lineLimit(1)
+                    if let topic = appState.activeChannelState?.topic, !topic.isEmpty {
+                        Text(topic)
+                            .font(.system(size: 12))
+                            .foregroundColor(Theme.textMuted)
+                            .lineLimit(1)
+                    }
                 }
             }
+            .buttonStyle(.plain)
 
             Spacer()
 
@@ -95,5 +103,12 @@ struct TopBarView: View {
                 .frame(height: 1),
             alignment: .bottom
         )
+        .sheet(isPresented: $showingSettings) {
+            if let channel = appState.activeChannelState, channel.name.hasPrefix("#") {
+                ChannelSettingsSheet(channel: channel)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
+            }
+        }
     }
 }
