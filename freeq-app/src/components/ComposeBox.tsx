@@ -184,25 +184,32 @@ export function ComposeBox() {
       if (resp.status === 401) {
         const brokerToken = localStorage.getItem('freeq-broker-token');
         const brokerBase = localStorage.getItem('freeq-broker-base');
+        console.log('[upload] 401 — attempting broker refresh', { hasBrokerToken: !!brokerToken, brokerBase });
         if (brokerToken && brokerBase) {
-          const refreshResp = await fetch(`${brokerBase}/session`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ broker_token: brokerToken }),
-          });
-          if (refreshResp.ok) {
-            // Broker pushed fresh OAuth session to server — retry upload
-            const retryForm = new FormData();
-            retryForm.append('file', pendingUpload.file);
-            retryForm.append('did', authDid);
-            if (activeChannel !== 'server' && activeChannel.startsWith('#')) retryForm.append('channel', activeChannel);
-            if (text.trim()) retryForm.append('alt', text.trim());
-            if (crossPost) retryForm.append('cross_post', 'true');
-            resp = await fetch('/api/v1/upload', { method: 'POST', body: retryForm });
+          try {
+            const refreshResp = await fetch(`${brokerBase}/session`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ broker_token: brokerToken }),
+            });
+            console.log('[upload] broker refresh response:', refreshResp.status);
+            if (refreshResp.ok) {
+              // Broker pushed fresh OAuth session to server — retry upload
+              const retryForm = new FormData();
+              retryForm.append('file', pendingUpload.file);
+              retryForm.append('did', authDid);
+              if (activeChannel !== 'server' && activeChannel.startsWith('#')) retryForm.append('channel', activeChannel);
+              if (text.trim()) retryForm.append('alt', text.trim());
+              if (crossPost) retryForm.append('cross_post', 'true');
+              resp = await fetch('/api/v1/upload', { method: 'POST', body: retryForm });
+              console.log('[upload] retry response:', resp.status);
+            }
+          } catch (e) {
+            console.warn('[upload] broker refresh error:', e);
           }
         }
         if (resp.status === 401) {
-          throw new Error('Upload session expired. Please log out and sign in again to upload.');
+          throw new Error('Upload session expired. Try refreshing the page, or log out and sign in again.');
         }
       }
 
