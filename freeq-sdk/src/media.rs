@@ -368,22 +368,30 @@ pub async fn upload_media_to_pds(
         ).await; // Best-effort; don't fail the upload if cross-post fails
     }
 
-    // Step 3: Build CDN URL (works now that blob is referenced by a record)
-    let ext = match mime.as_str() {
-        "image/png" => "png",
-        "image/webp" => "webp",
-        "image/gif" => "gif",
-        _ => "jpeg",
+    // Step 3: Build URL
+    // Image CDN only works for images — audio/video need the raw blob URL
+    let url = if mime.starts_with("image/") {
+        let ext = match mime.as_str() {
+            "image/png" => "png",
+            "image/webp" => "webp",
+            "image/gif" => "gif",
+            _ => "jpeg",
+        };
+        format!(
+            "https://cdn.bsky.app/img/feed_fullsize/plain/{did}/{cid}@{ext}",
+        )
+    } else {
+        // For audio/video, use the raw blob endpoint on the PDS
+        format!(
+            "{pds_url}/xrpc/com.atproto.sync.getBlob?did={did}&cid={cid}",
+        )
     };
-    let cdn_url = format!(
-        "https://cdn.bsky.app/img/feed_fullsize/plain/{did}/{cid}@{ext}",
-    );
 
     Ok(MediaUploadResult {
         cid,
         size,
         mime_type: mime,
-        url: cdn_url,
+        url,
     })
 }
 

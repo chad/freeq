@@ -184,7 +184,6 @@ struct ComposeView: View {
                     if !isRecording {
                         if holdStart == nil {
                             holdStart = Date()
-                            // Fire a timer to start recording after 0.25s hold
                             holdTimer?.invalidate()
                             holdTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: false) { _ in
                                 DispatchQueue.main.async {
@@ -194,10 +193,17 @@ struct ComposeView: View {
                                 }
                             }
                         }
+                        // Cancel timer if finger moves too much before recording starts
+                        if abs(value.translation.width) > 15 || abs(value.translation.height) > 15 {
+                            holdTimer?.invalidate()
+                            holdTimer = nil
+                            holdStart = nil
+                        }
                     }
+                    // Always track drag offset once recording (slide to cancel)
                     if isRecording {
                         dragOffset = value.translation.width
-                        recordingCancelled = dragOffset < -80
+                        recordingCancelled = dragOffset < -60
                     }
                 }
                 .onEnded { _ in
@@ -208,7 +214,6 @@ struct ComposeView: View {
                     if wasRecording {
                         stopRecording()
                     } else {
-                        // Brief tap — show hint
                         ToastManager.shared.show("Hold to record voice message", icon: "mic.fill")
                     }
                 }

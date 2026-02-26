@@ -661,7 +661,7 @@ struct MessageListView: View {
 
     /// Detect "🎤 Voice message (0:05) https://..." pattern
     private func extractVoiceMessage(_ text: String) -> (URL, String?)? {
-        guard text.hasPrefix("🎤") else { return nil }
+        guard text.contains("🎤") else { return nil }
         // Extract duration label
         let durationPattern = #"\((\d+:\d+)\)"#
         var durationLabel: String? = nil

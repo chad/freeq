@@ -54,6 +54,15 @@ function shouldShowDateSep(msgs: Message[], i: number): boolean {
 const IMAGE_URL_RE = /https?:\/\/[^\s<]+\.(?:jpg|jpeg|png|gif|webp)(?:\?[^\s<]*)?/gi;
 const CDN_IMAGE_RE = /https?:\/\/cdn\.bsky\.app\/img\/[^\s<]+/gi;
 
+// Voice message pattern: 🎤 Voice message (0:05) https://...
+const VOICE_MSG_RE = /🎤[^h]*(https?:\/\/\S+)/;
+// Video URL patterns
+const VIDEO_URL_RE = /https?:\/\/[^\s<]+\.(?:mp4|mov|m4v|webm)(?:\?[^\s<]*)?/i;
+// Audio URL patterns (file extension based)
+const AUDIO_URL_RE = /https?:\/\/[^\s<]+\.(?:m4a|mp3|ogg|wav|aac)(?:\?[^\s<]*)?/i;
+// PDS blob URL (for audio/video blobs)
+const PDS_BLOB_RE = /https?:\/\/[^\s]+\/xrpc\/com\.atproto\.sync\.getBlob[^\s]*/i;
+
 function extractImageUrls(text: string): string[] {
   const urls: string[] = [];
   const matches = text.match(IMAGE_URL_RE) || [];
@@ -175,6 +184,85 @@ const BSKY_POST_RE = /https?:\/\/bsky\.app\/profile\/([^/]+)\/post\/([a-zA-Z0-9]
 // YouTube URL pattern  
 const YT_RE = /(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
 
+/** Inline audio player for voice messages and audio files */
+function InlineAudioPlayer({ url, label }: { url: string; label?: string }) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  const toggle = () => {
+    const el = audioRef.current;
+    if (!el) return;
+    if (playing) {
+      el.pause();
+      setPlaying(false);
+    } else {
+      el.play().catch(() => {});
+      setPlaying(true);
+    }
+  };
+
+  const fmt = (s: number) => {
+    if (!s || !isFinite(s)) return '0:00';
+    return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="mt-1.5 flex items-center gap-3 bg-bg-tertiary border border-border rounded-xl px-3 py-2.5 max-w-[300px]">
+      <button
+        onClick={toggle}
+        className="flex-shrink-0 w-10 h-10 rounded-full bg-accent flex items-center justify-center hover:brightness-110 transition"
+      >
+        {playing ? (
+          <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+        ) : (
+          <svg className="w-4 h-4 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        )}
+      </button>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5 text-xs text-fg-muted mb-1">
+          <svg className="w-3 h-3 text-accent" fill="currentColor" viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm-1-9c0-.55.45-1 1-1s1 .45 1 1v6c0 .55-.45 1-1 1s-1-.45-1-1V5z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+          <span className="font-medium text-fg-secondary">Voice message</span>
+        </div>
+        <div className="relative h-1 bg-bg-hover rounded-full overflow-hidden">
+          <div
+            className="absolute left-0 top-0 h-full bg-accent rounded-full transition-all"
+            style={{ width: duration > 0 ? `${(progress / duration) * 100}%` : '0%' }}
+          />
+        </div>
+        <div className="flex justify-between mt-1 text-[10px] text-fg-muted font-mono">
+          <span>{fmt(playing ? progress : 0)}</span>
+          <span>{label || fmt(duration)}</span>
+        </div>
+      </div>
+      <audio
+        ref={audioRef}
+        src={url}
+        preload="metadata"
+        onLoadedMetadata={() => setDuration(audioRef.current?.duration || 0)}
+        onTimeUpdate={() => setProgress(audioRef.current?.currentTime || 0)}
+        onEnded={() => { setPlaying(false); setProgress(0); }}
+      />
+    </div>
+  );
+}
+
+/** Inline video player */
+function InlineVideoPlayer({ url }: { url: string }) {
+  return (
+    <div className="mt-1.5 max-w-sm">
+      <video
+        src={url}
+        controls
+        preload="metadata"
+        className="rounded-lg border border-border max-h-72 bg-black"
+        playsInline
+      />
+    </div>
+  );
+}
+
 function MessageContent({ msg }: { msg: Message }) {
   const setLightbox = useStore((s) => s.setLightboxUrl);
 
@@ -183,6 +271,44 @@ function MessageContent({ msg }: { msg: Message }) {
     return (
       <div className="text-fg-muted italic text-[15px] mt-0.5">
         <span style={{ color }} className="font-semibold not-italic">{'* '}{msg.from}</span>{' '}{msg.text}
+      </div>
+    );
+  }
+
+  // Voice messages — check first before image extraction
+  const voiceMatch = msg.text.match(VOICE_MSG_RE);
+  if (voiceMatch) {
+    const durationMatch = msg.text.match(/\((\d+:\d+)\)/);
+    return (
+      <div className="mt-0.5">
+        {msg.replyTo && <ReplyBadge msgId={msg.replyTo} />}
+        <InlineAudioPlayer url={voiceMatch[1]} label={durationMatch?.[1]} />
+      </div>
+    );
+  }
+
+  // Video URLs
+  const videoMatch = msg.text.match(VIDEO_URL_RE);
+  if (videoMatch) {
+    const cleanText = msg.text.replace(videoMatch[0], '').trim();
+    return (
+      <div className="mt-0.5">
+        {msg.replyTo && <ReplyBadge msgId={msg.replyTo} />}
+        {cleanText && <div className="text-[15px] leading-relaxed mb-1">{renderTextSafe(cleanText)}</div>}
+        <InlineVideoPlayer url={videoMatch[0]} />
+      </div>
+    );
+  }
+
+  // Audio URLs (non-voice-message)
+  const audioMatch = msg.text.match(AUDIO_URL_RE) || msg.text.match(PDS_BLOB_RE);
+  if (audioMatch && !msg.text.match(IMAGE_URL_RE) && !msg.text.match(CDN_IMAGE_RE)) {
+    const cleanText = msg.text.replace(audioMatch[0], '').trim();
+    return (
+      <div className="mt-0.5">
+        {msg.replyTo && <ReplyBadge msgId={msg.replyTo} />}
+        {cleanText && <div className="text-[15px] leading-relaxed mb-1">{renderTextSafe(cleanText)}</div>}
+        <InlineAudioPlayer url={audioMatch[0]} />
       </div>
     );
   }
