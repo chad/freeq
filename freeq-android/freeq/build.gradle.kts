@@ -71,6 +71,9 @@ dependencies {
     // Browser (Chrome Custom Tabs for OAuth)
     implementation("androidx.browser:browser:1.7.0")
 
+    // Emoji picker
+    implementation("androidx.emoji2:emoji2-emojipicker:1.5.0")
+
     // JNA (required by UniFFI-generated Kotlin bindings)
     implementation("net.java.dev.jna:jna:5.13.0@aar")
 

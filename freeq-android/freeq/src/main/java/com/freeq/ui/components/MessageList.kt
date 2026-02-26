@@ -1,6 +1,8 @@
 package com.freeq.ui.components
 
+import android.view.ContextThemeWrapper
 import androidx.compose.foundation.background
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -182,6 +184,7 @@ private fun MessageBubble(
     onThreadClick: ((ChatMessage) -> Unit)? = null
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    var showEmojiPicker by remember { mutableStateOf(false) }
     val haptic = LocalHapticFeedback.current
     val isOwn = msg.from.equals(appState.nick.value, ignoreCase = true)
     val isMention = !isOwn && appState.nick.value.isNotEmpty() &&
@@ -270,6 +273,13 @@ private fun MessageBubble(
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
+                        if (msg.isEdited) {
+                            Text(
+                                text = "(edited)",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                        }
                     }
                 }
 
@@ -280,15 +290,6 @@ private fun MessageBubble(
                     fromNick = msg.from,
                     onImageClick = onImageClick
                 )
-
-                if (msg.isEdited) {
-                    Text(
-                        text = "(edited)",
-                        fontSize = 11.sp,
-                        fontStyle = FontStyle.Italic,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                    )
-                }
 
                 // Reactions
                 if (msg.reactions.isNotEmpty()) {
@@ -337,6 +338,32 @@ private fun MessageBubble(
             expanded = showMenu,
             onDismissRequest = { showMenu = false }
         ) {
+            // Quick-react emoji row
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                listOf("\uD83D\uDC4D", "\u2764\uFE0F", "\uD83D\uDE02", "\uD83D\uDE2E", "\uD83D\uDE22", "\uD83D\uDC4E").forEach { emoji ->
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            appState.activeChannel.value?.let { target ->
+                                appState.sendReaction(target, msg.id, emoji)
+                            }
+                            showMenu = false
+                        }
+                    ) {
+                        Text(
+                            emoji,
+                            fontSize = 20.sp,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                }
+            }
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
             DropdownMenuItem(
                 text = { Text("Reply") },
                 onClick = {
@@ -365,6 +392,14 @@ private fun MessageBubble(
                 },
                 leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) }
             )
+            DropdownMenuItem(
+                text = { Text("Add Reaction") },
+                onClick = {
+                    showMenu = false
+                    showEmojiPicker = true
+                },
+                leadingIcon = { Icon(Icons.Default.AddReaction, contentDescription = null) }
+            )
             if (isOwn) {
                 DropdownMenuItem(
                     text = { Text("Edit") },
@@ -392,6 +427,37 @@ private fun MessageBubble(
                     }
                 )
             }
+        }
+
+        // Emoji picker dialog
+        if (showEmojiPicker) {
+            AlertDialog(
+                onDismissRequest = { showEmojiPicker = false },
+                confirmButton = {},
+                title = { Text("Add Reaction") },
+                containerColor = MaterialTheme.colorScheme.surface,
+                text = {
+                    AndroidView(
+                        factory = { context ->
+                            val darkContext = ContextThemeWrapper(
+                                context,
+                                android.R.style.Theme_DeviceDefault
+                            )
+                            androidx.emoji2.emojipicker.EmojiPickerView(darkContext).apply {
+                                setOnEmojiPickedListener { emojiViewItem ->
+                                    appState.activeChannel.value?.let { target ->
+                                        appState.sendReaction(target, msg.id, emojiViewItem.emoji)
+                                    }
+                                    showEmojiPicker = false
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(350.dp)
+                    )
+                }
+            )
         }
     }
 }
