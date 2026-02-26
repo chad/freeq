@@ -607,6 +607,7 @@ async fn auth_broker_session(
         .ok_or((StatusCode::FORBIDDEN, "Broker auth not configured".to_string()))?;
     verify_broker_signature(&secret, &headers, &req)?;
 
+    tracing::info!(did = %req.did, "Broker pushed web session");
     state.web_sessions.lock().insert(req.did.clone(), crate::server::WebSession {
         did: req.did.clone(),
         handle: req.handle.clone(),
@@ -1142,8 +1143,15 @@ async fn api_upload(
     }
 
     // Look up the user's web session
-    let session = state.web_sessions.lock().get(&did).cloned()
-        .ok_or_else(|| (StatusCode::UNAUTHORIZED, "No active session for this DID — please re-authenticate".into()))?;
+    let session = state.web_sessions.lock().get(&did).cloned();
+    let session = match session {
+        Some(s) => s,
+        None => {
+            let count = state.web_sessions.lock().len();
+            tracing::warn!(did = %did, session_count = count, "Upload 401: no web session for DID");
+            return Err((StatusCode::UNAUTHORIZED, "No active session for this DID — please re-authenticate".into()));
+        }
+    };
 
     // Sessions persist until server restart (in-memory only).
     // No time-based expiry — the PDS access token may expire on its own,
