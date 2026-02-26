@@ -291,6 +291,7 @@ export function sendEdit(target: string, originalMsgId: string, newText: string)
 }
 
 export function sendDelete(target: string, msgId: string) {
+  useStore.getState().deleteMessage(target, msgId);
   const line = format('TAGMSG', [target], { '+draft/delete': msgId });
   raw(line);
 }

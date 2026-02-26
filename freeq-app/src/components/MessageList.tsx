@@ -440,7 +440,7 @@ function isGrouped(msgs: Message[], i: number): boolean {
   if (i === 0) return false;
   const prev = msgs[i - 1];
   const curr = msgs[i];
-  if (prev.isSystem || curr.isSystem) return false;
+  if (prev.isSystem || curr.isSystem || prev.deleted || curr.deleted) return false;
   if (prev.from !== curr.from) return false;
   if (curr.timestamp.getTime() - prev.timestamp.getTime() > 5 * 60 * 1000) return false;
   return true;
@@ -991,7 +991,11 @@ export function MessageList() {
               </div>
             )}
             {shouldShowDateSep(messages, i) && <DateSeparator date={msg.timestamp} />}
-            {msg.isSystem ? (
+            {msg.deleted ? (
+              <div className="px-4 py-0.5 text-xs italic text-[var(--text-muted)] opacity-50">
+                Message from {msg.from} deleted
+              </div>
+            ) : msg.isSystem ? (
               <SystemMessage msg={msg} />
             ) : isGrouped(messages, i) ? (
               <GroupedMessage msg={msg} channel={activeChannel} onNickClick={onNickClick} />
