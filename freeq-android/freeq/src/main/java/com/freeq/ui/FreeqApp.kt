@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import com.freeq.model.AppState
 import com.freeq.model.ConnectionState
+import com.freeq.ui.components.MotdDialog
 import com.freeq.ui.navigation.MainScreen
 import com.freeq.ui.screens.ConnectScreen
 import com.freeq.ui.theme.FreeqTheme
@@ -21,5 +22,7 @@ fun FreeqApp(appState: AppState) {
             ConnectionState.Connected,
             ConnectionState.Registered -> MainScreen(appState)
         }
+
+        MotdDialog(appState)
     }
 }

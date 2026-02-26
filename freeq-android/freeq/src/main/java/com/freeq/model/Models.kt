@@ -30,7 +30,8 @@ data class MemberInfo(
     val isOp: Boolean,
     val isHalfop: Boolean = false,
     val isVoiced: Boolean,
-    val awayMsg: String? = null
+    val awayMsg: String? = null,
+    val did: String? = null
 ) {
     val prefix: String
         get() = when {
@@ -144,13 +145,19 @@ class AppState(application: Application) : AndroidViewModel(application) {
     val batches = mutableMapOf<String, BatchBuffer>()
     data class BatchBuffer(val target: String, val messages: MutableList<ChatMessage> = mutableListOf())
 
+    // MOTD
+    val motdLines = mutableStateListOf<String>()
+    var showMotd = mutableStateOf(false)
+    internal var collectingMotd = false
+
     private var client: FreeqClient? = null
     private var lastTypingSent: Long = 0
-    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    var reconnectAttempts = 0
+    internal val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     val notificationManager = FreeqNotificationManager(application)
     val networkMonitor = NetworkMonitor(application).also { it.bind(this) }
 
-    private val prefs: SharedPreferences
+    internal val prefs: SharedPreferences
         get() = getApplication<Application>().getSharedPreferences("freeq", Context.MODE_PRIVATE)
 
     val activeChannelState: ChannelState?
@@ -433,6 +440,7 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
 
             is FreeqEvent.Registered -> {
                 state.connectionState.value = ConnectionState.Registered
+                state.reconnectAttempts = 0
                 state.nick.value = event.nick
                 state.autoJoinChannels.toList().forEach { state.joinChannel(it) }
             }
@@ -620,13 +628,41 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
             }
 
             is FreeqEvent.Notice -> {
-                // Could display in a notice buffer
+                val text = event.text
+                if (text == "MOTD:START") {
+                    state.collectingMotd = true
+                    state.motdLines.clear()
+                } else if (text == "MOTD:END") {
+                    state.collectingMotd = false
+                    if (state.motdLines.isNotEmpty()) {
+                        val content = state.motdLines.joinToString("\n")
+                        val hash = content.hashCode().toString(36)
+                        val seenHash = state.prefs.getString("motd_seen_hash", null)
+                        if (hash != seenHash) {
+                            state.showMotd.value = true
+                        }
+                    }
+                } else if (text.startsWith("MOTD:") && state.collectingMotd) {
+                    state.motdLines.add(text.removePrefix("MOTD:"))
+                }
             }
 
             is FreeqEvent.Disconnected -> {
                 state.connectionState.value = ConnectionState.Disconnected
                 if (event.reason.isNotEmpty()) {
                     state.errorMessage.value = "Disconnected: ${event.reason}"
+                }
+                // Auto-reconnect with exponential backoff (2s, 4s, 8s, 16s, 30s cap)
+                if (state.nick.value.isNotEmpty()) {
+                    state.reconnectAttempts++
+                    val delay = minOf(1L shl minOf(state.reconnectAttempts, 5), 30L)
+                    state.scope.launch {
+                        kotlinx.coroutines.delay(delay * 1000)
+                        if (state.connectionState.value == ConnectionState.Disconnected
+                            && state.nick.value.isNotEmpty()) {
+                            state.connect(state.nick.value)
+                        }
+                    }
                 }
             }
 
