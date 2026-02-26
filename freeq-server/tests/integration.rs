@@ -1970,3 +1970,82 @@ async fn halfop_mode() {
     handle_half.privmsg("#halftest", "halfop can speak").await.unwrap();
     expect_event(&mut events_op, 5000, |e| matches!(e, Event::Message { text, .. } if text == "halfop can speak"), "halfop speaks in +m").await;
 }
+
+// ── Test: Message signing for DID-authenticated users ───────────────
+
+#[tokio::test]
+async fn message_signing_authenticated_user() {
+    let private_key = PrivateKey::generate_secp256k1();
+    let did_str = "did:plc:sigtest";
+    let doc = did::make_test_did_document(did_str, &private_key.public_key_multibase());
+
+    let mut docs = HashMap::new();
+    docs.insert(did_str.to_string(), doc);
+    let resolver = DidResolver::static_map(docs);
+
+    let (addr, server_handle) = start_test_server(resolver).await;
+
+    // Authenticated user
+    let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(
+        did_str.to_string(),
+        private_key,
+    ));
+    let config = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "signer".to_string(),
+        user: "signer".to_string(),
+        realname: "Signer".to_string(),
+        ..Default::default()
+    };
+    let (handle_auth, mut events_auth) = client::connect(config, Some(signer));
+    expect_event(&mut events_auth, 2000, |e| matches!(e, Event::Registered { .. }), "auth registered").await;
+
+    // Guest user (to receive messages and check for sig tag)
+    let config2 = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "observer".to_string(),
+        user: "observer".to_string(),
+        realname: "Observer".to_string(),
+        ..Default::default()
+    };
+    let (handle_guest, mut events_guest) = client::connect(config2, None);
+    expect_event(&mut events_guest, 2000, |e| matches!(e, Event::Registered { .. }), "guest registered").await;
+
+    // Both join channel
+    handle_auth.join("#sigtest").await.unwrap();
+    expect_event(&mut events_auth, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#sigtest"), "auth joined").await;
+    handle_guest.join("#sigtest").await.unwrap();
+    expect_event(&mut events_guest, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#sigtest"), "guest joined").await;
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    while events_auth.try_recv().is_ok() {}
+    while events_guest.try_recv().is_ok() {}
+
+    // Authenticated user sends message
+    handle_auth.privmsg("#sigtest", "signed hello").await.unwrap();
+
+    // Guest should receive message WITH sig tag
+    let msg = expect_event(&mut events_guest, 2000, |e| {
+        matches!(e, Event::Message { text, .. } if text == "signed hello")
+    }, "guest got signed msg").await;
+
+    if let Event::Message { tags, .. } = &msg {
+        assert!(tags.contains_key("+freeq.at/sig"), "Message from authenticated user should have +freeq.at/sig tag. Tags: {:?}", tags);
+        let sig = tags.get("+freeq.at/sig").unwrap();
+        assert!(!sig.is_empty(), "Signature should not be empty");
+    }
+
+    // Guest sends a message — should NOT have sig tag
+    handle_guest.privmsg("#sigtest", "unsigned hello").await.unwrap();
+    let msg2 = expect_event(&mut events_auth, 2000, |e| {
+        matches!(e, Event::Message { text, .. } if text == "unsigned hello")
+    }, "auth got unsigned msg").await;
+
+    if let Event::Message { tags, .. } = &msg2 {
+        assert!(!tags.contains_key("+freeq.at/sig"), "Message from guest should NOT have +freeq.at/sig tag. Tags: {:?}", tags);
+    }
+
+    handle_auth.quit(None).await.unwrap();
+    handle_guest.quit(None).await.unwrap();
+    server_handle.abort();
+}

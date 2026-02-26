@@ -195,6 +195,7 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/og", get(api_og_preview))
         .route("/api/v1/keys/{did}", get(api_get_keys))
         .route("/api/v1/keys", axum::routing::post(api_upload_keys))
+        .route("/api/v1/signing-key", get(api_signing_key))
         .route("/auth/mobile", get(auth_mobile_redirect))
         .route("/join/{channel}", get(channel_invite_page))
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)) // 12MB
@@ -362,6 +363,22 @@ struct WhoisResponse {
 
 /// Server start time (set once on first call).
 static START_TIME: std::sync::OnceLock<SystemTime> = std::sync::OnceLock::new();
+
+/// Public endpoint: returns the server's message signing public key.
+/// Clients and federated servers use this to verify `+freeq.at/sig` tags.
+async fn api_signing_key(State(state): State<Arc<SharedState>>) -> Json<serde_json::Value> {
+    let vk = state.msg_signing_key.verifying_key();
+    use base64::Engine;
+    let pubkey_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(vk.as_bytes());
+    Json(serde_json::json!({
+        "algorithm": "ed25519",
+        "public_key": pubkey_b64,
+        "encoding": "base64url",
+        "usage": "message-signing",
+        "canonical_form": "{sender_did}\\0{target}\\0{text}\\0{timestamp}",
+        "tag": "+freeq.at/sig"
+    }))
+}
 
 async fn api_health(State(state): State<Arc<SharedState>>) -> Json<HealthResponse> {
     let start = START_TIME.get_or_init(SystemTime::now);

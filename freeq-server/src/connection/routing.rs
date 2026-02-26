@@ -82,6 +82,7 @@ pub(crate) fn relay_to_nick(
                 text: text.to_string(),
                 origin,
                 msgid: None, // PM relay — no msgid (recipient server assigns)
+                sig: None,   // PM relay — sig not available at routing layer
             });
         }
         return RouteResult::Relayed;

@@ -330,6 +330,10 @@ pub struct SharedState {
     pub msg_timestamps: Mutex<HashMap<String, Vec<u64>>>,
     /// Per-IP active connection count (for connection limiting).
     pub ip_connections: Mutex<HashMap<std::net::IpAddr, u32>>,
+    /// Ed25519 signing key for message attestation.
+    /// The server signs messages from DID-authenticated users to provide
+    /// provenance that survives federation. Published at /api/v1/signing-key.
+    pub msg_signing_key: ed25519_dalek::SigningKey,
 }
 
 impl SharedState {
@@ -562,6 +566,38 @@ impl Server {
             self.config.plugin_dir.as_deref(),
         );
 
+        // Load or generate message signing key
+        let msg_signing_key = {
+            let key_path = std::path::Path::new(
+                self.config.data_dir.as_deref().unwrap_or(".")
+            ).join("msg-signing-key.secret");
+            if key_path.exists() {
+                if let Ok(data) = std::fs::read(&key_path) {
+                    if let Ok(bytes) = <[u8; 32]>::try_from(data.as_slice()) {
+                        tracing::info!("Loaded message signing key from {}", key_path.display());
+                        ed25519_dalek::SigningKey::from_bytes(&bytes)
+                    } else {
+                        tracing::warn!("Corrupt msg signing key, regenerating");
+                        let key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+                        let _ = std::fs::write(&key_path, key.to_bytes());
+                        key
+                    }
+                } else {
+                    let key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+                    let _ = std::fs::write(&key_path, key.to_bytes());
+                    key
+                }
+            } else {
+                let key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+                if let Err(e) = std::fs::write(&key_path, key.to_bytes()) {
+                    tracing::error!("Failed to persist msg signing key: {e}");
+                } else {
+                    tracing::info!("Generated message signing key at {}", key_path.display());
+                }
+                key
+            }
+        };
+
         Ok(Arc::new(SharedState {
             server_name: self.config.server_name.clone(),
             challenge_store: ChallengeStore::new(self.config.challenge_timeout_secs),
@@ -614,6 +650,7 @@ impl Server {
             prekey_bundles: Mutex::new(HashMap::new()),
             msg_timestamps: Mutex::new(HashMap::new()),
             ip_connections: Mutex::new(HashMap::new()),
+            msg_signing_key,
         }))
     }
 
@@ -1125,15 +1162,18 @@ async fn process_s2s_message(
             manager.peer_names.lock().await.insert(authenticated_peer_id.to_string(), server_name);
         }
 
-        S2sMessage::Privmsg { from, target, text, origin: _, msgid, .. } => {
+        S2sMessage::Privmsg { from, target, text, origin: _, msgid, sig, .. } => {
             // Generate a local msgid if the remote didn't send one
             let msgid = msgid.unwrap_or_else(crate::msgid::generate);
 
-            // Plain line for non-tag clients, tagged line with msgid for tag clients
+            // Plain line for non-tag clients, tagged line with msgid + sig for tag clients
             let plain_line = format!(":{from} PRIVMSG {target} :{text}\r\n");
             let tagged_line = {
                 let mut tags = HashMap::new();
                 tags.insert("msgid".to_string(), msgid.clone());
+                if let Some(ref sig) = sig {
+                    tags.insert("+freeq.at/sig".to_string(), sig.clone());
+                }
                 let tag_msg = crate::irc::Message {
                     tags,
                     prefix: Some(from.clone()),
@@ -1180,6 +1220,9 @@ async fn process_s2s_message(
                         .as_secs();
                     let mut tags = HashMap::new();
                     tags.insert("msgid".to_string(), msgid.clone());
+                    if let Some(ref sig) = sig {
+                        tags.insert("+freeq.at/sig".to_string(), sig.clone());
+                    }
                     let mut channels = state.channels.lock();
                     if let Some(ch) = channels.get_mut(&channel_key) {
                         ch.history.push_back(HistoryMessage {

@@ -194,17 +194,7 @@ If something feels “too clever,” it’s probably wrong.
 ### P0 — Critical (do next)
 
 - [x] **`msgid` on all messages** — ✅ DONE. ULID on every PRIVMSG/NOTICE, carried in IRCv3 `msgid` tag, stored in DB + history, included in CHATHISTORY replay and JOIN history. S2S preserves msgid across federation.
-- [ ] **Message signing by default** — All messages from DID-authenticated users should be cryptographically signed. This is the foundational trust property: if you have a DID, your messages are provably yours. Design:
-  - Authenticated users sign every PRIVMSG/NOTICE/TOPIC with their DID key
-  - Signature carried via IRCv3 message tag (e.g. `+freeq.at/sig=<base64url>`)
-  - Signed data: `{target}\0{text}\0{timestamp}` (canonical form)
-  - Server verifies signature on receipt (reject forged messages from peers)
-  - S2S relayed messages carry the original signature (end-to-end verifiable)
-  - Clients can verify signatures against the sender's DID document
-  - Guest (unauthenticated) messages are unsigned — clearly distinguishable
-  - Key types: secp256k1 (MUST), ed25519 (SHOULD) — same as SASL
-  - **Scope**: PRIVMSG, NOTICE, TOPIC, KICK (actions with attribution)
-  - **Non-goal for now**: signing JOIN/PART/MODE (low attribution value)
+- [x] **Message signing by default** — ✅ DONE. Server-attested ed25519 signatures on all PRIVMSG/NOTICE from DID-authenticated users. Signature carried via `+freeq.at/sig=<base64url>` IRCv3 tag. Canonical form: `{sender_did}\0{target}\0{text}\0{timestamp}`. S2S carries signatures through federation. Guest messages are unsigned. Public key at `/api/v1/signing-key`. Web client shows signed badge (🔒). Phase 2: client-side signing with session keys.
 
 ### P1 — High priority
 

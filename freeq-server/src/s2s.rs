@@ -77,6 +77,9 @@ pub enum S2sMessage {
         /// ULID message ID (IRCv3 `msgid` tag).
         #[serde(default)]
         msgid: Option<String>,
+        /// Server-attested message signature (`+freeq.at/sig`).
+        #[serde(default)]
+        sig: Option<String>,
     },
 
     /// A user joined a channel.

@@ -7,6 +7,25 @@ use crate::server::SharedState;
 use super::Connection;
 use super::helpers::{s2s_broadcast, s2s_next_event_id, normalize_channel};
 
+/// Sign a message on behalf of a DID-authenticated user.
+///
+/// Canonical form: `{sender_did}\0{target}\0{text}\0{timestamp}`
+/// Returns base64url-encoded ed25519 signature, or None if user is a guest.
+fn sign_message(
+    conn: &Connection,
+    target: &str,
+    text: &str,
+    timestamp: u64,
+    state: &Arc<SharedState>,
+) -> Option<String> {
+    let did = conn.authenticated_did.as_ref()?;
+    let canonical = format!("{did}\0{target}\0{text}\0{timestamp}");
+    use ed25519_dalek::Signer;
+    let sig = state.msg_signing_key.sign(canonical.as_bytes());
+    use base64::Engine;
+    Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes()))
+}
+
 pub(super) fn handle_tagmsg(
     conn: &Connection,
     target: &str,
@@ -239,6 +258,12 @@ pub(super) fn handle_privmsg(
         // Build tags with msgid injected (for tag-capable clients)
         let mut full_tags = tags.clone();
         full_tags.insert("msgid".to_string(), msgid.clone());
+
+        // Sign message for DID-authenticated users
+        if let Some(sig) = sign_message(conn, target, text, timestamp, state) {
+            full_tags.insert("+freeq.at/sig".to_string(), sig);
+        }
+
         let mut full_tags_with_time = full_tags.clone();
         full_tags_with_time.insert("time".to_string(), time_tag.clone());
 
@@ -324,6 +349,7 @@ pub(super) fn handle_privmsg(
         // Broadcast channel PRIVMSG to S2S peers
         if command == "PRIVMSG" {
             let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
+            let sig = full_tags.get("+freeq.at/sig").cloned();
             s2s_broadcast(state, crate::s2s::S2sMessage::Privmsg {
                 event_id: s2s_next_event_id(state),
                 from: conn.nick.as_deref().unwrap_or("*").to_string(),
@@ -331,6 +357,7 @@ pub(super) fn handle_privmsg(
                 text: text.to_string(),
                 origin,
                 msgid: Some(msgid.clone()),
+                sig,
             });
         }
     } else {
@@ -338,6 +365,12 @@ pub(super) fn handle_privmsg(
         let pm_msgid = crate::msgid::generate();
         let mut pm_tags = tags.clone();
         pm_tags.insert("msgid".to_string(), pm_msgid.clone());
+
+        // Sign DMs for DID-authenticated users
+        if let Some(sig) = sign_message(conn, target, text, timestamp, state) {
+            pm_tags.insert("+freeq.at/sig".to_string(), sig);
+        }
+
         let mut pm_tags_with_time = pm_tags.clone();
         pm_tags_with_time.insert("time".to_string(), time_tag.clone());
 
@@ -703,6 +736,15 @@ fn handle_edit(
     full_tags.insert("msgid".to_string(), edit_msgid.clone());
     // Keep the +draft/edit tag so clients know this is an edit
 
+    // Sign edited message for DID-authenticated users
+    let edit_timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if let Some(sig) = sign_message(conn, target, new_text, edit_timestamp, state) {
+        full_tags.insert("+freeq.at/sig".to_string(), sig);
+    }
+
     // Plain line for non-tag clients (they see it as a new message)
     let plain_line = format!(":{hostmask} PRIVMSG {target} :{new_text}\r\n");
     // Tagged line with edit reference
@@ -783,6 +825,7 @@ fn handle_edit(
 
     // Broadcast to S2S peers
     let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
+    let sig = full_tags.get("+freeq.at/sig").cloned();
     s2s_broadcast(state, crate::s2s::S2sMessage::Privmsg {
         event_id: s2s_next_event_id(state),
         from: nick.to_string(),
@@ -790,6 +833,7 @@ fn handle_edit(
         text: new_text.to_string(),
         origin,
         msgid: Some(edit_msgid),
+        sig,
     });
 }
 

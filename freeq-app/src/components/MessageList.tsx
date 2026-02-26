@@ -560,6 +560,7 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
             {msg.from}
           </button>
           {member?.did && <VerifiedBadge />}
+          {msg.tags['+freeq.at/sig'] && <SignedBadge />}
           {member?.away != null && (
             <span className="text-xs text-fg-dim bg-warning/10 text-warning px-1.5 py-0.5 rounded">away</span>
           )}
@@ -688,6 +689,17 @@ function VerifiedBadge() {
     <span className="text-accent text-xs" title="AT Protocol verified identity">
       <svg className="w-3.5 h-3.5 inline -mt-0.5" viewBox="0 0 16 16" fill="currentColor">
         <path d="M8 0a8 8 0 100 16A8 8 0 008 0zm3.78 5.97l-4.5 5a.75.75 0 01-1.06.02l-2-1.86a.75.75 0 011.02-1.1l1.45 1.35 3.98-4.43a.75.75 0 011.11 1.02z"/>
+      </svg>
+    </span>
+  );
+}
+
+/** Signed message badge — message has a server-attested cryptographic signature */
+function SignedBadge() {
+  return (
+    <span className="text-success text-xs opacity-60" title="Cryptographically signed message">
+      <svg className="w-3 h-3 inline -mt-0.5" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M8 1a2 2 0 00-2 2v3H5a2 2 0 00-2 2v5a2 2 0 002 2h6a2 2 0 002-2V8a2 2 0 00-2-2H10V3a2 2 0 00-2-2zm0 1.5a.5.5 0 01.5.5v3h-1V3a.5.5 0 01.5-.5z"/>
       </svg>
     </span>
   );
