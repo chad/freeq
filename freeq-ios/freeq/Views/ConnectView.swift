@@ -1,5 +1,4 @@
 import SwiftUI
-import AuthenticationServices
 
 struct ConnectView: View {
     @EnvironmentObject var appState: AppState
@@ -277,8 +276,10 @@ struct ConnectView: View {
             nickFocused = false
         }
         .preferredColorScheme(.dark)
-        // No auto-login here — ContentView handles session persistence
-        // ConnectView only shows when user needs to explicitly log in
+        .onAppear {
+            // Clear loading state when returning from Safari without completing auth
+            loading = false
+        }
     }
 
     private func errorRow(_ text: String) -> some View {
@@ -307,72 +308,17 @@ struct ConnectView: View {
             return
         }
 
-        let session = ASWebAuthenticationSession(url: url, callback: .customScheme("freeq")) { callbackURL, err in
-            DispatchQueue.main.async {
-                loading = false
+        // Save handle so we can complete login when the app reopens
+        UserDefaults.standard.set(handle, forKey: "freeq.handle")
+        UserDefaults.standard.set(true, forKey: "freeq.loginPending")
 
-                if let err = err {
-                    if (err as NSError).code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
-                        return
-                    }
-                    error = "Login failed: \(err.localizedDescription)"
-                    return
-                }
-
-                guard let callbackURL = callbackURL,
-                      let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
-                      let token = components.queryItems?.first(where: { $0.name == "token" })?.value,
-                      let brokerToken = components.queryItems?.first(where: { $0.name == "broker_token" })?.value,
-                      let nick = components.queryItems?.first(where: { $0.name == "nick" })?.value,
-                      let did = components.queryItems?.first(where: { $0.name == "did" })?.value
-                else {
-                    error = "Invalid response from server"
-                    return
-                }
-
-                // Save handle + login time for session persistence
-                UserDefaults.standard.set(handle, forKey: "freeq.handle")
-                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "freeq.lastLogin")
-                UserDefaults.standard.set(brokerToken, forKey: "freeq.brokerToken")
-
-                appState.pendingWebToken = token
-                appState.brokerToken = brokerToken
-                appState.authenticatedDID = did
-                appState.serverAddress = "irc.freeq.at:6667"
-                appState.connect(nick: nick)
-            }
-        }
-
-        session.presentationContextProvider = ASPresentationContextProvider.shared
-        session.prefersEphemeralWebBrowserSession = false
-        session.start()
+        // Open in Safari — the broker will redirect back via freeq:// URL scheme
+        // which iOS routes to our app via CFBundleURLTypes + onOpenURL handler
+        UIApplication.shared.open(url)
     }
 
     private func connectAsGuest() {
         appState.serverAddress = guestServer
         appState.connect(nick: guestNick)
-    }
-}
-
-/// Provides the window for ASWebAuthenticationSession.
-class ASPresentationContextProvider: NSObject, ASWebAuthenticationPresentationContextProviding {
-    static let shared = ASPresentationContextProvider()
-
-    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        // Try to find the key window from connected scenes
-        for scene in UIApplication.shared.connectedScenes {
-            if let windowScene = scene as? UIWindowScene {
-                // Prefer the key window
-                if let keyWindow = windowScene.windows.first(where: { $0.isKeyWindow }) {
-                    return keyWindow
-                }
-                // Fall back to any window
-                if let window = windowScene.windows.first {
-                    return window
-                }
-            }
-        }
-        // Last resort — create a new window (may cause error 3)
-        return ASPresentationAnchor()
     }
 }
