@@ -741,8 +741,8 @@ struct AuthLoginQuery {
 /// This is used by the iOS app because the broker's HTML redirect has
 /// broken JS (escaped quotes in raw strings) and ASWebAuthenticationSession
 /// doesn't intercept JS-initiated custom scheme navigations.
-async fn auth_mobile_redirect() -> Html<String> {
-    Html(r##"<!DOCTYPE html>
+async fn auth_mobile_redirect() -> impl IntoResponse {
+    let html = r##"<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>freeq</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
@@ -761,7 +761,8 @@ a{color:#89b4fa;font-size:17px;font-weight:600;text-decoration:none;display:inli
 try {
   var h = location.hash;
   if (h && h.indexOf('#oauth=') === 0) {
-    var b64 = h.substring(7);
+    var b64 = h.substring(7).replace(/-/g,'+').replace(/_/g,'/');
+    while(b64.length%4) b64+='=';
     var json = JSON.parse(atob(b64));
     var t = json.token || json.web_token || json.access_jwt || '';
     var bt = json.broker_token || '';
@@ -783,7 +784,14 @@ try {
 } catch(e) {
   document.getElementById('status').textContent = 'Error: ' + e.message;
 }
-</script></body></html>"##.to_string())
+</script></body></html>"##;
+    (
+        [
+            ("content-type", "text/html; charset=utf-8"),
+            ("content-security-policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'"),
+        ],
+        html,
+    )
 }
 
 async fn auth_login(
