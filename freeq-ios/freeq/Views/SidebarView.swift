@@ -186,6 +186,18 @@ struct SidebarView: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 4)
+        .contextMenu {
+            Button {
+                appState.markRead(channel.name)
+            } label: {
+                Label("Mark as Read", systemImage: "checkmark.circle")
+            }
+            Button(role: .destructive) {
+                appState.partChannel(channel.name)
+            } label: {
+                Label("Leave Channel", systemImage: "arrow.right.square")
+            }
+        }
     }
 
     private func dmRow(_ dm: ChannelState) -> some View {
@@ -211,6 +223,17 @@ struct SidebarView: View {
                     .lineLimit(1)
 
                 Spacer()
+
+                let unread = appState.unreadCounts[dm.name] ?? 0
+                if unread > 0 {
+                    Text("\(unread)")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Theme.accent)
+                        .cornerRadius(10)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
@@ -219,5 +242,20 @@ struct SidebarView: View {
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 4)
+        .contextMenu {
+            Button {
+                appState.markRead(dm.name)
+            } label: {
+                Label("Mark as Read", systemImage: "checkmark.circle")
+            }
+            Button(role: .destructive) {
+                appState.dmBuffers.removeAll { $0.name == dm.name }
+                if appState.activeChannel == dm.name {
+                    appState.activeChannel = appState.channels.first?.name
+                }
+            } label: {
+                Label("Close DM", systemImage: "xmark.circle")
+            }
+        }
     }
 }

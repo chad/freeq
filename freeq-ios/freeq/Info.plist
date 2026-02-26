@@ -30,6 +30,12 @@
 		<key>UIColorName</key>
 		<string>AccentColor</string>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>freeq needs camera access to take photos and videos to share in chat.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>freeq needs microphone access to record voice messages and video with audio.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>freeq needs photo library access to share photos and videos in chat.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

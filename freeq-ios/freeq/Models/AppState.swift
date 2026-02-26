@@ -168,6 +168,7 @@ class AppState: ObservableObject {
     private var client: FreeqClient? = nil
     private var typingTimer: Timer? = nil
     private var lastTypingSent: Date = .distantPast
+    private var reconnectAttempts: Int = 0
 
     var activeChannelState: ChannelState? {
         if let name = activeChannel {
@@ -548,6 +549,7 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
 
         case .registered(let nick):
             state.connectionState = .registered
+            state.reconnectAttempts = 0
             // If we expected an authenticated session but got Guest, disconnect
             if state.authenticatedDID != nil && nick.lowercased().hasPrefix("guest") {
                 state.errorMessage = "Session expired. Please log in again."
@@ -720,6 +722,7 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                     state.activeChannel = state.channels.first?.name
                 }
                 state.errorMessage = "Kicked from \(channel) by \(by): \(reason)"
+                ToastManager.shared.show("Kicked from \(channel)", icon: "xmark.circle.fill")
             } else {
                 let ch = state.getOrCreateChannel(channel)
                 ch.appendIfNew(ChatMessage(
@@ -811,9 +814,11 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
             if !reason.isEmpty {
                 state.errorMessage = "Disconnected: \(reason)"
             }
-            // Auto-reconnect if we have a saved session (e.g. network blip)
+            // Auto-reconnect with exponential backoff
             if state.hasSavedSession {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                state.reconnectAttempts += 1
+                let delay = min(Double(1 << min(state.reconnectAttempts, 5)), 30.0) // 2, 4, 8, 16, 30, 30...
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                     if state.connectionState == .disconnected && state.hasSavedSession {
                         state.reconnectSavedSession()
                     }

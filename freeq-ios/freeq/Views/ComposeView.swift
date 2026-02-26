@@ -63,9 +63,9 @@ struct ComposeView: View {
 
             HStack(alignment: .bottom, spacing: 10) {
                 HStack(alignment: .bottom, spacing: 8) {
-                    // Photo upload (AT-authenticated only)
+                    // Media upload (AT-authenticated only)
                     if appState.authenticatedDID != nil, let target = appState.activeChannel {
-                        PhotoPickerButton(channel: target)
+                        MediaAttachmentButton(channel: target)
                     } else {
                         Image(systemName: "plus.circle.fill")
                             .font(.system(size: 24))

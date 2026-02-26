@@ -1,4 +1,5 @@
 import SwiftUI
+import AVKit
 
 struct MessageListView: View {
     @EnvironmentObject var appState: AppState
@@ -253,7 +254,7 @@ struct MessageListView: View {
 
         Button(action: {
             UIPasteboard.general.string = msg.text
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            ToastManager.shared.show("Copied!", icon: "doc.on.doc.fill")
         }) {
             Label("Copy Text", systemImage: "doc.on.doc")
         }
@@ -263,15 +264,8 @@ struct MessageListView: View {
 
     private var typingIndicator: some View {
         HStack(spacing: 8) {
-            // Animated dots
-            HStack(spacing: 3) {
-                ForEach(0..<3, id: \.self) { i in
-                    Circle()
-                        .fill(Theme.textMuted)
-                        .frame(width: 6, height: 6)
-                        .opacity(0.6)
-                }
-            }
+            // Animated bouncing dots
+            TypingDots()
 
             let typers = channel.activeTypers
             if typers.count == 1 {
@@ -533,6 +527,25 @@ struct MessageListView: View {
                 .font(.system(size: 15))
                 .italic()
                 .foregroundColor(Theme.textSecondary)
+        } else if let url = extractVideoURL(msg.text) {
+            VStack(alignment: .leading, spacing: 6) {
+                let remainingText = msg.text.replacingOccurrences(of: url.absoluteString, with: "").trimmingCharacters(in: .whitespaces)
+                // Strip voice message prefix
+                let cleanText = remainingText.replacingOccurrences(of: "🎤 Voice message", with: "").replacingOccurrences(of: #"\(\d+:\d+\)"#, with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+                if !cleanText.isEmpty {
+                    styledText(cleanText)
+                }
+                InlineVideoPlayer(url: url)
+            }
+        } else if let url = extractAudioURL(msg.text) {
+            VStack(alignment: .leading, spacing: 6) {
+                let remainingText = msg.text.replacingOccurrences(of: url.absoluteString, with: "").trimmingCharacters(in: .whitespaces)
+                let cleanText = remainingText.replacingOccurrences(of: "🎤 Voice message", with: "").replacingOccurrences(of: #"\(\d+:\d+\)"#, with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+                if !cleanText.isEmpty {
+                    styledText(cleanText)
+                }
+                InlineAudioPlayer(url: url)
+            }
         } else if let url = extractImageURL(msg.text) {
             VStack(alignment: .leading, spacing: 6) {
                 let remainingText = msg.text.replacingOccurrences(of: url.absoluteString, with: "").trimmingCharacters(in: .whitespaces)
@@ -636,6 +649,27 @@ struct MessageListView: View {
         // Match AT Protocol CDN image URLs (cdn.bsky.app/img/...)
         let cdnPattern = #"https?://cdn\.bsky\.app/img/[^\s<]+"#
         if let range = text.range(of: cdnPattern, options: .regularExpression) {
+            return URL(string: String(text[range]))
+        }
+        return nil
+    }
+
+    private func extractVideoURL(_ text: String) -> URL? {
+        let pattern = #"https?://\S+\.(?:mp4|mov|m4v|webm)(?:\?\S*)?"#
+        if let range = text.range(of: pattern, options: .regularExpression) {
+            return URL(string: String(text[range]))
+        }
+        // AT Protocol CDN video URLs
+        let cdnPattern = #"https?://video\.bsky\.app/[^\s<]+"#
+        if let range = text.range(of: cdnPattern, options: .regularExpression) {
+            return URL(string: String(text[range]))
+        }
+        return nil
+    }
+
+    private func extractAudioURL(_ text: String) -> URL? {
+        let pattern = #"https?://\S+\.(?:m4a|mp3|ogg|wav|aac)(?:\?\S*)?"#
+        if let range = text.range(of: pattern, options: .regularExpression) {
             return URL(string: String(text[range]))
         }
         return nil
@@ -755,6 +789,30 @@ struct EmojiPickerSheet: View {
     }
 }
 
+// MARK: - Animated Typing Dots
+
+struct TypingDots: View {
+    @State private var animating = false
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(0..<3, id: \.self) { i in
+                Circle()
+                    .fill(Theme.textMuted)
+                    .frame(width: 6, height: 6)
+                    .offset(y: animating ? -4 : 2)
+                    .animation(
+                        .easeInOut(duration: 0.4)
+                            .repeatForever(autoreverses: true)
+                            .delay(Double(i) * 0.15),
+                        value: animating
+                    )
+            }
+        }
+        .onAppear { animating = true }
+    }
+}
+
 // Helper for profile sheet binding
 private struct ProfileNickTarget: Identifiable {
     let nick: String
@@ -766,5 +824,150 @@ private struct ScrollOffsetKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
+    }
+}
+
+// MARK: - Inline Video Player
+
+struct InlineVideoPlayer: View {
+    let url: URL
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        VideoPlayer(player: player ?? AVPlayer())
+            .frame(maxWidth: 280, minHeight: 160, maxHeight: 220)
+            .cornerRadius(10)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Theme.border, lineWidth: 1)
+            )
+            .onAppear {
+                if player == nil {
+                    player = AVPlayer(url: url)
+                }
+            }
+            .onDisappear {
+                player?.pause()
+            }
+    }
+}
+
+// MARK: - Inline Audio Player
+
+struct InlineAudioPlayer: View {
+    let url: URL
+    @State private var player: AVPlayer?
+    @State private var isPlaying = false
+    @State private var progress: Double = 0
+    @State private var duration: Double = 0
+    @State private var timer: Timer?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Play/pause button
+            Button(action: togglePlayback) {
+                ZStack {
+                    Circle()
+                        .fill(Theme.accent)
+                        .frame(width: 40, height: 40)
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(.white)
+                        .offset(x: isPlaying ? 0 : 2) // Visual centering for play icon
+                }
+            }
+
+            // Waveform / progress
+            VStack(alignment: .leading, spacing: 4) {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        // Background bar
+                        Capsule()
+                            .fill(Theme.bgTertiary)
+                            .frame(height: 4)
+
+                        // Progress bar
+                        Capsule()
+                            .fill(Theme.accent)
+                            .frame(width: max(0, geo.size.width * CGFloat(duration > 0 ? progress / duration : 0)), height: 4)
+                    }
+                }
+                .frame(height: 4)
+
+                // Duration
+                Text(formatTime(isPlaying ? progress : duration))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(Theme.textMuted)
+            }
+        }
+        .padding(12)
+        .background(Theme.bgTertiary)
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Theme.border, lineWidth: 1)
+        )
+        .frame(maxWidth: 260)
+        .onAppear { loadDuration() }
+        .onDisappear { cleanup() }
+    }
+
+    private func loadDuration() {
+        let asset = AVAsset(url: url)
+        Task {
+            if let d = try? await asset.load(.duration) {
+                let secs = CMTimeGetSeconds(d)
+                await MainActor.run { duration = secs > 0 ? secs : 0 }
+            }
+        }
+    }
+
+    private func togglePlayback() {
+        if player == nil {
+            player = AVPlayer(url: url)
+            // Configure audio session for playback
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            try? AVAudioSession.sharedInstance().setActive(true)
+        }
+
+        if isPlaying {
+            player?.pause()
+            timer?.invalidate()
+            isPlaying = false
+        } else {
+            player?.play()
+            isPlaying = true
+            timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+                if let current = player?.currentTime() {
+                    let secs = CMTimeGetSeconds(current)
+                    if secs >= 0 { progress = secs }
+                }
+                // Check if finished
+                if let item = player?.currentItem {
+                    let dur = CMTimeGetSeconds(item.duration)
+                    let cur = CMTimeGetSeconds(item.currentTime())
+                    if dur > 0 && cur >= dur - 0.1 {
+                        player?.seek(to: .zero)
+                        player?.pause()
+                        isPlaying = false
+                        progress = 0
+                        timer?.invalidate()
+                    }
+                }
+            }
+        }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    private func cleanup() {
+        player?.pause()
+        timer?.invalidate()
+    }
+
+    private func formatTime(_ t: Double) -> String {
+        guard t.isFinite && t >= 0 else { return "0:00" }
+        let mins = Int(t) / 60
+        let secs = Int(t) % 60
+        return String(format: "%d:%02d", mins, secs)
     }
 }

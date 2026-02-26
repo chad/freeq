@@ -41,6 +41,7 @@ struct MainTabView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: appState.lightboxURL != nil)
+        .withToast()
         .preferredColorScheme(.dark)
     }
 

@@ -141,14 +141,21 @@ struct SearchSheet: View {
         return result
     }
 
+    private static let todayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "h:mm a"
+        return f
+    }()
+    private static let dateTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMM d, h:mm a"
+        return f
+    }()
+
     private func formatTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        if Calendar.current.isDateInToday(date) {
-            formatter.dateFormat = "h:mm a"
-        } else {
-            formatter.dateFormat = "MMM d, h:mm a"
-        }
-        return formatter.string(from: date)
+        Calendar.current.isDateInToday(date)
+            ? Self.todayFormatter.string(from: date)
+            : Self.dateTimeFormatter.string(from: date)
     }
 }
 

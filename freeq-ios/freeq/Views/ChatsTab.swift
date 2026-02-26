@@ -38,10 +38,21 @@ struct ChatsTab: View {
                                 Button(role: .destructive) {
                                     if conv.name.hasPrefix("#") {
                                         appState.partChannel(conv.name)
+                                    } else {
+                                        appState.dmBuffers.removeAll { $0.name == conv.name }
                                     }
                                 } label: {
-                                    Label("Leave", systemImage: "arrow.right.square")
+                                    Label(conv.name.hasPrefix("#") ? "Leave" : "Close", systemImage: "arrow.right.square")
                                 }
+                            }
+                            .swipeActions(edge: .leading) {
+                                Button {
+                                    appState.markRead(conv.name)
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                } label: {
+                                    Label("Read", systemImage: "checkmark.circle")
+                                }
+                                .tint(Theme.accent)
                             }
                         }
                     }
