@@ -538,9 +538,9 @@ async fn auth_callback(
             urlencod(&pending.did),
             urlencod(&pending.handle),
         );
-        return Ok(Html(format!(
-            r#"<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" content=\"0;url={redirect}\"></head><body><script>window.location.href = \"{redirect}\";</script><p>Redirecting to freeq app...</p></body></html>"#
-        )).into_response());
+        // Must be a 302 redirect — ASWebAuthenticationSession only intercepts
+        // HTTP redirects with the custom scheme, not JS/meta-refresh in HTML.
+        return Ok(axum::response::Redirect::to(&redirect).into_response());
     }
 
     let result = serde_json::json!({
