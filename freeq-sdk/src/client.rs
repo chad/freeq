@@ -551,6 +551,9 @@ where
     let mut web_token = config.web_token.clone();
     let mut authenticated_did: Option<String> = None;
     let mut pending_commands: Vec<Command> = Vec::new();
+    // Session message-signing keypair (generated after SASL success)
+    let mut msg_signing_key: Option<ed25519_dalek::SigningKey> = None;
+    let mut msg_signing_did: Option<String> = None;
     let mut line_buf = String::new();
     let mut last_activity = tokio::time::Instant::now();
     let ping_interval = tokio::time::Duration::from_secs(60);
@@ -619,7 +622,15 @@ where
                                 .or_else(|| signer.as_ref().map(|s| s.did().to_string()))
                                 .unwrap_or_default();
                             if !did.is_empty() {
-                                let _ = event_tx.send(Event::Authenticated { did }).await;
+                                let _ = event_tx.send(Event::Authenticated { did: did.clone() }).await;
+                                // Generate session message-signing keypair
+                                let key = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+                                let pubkey_bytes = key.verifying_key().as_bytes().to_vec();
+                                use base64::Engine;
+                                let pubkey_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&pubkey_bytes);
+                                msg_signing_key = Some(key);
+                                msg_signing_did = Some(did);
+                                writer.write_all(format!("MSGSIG {pubkey_b64}\r\n").as_bytes()).await?;
                             }
                             web_token = None;
                             writer.write_all(b"CAP END\r\n").await?;
@@ -652,7 +663,7 @@ where
                             registered = true;
                             // Flush any commands that were queued before registration
                             for cmd in pending_commands.drain(..) {
-                                execute_command(&mut writer, cmd).await?;
+                                execute_command(&mut writer, cmd, &msg_signing_key, &msg_signing_did).await?;
                             }
                         }
                         "353" => {
@@ -915,7 +926,7 @@ where
             }
             Some(cmd) = cmd_rx.recv() => {
                 if registered || matches!(cmd, Command::Quit(_)) {
-                    execute_command(&mut writer, cmd).await?;
+                    execute_command(&mut writer, cmd, &msg_signing_key, &msg_signing_did).await?;
                     if !registered {
                         break; // Quit before registration
                     }
@@ -939,13 +950,36 @@ where
 }
 
 /// Execute a single IRC command on the wire.
-async fn execute_command<W: AsyncWrite + Unpin>(writer: &mut W, cmd: Command) -> Result<()> {
+/// Execute a single IRC command on the wire.
+/// If `signing_key` and `signing_did` are set, PRIVMSG gets a `+freeq.at/sig` tag.
+async fn execute_command<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    cmd: Command,
+    signing_key: &Option<ed25519_dalek::SigningKey>,
+    signing_did: &Option<String>,
+) -> Result<()> {
     match cmd {
         Command::Join(channel) => {
             writer.write_all(format!("JOIN {channel}\r\n").as_bytes()).await?;
         }
         Command::Privmsg { target, text } => {
-            writer.write_all(format!("PRIVMSG {target} :{text}\r\n").as_bytes()).await?;
+            if let (Some(key), Some(did)) = (signing_key, signing_did) {
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let canonical = format!("{did}\0{target}\0{text}\0{timestamp}");
+                use ed25519_dalek::Signer;
+                let sig = key.sign(canonical.as_bytes());
+                use base64::Engine;
+                let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes());
+                // Send with IRCv3 message tag
+                writer.write_all(
+                    format!("@+freeq.at/sig={sig_b64} PRIVMSG {target} :{text}\r\n").as_bytes()
+                ).await?;
+            } else {
+                writer.write_all(format!("PRIVMSG {target} :{text}\r\n").as_bytes()).await?;
+            }
         }
         Command::Raw(line) => {
             writer.write_all(format!("{line}\r\n").as_bytes()).await?;

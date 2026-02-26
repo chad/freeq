@@ -621,6 +621,60 @@ where
                     );
                 }
             }
+            "MSGSIG" => {
+                // Client registers its session message-signing public key.
+                // Usage: MSGSIG <base64url-ed25519-pubkey>
+                if !conn.registered { continue; }
+                if conn.authenticated_did.is_none() {
+                    let reply = irc::Message::from_server(
+                        &server_name, "FAIL",
+                        vec!["MSGSIG", "NOT_AUTHENTICATED", "Must be DID-authenticated to register a signing key"],
+                    );
+                    send(&state, &session_id, format!("{reply}\r\n"));
+                    continue;
+                }
+                if let Some(pubkey_b64) = msg.params.first() {
+                    use base64::Engine;
+                    match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(pubkey_b64) {
+                        Ok(bytes) if bytes.len() == 32 => {
+                            match ed25519_dalek::VerifyingKey::from_bytes(
+                                bytes.as_slice().try_into().unwrap()
+                            ) {
+                                Ok(vk) => {
+                                    state.session_msg_keys.lock().insert(session_id.clone(), vk);
+                                    if let Some(ref did) = conn.authenticated_did {
+                                        state.did_msg_keys.lock().insert(did.clone(), pubkey_b64.clone());
+                                    }
+                                    tracing::info!(
+                                        session = %session_id,
+                                        did = ?conn.authenticated_did,
+                                        "Client registered message signing key"
+                                    );
+                                    let reply = irc::Message::from_server(
+                                        &server_name, "MSGSIG",
+                                        vec!["OK"],
+                                    );
+                                    send(&state, &session_id, format!("{reply}\r\n"));
+                                }
+                                Err(_) => {
+                                    let reply = irc::Message::from_server(
+                                        &server_name, "FAIL",
+                                        vec!["MSGSIG", "INVALID_KEY", "Invalid ed25519 public key"],
+                                    );
+                                    send(&state, &session_id, format!("{reply}\r\n"));
+                                }
+                            }
+                        }
+                        _ => {
+                            let reply = irc::Message::from_server(
+                                &server_name, "FAIL",
+                                vec!["MSGSIG", "INVALID_KEY", "Expected 32-byte base64url-encoded ed25519 public key"],
+                            );
+                            send(&state, &session_id, format!("{reply}\r\n"));
+                        }
+                    }
+                }
+            }
             "PRIVMSG" | "NOTICE" => {
                 if !conn.registered { continue; }
                 if let (Some(target), Some(text)) = (msg.params.first(), msg.params.get(1)) {
@@ -861,6 +915,7 @@ where
     state.session_iroh_ids.lock().remove(&session_id);
     state.session_away.lock().remove(&session_id);
     state.msg_timestamps.lock().remove(&session_id);
+    state.session_msg_keys.lock().remove(&session_id);
     state.cap_message_tags.lock().remove(&session_id);
     state.cap_multi_prefix.lock().remove(&session_id);
     state.cap_echo_message.lock().remove(&session_id);

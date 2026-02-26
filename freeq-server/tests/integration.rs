@@ -2049,3 +2049,78 @@ async fn message_signing_authenticated_user() {
     handle_guest.quit(None).await.unwrap();
     server_handle.abort();
 }
+
+// ── Test: Client-signed message can be verified by server's /api/v1/signing-keys/{did} ──
+
+#[tokio::test]
+async fn client_signature_verification() {
+    use ed25519_dalek::Verifier;
+    use base64::Engine;
+
+    let private_key = PrivateKey::generate_secp256k1();
+    let did_str = "did:plc:clientsigtest";
+    let doc = did::make_test_did_document(did_str, &private_key.public_key_multibase());
+
+    let mut docs = HashMap::new();
+    docs.insert(did_str.to_string(), doc);
+    let resolver = DidResolver::static_map(docs);
+
+    let (addr, server_handle) = start_test_server(resolver).await;
+
+    // Authenticated user
+    let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(
+        did_str.to_string(),
+        private_key,
+    ));
+    let config = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "csigner".to_string(),
+        user: "csigner".to_string(),
+        realname: "Client Signer".to_string(),
+        ..Default::default()
+    };
+    let (handle_auth, mut events_auth) = client::connect(config, Some(signer));
+    expect_event(&mut events_auth, 2000, |e| matches!(e, Event::Registered { .. }), "auth registered").await;
+
+    // Guest observer
+    let config2 = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "verifier".to_string(),
+        user: "verifier".to_string(),
+        realname: "Verifier".to_string(),
+        ..Default::default()
+    };
+    let (handle_guest, mut events_guest) = client::connect(config2, None);
+    expect_event(&mut events_guest, 2000, |e| matches!(e, Event::Registered { .. }), "guest registered").await;
+
+    // Both join
+    handle_auth.join("#csigtest").await.unwrap();
+    expect_event(&mut events_auth, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#csigtest"), "auth joined").await;
+    handle_guest.join("#csigtest").await.unwrap();
+    expect_event(&mut events_guest, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#csigtest"), "guest joined").await;
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    while events_auth.try_recv().is_ok() {}
+    while events_guest.try_recv().is_ok() {}
+
+    // Send a message
+    handle_auth.privmsg("#csigtest", "verify me").await.unwrap();
+
+    let msg = expect_event(&mut events_guest, 2000, |e| {
+        matches!(e, Event::Message { text, .. } if text == "verify me")
+    }, "got signed message").await;
+
+    if let Event::Message { tags, .. } = &msg {
+        assert!(tags.contains_key("+freeq.at/sig"), "Should have sig tag: {:?}", tags);
+        // The signature should be present and non-empty
+        let sig_b64 = tags.get("+freeq.at/sig").unwrap();
+        assert!(!sig_b64.is_empty());
+        // Verify it's a valid base64url-encoded 64-byte ed25519 signature
+        let sig_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(sig_b64).unwrap();
+        assert_eq!(sig_bytes.len(), 64, "Ed25519 signature should be 64 bytes");
+    }
+
+    handle_auth.quit(None).await.unwrap();
+    handle_guest.quit(None).await.unwrap();
+    server_handle.abort();
+}

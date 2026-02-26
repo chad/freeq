@@ -7,19 +7,50 @@ use crate::server::SharedState;
 use super::Connection;
 use super::helpers::{s2s_broadcast, s2s_next_event_id, normalize_channel};
 
-/// Sign a message on behalf of a DID-authenticated user.
+/// Verify a client-provided signature, or server-sign as fallback.
+///
+/// If the client included `+freeq.at/sig` AND has a registered session key,
+/// verify it. If valid, return the client's signature (true non-repudiation).
+/// If the client didn't sign but is DID-authenticated, server-sign as fallback.
+/// Returns None for guests.
 ///
 /// Canonical form: `{sender_did}\0{target}\0{text}\0{timestamp}`
-/// Returns base64url-encoded ed25519 signature, or None if user is a guest.
-fn sign_message(
+fn resolve_signature(
     conn: &Connection,
     target: &str,
     text: &str,
     timestamp: u64,
+    client_sig: Option<&str>,
     state: &Arc<SharedState>,
 ) -> Option<String> {
     let did = conn.authenticated_did.as_ref()?;
     let canonical = format!("{did}\0{target}\0{text}\0{timestamp}");
+
+    // If client provided a signature, verify it against their registered key
+    if let Some(sig_b64) = client_sig {
+        if let Some(vk) = state.session_msg_keys.lock().get(&conn.id).cloned() {
+            use base64::Engine;
+            if let Ok(sig_bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(sig_b64) {
+                if sig_bytes.len() == 64 {
+                    let sig_array: [u8; 64] = sig_bytes.try_into().unwrap();
+                    let sig = ed25519_dalek::Signature::from_bytes(&sig_array);
+                    use ed25519_dalek::Verifier;
+                    if vk.verify(canonical.as_bytes(), &sig).is_ok() {
+                        // Client signature valid — use it (true non-repudiation)
+                        return Some(sig_b64.to_string());
+                    } else {
+                        tracing::warn!(
+                            session = %conn.id,
+                            did = %did,
+                            "Client message signature verification failed — falling back to server signing"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: server signs on behalf of authenticated user
     use ed25519_dalek::Signer;
     let sig = state.msg_signing_key.sign(canonical.as_bytes());
     use base64::Engine;
@@ -259,8 +290,9 @@ pub(super) fn handle_privmsg(
         let mut full_tags = tags.clone();
         full_tags.insert("msgid".to_string(), msgid.clone());
 
-        // Sign message for DID-authenticated users
-        if let Some(sig) = sign_message(conn, target, text, timestamp, state) {
+        // Verify client signature or server-sign as fallback
+        let client_sig = tags.get("+freeq.at/sig").map(|s| s.as_str());
+        if let Some(sig) = resolve_signature(conn, target, text, timestamp, client_sig, state) {
             full_tags.insert("+freeq.at/sig".to_string(), sig);
         }
 
@@ -366,8 +398,9 @@ pub(super) fn handle_privmsg(
         let mut pm_tags = tags.clone();
         pm_tags.insert("msgid".to_string(), pm_msgid.clone());
 
-        // Sign DMs for DID-authenticated users
-        if let Some(sig) = sign_message(conn, target, text, timestamp, state) {
+        // Verify client signature or server-sign DMs
+        let client_sig = tags.get("+freeq.at/sig").map(|s| s.as_str());
+        if let Some(sig) = resolve_signature(conn, target, text, timestamp, client_sig, state) {
             pm_tags.insert("+freeq.at/sig".to_string(), sig);
         }
 
@@ -736,12 +769,13 @@ fn handle_edit(
     full_tags.insert("msgid".to_string(), edit_msgid.clone());
     // Keep the +draft/edit tag so clients know this is an edit
 
-    // Sign edited message for DID-authenticated users
+    // Verify/sign edited message
     let edit_timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    if let Some(sig) = sign_message(conn, target, new_text, edit_timestamp, state) {
+    let client_sig = tags.get("+freeq.at/sig").map(|s| s.as_str());
+    if let Some(sig) = resolve_signature(conn, target, new_text, edit_timestamp, client_sig, state) {
         full_tags.insert("+freeq.at/sig".to_string(), sig);
     }
 

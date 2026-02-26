@@ -11,6 +11,7 @@ import { useStore, type Message } from '../store';
 import { notify } from '../lib/notifications';
 import { prefetchProfiles } from '../lib/profiles';
 import * as e2ee from '../lib/e2ee';
+import * as signing from './signing';
 
 // ── State ──
 
@@ -145,6 +146,7 @@ export function disconnect() {
   saslPdsUrl = '';
   saslMethod = '';
   joinedChannels.clear();
+  signing.resetSigning();
   useStore.getState().fullReset();
 }
 
@@ -198,6 +200,17 @@ function cacheEchoPlaintext(ciphertext: string, plaintext: string) {
   }
 }
 
+/** Send a signed PRIVMSG (async — signs then sends) */
+async function signedPrivmsg(target: string, text: string) {
+  const sig = await signing.signMessage(target, text);
+  if (sig) {
+    const line = format('PRIVMSG', [target, text], { '+freeq.at/sig': sig });
+    raw(line);
+  } else {
+    raw(`PRIVMSG ${target} :${text}`);
+  }
+}
+
 export function sendMessage(target: string, text: string) {
   const isChannel = target.startsWith('#') || target.startsWith('&');
 
@@ -209,7 +222,7 @@ export function sendMessage(target: string, text: string) {
         const line = format('PRIVMSG', [target, encrypted], { '+encrypted': '' });
         raw(line);
       } else {
-        raw(`PRIVMSG ${target} :${text}`);
+        signedPrivmsg(target, text);
       }
     });
   }
@@ -224,14 +237,14 @@ export function sendMessage(target: string, text: string) {
           const line = format('PRIVMSG', [target, encrypted], { '+encrypted': '' });
           raw(line);
         } else {
-          raw(`PRIVMSG ${target} :${text}`);
+          signedPrivmsg(target, text);
         }
       });
     } else {
-      raw(`PRIVMSG ${target} :${text}`);
+      signedPrivmsg(target, text);
     }
   } else {
-    raw(`PRIVMSG ${target} :${text}`);
+    signedPrivmsg(target, text);
   }
 
   // Ensure DM buffer exists
@@ -369,6 +382,13 @@ async function handleLine(rawLine: string) {
       }
       break;
     case '903':
+      // Register client message-signing key if we have a DID
+      if (saslDid) {
+        signing.setSigningDid(saslDid);
+        signing.generateSigningKey().then((pubkey) => {
+          if (pubkey) raw(`MSGSIG ${pubkey}`);
+        });
+      }
       raw('CAP END');
       break;
     case '904':

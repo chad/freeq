@@ -196,6 +196,7 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/keys/{did}", get(api_get_keys))
         .route("/api/v1/keys", axum::routing::post(api_upload_keys))
         .route("/api/v1/signing-key", get(api_signing_key))
+        .route("/api/v1/signing-keys/{did}", get(api_did_signing_key))
         .route("/auth/mobile", get(auth_mobile_redirect))
         .route("/join/{channel}", get(channel_invite_page))
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)) // 12MB
@@ -378,6 +379,25 @@ async fn api_signing_key(State(state): State<Arc<SharedState>>) -> Json<serde_js
         "canonical_form": "{sender_did}\\0{target}\\0{text}\\0{timestamp}",
         "tag": "+freeq.at/sig"
     }))
+}
+
+/// Per-DID signing key: returns the client's registered session signing key.
+async fn api_did_signing_key(
+    State(state): State<Arc<SharedState>>,
+    axum::extract::Path(did): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, axum::http::StatusCode> {
+    let did_decoded = urlencoding::decode(&did).unwrap_or(std::borrow::Cow::Borrowed(&did));
+    if let Some(pubkey) = state.did_msg_keys.lock().get(did_decoded.as_ref()) {
+        Ok(Json(serde_json::json!({
+            "did": did_decoded.as_ref(),
+            "algorithm": "ed25519",
+            "public_key": pubkey,
+            "encoding": "base64url",
+            "source": "client-session"
+        })))
+    } else {
+        Err(axum::http::StatusCode::NOT_FOUND)
+    }
 }
 
 async fn api_health(State(state): State<Arc<SharedState>>) -> Json<HealthResponse> {

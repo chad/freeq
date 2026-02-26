@@ -330,10 +330,15 @@ pub struct SharedState {
     pub msg_timestamps: Mutex<HashMap<String, Vec<u64>>>,
     /// Per-IP active connection count (for connection limiting).
     pub ip_connections: Mutex<HashMap<std::net::IpAddr, u32>>,
-    /// Ed25519 signing key for message attestation.
-    /// The server signs messages from DID-authenticated users to provide
-    /// provenance that survives federation. Published at /api/v1/signing-key.
+    /// Ed25519 signing key for server-attested message signatures.
+    /// Used as fallback when clients don't provide their own signatures.
     pub msg_signing_key: ed25519_dalek::SigningKey,
+    /// Client-registered message signing keys: session_id → VerifyingKey.
+    /// Clients send MSGSIG <base64url-pubkey> after SASL to register.
+    pub session_msg_keys: Mutex<HashMap<String, ed25519_dalek::VerifyingKey>>,
+    /// DID → latest message signing public key (base64url-encoded).
+    /// Published via /api/v1/signing-keys/{did} for verification.
+    pub did_msg_keys: Mutex<HashMap<String, String>>,
 }
 
 impl SharedState {
@@ -651,6 +656,8 @@ impl Server {
             msg_timestamps: Mutex::new(HashMap::new()),
             ip_connections: Mutex::new(HashMap::new()),
             msg_signing_key,
+            session_msg_keys: Mutex::new(HashMap::new()),
+            did_msg_keys: Mutex::new(HashMap::new()),
         }))
     }
 
