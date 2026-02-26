@@ -812,7 +812,13 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
             } else if text == "MOTD:END" {
                 state.collectingMotd = false
                 if !state.motdLines.isEmpty {
-                    state.showMotd = true
+                    // Only show if content changed since last dismiss
+                    let content = state.motdLines.joined(separator: "\n")
+                    let hash = String(content.hashValue, radix: 36)
+                    let seenHash = UserDefaults.standard.string(forKey: "freeq.motdSeenHash")
+                    if hash != seenHash {
+                        state.showMotd = true
+                    }
                 }
             } else if text.hasPrefix("MOTD:") {
                 if state.collectingMotd {

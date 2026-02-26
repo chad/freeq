@@ -1,11 +1,35 @@
 import { useStore } from '../store';
+import { useMemo } from 'react';
+
+/** Simple string hash (djb2) */
+function hashMotd(lines: string[]): string {
+  const str = lines.join('\n');
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash + str.charCodeAt(i)) >>> 0;
+  }
+  return hash.toString(36);
+}
 
 export function MotdBanner() {
   const motd = useStore((s) => s.motd);
   const dismissed = useStore((s) => s.motdDismissed);
-  const dismiss = useStore((s) => s.dismissMotd);
+  const storeDismiss = useStore((s) => s.dismissMotd);
 
-  if (dismissed || motd.length === 0) return null;
+  const motdHash = useMemo(() => hashMotd(motd), [motd]);
+
+  // Check if this exact MOTD was already seen
+  const alreadySeen = useMemo(() => {
+    if (motd.length === 0) return true;
+    return localStorage.getItem('freeq-motd-seen') === motdHash;
+  }, [motdHash, motd.length]);
+
+  const dismiss = () => {
+    localStorage.setItem('freeq-motd-seen', motdHash);
+    storeDismiss();
+  };
+
+  if (dismissed || alreadySeen || motd.length === 0) return null;
 
   return (
     <div className="fixed inset-0 z-[160] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-fadeIn" onClick={dismiss}>

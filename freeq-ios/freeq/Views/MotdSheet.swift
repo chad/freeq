@@ -5,6 +5,14 @@ struct MotdSheet: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
 
+    private func dismissAndSave() {
+        // Save hash of current MOTD so we don't show it again
+        let content = appState.motdLines.joined(separator: "\n")
+        let hash = String(content.hashValue, radix: 36)
+        UserDefaults.standard.set(hash, forKey: "freeq.motdSeenHash")
+        dismiss()
+    }
+
     var body: some View {
         NavigationView {
             ZStack {
@@ -47,7 +55,7 @@ struct MotdSheet: View {
                         .padding(.bottom, 24)
 
                         // Action button
-                        Button(action: { dismiss() }) {
+                        Button(action: { dismissAndSave() }) {
                             Text("Let's go")
                                 .font(.system(size: 16, weight: .bold))
                                 .foregroundColor(.white)
@@ -70,7 +78,7 @@ struct MotdSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(action: { dismiss() }) {
+                    Button(action: { dismissAndSave() }) {
                         Image(systemName: "xmark")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundColor(Theme.textMuted)
