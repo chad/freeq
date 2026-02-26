@@ -583,11 +583,13 @@ struct BrokerTokenResponse {
 async fn auth_broker_web_token(
     State(state): State<Arc<SharedState>>,
     headers: axum::http::HeaderMap,
-    Json(req): Json<BrokerTokenRequest>,
+    body: axum::body::Bytes,
 ) -> Result<Json<BrokerTokenResponse>, (StatusCode, String)> {
     let secret = state.config.broker_shared_secret.clone()
         .ok_or((StatusCode::FORBIDDEN, "Broker auth not configured".to_string()))?;
-    verify_broker_signature(&secret, &headers, &req)?;
+    verify_broker_signature_raw(&secret, &headers, &body)?;
+    let req: BrokerTokenRequest = serde_json::from_slice(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid JSON: {e}")))?;
 
     let token = generate_random_string(32);
     state.web_auth_tokens.lock().insert(
@@ -601,11 +603,13 @@ async fn auth_broker_web_token(
 async fn auth_broker_session(
     State(state): State<Arc<SharedState>>,
     headers: axum::http::HeaderMap,
-    Json(req): Json<BrokerSessionRequest>,
+    body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let secret = state.config.broker_shared_secret.clone()
         .ok_or((StatusCode::FORBIDDEN, "Broker auth not configured".to_string()))?;
-    verify_broker_signature(&secret, &headers, &req)?;
+    verify_broker_signature_raw(&secret, &headers, &body)?;
+    let req: BrokerSessionRequest = serde_json::from_slice(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid JSON: {e}")))?;
 
     tracing::info!(did = %req.did, "Broker pushed web session");
     state.web_sessions.lock().insert(req.did.clone(), crate::server::WebSession {
@@ -621,10 +625,12 @@ async fn auth_broker_session(
     Ok(Json(serde_json::json!({"ok": true})))
 }
 
-fn verify_broker_signature<T: Serialize>(
+/// Verify HMAC-SHA256 signature over raw request bytes.
+/// This avoids JSON re-serialization order mismatches between broker and server.
+fn verify_broker_signature_raw(
     secret: &str,
     headers: &axum::http::HeaderMap,
-    body: &T,
+    body_bytes: &[u8],
 ) -> Result<(), (StatusCode, String)> {
     use base64::Engine;
     use hmac::{Hmac, Mac};
@@ -634,12 +640,9 @@ fn verify_broker_signature<T: Serialize>(
         .and_then(|v| v.to_str().ok())
         .ok_or((StatusCode::UNAUTHORIZED, "Missing broker signature".to_string()))?;
 
-    let body_bytes = serde_json::to_vec(body)
-        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid body".to_string()))?;
-
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "HMAC init failed".to_string()))?;
-    mac.update(&body_bytes);
+    mac.update(body_bytes);
     let expected = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
 
     if expected != sig {
