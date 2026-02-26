@@ -15,6 +15,7 @@ struct ComposeView: View {
     @State private var recordingCancelled = false
     @State private var dragOffset: CGFloat = 0
     @State private var holdStart: Date? = nil
+    @State private var holdTimer: Timer? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -180,16 +181,18 @@ struct ComposeView: View {
                     state = true
                 }
                 .onChanged { value in
-                    if !isRecording && abs(value.translation.width) < 10 && abs(value.translation.height) < 10 {
+                    if !isRecording {
                         if holdStart == nil {
                             holdStart = Date()
-                            // Show hint briefly on first touch
-                            if !showMicHint {
-                                showMicHint = true
+                            // Fire a timer to start recording after 0.25s hold
+                            holdTimer?.invalidate()
+                            holdTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: false) { _ in
+                                DispatchQueue.main.async {
+                                    if holdStart != nil && !isRecording {
+                                        startRecording()
+                                    }
+                                }
                             }
-                        }
-                        if let start = holdStart, Date().timeIntervalSince(start) >= 0.25 && !isRecording {
-                            startRecording()
                         }
                     }
                     if isRecording {
@@ -198,8 +201,11 @@ struct ComposeView: View {
                     }
                 }
                 .onEnded { _ in
+                    holdTimer?.invalidate()
+                    holdTimer = nil
+                    let wasRecording = isRecording
                     holdStart = nil
-                    if isRecording {
+                    if wasRecording {
                         stopRecording()
                     } else {
                         // Brief tap — show hint
