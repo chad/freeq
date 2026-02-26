@@ -24,6 +24,7 @@ let saslToken = '';
 let saslDid = '';
 let saslPdsUrl = '';
 let saslMethod = '';
+let skipBrokerRefresh = false; // Set when we already have a fresh token (e.g. from OAuth)
 
 // Auto-join channels after registration
 let autoJoinChannels: string[] = [];
@@ -78,9 +79,14 @@ export function connect(url: string, desiredNick: string, channels?: string[]) {
 
         // If we have a broker token and SASL credentials, refresh the web-token
         // before registering (web-tokens are one-time use).
+        // Skip if we already have a fresh token (e.g. just came from OAuth).
         const brokerToken = localStorage.getItem('freeq-broker-token');
         const brokerBase = localStorage.getItem('freeq-broker-base');
-        if (brokerToken && brokerBase && saslDid) {
+        if (skipBrokerRefresh && saslToken) {
+          skipBrokerRefresh = false;
+          clearTimeout(safetyTimer);
+          sendRegistration();
+        } else if (brokerToken && brokerBase && saslDid) {
           const ctrl = new AbortController();
           const tm = setTimeout(() => ctrl.abort(), 5000);
           // Broker /session returns 502 on first call due to DPoP nonce rotation —
@@ -158,6 +164,8 @@ export function setSaslCredentials(token: string, did: string, pdsUrl: string, m
   saslDid = did;
   saslPdsUrl = pdsUrl;
   saslMethod = method;
+  // If we're given a fresh token, don't waste it by calling broker again
+  if (token) skipBrokerRefresh = true;
 }
 
 /** Resolve a nick to a DID by searching member lists across all channels. */
