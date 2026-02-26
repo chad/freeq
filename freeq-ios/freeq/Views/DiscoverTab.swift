@@ -13,12 +13,18 @@ struct DiscoverTab: View {
     @EnvironmentObject var appState: AppState
     @State private var channelInput = ""
     @State private var serverChannels: [ServerChannel] = []
-    @State private var loading = false
+    @State private var loading = true
     @State private var searchText = ""
+    @FocusState private var joinFocused: Bool
 
     private var filteredChannels: [ServerChannel] {
-        if searchText.isEmpty { return serverChannels }
-        return serverChannels.filter { $0.name.localizedCaseInsensitiveContains(searchText) || $0.topic.localizedCaseInsensitiveContains(searchText) }
+        let channels = serverChannels
+        if searchText.isEmpty { return channels }
+        let q = searchText.lowercased()
+        return channels.filter {
+            $0.name.lowercased().contains(q) ||
+            $0.topic.lowercased().contains(q)
+        }
     }
 
     var body: some View {
@@ -26,154 +32,126 @@ struct DiscoverTab: View {
             ZStack {
                 Theme.bgPrimary.ignoresSafeArea()
 
-                ScrollView {
-                    VStack(spacing: 24) {
-                        // Join custom channel
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("JOIN A CHANNEL")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundColor(Theme.textMuted)
-                                .kerning(1)
+                VStack(spacing: 0) {
+                    // Search bar (always visible at top)
+                    HStack(spacing: 10) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 15))
+                            .foregroundColor(Theme.textMuted)
 
-                            HStack(spacing: 10) {
-                                Text("#")
-                                    .font(.system(size: 18, weight: .medium))
-                                    .foregroundColor(Theme.textMuted)
+                        TextField("", text: $searchText, prompt: Text("Search channels...").foregroundColor(Theme.textMuted))
+                            .foregroundColor(Theme.textPrimary)
+                            .font(.system(size: 16))
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                            .submitLabel(.search)
 
-                                TextField("channel-name", text: $channelInput)
-                                    .foregroundColor(Theme.textPrimary)
+                        if !searchText.isEmpty {
+                            Button(action: { searchText = "" }) {
+                                Image(systemName: "xmark.circle.fill")
                                     .font(.system(size: 16))
-                                    .autocapitalization(.none)
-                                    .disableAutocorrection(true)
-                                    .submitLabel(.join)
-                                    .onSubmit { joinCustom() }
-
-                                Button(action: joinCustom) {
-                                    Image(systemName: "arrow.right.circle.fill")
-                                        .font(.system(size: 24))
-                                        .foregroundColor(channelInput.isEmpty ? Theme.textMuted : Theme.accent)
-                                }
-                                .disabled(channelInput.isEmpty)
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 12)
-                            .background(Theme.bgSecondary)
-                            .cornerRadius(10)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 10)
-                                    .stroke(Theme.border, lineWidth: 1)
-                            )
-                        }
-                        .padding(.horizontal, 16)
-
-                        // Live channels from server
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack {
-                                Text("CHANNELS")
-                                    .font(.system(size: 11, weight: .bold))
                                     .foregroundColor(Theme.textMuted)
-                                    .kerning(1)
-                                Spacer()
-                                if loading {
-                                    ProgressView().tint(Theme.textMuted).scaleEffect(0.7)
-                                } else {
-                                    Text("\(serverChannels.count)")
-                                        .font(.system(size: 11, weight: .medium))
-                                        .foregroundColor(Theme.textMuted)
-                                }
-                            }
-                            .padding(.horizontal, 16)
-
-                            if !serverChannels.isEmpty {
-                                // Search filter
-                                HStack(spacing: 8) {
-                                    Image(systemName: "magnifyingglass")
-                                        .font(.system(size: 13))
-                                        .foregroundColor(Theme.textMuted)
-                                    TextField("", text: $searchText, prompt: Text("Filter channels").foregroundColor(Theme.textMuted))
-                                        .foregroundColor(Theme.textPrimary)
-                                        .font(.system(size: 14))
-                                        .autocapitalization(.none)
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(Theme.bgTertiary)
-                                .cornerRadius(8)
-                                .padding(.horizontal, 16)
-                            }
-
-                            ForEach(filteredChannels) { ch in
-                                let joined = appState.channels.contains { $0.name.lowercased() == ch.name.lowercased() }
-
-                                Button(action: { appState.joinChannel(ch.name) }) {
-                                    HStack(spacing: 12) {
-                                        ZStack {
-                                            Circle()
-                                                .fill(Theme.accent.opacity(0.15))
-                                                .frame(width: 44, height: 44)
-                                            Text("#")
-                                                .font(.system(size: 18, weight: .bold, design: .rounded))
-                                                .foregroundColor(Theme.accent)
-                                        }
-
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(ch.name)
-                                                .font(.system(size: 16, weight: .medium))
-                                                .foregroundColor(Theme.textPrimary)
-
-                                            if !ch.topic.isEmpty {
-                                                Text(ch.topic)
-                                                    .font(.system(size: 13))
-                                                    .foregroundColor(Theme.textMuted)
-                                                    .lineLimit(1)
-                                            }
-                                        }
-
-                                        Spacer()
-
-                                        VStack(alignment: .trailing, spacing: 2) {
-                                            if joined {
-                                                Text("Joined")
-                                                    .font(.system(size: 12, weight: .medium))
-                                                    .foregroundColor(Theme.textMuted)
-                                            } else {
-                                                Text("Join")
-                                                    .font(.system(size: 13, weight: .semibold))
-                                                    .foregroundColor(Theme.accent)
-                                                    .padding(.horizontal, 14)
-                                                    .padding(.vertical, 6)
-                                                    .background(Theme.accent.opacity(0.15))
-                                                    .clipShape(Capsule())
-                                            }
-
-                                            HStack(spacing: 3) {
-                                                Image(systemName: "person.2.fill")
-                                                    .font(.system(size: 9))
-                                                Text("\(ch.memberCount)")
-                                                    .font(.system(size: 11))
-                                            }
-                                            .foregroundColor(Theme.textMuted)
-                                        }
-                                    }
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 6)
-                                }
-                                .buttonStyle(.plain)
-                            }
-
-                            if serverChannels.isEmpty && !loading {
-                                Text("Connect to see available channels")
-                                    .font(.system(size: 14))
-                                    .foregroundColor(Theme.textMuted)
-                                    .frame(maxWidth: .infinity)
-                                    .padding(.vertical, 24)
                             }
                         }
                     }
-                    .padding(.top, 16)
-                }
-                .refreshable {
-                    await fetchChannels()
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Theme.bgSecondary)
+                    .cornerRadius(12)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
+
+                    // Quick join bar
+                    HStack(spacing: 8) {
+                        Text("#")
+                            .font(.system(size: 16, weight: .medium, design: .monospaced))
+                            .foregroundColor(Theme.textMuted)
+
+                        TextField("", text: $channelInput, prompt: Text("Join by name...").foregroundColor(Theme.textMuted))
+                            .foregroundColor(Theme.textPrimary)
+                            .font(.system(size: 15))
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                            .submitLabel(.join)
+                            .focused($joinFocused)
+                            .onSubmit { joinCustom() }
+
+                        if !channelInput.isEmpty {
+                            Button(action: joinCustom) {
+                                Text("Join")
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 6)
+                                    .background(Theme.accent)
+                                    .cornerRadius(8)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Theme.bgSecondary.opacity(0.5))
+
+                    Rectangle().fill(Theme.border).frame(height: 1)
+
+                    // Channel list
+                    if loading && serverChannels.isEmpty {
+                        Spacer()
+                        VStack(spacing: 12) {
+                            ProgressView().tint(Theme.accent).scaleEffect(1.1)
+                            Text("Loading channels...")
+                                .font(.system(size: 14))
+                                .foregroundColor(Theme.textMuted)
+                        }
+                        Spacer()
+                    } else if filteredChannels.isEmpty {
+                        Spacer()
+                        VStack(spacing: 12) {
+                            Image(systemName: searchText.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass")
+                                .font(.system(size: 36))
+                                .foregroundColor(Theme.textMuted)
+                            if searchText.isEmpty {
+                                Text("No active channels")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundColor(Theme.textSecondary)
+                            } else {
+                                Text("No channels matching \"\(searchText)\"")
+                                    .font(.system(size: 15))
+                                    .foregroundColor(Theme.textSecondary)
+                                Button("Create #\(searchText)") {
+                                    channelInput = searchText
+                                    joinCustom()
+                                }
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(Theme.accent)
+                            }
+                        }
+                        Spacer()
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 0) {
+                                // Result count
+                                if !searchText.isEmpty {
+                                    HStack {
+                                        Text("\(filteredChannels.count) result\(filteredChannels.count == 1 ? "" : "s")")
+                                            .font(.system(size: 12))
+                                            .foregroundColor(Theme.textMuted)
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 16)
+                                    .padding(.top, 8)
+                                    .padding(.bottom, 4)
+                                }
+
+                                ForEach(filteredChannels) { ch in
+                                    channelRow(ch)
+                                }
+                            }
+                            .padding(.bottom, 16)
+                        }
+                        .refreshable { await fetchChannels() }
+                    }
                 }
             }
             .navigationTitle("Discover")
@@ -184,13 +162,82 @@ struct DiscoverTab: View {
         .task { await fetchChannels() }
     }
 
+    private func channelRow(_ ch: ServerChannel) -> some View {
+        let joined = appState.channels.contains { $0.name.lowercased() == ch.name.lowercased() }
+
+        return Button(action: {
+            appState.joinChannel(ch.name)
+            // Switch to Chats tab
+            if joined {
+                appState.activeChannel = ch.name
+            }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }) {
+            HStack(spacing: 12) {
+                // Channel icon
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Theme.accent.opacity(joined ? 0.2 : 0.1))
+                        .frame(width: 48, height: 48)
+                    Text("#")
+                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .foregroundColor(Theme.accent.opacity(joined ? 1 : 0.7))
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(ch.name)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(Theme.textPrimary)
+
+                        HStack(spacing: 3) {
+                            Image(systemName: "person.2.fill")
+                                .font(.system(size: 9))
+                            Text("\(ch.memberCount)")
+                                .font(.system(size: 12))
+                        }
+                        .foregroundColor(Theme.textMuted)
+                    }
+
+                    if !ch.topic.isEmpty {
+                        Text(ch.topic)
+                            .font(.system(size: 13))
+                            .foregroundColor(Theme.textSecondary)
+                            .lineLimit(2)
+                    }
+                }
+
+                Spacer()
+
+                if joined {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(Theme.success)
+                } else {
+                    Text("Join")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(Theme.accent)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 7)
+                        .background(Theme.accent.opacity(0.12))
+                        .cornerRadius(8)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+        }
+        .buttonStyle(.plain)
+    }
+
     private func fetchChannels() async {
         loading = true
         defer { loading = false }
 
         guard let url = URL(string: "https://irc.freeq.at/api/v1/channels") else { return }
         do {
-            let (data, response) = try await URLSession.shared.data(from: url)
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 8
+            let (data, response) = try await URLSession.shared.data(for: request)
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
             if let json = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
                 let channels = json.compactMap { ch -> ServerChannel? in
@@ -213,5 +260,8 @@ struct DiscoverTab: View {
         let channel = name.hasPrefix("#") ? name : "#\(name)"
         appState.joinChannel(channel)
         channelInput = ""
+        joinFocused = false
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        ToastManager.shared.show("Joining \(channel)", icon: "number")
     }
 }

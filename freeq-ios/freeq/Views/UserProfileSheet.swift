@@ -157,7 +157,7 @@ struct UserProfileSheet: View {
 
     private func startDM() {
         let _ = appState.getOrCreateDM(nick)
-        appState.activeChannel = nick
+        appState.pendingDMNick = nick
         dismiss()
     }
 

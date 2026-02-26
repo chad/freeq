@@ -1,10 +1,19 @@
 import SwiftUI
+import AVFoundation
 
 struct ComposeView: View {
     @EnvironmentObject var appState: AppState
     @State private var text: String = ""
     @FocusState private var isFocused: Bool
     @State private var completions: [String] = []
+
+    // Voice recording state
+    @State private var isRecording = false
+    @State private var recorder: AVAudioRecorder?
+    @State private var recordingTime: TimeInterval = 0
+    @State private var recordTimer: Timer?
+    @State private var recordingCancelled = false
+    @State private var dragOffset: CGFloat = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,9 +70,13 @@ struct ComposeView: View {
                 .onAppear { text = edit.text }
             }
 
-            HStack(alignment: .bottom, spacing: 10) {
+            // Recording overlay
+            if isRecording {
+                recordingBar
+            } else {
+                // Normal compose bar
                 HStack(alignment: .bottom, spacing: 8) {
-                    // Media upload (AT-authenticated only)
+                    // Media button (authenticated only)
                     if appState.authenticatedDID != nil, let target = appState.activeChannel {
                         MediaAttachmentButton(channel: target)
                     } else {
@@ -72,55 +85,288 @@ struct ComposeView: View {
                             .foregroundColor(Theme.textMuted.opacity(0.5))
                     }
 
-                    TextField(
-                        "",
-                        text: $text,
-                        prompt: Text(placeholder).foregroundColor(Theme.textMuted),
-                        axis: .vertical
-                    )
-                    .foregroundColor(Theme.textPrimary)
-                    .font(.system(size: 16))
-                    .lineLimit(1...6)
-                    .focused($isFocused)
-                    .submitLabel(.send)
-                    .onSubmit { send() }
-                    .tint(Theme.accent)
-                    .onChange(of: text) {
-                        updateCompletions()
-                        if let target = appState.activeChannel, !text.isEmpty {
-                            appState.sendTyping(target: target)
+                    // Text input
+                    HStack(alignment: .bottom, spacing: 6) {
+                        TextField(
+                            "",
+                            text: $text,
+                            prompt: Text(placeholder).foregroundColor(Theme.textMuted),
+                            axis: .vertical
+                        )
+                        .foregroundColor(Theme.textPrimary)
+                        .font(.system(size: 16))
+                        .lineLimit(1...6)
+                        .focused($isFocused)
+                        .submitLabel(.send)
+                        .onSubmit { send() }
+                        .tint(Theme.accent)
+                        .onChange(of: text) {
+                            updateCompletions()
+                            if let target = appState.activeChannel, !text.isEmpty {
+                                appState.sendTyping(target: target)
+                            }
                         }
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Theme.bgTertiary)
+                    .cornerRadius(20)
 
-                    // Send button
-                    Button(action: send) {
+                    // Send or Mic button
+                    if canSend {
+                        Button(action: send) {
+                            ZStack {
+                                Circle()
+                                    .fill(Theme.accent)
+                                    .frame(width: 36, height: 36)
+                                Image(systemName: appState.editingMessage != nil ? "checkmark" : "arrow.up")
+                                    .font(.system(size: 15, weight: .bold))
+                                    .foregroundColor(.white)
+                            }
+                        }
+                    } else if appState.authenticatedDID != nil {
+                        // Mic button — hold to record
+                        micButton
+                    } else {
+                        // Disabled send for guests with no text
                         ZStack {
                             Circle()
-                                .fill(canSend ? Theme.accent : Theme.textMuted.opacity(0.3))
-                                .frame(width: 32, height: 32)
-
-                            Image(systemName: appState.editingMessage != nil ? "checkmark" : "arrow.up")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundColor(.white)
+                                .fill(Theme.textMuted.opacity(0.2))
+                                .frame(width: 36, height: 36)
+                            Image(systemName: "arrow.up")
+                                .font(.system(size: 15, weight: .bold))
+                                .foregroundColor(Theme.textMuted.opacity(0.4))
                         }
                     }
-                    .disabled(!canSend)
                 }
-                .padding(.horizontal, 12)
+                .padding(.horizontal, 10)
                 .padding(.vertical, 8)
-                .background(Theme.bgTertiary)
-                .cornerRadius(22)
+                .background(Theme.bgSecondary)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(Theme.bgSecondary)
+        }
+    }
+
+    // MARK: - Mic Button (hold to record)
+
+    private var micButton: some View {
+        ZStack {
+            Circle()
+                .fill(Theme.bgTertiary)
+                .frame(width: 36, height: 36)
+            Image(systemName: "mic.fill")
+                .font(.system(size: 16))
+                .foregroundColor(Theme.accent)
+        }
+        .gesture(
+            LongPressGesture(minimumDuration: 0.3)
+                .onEnded { _ in
+                    startRecording()
+                }
+        )
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    if isRecording {
+                        dragOffset = value.translation.width
+                        // Slide left to cancel
+                        if dragOffset < -80 {
+                            recordingCancelled = true
+                        }
+                    }
+                }
+                .onEnded { _ in
+                    if isRecording {
+                        stopRecording()
+                    }
+                }
+        )
+    }
+
+    // MARK: - Recording Bar
+
+    private var recordingBar: some View {
+        HStack(spacing: 12) {
+            // Red dot + timer
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Theme.danger)
+                    .frame(width: 10, height: 10)
+                    .opacity(recordingTime.truncatingRemainder(dividingBy: 1) < 0.5 ? 1 : 0.3)
+
+                Text(formatDuration(recordingTime))
+                    .font(.system(size: 16, weight: .medium, design: .monospaced))
+                    .foregroundColor(Theme.textPrimary)
+            }
+
+            Spacer()
+
+            if recordingCancelled || dragOffset < -40 {
+                Text("Release to cancel")
+                    .font(.system(size: 14))
+                    .foregroundColor(Theme.danger)
+            } else {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 11))
+                    Text("Slide to cancel")
+                        .font(.system(size: 14))
+                }
+                .foregroundColor(Theme.textMuted)
+            }
+
+            Spacer()
+
+            // Stop and send
+            Button(action: stopRecording) {
+                ZStack {
+                    Circle()
+                        .fill(Theme.accent)
+                        .frame(width: 36, height: 36)
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundColor(.white)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Theme.danger.opacity(0.08))
+        .background(Theme.bgSecondary)
+    }
+
+    // MARK: - Voice Recording
+
+    private func startRecording() {
+        // Check permission
+        switch AVAudioApplication.shared.recordPermission {
+        case .denied:
+            ToastManager.shared.show("Microphone access denied", icon: "mic.slash")
+            return
+        case .undetermined:
+            AVAudioApplication.requestRecordPermission { granted in
+                if granted {
+                    DispatchQueue.main.async { self.startRecording() }
+                }
+            }
+            return
+        default: break
+        }
+
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.record, mode: .default)
+            try session.setActive(true)
+        } catch {
+            ToastManager.shared.show("Audio error", icon: "exclamationmark.triangle")
+            return
+        }
+
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("voice_\(UUID().uuidString).m4a")
+        let settings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: 44100,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
+        ]
+
+        do {
+            recorder = try AVAudioRecorder(url: tempURL, settings: settings)
+            recorder?.record()
+            isRecording = true
+            recordingTime = 0
+            recordingCancelled = false
+            dragOffset = 0
+            UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+
+            recordTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+                recordingTime = recorder?.currentTime ?? 0
+                if recordingTime >= 300 { stopRecording() }
+            }
+        } catch {
+            ToastManager.shared.show("Recording failed", icon: "exclamationmark.triangle")
+        }
+    }
+
+    private func stopRecording() {
+        recordTimer?.invalidate()
+        recordTimer = nil
+        guard let recorder = recorder, isRecording else { return }
+        recorder.stop()
+        isRecording = false
+
+        let cancelled = recordingCancelled || dragOffset < -80 || recordingTime < 0.5
+
+        if cancelled {
+            // Discard
+            try? FileManager.default.removeItem(at: recorder.url)
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            return
+        }
+
+        // Send the voice message
+        guard let data = try? Data(contentsOf: recorder.url) else { return }
+        let duration = formatDuration(recordingTime)
+
+        try? AVAudioSession.sharedInstance().setActive(false)
+
+        guard let target = appState.activeChannel else { return }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+
+        Task {
+            // Refresh broker session
+            if let brokerToken = appState.brokerToken {
+                let brokerBase = appState.authBrokerBase
+                var req = URLRequest(url: URL(string: "\(brokerBase)/session")!)
+                req.httpMethod = "POST"
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                req.httpBody = try? JSONSerialization.data(withJSONObject: ["broker_token": brokerToken])
+                _ = try? await URLSession.shared.data(for: req)
+            }
+
+            let did = appState.authenticatedDID ?? ""
+            let boundary = UUID().uuidString
+            var body = Data()
+
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"did\"\r\n\r\n\(did)\r\n".data(using: .utf8)!)
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"channel\"\r\n\r\n\(target)\r\n".data(using: .utf8)!)
+            body.append("--\(boundary)\r\n".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"file\"; filename=\"voice.m4a\"\r\nContent-Type: audio/mp4\r\n\r\n".data(using: .utf8)!)
+            body.append(data)
+            body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+
+            var request = URLRequest(url: URL(string: "https://irc.freeq.at/api/v1/upload")!)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 30
+            request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+            request.httpBody = body
+
+            do {
+                let (responseData, response) = try await URLSession.shared.data(for: request)
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                if status == 200,
+                   let json = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
+                   let url = json["url"] as? String {
+                    await MainActor.run {
+                        appState.sendMessage(target: target, text: "🎤 Voice message (\(duration)) \(url)")
+                    }
+                } else {
+                    await MainActor.run {
+                        ToastManager.shared.show("Upload failed", icon: "exclamationmark.triangle")
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    ToastManager.shared.show("Upload failed", icon: "exclamationmark.triangle")
+                }
+            }
         }
     }
 
     // MARK: - Nick Autocomplete
 
     private func updateCompletions() {
-        // Check if the user is typing @someone
         guard let lastWord = text.split(separator: " ").last,
               lastWord.hasPrefix("@"),
               lastWord.count > 1 else {
@@ -139,7 +385,6 @@ struct ComposeView: View {
     }
 
     private func applyCompletion(_ nick: String) {
-        // Replace the @partial with @nick
         var words = text.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
         if let lastIdx = words.indices.last, words[lastIdx].hasPrefix("@") {
             words[lastIdx] = "@\(nick)"
@@ -153,12 +398,8 @@ struct ComposeView: View {
     }
 
     private var placeholder: String {
-        if appState.replyingTo != nil {
-            return "Reply..."
-        }
-        if appState.editingMessage != nil {
-            return "Edit message..."
-        }
+        if appState.replyingTo != nil { return "Reply..." }
+        if appState.editingMessage != nil { return "Edit message..." }
         return "Message \(appState.activeChannel ?? "")"
     }
 
@@ -208,7 +449,6 @@ struct ComposeView: View {
             if appState.sendMessage(target: target, text: trimmed) {
                 text = ""
             } else {
-                // Send failed — keep text so user doesn't lose their message
                 UINotificationFeedbackGenerator().notificationOccurred(.error)
                 return
             }
@@ -249,5 +489,11 @@ struct ComposeView: View {
         default:
             appState.sendRaw(String(input.dropFirst()))
         }
+    }
+
+    private func formatDuration(_ t: TimeInterval) -> String {
+        let mins = Int(t) / 60
+        let secs = Int(t) % 60
+        return String(format: "%d:%02d", mins, secs)
     }
 }

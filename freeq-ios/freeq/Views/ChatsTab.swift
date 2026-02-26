@@ -6,9 +6,10 @@ struct ChatsTab: View {
     @EnvironmentObject var networkMonitor: NetworkMonitor
     @State private var showingJoinSheet = false
     @State private var searchText = ""
+    @State private var navigationPath = NavigationPath()
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $navigationPath) {
             ZStack {
                 Theme.bgPrimary.ignoresSafeArea()
 
@@ -81,6 +82,17 @@ struct ChatsTab: View {
                 JoinChannelSheet()
                     .presentationDetents([.medium])
                     .presentationDragIndicator(.visible)
+            }
+            .onChange(of: appState.pendingDMNick) {
+                if let nick = appState.pendingDMNick {
+                    appState.pendingDMNick = nil
+                    // Pop to root then push the DM
+                    navigationPath = NavigationPath()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        appState.activeChannel = nick
+                        navigationPath.append(nick)
+                    }
+                }
             }
         }
     }

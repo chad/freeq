@@ -41,6 +41,11 @@ struct MainTabView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: appState.lightboxURL != nil)
+        .onChange(of: appState.pendingDMNick) {
+            if appState.pendingDMNick != nil {
+                selectedTab = 0 // Switch to Chats tab
+            }
+        }
         .withToast()
         .preferredColorScheme(.dark)
     }

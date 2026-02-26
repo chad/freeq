@@ -148,6 +148,9 @@ class AppState: ObservableObject {
     // In-flight CHATHISTORY batches
     fileprivate var batches: [String: BatchBuffer] = [:]
 
+    /// Pending DM navigation — set by profile "Message" button, consumed by ChatsTab
+    @Published var pendingDMNick: String? = nil
+
     /// For reply UI
     @Published var replyingTo: ChatMessage? = nil
     /// For edit UI

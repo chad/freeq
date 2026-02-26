@@ -13,7 +13,6 @@ struct MediaAttachmentButton: View {
     @State private var showingActionSheet = false
     @State private var showingPhotoPicker = false
     @State private var showingCamera = false
-    @State private var showingAudioRecorder = false
     @State private var selectedItems: [PhotosPickerItem] = []
     @State private var stagedMedia: StagedMedia? = nil
 
@@ -26,7 +25,6 @@ struct MediaAttachmentButton: View {
         .confirmationDialog("Attach Media", isPresented: $showingActionSheet) {
             Button("Photo Library") { showingPhotoPicker = true }
             Button("Take Photo or Video") { showingCamera = true }
-            Button("Record Audio") { showingAudioRecorder = true }
             Button("Cancel", role: .cancel) { }
         }
         .photosPicker(isPresented: $showingPhotoPicker, selection: $selectedItems, maxSelectionCount: 1, matching: .any(of: [.images, .videos]))
@@ -44,11 +42,6 @@ struct MediaAttachmentButton: View {
                 }
             }
             .ignoresSafeArea()
-        }
-        .sheet(isPresented: $showingAudioRecorder) {
-            AudioRecorderSheet(channel: channel)
-                .presentationDetents([.medium])
-                .presentationDragIndicator(.visible)
         }
         .sheet(item: $stagedMedia) { media in
             MediaPreviewSheet(media: media, channel: channel)
