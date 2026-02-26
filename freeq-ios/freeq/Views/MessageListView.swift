@@ -870,6 +870,8 @@ struct InlineAudioPlayer: View {
     @State private var progress: Double = 0
     @State private var duration: Double = 0
     @State private var timer: Timer?
+    @State private var loadError = false
+    @State private var statusObserver: NSKeyValueObservation?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -877,12 +879,18 @@ struct InlineAudioPlayer: View {
             Button(action: togglePlayback) {
                 ZStack {
                     Circle()
-                        .fill(Theme.accent)
+                        .fill(loadError ? Theme.danger : Theme.accent)
                         .frame(width: 44, height: 44)
-                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 18))
-                        .foregroundColor(.white)
-                        .offset(x: isPlaying ? 0 : 2)
+                    if loadError {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 16))
+                            .foregroundColor(.white)
+                    } else {
+                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                            .font(.system(size: 18))
+                            .foregroundColor(.white)
+                            .offset(x: isPlaying ? 0 : 2)
+                    }
                 }
             }
 
@@ -936,21 +944,55 @@ struct InlineAudioPlayer: View {
     }
 
     private func loadDuration() {
-        let asset = AVAsset(url: url)
+        // If we have a label like "0:05", parse it as initial duration
+        if let label = label, let parsed = parseDuration(label) {
+            duration = parsed
+        }
+        // Also try loading from the asset
+        let asset = AVURLAsset(url: url)
         Task {
             if let d = try? await asset.load(.duration) {
                 let secs = CMTimeGetSeconds(d)
-                await MainActor.run { duration = secs > 0 ? secs : 0 }
+                if secs > 0 && secs.isFinite {
+                    await MainActor.run { duration = secs }
+                }
             }
         }
     }
 
+    private func parseDuration(_ s: String) -> Double? {
+        let parts = s.split(separator: ":")
+        guard parts.count == 2,
+              let mins = Double(parts[0]),
+              let secs = Double(parts[1]) else { return nil }
+        return mins * 60 + secs
+    }
+
     private func togglePlayback() {
+        // Configure audio session for playback FIRST
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+        try? AVAudioSession.sharedInstance().setActive(true)
+
         if player == nil {
-            player = AVPlayer(url: url)
-            // Configure audio session for playback
-            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-            try? AVAudioSession.sharedInstance().setActive(true)
+            let item = AVPlayerItem(url: url)
+            player = AVPlayer(playerItem: item)
+
+            // Observe item status for errors
+            statusObserver = item.observe(\.status, options: [.new]) { [self] item, _ in
+                DispatchQueue.main.async {
+                    if item.status == .failed {
+                        loadError = true
+                        isPlaying = false
+                        timer?.invalidate()
+                        print("Audio playback error: \(item.error?.localizedDescription ?? "unknown")")
+                    } else if item.status == .readyToPlay {
+                        let dur = CMTimeGetSeconds(item.duration)
+                        if dur > 0 && dur.isFinite {
+                            duration = dur
+                        }
+                    }
+                }
+            }
         }
 
         if isPlaying {
@@ -958,23 +1000,40 @@ struct InlineAudioPlayer: View {
             timer?.invalidate()
             isPlaying = false
         } else {
+            if loadError {
+                // Reset and retry
+                loadError = false
+                statusObserver?.invalidate()
+                let item = AVPlayerItem(url: url)
+                player?.replaceCurrentItem(with: item)
+                statusObserver = item.observe(\.status, options: [.new]) { item, _ in
+                    DispatchQueue.main.async {
+                        if item.status == .failed {
+                            self.loadError = true
+                            self.isPlaying = false
+                        }
+                    }
+                }
+            }
+
             player?.play()
             isPlaying = true
             timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-                if let current = player?.currentTime() {
-                    let secs = CMTimeGetSeconds(current)
-                    if secs >= 0 { progress = secs }
-                }
-                // Check if finished
-                if let item = player?.currentItem {
+                guard let p = player else { return }
+                let secs = CMTimeGetSeconds(p.currentTime())
+                if secs >= 0 && secs.isFinite { progress = secs }
+
+                if let item = p.currentItem {
                     let dur = CMTimeGetSeconds(item.duration)
-                    let cur = CMTimeGetSeconds(item.currentTime())
-                    if dur > 0 && cur >= dur - 0.1 {
-                        player?.seek(to: .zero)
-                        player?.pause()
-                        isPlaying = false
-                        progress = 0
-                        timer?.invalidate()
+                    if dur > 0 && dur.isFinite {
+                        duration = dur
+                        if secs >= dur - 0.1 {
+                            p.seek(to: .zero)
+                            p.pause()
+                            isPlaying = false
+                            progress = 0
+                            timer?.invalidate()
+                        }
                     }
                 }
             }
@@ -985,6 +1044,7 @@ struct InlineAudioPlayer: View {
     private func cleanup() {
         player?.pause()
         timer?.invalidate()
+        statusObserver?.invalidate()
     }
 
     private func formatTime(_ t: Double) -> String {

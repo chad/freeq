@@ -72,9 +72,19 @@ struct ComposeView: View {
                 .onAppear { text = edit.text }
             }
 
-            // Recording overlay
             if isRecording {
+                // Recording bar with slide-to-cancel gesture on the WHOLE bar
                 recordingBar
+                    .gesture(
+                        DragGesture(minimumDistance: 10)
+                            .onChanged { value in
+                                dragOffset = value.translation.width
+                                recordingCancelled = dragOffset < -60
+                            }
+                            .onEnded { _ in
+                                stopRecording()
+                            }
+                    )
             } else {
                 // Normal compose bar
                 HStack(alignment: .bottom, spacing: 8) {
