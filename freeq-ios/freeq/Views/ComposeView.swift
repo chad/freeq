@@ -16,12 +16,29 @@ struct ComposeView: View {
     @State private var dragOffset: CGFloat = 0
     @State private var holdStart: Date? = nil
     @State private var holdTimer: Timer? = nil
+    @State private var isUploadingVoice = false
 
     var body: some View {
         VStack(spacing: 0) {
             Rectangle()
                 .fill(Theme.border)
                 .frame(height: 1)
+
+            // Voice message upload indicator
+            if isUploadingVoice {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: Theme.accent))
+                        .scaleEffect(0.7)
+                    Text("Sending voice message…")
+                        .font(.system(size: 13))
+                        .foregroundColor(Theme.textMuted)
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Theme.bgTertiary)
+            }
 
             // Nick autocomplete suggestions
             if !completions.isEmpty {
@@ -340,7 +357,7 @@ struct ComposeView: View {
         // Always deactivate audio session
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
 
-        let cancelled = recordingCancelled || dragOffset < -80 || recordingTime < 0.5
+        let cancelled = recordingCancelled || dragOffset < -60 || recordingTime < 0.5
         dragOffset = 0
         recordingCancelled = false
 
@@ -348,6 +365,7 @@ struct ComposeView: View {
             // Discard
             try? FileManager.default.removeItem(at: recorder.url)
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            ToastManager.shared.show("Voice message cancelled", icon: "xmark.circle")
             return
         }
 
@@ -357,8 +375,15 @@ struct ComposeView: View {
 
         guard let target = appState.activeChannel else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        isUploadingVoice = true
 
         Task {
+            defer {
+                Task { @MainActor in
+                    isUploadingVoice = false
+                }
+            }
+
             // Refresh broker session
             if let brokerToken = appState.brokerToken {
                 let brokerBase = appState.authBrokerBase
@@ -396,6 +421,7 @@ struct ComposeView: View {
                    let url = json["url"] as? String {
                     await MainActor.run {
                         appState.sendMessage(target: target, text: "🎤 Voice message (\(duration)) \(url)")
+                        ToastManager.shared.show("Voice message sent", icon: "checkmark.circle")
                     }
                 } else {
                     await MainActor.run {

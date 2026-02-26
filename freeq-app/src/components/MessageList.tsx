@@ -192,17 +192,44 @@ function InlineAudioPlayer({ url, label }: { url: string; label?: string }) {
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(false);
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
 
-  const toggle = () => {
+  // PDS sends Content-Disposition: attachment + sandbox CSP, so fetch and create blob URL
+  const ensureBlob = async (): Promise<string | null> => {
+    if (blobUrl) return blobUrl;
+    setLoading(true);
+    setError(false);
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      setBlobUrl(objectUrl);
+      setLoading(false);
+      return objectUrl;
+    } catch (e) {
+      console.error('Audio download failed:', e);
+      setError(true);
+      setLoading(false);
+      return null;
+    }
+  };
+
+  const toggle = async () => {
+    if (playing) {
+      audioRef.current?.pause();
+      setPlaying(false);
+      return;
+    }
+    const src = await ensureBlob();
+    if (!src) return;
     const el = audioRef.current;
     if (!el) return;
-    if (playing) {
-      el.pause();
-      setPlaying(false);
-    } else {
-      el.play().catch(() => {});
-      setPlaying(true);
-    }
+    if (el.src !== src) el.src = src;
+    el.play().catch(() => setError(true));
+    setPlaying(true);
   };
 
   const fmt = (s: number) => {
@@ -214,9 +241,19 @@ function InlineAudioPlayer({ url, label }: { url: string; label?: string }) {
     <div className="mt-1.5 flex items-center gap-3 bg-bg-tertiary border border-border rounded-xl px-3 py-2.5 max-w-[300px]">
       <button
         onClick={toggle}
-        className="flex-shrink-0 w-10 h-10 rounded-full bg-accent flex items-center justify-center hover:brightness-110 transition"
+        disabled={loading}
+        className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center transition ${
+          error ? 'bg-red-500 hover:bg-red-600' : 'bg-accent hover:brightness-110'
+        }`}
       >
-        {playing ? (
+        {loading ? (
+          <svg className="w-5 h-5 text-white animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+          </svg>
+        ) : error ? (
+          <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+        ) : playing ? (
           <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
         ) : (
           <svg className="w-4 h-4 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
@@ -240,11 +277,11 @@ function InlineAudioPlayer({ url, label }: { url: string; label?: string }) {
       </div>
       <audio
         ref={audioRef}
-        src={url}
-        preload="metadata"
+        preload="none"
         onLoadedMetadata={() => setDuration(audioRef.current?.duration || 0)}
         onTimeUpdate={() => setProgress(audioRef.current?.currentTime || 0)}
         onEnded={() => { setPlaying(false); setProgress(0); }}
+        onError={() => { setError(true); setPlaying(false); }}
       />
     </div>
   );

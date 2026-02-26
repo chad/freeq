@@ -909,6 +909,10 @@ struct InlineAudioPlayer: View {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 16))
                             .foregroundColor(.white)
+                    } else if isDownloading {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(0.8)
                     } else {
                         Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                             .font(.system(size: 18))
@@ -917,6 +921,7 @@ struct InlineAudioPlayer: View {
                     }
                 }
             }
+            .disabled(isDownloading)
 
             VStack(alignment: .leading, spacing: 6) {
                 // Label
@@ -992,77 +997,109 @@ struct InlineAudioPlayer: View {
         return mins * 60 + secs
     }
 
+    @State private var localFileURL: URL?
+    @State private var isDownloading = false
+
     private func togglePlayback() {
-        // Configure audio session for playback FIRST
+        // Configure audio session for playback
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
         try? AVAudioSession.sharedInstance().setActive(true)
-
-        if player == nil {
-            let item = AVPlayerItem(url: url)
-            player = AVPlayer(playerItem: item)
-
-            // Observe item status for errors
-            statusObserver = item.observe(\.status, options: [.new]) { [self] item, _ in
-                DispatchQueue.main.async {
-                    if item.status == .failed {
-                        loadError = true
-                        isPlaying = false
-                        timer?.invalidate()
-                        print("Audio playback error: \(item.error?.localizedDescription ?? "unknown")")
-                    } else if item.status == .readyToPlay {
-                        let dur = CMTimeGetSeconds(item.duration)
-                        if dur > 0 && dur.isFinite {
-                            duration = dur
-                        }
-                    }
-                }
-            }
-        }
 
         if isPlaying {
             player?.pause()
             timer?.invalidate()
             isPlaying = false
-        } else {
-            if loadError {
-                // Reset and retry
-                loadError = false
-                statusObserver?.invalidate()
-                let item = AVPlayerItem(url: url)
-                player?.replaceCurrentItem(with: item)
-                statusObserver = item.observe(\.status, options: [.new]) { item, _ in
-                    DispatchQueue.main.async {
-                        if item.status == .failed {
-                            self.loadError = true
-                            self.isPlaying = false
-                        }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            return
+        }
+
+        // If we have a local file, play it directly
+        if let localURL = localFileURL {
+            playFromURL(localURL)
+            return
+        }
+
+        // Download first (PDS sends Content-Disposition: attachment which blocks AVPlayer streaming)
+        isDownloading = true
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+
+        Task {
+            do {
+                let (data, response) = try await URLSession.shared.data(from: url)
+                let httpResponse = response as? HTTPURLResponse
+                guard httpResponse?.statusCode == 200, !data.isEmpty else {
+                    await MainActor.run {
+                        isDownloading = false
+                        loadError = true
                     }
+                    return
+                }
+
+                // Determine extension from content-type
+                let contentType = httpResponse?.value(forHTTPHeaderField: "Content-Type") ?? "audio/mp4"
+                let ext = contentType.contains("m4a") || contentType.contains("mp4") ? "m4a" : "mp3"
+                let tempURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("audio_\(url.absoluteString.hashValue).\(ext)")
+
+                try data.write(to: tempURL)
+
+                await MainActor.run {
+                    localFileURL = tempURL
+                    isDownloading = false
+                    playFromURL(tempURL)
+                }
+            } catch {
+                await MainActor.run {
+                    isDownloading = false
+                    loadError = true
+                    print("Audio download error: \(error)")
                 }
             }
+        }
+    }
 
-            player?.play()
-            isPlaying = true
-            timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-                guard let p = player else { return }
-                let secs = CMTimeGetSeconds(p.currentTime())
-                if secs >= 0 && secs.isFinite { progress = secs }
+    private func playFromURL(_ fileURL: URL) {
+        if player == nil {
+            let item = AVPlayerItem(url: fileURL)
+            player = AVPlayer(playerItem: item)
 
-                if let item = p.currentItem {
-                    let dur = CMTimeGetSeconds(item.duration)
-                    if dur > 0 && dur.isFinite {
-                        duration = dur
-                        if secs >= dur - 0.1 {
-                            p.seek(to: .zero)
-                            p.pause()
-                            isPlaying = false
-                            progress = 0
-                            timer?.invalidate()
-                        }
+            statusObserver = item.observe(\.status, options: [.new]) { item, _ in
+                DispatchQueue.main.async {
+                    if item.status == .failed {
+                        loadError = true
+                        isPlaying = false
+                        timer?.invalidate()
+                    } else if item.status == .readyToPlay {
+                        let dur = CMTimeGetSeconds(item.duration)
+                        if dur > 0 && dur.isFinite { duration = dur }
                     }
                 }
             }
         }
+
+        player?.play()
+        isPlaying = true
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+
+        timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            guard let p = player else { return }
+            let secs = CMTimeGetSeconds(p.currentTime())
+            if secs >= 0 && secs.isFinite { progress = secs }
+
+            if let item = p.currentItem {
+                let dur = CMTimeGetSeconds(item.duration)
+                if dur > 0 && dur.isFinite {
+                    duration = dur
+                    if secs >= dur - 0.1 {
+                        p.seek(to: .zero)
+                        p.pause()
+                        isPlaying = false
+                        progress = 0
+                        timer?.invalidate()
+                    }
+                }
+            }
+        }
     }
 
     private func cleanup() {
