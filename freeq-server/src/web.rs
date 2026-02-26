@@ -194,6 +194,7 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/og", get(api_og_preview))
         .route("/api/v1/keys/{did}", get(api_get_keys))
         .route("/api/v1/keys", axum::routing::post(api_upload_keys))
+        .route("/auth/mobile", get(auth_mobile_redirect))
         .route("/join/{channel}", get(channel_invite_page))
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)) // 12MB
         .layer({
@@ -735,6 +736,56 @@ struct AuthLoginQuery {
 ///
 /// Initiates the AT Protocol OAuth flow. Resolves the handle, does PAR,
 /// and redirects the browser to the authorization server.
+/// Serves a page that reads #oauth=base64json from the hash fragment,
+/// parses it, and redirects to freeq://auth?token=...&broker_token=...
+/// This is used by the iOS app because the broker's HTML redirect has
+/// broken JS (escaped quotes in raw strings) and ASWebAuthenticationSession
+/// doesn't intercept JS-initiated custom scheme navigations.
+async fn auth_mobile_redirect() -> Html<String> {
+    Html(r##"<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>freeq</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{font-family:system-ui;background:#1e1e2e;color:#cdd6f4;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+.box{text-align:center}
+h1{color:#89b4fa;font-size:24px}
+p{color:#a6adc8;font-size:15px}
+a{color:#89b4fa;font-size:17px;font-weight:600;text-decoration:none;display:inline-block;margin-top:16px;padding:12px 32px;background:#89b4fa22;border-radius:12px}
+</style></head>
+<body><div class="box" id="box">
+<h1>freeq</h1>
+<p id="status">Connecting...</p>
+<a id="link" style="display:none" href="#">Open freeq</a>
+</div>
+<script>
+try {
+  var h = location.hash;
+  if (h && h.indexOf('#oauth=') === 0) {
+    var b64 = h.substring(7);
+    var json = JSON.parse(atob(b64));
+    var t = json.token || json.web_token || json.access_jwt || '';
+    var bt = json.broker_token || '';
+    var n = json.nick || json.handle || '';
+    var d = json.did || '';
+    var ha = json.handle || '';
+    var url = 'freeq://auth?token=' + encodeURIComponent(t)
+      + '&broker_token=' + encodeURIComponent(bt)
+      + '&nick=' + encodeURIComponent(n)
+      + '&did=' + encodeURIComponent(d)
+      + '&handle=' + encodeURIComponent(ha);
+    document.getElementById('link').href = url;
+    document.getElementById('link').style.display = 'inline-block';
+    document.getElementById('status').textContent = 'Tap to return to freeq';
+    window.location.href = url;
+  } else {
+    document.getElementById('status').textContent = 'Authentication failed.';
+  }
+} catch(e) {
+  document.getElementById('status').textContent = 'Error: ' + e.message;
+}
+</script></body></html>"##.to_string())
+}
+
 async fn auth_login(
     headers: axum::http::HeaderMap,
     Query(q): Query<AuthLoginQuery>,
