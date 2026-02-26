@@ -128,6 +128,7 @@ struct ComposeView: View {
                     } else if appState.authenticatedDID != nil {
                         // Mic button — hold to record
                         micButton
+                            .accessibilityLabel("Hold to record voice message")
                     } else {
                         // Disabled send for guests with no text
                         ZStack {
@@ -150,15 +151,28 @@ struct ComposeView: View {
     // MARK: - Mic Button (hold to record)
 
     @GestureState private var micPressed = false
+    @State private var showMicHint = false
 
     private var micButton: some View {
-        ZStack {
-            Circle()
-                .fill(micPressed ? Theme.accent.opacity(0.3) : Theme.bgTertiary)
-                .frame(width: 36, height: 36)
-            Image(systemName: "mic.fill")
-                .font(.system(size: 16))
-                .foregroundColor(Theme.accent)
+        VStack(spacing: 2) {
+            ZStack {
+                // Expanding ring on press
+                Circle()
+                    .fill(Theme.accent.opacity(micPressed ? 0.15 : 0))
+                    .frame(width: micPressed ? 56 : 36, height: micPressed ? 56 : 36)
+                    .animation(.easeOut(duration: 0.2), value: micPressed)
+
+                Circle()
+                    .fill(micPressed ? Theme.accent : Theme.bgTertiary)
+                    .frame(width: 36, height: 36)
+                    .scaleEffect(micPressed ? 1.15 : 1.0)
+                    .animation(.easeOut(duration: 0.15), value: micPressed)
+
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 16))
+                    .foregroundColor(micPressed ? .white : Theme.accent)
+                    .animation(.easeOut(duration: 0.1), value: micPressed)
+            }
         }
         .gesture(
             DragGesture(minimumDistance: 0)
@@ -166,13 +180,15 @@ struct ComposeView: View {
                     state = true
                 }
                 .onChanged { value in
-                    // Start recording after holding ~0.2s (detected by still being in gesture)
                     if !isRecording && abs(value.translation.width) < 10 && abs(value.translation.height) < 10 {
-                        // Use a timer to start recording after brief hold
                         if holdStart == nil {
                             holdStart = Date()
+                            // Show hint briefly on first touch
+                            if !showMicHint {
+                                showMicHint = true
+                            }
                         }
-                        if let start = holdStart, Date().timeIntervalSince(start) >= 0.2 && !isRecording {
+                        if let start = holdStart, Date().timeIntervalSince(start) >= 0.25 && !isRecording {
                             startRecording()
                         }
                     }
@@ -185,6 +201,9 @@ struct ComposeView: View {
                     holdStart = nil
                     if isRecording {
                         stopRecording()
+                    } else {
+                        // Brief tap — show hint
+                        ToastManager.shared.show("Hold to record voice message", icon: "mic.fill")
                     }
                 }
         )

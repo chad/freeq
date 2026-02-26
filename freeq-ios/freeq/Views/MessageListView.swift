@@ -527,25 +527,17 @@ struct MessageListView: View {
                 .font(.system(size: 15))
                 .italic()
                 .foregroundColor(Theme.textSecondary)
+        } else if let (url, durationLabel) = extractVoiceMessage(msg.text) {
+            // Voice messages — must check before image/video to avoid CDN URL misdetection
+            InlineAudioPlayer(url: url, label: durationLabel)
         } else if let url = extractVideoURL(msg.text) {
             VStack(alignment: .leading, spacing: 6) {
                 let remainingText = msg.text.replacingOccurrences(of: url.absoluteString, with: "").trimmingCharacters(in: .whitespaces)
-                // Strip voice message prefix
-                let cleanText = remainingText.replacingOccurrences(of: "🎤 Voice message", with: "").replacingOccurrences(of: #"\(\d+:\d+\)"#, with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces)
-                if !cleanText.isEmpty {
-                    styledText(cleanText)
-                }
+                if !remainingText.isEmpty { styledText(remainingText) }
                 InlineVideoPlayer(url: url)
             }
         } else if let url = extractAudioURL(msg.text) {
-            VStack(alignment: .leading, spacing: 6) {
-                let remainingText = msg.text.replacingOccurrences(of: url.absoluteString, with: "").trimmingCharacters(in: .whitespaces)
-                let cleanText = remainingText.replacingOccurrences(of: "🎤 Voice message", with: "").replacingOccurrences(of: #"\(\d+:\d+\)"#, with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces)
-                if !cleanText.isEmpty {
-                    styledText(cleanText)
-                }
-                InlineAudioPlayer(url: url)
-            }
+            InlineAudioPlayer(url: url, label: nil)
         } else if let url = extractImageURL(msg.text) {
             VStack(alignment: .leading, spacing: 6) {
                 let remainingText = msg.text.replacingOccurrences(of: url.absoluteString, with: "").trimmingCharacters(in: .whitespaces)
@@ -665,6 +657,22 @@ struct MessageListView: View {
             return URL(string: String(text[range]))
         }
         return nil
+    }
+
+    /// Detect "🎤 Voice message (0:05) https://..." pattern
+    private func extractVoiceMessage(_ text: String) -> (URL, String?)? {
+        guard text.hasPrefix("🎤") else { return nil }
+        // Extract duration label
+        let durationPattern = #"\((\d+:\d+)\)"#
+        var durationLabel: String? = nil
+        if let range = text.range(of: durationPattern, options: .regularExpression) {
+            durationLabel = String(text[range]).trimmingCharacters(in: CharacterSet(charactersIn: "()"))
+        }
+        // Extract any URL
+        let urlPattern = #"https?://\S+"#
+        guard let urlRange = text.range(of: urlPattern, options: .regularExpression),
+              let url = URL(string: String(text[urlRange])) else { return nil }
+        return (url, durationLabel)
     }
 
     private func extractAudioURL(_ text: String) -> URL? {
@@ -856,6 +864,7 @@ struct InlineVideoPlayer: View {
 
 struct InlineAudioPlayer: View {
     let url: URL
+    var label: String? = nil
     @State private var player: AVPlayer?
     @State private var isPlaying = false
     @State private var progress: Double = 0
@@ -869,24 +878,32 @@ struct InlineAudioPlayer: View {
                 ZStack {
                     Circle()
                         .fill(Theme.accent)
-                        .frame(width: 40, height: 40)
+                        .frame(width: 44, height: 44)
                     Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 16))
+                        .font(.system(size: 18))
                         .foregroundColor(.white)
-                        .offset(x: isPlaying ? 0 : 2) // Visual centering for play icon
+                        .offset(x: isPlaying ? 0 : 2)
                 }
             }
 
-            // Waveform / progress
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
+                // Label
+                HStack(spacing: 6) {
+                    Image(systemName: "mic.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.accent)
+                    Text("Voice message")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(Theme.textPrimary)
+                }
+
+                // Progress bar
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
-                        // Background bar
                         Capsule()
-                            .fill(Theme.bgTertiary)
+                            .fill(Theme.accent.opacity(0.2))
                             .frame(height: 4)
 
-                        // Progress bar
                         Capsule()
                             .fill(Theme.accent)
                             .frame(width: max(0, geo.size.width * CGFloat(duration > 0 ? progress / duration : 0)), height: 4)
@@ -895,19 +912,25 @@ struct InlineAudioPlayer: View {
                 .frame(height: 4)
 
                 // Duration
-                Text(formatTime(isPlaying ? progress : duration))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(Theme.textMuted)
+                HStack {
+                    Text(formatTime(isPlaying ? progress : 0))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(Theme.textMuted)
+                    Spacer()
+                    Text(label ?? formatTime(duration))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(Theme.textMuted)
+                }
             }
         }
         .padding(12)
         .background(Theme.bgTertiary)
-        .cornerRadius(12)
+        .cornerRadius(14)
         .overlay(
-            RoundedRectangle(cornerRadius: 12)
+            RoundedRectangle(cornerRadius: 14)
                 .stroke(Theme.border, lineWidth: 1)
         )
-        .frame(maxWidth: 260)
+        .frame(maxWidth: 280)
         .onAppear { loadDuration() }
         .onDisappear { cleanup() }
     }
