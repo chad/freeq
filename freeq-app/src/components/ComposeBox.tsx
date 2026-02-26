@@ -178,13 +178,36 @@ export function ComposeBox() {
         form.append('cross_post', 'true');
       }
 
-      const resp = await fetch('/api/v1/upload', { method: 'POST', body: form });
-      if (!resp.ok) {
-        const err = await resp.text();
+      let resp = await fetch('/api/v1/upload', { method: 'POST', body: form });
+
+      // If session expired, try to refresh via broker and retry once
+      if (resp.status === 401) {
+        const brokerToken = localStorage.getItem('freeq-broker-token');
+        const brokerBase = localStorage.getItem('freeq-broker-base');
+        if (brokerToken && brokerBase) {
+          const refreshResp = await fetch(`${brokerBase}/session`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ broker_token: brokerToken }),
+          });
+          if (refreshResp.ok) {
+            // Broker pushed fresh OAuth session to server — retry upload
+            const retryForm = new FormData();
+            retryForm.append('file', pendingUpload.file);
+            retryForm.append('did', authDid);
+            if (activeChannel !== 'server' && activeChannel.startsWith('#')) retryForm.append('channel', activeChannel);
+            if (text.trim()) retryForm.append('alt', text.trim());
+            if (crossPost) retryForm.append('cross_post', 'true');
+            resp = await fetch('/api/v1/upload', { method: 'POST', body: retryForm });
+          }
+        }
         if (resp.status === 401) {
           throw new Error('Upload session expired. Please log out and sign in again to upload.');
         }
-        throw new Error(err);
+      }
+
+      if (!resp.ok) {
+        throw new Error(await resp.text());
       }
 
       const result = await resp.json();
