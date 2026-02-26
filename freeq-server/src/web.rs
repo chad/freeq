@@ -266,15 +266,36 @@ pub fn router(state: Arc<SharedState>) -> Router {
 
 async fn ws_upgrade(
     ws: WebSocketUpgrade,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     State(state): State<Arc<SharedState>>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_ws(socket, state))
+    let ip = addr.ip();
+    // Per-IP connection limit for WebSocket (same limit as TCP)
+    const MAX_CONNS_PER_IP: u32 = 20;
+    {
+        let ip_conns = state.ip_connections.lock();
+        if ip_conns.get(&ip).copied().unwrap_or(0) >= MAX_CONNS_PER_IP {
+            tracing::warn!(%ip, "WebSocket connection rejected: per-IP limit reached");
+            return axum::http::StatusCode::TOO_MANY_REQUESTS.into_response();
+        }
+    }
+    ws.on_upgrade(move |socket| handle_ws(socket, state, ip)).into_response()
 }
 
-async fn handle_ws(socket: WebSocket, state: Arc<SharedState>) {
+async fn handle_ws(socket: WebSocket, state: Arc<SharedState>, ip: std::net::IpAddr) {
+    {
+        let mut ip_conns = state.ip_connections.lock();
+        *ip_conns.entry(ip).or_insert(0) += 1;
+    }
     let stream = bridge_ws(socket);
-    if let Err(e) = crate::connection::handle_generic(stream, state).await {
+    if let Err(e) = crate::connection::handle_generic(stream, state.clone()).await {
         tracing::error!("WebSocket connection error: {e}");
+    }
+    // Decrement on disconnect
+    let mut ip_conns = state.ip_connections.lock();
+    if let Some(count) = ip_conns.get_mut(&ip) {
+        *count = count.saturating_sub(1);
+        if *count == 0 { ip_conns.remove(&ip); }
     }
 }
 

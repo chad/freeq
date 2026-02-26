@@ -135,3 +135,28 @@ kbd {
     opacity: 1 !important;
   }
 }
+
+/* ── Mobile / safe area ── */
+body {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Prevent pull-to-refresh on mobile */
+html, body {
+  overscroll-behavior-y: contain;
+}
+
+/* Larger touch targets on mobile */
+@media (hover: none) {
+  button, a, [role="button"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  /* Except inline badges/small UI elements */
+  button .shrink-0, .text-xs button {
+    min-height: auto;
+    min-width: auto;
+  }
+}

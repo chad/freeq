@@ -266,6 +266,7 @@ pub(super) async fn handle_authenticate(
                                 vec![nick, "SASL authentication successful"],
                             );
                             send(state, session_id, format!("{success}\r\n"));
+                            tracing::info!(%session_id, %did, nick = %nick, "SASL authentication successful");
 
                             // Broadcast account-notify to shared channels
                             broadcast_account_notify(state, session_id, nick, &did);
@@ -273,12 +274,17 @@ pub(super) async fn handle_authenticate(
                         Err(reason) => {
                             tracing::warn!(%session_id, "SASL auth failed: {reason}");
                             conn.sasl_in_progress = false;
+                            conn.sasl_failures += 1;
                             let fail = Message::from_server(
                                 server_name,
                                 irc::ERR_SASLFAIL,
                                 vec![conn.nick_or_star(), "SASL authentication failed"],
                             );
                             send(state, session_id, format!("{fail}\r\n"));
+                            if conn.sasl_failures >= 3 {
+                                send(state, session_id, "ERROR :Too many SASL failures\r\n".to_string());
+                                return;
+                            }
                         }
                     }
                 }

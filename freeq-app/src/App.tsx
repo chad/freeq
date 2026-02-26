@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useStore } from './store';
 import { useKeyboard } from './hooks/useKeyboard';
 import { setUnreadCount, requestPermission } from './lib/notifications';
@@ -37,6 +37,28 @@ export default function App() {
   const channels = useStore((s) => s.channels);
   const activeChannel = useStore((s) => s.activeChannel);
   const setActive = useStore((s) => s.setActiveChannel);
+
+  // Swipe gesture to open/close sidebar on mobile
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
+  useEffect(() => {
+    const onStart = (e: TouchEvent) => {
+      touchStart.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    };
+    const onEnd = (e: TouchEvent) => {
+      if (!touchStart.current) return;
+      const dx = e.changedTouches[0].clientX - touchStart.current.x;
+      const dy = Math.abs(e.changedTouches[0].clientY - touchStart.current.y);
+      // Horizontal swipe (>80px, mostly horizontal)
+      if (Math.abs(dx) > 80 && dy < 60 && window.innerWidth < 768) {
+        if (dx > 0 && touchStart.current.x < 40) setSidebarOpen(true);
+        else if (dx < 0 && sidebarOpen) setSidebarOpen(false);
+      }
+      touchStart.current = null;
+    };
+    document.addEventListener('touchstart', onStart, { passive: true });
+    document.addEventListener('touchend', onEnd, { passive: true });
+    return () => { document.removeEventListener('touchstart', onStart); document.removeEventListener('touchend', onEnd); };
+  }, [sidebarOpen]);
 
   // Apply theme to document
   useEffect(() => {

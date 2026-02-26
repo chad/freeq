@@ -322,6 +322,9 @@ pub struct SharedState {
     /// E2EE pre-key bundles: DID → PreKeyBundle JSON.
     /// Clients upload their bundles; other clients fetch to start encrypted sessions.
     pub prekey_bundles: Mutex<HashMap<String, serde_json::Value>>,
+    /// Per-session message timestamps for channel flood protection.
+    /// Key: session_id, Value: ring buffer of recent message timestamps.
+    pub msg_timestamps: Mutex<HashMap<String, Vec<u64>>>,
     /// Per-IP active connection count (for connection limiting).
     pub ip_connections: Mutex<HashMap<std::net::IpAddr, u32>>,
 }
@@ -583,6 +586,7 @@ impl Server {
                 }
             },
             prekey_bundles: Mutex::new(HashMap::new()),
+            msg_timestamps: Mutex::new(HashMap::new()),
             ip_connections: Mutex::new(HashMap::new()),
         }))
     }
@@ -786,41 +790,74 @@ impl Server {
             let listener = tokio::net::TcpListener::bind(addr).await?;
             tracing::info!("HTTP/WebSocket listener on {addr}");
             tokio::spawn(async move {
-                if let Err(e) = axum::serve(listener, router).await {
+                if let Err(e) = axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await {
                     tracing::error!("HTTP server error: {e}");
                 }
             });
         }
 
+        // Graceful shutdown on SIGTERM/SIGINT
+        let shutdown_state = Arc::clone(&state);
+        let shutdown = async move {
+            let mut sigterm = tokio::signal::unix::signal(
+                tokio::signal::unix::SignalKind::terminate(),
+            ).expect("failed to install SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => tracing::info!("Received SIGINT, shutting down..."),
+                _ = sigterm.recv() => tracing::info!("Received SIGTERM, shutting down..."),
+            }
+            // Broadcast ERROR to all connected clients
+            let conns = shutdown_state.connections.lock();
+            for tx in conns.values() {
+                let _ = tx.try_send("ERROR :Server shutting down\r\n".to_string());
+            }
+            drop(conns);
+            // Give clients a moment to receive the ERROR
+            tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+            tracing::info!("Shutdown complete ({} connections closed)", shutdown_state.connections.lock().len());
+        };
+
         // Accept plain connections
         const MAX_CONNS_PER_IP: u32 = 20;
-        loop {
-            let (stream, addr) = plain_listener.accept().await?;
-            let ip = addr.ip();
-            let state = Arc::clone(&state);
-            // Per-IP connection limit
-            {
-                let mut ip_conns = state.ip_connections.lock();
-                let count = ip_conns.entry(ip).or_insert(0);
-                if *count >= MAX_CONNS_PER_IP {
-                    tracing::warn!(%ip, "Connection rejected: per-IP limit reached");
-                    continue;
+        tokio::select! {
+            _ = shutdown => {}
+            result = async {
+                loop {
+                    let (stream, addr) = plain_listener.accept().await?;
+                    let ip = addr.ip();
+                    let state = Arc::clone(&state);
+                    // Per-IP connection limit
+                    {
+                        let mut ip_conns = state.ip_connections.lock();
+                        let count = ip_conns.entry(ip).or_insert(0);
+                        if *count >= MAX_CONNS_PER_IP {
+                            tracing::warn!(%ip, "Connection rejected: per-IP limit reached");
+                            continue;
+                        }
+                        *count += 1;
+                    }
+                    tokio::spawn(async move {
+                        let result = connection::handle(stream, Arc::clone(&state)).await;
+                        if let Err(e) = result {
+                            tracing::error!("Connection error: {e}");
+                        }
+                        // Decrement IP counter on disconnect
+                        let mut ip_conns = state.ip_connections.lock();
+                        if let Some(count) = ip_conns.get_mut(&ip) {
+                            *count = count.saturating_sub(1);
+                            if *count == 0 { ip_conns.remove(&ip); }
+                        }
+                    });
                 }
-                *count += 1;
-            }
-            tokio::spawn(async move {
-                let result = connection::handle(stream, Arc::clone(&state)).await;
+                #[allow(unreachable_code)]
+                Ok::<(), anyhow::Error>(())
+            } => {
                 if let Err(e) = result {
-                    tracing::error!("Connection error: {e}");
+                    tracing::error!("Accept loop error: {e}");
                 }
-                // Decrement IP counter on disconnect
-                let mut ip_conns = state.ip_connections.lock();
-                if let Some(count) = ip_conns.get_mut(&ip) {
-                    *count = count.saturating_sub(1);
-                    if *count == 0 { ip_conns.remove(&ip); }
-                }
-            });
+            }
         }
+        Ok(())
     }
 
     /// Start the server and return the bound address + task handle (for testing).

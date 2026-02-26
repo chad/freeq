@@ -7,9 +7,19 @@ async fn main() -> Result<()> {
     // Install the ring crypto provider before any TLS usage.
     // Iroh brings in ring, but rustls needs an explicit provider selection.
     let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("freeq_server=info".parse()?))
-        .init();
+    // Use JSON logs in production (FREEQ_LOG_JSON=1), human-readable otherwise
+    let json_logs = std::env::var("FREEQ_LOG_JSON").unwrap_or_default() == "1";
+    let filter = EnvFilter::from_default_env().add_directive("freeq_server=info".parse()?);
+    if json_logs {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .json()
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .init();
+    }
 
     let config = freeq_server::config::ServerConfig::parse();
     tracing::info!("Starting IRC server on {}", config.listen_addr);

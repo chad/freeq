@@ -79,6 +79,7 @@ pub struct Connection {
 
     // SASL state
     pub(crate) sasl_in_progress: bool,
+    pub(crate) sasl_failures: u8,
 }
 
 impl Connection {
@@ -104,6 +105,7 @@ impl Connection {
             cap_away_notify: false,
             cap_e2ee: false,
             sasl_in_progress: false,
+            sasl_failures: 0,
         }
     }
 
@@ -279,10 +281,18 @@ where
         }
 
         line_buf.clear();
+        // Cap line length to 8KB to prevent OOM from malicious clients
+        const MAX_LINE_LEN: usize = 8192;
         let read_result = tokio::time::timeout(
             ping_interval,
             reader.read_line(&mut line_buf),
         ).await;
+        if line_buf.len() > MAX_LINE_LEN {
+            tracing::warn!(%session_id, len = line_buf.len(), "Line too long, dropping");
+            let reply = Message::from_server(&server_name, "417", vec!["*", "Input line was too long"]);
+            send(&state, &session_id, format!("{reply}\r\n"));
+            continue;
+        }
 
         match read_result {
             Ok(Ok(0)) | Ok(Err(_)) => break, // EOF or error
@@ -346,6 +356,17 @@ where
             }
             "NICK" => {
                 if let Some(nick) = msg.params.first() {
+                    // Validate nick: 1-64 chars, allowed chars for IRC + AT handles
+                    if nick.is_empty() || nick.len() > 64
+                        || nick.contains(|c: char| c.is_control() || c == ' ' || c == '\0' || c == '\r' || c == '\n' || c == ',' || c == '*' || c == '?' || c == '!' || c == '@' || c == '#' || c == '&' || c == ':')
+                    {
+                        let reply = Message::from_server(
+                            &server_name, "432",
+                            vec![conn.nick_or_star(), nick, "Erroneous Nickname"],
+                        );
+                        send(&state, &session_id, format!("{reply}\r\n"));
+                        continue;
+                    }
                     let nick_lower = nick.to_lowercase();
                     let in_use = state.nick_to_session.lock()
                         .keys().any(|k| k.to_lowercase() == nick_lower);
@@ -790,12 +811,18 @@ where
         });
     }
 
-    tracing::info!(%session_id, "Connection closed");
+    tracing::info!(
+        %session_id,
+        nick = conn.nick.as_deref().unwrap_or("-"),
+        did = conn.authenticated_did.as_deref().unwrap_or("-"),
+        "Connection closed"
+    );
     state.connections.lock().remove(&session_id);
     state.session_dids.lock().remove(&session_id);
     state.session_handles.lock().remove(&session_id);
     state.session_iroh_ids.lock().remove(&session_id);
     state.session_away.lock().remove(&session_id);
+    state.msg_timestamps.lock().remove(&session_id);
     state.cap_message_tags.lock().remove(&session_id);
     state.cap_multi_prefix.lock().remove(&session_id);
     state.cap_echo_message.lock().remove(&session_id);
