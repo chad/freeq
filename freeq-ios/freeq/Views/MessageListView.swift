@@ -950,23 +950,132 @@ private struct ScrollOffsetKey: PreferenceKey {
 struct InlineVideoPlayer: View {
     let url: URL
     @State private var player: AVPlayer?
+    @State private var isDownloading = false
+    @State private var loadError = false
+    @State private var localURL: URL?
+    @State private var thumbnail: UIImage?
 
     var body: some View {
-        VideoPlayer(player: player ?? AVPlayer())
-            .frame(maxWidth: 280, minHeight: 160, maxHeight: 220)
-            .cornerRadius(10)
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(Theme.border, lineWidth: 1)
-            )
-            .onAppear {
-                if player == nil {
-                    player = AVPlayer(url: url)
+        ZStack {
+            if let player = player {
+                VideoPlayer(player: player)
+                    .frame(maxWidth: 300, minHeight: 180, maxHeight: 240)
+                    .cornerRadius(12)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Theme.border, lineWidth: 1)
+                    )
+            } else {
+                // Thumbnail / loading state
+                ZStack {
+                    if let thumb = thumbnail {
+                        Image(uiImage: thumb)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(maxWidth: 300, minHeight: 180, maxHeight: 240)
+                            .clipped()
+                    } else {
+                        Rectangle()
+                            .fill(Theme.bgTertiary)
+                            .frame(maxWidth: 300, minHeight: 180, maxHeight: 240)
+                    }
+
+                    if isDownloading {
+                        ProgressView()
+                            .tint(.white)
+                            .scaleEffect(1.2)
+                            .frame(width: 56, height: 56)
+                            .background(.black.opacity(0.5))
+                            .cornerRadius(28)
+                    } else if loadError {
+                        VStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 24))
+                                .foregroundColor(.white)
+                            Text("Tap to retry")
+                                .font(.system(size: 12))
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                        .frame(width: 80, height: 64)
+                        .background(.black.opacity(0.5))
+                        .cornerRadius(12)
+                    } else {
+                        // Play button overlay
+                        Image(systemName: "play.circle.fill")
+                            .font(.system(size: 52))
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, .black.opacity(0.5))
+                    }
                 }
+                .cornerRadius(12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Theme.border, lineWidth: 1)
+                )
+                .onTapGesture { downloadAndPlay() }
             }
-            .onDisappear {
-                player?.pause()
+        }
+        .onAppear { generateThumbnail() }
+        .onDisappear { player?.pause() }
+    }
+
+    private func generateThumbnail() {
+        // Try to get a thumbnail from the URL for preview
+        // For proxy URLs this won't work until downloaded, show placeholder
+    }
+
+    private func downloadAndPlay() {
+        guard !isDownloading else { return }
+        if let local = localURL {
+            setupPlayer(local)
+            return
+        }
+
+        isDownloading = true
+        loadError = false
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+
+        Task {
+            do {
+                let (data, response) = try await URLSession.shared.data(from: url)
+                let httpResponse = response as? HTTPURLResponse
+                guard httpResponse?.statusCode == 200, !data.isEmpty else {
+                    await MainActor.run { isDownloading = false; loadError = true }
+                    return
+                }
+
+                let contentType = httpResponse?.value(forHTTPHeaderField: "Content-Type") ?? "video/mp4"
+                let ext = contentType.contains("quicktime") || contentType.contains("mov") ? "mov" : "mp4"
+                let tempURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("video_\(url.absoluteString.hashValue).\(ext)")
+                try data.write(to: tempURL)
+
+                // Generate thumbnail from downloaded file
+                let asset = AVAsset(url: tempURL)
+                let generator = AVAssetImageGenerator(asset: asset)
+                generator.appliesPreferredTrackTransform = true
+                if let cgImage = try? generator.copyCGImage(at: .zero, actualTime: nil) {
+                    let thumb = UIImage(cgImage: cgImage)
+                    await MainActor.run { thumbnail = thumb }
+                }
+
+                await MainActor.run {
+                    localURL = tempURL
+                    isDownloading = false
+                    setupPlayer(tempURL)
+                }
+            } catch {
+                await MainActor.run { isDownloading = false; loadError = true }
             }
+        }
+    }
+
+    private func setupPlayer(_ fileURL: URL) {
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        let p = AVPlayer(url: fileURL)
+        player = p
+        p.play()
     }
 }
 

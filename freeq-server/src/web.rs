@@ -1352,7 +1352,11 @@ struct OgQuery {
 /// GET /api/v1/blob?url=<pds-blob-url>
 /// Proxies PDS blob downloads, stripping Content-Disposition: attachment
 /// and sandbox CSP headers that prevent browser/AVPlayer playback.
-async fn api_blob_proxy(Query(q): Query<std::collections::HashMap<String, String>>) -> impl IntoResponse {
+/// Supports Range requests for video seeking / AVPlayer compatibility.
+async fn api_blob_proxy(
+    headers: axum::http::HeaderMap,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
     let Some(url) = q.get("url") else {
         return (StatusCode::BAD_REQUEST, "missing url parameter").into_response();
     };
@@ -1363,11 +1367,19 @@ async fn api_blob_proxy(Query(q): Query<std::collections::HashMap<String, String
     }
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .unwrap_or_default();
 
-    let resp = match client.get(url).send().await {
+    // Forward Range header if present (needed for AVPlayer / video seeking)
+    let mut req = client.get(url);
+    if let Some(range) = headers.get(axum::http::header::RANGE) {
+        if let Ok(range_str) = range.to_str() {
+            req = req.header("Range", range_str);
+        }
+    }
+
+    let resp = match req.send().await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(url = %url, error = %e, "Blob proxy fetch failed");
@@ -1375,7 +1387,8 @@ async fn api_blob_proxy(Query(q): Query<std::collections::HashMap<String, String
         }
     };
 
-    if !resp.status().is_success() {
+    let upstream_status = resp.status();
+    if !upstream_status.is_success() && upstream_status.as_u16() != 206 {
         return (StatusCode::BAD_GATEWAY, "upstream error").into_response();
     }
 
@@ -1386,19 +1399,46 @@ async fn api_blob_proxy(Query(q): Query<std::collections::HashMap<String, String
         .unwrap_or("application/octet-stream")
         .to_string();
 
+    let content_range = resp
+        .headers()
+        .get("content-range")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let content_length = resp
+        .headers()
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
     let bytes = match resp.bytes().await {
         Ok(b) => b,
         Err(_) => return (StatusCode::BAD_GATEWAY, "read failed").into_response(),
     };
 
-    (
-        StatusCode::OK,
-        [
-            (axum::http::header::CONTENT_TYPE, content_type),
-            (axum::http::header::CACHE_CONTROL, "public, max-age=86400".into()),
-        ],
-        bytes,
-    ).into_response()
+    let status = if upstream_status.as_u16() == 206 {
+        StatusCode::PARTIAL_CONTENT
+    } else {
+        StatusCode::OK
+    };
+
+    let mut resp_headers = axum::http::HeaderMap::new();
+    resp_headers.insert(axum::http::header::CONTENT_TYPE, content_type.parse().unwrap_or_else(|_| "application/octet-stream".parse().unwrap()));
+    resp_headers.insert(axum::http::header::CACHE_CONTROL, "public, max-age=86400".parse().unwrap());
+    resp_headers.insert(axum::http::header::ACCEPT_RANGES, "bytes".parse().unwrap());
+
+    if let Some(cr) = content_range {
+        if let Ok(val) = cr.parse() {
+            resp_headers.insert(axum::http::header::CONTENT_RANGE, val);
+        }
+    }
+    if let Some(cl) = content_length {
+        if let Ok(val) = cl.parse() {
+            resp_headers.insert(axum::http::header::CONTENT_LENGTH, val);
+        }
+    }
+
+    (status, resp_headers, bytes).into_response()
 }
 
 /// Fetch OpenGraph metadata from a URL and return as JSON.
