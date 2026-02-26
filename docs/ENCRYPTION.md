@@ -23,7 +23,7 @@ freeq has encryption at multiple layers — transport, authentication, federatio
 | **Server ↔ Policy DB (at rest)** | ❌ No | Plaintext on disk | Channel policies, credentials |
 | **Message content (in transit)** | 🟡 Transport only | TLS protects the pipe, not the payload | Server sees plaintext; no E2E encryption yet |
 | **Message content (at rest)** | ❌ No | Stored as plaintext in SQLite | History, search, moderation all need plaintext today |
-| **Message signatures** | 🔴 Not yet | Planned: `+freeq.at/sig` IRCv3 tag | See roadmap below |
+| **Message signatures** | ✅ Yes (server-attested) | ed25519 via `+freeq.at/sig` IRCv3 tag | Server signs on behalf of verified DIDs; see details below |
 | **DM content** | 🟡 Transport only | Same as channel messages | Server can read DMs; no E2E yet |
 | **File uploads (in transit)** | ✅ Yes | HTTPS to server → HTTPS to PDS | Uploaded via TLS to server, proxied via TLS to AT Protocol PDS |
 | **File uploads (at rest)** | 🟡 PDS-dependent | Stored on user's PDS (Bluesky infra) | Not under freeq's control; PDS may or may not encrypt at rest |
@@ -101,12 +101,18 @@ This matters because:
 
 SQLite databases store messages, channel state, and history as plaintext on disk. There's no encryption at rest. A compromised server filesystem exposes everything.
 
-### 3. Message Signatures
+### 3. Message Signatures (Partial)
 
-Messages are not signed today. This means:
-- You can't cryptographically prove who sent a message
-- The server could theoretically forge messages
-- S2S federation has no way to verify message authorship end-to-end
+Messages are now signed with server-attested ed25519 signatures. Every PRIVMSG/NOTICE from a DID-authenticated user carries a `+freeq.at/sig` tag containing a base64url-encoded signature over `{sender_did}\0{target}\0{text}\0{timestamp}`. The server's signing public key is published at `/api/v1/signing-key`.
+
+**What this provides:**
+- Federated servers can verify message provenance
+- Signed messages are distinguishable from unsigned (guest) messages
+- Signatures survive S2S relay
+
+**What this does NOT provide (yet):**
+- The server could still theoretically forge signatures (it holds the signing key)
+- True end-to-end non-repudiation requires client-side signing (Phase 2)
 
 ### 4. File Uploads
 
@@ -120,11 +126,11 @@ The credential verifier's signing key is stored as a plaintext file on disk. It 
 
 ## Roadmap
 
-### Phase 1: Message Signing (P0)
+### Phase 1: Message Signing (P0) ✅ SHIPPED
 
-**Status**: Designed, not implemented
+**Status**: Implemented (server-attested)
 
-Every message from a DID-authenticated user will be cryptographically signed:
+Every message from a DID-authenticated user is cryptographically signed:
 
 ```
 @+freeq.at/sig=<base64url-signature> PRIVMSG #channel :Hello world
@@ -136,7 +142,9 @@ Every message from a DID-authenticated user will be cryptographically signed:
 - **Scope**: PRIVMSG, NOTICE, TOPIC, KICK
 - **Guest messages**: Unsigned — clearly distinguishable from verified messages
 
-This gives **message authenticity** and **non-repudiation** without E2E encryption. The server can still read messages, but it can't forge them.
+Currently, the **server** signs messages on behalf of verified users (the server has validated their DID via SASL). This provides message provenance through federation but not true non-repudiation — the server holds the signing key and could theoretically forge signatures.
+
+**Phase 1.5** (next): Client-side signing with session-generated ed25519 keypairs, registered with the server during SASL. This will provide true non-repudiation — the server relays but cannot forge.
 
 ### Phase 2: End-to-End Encryption for DMs
 
@@ -185,7 +193,7 @@ Trade-offs:
 | Transport encryption | ✅ | ✅ | ✅ | ✅ | ✅ |
 | E2E DMs | ❌ | ❌ | ❌ | ✅ | ✅* |
 | E2E group chat | ❌ | ❌ | ❌ | ✅ | ✅* |
-| Message signatures | ❌† | ❌ | ❌ | ✅ | ❌ |
+| Message signatures | ✅* | ❌ | ❌ | ✅ | ❌ |
 | Decentralized identity | ✅ | ❌ | ❌ | ❌ | ✅ |
 | Server can read messages | Yes | Yes | Yes | No | Yes* |
 | Open protocol | ✅ | ❌ | ❌ | ✅ | ✅ |
@@ -193,7 +201,7 @@ Trade-offs:
 | IP cloaking | ✅ | N/A | ✅ | ✅ | Varies |
 
 *Matrix E2E is opt-in and [has had verification UX issues](https://matrix.org/blog/2024/matrix-2-0/).  
-†Message signing is designed and next on the roadmap.
+*Server-attested signatures shipped; client-side signing planned for Phase 1.5.
 
 ---
 
@@ -215,7 +223,7 @@ Trade-offs:
 - **Compromised server host**: Plaintext database on disk
 - **Metadata analysis**: Server knows who talks to whom, when, and how often
 - **Compromised PDS**: Uploaded media controlled by PDS operator
-- **Message forgery by server**: No message signatures yet
+- **Message forgery by server**: Server-attested signatures exist but the server holds the key; client-side signing (Phase 1.5) will close this gap
 
 ---
 
