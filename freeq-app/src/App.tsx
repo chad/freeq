@@ -23,6 +23,7 @@ import { FileDropOverlay } from './components/FileDropOverlay';
 import { InstallPrompt } from './components/InstallPrompt';
 import { OnboardingTour } from './components/OnboardingTour';
 import { BookmarksPanel } from './components/BookmarksPanel';
+import { MotdBanner } from './components/MotdBanner';
 
 export default function App() {
   const registered = useStore((s) => s.registered);
@@ -154,6 +155,7 @@ export default function App() {
         </div>
 
         <main className="flex-1 flex flex-col min-w-0">
+          <MotdBanner />
           <TopBar
             onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
             onToggleMembers={() => setMembersOpen(!membersOpen)}

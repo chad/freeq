@@ -38,7 +38,7 @@ export function MemberList() {
   };
 
   return (
-    <aside className="w-52 h-full bg-bg-secondary border-l border-border overflow-y-auto shrink-0">
+    <aside role="complementary" aria-label="Channel members" className="w-52 h-full bg-bg-secondary border-l border-border overflow-y-auto shrink-0">
       <div className="px-3 pt-4 pb-2">
         {ops.length > 0 && (
           <Section label={`Operators — ${ops.length}`}>

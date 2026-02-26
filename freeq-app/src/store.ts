@@ -92,6 +92,8 @@ export interface Store {
   authDid: string | null;
   authMessage: string | null;
   authError: string | null;
+  motd: string[];
+  motdDismissed: boolean;
 
   // Channels & DMs
   channels: Map<string, Channel>;
@@ -127,6 +129,8 @@ export interface Store {
   setRegistered: (v: boolean) => void;
   setAuth: (did: string, message: string) => void;
   setAuthError: (error: string) => void;
+  appendMotd: (line: string) => void;
+  dismissMotd: () => void;
   reset: () => void;
   fullReset: () => void;
 
@@ -222,6 +226,8 @@ export const useStore = create<Store>((set, get) => ({
   authDid: null,
   authMessage: null,
   authError: null,
+  motd: [],
+  motdDismissed: false,
   channels: new Map(),
   activeChannel: 'server',
   serverMessages: [],
@@ -250,6 +256,8 @@ export const useStore = create<Store>((set, get) => ({
   setNick: (nick) => set({ nick }),
   setRegistered: (v) => set({ registered: v }),
   setAuth: (did, message) => set({ authDid: did, authMessage: message, authError: null }),
+  appendMotd: (line) => set((s) => ({ motd: [...s.motd, line] })),
+  dismissMotd: () => set({ motdDismissed: true }),
   setAuthError: (error) => set({ authError: error }),
   reset: () => set({
     connectionState: 'disconnected',
@@ -258,6 +266,8 @@ export const useStore = create<Store>((set, get) => ({
     activeChannel: 'server',
     serverMessages: [],
     batches: new Map(),
+    motd: [],
+    motdDismissed: false,
   }),
   fullReset: () => set((s) => ({
     connectionState: 'disconnected',

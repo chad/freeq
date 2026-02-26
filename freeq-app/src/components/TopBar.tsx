@@ -11,6 +11,7 @@ interface TopBarProps {
 export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBarProps) {
   const activeChannel = useStore((s) => s.activeChannel);
   const channels = useStore((s) => s.channels);
+  const connectionState = useStore((s) => s.connectionState);
   const [editing, setEditing] = useState(false);
   const [topicDraft, setTopicDraft] = useState('');
 
@@ -32,6 +33,7 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
   };
 
   return (
+    <>
     <header className="h-14 bg-bg-secondary border-b border-border flex items-center gap-3 px-4 shrink-0">
       {/* Mobile menu button */}
       <button
@@ -42,6 +44,16 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
           <path fillRule="evenodd" d="M2.5 12a.5.5 0 01.5-.5h10a.5.5 0 010 1H3a.5.5 0 01-.5-.5zm0-4a.5.5 0 01.5-.5h10a.5.5 0 010 1H3a.5.5 0 01-.5-.5zm0-4a.5.5 0 01.5-.5h10a.5.5 0 010 1H3a.5.5 0 01-.5-.5z"/>
         </svg>
       </button>
+
+      {/* Connection status dot */}
+      {connectionState !== 'connected' && (
+        <span
+          className={`shrink-0 w-2 h-2 rounded-full ${
+            connectionState === 'connecting' ? 'bg-warning animate-pulse' : 'bg-danger'
+          }`}
+          title={connectionState === 'connecting' ? 'Connecting…' : 'Disconnected'}
+        />
+      )}
 
       {/* Channel / DM name */}
       <div className="flex items-center gap-2 min-w-0 shrink">
@@ -78,7 +90,7 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
       {/* Separator */}
       {isChannel && <div className="w-px h-5 bg-border" />}
 
-      {/* Topic (channels only, hidden on very small screens) */}
+      {/* Topic (channels only) */}
       <div className="flex-1 min-w-0 hidden sm:block">
         {isChannel ? (
           editing ? (
@@ -137,5 +149,12 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
         </button>
       )}
     </header>
+    {/* Mobile topic bar — visible on small screens when topic exists */}
+    {isChannel && topic && (
+      <div className="sm:hidden px-4 py-1.5 bg-bg-secondary border-b border-border">
+        <p className="text-xs text-fg-dim truncate">{topic}</p>
+      </div>
+    )}
+    </>
   );
 }

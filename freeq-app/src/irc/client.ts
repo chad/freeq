@@ -705,9 +705,27 @@ async function handleLine(rawLine: string) {
       store.addSystemMessage('server', `No such nick: ${failNick}`);
       break;
     }
-    case '473': store.addSystemMessage('server', `Cannot join ${msg.params[1]} (invite only)`); break;
-    case '474': store.addSystemMessage('server', `Cannot join ${msg.params[1]} (banned)`); break;
-    case '475': store.addSystemMessage('server', `Cannot join ${msg.params[1]} (bad key)`); break;
+    case '404': { // ERR_CANNOTSENDTOCHAN
+      const ch = msg.params[1] || '';
+      const reason = msg.params[2] || 'Cannot send to channel';
+      store.addSystemMessage(ch || 'server', reason);
+      break;
+    }
+    case '473': {
+      const ch = msg.params[1] || '';
+      store.addSystemMessage(ch || 'server', `Cannot join ${ch} — channel is invite only (+i)`);
+      break;
+    }
+    case '474': {
+      const ch = msg.params[1] || '';
+      store.addSystemMessage(ch || 'server', `Cannot join ${ch} — you are banned`);
+      break;
+    }
+    case '475': {
+      const ch = msg.params[1] || '';
+      store.addSystemMessage(ch || 'server', `Cannot join ${ch} — incorrect channel key`);
+      break;
+    }
     case '477': {
       const ch = msg.params[1] || '';
       const reason = msg.params[2] || 'Policy acceptance required';
@@ -795,9 +813,12 @@ async function handleLine(rawLine: string) {
       break;
 
     // ── Informational ──
-    case '375': case '372':
-      store.addSystemMessage('server', msg.params[msg.params.length - 1]);
+    case '375': case '372': {
+      const motdLine = msg.params[msg.params.length - 1];
+      store.addSystemMessage('server', motdLine);
+      if (msg.command === '372') store.appendMotd(motdLine.replace(/^- ?/, ''));
       break;
+    }
 
     default:
       // Numeric replies → server buffer

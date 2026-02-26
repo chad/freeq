@@ -583,7 +583,7 @@ function TypingIndicatorBar({ channel }: { channel: string }) {
     : `${typers[0]} and ${typers.length - 1} others are typing`;
 
   return (
-    <div className="px-4 py-1.5 flex items-center gap-2 text-xs text-fg-dim animate-fadeIn">
+    <div className="px-4 py-1.5 flex items-center gap-2 text-xs text-fg-dim animate-fadeIn" aria-live="polite" aria-atomic="true">
       <span className="flex gap-0.5">
         <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: '0ms' }} />
         <span className="w-1.5 h-1.5 rounded-full bg-accent animate-bounce" style={{ animationDelay: '150ms' }} />
@@ -607,6 +607,7 @@ export function MessageList() {
   const ref = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [newMsgCount, setNewMsgCount] = useState(0);
   const [popover, setPopover] = useState<{ nick: string; did?: string; pos: { x: number; y: number } } | null>(null);
 
   // Track whether user has scrolled up (unstick from bottom)
@@ -616,11 +617,18 @@ export function MessageList() {
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     stickToBottomRef.current = atBottom;
     setShowScrollBtn(!atBottom);
+    if (atBottom) setNewMsgCount(0);
   }, []);
 
-  // Scroll to bottom when messages change (if stuck to bottom)
+  // Scroll to bottom when messages change (if stuck to bottom), or count new messages
+  const prevLenRef = useRef(messages.length);
   useEffect(() => {
-    if (!stickToBottomRef.current) return;
+    const added = messages.length - prevLenRef.current;
+    prevLenRef.current = messages.length;
+    if (!stickToBottomRef.current) {
+      if (added > 0) setNewMsgCount((c) => c + added);
+      return;
+    }
     const scrollBottom = () => {
       if (ref.current) ref.current.scrollTop = ref.current.scrollHeight;
     };
@@ -633,6 +641,8 @@ export function MessageList() {
   useEffect(() => {
     stickToBottomRef.current = true;
     setShowScrollBtn(false);
+    setNewMsgCount(0);
+    prevLenRef.current = 0;
     const scrollBottom = () => {
       if (ref.current) {
         ref.current.scrollTop = ref.current.scrollHeight;
@@ -666,7 +676,7 @@ export function MessageList() {
   }, []);
 
   return (
-    <div key={activeChannel} ref={ref} data-testid="message-list" className={`flex-1 overflow-y-auto relative ${
+    <div key={activeChannel} ref={ref} data-testid="message-list" role="log" aria-label={`Messages in ${activeChannel}`} aria-live="polite" className={`flex-1 overflow-y-auto relative ${
       density === 'compact' ? 'text-[14px] [&_.msg-full]:pt-1.5 [&_.msg-full]:pb-0' :
       density === 'cozy' ? 'text-[16px] [&_.msg-full]:pt-4 [&_.msg-full]:pb-2' : ''
     }`} onScroll={onScroll}>
@@ -685,10 +695,20 @@ export function MessageList() {
             <>
               <div className="text-3xl mb-2">👋</div>
               <div className="text-xl text-fg font-bold">Welcome to {activeChannel}</div>
-              <div className="text-sm mt-2 text-center max-w-xs leading-relaxed">
-                This is the very beginning of <span className="text-accent font-medium">{activeChannel}</span>.
-                Start a conversation!
-              </div>
+              {(() => {
+                const ch = useStore.getState().channels.get(activeChannel.toLowerCase());
+                const topic = ch?.topic;
+                return topic ? (
+                  <div className="text-sm mt-2 text-center max-w-md leading-relaxed text-fg-muted">
+                    {topic}
+                  </div>
+                ) : (
+                  <div className="text-sm mt-2 text-center max-w-xs leading-relaxed">
+                    This is the very beginning of <span className="text-accent font-medium">{activeChannel}</span>.
+                    Start a conversation!
+                  </div>
+                );
+              })()}
               <div className="flex gap-2 mt-4">
                 <button onClick={() => {
                   navigator.clipboard.writeText(`https://irc.freeq.at/join/${encodeURIComponent(activeChannel)}`);
@@ -746,7 +766,7 @@ export function MessageList() {
           <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
             <path fillRule="evenodd" d="M8 1a.5.5 0 01.5.5v11.793l3.146-3.147a.5.5 0 01.708.708l-4 4a.5.5 0 01-.708 0l-4-4a.5.5 0 01.708-.708L7.5 13.293V1.5A.5.5 0 018 1z"/>
           </svg>
-          New messages
+          {newMsgCount > 0 ? `${newMsgCount} new message${newMsgCount === 1 ? '' : 's'}` : 'Jump to bottom'}
         </button>
       )}
 
