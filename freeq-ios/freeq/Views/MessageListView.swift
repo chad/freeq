@@ -15,6 +15,19 @@ struct MessageListView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ZStack(alignment: .bottom) {
+                if channel.messages.isEmpty {
+                    // Skeleton loading state
+                    VStack(spacing: 0) {
+                        Spacer()
+                        ForEach(0..<5, id: \.self) { i in
+                            skeletonRow(short: i % 3 == 1)
+                        }
+                        Spacer()
+                    }
+                    .redacted(reason: .placeholder)
+                    .shimmering()
+                }
+
                 ScrollView {
                     // Pull to load older messages
                     Button(action: {
@@ -108,7 +121,7 @@ struct MessageListView: View {
                     showScrollButton = value > screenHeight + 150
                 }
 
-                // Scroll to bottom button
+                // Scroll to bottom FAB with message preview
                 if showScrollButton {
                     Button(action: {
                         if let last = channel.messages.last {
@@ -118,19 +131,54 @@ struct MessageListView: View {
                         }
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     }) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 12, weight: .bold))
-                            Text("New messages")
-                                .font(.system(size: 13, weight: .medium))
+                        VStack(spacing: 0) {
+                            // Latest message preview
+                            if let last = channel.messages.last, !last.from.isEmpty {
+                                HStack(spacing: 8) {
+                                    UserAvatar(nick: last.from, size: 22)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(last.from)
+                                            .font(.system(size: 11, weight: .bold))
+                                            .foregroundColor(Theme.nickColor(for: last.from))
+                                        Text(last.text.prefix(60) + (last.text.count > 60 ? "…" : ""))
+                                            .font(.system(size: 12))
+                                            .foregroundColor(Theme.textSecondary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                    let unread = appState.unreadCounts[channel.name] ?? 0
+                                    if unread > 0 {
+                                        Text("\(unread)")
+                                            .font(.system(size: 11, weight: .bold))
+                                            .foregroundColor(.white)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(Theme.accent)
+                                            .cornerRadius(10)
+                                    }
+                                    Image(systemName: "chevron.down")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundColor(Theme.textMuted)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                            } else {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "chevron.down")
+                                        .font(.system(size: 12, weight: .bold))
+                                    Text("Scroll to bottom")
+                                        .font(.system(size: 13, weight: .medium))
+                                }
+                                .foregroundColor(Theme.accent)
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 8)
+                            }
                         }
-                        .foregroundColor(Theme.accent)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
                         .background(.ultraThinMaterial)
-                        .cornerRadius(20)
-                        .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+                        .cornerRadius(14)
+                        .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
                     }
+                    .padding(.horizontal, 12)
                     .padding(.bottom, 8)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .animation(.spring(response: 0.3), value: showScrollButton)
@@ -369,8 +417,17 @@ struct MessageListView: View {
 
     // MARK: - Message Rows
 
+    private func isMention(_ msg: ChatMessage) -> Bool {
+        let nick = appState.nick.lowercased()
+        return msg.text.lowercased().contains("@\(nick)") ||
+               msg.text.lowercased().contains(nick + ":") ||
+               msg.text.lowercased().contains(nick + ",")
+    }
+
     @ViewBuilder
     private func messageRow(_ msg: ChatMessage, showHeader: Bool) -> some View {
+        let mention = isMention(msg) && msg.from.lowercased() != appState.nick.lowercased()
+
         VStack(alignment: .leading, spacing: 0) {
             // Reply context — tap to open thread
             if let replyId = msg.replyTo,
@@ -398,7 +455,6 @@ struct MessageListView: View {
                                         .font(.system(size: 15, weight: .bold))
                                         .foregroundColor(Theme.nickColor(for: msg.from))
 
-                                    // Verified badge — shown if we have a cached avatar (means Bluesky profile found)
                                     if avatarCache.avatarURL(for: msg.from.lowercased()) != nil {
                                         VerifiedBadge(size: 12)
                                     }
@@ -444,6 +500,22 @@ struct MessageListView: View {
                     .padding(.top, 4)
             }
         }
+        // Mention highlight
+        .background(mention ? Theme.accent.opacity(0.08) : Color.clear)
+        .overlay(alignment: .leading) {
+            if mention {
+                Rectangle().fill(Theme.accent).frame(width: 3)
+            }
+        }
+        // Double-tap to react with ❤️
+        .onTapGesture(count: 2) {
+            appState.sendReaction(target: channel.name, msgId: msg.id, emoji: "❤️")
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+        .transition(.asymmetric(
+            insertion: .move(edge: .bottom).combined(with: .opacity),
+            removal: .opacity
+        ))
         .id(msg.id)
     }
 
@@ -1127,5 +1199,76 @@ struct InlineAudioPlayer: View {
         let mins = Int(t) / 60
         let secs = Int(t) % 60
         return String(format: "%d:%02d", mins, secs)
+    }
+}
+
+// MARK: - Skeleton Loading
+
+extension MessageListView {
+    func skeletonRow(short: Bool) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Circle()
+                .fill(Theme.bgTertiary)
+                .frame(width: 40, height: 40)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Theme.bgTertiary)
+                        .frame(width: 80, height: 14)
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Theme.bgTertiary)
+                        .frame(width: 40, height: 10)
+                }
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Theme.bgTertiary)
+                    .frame(width: short ? 120 : 220, height: 14)
+                if !short {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Theme.bgTertiary)
+                        .frame(width: 160, height: 14)
+                }
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+}
+
+// MARK: - Shimmer Effect
+
+struct ShimmerModifier: ViewModifier {
+    @State private var phase: CGFloat = -1.0
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(
+                GeometryReader { geo in
+                    Rectangle()
+                        .fill(
+                            LinearGradient(
+                                colors: [.clear, .white.opacity(0.08), .clear],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: geo.size.width * 0.6)
+                        .offset(x: geo.size.width * phase)
+                        .onAppear {
+                            withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
+                                phase = 1.5
+                            }
+                        }
+                }
+                .clipped()
+            )
+    }
+}
+
+extension View {
+    func shimmering() -> some View {
+        modifier(ShimmerModifier())
     }
 }

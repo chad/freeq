@@ -11,7 +11,10 @@ struct TopBarView: View {
     var body: some View {
         HStack(spacing: 14) {
             // Hamburger
-            Button(action: { showingSidebar.toggle() }) {
+            Button(action: {
+                showingSidebar.toggle()
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            }) {
                 Image(systemName: "line.3.horizontal")
                     .font(.system(size: 20, weight: .medium))
                     .foregroundColor(Theme.textSecondary)

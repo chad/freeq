@@ -18,16 +18,20 @@ struct ContentView: View {
                             startReconnectTimer()
                             appState.reconnectSavedSession()
                         }
+                        .transition(.opacity)
                 } else {
                     ConnectView()
                         .onAppear { stopReconnectTimer() }
+                        .transition(.opacity.combined(with: .scale(scale: 1.02)))
                 }
             case .connecting:
                 if appState.hasSavedSession || hasAttemptedReconnect {
                     reconnectingView
                         .onAppear { if reconnectTimer == nil { startReconnectTimer() } }
+                        .transition(.opacity)
                 } else {
                     ConnectView()
+                        .transition(.opacity)
                 }
             case .connected, .registered:
                 MainTabView()
@@ -35,9 +39,15 @@ struct ContentView: View {
                         hasAttemptedReconnect = false
                         reconnectTimedOut = false
                         stopReconnectTimer()
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                     }
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .opacity
+                    ))
             }
         }
+        .animation(.easeInOut(duration: 0.35), value: appState.connectionState)
         .preferredColorScheme(appState.isDarkTheme ? .dark : .light)
     }
 

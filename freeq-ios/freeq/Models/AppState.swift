@@ -114,7 +114,7 @@ struct MemberInfo: Identifiable, Equatable {
 }
 
 /// Connection state.
-enum ConnectionState {
+enum ConnectionState: Equatable {
     case disconnected
     case connecting
     case connected
@@ -407,12 +407,18 @@ class AppState: ObservableObject {
 
     func markRead(_ channel: String) {
         unreadCounts[channel] = 0
+        updateBadgeCount()
         // Persist last-read message ID
         if let state = channels.first(where: { $0.name == channel }) ?? dmBuffers.first(where: { $0.name == channel }),
            let lastMsg = state.messages.last {
             lastReadMessageIds[channel] = lastMsg.id
             UserDefaults.standard.set(lastReadMessageIds, forKey: "freeq.readPositions")
         }
+    }
+
+    func updateBadgeCount() {
+        let total = unreadCounts.values.reduce(0, +)
+        UNUserNotificationCenter.current().setBadgeCount(total)
     }
 
     func toggleTheme() {
@@ -442,6 +448,7 @@ class AppState: ObservableObject {
     func incrementUnread(_ channel: String) {
         if activeChannel != channel {
             unreadCounts[channel, default: 0] += 1
+            updateBadgeCount()
         }
     }
 
@@ -553,6 +560,7 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
         case .registered(let nick):
             state.connectionState = .registered
             state.reconnectAttempts = 0
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
             // If we expected an authenticated session but got Guest, disconnect
             if state.authenticatedDID != nil && nick.lowercased().hasPrefix("guest") {
                 state.errorMessage = "Session expired. Please log in again."

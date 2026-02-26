@@ -32,6 +32,9 @@ struct MainTabView: View {
                     .tag(2)
             }
             .tint(Theme.accent)
+            .onChange(of: selectedTab) {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            }
 
             // Image lightbox overlay
             if let url = appState.lightboxURL {
