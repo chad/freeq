@@ -656,6 +656,11 @@ struct MessageListView: View {
         if let range = text.range(of: cdnPattern, options: .regularExpression) {
             return URL(string: String(text[range]))
         }
+        // Proxy blob URLs with video mime hint
+        let proxyPattern = #"https?://\S+/api/v1/blob\?\S*mime=video%2F\S*"#
+        if let range = text.range(of: proxyPattern, options: .regularExpression) {
+            return URL(string: String(text[range]))
+        }
         return nil
     }
 
@@ -706,6 +711,11 @@ struct MessageListView: View {
     private func extractAudioURL(_ text: String) -> URL? {
         let pattern = #"https?://\S+\.(?:m4a|mp3|ogg|wav|aac)(?:\?\S*)?"#
         if let range = text.range(of: pattern, options: .regularExpression) {
+            return URL(string: String(text[range]))
+        }
+        // Proxy blob URLs with audio mime hint
+        let proxyPattern = #"https?://\S+/api/v1/blob\?\S*mime=audio%2F\S*"#
+        if let range = text.range(of: proxyPattern, options: .regularExpression) {
             return URL(string: String(text[range]))
         }
         return nil

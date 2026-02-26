@@ -64,6 +64,9 @@ const VIDEO_URL_RE = /https?:\/\/[^\s<]+\.(?:mp4|mov|m4v|webm)(?:\?[^\s<]*)?/i;
 const AUDIO_URL_RE = /https?:\/\/[^\s<]+\.(?:m4a|mp3|ogg|wav|aac)(?:\?[^\s<]*)?/i;
 // PDS blob URL (for audio/video blobs)
 const PDS_BLOB_RE = /https?:\/\/[^\s]+\/xrpc\/com\.atproto\.sync\.getBlob[^\s]*/i;
+// Proxy blob URL with mime hint
+const PROXY_VIDEO_RE = /https?:\/\/[^\s]+\/api\/v1\/blob\?[^\s]*mime=video%2F[^\s]*/i;
+const PROXY_AUDIO_RE = /https?:\/\/[^\s]+\/api\/v1\/blob\?[^\s]*mime=audio%2F[^\s]*/i;
 
 function extractImageUrls(text: string): string[] {
   const urls: string[] = [];
@@ -316,8 +319,8 @@ function MessageContent({ msg }: { msg: Message }) {
     );
   }
 
-  // Video URLs
-  const videoMatch = msg.text.match(VIDEO_URL_RE);
+  // Video URLs (file extension or proxy with video mime hint)
+  const videoMatch = msg.text.match(VIDEO_URL_RE) || msg.text.match(PROXY_VIDEO_RE);
   if (videoMatch) {
     const cleanText = msg.text.replace(videoMatch[0], '').trim();
     return (
@@ -329,8 +332,8 @@ function MessageContent({ msg }: { msg: Message }) {
     );
   }
 
-  // Audio URLs (non-voice-message)
-  const audioMatch = msg.text.match(AUDIO_URL_RE) || msg.text.match(PDS_BLOB_RE);
+  // Audio URLs (file extension, proxy with audio mime hint, or PDS blob)
+  const audioMatch = msg.text.match(AUDIO_URL_RE) || msg.text.match(PROXY_AUDIO_RE) || msg.text.match(PDS_BLOB_RE);
   if (audioMatch && !msg.text.match(IMAGE_URL_RE) && !msg.text.match(CDN_IMAGE_RE)) {
     const cleanText = msg.text.replace(audioMatch[0], '').trim();
     return (

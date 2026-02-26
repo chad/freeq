@@ -1244,7 +1244,9 @@ async fn api_upload(
     // Content-Disposition: attachment and sandbox CSP blocking playback
     let client_url = if !result.mime_type.starts_with("image/") {
         let encoded = urlencoding::encode(&result.url);
-        format!("https://irc.freeq.at/api/v1/blob?url={encoded}")
+        // Include mime hint so clients can render without HEAD request
+        let mime_encoded = urlencoding::encode(&result.mime_type);
+        format!("https://irc.freeq.at/api/v1/blob?url={encoded}&mime={mime_encoded}")
     } else {
         result.url.clone()
     };

@@ -25,6 +25,7 @@ let saslDid = '';
 let saslPdsUrl = '';
 let saslMethod = '';
 let skipBrokerRefresh = false; // Set when we already have a fresh token (e.g. from OAuth)
+let guestFallbackCount = 0; // Track retries when authenticated user gets Guest nick
 
 // Auto-join channels after registration
 let autoJoinChannels: string[] = [];
@@ -395,10 +396,19 @@ async function handleLine(rawLine: string) {
       const serverNick = msg.params[0] || nick;
 
       // If we were authenticated but server gave us a Guest nick,
-      // the web-token was consumed or expired. Clear broker token so next
-      // reconnect goes back to the login screen instead of looping.
+      // the web-token was consumed or expired. Retry once (server restart
+      // clears in-memory sessions — broker refresh re-pushes on reconnect
+      // but there may be a race).
       const wasAuthenticated = localStorage.getItem('freeq-handle');
       if (wasAuthenticated && /^Guest\d+$/i.test(serverNick)) {
+        guestFallbackCount++;
+        if (guestFallbackCount <= 2) {
+          // Disconnect and let auto-reconnect retry with fresh broker session
+          raw('QUIT :Retrying auth');
+          return;
+        }
+        // After 2 retries, give up and show login
+        guestFallbackCount = 0;
         localStorage.removeItem('freeq-broker-token');
         raw('QUIT :Session expired');
         transport?.disconnect();
@@ -406,6 +416,7 @@ async function handleLine(rawLine: string) {
         useStore.getState().fullReset();
         return;
       }
+      guestFallbackCount = 0; // Reset on successful auth
 
       nick = serverNick;
       store.setNick(nick);
