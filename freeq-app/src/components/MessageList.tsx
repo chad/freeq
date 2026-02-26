@@ -56,6 +56,8 @@ const CDN_IMAGE_RE = /https?:\/\/cdn\.bsky\.app\/img\/[^\s<]+/gi;
 
 // Voice message pattern: 🎤 Voice message (0:05) https://...
 const VOICE_MSG_RE = /🎤[^h]*(https?:\/\/\S+)/;
+// Duration in voice message
+const VOICE_DURATION_RE = /\((\d+:\d+)\)/;
 // Video URL patterns
 const VIDEO_URL_RE = /https?:\/\/[^\s<]+\.(?:mp4|mov|m4v|webm)(?:\?[^\s<]*)?/i;
 // Audio URL patterns (file extension based)
@@ -278,11 +280,17 @@ function MessageContent({ msg }: { msg: Message }) {
   // Voice messages — check first before image extraction
   const voiceMatch = msg.text.match(VOICE_MSG_RE);
   if (voiceMatch) {
-    const durationMatch = msg.text.match(/\((\d+:\d+)\)/);
+    const durationMatch = msg.text.match(VOICE_DURATION_RE);
+    let audioUrl = voiceMatch[1];
+    // Rewrite old cdn.bsky.app/img/ URLs to PDS blob URLs for audio
+    const cdnMatch = audioUrl.match(/cdn\.bsky\.app\/img\/[^/]+\/plain\/([^/]+)\/([^@\s]+)/);
+    if (cdnMatch) {
+      audioUrl = `https://bsky.social/xrpc/com.atproto.sync.getBlob?did=${cdnMatch[1]}&cid=${cdnMatch[2]}`;
+    }
     return (
       <div className="mt-0.5">
         {msg.replyTo && <ReplyBadge msgId={msg.replyTo} />}
-        <InlineAudioPlayer url={voiceMatch[1]} label={durationMatch?.[1]} />
+        <InlineAudioPlayer url={audioUrl} label={durationMatch?.[1]} />
       </div>
     );
   }

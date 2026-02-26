@@ -72,23 +72,10 @@ struct ComposeView: View {
                 .onAppear { text = edit.text }
             }
 
-            if isRecording {
-                // Recording bar with slide-to-cancel gesture on the WHOLE bar
-                recordingBar
-                    .gesture(
-                        DragGesture(minimumDistance: 10)
-                            .onChanged { value in
-                                dragOffset = value.translation.width
-                                recordingCancelled = dragOffset < -60
-                            }
-                            .onEnded { _ in
-                                stopRecording()
-                            }
-                    )
-            } else {
-                // Normal compose bar
+            // Use ZStack with opacity to keep mic button gesture alive during recording
+            ZStack {
+                // Normal compose bar — hidden (not removed) during recording
                 HStack(alignment: .bottom, spacing: 8) {
-                    // Media button (authenticated only)
                     if appState.authenticatedDID != nil, let target = appState.activeChannel {
                         MediaAttachmentButton(channel: target)
                     } else {
@@ -97,7 +84,6 @@ struct ComposeView: View {
                             .foregroundColor(Theme.textMuted.opacity(0.5))
                     }
 
-                    // Text input
                     HStack(alignment: .bottom, spacing: 6) {
                         TextField(
                             "",
@@ -124,7 +110,6 @@ struct ComposeView: View {
                     .background(Theme.bgTertiary)
                     .cornerRadius(20)
 
-                    // Send or Mic button
                     if canSend {
                         Button(action: send) {
                             ZStack {
@@ -137,11 +122,9 @@ struct ComposeView: View {
                             }
                         }
                     } else if appState.authenticatedDID != nil {
-                        // Mic button — hold to record
                         micButton
                             .accessibilityLabel("Hold to record voice message")
                     } else {
-                        // Disabled send for guests with no text
                         ZStack {
                             Circle()
                                 .fill(Theme.textMuted.opacity(0.2))
@@ -155,6 +138,13 @@ struct ComposeView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
                 .background(Theme.bgSecondary)
+                .opacity(isRecording ? 0 : 1)
+
+                // Recording bar overlaid on top when recording
+                if isRecording {
+                    recordingBar
+                        .transition(.opacity)
+                }
             }
         }
     }
@@ -210,7 +200,7 @@ struct ComposeView: View {
                             holdStart = nil
                         }
                     }
-                    // Always track drag offset once recording (slide to cancel)
+                    // Track drag offset for slide-to-cancel (works because view stays mounted via opacity)
                     if isRecording {
                         dragOffset = value.translation.width
                         recordingCancelled = dragOffset < -60
@@ -222,6 +212,7 @@ struct ComposeView: View {
                     let wasRecording = isRecording
                     holdStart = nil
                     if wasRecording {
+                        // Release sends (or cancels if slid left)
                         stopRecording()
                     } else {
                         ToastManager.shared.show("Hold to record voice message", icon: "mic.fill")
@@ -248,32 +239,35 @@ struct ComposeView: View {
 
             Spacer()
 
-            if recordingCancelled || dragOffset < -40 {
-                Text("Release to cancel")
-                    .font(.system(size: 14))
-                    .foregroundColor(Theme.danger)
+            if recordingCancelled || dragOffset < -60 {
+                HStack(spacing: 4) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                    Text("Release to cancel")
+                        .font(.system(size: 14, weight: .medium))
+                }
+                .foregroundColor(Theme.danger)
             } else {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.left")
                         .font(.system(size: 11))
                     Text("Slide to cancel")
-                        .font(.system(size: 14))
+                        .font(.system(size: 13))
                 }
                 .foregroundColor(Theme.textMuted)
             }
 
             Spacer()
 
-            // Stop and send
-            Button(action: stopRecording) {
-                ZStack {
-                    Circle()
-                        .fill(Theme.accent)
-                        .frame(width: 36, height: 36)
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundColor(.white)
-                }
+            // Release to send indicator
+            HStack(spacing: 5) {
+                Text("Release to send")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Theme.accent)
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 22))
+                    .foregroundColor(Theme.accent)
+                    .symbolEffect(.pulse, isActive: true)
             }
         }
         .padding(.horizontal, 12)

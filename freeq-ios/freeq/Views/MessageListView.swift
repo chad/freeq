@@ -671,7 +671,31 @@ struct MessageListView: View {
         // Extract any URL
         let urlPattern = #"https?://\S+"#
         guard let urlRange = text.range(of: urlPattern, options: .regularExpression),
-              let url = URL(string: String(text[urlRange])) else { return nil }
+              var url = URL(string: String(text[urlRange])) else { return nil }
+
+        // Rewrite old cdn.bsky.app/img/ URLs to PDS blob URLs for audio
+        // cdn.bsky.app/img/feed_fullsize/plain/{did}/{cid}@{ext}
+        // → {pds}/xrpc/com.atproto.sync.getBlob?did={did}&cid={cid}
+        if let urlStr = url.absoluteString.removingPercentEncoding,
+           urlStr.contains("cdn.bsky.app/img/") {
+            let parts = urlStr.split(separator: "/")
+            // Format: .../plain/{did}/{cid}@{ext}
+            if let plainIdx = parts.firstIndex(of: "plain"),
+               plainIdx + 2 < parts.count {
+                let did = String(parts[plainIdx + 1])
+                var cidPart = String(parts[plainIdx + 2])
+                // Remove @ext suffix
+                if let atIdx = cidPart.firstIndex(of: "@") {
+                    cidPart = String(cidPart[cidPart.startIndex..<atIdx])
+                }
+                // Use bsky.social PDS as default (most common)
+                let blobUrl = "https://bsky.social/xrpc/com.atproto.sync.getBlob?did=\(did)&cid=\(cidPart)"
+                if let rewritten = URL(string: blobUrl) {
+                    url = rewritten
+                }
+            }
+        }
+
         return (url, durationLabel)
     }
 
