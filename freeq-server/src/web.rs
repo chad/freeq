@@ -191,6 +191,7 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/users/{nick}", get(api_user))
         .route("/api/v1/users/{nick}/whois", get(api_user_whois))
         .route("/api/v1/upload", axum::routing::post(api_upload))
+        .route("/api/v1/blob", get(api_blob_proxy))
         .route("/api/v1/og", get(api_og_preview))
         .route("/api/v1/keys/{did}", get(api_get_keys))
         .route("/api/v1/keys", axum::routing::post(api_upload_keys))
@@ -1239,10 +1240,19 @@ async fn api_upload(
         (StatusCode::BAD_GATEWAY, format!("PDS upload failed: {e}"))
     })?;
 
-    tracing::info!(did = %did, url = %result.url, size = result.size, "Media uploaded to PDS");
+    // For non-image content, proxy through our server to avoid PDS
+    // Content-Disposition: attachment and sandbox CSP blocking playback
+    let client_url = if !result.mime_type.starts_with("image/") {
+        let encoded = urlencoding::encode(&result.url);
+        format!("https://irc.freeq.at/api/v1/blob?url={encoded}")
+    } else {
+        result.url.clone()
+    };
+
+    tracing::info!(did = %did, url = %client_url, size = result.size, "Media uploaded to PDS");
 
     Ok(Json(serde_json::json!({
-        "url": result.url,
+        "url": client_url,
         "content_type": result.mime_type,
         "size": result.size,
     })))
@@ -1333,6 +1343,60 @@ h1 .accent{{color:#00d4aa}}
 #[derive(Deserialize)]
 struct OgQuery {
     url: String,
+}
+
+// ── Blob proxy endpoint ───────────────────────────────────────────
+
+/// GET /api/v1/blob?url=<pds-blob-url>
+/// Proxies PDS blob downloads, stripping Content-Disposition: attachment
+/// and sandbox CSP headers that prevent browser/AVPlayer playback.
+async fn api_blob_proxy(Query(q): Query<std::collections::HashMap<String, String>>) -> impl IntoResponse {
+    let Some(url) = q.get("url") else {
+        return (StatusCode::BAD_REQUEST, "missing url parameter").into_response();
+    };
+
+    // Only proxy known PDS blob URLs
+    if !url.contains("/xrpc/com.atproto.sync.getBlob") && !url.contains("cdn.bsky.app") {
+        return (StatusCode::BAD_REQUEST, "not a valid blob URL").into_response();
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .unwrap_or_default();
+
+    let resp = match client.get(url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(url = %url, error = %e, "Blob proxy fetch failed");
+            return (StatusCode::BAD_GATEWAY, "fetch failed").into_response();
+        }
+    };
+
+    if !resp.status().is_success() {
+        return (StatusCode::BAD_GATEWAY, "upstream error").into_response();
+    }
+
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_string();
+
+    let bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_GATEWAY, "read failed").into_response(),
+    };
+
+    (
+        StatusCode::OK,
+        [
+            (axum::http::header::CONTENT_TYPE, content_type),
+            (axum::http::header::CACHE_CONTROL, "public, max-age=86400".into()),
+        ],
+        bytes,
+    ).into_response()
 }
 
 /// Fetch OpenGraph metadata from a URL and return as JSON.

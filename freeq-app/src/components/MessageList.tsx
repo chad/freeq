@@ -194,42 +194,20 @@ function InlineAudioPlayer({ url, label }: { url: string; label?: string }) {
   const [duration, setDuration] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
-  const [blobUrl, setBlobUrl] = useState<string | null>(null);
 
-  // PDS sends Content-Disposition: attachment + sandbox CSP, so fetch and create blob URL
-  const ensureBlob = async (): Promise<string | null> => {
-    if (blobUrl) return blobUrl;
-    setLoading(true);
-    setError(false);
-    try {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      setBlobUrl(objectUrl);
-      setLoading(false);
-      return objectUrl;
-    } catch (e) {
-      console.error('Audio download failed:', e);
-      setError(true);
-      setLoading(false);
-      return null;
-    }
-  };
-
-  const toggle = async () => {
+  const toggle = () => {
+    const el = audioRef.current;
+    if (!el) return;
     if (playing) {
-      audioRef.current?.pause();
+      el.pause();
       setPlaying(false);
       return;
     }
-    const src = await ensureBlob();
-    if (!src) return;
-    const el = audioRef.current;
-    if (!el) return;
-    if (el.src !== src) el.src = src;
-    el.play().catch(() => setError(true));
-    setPlaying(true);
+    setLoading(true);
+    setError(false);
+    el.play()
+      .then(() => { setPlaying(true); setLoading(false); })
+      .catch(() => { setError(true); setLoading(false); });
   };
 
   const fmt = (s: number) => {
@@ -277,11 +255,12 @@ function InlineAudioPlayer({ url, label }: { url: string; label?: string }) {
       </div>
       <audio
         ref={audioRef}
-        preload="none"
+        src={url}
+        preload="metadata"
         onLoadedMetadata={() => setDuration(audioRef.current?.duration || 0)}
         onTimeUpdate={() => setProgress(audioRef.current?.currentTime || 0)}
         onEnded={() => { setPlaying(false); setProgress(0); }}
-        onError={() => { setError(true); setPlaying(false); }}
+        onError={() => { setError(true); setPlaying(false); setLoading(false); }}
       />
     </div>
   );
@@ -319,10 +298,15 @@ function MessageContent({ msg }: { msg: Message }) {
   if (voiceMatch) {
     const durationMatch = msg.text.match(VOICE_DURATION_RE);
     let audioUrl = voiceMatch[1];
-    // Rewrite old cdn.bsky.app/img/ URLs to PDS blob URLs for audio
+    // Rewrite old cdn.bsky.app/img/ URLs to proxy through our server
     const cdnMatch = audioUrl.match(/cdn\.bsky\.app\/img\/[^/]+\/plain\/([^/]+)\/([^@\s]+)/);
     if (cdnMatch) {
-      audioUrl = `https://bsky.social/xrpc/com.atproto.sync.getBlob?did=${cdnMatch[1]}&cid=${cdnMatch[2]}`;
+      const pdsUrl = `https://bsky.social/xrpc/com.atproto.sync.getBlob?did=${cdnMatch[1]}&cid=${cdnMatch[2]}`;
+      audioUrl = `/api/v1/blob?url=${encodeURIComponent(pdsUrl)}`;
+    }
+    // Proxy PDS blob URLs too
+    if (audioUrl.includes('/xrpc/com.atproto.sync.getBlob')) {
+      audioUrl = `/api/v1/blob?url=${encodeURIComponent(audioUrl)}`;
     }
     return (
       <div className="mt-0.5">

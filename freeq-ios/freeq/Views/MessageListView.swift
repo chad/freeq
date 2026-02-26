@@ -673,26 +673,30 @@ struct MessageListView: View {
         guard let urlRange = text.range(of: urlPattern, options: .regularExpression),
               var url = URL(string: String(text[urlRange])) else { return nil }
 
-        // Rewrite old cdn.bsky.app/img/ URLs to PDS blob URLs for audio
-        // cdn.bsky.app/img/feed_fullsize/plain/{did}/{cid}@{ext}
-        // → {pds}/xrpc/com.atproto.sync.getBlob?did={did}&cid={cid}
-        if let urlStr = url.absoluteString.removingPercentEncoding,
-           urlStr.contains("cdn.bsky.app/img/") {
+        // Proxy all audio through our server to avoid PDS Content-Disposition: attachment
+        // and sandbox CSP headers that block AVPlayer/browser playback
+        let urlStr = url.absoluteString
+        if urlStr.contains("cdn.bsky.app/img/") {
+            // Rewrite old CDN image URLs to PDS blob URLs first
             let parts = urlStr.split(separator: "/")
-            // Format: .../plain/{did}/{cid}@{ext}
             if let plainIdx = parts.firstIndex(of: "plain"),
                plainIdx + 2 < parts.count {
                 let did = String(parts[plainIdx + 1])
                 var cidPart = String(parts[plainIdx + 2])
-                // Remove @ext suffix
                 if let atIdx = cidPart.firstIndex(of: "@") {
                     cidPart = String(cidPart[cidPart.startIndex..<atIdx])
                 }
-                // Use bsky.social PDS as default (most common)
-                let blobUrl = "https://bsky.social/xrpc/com.atproto.sync.getBlob?did=\(did)&cid=\(cidPart)"
-                if let rewritten = URL(string: blobUrl) {
+                let pdsUrl = "https://bsky.social/xrpc/com.atproto.sync.getBlob?did=\(did)&cid=\(cidPart)"
+                let proxyUrl = "https://irc.freeq.at/api/v1/blob?url=\(pdsUrl.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? pdsUrl)"
+                if let rewritten = URL(string: proxyUrl) {
                     url = rewritten
                 }
+            }
+        } else if urlStr.contains("/xrpc/com.atproto.sync.getBlob") {
+            // Proxy PDS blob URLs through our server
+            let proxyUrl = "https://irc.freeq.at/api/v1/blob?url=\(urlStr.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? urlStr)"
+            if let rewritten = URL(string: proxyUrl) {
+                url = rewritten
             }
         }
 
