@@ -479,20 +479,34 @@ async fn auth_callback(
 
     let token_resp: serde_json::Value = if (status.as_u16() == 400 || status.as_u16() == 401) && dpop_nonce.is_some() {
         let nonce = dpop_nonce.as_deref().unwrap();
+        tracing::info!(nonce = %nonce, "DPoP nonce retry for token exchange");
         let dpop_proof2 = dpop_key.proof("POST", &pending.token_endpoint, Some(nonce), None)
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DPoP retry failed: {e}")))?;
         let resp2 = client.post(&pending.token_endpoint).header("DPoP", &dpop_proof2).form(&params).send().await
             .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token retry failed: {e}")))?;
-        if !resp2.status().is_success() {
+        let resp2_status = resp2.status();
+        if !resp2_status.is_success() {
             let text = resp2.text().await.unwrap_or_default();
-            return Ok(Html(oauth_result_page(&format!("Token exchange failed: {text}"), None)).into_response());
+            tracing::error!(status = %resp2_status, body = %text, "Token exchange retry failed");
+            let err_msg = format!("Token exchange failed: {text}");
+            if pending.mobile {
+                let redirect = format!("freeq://auth?error={}", urlencod(&err_msg));
+                return Ok(axum::response::Redirect::to(&redirect).into_response());
+            }
+            return Ok(Html(oauth_result_page(&err_msg, None)).into_response());
         }
         resp2.json().await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token parse failed: {e}")))?
     } else if status.is_success() {
         resp.json().await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token parse failed: {e}")))?
     } else {
         let text = resp.text().await.unwrap_or_default();
-        return Ok(Html(oauth_result_page(&format!("Token exchange failed ({status}): {text}"), None)).into_response());
+        tracing::error!(status = %status, body = %text, "Token exchange failed");
+        let err_msg = format!("Token exchange failed ({status}): {text}");
+        if pending.mobile {
+            let redirect = format!("freeq://auth?error={}", urlencod(&err_msg));
+            return Ok(axum::response::Redirect::to(&redirect).into_response());
+        }
+        return Ok(Html(oauth_result_page(&err_msg, None)).into_response());
     };
 
     let refresh_token = token_resp["refresh_token"].as_str()
