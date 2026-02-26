@@ -83,13 +83,21 @@ export function connect(url: string, desiredNick: string, channels?: string[]) {
         if (brokerToken && brokerBase && saslDid) {
           const ctrl = new AbortController();
           const tm = setTimeout(() => ctrl.abort(), 5000);
-          fetch(`${brokerBase}/session`, {
+          // Broker /session returns 502 on first call due to DPoP nonce rotation —
+          // retry once on 502 which always succeeds after nonce is cached.
+          const brokerBody = JSON.stringify({ broker_token: brokerToken });
+          const doFetch = () => fetch(`${brokerBase}/session`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ broker_token: brokerToken }),
+            body: brokerBody,
             signal: ctrl.signal,
-          })
-            .then(r => { clearTimeout(tm); return r.ok ? r.json() : Promise.reject('broker refresh failed'); })
+          });
+          doFetch()
+            .then(r => {
+              clearTimeout(tm);
+              if (r.status === 502) return doFetch().then(r2 => r2.ok ? r2.json() : Promise.reject('broker 502 retry failed'));
+              return r.ok ? r.json() : Promise.reject('broker refresh failed');
+            })
             .then((session: { token: string; nick: string; did: string; handle: string }) => {
               clearTimeout(safetyTimer);
               sendRegistration(session.token);

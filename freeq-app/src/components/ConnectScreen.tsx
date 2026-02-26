@@ -177,17 +177,23 @@ export function ConnectScreen() {
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
-    fetch(`${brokerOrigin}/session`, {
+    const brokerBody = JSON.stringify({ broker_token: brokerToken });
+    const doFetch = () => fetch(`${brokerOrigin}/session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ broker_token: brokerToken }),
+      body: brokerBody,
       signal: controller.signal,
-    })
+    });
+    doFetch()
       .then(async (res) => {
         clearTimeout(timeout);
-        if (!res.ok) {
-          throw new Error(await res.text());
+        // Retry once on 502 (DPoP nonce rotation causes first call to fail)
+        if (res.status === 502) {
+          const r2 = await doFetch();
+          if (!r2.ok) throw new Error(await r2.text());
+          return r2.json();
         }
+        if (!res.ok) throw new Error(await res.text());
         return res.json();
       })
       .then((session: BrokerSessionResponse) => {

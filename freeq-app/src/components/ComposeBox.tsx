@@ -187,11 +187,20 @@ export function ComposeBox() {
         console.log('[upload] 401 — attempting broker refresh', { hasBrokerToken: !!brokerToken, brokerBase });
         if (brokerToken && brokerBase) {
           try {
-            const refreshResp = await fetch(`${brokerBase}/session`, {
+            const brokerBody = JSON.stringify({ broker_token: brokerToken });
+            let refreshResp = await fetch(`${brokerBase}/session`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ broker_token: brokerToken }),
+              body: brokerBody,
             });
+            // Retry once on 502 (DPoP nonce rotation)
+            if (refreshResp.status === 502) {
+              refreshResp = await fetch(`${brokerBase}/session`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: brokerBody,
+              });
+            }
             console.log('[upload] broker refresh response:', refreshResp.status);
             if (refreshResp.ok) {
               // Broker pushed fresh OAuth session to server — retry upload
