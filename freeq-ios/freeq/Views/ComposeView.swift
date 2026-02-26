@@ -14,6 +14,7 @@ struct ComposeView: View {
     @State private var recordTimer: Timer?
     @State private var recordingCancelled = false
     @State private var dragOffset: CGFloat = 0
+    @State private var holdStart: Date? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -148,33 +149,40 @@ struct ComposeView: View {
 
     // MARK: - Mic Button (hold to record)
 
+    @GestureState private var micPressed = false
+
     private var micButton: some View {
         ZStack {
             Circle()
-                .fill(Theme.bgTertiary)
+                .fill(micPressed ? Theme.accent.opacity(0.3) : Theme.bgTertiary)
                 .frame(width: 36, height: 36)
             Image(systemName: "mic.fill")
                 .font(.system(size: 16))
                 .foregroundColor(Theme.accent)
         }
         .gesture(
-            LongPressGesture(minimumDuration: 0.3)
-                .onEnded { _ in
-                    startRecording()
-                }
-        )
-        .simultaneousGesture(
             DragGesture(minimumDistance: 0)
+                .updating($micPressed) { _, state, _ in
+                    state = true
+                }
                 .onChanged { value in
+                    // Start recording after holding ~0.2s (detected by still being in gesture)
+                    if !isRecording && abs(value.translation.width) < 10 && abs(value.translation.height) < 10 {
+                        // Use a timer to start recording after brief hold
+                        if holdStart == nil {
+                            holdStart = Date()
+                        }
+                        if let start = holdStart, Date().timeIntervalSince(start) >= 0.2 && !isRecording {
+                            startRecording()
+                        }
+                    }
                     if isRecording {
                         dragOffset = value.translation.width
-                        // Slide left to cancel
-                        if dragOffset < -80 {
-                            recordingCancelled = true
-                        }
+                        recordingCancelled = dragOffset < -80
                     }
                 }
                 .onEnded { _ in
+                    holdStart = nil
                     if isRecording {
                         stopRecording()
                     }
@@ -293,8 +301,14 @@ struct ComposeView: View {
         guard let recorder = recorder, isRecording else { return }
         recorder.stop()
         isRecording = false
+        self.recorder = nil
+
+        // Always deactivate audio session
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
 
         let cancelled = recordingCancelled || dragOffset < -80 || recordingTime < 0.5
+        dragOffset = 0
+        recordingCancelled = false
 
         if cancelled {
             // Discard
@@ -306,8 +320,6 @@ struct ComposeView: View {
         // Send the voice message
         guard let data = try? Data(contentsOf: recorder.url) else { return }
         let duration = formatDuration(recordingTime)
-
-        try? AVAudioSession.sharedInstance().setActive(false)
 
         guard let target = appState.activeChannel else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
