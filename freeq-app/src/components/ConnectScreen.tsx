@@ -162,11 +162,14 @@ export function ConnectScreen() {
   }, [brokerOrigin]);
 
   // Attempt broker session refresh on load (persistent login)
+  const [brokerAttempts, setBrokerAttempts] = useState(0);
   useEffect(() => {
     if (registered || oauthPending || autoConnecting) return;
+    if (brokerAttempts >= 2) return; // Give up after 2 attempts
     const brokerToken = localStorage.getItem(LS_BROKER_TOKEN);
     if (!brokerToken) return;
 
+    setBrokerAttempts(n => n + 1);
     setAutoConnecting(true);
     const ch = (localStorage.getItem(LS_CHANNELS) || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
 
