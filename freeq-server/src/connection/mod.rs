@@ -78,6 +78,8 @@ pub struct Connection {
     pub(crate) cap_e2ee: bool,
     /// Server operator (OPER) status.
     pub(crate) is_oper: bool,
+    /// Client software identifier (derived from USER realname).
+    pub(crate) client_info: Option<String>,
 
     // SASL state
     pub(crate) sasl_in_progress: bool,
@@ -107,6 +109,7 @@ impl Connection {
             cap_away_notify: false,
             cap_e2ee: false,
             is_oper: false,
+            client_info: None,
             sasl_in_progress: false,
             sasl_failures: 0,
         }
@@ -493,7 +496,12 @@ where
             "USER" => {
                 if msg.params.len() >= 4 {
                     conn.user = Some(msg.params[0].clone());
-                    conn.realname = Some(msg.params[3].clone());
+                    let realname = msg.params[3].clone();
+                    // Derive client info from realname
+                    let client = detect_client(&realname);
+                    state.session_client_info.lock().insert(session_id.clone(), client.clone());
+                    conn.client_info = Some(client);
+                    conn.realname = Some(realname);
                     try_complete_registration(
                         &mut conn,
                         &state,
@@ -983,42 +991,116 @@ where
         true // Guest sessions are always "last"
     };
 
-    // Only broadcast QUIT and remove nick if this is the last session for the DID
+    // Grace period for DID users: hold channel membership for 30s before broadcasting QUIT.
+    // If they reconnect within that window, suppress the quit/join churn entirely.
+    const QUIT_GRACE_SECS: u64 = 30;
+
     if let Some(ref nick) = conn.nick {
         if is_last_session_for_did {
-            let hostmask = conn.hostmask();
-            let quit_msg = format!(":{hostmask} QUIT :Connection closed\r\n");
-            let channels = state.channels.lock();
-            let conns = state.connections.lock();
-            for ch in channels.values() {
-                if ch.members.contains(&session_id) {
-                    for member in &ch.members {
-                        if member != &session_id
-                            && let Some(tx) = conns.get(member) {
-                                let _ = tx.try_send(quit_msg.clone());
-                            }
-                    }
-                }
-            }
-            drop(conns);
-            drop(channels);
-            state.nick_to_session.lock().remove_by_nick(nick);
+            if let Some(ref did) = conn.authenticated_did {
+                // DID user — enter ghost mode instead of immediate QUIT
+                let hostmask = conn.hostmask();
 
-            // Broadcast QUIT to S2S peers only for last session
-            let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
-            s2s_broadcast(&state, crate::s2s::S2sMessage::Quit {
-                event_id: s2s_next_event_id(&state),
-                nick: nick.clone(),
-                reason: "Connection closed".to_string(),
-                origin,
-            });
+                // Collect channel membership to preserve
+                let ghost_channels: Vec<(String, bool, bool, bool)> = {
+                    let channels = state.channels.lock();
+                    channels.iter()
+                        .filter(|(_, ch)| ch.members.contains(&session_id))
+                        .map(|(name, ch)| (
+                            name.clone(),
+                            ch.ops.contains(&session_id),
+                            ch.voiced.contains(&session_id),
+                            ch.halfops.contains(&session_id),
+                        ))
+                        .collect()
+                };
+
+                let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
+                // Remove from channels/state now, but hold nick and don't broadcast
+                cleanup_session_state(&state, &session_id);
+
+                // Don't remove the nick — ghost holds it
+                // state.nick_to_session.lock().remove_by_nick(nick); // <-- NOT here
+
+                let ghost = crate::server::GhostSession {
+                    nick: nick.clone(),
+                    hostmask: hostmask.clone(),
+                    channels: ghost_channels,
+                    disconnect_time: std::time::Instant::now(),
+                    cancel: cancel_tx,
+                };
+                state.ghost_sessions.lock().insert(did.clone(), ghost);
+
+                tracing::info!(
+                    %session_id, nick = %nick, did = %did,
+                    "Entered ghost mode ({}s grace period)", QUIT_GRACE_SECS
+                );
+
+                // Spawn deferred QUIT broadcast
+                let state_clone = state.clone();
+                let did_clone = did.clone();
+                let nick_clone = nick.clone();
+                let hostmask_clone = hostmask.clone();
+                tokio::spawn(async move {
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(QUIT_GRACE_SECS)) => {
+                            // Grace period expired — broadcast QUIT now
+                            let ghost = state_clone.ghost_sessions.lock().remove(&did_clone);
+                            if ghost.is_some() {
+                                let quit_msg = format!(":{hostmask_clone} QUIT :Connection closed\r\n");
+                                let channels = state_clone.channels.lock();
+                                let conns = state_clone.connections.lock();
+                                for ch in channels.values() {
+                                    for member in &ch.members {
+                                        if let Some(tx) = conns.get(member) {
+                                            let _ = tx.try_send(quit_msg.clone());
+                                        }
+                                    }
+                                }
+                                drop(conns);
+                                drop(channels);
+                                state_clone.nick_to_session.lock().remove_by_nick(&nick_clone);
+                                tracing::info!(
+                                    nick = %nick_clone, did = %did_clone,
+                                    "Ghost grace expired — broadcasting QUIT"
+                                );
+                                // S2S
+                                let origin = state_clone.server_iroh_id.lock().clone().unwrap_or_default();
+                                s2s_broadcast(&state_clone, crate::s2s::S2sMessage::Quit {
+                                    event_id: s2s_next_event_id(&state_clone),
+                                    nick: nick_clone,
+                                    reason: "Connection closed".to_string(),
+                                    origin,
+                                });
+                            }
+                        }
+                        _ = cancel_rx => {
+                            // Reconnected — ghost was reclaimed, no QUIT needed
+                        }
+                    }
+                });
+            } else {
+                // Guest user — immediate QUIT (no grace period)
+                let hostmask = conn.hostmask();
+                broadcast_quit(&state, &session_id, &hostmask);
+                state.nick_to_session.lock().remove_by_nick(nick);
+                broadcast_quit_s2s(&state, nick);
+                cleanup_session_state(&state, &session_id);
+                cleanup_channel_membership(&state, &session_id);
+            }
         } else {
             tracing::info!(
                 %session_id,
                 nick = %nick,
                 "Session closed but other sessions remain for DID"
             );
+            cleanup_session_state(&state, &session_id);
+            cleanup_channel_membership(&state, &session_id);
         }
+    } else {
+        cleanup_session_state(&state, &session_id);
+        cleanup_channel_membership(&state, &session_id);
     }
 
     tracing::info!(
@@ -1028,39 +1110,100 @@ where
         last_session = is_last_session_for_did,
         "Connection closed"
     );
-    state.connections.lock().remove(&session_id);
-    state.session_dids.lock().remove(&session_id);
-    state.session_handles.lock().remove(&session_id);
-    state.session_iroh_ids.lock().remove(&session_id);
-    state.session_away.lock().remove(&session_id);
-    state.msg_timestamps.lock().remove(&session_id);
-    state.session_msg_keys.lock().remove(&session_id);
-    state.cap_message_tags.lock().remove(&session_id);
-    state.cap_multi_prefix.lock().remove(&session_id);
-    state.cap_echo_message.lock().remove(&session_id);
-    state.cap_server_time.lock().remove(&session_id);
-    state.cap_batch.lock().remove(&session_id);
-    state.cap_account_notify.lock().remove(&session_id);
-    state.cap_extended_join.lock().remove(&session_id);
-    state.cap_away_notify.lock().remove(&session_id);
-    state.server_opers.lock().remove(&session_id);
-    {
-        let mut channels = state.channels.lock();
-        for ch in channels.values_mut() {
-            ch.members.remove(&session_id);
-            ch.ops.remove(&session_id);
-            ch.voiced.remove(&session_id);
-            ch.halfops.remove(&session_id);
-        }
-        channels.retain(|_, ch| {
-            !ch.members.is_empty()
-                || !ch.remote_members.is_empty()
-                || ch.founder_did.is_some()
-                || ch.topic.is_some()
-                || !ch.bans.is_empty()
-        });
-    }
 
     write_handle.abort();
     Ok(())
+}
+
+/// Detect the client software from the USER realname field.
+fn detect_client(realname: &str) -> String {
+    let r = realname.to_lowercase();
+    if r.contains("freeq web") { return "freeq-web".to_string(); }
+    if r.contains("freeq ios") { return "freeq-ios".to_string(); }
+    if r.contains("freeq android") { return "freeq-android".to_string(); }
+    if r == "freeq" { return "freeq-sdk".to_string(); }
+    // Common IRC clients
+    if r.contains("irssi") { return "irssi".to_string(); }
+    if r.contains("weechat") { return "weechat".to_string(); }
+    if r.contains("hexchat") { return "hexchat".to_string(); }
+    if r.contains("thunderbird") { return "thunderbird".to_string(); }
+    if r.contains("textual") { return "textual".to_string(); }
+    if r.contains("mutter") { return "mutter".to_string(); }
+    if r.contains("irccloud") { return "irccloud".to_string(); }
+    if r.contains("znc") { return "znc".to_string(); }
+    if r.contains("kiwi") { return "kiwi-irc".to_string(); }
+    if r.contains("thelounge") { return "thelounge".to_string(); }
+    if r.contains("revolution") { return "revolution-irc".to_string(); }
+    if r.contains("goguma") { return "goguma".to_string(); }
+    // fallback: first word of realname, capped
+    let first = realname.split_whitespace().next().unwrap_or("unknown");
+    first.chars().take(20).collect()
+}
+
+/// Broadcast QUIT to all channels the session is in.
+fn broadcast_quit(state: &Arc<SharedState>, session_id: &str, hostmask: &str) {
+    let quit_msg = format!(":{hostmask} QUIT :Connection closed\r\n");
+    let channels = state.channels.lock();
+    let conns = state.connections.lock();
+    for ch in channels.values() {
+        if ch.members.contains(session_id) {
+            for member in &ch.members {
+                if member != session_id {
+                    if let Some(tx) = conns.get(member) {
+                        let _ = tx.try_send(quit_msg.clone());
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Broadcast QUIT to S2S peers.
+fn broadcast_quit_s2s(state: &Arc<SharedState>, nick: &str) {
+    let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
+    s2s_broadcast(state, crate::s2s::S2sMessage::Quit {
+        event_id: s2s_next_event_id(state),
+        nick: nick.to_string(),
+        reason: "Connection closed".to_string(),
+        origin,
+    });
+}
+
+/// Clean up per-session state (connections, caps, etc.) but NOT channel membership.
+fn cleanup_session_state(state: &Arc<SharedState>, session_id: &str) {
+    state.connections.lock().remove(session_id);
+    state.session_dids.lock().remove(session_id);
+    state.session_handles.lock().remove(session_id);
+    state.session_iroh_ids.lock().remove(session_id);
+    state.session_away.lock().remove(session_id);
+    state.msg_timestamps.lock().remove(session_id);
+    state.session_msg_keys.lock().remove(session_id);
+    state.session_client_info.lock().remove(session_id);
+    state.cap_message_tags.lock().remove(session_id);
+    state.cap_multi_prefix.lock().remove(session_id);
+    state.cap_echo_message.lock().remove(session_id);
+    state.cap_server_time.lock().remove(session_id);
+    state.cap_batch.lock().remove(session_id);
+    state.cap_account_notify.lock().remove(session_id);
+    state.cap_extended_join.lock().remove(session_id);
+    state.cap_away_notify.lock().remove(session_id);
+    state.server_opers.lock().remove(session_id);
+}
+
+/// Remove a session from all channels. Retains channels that still have content.
+fn cleanup_channel_membership(state: &Arc<SharedState>, session_id: &str) {
+    let mut channels = state.channels.lock();
+    for ch in channels.values_mut() {
+        ch.members.remove(session_id);
+        ch.ops.remove(session_id);
+        ch.voiced.remove(session_id);
+        ch.halfops.remove(session_id);
+    }
+    channels.retain(|_, ch| {
+        !ch.members.is_empty()
+            || !ch.remote_members.is_empty()
+            || ch.founder_did.is_some()
+            || ch.topic.is_some()
+            || !ch.bans.is_empty()
+    });
 }

@@ -31,6 +31,70 @@ pub(super) fn attach_same_did(
         .or_default()
         .insert(session_id.to_string());
 
+    // Check for ghost session (recently disconnected — reclaim without join/part churn)
+    let ghost = state.ghost_sessions.lock().remove(&did);
+    if let Some(ghost) = ghost {
+        // Cancel the deferred QUIT broadcast
+        let _ = ghost.cancel.send(());
+        let elapsed = ghost.disconnect_time.elapsed();
+        tracing::info!(
+            did = %did, nick = %ghost.nick, session = %session_id,
+            elapsed_ms = elapsed.as_millis() as u64,
+            channels = ghost.channels.len(),
+            "Reclaimed ghost session — suppressing quit/join churn"
+        );
+
+        // Adopt the ghost's nick
+        if conn.nick.as_ref().map(|n| n.to_lowercase()) != Some(ghost.nick.to_lowercase()) {
+            if let Some(ref old_nick) = conn.nick {
+                state.nick_to_session.lock().remove_by_nick(old_nick);
+            }
+            conn.nick = Some(ghost.nick.clone());
+        }
+        // Point the nick at the new session
+        state.nick_to_session.lock().insert(&ghost.nick, session_id);
+
+        // Re-join all channels the ghost was in (silently — no broadcast)
+        let mut channels = state.channels.lock();
+        for (ch_name, was_op, was_voiced, was_halfop) in &ghost.channels {
+            if let Some(ch) = channels.get_mut(&ch_name.to_lowercase()) {
+                ch.members.insert(session_id.to_string());
+                if *was_op { ch.ops.insert(session_id.to_string()); }
+                if *was_voiced { ch.voiced.insert(session_id.to_string()); }
+                if *was_halfop { ch.halfops.insert(session_id.to_string()); }
+            }
+        }
+        drop(channels);
+
+        // Send synthetic state to the reconnected session (topic, names)
+        let server_name = &state.server_name;
+        let nick = ghost.nick.clone();
+        for (ch_name, _, _, _) in &ghost.channels {
+            // Send JOIN to the client so it knows it's in the channel
+            let hostmask = conn.hostmask();
+            send(state, session_id, format!(":{hostmask} JOIN {ch_name}\r\n"));
+
+            // Topic
+            {
+                let channels = state.channels.lock();
+                if let Some(ch) = channels.get(&ch_name.to_lowercase()) {
+                    if let Some(ref topic) = ch.topic {
+                        let topic_msg = crate::irc::Message::from_server(
+                            server_name, crate::irc::RPL_TOPIC,
+                            vec![&nick, ch_name, &topic.text],
+                        );
+                        send(state, session_id, format!("{topic_msg}\r\n"));
+                    }
+                }
+            }
+
+            // Names (uses handle_names which manages its own locking)
+            super::channel::handle_names(conn, ch_name, state, server_name, session_id, send);
+        }
+
+        return;
+    }
+
     // Find existing sessions for this DID
     let existing_sessions: Vec<String> = {
         let session_dids = state.session_dids.lock();

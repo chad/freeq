@@ -131,7 +131,7 @@ impl FreeqClient {
             server_addr: self.server.clone(),
             nick: nick.clone(),
             user: nick.clone(),
-            realname: "freeq".to_string(),
+            realname: "freeq ios".to_string(),
             tls: self.server.contains(":6697") || self.server.contains(":443"),
             tls_insecure: false,
             web_token,

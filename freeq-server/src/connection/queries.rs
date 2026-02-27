@@ -183,6 +183,19 @@ pub(super) fn handle_whois(
         send(state, session_id, format!("{iroh_notice}\r\n"));
     }
 
+    // Show client software
+    // Look up the target connection to get client_info
+    // We need to find the connection object — it's not in shared state directly,
+    // so we'll store client_info per-session.
+    if let Some(ref client) = state.session_client_info.lock().get(&target_session) {
+        let client_line = Message::from_server(
+            server_name,
+            "671",  // RPL_WHOISSECURE (informational)
+            vec![my_nick, target_nick, &format!("client: {client}")],
+        );
+        send(state, session_id, format!("{client_line}\r\n"));
+    }
+
     // 318 RPL_ENDOFWHOIS
     let end = Message::from_server(
         server_name,

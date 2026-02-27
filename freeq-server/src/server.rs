@@ -439,6 +439,24 @@ pub struct SharedState {
     /// DID → latest message signing public key (base64url-encoded).
     /// Published via /api/v1/signing-keys/{did} for verification.
     pub did_msg_keys: Mutex<HashMap<String, String>>,
+    /// session_id → client software identifier (from USER realname).
+    pub session_client_info: Mutex<HashMap<String, String>>,
+    /// Ghost sessions: DID users who disconnected recently.
+    /// If they reconnect within the grace period, suppress QUIT/JOIN churn.
+    /// Key: DID, Value: (nick, hostmask, channels_with_modes, disconnect_time, cancel_sender)
+    pub ghost_sessions: Mutex<HashMap<String, GhostSession>>,
+}
+
+/// A ghost session represents a recently-disconnected DID user.
+/// Their channel membership is preserved for a grace period.
+pub struct GhostSession {
+    pub nick: String,
+    pub hostmask: String,
+    /// Channels they were in, with (is_op, is_voiced, is_halfop).
+    pub channels: Vec<(String, bool, bool, bool)>,
+    pub disconnect_time: std::time::Instant,
+    /// Send to this to cancel the deferred QUIT broadcast.
+    pub cancel: tokio::sync::oneshot::Sender<()>,
 }
 
 impl SharedState {
@@ -815,6 +833,8 @@ impl Server {
             msg_signing_key,
             session_msg_keys: Mutex::new(HashMap::new()),
             did_msg_keys: Mutex::new(HashMap::new()),
+            session_client_info: Mutex::new(HashMap::new()),
+            ghost_sessions: Mutex::new(HashMap::new()),
         }))
     }
 
