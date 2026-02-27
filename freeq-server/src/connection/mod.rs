@@ -80,6 +80,8 @@ pub struct Connection {
     pub(crate) is_oper: bool,
     /// Client software identifier (derived from USER realname).
     pub(crate) client_info: Option<String>,
+    /// Channels reclaimed from a ghost session, pending synthetic state after registration.
+    pub(crate) ghost_channels: Option<Vec<String>>,
 
     // SASL state
     pub(crate) sasl_in_progress: bool,
@@ -110,6 +112,7 @@ impl Connection {
             cap_e2ee: false,
             is_oper: false,
             client_info: None,
+            ghost_channels: None,
             sasl_in_progress: false,
             sasl_failures: 0,
         }

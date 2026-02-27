@@ -66,31 +66,9 @@ pub(super) fn attach_same_did(
         }
         drop(channels);
 
-        // Send synthetic state to the reconnected session (topic, names)
-        let server_name = &state.server_name;
-        let nick = ghost.nick.clone();
-        for (ch_name, _, _, _) in &ghost.channels {
-            // Send JOIN to the client so it knows it's in the channel
-            let hostmask = conn.hostmask();
-            send(state, session_id, format!(":{hostmask} JOIN {ch_name}\r\n"));
-
-            // Topic
-            {
-                let channels = state.channels.lock();
-                if let Some(ch) = channels.get(&ch_name.to_lowercase()) {
-                    if let Some(ref topic) = ch.topic {
-                        let topic_msg = crate::irc::Message::from_server(
-                            server_name, crate::irc::RPL_TOPIC,
-                            vec![&nick, ch_name, &topic.text],
-                        );
-                        send(state, session_id, format!("{topic_msg}\r\n"));
-                    }
-                }
-            }
-
-            // Names (uses handle_names which manages its own locking)
-            super::channel::handle_names(conn, ch_name, state, server_name, session_id, send);
-        }
+        // Store reclaimed channel names so try_complete_registration can send
+        // synthetic state AFTER the client is fully registered (needed for CHATHISTORY).
+        conn.ghost_channels = Some(ghost.channels.iter().map(|(name, _, _, _)| name.clone()).collect());
 
         return;
     }
@@ -360,6 +338,34 @@ pub(super) fn try_complete_registration(
             vec![nick, "MOTD File is missing"],
         );
         send(state, session_id, format!("{no_motd}\r\n"));
+    }
+
+    // Send synthetic state for ghost-reclaimed channels (now that registration is complete,
+    // so the client can issue CHATHISTORY after receiving ENDOFNAMES).
+    if let Some(ghost_chs) = conn.ghost_channels.take() {
+        let nick = conn.nick.as_deref().unwrap_or("*").to_string();
+        for ch_name in &ghost_chs {
+            // Send JOIN to the client so it knows it's in the channel
+            let hostmask = conn.hostmask();
+            send(state, session_id, format!(":{hostmask} JOIN {ch_name}\r\n"));
+
+            // Topic
+            {
+                let channels = state.channels.lock();
+                if let Some(ch) = channels.get(&ch_name.to_lowercase()) {
+                    if let Some(ref topic) = ch.topic {
+                        let topic_msg = crate::irc::Message::from_server(
+                            server_name, crate::irc::RPL_TOPIC,
+                            vec![&nick, ch_name, &topic.text],
+                        );
+                        send(state, session_id, format!("{topic_msg}\r\n"));
+                    }
+                }
+            }
+
+            // Names (sends NAMREPLY + ENDOFNAMES → triggers client CHATHISTORY request)
+            super::channel::handle_names(conn, ch_name, state, server_name, session_id, send);
+        }
     }
 
     // Auto-rejoin channels for DID-authenticated users.
