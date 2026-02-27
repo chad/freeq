@@ -188,6 +188,7 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/channels", get(api_channels))
         .route("/api/v1/channels/{name}/history", get(api_channel_history))
         .route("/api/v1/channels/{name}/topic", get(api_channel_topic))
+        .route("/api/v1/channels/{name}/pins", get(api_channel_pins))
         .route("/api/v1/users/{nick}", get(api_user))
         .route("/api/v1/users/{nick}/whois", get(api_user_whois))
         .route("/api/v1/upload", axum::routing::post(api_upload))
@@ -629,6 +630,27 @@ async fn api_channel_topic(
             set_by: ch.topic.as_ref().map(|t| t.set_by.clone()),
             set_at: ch.topic.as_ref().map(|t| t.set_at),
         })),
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+async fn api_channel_pins(
+    Path(name): Path<String>,
+    State(state): State<Arc<SharedState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let channel = if name.starts_with('#') { name } else { format!("#{name}") };
+    let channels = state.channels.lock();
+    match channels.get(&channel) {
+        Some(ch) => {
+            let pins: Vec<serde_json::Value> = ch.pins.iter().map(|p| {
+                serde_json::json!({
+                    "msgid": p.msgid,
+                    "pinned_by": p.pinned_by,
+                    "pinned_at": p.pinned_at,
+                })
+            }).collect();
+            Ok(Json(serde_json::json!({ "channel": channel, "pins": pins })))
+        }
         None => Err(StatusCode::NOT_FOUND),
     }
 }

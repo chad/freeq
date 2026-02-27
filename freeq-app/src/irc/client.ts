@@ -349,6 +349,25 @@ export function getNick(): string {
   return nick;
 }
 
+export function pinMessage(channel: string, msgid: string) {
+  raw(`PIN ${channel} ${msgid}`);
+}
+
+export function unpinMessage(channel: string, msgid: string) {
+  raw(`UNPIN ${channel} ${msgid}`);
+}
+
+async function fetchPins(channel: string) {
+  try {
+    const name = channel.startsWith('#') ? channel.slice(1) : channel;
+    const resp = await fetch(`${window.location.origin}/api/v1/channels/${encodeURIComponent(name)}/pins`);
+    if (resp.ok) {
+      const data = await resp.json();
+      useStore.getState().setPins(channel, data.pins || []);
+    }
+  } catch { /* ignore */ }
+}
+
 // ── Internals ──
 
 function raw(line: string) {
@@ -474,6 +493,8 @@ async function handleLine(rawLine: string) {
         store.clearMembers(channel); // Clear stale members before NAMES reply arrives
         store.setActiveChannel(channel);
         joinedChannels.add(channel.toLowerCase());
+        // Fetch pinned messages
+        fetchPins(channel);
       }
       const joinDid = account && account !== '*' ? account : undefined;
       store.addMember(channel, {

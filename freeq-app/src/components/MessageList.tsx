@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { useStore, type Message } from '../store';
+import { useStore, type Message, type PinnedMessage } from '../store';
 import { getNick, requestHistory, sendReaction } from '../irc/client';
 import { fetchProfile, getCachedProfile, type ATProfile } from '../lib/profiles';
 import { EmojiPicker } from './EmojiPicker';
@@ -774,6 +774,63 @@ function TypingIndicatorBar({ channel }: { channel: string }) {
 
 // ── Main export ──
 
+/** Pinned messages bar — shows at the top of the channel message area. */
+function PinnedBar({ pins, messages }: { pins: PinnedMessage[]; messages: Message[] }) {
+  const [expanded, setExpanded] = useState(false);
+  if (pins.length === 0) return null;
+
+  // Find the actual message content for each pin
+  const pinnedMsgs = pins.slice(0, expanded ? 10 : 1).map((pin) => {
+    const msg = messages.find((m) => m.id === pin.msgid);
+    return { ...pin, msg };
+  });
+
+  return (
+    <div className="border-b border-border bg-bg-secondary/50 px-4 py-1.5 text-sm">
+      <div className="flex items-center gap-2">
+        <span className="text-accent text-xs">📌</span>
+        {pinnedMsgs[0]?.msg ? (
+          <button
+            className="flex-1 text-left truncate text-fg-muted hover:text-fg transition-colors"
+            onClick={() => {
+              useStore.getState().setScrollToMsgId(pinnedMsgs[0].msgid);
+            }}
+          >
+            <span className="font-semibold text-fg text-xs">{pinnedMsgs[0].msg.from}</span>
+            <span className="ml-1.5 text-xs">{pinnedMsgs[0].msg.text.slice(0, 120)}{pinnedMsgs[0].msg.text.length > 120 ? '…' : ''}</span>
+          </button>
+        ) : (
+          <span className="flex-1 text-fg-dim text-xs italic">Pinned message not in view</span>
+        )}
+        {pins.length > 1 && (
+          <button
+            className="text-[10px] text-fg-dim hover:text-fg shrink-0"
+            onClick={() => setExpanded(!expanded)}
+          >
+            {expanded ? '▲' : `+${pins.length - 1} more`}
+          </button>
+        )}
+      </div>
+      {expanded && pinnedMsgs.slice(1).map((p) => (
+        <div key={p.msgid} className="flex items-center gap-2 mt-1">
+          <span className="text-accent text-xs">📌</span>
+          {p.msg ? (
+            <button
+              className="flex-1 text-left truncate text-fg-muted hover:text-fg text-xs"
+              onClick={() => useStore.getState().setScrollToMsgId(p.msgid)}
+            >
+              <span className="font-semibold text-fg">{p.msg.from}</span>
+              <span className="ml-1.5">{p.msg.text.slice(0, 100)}</span>
+            </button>
+          ) : (
+            <span className="flex-1 text-fg-dim text-xs italic">Message {p.msgid.slice(0, 8)}…</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function MessageList() {
   const activeChannel = useStore((s) => s.activeChannel);
   const messages = useStore((s) => {
@@ -781,6 +838,7 @@ export function MessageList() {
     return s.channels.get(s.activeChannel.toLowerCase())?.messages || [];
   });
   const lastReadMsgId = useStore((s) => s.channels.get(s.activeChannel.toLowerCase())?.lastReadMsgId);
+  const pins = useStore((s) => s.channels.get(s.activeChannel.toLowerCase())?.pins || []);
   const density = useStore((s) => s.messageDensity);
   const ref = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
@@ -884,6 +942,11 @@ export function MessageList() {
       density === 'compact' ? 'text-[14px] [&_.msg-full]:pt-1.5 [&_.msg-full]:pb-0' :
       density === 'cozy' ? 'text-[16px] [&_.msg-full]:pt-4 [&_.msg-full]:pb-2' : ''
     }`} onScroll={onScroll}>
+      {activeChannel.startsWith('#') && pins.length > 0 && (
+        <div className="sticky top-0 z-10">
+          <PinnedBar pins={pins} messages={messages} />
+        </div>
+      )}
       {messages.length === 0 && showSkeleton && activeChannel !== 'server' && (
         <div className="px-4 pt-4 space-y-4 animate-pulse">
           {[...Array(6)].map((_, i) => (

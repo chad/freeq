@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useStore, type Message } from '../store';
-import { sendDelete } from '../irc/client';
+import { sendDelete, pinMessage, unpinMessage } from '../irc/client';
 import { showToast } from './Toast';
 
 interface Props {
@@ -68,6 +68,23 @@ export function MessageContextMenu({ msg, channel, position, onClose, onReply, o
         useStore.getState().addBookmark(channel, msg.id, msg.from, msg.text, msg.timestamp);
         onClose();
       }} />
+      {channel.startsWith('#') && (() => {
+        const ch = useStore.getState().channels.get(channel.toLowerCase());
+        const isPinned = ch?.pins.some(p => p.msgid === msg.id);
+        return (
+          <MenuItem icon="📌" label={isPinned ? "Unpin Message" : "Pin Message"} onClick={() => {
+            if (isPinned) {
+              unpinMessage(channel, msg.id);
+              useStore.getState().setPins(channel, (ch?.pins || []).filter(p => p.msgid !== msg.id));
+            } else {
+              pinMessage(channel, msg.id);
+              const now = Math.floor(Date.now() / 1000);
+              useStore.getState().setPins(channel, [{ msgid: msg.id, pinned_by: 'you', pinned_at: now }, ...(ch?.pins || [])]);
+            }
+            onClose();
+          }} />
+        );
+      })()}
       <MenuItem icon="🦋" label="Share to Bluesky" onClick={() => {
         const bskyUrl = `https://bsky.app/intent/compose?text=${encodeURIComponent(`"${msg.text.slice(0, 200)}" — ${msg.from} on freeq`)}`;
         window.open(bskyUrl, '_blank');

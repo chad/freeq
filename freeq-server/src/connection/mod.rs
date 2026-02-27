@@ -604,6 +604,95 @@ where
                     );
                 }
             }
+            "PIN" | "UNPIN" => {
+                if !conn.registered { continue; }
+                let nick = conn.nick_or_star();
+                if msg.params.len() < 2 {
+                    let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
+                        vec![nick, &msg.command, "Not enough parameters"]);
+                    send(&state, &session_id, format!("{reply}\r\n"));
+                    continue;
+                }
+                let channel = normalize_channel(&msg.params[0]);
+                let msgid = &msg.params[1];
+                let is_pin = msg.command == "PIN";
+
+                // Check op status (or server oper)
+                let is_op = state.channels.lock()
+                    .get(&channel)
+                    .map(|ch| ch.ops.contains(&session_id))
+                    .unwrap_or(false);
+                let is_server_oper = state.server_opers.lock().contains(&session_id);
+                if !is_op && !is_server_oper {
+                    let reply = Message::from_server(&server_name, irc::ERR_CHANOPRIVSNEEDED,
+                        vec![nick, &channel, "You're not channel operator"]);
+                    send(&state, &session_id, format!("{reply}\r\n"));
+                    continue;
+                }
+
+                let mut channels = state.channels.lock();
+                if let Some(ch) = channels.get_mut(&channel) {
+                    if is_pin {
+                        if ch.pins.iter().any(|p| p.msgid == *msgid) {
+                            let reply = Message::from_server(&server_name, "NOTICE",
+                                vec![nick, &format!("Message {msgid} is already pinned in {channel}")]);
+                            send(&state, &session_id, format!("{reply}\r\n"));
+                        } else {
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default().as_secs();
+                            ch.pins.insert(0, crate::server::PinnedMessage {
+                                msgid: msgid.to_string(),
+                                pinned_by: nick.to_string(),
+                                pinned_at: now,
+                            });
+                            // Cap at 50 pins
+                            ch.pins.truncate(50);
+                            drop(channels);
+                            // Notify channel
+                            let notice = format!(
+                                ":{nick}!~u@host NOTICE {channel} :\x01ACTION pinned a message\x01\r\n"
+                            );
+                            helpers::broadcast_to_channel(&state, &channel, &notice);
+                        }
+                    } else {
+                        let before = ch.pins.len();
+                        ch.pins.retain(|p| p.msgid != *msgid);
+                        if ch.pins.len() < before {
+                            drop(channels);
+                            let notice = format!(
+                                ":{nick}!~u@host NOTICE {channel} :\x01ACTION unpinned a message\x01\r\n"
+                            );
+                            helpers::broadcast_to_channel(&state, &channel, &notice);
+                        } else {
+                            let reply = Message::from_server(&server_name, "NOTICE",
+                                vec![nick, &format!("Message {msgid} is not pinned in {channel}")]);
+                            send(&state, &session_id, format!("{reply}\r\n"));
+                        }
+                    }
+                }
+            }
+            "PINS" => {
+                if !conn.registered { continue; }
+                let nick = conn.nick_or_star();
+                if let Some(channel) = msg.params.first() {
+                    let channel = normalize_channel(channel);
+                    let channels = state.channels.lock();
+                    if let Some(ch) = channels.get(&channel) {
+                        if ch.pins.is_empty() {
+                            let reply = Message::from_server(&server_name, "NOTICE",
+                                vec![nick, &format!("No pinned messages in {channel}")]);
+                            send(&state, &session_id, format!("{reply}\r\n"));
+                        } else {
+                            for pin in &ch.pins {
+                                let reply = Message::from_server(&server_name, "NOTICE",
+                                    vec![nick, &format!("PIN {} {} {} {}", channel, pin.msgid, pin.pinned_by, pin.pinned_at)]);
+                                send(&state, &session_id, format!("{reply}\r\n"));
+                            }
+                        }
+                    }
+                }
+            }
             "NAMES" => {
                 if !conn.registered { continue; }
                 if let Some(channel) = msg.params.first() {

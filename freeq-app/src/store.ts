@@ -33,6 +33,12 @@ export interface Member {
   typing?: boolean;
 }
 
+export interface PinnedMessage {
+  msgid: string;
+  pinned_by: string;
+  pinned_at: number;
+}
+
 export interface Channel {
   name: string;
   topic: string;
@@ -45,6 +51,7 @@ export interface Channel {
   mentionCount: number;
   lastReadMsgId?: string; // last message seen when channel was active
   isJoined: boolean;
+  pins: PinnedMessage[];
 }
 
 interface Batch {
@@ -183,6 +190,7 @@ export interface Store {
   setBookmarksPanelOpen: (open: boolean) => void;
   setSearchOpen: (open: boolean) => void;
   setScrollToMsgId: (id: string | null) => void;
+  setPins: (channel: string, pins: PinnedMessage[]) => void;
   setSearchQuery: (query: string) => void;
   setChannelListOpen: (open: boolean) => void;
   setChannelList: (list: ChannelListEntry[]) => void;
@@ -214,6 +222,7 @@ function getOrCreateChannel(channels: Map<string, Channel>, name: string): Chann
       unreadCount: 0,
       mentionCount: 0,
       isJoined: false,
+      pins: [],
     };
     channels.set(key, ch);
   }
@@ -681,6 +690,12 @@ export const useStore = create<Store>((set, get) => ({
   setBookmarksPanelOpen: (open) => set({ bookmarksPanelOpen: open }),
   setSearchOpen: (open) => set({ searchOpen: open, searchQuery: open ? '' : '' }),
   setScrollToMsgId: (id) => set({ scrollToMsgId: id }),
+  setPins: (channel, pins) => set((state) => {
+    const channels = new Map(state.channels);
+    const ch = channels.get(channel.toLowerCase());
+    if (ch) { ch.pins = pins; channels.set(channel.toLowerCase(), { ...ch }); }
+    return { channels };
+  }),
   setSearchQuery: (query) => set({ searchQuery: query }),
   setChannelListOpen: (open) => set({ channelListOpen: open }),
   setChannelList: (list) => set({ channelList: list }),

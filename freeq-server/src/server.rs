@@ -68,6 +68,19 @@ pub struct ChannelState {
     pub encrypted_only: bool,
     /// Channel key (+k) — password required to join.
     pub key: Option<String>,
+    /// Pinned message IDs (msgid strings), most recent first.
+    pub pins: Vec<PinnedMessage>,
+}
+
+/// A pinned message reference.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PinnedMessage {
+    /// The ULID msgid of the pinned message.
+    pub msgid: String,
+    /// Who pinned it (nick or DID).
+    pub pinned_by: String,
+    /// When it was pinned (unix secs).
+    pub pinned_at: u64,
 }
 
 impl ChannelState {
