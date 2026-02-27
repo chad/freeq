@@ -1044,6 +1044,11 @@ impl Server {
 ///
 /// Remote users are identified by nick (not session ID). We deliver
 /// to local sessions that are members of the target channel.
+/// Per-peer S2S rate limiter: max events per second.
+static S2S_RATE_LIMITS: std::sync::LazyLock<parking_lot::Mutex<HashMap<String, (u64, u32)>>> =
+    std::sync::LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
+const S2S_MAX_EVENTS_PER_SEC: u32 = 100;
+
 async fn process_s2s_message(
     state: &Arc<SharedState>,
     manager: &Arc<crate::s2s::S2sManager>,
@@ -1051,6 +1056,30 @@ async fn process_s2s_message(
     msg: crate::s2s::S2sMessage,
 ) {
     use crate::s2s::S2sMessage;
+
+    // ── S2S rate limiting ──
+    {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut limits = S2S_RATE_LIMITS.lock();
+        let entry = limits.entry(authenticated_peer_id.to_string()).or_insert((now, 0));
+        if entry.0 == now {
+            entry.1 += 1;
+            if entry.1 > S2S_MAX_EVENTS_PER_SEC {
+                if entry.1 == S2S_MAX_EVENTS_PER_SEC + 1 {
+                    tracing::warn!(
+                        peer = %authenticated_peer_id,
+                        "S2S rate limit exceeded ({S2S_MAX_EVENTS_PER_SEC}/sec), dropping events"
+                    );
+                }
+                return;
+            }
+        } else {
+            *entry = (now, 1);
+        }
+    }
 
     /// Deliver a raw IRC line to all local members of a channel.
     fn deliver_to_channel(state: &SharedState, channel: &str, line: &str) {
@@ -1284,6 +1313,31 @@ async fn process_s2s_message(
         S2sMessage::Join { nick, channel, did, handle, is_op, origin, .. } => {
             // Normalize channel name — IRC channels are case-insensitive
             let channel = channel.to_lowercase();
+
+            // ── S2S authorization: enforce bans and +i ──
+            {
+                let channels = state.channels.lock();
+                if let Some(ch) = channels.get(&channel) {
+                    // Check +i (invite only)
+                    if ch.invite_only {
+                        tracing::info!(
+                            channel = %channel, nick = %nick,
+                            "S2S Join rejected: channel is +i (invite only)"
+                        );
+                        return;
+                    }
+                    // Check bans
+                    let hostmask = format!("{nick}!{nick}@s2s");
+                    if ch.is_banned(&hostmask, did.as_deref()) {
+                        tracing::info!(
+                            channel = %channel, nick = %nick,
+                            "S2S Join rejected: user is banned"
+                        );
+                        return;
+                    }
+                }
+            }
+
             // Presence is S2S-event-only (NOT in CRDT — avoids ghost users)
             // Idempotent: set-based, don't assume not present
             {
@@ -1343,32 +1397,19 @@ async fn process_s2s_message(
             // we apply it locally for UX responsiveness, then write to CRDT
             // for convergent persistence. On any divergence, CRDT wins.
 
-            // Enforce +t locally
+            // ── S2S authorization: enforce +t locally ──
             {
                 let channels = state.channels.lock();
                 if let Some(ch) = channels.get(&channel) {
                     if ch.topic_locked {
-                        // The remote server already checked +t authorization before
-                        // broadcasting. Trust the peer's authorization decision —
-                        // the sending server verified the user was an op before
-                        // emitting the S2S Topic event. We only reject if the
-                        // setter is completely unknown to us (not in remote_members).
-                        let is_known = ch.has_remote_member(&set_by);
                         let is_authorized = ch.remote_member(&set_by)
                             .is_some_and(|rm| rm.is_op || rm.did.as_ref().is_some_and(|d| {
                                 ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
                             }));
-                        if !is_known {
-                            tracing::info!(
+                        if !is_authorized {
+                            tracing::warn!(
                                 channel = %channel, set_by = %set_by,
-                                "Accepting S2S topic change from unknown remote user (trusting peer authorization)"
-                            );
-                            // Accept: the remote server authorized this. We may not
-                            // have the user in our remote_members yet (race with Join).
-                        } else if !is_authorized {
-                            tracing::info!(
-                                channel = %channel, set_by = %set_by,
-                                "Rejecting S2S topic change: channel is +t and setter is not authorized"
+                                "S2S Topic rejected: channel is +t and setter is not an authorized op"
                             );
                             return;
                         }
@@ -1727,6 +1768,25 @@ async fn process_s2s_message(
 
         S2sMessage::Mode { channel, mode, arg, set_by, .. } => {
             let channel = channel.to_lowercase();
+
+            // ── S2S authorization: verify the setter is an op ──
+            {
+                let channels = state.channels.lock();
+                if let Some(ch) = channels.get(&channel) {
+                    let is_authorized = ch.remote_member(&set_by)
+                        .is_some_and(|rm| rm.is_op || rm.did.as_ref().is_some_and(|d| {
+                            ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
+                        }));
+                    if !is_authorized {
+                        tracing::warn!(
+                            channel = %channel, set_by = %set_by, mode = %mode,
+                            "S2S Mode rejected: setter is not an authorized op"
+                        );
+                        return;
+                    }
+                }
+            }
+
             {
                 let mut channels = state.channels.lock();
                 if let Some(ch) = channels.get_mut(&channel) {
@@ -1823,6 +1883,25 @@ async fn process_s2s_message(
             // from the channel and notify them. If the user is a remote member
             // from yet another server, remove from remote_members.
             let channel_key = channel.to_lowercase();
+
+            // ── S2S authorization: verify the kicker is an op ──
+            {
+                let channels = state.channels.lock();
+                if let Some(ch) = channels.get(&channel_key) {
+                    let is_authorized = ch.remote_member(&by)
+                        .is_some_and(|rm| rm.is_op || rm.did.as_ref().is_some_and(|d| {
+                            ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
+                        }));
+                    if !is_authorized {
+                        tracing::warn!(
+                            channel = %channel_key, by = %by, target = %nick,
+                            "S2S Kick rejected: kicker is not an authorized op"
+                        );
+                        return;
+                    }
+                }
+            }
+
             let kick_line = format!(":{by}!remote@s2s KICK {channel} {nick} :{reason}\r\n");
 
             // Case-insensitive nick lookup: IRC nicks are case-insensitive

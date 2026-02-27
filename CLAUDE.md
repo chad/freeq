@@ -201,12 +201,12 @@ If something feels “too clever,” it’s probably wrong.
 - [x] **Message editing** — ✅ DONE. `+draft/edit=<msgid>` on PRIVMSG. Server verifies authorship, stores with `replaces_msgid`, updates in-memory history, broadcasts to channel.
 - [x] **Message deletion** — ✅ DONE. `+draft/delete=<msgid>` on TAGMSG. Soft delete (deleted_at). Author or ops can delete. Excluded from CHATHISTORY/history.
 - [x] **`away-notify` cap** — ✅ DONE. Broadcast AWAY changes to shared channel members. Server, SDK, TUI, and web client all support it.
-- [ ] **S2S authorization on Kick/Mode** — Receiving server should verify the kicker/mode-setter has authority (is an op) before executing. Currently any peer can forge kicks/ops.
-- [ ] **S2S authorization on Topic** — Verify `set_by` belongs to the authenticated peer, not a spoofed nick.
+- [x] **S2S authorization on Kick/Mode** — ✅ DONE. Receiving server verifies the kicker/mode-setter is an op (via remote_members is_op, founder_did, or did_ops) before executing. Unauthorized mode/kick events are rejected with warning log.
+- [x] **S2S authorization on Topic** — ✅ DONE. +t channels reject topic changes from non-ops. Removed "trust unknown users" fallback.
 - [ ] **SyncResponse channel creation limit** — Cap channels created via sync to prevent a rogue peer from creating thousands of channels.
 - [ ] **ChannelCreated should propagate default modes** — Receiving side uses `or_default()` which sets all modes to false. Should inherit +nt defaults so remote channels have standard protections.
 - [ ] **Invites should sync via S2S** — Currently invites are local server state only. A user invited on server A can only join on server A. Relay invite tokens to peers.
-- [ ] **S2S rate limiting** — Connected peers can flood events without throttling.
+- [x] **S2S rate limiting** — ✅ DONE. 100 events/sec per peer, drops with warning log.
 - [ ] **DPoP nonce retry for SASL verification** — PDS nonce rotation causes server-side verification to fail.
 
 ### P2 — Important
@@ -215,7 +215,7 @@ If something feels “too clever,” it’s probably wrong.
 - [ ] **Channel key removal propagation** — `-k` can't propagate via SyncResponse (only additive). Needs protocol change or CRDT-backed key state.
 - [ ] **S2S authentication (allowlist enforcement)** — `--s2s-allowed-peers` only checks incoming. Formalize mutual auth.
 - [ ] **Ban sync + enforcement** — Bans are local-only despite CRDT support. Wire up S2S ban propagation.
-- [ ] **S2S Join enforcement** — Incoming S2S Joins don't check bans or +i.
+- [x] **S2S Join enforcement** — ✅ DONE. Incoming S2S Joins check bans (nick + DID) and +i (invite only). Blocked joins logged.
 - [ ] **Hostname cloaking** — All users show `host` placeholder. Implement cloaking for public deployments.
 - [ ] **IRCv3: account-notify / extended-join** — Broadcast DID on auth and in JOIN.
 - [ ] **IRCv3: CHATHISTORY** — On-demand history retrieval (persistence layer supports it).
