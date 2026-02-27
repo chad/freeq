@@ -104,9 +104,22 @@ fun MessageList(
         }
     }
 
-    // Auto-scroll to bottom on new messages only if already near bottom
+    // On first load, scroll to last-read position (or bottom if none)
+    var initialScrollDone by remember { mutableStateOf(false) }
     LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty() && scrollToMessageId == null && isNearBottom) {
+        if (!initialScrollDone && messages.isNotEmpty()) {
+            val targetIdx = if (lastReadId != null) {
+                val idx = messages.indexOfFirst { it.id == lastReadId }
+                if (idx >= 0) idx else messages.size - 1
+            } else if (lastReadTimestamp > 0) {
+                val idx = messages.indexOfLast { it.timestamp.time <= lastReadTimestamp }
+                if (idx >= 0) idx else messages.size - 1
+            } else {
+                messages.size - 1
+            }
+            listState.scrollToItem(targetIdx)
+            initialScrollDone = true
+        } else if (initialScrollDone && messages.isNotEmpty() && scrollToMessageId == null && isNearBottom && !listState.isScrollInProgress) {
             listState.animateScrollToItem(messages.size - 1)
         }
     }
