@@ -605,9 +605,19 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
                       className="w-full bg-bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-fg focus:outline-none focus:border-accent"
                     >
                       <option value="">Select…</option>
+                      {/* Active verifiers on this channel */}
                       {policy?.policy?.credential_endpoints && Object.keys(policy.policy.credential_endpoints).map((type) => (
-                        <option key={type} value={type}>{type}</option>
+                        <option key={type} value={type}>{CRED_LABELS[type] || type}</option>
                       ))}
+                      {/* Built-in types not yet added as verifiers */}
+                      {VERIFIER_PRESETS
+                        .filter((p) => !policy?.policy?.credential_endpoints?.[p.credentialType])
+                        .map((p) => (
+                          <option key={p.credentialType} value={p.credentialType}>
+                            {p.label} (not yet verified)
+                          </option>
+                        ))
+                      }
                     </select>
                   </div>
                 </div>
