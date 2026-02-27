@@ -549,7 +549,9 @@ export const useStore = create<Store>((set, get) => ({
     const channels = new Map(s.channels);
     const ch = channels.get(channel.toLowerCase());
     if (!ch) return { channels };
-    ch.messages = ch.messages.filter((m) => m.id !== msgId);
+    ch.messages = ch.messages.map((m) =>
+      m.id === msgId ? { ...m, deleted: true, text: '' } : m
+    );
     channels.set(channel.toLowerCase(), { ...ch });
     return { channels };
   }),
