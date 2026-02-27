@@ -480,6 +480,27 @@ impl SharedState {
     }
 }
 
+/// Load or generate a persistent ed25519 signing key for message signing + DB key derivation.
+fn load_msg_signing_key(data_dir: &str) -> ed25519_dalek::SigningKey {
+    let key_path = std::path::Path::new(data_dir).join("msg-signing-key.secret");
+    if key_path.exists() {
+        if let Ok(data) = std::fs::read(&key_path) {
+            if let Ok(bytes) = <[u8; 32]>::try_from(data.as_slice()) {
+                tracing::info!("Loaded message signing key from {}", key_path.display());
+                return ed25519_dalek::SigningKey::from_bytes(&bytes);
+            }
+        }
+        tracing::warn!("Corrupt msg signing key at {}, regenerating", key_path.display());
+    }
+    let key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
+    if let Err(e) = std::fs::write(&key_path, key.to_bytes()) {
+        tracing::error!("Failed to persist msg signing key: {e}");
+    } else {
+        tracing::info!("Generated message signing key at {}", key_path.display());
+    }
+    key
+}
+
 pub struct Server {
     config: ServerConfig,
     resolver: DidResolver,
@@ -500,10 +521,29 @@ impl Server {
 
     /// Build SharedState, opening the database and loading persisted data.
     fn build_state(&self) -> Result<Arc<SharedState>> {
+        // Load message signing key early — it's used to derive DB encryption key
+        let msg_signing_key = load_msg_signing_key(
+            self.config.data_dir.as_deref().unwrap_or(".")
+        );
+
+        // Derive a separate AES-256 key from the signing key for DB encryption at rest
+        let db_encryption_key: [u8; 32] = {
+            use hmac::{Hmac, Mac};
+            use sha2::Sha256;
+            let mut mac = Hmac::<Sha256>::new_from_slice(msg_signing_key.to_bytes().as_slice())
+                .expect("HMAC key");
+            mac.update(b"freeq-db-encryption-v1");
+            let result = mac.finalize();
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&result.into_bytes());
+            key
+        };
+
         let db = match &self.config.db_path {
             Some(path) => {
-                tracing::info!("Opening database: {path}");
-                Some(Db::open(path).map_err(|e| anyhow::anyhow!("Failed to open database: {e}"))?)
+                tracing::info!("Opening database: {path} (encryption at rest: enabled)");
+                Some(Db::open_encrypted(path, db_encryption_key)
+                    .map_err(|e| anyhow::anyhow!("Failed to open database: {e}"))?)
             }
             None => None,
         };
@@ -571,37 +611,7 @@ impl Server {
             self.config.plugin_dir.as_deref(),
         );
 
-        // Load or generate message signing key
-        let msg_signing_key = {
-            let key_path = std::path::Path::new(
-                self.config.data_dir.as_deref().unwrap_or(".")
-            ).join("msg-signing-key.secret");
-            if key_path.exists() {
-                if let Ok(data) = std::fs::read(&key_path) {
-                    if let Ok(bytes) = <[u8; 32]>::try_from(data.as_slice()) {
-                        tracing::info!("Loaded message signing key from {}", key_path.display());
-                        ed25519_dalek::SigningKey::from_bytes(&bytes)
-                    } else {
-                        tracing::warn!("Corrupt msg signing key, regenerating");
-                        let key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
-                        let _ = std::fs::write(&key_path, key.to_bytes());
-                        key
-                    }
-                } else {
-                    let key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
-                    let _ = std::fs::write(&key_path, key.to_bytes());
-                    key
-                }
-            } else {
-                let key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
-                if let Err(e) = std::fs::write(&key_path, key.to_bytes()) {
-                    tracing::error!("Failed to persist msg signing key: {e}");
-                } else {
-                    tracing::info!("Generated message signing key at {}", key_path.display());
-                }
-                key
-            }
-        };
+        // msg_signing_key already loaded above (needed for DB encryption key derivation)
 
         Ok(Arc::new(SharedState {
             server_name: self.config.server_name.clone(),

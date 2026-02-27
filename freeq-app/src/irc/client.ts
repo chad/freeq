@@ -564,7 +564,8 @@ async function handleLine(rawLine: string) {
       else if (e2ee.isEncrypted(text) && !isChannel && !isSelf) {
         const remoteDid = didForNick(from);
         if (remoteDid) {
-          const plain = await e2ee.decryptMessage(remoteDid, text);
+          const origin = window.location.origin;
+          const plain = await e2ee.decryptMessage(remoteDid, text, origin);
           if (plain !== null) {
             displayText = plain;
             isEncryptedMsg = true;

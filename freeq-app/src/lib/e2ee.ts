@@ -75,6 +75,14 @@ export function getIdentityPublicKey(): Uint8Array | null {
  * Initialize E2EE for an authenticated user.
  */
 export async function initialize(did: string, serverOrigin: string): Promise<void> {
+  // Check X25519 availability before doing anything
+  try {
+    await (crypto.subtle.generateKey as any)({ name: 'X25519' }, false, ['deriveBits']);
+  } catch {
+    console.warn('[e2ee] X25519 not available in this browser — E2EE disabled');
+    return;
+  }
+
   db = await openDB(DB_NAME, DB_VERSION, {
     upgrade(database) {
       if (!database.objectStoreNames.contains('identity')) {
@@ -132,35 +140,23 @@ export function shutdown(): void {
 
 async function generateIdentityKeys(): Promise<IdentityKeys> {
   // Use Web Crypto X25519 where available, fall back to random bytes
-  try {
-    const ikPair = await (crypto.subtle.generateKey as any)(
-      { name: 'X25519' }, true, ['deriveBits']
-    );
-    const spkPair = await (crypto.subtle.generateKey as any)(
-      { name: 'X25519' }, true, ['deriveBits']
-    );
-    const ikSecret = new Uint8Array(await crypto.subtle.exportKey('raw', ikPair.privateKey));
-    const ikPublic = new Uint8Array(await crypto.subtle.exportKey('raw', ikPair.publicKey));
-    const spkSecret = new Uint8Array(await crypto.subtle.exportKey('raw', spkPair.privateKey));
-    const spkPublic = new Uint8Array(await crypto.subtle.exportKey('raw', spkPair.publicKey));
+  const ikPair = await (crypto.subtle.generateKey as any)(
+    { name: 'X25519' }, true, ['deriveBits']
+  );
+  const spkPair = await (crypto.subtle.generateKey as any)(
+    { name: 'X25519' }, true, ['deriveBits']
+  );
+  const ikSecret = new Uint8Array(await crypto.subtle.exportKey('raw', ikPair.privateKey));
+  const ikPublic = new Uint8Array(await crypto.subtle.exportKey('raw', ikPair.publicKey));
+  const spkSecret = new Uint8Array(await crypto.subtle.exportKey('raw', spkPair.privateKey));
+  const spkPublic = new Uint8Array(await crypto.subtle.exportKey('raw', spkPair.publicKey));
 
-    return {
-      secretKey: ikSecret, publicKey: ikPublic,
-      spkSecret, spkPublic,
-      spkSignature: new Uint8Array(64), // placeholder
-      spkId: 1,
-    };
-  } catch {
-    // X25519 not available — generate random keys (for testing/older browsers)
-    return {
-      secretKey: crypto.getRandomValues(new Uint8Array(32)),
-      publicKey: crypto.getRandomValues(new Uint8Array(32)),
-      spkSecret: crypto.getRandomValues(new Uint8Array(32)),
-      spkPublic: crypto.getRandomValues(new Uint8Array(32)),
-      spkSignature: new Uint8Array(64),
-      spkId: 1,
-    };
-  }
+  return {
+    secretKey: ikSecret, publicKey: ikPublic,
+    spkSecret, spkPublic,
+    spkSignature: new Uint8Array(64), // placeholder — TODO: sign SPK with IK
+    spkId: 1,
+  };
 }
 
 // ── Pre-Key Bundle API ──
@@ -239,11 +235,18 @@ export async function encryptMessage(
 export async function decryptMessage(
   remoteDid: string,
   wire: string,
+  serverOrigin?: string,
 ): Promise<string | null> {
   if (!initialized) return null;
   if (!wire.startsWith(ENC3_PREFIX)) return null;
 
-  const session = sessions.get(remoteDid);
+  let session = sessions.get(remoteDid);
+  // Auto-establish session if we don't have one (receiver side)
+  if (!session && serverOrigin) {
+    const newSession = await establishSession(remoteDid, serverOrigin);
+    if (!newSession) return null;
+    session = newSession;
+  }
   if (!session) return null;
 
   try {
@@ -296,20 +299,39 @@ async function establishSession(remoteDid: string, serverOrigin: string): Promis
     const theirIK = fromB64(bundle.identity_key);
     const theirSPK = fromB64(bundle.signed_pre_key);
 
-    // X3DH: three DH computations
-    const dh1 = await x25519DH(identityKeys.secretKey, theirSPK);
-    const dh2 = await x25519DH(identityKeys.spkSecret, theirIK);
-    const dh3 = await x25519DH(identityKeys.spkSecret, theirSPK);
+    // Symmetric X3DH: both sides compute the same 3 DH values.
+    // We sort by public key to ensure both sides use the same order:
+    //   dh1 = DH(my_ik, their_spk)
+    //   dh2 = DH(my_spk, their_ik)
+    //   dh3 = DH(my_spk, their_spk)
+    // DH is commutative, so DH(a_secret, B_pub) == DH(b_secret, A_pub).
+    // But dh1 and dh2 use DIFFERENT key pairs, so we need to canonicalize.
+    // Solution: always order (dh_ik×spk, dh_spk×ik) by comparing public keys.
+    const dh_ik_spk = await x25519DH(identityKeys.secretKey, theirSPK);
+    const dh_spk_ik = await x25519DH(identityKeys.spkSecret, theirIK);
+    const dh_spk_spk = await x25519DH(identityKeys.spkSecret, theirSPK);
+
+    // Canonical order: sort the two cross-DH values by comparing our IK vs their IK
+    const myIK = identityKeys.publicKey;
+    const weAreFirst = compareBytes(myIK, theirIK) < 0;
+    const dh1 = weAreFirst ? dh_ik_spk : dh_spk_ik;
+    const dh2 = weAreFirst ? dh_spk_ik : dh_ik_spk;
 
     const ikm = new Uint8Array(96);
-    ikm.set(dh1, 0); ikm.set(dh2, 32); ikm.set(dh3, 64);
+    ikm.set(dh1, 0); ikm.set(dh2, 32); ikm.set(dh_spk_spk, 64);
 
     const sharedSecret = await hkdfDerive(ikm, 'freeq-x3dh-v1');
 
+    // Derive separate send/recv chain keys based on who has the "lower" public key.
+    // The party with the lexicographically lower IK uses chain_a for sending, chain_b for receiving.
+    // The other party uses chain_b for sending, chain_a for receiving.
+    const chain_a = await hkdfDerive(sharedSecret, 'freeq-chain-a');
+    const chain_b = await hkdfDerive(sharedSecret, 'freeq-chain-b');
+
     const st: SessionState = {
       sharedSecret: Array.from(sharedSecret),
-      sendChainKey: Array.from(sharedSecret),
-      recvChainKey: Array.from(sharedSecret),
+      sendChainKey: Array.from(weAreFirst ? chain_a : chain_b),
+      recvChainKey: Array.from(weAreFirst ? chain_b : chain_a),
       sendMsgNum: 0, recvMsgNum: 0, prevChainLen: 0,
     };
 
@@ -330,17 +352,10 @@ async function establishSession(remoteDid: string, serverOrigin: string): Promis
 // ── Crypto Helpers ──
 
 async function x25519DH(secret: Uint8Array, pub_key: Uint8Array): Promise<Uint8Array> {
-  try {
-    const sk = await (crypto.subtle.importKey as any)('raw', secret, { name: 'X25519' }, false, ['deriveBits']);
-    const pk = await (crypto.subtle.importKey as any)('raw', pub_key, { name: 'X25519' }, false, []);
-    const bits = await (crypto.subtle.deriveBits as any)({ name: 'X25519', public: pk }, sk, 256);
-    return new Uint8Array(bits);
-  } catch {
-    // Fallback: XOR-based "DH" for browsers without X25519 (not secure, testing only)
-    const out = new Uint8Array(32);
-    for (let i = 0; i < 32; i++) out[i] = secret[i] ^ pub_key[i];
-    return out;
-  }
+  const sk = await (crypto.subtle.importKey as any)('raw', secret, { name: 'X25519' }, false, ['deriveBits']);
+  const pk = await (crypto.subtle.importKey as any)('raw', pub_key, { name: 'X25519' }, false, []);
+  const bits = await (crypto.subtle.deriveBits as any)({ name: 'X25519', public: pk }, sk, 256);
+  return new Uint8Array(bits);
 }
 
 async function hkdfDerive(ikm: Uint8Array, info: string): Promise<Uint8Array> {
@@ -453,6 +468,15 @@ export async function decryptChannel(channel: string, wire: string): Promise<str
 }
 
 // ── Base64url ──
+
+/** Lexicographic comparison of two byte arrays. */
+function compareBytes(a: Uint8Array, b: Uint8Array): number {
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return a.length - b.length;
+}
 
 function toB64(data: Uint8Array): string {
   return btoa(String.fromCharCode(...data))

@@ -10,9 +10,55 @@ use rusqlite::{params, Connection, Result as SqlResult};
 
 use crate::server::{BanEntry, ChannelState, TopicInfo};
 
+/// Prefix for encrypted-at-rest message content.
+const EAR_PREFIX: &str = "EAR1:";
+
+/// Encrypt text with AES-256-GCM for storage at rest.
+fn encrypt_at_rest(key: &[u8; 32], plaintext: &str) -> String {
+    use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead, Nonce};
+    let cipher = Aes256Gcm::new(key.into());
+    let nonce_bytes: [u8; 12] = rand::random();
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    match cipher.encrypt(nonce, plaintext.as_bytes()) {
+        Ok(ct) => {
+            use base64::Engine;
+            let mut combined = Vec::with_capacity(12 + ct.len());
+            combined.extend_from_slice(&nonce_bytes);
+            combined.extend_from_slice(&ct);
+            format!("{EAR_PREFIX}{}", base64::engine::general_purpose::STANDARD.encode(&combined))
+        }
+        Err(_) => plaintext.to_string(), // fallback: store plaintext
+    }
+}
+
+/// Decrypt text from at-rest storage. Returns plaintext if not encrypted.
+fn decrypt_at_rest(key: &[u8; 32], stored: &str) -> String {
+    if !stored.starts_with(EAR_PREFIX) {
+        return stored.to_string(); // not encrypted — return as-is (legacy data)
+    }
+    use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead, Nonce};
+    use base64::Engine;
+    let b64 = &stored[EAR_PREFIX.len()..];
+    match base64::engine::general_purpose::STANDARD.decode(b64) {
+        Ok(combined) if combined.len() > 12 => {
+            let nonce = Nonce::from_slice(&combined[..12]);
+            let ct = &combined[12..];
+            let cipher = Aes256Gcm::new(key.into());
+            match cipher.decrypt(nonce, ct) {
+                Ok(pt) => String::from_utf8_lossy(&pt).to_string(),
+                Err(_) => stored.to_string(), // can't decrypt — return raw
+            }
+        }
+        _ => stored.to_string(),
+    }
+}
+
 /// Database handle wrapping a SQLite connection.
 pub struct Db {
     conn: Connection,
+    /// AES-256-GCM key for encrypting message content at rest.
+    /// Derived from the server's signing key. If None, messages stored as plaintext.
+    encryption_key: Option<[u8; 32]>,
 }
 
 /// A persisted message row.
@@ -43,7 +89,15 @@ impl Db {
     /// Open (or create) the database at the given path.
     pub fn open<P: AsRef<Path>>(path: P) -> SqlResult<Self> {
         let conn = Connection::open(path)?;
-        let db = Self { conn };
+        let db = Self { conn, encryption_key: None };
+        db.init()?;
+        Ok(db)
+    }
+
+    /// Open a database with encryption at rest for message content.
+    pub fn open_encrypted<P: AsRef<Path>>(path: P, key: [u8; 32]) -> SqlResult<Self> {
+        let conn = Connection::open(path)?;
+        let db = Self { conn, encryption_key: Some(key) };
         db.init()?;
         Ok(db)
     }
@@ -51,7 +105,7 @@ impl Db {
     /// Open an in-memory database (for testing).
     pub fn open_memory() -> SqlResult<Self> {
         let conn = Connection::open_in_memory()?;
-        let db = Self { conn };
+        let db = Self { conn, encryption_key: None };
         db.init()?;
         Ok(db)
     }
@@ -271,10 +325,15 @@ impl Db {
         msgid: Option<&str>,
     ) -> SqlResult<()> {
         let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "{}".to_string());
+        let stored_text = if let Some(ref key) = self.encryption_key {
+            encrypt_at_rest(key, text)
+        } else {
+            text.to_string()
+        };
         self.conn.execute(
             "INSERT INTO messages (channel, sender, text, timestamp, tags_json, msgid)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![channel, sender, text, timestamp as i64, tags_json, msgid],
+            params![channel, sender, stored_text, timestamp as i64, tags_json, msgid],
         )?;
         Ok(())
     }
@@ -311,6 +370,12 @@ impl Db {
         };
         // Reverse to oldest-first order
         rows_vec.reverse();
+        // Decrypt at-rest encryption if enabled
+        if let Some(ref key) = self.encryption_key {
+            for row in &mut rows_vec {
+                row.text = decrypt_at_rest(key, &row.text);
+            }
+        }
         Ok(rows_vec)
     }
 
@@ -329,7 +394,11 @@ impl Db {
              LIMIT ?3"
         )?;
         let rows = stmt.query_map(params![channel, after as i64, limit as i64], map_message_row)?;
-        rows.collect::<SqlResult<Vec<_>>>()
+        let mut result = rows.collect::<SqlResult<Vec<_>>>()?;
+        if let Some(ref key) = self.encryption_key {
+            for row in &mut result { row.text = decrypt_at_rest(key, &row.text); }
+        }
+        Ok(result)
     }
 
     /// Get messages between two timestamps (oldest first).
@@ -351,7 +420,11 @@ impl Db {
             params![channel, after as i64, before as i64, limit as i64],
             map_message_row,
         )?;
-        rows.collect::<SqlResult<Vec<_>>>()
+        let mut result = rows.collect::<SqlResult<Vec<_>>>()?;
+        if let Some(ref key) = self.encryption_key {
+            for row in &mut result { row.text = decrypt_at_rest(key, &row.text); }
+        }
+        Ok(result)
     }
 
     /// Prune old messages for a channel, keeping only the most recent `max_keep`.
@@ -375,7 +448,13 @@ impl Db {
         )?;
         let mut rows = stmt.query_map(params![channel, msgid], map_message_row)?;
         match rows.next() {
-            Some(row) => Ok(Some(row?)),
+            Some(row) => {
+                let mut msg = row?;
+                if let Some(ref key) = self.encryption_key {
+                    msg.text = decrypt_at_rest(key, &msg.text);
+                }
+                Ok(Some(msg))
+            }
             None => Ok(None),
         }
     }
@@ -405,10 +484,15 @@ impl Db {
         replaces_msgid: &str,
     ) -> SqlResult<()> {
         let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "{}".to_string());
+        let stored_text = if let Some(ref key) = self.encryption_key {
+            encrypt_at_rest(key, text)
+        } else {
+            text.to_string()
+        };
         self.conn.execute(
             "INSERT INTO messages (channel, sender, text, timestamp, tags_json, msgid, replaces_msgid)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![channel, sender, text, timestamp as i64, tags_json, msgid, replaces_msgid],
+            params![channel, sender, stored_text, timestamp as i64, tags_json, msgid, replaces_msgid],
         )?;
         Ok(())
     }

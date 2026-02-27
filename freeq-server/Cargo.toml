@@ -14,6 +14,7 @@ name = "freeq-server"
 path = "src/main.rs"
 
 [dependencies]
+aes-gcm = { workspace = true }
 freeq-sdk = { path = "../freeq-sdk" }
 tokio = { workspace = true }
 tokio-rustls = { workspace = true }
