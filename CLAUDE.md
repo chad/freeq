@@ -226,9 +226,9 @@ If something feels “too clever,” it’s probably wrong.
 
 ### P2.5 — Web App Prerequisites (see `docs/WEB-APP-PLAN.md`)
 
-- [ ] **Web app (Phase 1)** — React+TS+Vite+Tailwind. IRC-over-WebSocket adapter, Zustand store, AT Protocol profile resolution, basic channel/message/member UX. Separate repo (`freeq-app`).
+- [x] **Web app (Phase 1)** — ✅ DONE. React+TS+Vite+Tailwind at freeq-app/.
 - [ ] **Search (FTS5)** — SQLite FTS5 for message search. REST endpoint or IRC SEARCH command.
-- [ ] **Pinned messages** — Channel metadata via TAGMSG or MODE variant.
+- [x] **Pinned messages** — ✅ DONE. PIN/UNPIN/PINS commands, REST API, web client PinnedBar + context menu.
 
 ### P3 — Future
 
@@ -240,7 +240,7 @@ If something feels “too clever,” it’s probably wrong.
 - [ ] Reputation/trust via social graph
 - [ ] Serverless P2P mode
 - [ ] IRCv3 WG proposal for ATPROTO-CHALLENGE
-- [ ] Web client (separate repo, PWA)
+- [x] Web client — ✅ DONE (freeq-app/, deployed at irc.freeq.at)
 - [ ] Moderation event log (CRDT-backed, ULID-keyed)
 - [ ] AT Protocol label integration for moderation
 
