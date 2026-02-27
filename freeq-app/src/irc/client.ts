@@ -906,6 +906,8 @@ async function handleLine(rawLine: string) {
     case '375': case '372': {
       const motdLine = msg.params[msg.params.length - 1];
       store.addSystemMessage('server', motdLine);
+      // 375 = MOTD start — clear previous MOTD lines (prevents duplication on reconnect)
+      if (msg.command === '375') useStore.setState({ motd: [], motdDismissed: false });
       if (msg.command === '372') store.appendMotd(motdLine.replace(/^- ?/, ''));
       break;
     }

@@ -64,6 +64,11 @@ export function MessageContextMenu({ msg, channel, position, onClose, onReply, o
       <div className="h-px bg-border mx-2 my-1" />
       <MenuItem icon="📋" label="Copy Text" onClick={copyText} />
       <MenuItem icon="🔗" label="Copy Link" onClick={copyLink} />
+      {msg.id && <MenuItem icon="🆔" label="Copy Message ID" onClick={() => {
+        navigator.clipboard.writeText(msg.id);
+        showToast('Message ID copied', 'success', 2000);
+        onClose();
+      }} />}
       <MenuItem icon="🔖" label="Bookmark" onClick={() => {
         useStore.getState().addBookmark(channel, msg.id, msg.from, msg.text, msg.timestamp);
         onClose();
