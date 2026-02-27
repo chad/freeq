@@ -3,6 +3,11 @@ package com.freeq.ui.components
 import android.view.ContextThemeWrapper
 import androidx.compose.foundation.background
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -18,6 +23,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -35,6 +41,7 @@ import com.freeq.model.ChatMessage
 import com.freeq.model.MemberInfo
 import com.freeq.ui.theme.FreeqColors
 import com.freeq.ui.theme.Theme
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -48,6 +55,7 @@ fun MessageList(
 ) {
     val messages = channelState.messages
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
     var lightboxUrl by remember { mutableStateOf<String?>(null) }
     var highlightedMessageId by remember { mutableStateOf<String?>(null) }
@@ -71,9 +79,19 @@ fun MessageList(
         }
     }
 
-    // Auto-scroll to bottom on new messages (skip if we just scrolled to a search result)
+    // Track whether the user is near the bottom of the list
+    val isNearBottom by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val totalItems = layoutInfo.totalItemsCount
+            totalItems == 0 || lastVisible >= totalItems - 3
+        }
+    }
+
+    // Auto-scroll to bottom on new messages only if already near bottom
     LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty() && scrollToMessageId == null) {
+        if (messages.isNotEmpty() && scrollToMessageId == null && isNearBottom) {
             listState.animateScrollToItem(messages.size - 1)
         }
     }
@@ -155,6 +173,84 @@ fun MessageList(
             if (typers.isNotEmpty()) {
                 item {
                     TypingIndicator(typers)
+                }
+            }
+        }
+
+        // Scroll-to-bottom FAB
+        AnimatedVisibility(
+            visible = !isNearBottom && messages.isNotEmpty(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 12.dp),
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut()
+        ) {
+            val lastMsg = messages.lastOrNull { it.from.isNotEmpty() }
+            Surface(
+                onClick = {
+                    scope.launch {
+                        listState.animateScrollToItem(messages.size - 1)
+                    }
+                },
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 4.dp,
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .fillMaxWidth()
+            ) {
+                if (lastMsg != null) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        UserAvatar(nick = lastMsg.from, size = 28.dp)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = lastMsg.from,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Theme.nickColor(lastMsg.from),
+                                maxLines = 1
+                            )
+                            Text(
+                                text = lastMsg.text.take(60),
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Icon(
+                            Icons.Default.KeyboardArrowDown,
+                            contentDescription = "Scroll to bottom",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .padding(10.dp)
+                            .fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            "Scroll to bottom",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }
