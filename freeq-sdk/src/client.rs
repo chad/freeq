@@ -3,6 +3,27 @@
 //! This is the main entry point for SDK consumers. It manages the TCP
 //! connection, IRC registration, CAP/SASL negotiation, and emits events.
 //! Supports both plaintext and TLS connections.
+//!
+//! ## SASL Authentication
+//!
+//! Two SASL methods are supported:
+//!
+//! - **`web-token`**: A short-lived token minted by the auth broker after OAuth.
+//!   Set `config.sasl_token` and `config.sasl_method = "web-token"`. The token is
+//!   sent as the SASL payload and verified against the server's in-memory token map.
+//!   Tokens expire after 5 minutes. Best for web and mobile clients that go through
+//!   the OAuth broker flow.
+//!
+//! - **`crypto`**: Direct cryptographic challenge-response using the user's AT Protocol
+//!   signing key. Set `config.sasl_method = "crypto"` and provide a DID + signing key.
+//!   The server sends a challenge; the client signs it; the server verifies against the
+//!   DID document. Best for bots and CLI tools with direct key access.
+//!
+//! ## Reconnection
+//!
+//! The SDK does not implement automatic reconnection. Consumers should implement
+//! their own reconnect logic with exponential backoff (e.g., 2→4→8→16→30s cap)
+//! to avoid overwhelming the server. Listen for [`Event::Disconnected`] and retry.
 
 use std::sync::Arc;
 

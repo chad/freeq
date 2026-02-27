@@ -202,10 +202,14 @@ class AppState: ObservableObject {
         if let savedReadPositions = UserDefaults.standard.dictionary(forKey: "freeq.readPositions") as? [String: String] {
             lastReadMessageIds = savedReadPositions
         }
-        if let savedDID = UserDefaults.standard.string(forKey: "freeq.did") {
+        // Migrate secrets from UserDefaults to Keychain (one-time)
+        KeychainHelper.migrateFromUserDefaults(userDefaultsKey: "freeq.did", keychainKey: "did")
+        KeychainHelper.migrateFromUserDefaults(userDefaultsKey: "freeq.brokerToken", keychainKey: "brokerToken")
+
+        if let savedDID = KeychainHelper.load(key: "did") {
             authenticatedDID = savedDID
         }
-        if let savedBroker = UserDefaults.standard.string(forKey: "freeq.brokerToken") {
+        if let savedBroker = KeychainHelper.load(key: "brokerToken") {
             brokerToken = savedBroker
         }
         if let savedBrokerBase = UserDefaults.standard.string(forKey: "freeq.brokerBase") {
@@ -239,7 +243,7 @@ class AppState: ObservableObject {
                 await MainActor.run {
                     self.pendingWebToken = session.token
                     self.authenticatedDID = session.did
-                    UserDefaults.standard.set(session.did, forKey: "freeq.did")
+                    KeychainHelper.save(key: "did", value: session.did)
                     self.connect(nick: session.nick)
                 }
             } catch {
@@ -298,7 +302,8 @@ class AppState: ObservableObject {
     func logout() {
         disconnect()
         UserDefaults.standard.removeObject(forKey: "freeq.lastLogin")
-        UserDefaults.standard.removeObject(forKey: "freeq.did")
+        KeychainHelper.delete(key: "did")
+        KeychainHelper.delete(key: "brokerToken")
         UserDefaults.standard.removeObject(forKey: "freeq.nick")
         UserDefaults.standard.removeObject(forKey: "freeq.handle")
         DispatchQueue.main.async {
@@ -575,7 +580,7 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
 
         case .authenticated(let did):
             state.authenticatedDID = did
-            UserDefaults.standard.set(did, forKey: "freeq.did")
+            KeychainHelper.save(key: "did", value: did)
 
         case .authFailed(let reason):
             state.errorMessage = "Auth failed: \(reason)"

@@ -49,7 +49,7 @@ struct FreeqApp: App {
         // Save session
         UserDefaults.standard.set(handle, forKey: "freeq.handle")
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "freeq.lastLogin")
-        UserDefaults.standard.set(brokerToken, forKey: "freeq.brokerToken")
+        KeychainHelper.save(key: "brokerToken", value: brokerToken)
         UserDefaults.standard.removeObject(forKey: "freeq.loginPending")
 
         // Connect
