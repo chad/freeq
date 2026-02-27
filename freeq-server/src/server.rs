@@ -1452,7 +1452,13 @@ async fn process_s2s_message(
             let has_local_members;
             {
                 let mut channels = state.channels.lock();
+                let is_new = !channels.contains_key(&channel);
                 let ch = channels.entry(channel.clone()).or_default();
+                // New channels get +nt defaults
+                if is_new {
+                    ch.no_ext_msg = true;
+                    ch.topic_locked = true;
+                }
 
                 // ── Authority gating ───────────────────────────────────
                 // Founder: only adopt if we have no local founder.
@@ -1589,6 +1595,18 @@ async fn process_s2s_message(
         }
 
         S2sMessage::SyncResponse { server_id: peer_id, channels: remote_channels } => {
+            // Cap channel creation from sync to prevent flooding
+            const MAX_SYNC_CHANNELS: usize = 500;
+            if remote_channels.len() > MAX_SYNC_CHANNELS {
+                tracing::warn!(
+                    peer = %peer_id,
+                    "SyncResponse has {} channels, capping at {MAX_SYNC_CHANNELS}",
+                    remote_channels.len()
+                );
+            }
+            let remote_channels: Vec<_> = remote_channels.into_iter()
+                .take(MAX_SYNC_CHANNELS)
+                .collect();
             tracing::info!(
                 "Received sync: {} channel(s) from peer {peer_id}",
                 remote_channels.len()
@@ -1614,7 +1632,13 @@ async fn process_s2s_message(
                 }
 
                 for info in remote_channels {
+                    let is_new = !channels.contains_key(&info.name);
                     let ch = channels.entry(info.name.clone()).or_default();
+                    // New channels created via sync get +nt by default
+                    if is_new {
+                        ch.no_ext_msg = true;
+                        ch.topic_locked = true;
+                    }
 
                     // ── Authority gating on sync ──────────────────────
                     // Merge founder: only adopt if we don't have one AND it's a valid DID
