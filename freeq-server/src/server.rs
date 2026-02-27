@@ -441,6 +441,8 @@ pub struct SharedState {
     pub did_msg_keys: Mutex<HashMap<String, String>>,
     /// session_id → client software identifier (from USER realname).
     pub session_client_info: Mutex<HashMap<String, String>>,
+    /// Upload tokens: token → (DID, created_at). Short-lived proof of upload authorization.
+    pub upload_tokens: Mutex<HashMap<String, (String, std::time::Instant)>>,
     /// Ghost sessions: DID users who disconnected recently.
     /// If they reconnect within the grace period, suppress QUIT/JOIN churn.
     /// Key: DID, Value: (nick, hostmask, channels_with_modes, disconnect_time, cancel_sender)
@@ -834,6 +836,7 @@ impl Server {
             session_msg_keys: Mutex::new(HashMap::new()),
             did_msg_keys: Mutex::new(HashMap::new()),
             session_client_info: Mutex::new(HashMap::new()),
+            upload_tokens: Mutex::new(HashMap::new()),
             ghost_sessions: Mutex::new(HashMap::new()),
         }))
     }
@@ -1039,6 +1042,41 @@ impl Server {
             tokio::spawn(async move {
                 if let Err(e) = axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await {
                     tracing::error!("HTTP server error: {e}");
+                }
+            });
+        }
+
+        // Periodic cleanup: prune expired tokens and stale sessions
+        {
+            let cleanup_state = Arc::clone(&state);
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+                loop {
+                    interval.tick().await;
+                    // Prune expired web-auth tokens (300s TTL)
+                    {
+                        let mut tokens = cleanup_state.web_auth_tokens.lock();
+                        let before = tokens.len();
+                        tokens.retain(|_, (_, _, created)| created.elapsed().as_secs() < 300);
+                        let pruned = before - tokens.len();
+                        if pruned > 0 { tracing::info!("Pruned {pruned} expired web-auth tokens"); }
+                    }
+                    // Prune expired upload tokens (300s TTL)
+                    {
+                        let mut tokens = cleanup_state.upload_tokens.lock();
+                        let before = tokens.len();
+                        tokens.retain(|_, (_, created)| created.elapsed().as_secs() < 300);
+                        let pruned = before - tokens.len();
+                        if pruned > 0 { tracing::info!("Pruned {pruned} expired upload tokens"); }
+                    }
+                    // Prune stale web sessions (24h TTL — PDS tokens expire anyway)
+                    {
+                        let mut sessions = cleanup_state.web_sessions.lock();
+                        let before = sessions.len();
+                        sessions.retain(|_, s| s.created_at.elapsed().as_secs() < 86400);
+                        let pruned = before - sessions.len();
+                        if pruned > 0 { tracing::info!("Pruned {pruned} stale web sessions"); }
+                    }
                 }
             });
         }

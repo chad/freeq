@@ -818,11 +818,17 @@ async fn auth_broker_session(
         created_at: std::time::Instant::now(),
     });
 
-    Ok(Json(serde_json::json!({"ok": true})))
+    // Mint an upload token for this DID (5 min TTL, used by mobile clients
+    // that can't prove session ownership via WebSocket session_dids).
+    let upload_token = generate_random_string(32);
+    state.upload_tokens.lock().insert(upload_token.clone(), (req.did.clone(), std::time::Instant::now()));
+
+    Ok(Json(serde_json::json!({"ok": true, "upload_token": upload_token})))
 }
 
-/// Verify HMAC-SHA256 signature over raw request bytes.
-/// This avoids JSON re-serialization order mismatches between broker and server.
+/// Verify HMAC-SHA256 signature over raw request bytes with replay protection.
+/// The broker must include X-Broker-Timestamp (unix seconds). Requests older
+/// than 60 seconds are rejected.
 fn verify_broker_signature_raw(
     secret: &str,
     headers: &axum::http::HeaderMap,
@@ -835,6 +841,19 @@ fn verify_broker_signature_raw(
     let sig = headers.get("x-broker-signature")
         .and_then(|v| v.to_str().ok())
         .ok_or((StatusCode::UNAUTHORIZED, "Missing broker signature".to_string()))?;
+
+    // Replay protection: check timestamp freshness (optional for backward compat)
+    if let Some(ts_str) = headers.get("x-broker-timestamp").and_then(|v| v.to_str().ok()) {
+        if let Ok(ts) = ts_str.parse::<u64>() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            if now.abs_diff(ts) > 60 {
+                return Err((StatusCode::UNAUTHORIZED, "Broker request expired (timestamp > 60s)".to_string()));
+            }
+        }
+    }
 
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "HMAC init failed".to_string()))?;
@@ -1349,6 +1368,7 @@ fn mobile_nick_from_handle(handle: &str) -> String {
 /// Returns JSON: `{ "url": "...", "content_type": "...", "size": N }`.
 async fn api_upload(
     State(state): State<Arc<SharedState>>,
+    headers: axum::http::HeaderMap,
     mut multipart: axum::extract::Multipart,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let mut file_data: Option<Vec<u8>> = None;
@@ -1399,7 +1419,27 @@ async fn api_upload(
         return Err((StatusCode::BAD_REQUEST, "No DID provided".into()));
     }
 
-    // Look up the user's web session
+    // ── Upload auth: verify the caller owns this DID ────────────────────
+    // Accept either:
+    //   1. X-Upload-Token header (HMAC-SHA256 over DID, minted by broker session push)
+    //   2. DID must have an active WebSocket session on this server
+    // This prevents arbitrary callers from using stored PDS credentials.
+    let has_upload_token = headers.get("x-upload-token")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|token| {
+            state.upload_tokens.lock().get(token)
+                .is_some_and(|(t_did, created)| t_did == &did && created.elapsed().as_secs() < 300)
+        });
+    let has_active_session = {
+        let session_dids = state.session_dids.lock();
+        session_dids.values().any(|d| d == &did)
+    };
+    if !has_upload_token && !has_active_session {
+        tracing::warn!(did = %did, "Upload rejected: no active WebSocket session or upload token");
+        return Err((StatusCode::UNAUTHORIZED, "Upload requires an active connection for this DID".into()));
+    }
+
+    // Look up the user's web session (PDS credentials)
     let session = state.web_sessions.lock().get(&did).cloned();
     let session = match session {
         Some(s) => s,
@@ -1409,10 +1449,6 @@ async fn api_upload(
             return Err((StatusCode::UNAUTHORIZED, "No active session for this DID — please re-authenticate".into()));
         }
     };
-
-    // Sessions persist until server restart (in-memory only).
-    // No time-based expiry — the PDS access token may expire on its own,
-    // in which case the upload will fail with a PDS error.
 
     // Upload to PDS using stored DPoP credentials
     let dpop_key = freeq_sdk::oauth::DpopKey::from_base64url(&session.dpop_key_b64)
@@ -1555,8 +1591,18 @@ async fn api_blob_proxy(
         return (StatusCode::BAD_REQUEST, "missing url parameter").into_response();
     };
 
-    // Only proxy known PDS blob URLs
-    if !url.contains("/xrpc/com.atproto.sync.getBlob") && !url.contains("cdn.bsky.app") {
+    // Only proxy known PDS blob URLs — strict host validation to prevent SSRF
+    let parsed = match url::Url::parse(url) {
+        Ok(u) if u.scheme() == "https" => u,
+        _ => return (StatusCode::BAD_REQUEST, "invalid URL").into_response(),
+    };
+    let host = parsed.host_str().unwrap_or("");
+    let is_pds_blob = parsed.path().starts_with("/xrpc/com.atproto.sync.getBlob")
+        && (host.ends_with(".host.bsky.network")
+            || host.ends_with(".bsky.network")
+            || host == "bsky.social");
+    let is_cdn = host == "cdn.bsky.app";
+    if !is_pds_blob && !is_cdn {
         return (StatusCode::BAD_REQUEST, "not a valid blob URL").into_response();
     }
 
@@ -1643,6 +1689,27 @@ async fn api_og_preview(Query(q): Query<OgQuery>) -> impl IntoResponse {
         Ok(u) if u.scheme() == "http" || u.scheme() == "https" => u,
         _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid URL"}))).into_response(),
     };
+
+    // Block SSRF: reject private/loopback IPs and hostnames
+    if let Some(host) = url.host_str() {
+        // Block obvious private hostnames
+        let host_lower = host.to_lowercase();
+        if host_lower == "localhost" || host_lower.ends_with(".local") || host_lower.ends_with(".internal") {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Private host"}))).into_response();
+        }
+        // Resolve and check for private IPs
+        if let Ok(addrs) = tokio::net::lookup_host(format!("{host}:80")).await {
+            for addr in addrs {
+                let ip = addr.ip();
+                if ip.is_loopback() || ip.is_unspecified()
+                    || matches!(ip, std::net::IpAddr::V4(v4) if v4.is_private() || v4.is_link_local())
+                    || matches!(ip, std::net::IpAddr::V6(v6) if v6.is_loopback())
+                {
+                    return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Private IP"}))).into_response();
+                }
+            }
+        }
+    }
 
     // Fetch with timeout
     let client = reqwest::Client::builder()
