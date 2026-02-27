@@ -203,6 +203,21 @@ pub enum S2sMessage {
         origin: String,
     },
 
+    /// A ban was set or removed on a channel.
+    #[serde(rename = "ban")]
+    Ban {
+        #[serde(default)]
+        event_id: String,
+        channel: String,
+        /// The ban mask (nick!user@host or DID).
+        mask: String,
+        /// Who set/removed the ban.
+        set_by: String,
+        /// true = ban added, false = ban removed.
+        adding: bool,
+        origin: String,
+    },
+
     /// Policy sync — share a channel's policy document with peers.
     /// Sent when a policy is created/updated/cleared.
     #[serde(rename = "policy_sync")]
@@ -264,6 +279,9 @@ pub struct ChannelInfo {
     pub moderated: bool,
     #[serde(default)]
     pub key: Option<String>,
+    /// Active bans (mask strings).
+    #[serde(default)]
+    pub bans: Vec<String>,
 }
 
 /// Bounded set for event dedup. Uses two layers:

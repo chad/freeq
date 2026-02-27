@@ -771,6 +771,19 @@ pub(super) fn handle_mode(
                 let hostmask = conn.hostmask();
                 let mode_msg = format!(":{hostmask} MODE {channel} {sign}b {mask}\r\n");
                 broadcast_to_channel(state, channel, &mode_msg);
+
+                // S2S: propagate ban to peers
+                {
+                    let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
+                    s2s_broadcast(state, crate::s2s::S2sMessage::Ban {
+                        event_id: s2s_next_event_id(state),
+                        channel: channel.to_string(),
+                        mask: mask.to_string(),
+                        set_by: nick.to_string(),
+                        adding,
+                        origin,
+                    });
+                }
             }
             'i' => {
                 {

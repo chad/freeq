@@ -1168,6 +1168,7 @@ async fn process_s2s_message(
         S2sMessage::Mode { event_id, origin, .. } => (event_id.clone(), origin.clone()),
         S2sMessage::ChannelCreated { event_id, origin, .. } => (event_id.clone(), origin.clone()),
         S2sMessage::Kick { event_id, origin, .. } => (event_id.clone(), origin.clone()),
+        S2sMessage::Ban { event_id, origin, .. } => (event_id.clone(), origin.clone()),
         S2sMessage::PolicySync { event_id, origin, .. } => (event_id.clone(), origin.clone()),
         S2sMessage::CrdtSync { origin, .. } => (String::new(), origin.clone()),
         S2sMessage::PeerDisconnected { .. } => (String::new(), String::new()),
@@ -1582,6 +1583,7 @@ async fn process_s2s_message(
                         no_ext_msg: ch.no_ext_msg,
                         moderated: ch.moderated,
                         key: ch.key.clone(),
+                        bans: ch.bans.iter().map(|b| b.mask.clone()).collect(),
                     }
                 }).collect();
 
@@ -1731,6 +1733,20 @@ async fn process_s2s_message(
                         if info.moderated { ch.moderated = true; }
                         if info.key.is_some() && ch.key.is_none() {
                             ch.key = info.key.clone();
+                        }
+                    }
+
+                    // Merge bans from remote (additive — don't remove local bans)
+                    for mask in &info.bans {
+                        if !ch.bans.iter().any(|b| b.mask == *mask) {
+                            ch.bans.push(BanEntry {
+                                mask: mask.clone(),
+                                set_by: format!("s2s:{}", peer_id),
+                                set_at: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs(),
+                            });
                         }
                     }
 
@@ -1979,6 +1995,53 @@ async fn process_s2s_message(
                     deliver_to_channel(state, &channel_key, &kick_line);
                 }
             }
+        }
+
+        S2sMessage::Ban { channel, mask, set_by, adding, .. } => {
+            let channel_key = channel.to_lowercase();
+
+            // Authorization: verify set_by is an op
+            {
+                let channels = state.channels.lock();
+                if let Some(ch) = channels.get(&channel_key) {
+                    let is_authorized = ch.remote_member(&set_by)
+                        .is_some_and(|rm| rm.is_op || rm.did.as_ref().is_some_and(|d| {
+                            ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
+                        }));
+                    if !is_authorized {
+                        tracing::warn!(
+                            channel = %channel_key, set_by = %set_by,
+                            "S2S Ban rejected: setter is not an authorized op"
+                        );
+                        return;
+                    }
+                }
+            }
+
+            let mode_char = if adding { "+b" } else { "-b" };
+            let mode_line = format!(":{set_by}!remote@s2s MODE {channel} {mode_char} {mask}\r\n");
+
+            {
+                let mut channels = state.channels.lock();
+                if let Some(ch) = channels.get_mut(&channel_key) {
+                    if adding {
+                        if !ch.bans.iter().any(|b| b.mask == mask) {
+                            ch.bans.push(crate::server::BanEntry {
+                                mask: mask.clone(),
+                                set_by: set_by.clone(),
+                                set_at: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs(),
+                            });
+                        }
+                    } else {
+                        ch.bans.retain(|b| b.mask != mask);
+                    }
+                }
+            }
+
+            deliver_to_channel(state, &channel_key, &mode_line);
         }
 
         S2sMessage::NickChange { old, new, .. } => {
