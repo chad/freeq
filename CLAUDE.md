@@ -220,9 +220,9 @@ If something feels “too clever,” it’s probably wrong.
 - [x] **IRCv3: account-notify / extended-join** — ✅ DONE. DID broadcast on SASL success and extended JOIN.
 - [x] **IRCv3: CHATHISTORY** — ✅ DONE. On-demand history retrieval with batch support.
 - [x] **Connection limits** — ✅ DONE. 20 per-IP at TCP + WebSocket level.
-- [ ] **OPER command** — Server operator status for remote admin.
+- [x] **OPER command** — ✅ DONE. OPER <name> <password> + auto-OPER via --oper-dids. Server opers bypass channel op checks.
 - [ ] **TUI auto-reconnection** — Reconnect with backoff, rejoin channels.
-- [ ] **Normalize nick_to_session to lowercase keys** — Avoids O(n) linear scan on every case-insensitive nick lookup. Currently all nick lookups iterate the full map.
+- [x] **Normalize nick_to_session to lowercase keys** — ✅ DONE. NickMap wrapper with O(1) bidirectional lookups. All 39 call sites updated.
 
 ### P2.5 — Web App Prerequisites (see `docs/WEB-APP-PLAN.md`)
 
