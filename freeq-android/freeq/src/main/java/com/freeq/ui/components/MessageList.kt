@@ -259,12 +259,15 @@ private fun MessageBubble(
             ) {
                 // Header: nick + time
                 if (showHeader) {
+                    val memberPrefix = channelState.members
+                        .firstOrNull { it.nick.equals(msg.from, ignoreCase = true) }
+                        ?.prefix ?: ""
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = msg.from,
+                            text = memberPrefix + msg.from,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = Theme.nickColor(msg.from),
