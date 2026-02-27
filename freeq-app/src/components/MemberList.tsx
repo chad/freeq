@@ -125,7 +125,7 @@ function MemberItem({ member, onClick }: MemberItemProps) {
         </span>
 
         {member.did && (
-          <span className="text-accent text-xs" title="AT Protocol verified">✓</span>
+          <span className="text-accent text-xs" title={`Verified AT Protocol identity: ${member.did}`}>✓</span>
         )}
 
         {member.typing && (

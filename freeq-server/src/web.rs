@@ -538,14 +538,25 @@ async fn api_health(State(state): State<Arc<SharedState>>) -> Json<HealthRespons
 
 async fn api_channels(State(state): State<Arc<SharedState>>) -> Json<Vec<ChannelInfo>> {
     let channels = state.channels.lock();
-    let list: Vec<ChannelInfo> = channels
+    let mut list: Vec<ChannelInfo> = channels
         .iter()
+        .filter(|(name, ch)| {
+            // Hide internal test channels
+            if name.contains("_zqtest_") { return false; }
+            // Show channels with members, or with a topic, or well-known channels
+            let has_members = !ch.members.is_empty() || !ch.remote_members.is_empty();
+            let has_topic = ch.topic.is_some();
+            let well_known = name.starts_with("#freeq") || name.starts_with("#demo-");
+            has_members || has_topic || well_known
+        })
         .map(|(name, ch)| ChannelInfo {
             name: name.clone(),
-            members: ch.members.len(),
+            members: ch.members.len() + ch.remote_members.len(),
             topic: ch.topic.as_ref().map(|t| t.text.clone()),
         })
         .collect();
+    // Sort: most members first, then alphabetically
+    list.sort_by(|a, b| b.members.cmp(&a.members).then(a.name.cmp(&b.name)));
     Json(list)
 }
 

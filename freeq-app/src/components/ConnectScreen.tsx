@@ -4,6 +4,26 @@ import { useStore } from '../store';
 
 type LoginMode = 'at-proto' | 'guest';
 
+function friendlyError(error: string): string {
+  if (error.includes('SASL authentication failed'))
+    return 'Could not verify your identity. Make sure your handle is correct and try again.';
+  if (error.includes('Too many SASL failures'))
+    return 'Too many login attempts. Please wait a moment and try again.';
+  if (error.includes('unavailable'))
+    return 'The identity service is starting up. This usually takes a few seconds — please try again.';
+  if (error.includes('502') || error.includes('Bad Gateway'))
+    return 'The identity service is temporarily unavailable. Try again in a few seconds.';
+  if (error.includes('timeout') || error.includes('Timeout'))
+    return 'The connection timed out. Check your internet connection and try again.';
+  if (error.includes('Nick') && error.includes('registered'))
+    return 'That nickname is registered to another user. Sign in with AT Protocol to reclaim it, or choose a different nick.';
+  if (error.includes('OAuth'))
+    return 'The Bluesky authorization was cancelled or failed. Please try again.';
+  if (error.includes('WebSocket') || error.includes('websocket'))
+    return 'Could not connect to the server. Check your internet connection.';
+  return error;
+}
+
 // Module-level counter survives ConnectScreen remounts
 let brokerAutoAttempts = 0;
 
@@ -288,7 +308,14 @@ export function ConnectScreen() {
             <span className="text-accent">free</span><span className="text-fg">q</span>
           </h1>
           <p className="text-fg-dim text-sm">
-            {oauthPending ? 'Waiting for authorization...' : 'Connecting...'}
+            {oauthPending
+              ? 'Waiting for Bluesky authorization...'
+              : 'Connecting to identity provider...'}
+          </p>
+          <p className="text-fg-dim/50 text-[10px] mt-2">
+            {oauthPending
+              ? 'Complete the login in the popup window'
+              : 'This may take a few seconds on first connect'}
           </p>
           {authError && (
             <p className="text-danger text-xs mt-3">{authError}</p>
@@ -480,8 +507,17 @@ export function ConnectScreen() {
         </div>
 
         {displayError && (
-          <div className="mt-3 bg-danger/10 border border-danger/20 rounded-lg px-3 py-2 text-danger text-xs animate-fadeIn">
-            {displayError}
+          <div className="mt-3 bg-danger/10 border border-danger/20 rounded-lg px-3 py-2.5 text-xs animate-fadeIn">
+            <div className="font-semibold text-danger mb-0.5">
+              {displayError.includes('SASL') || displayError.includes('auth') || displayError.includes('Auth')
+                ? '🔑 Authentication Error'
+                : displayError.includes('unavailable') || displayError.includes('timeout') || displayError.includes('502')
+                  ? '🌐 Connection Error'
+                  : '⚠️ Error'}
+            </div>
+            <div className="text-danger/80">
+              {friendlyError(displayError)}
+            </div>
           </div>
         )}
 

@@ -568,7 +568,7 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
           )}
           <span className="text-xs text-fg-dim whitespace-nowrap cursor-default" title={msg.timestamp.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}>{formatTime(msg.timestamp)}</span>
           {msg.editOf && <span className="text-xs text-fg-dim">(edited)</span>}
-          {msg.encrypted && <span className="text-[10px] text-success" title="End-to-end encrypted">🔒</span>}
+          {msg.encrypted && <EncryptedBadge />}
         </div>
         <MessageContent msg={msg} />
         <Reactions msg={msg} channel={channel} />
@@ -698,11 +698,71 @@ function VerifiedBadge() {
 
 /** Signed message badge — message has a server-attested cryptographic signature */
 function SignedBadge() {
+  const [showInfo, setShowInfo] = useState(false);
   return (
-    <span className="text-success text-xs opacity-60" title="Cryptographically signed message">
-      <svg className="w-3 h-3 inline -mt-0.5" viewBox="0 0 16 16" fill="currentColor">
-        <path d="M8 1a2 2 0 00-2 2v3H5a2 2 0 00-2 2v5a2 2 0 002 2h6a2 2 0 002-2V8a2 2 0 00-2-2H10V3a2 2 0 00-2-2zm0 1.5a.5.5 0 01.5.5v3h-1V3a.5.5 0 01.5-.5z"/>
-      </svg>
+    <span className="relative inline-block">
+      <button
+        className="text-success text-xs opacity-60 hover:opacity-100 transition-opacity"
+        onClick={(e) => { e.stopPropagation(); setShowInfo(!showInfo); }}
+        title="Cryptographically signed message"
+      >
+        <svg className="w-3 h-3 inline -mt-0.5" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 1a2 2 0 00-2 2v3H5a2 2 0 00-2 2v5a2 2 0 002 2h6a2 2 0 002-2V8a2 2 0 00-2-2H10V3a2 2 0 00-2-2zm0 1.5a.5.5 0 01.5.5v3h-1V3a.5.5 0 01.5-.5z"/>
+        </svg>
+      </button>
+      {showInfo && (
+        <div className="absolute bottom-full left-0 mb-1 w-64 bg-bg-secondary border border-border rounded-lg shadow-xl p-3 z-50 animate-fadeIn"
+             onClick={(e) => e.stopPropagation()}>
+          <div className="text-xs font-semibold text-success mb-1 flex items-center gap-1">
+            <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 1a2 2 0 00-2 2v3H5a2 2 0 00-2 2v5a2 2 0 002 2h6a2 2 0 002-2V8a2 2 0 00-2-2H10V3a2 2 0 00-2-2zm0 1.5a.5.5 0 01.5.5v3h-1V3a.5.5 0 01.5-.5z"/>
+            </svg>
+            Signed Message
+          </div>
+          <p className="text-[11px] text-fg-muted leading-relaxed">
+            This message is cryptographically signed by the sender&apos;s verified identity.
+            It cannot be forged or tampered with — the signature is tied to their AT Protocol DID.
+          </p>
+          <button
+            className="text-[10px] text-fg-dim hover:text-fg-muted mt-1.5"
+            onClick={() => setShowInfo(false)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+    </span>
+  );
+}
+
+function EncryptedBadge() {
+  const [showInfo, setShowInfo] = useState(false);
+  return (
+    <span className="relative inline-block">
+      <button
+        className="text-[10px] text-success hover:opacity-80 transition-opacity"
+        onClick={(e) => { e.stopPropagation(); setShowInfo(!showInfo); }}
+        title="End-to-end encrypted"
+      >
+        🔒
+      </button>
+      {showInfo && (
+        <div className="absolute bottom-full left-0 mb-1 w-64 bg-bg-secondary border border-border rounded-lg shadow-xl p-3 z-50 animate-fadeIn"
+             onClick={(e) => e.stopPropagation()}>
+          <div className="text-xs font-semibold text-success mb-1">🔒 End-to-End Encrypted</div>
+          <p className="text-[11px] text-fg-muted leading-relaxed">
+            This message is end-to-end encrypted. Only you and the recipient can read it —
+            the server only sees ciphertext. Uses the Double Ratchet protocol (like Signal)
+            with forward secrecy.
+          </p>
+          <button
+            className="text-[10px] text-fg-dim hover:text-fg-muted mt-1.5"
+            onClick={() => setShowInfo(false)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
     </span>
   );
 }
@@ -777,6 +837,74 @@ function TypingIndicatorBar({ channel }: { channel: string }) {
 // ── Main export ──
 
 /** Pinned messages bar — shows at the top of the channel message area. */
+function ChannelEmptyState({ channel }: { channel: string }) {
+  const ch = useStore((s) => s.channels.get(channel.toLowerCase()));
+  const topic = ch?.topic;
+  const memberCount = ch?.members.size ?? 0;
+  const isEncrypted = ch?.isEncrypted;
+
+  return (
+    <>
+      <div className="text-3xl mb-2">👋</div>
+      <div className="text-xl text-fg font-bold">Welcome to {channel}</div>
+
+      {topic && (
+        <div className="text-sm mt-2 text-center max-w-md leading-relaxed text-fg-muted">
+          {topic}
+        </div>
+      )}
+
+      {!topic && (
+        <div className="text-sm mt-2 text-center max-w-xs leading-relaxed text-fg-dim">
+          This is the beginning of <span className="text-accent font-medium">{channel}</span>.
+        </div>
+      )}
+
+      {/* Channel features */}
+      <div className="flex flex-wrap justify-center gap-2 mt-4 text-[11px]">
+        {memberCount > 0 && (
+          <span className="bg-bg-tertiary border border-border rounded-full px-2.5 py-1 text-fg-dim">
+            👥 {memberCount} {memberCount === 1 ? 'member' : 'members'}
+          </span>
+        )}
+        {isEncrypted && (
+          <span className="bg-success/5 border border-success/20 rounded-full px-2.5 py-1 text-success">
+            🔒 Encrypted
+          </span>
+        )}
+        <span className="bg-bg-tertiary border border-border rounded-full px-2.5 py-1 text-fg-dim">
+          ✍️ Messages are signed
+        </span>
+      </div>
+
+      {/* Info cards */}
+      <div className="grid gap-2 mt-5 max-w-sm w-full">
+        <div className="bg-bg-tertiary/50 border border-border rounded-lg p-3 text-left">
+          <div className="text-[11px] font-semibold text-fg-muted mb-0.5">🔐 Verified Identity</div>
+          <div className="text-[11px] text-fg-dim leading-relaxed">
+            Users with a <span className="text-accent">✓</span> next to their name are signed in with their AT Protocol (Bluesky) identity. Their messages are cryptographically signed and can&apos;t be forged.
+          </div>
+        </div>
+        <div className="bg-bg-tertiary/50 border border-border rounded-lg p-3 text-left">
+          <div className="text-[11px] font-semibold text-fg-muted mb-0.5">💬 Getting started</div>
+          <div className="text-[11px] text-fg-dim leading-relaxed">
+            Type a message below to start chatting. Use <kbd className="px-1 py-0.5 bg-bg border border-border rounded text-[10px] font-mono">/help</kbd> for commands, or right-click messages for actions.
+          </div>
+        </div>
+      </div>
+
+      <div className="flex gap-2 mt-4">
+        <button onClick={() => {
+          navigator.clipboard.writeText(`https://irc.freeq.at/join/${encodeURIComponent(channel)}`);
+          import('./Toast').then(m => m.showToast('Invite link copied', 'success', 2000));
+        }} className="text-xs bg-bg-tertiary border border-border rounded-lg px-3 py-1.5 text-fg-dim hover:text-fg hover:border-accent transition-colors">
+          🔗 Copy invite link
+        </button>
+      </div>
+    </>
+  );
+}
+
 const EMPTY_PINS: PinnedMessage[] = [];
 
 function PinnedBar({ pins, messages }: { pins: PinnedMessage[]; messages: Message[] }) {
@@ -979,32 +1107,7 @@ export function MessageList() {
               </div>
             </>
           ) : activeChannel.startsWith('#') ? (
-            <>
-              <div className="text-3xl mb-2">👋</div>
-              <div className="text-xl text-fg font-bold">Welcome to {activeChannel}</div>
-              {(() => {
-                const ch = useStore.getState().channels.get(activeChannel.toLowerCase());
-                const topic = ch?.topic;
-                return topic ? (
-                  <div className="text-sm mt-2 text-center max-w-md leading-relaxed text-fg-muted">
-                    {topic}
-                  </div>
-                ) : (
-                  <div className="text-sm mt-2 text-center max-w-xs leading-relaxed">
-                    This is the very beginning of <span className="text-accent font-medium">{activeChannel}</span>.
-                    Start a conversation!
-                  </div>
-                );
-              })()}
-              <div className="flex gap-2 mt-4">
-                <button onClick={() => {
-                  navigator.clipboard.writeText(`https://irc.freeq.at/join/${encodeURIComponent(activeChannel)}`);
-                  import('./Toast').then(m => m.showToast('Invite link copied', 'success', 2000));
-                }} className="text-xs bg-bg-tertiary border border-border rounded-lg px-3 py-1.5 text-fg-dim hover:text-fg hover:border-accent">
-                  🔗 Copy invite link
-                </button>
-              </div>
-            </>
+            <ChannelEmptyState channel={activeChannel} />
           ) : (
             <>
               <div className="text-3xl mb-2">💬</div>
