@@ -26,8 +26,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.freeq.model.AppState
+import com.freeq.model.AvatarCache
 import com.freeq.model.ChannelState
 import com.freeq.model.ChatMessage
+import com.freeq.model.MemberInfo
 import com.freeq.ui.theme.FreeqColors
 import com.freeq.ui.theme.Theme
 import java.text.SimpleDateFormat
@@ -268,6 +270,14 @@ private fun MessageBubble(
                             color = Theme.nickColor(msg.from),
                             modifier = Modifier.clickable { onNickClick?.invoke(msg.from) }
                         )
+                        if (AvatarCache.avatarUrl(msg.from) != null) {
+                            Icon(
+                                Icons.Default.CheckCircle,
+                                contentDescription = "Verified",
+                                tint = FreeqColors.accent,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
                         Text(
                             text = formatTime(msg.timestamp),
                             fontSize = 11.sp,
