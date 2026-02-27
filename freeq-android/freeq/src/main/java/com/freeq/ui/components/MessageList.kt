@@ -3,7 +3,9 @@ package com.freeq.ui.components
 import android.view.ContextThemeWrapper
 import androidx.compose.foundation.background
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -174,6 +176,7 @@ fun MessageList(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
     msg: ChatMessage,
@@ -266,7 +269,15 @@ private fun MessageBubble(
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .clickable { showMenu = true }
+                    .combinedClickable(
+                        onClick = { showMenu = true },
+                        onDoubleClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            appState.activeChannel.value?.let { target ->
+                                appState.sendReaction(target, msg.id, "\u2764\uFE0F")
+                            }
+                        }
+                    )
             ) {
                 // Header: nick + time
                 if (showHeader) {
