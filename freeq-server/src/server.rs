@@ -292,6 +292,8 @@ pub struct SharedState {
     pub cap_account_notify: Mutex<HashSet<String>>,
     pub cap_extended_join: Mutex<HashSet<String>>,
     pub cap_away_notify: Mutex<HashSet<String>>,
+    /// Sessions that have OPER (server operator) status.
+    pub server_opers: Mutex<HashSet<String>>,
     /// Pending OAuth sessions: state → OAuthPending.
     pub oauth_pending: Mutex<HashMap<String, OAuthPending>>,
     /// Completed OAuth sessions: state → OAuthResult.
@@ -633,6 +635,7 @@ impl Server {
             cap_account_notify: Mutex::new(HashSet::new()),
             cap_extended_join: Mutex::new(HashSet::new()),
             cap_away_notify: Mutex::new(HashSet::new()),
+            server_opers: Mutex::new(HashSet::new()),
             oauth_pending: Mutex::new(HashMap::new()),
             oauth_complete: Mutex::new(HashMap::new()),
             web_auth_tokens: Mutex::new(HashMap::new()),

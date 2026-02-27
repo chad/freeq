@@ -76,6 +76,8 @@ pub struct Connection {
     /// Client understands E2EE messages (won't get synthetic notices instead).
     #[allow(dead_code)]
     pub(crate) cap_e2ee: bool,
+    /// Server operator (OPER) status.
+    pub(crate) is_oper: bool,
 
     // SASL state
     pub(crate) sasl_in_progress: bool,
@@ -104,6 +106,7 @@ impl Connection {
             cap_extended_join: false,
             cap_away_notify: false,
             cap_e2ee: false,
+            is_oper: false,
             sasl_in_progress: false,
             sasl_failures: 0,
         }
@@ -832,6 +835,36 @@ where
                 if !conn.registered { continue; }
                 handle_policy(&conn, &msg, &state, &server_name, &session_id, &send);
             }
+            "OPER" => {
+                if !conn.registered { continue; }
+                let nick = conn.nick_or_star().to_string();
+                if msg.params.len() < 2 {
+                    let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
+                        vec![&nick, "OPER", "Not enough parameters"]);
+                    send(&state, &session_id, format!("{reply}\r\n"));
+                    continue;
+                }
+                let _name = &msg.params[0]; // oper name (unused — we just check password)
+                let password = &msg.params[1];
+                let granted = if let Some(ref oper_pw) = state.config.oper_password {
+                    password == oper_pw
+                } else {
+                    false
+                };
+                if granted {
+                    conn.is_oper = true;
+                    state.server_opers.lock().insert(session_id.clone());
+                    let reply = Message::from_server(&server_name, "381",
+                        vec![&nick, "You are now an IRC operator"]);
+                    send(&state, &session_id, format!("{reply}\r\n"));
+                    tracing::info!(nick = %nick, session = %session_id, "OPER granted");
+                } else {
+                    let reply = Message::from_server(&server_name, "464",
+                        vec![&nick, "Password incorrect"]);
+                    send(&state, &session_id, format!("{reply}\r\n"));
+                    tracing::warn!(nick = %nick, session = %session_id, "OPER failed: bad password");
+                }
+            }
             "QUIT" => {
                 break;
             }
@@ -924,6 +957,7 @@ where
     state.cap_account_notify.lock().remove(&session_id);
     state.cap_extended_join.lock().remove(&session_id);
     state.cap_away_notify.lock().remove(&session_id);
+    state.server_opers.lock().remove(&session_id);
     {
         let mut channels = state.channels.lock();
         for ch in channels.values_mut() {

@@ -533,7 +533,9 @@ pub(super) fn handle_mode(
         .map(|ch| (ch.ops.contains(session_id), ch.halfops.contains(session_id)))
         .unwrap_or((false, false));
 
-    if !is_op && !is_halfop {
+    // Server operators (OPER) can always change modes
+    let is_server_oper = state.server_opers.lock().contains(session_id);
+    if !is_op && !is_halfop && !is_server_oper {
         let reply = Message::from_server(
             server_name,
             irc::ERR_CHANOPRIVSNEEDED,
@@ -544,7 +546,7 @@ pub(super) fn handle_mode(
     }
 
     // Halfops can only set +v/-v — not +o, +h, +m, +t, +i, +k, +n
-    if is_halfop && !is_op {
+    if is_halfop && !is_op && !is_server_oper {
         let has_restricted = mode_str.chars().any(|c| matches!(c, 'o' | 'h' | 'm' | 't' | 'i' | 'k' | 'n' | 'E'));
         if has_restricted {
             let reply = Message::from_server(
@@ -957,7 +959,8 @@ pub(super) fn handle_kick(
         return;
     }
 
-    if !is_op && !is_halfop {
+    let is_server_oper = state.server_opers.lock().contains(session_id);
+    if !is_op && !is_halfop && !is_server_oper {
         let reply = Message::from_server(
             server_name,
             irc::ERR_CHANOPRIVSNEEDED,
@@ -968,7 +971,7 @@ pub(super) fn handle_kick(
     }
 
     // Halfops cannot kick ops or other halfops
-    if is_halfop && !is_op {
+    if is_halfop && !is_op && !is_server_oper {
         let target_is_protected = state.channels.lock()
             .get(channel)
             .map(|ch| {
@@ -1088,7 +1091,8 @@ pub(super) fn handle_invite(
     }
 
     // If channel is +i, only ops can invite
-    if is_invite_only && !is_op {
+    let is_server_oper = state.server_opers.lock().contains(session_id);
+    if is_invite_only && !is_op && !is_server_oper {
         let reply = Message::from_server(
             server_name,
             irc::ERR_CHANOPRIVSNEEDED,
@@ -1199,7 +1203,8 @@ pub(super) fn handle_topic(
                     (ch.ops.contains(session_id), ch.topic_locked)
                 }).unwrap_or((false, false))
             };
-            if is_locked && !is_op {
+            let is_server_oper = state.server_opers.lock().contains(session_id);
+            if is_locked && !is_op && !is_server_oper {
                 let reply = Message::from_server(
                     server_name,
                     irc::ERR_CHANOPRIVSNEEDED,

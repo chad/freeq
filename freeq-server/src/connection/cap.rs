@@ -246,13 +246,26 @@ pub(super) async fn handle_authenticate(
                                 });
                             }
 
-                            let nick = conn.nick_or_star();
+                            let nick = conn.nick_or_star().to_string();
+
+                            // Auto-OPER for configured DIDs (before using nick ref)
+                            if state.config.oper_dids.iter().any(|d| d == &did) {
+                                conn.is_oper = true;
+                                state.server_opers.lock().insert(session_id.to_string());
+                                let oper_notice = Message::from_server(
+                                    server_name, "MODE",
+                                    vec![&nick, "+o"],
+                                );
+                                send(state, session_id, format!("{oper_notice}\r\n"));
+                                tracing::info!(%did, nick = %nick, "Auto-OPER granted via oper_dids config");
+                            }
+
                             let hostmask = conn.hostmask();
                             let logged_in = Message::from_server(
                                 server_name,
                                 irc::RPL_LOGGEDIN,
                                 vec![
-                                    nick,
+                                    &nick,
                                     &hostmask,
                                     &did,
                                     &format!("You are now logged in as {did}"),
@@ -263,13 +276,13 @@ pub(super) async fn handle_authenticate(
                             let success = Message::from_server(
                                 server_name,
                                 irc::RPL_SASLSUCCESS,
-                                vec![nick, "SASL authentication successful"],
+                                vec![&nick, "SASL authentication successful"],
                             );
                             send(state, session_id, format!("{success}\r\n"));
                             tracing::info!(%session_id, %did, nick = %nick, "SASL authentication successful");
 
                             // Broadcast account-notify to shared channels
-                            broadcast_account_notify(state, session_id, nick, &did);
+                            broadcast_account_notify(state, session_id, &nick, &did);
                         }
                         Err(reason) => {
                             tracing::warn!(%session_id, "SASL auth failed: {reason}");

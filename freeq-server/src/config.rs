@@ -114,6 +114,17 @@ pub struct ServerConfig {
     #[arg(long, env = "BROKER_SHARED_SECRET")]
     pub broker_shared_secret: Option<String>,
 
+    /// Server operator password. If set, the OPER command is enabled.
+    /// OPER grants global operator privileges (can kick/ban in any channel, etc.)
+    /// Can also be set via OPER_PASSWORD environment variable.
+    #[arg(long, env = "OPER_PASSWORD")]
+    pub oper_password: Option<String>,
+
+    /// DIDs that are automatically granted server operator status on connect.
+    /// Comma-separated list.
+    #[arg(long, value_delimiter = ',', env = "OPER_DIDS")]
+    pub oper_dids: Vec<String>,
+
 }
 
 impl Default for ServerConfig {
@@ -142,6 +153,8 @@ impl Default for ServerConfig {
             github_client_id: None,
             github_client_secret: None,
             broker_shared_secret: None,
+            oper_password: None,
+            oper_dids: vec![],
         }
     }
 }
