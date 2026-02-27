@@ -23,9 +23,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -143,6 +148,57 @@ internal fun replaceEmojiShortcodes(text: String): String {
     }
 }
 
+private val BOLD_PATTERN = Regex("""\*\*(.+?)\*\*""")
+private val CODE_PATTERN = Regex("""`([^`]+)`""")
+
+private data class StyledSpan(val start: Int, val end: Int, val style: SpanStyle, val displayText: String)
+
+private fun formatMarkdown(text: String, codeBg: Color): AnnotatedString {
+    val spans = mutableListOf<StyledSpan>()
+
+    BOLD_PATTERN.findAll(text).forEach { match ->
+        spans.add(StyledSpan(
+            start = match.range.first,
+            end = match.range.last + 1,
+            style = SpanStyle(fontWeight = FontWeight.Bold),
+            displayText = match.groupValues[1]
+        ))
+    }
+
+    CODE_PATTERN.findAll(text).forEach { match ->
+        // Skip if overlapping with a bold span
+        val range = match.range
+        if (spans.none { it.start < range.last + 1 && range.first < it.end }) {
+            spans.add(StyledSpan(
+                start = range.first,
+                end = range.last + 1,
+                style = SpanStyle(fontFamily = FontFamily.Monospace, background = codeBg),
+                displayText = match.groupValues[1]
+            ))
+        }
+    }
+
+    if (spans.isEmpty()) return AnnotatedString(text)
+
+    spans.sortBy { it.start }
+
+    return buildAnnotatedString {
+        var cursor = 0
+        for (span in spans) {
+            if (span.start > cursor) {
+                append(text.substring(cursor, span.start))
+            }
+            withStyle(span.style) {
+                append(span.displayText)
+            }
+            cursor = span.end
+        }
+        if (cursor < text.length) {
+            append(text.substring(cursor))
+        }
+    }
+}
+
 @Composable
 fun MessageContent(
     text: String,
@@ -167,6 +223,7 @@ fun MessageContent(
 
     // Text portion
     val showText = if (embedUrl != null) remainingText else displayText
+    val codeBg = MaterialTheme.colorScheme.surfaceVariant
     if (showText.isNotEmpty()) {
         SelectionContainer {
             if (isAction) {
@@ -177,8 +234,9 @@ fun MessageContent(
                     color = MaterialTheme.colorScheme.onBackground
                 )
             } else {
+                val styled = formatMarkdown(showText, codeBg)
                 Text(
-                    text = showText,
+                    text = styled,
                     fontSize = 15.sp,
                     color = MaterialTheme.colorScheme.onBackground
                 )
