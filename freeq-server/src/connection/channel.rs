@@ -43,6 +43,10 @@ pub(super) fn handle_join(
     if !is_new_channel {
         let channels = state.channels.lock();
         if let Some(ch) = channels.get(channel) {
+            // Already in channel — silently ignore (prevents double-join on reconnect)
+            if ch.members.contains(session_id) {
+                return;
+            }
             // Check channel key (+k)
             if let Some(ref key) = ch.key
                 && supplied_key != Some(key.as_str()) {

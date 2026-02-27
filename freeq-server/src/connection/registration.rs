@@ -298,13 +298,25 @@ pub(super) fn try_complete_registration(
         send(state, session_id, format!("{no_motd}\r\n"));
     }
 
-    // Auto-rejoin channels for DID-authenticated users
+    // Auto-rejoin channels for DID-authenticated users.
+    // Skip channels already joined via attach_same_did (multi-device).
     if let Some(ref did) = conn.authenticated_did {
         let did = did.clone();
         if let Some(channels) = state.with_db(|db| db.get_user_channels(&did)) {
-            if !channels.is_empty() {
-                tracing::info!(%session_id, %did, count = channels.len(), "Auto-rejoining saved channels");
-                for channel in channels {
+            // Filter out channels this session is already in (from multi-device attach)
+            let already_in: std::collections::HashSet<String> = {
+                let chs = state.channels.lock();
+                chs.iter()
+                    .filter(|(_, ch)| ch.members.contains(session_id))
+                    .map(|(name, _)| name.to_lowercase())
+                    .collect()
+            };
+            let to_join: Vec<String> = channels.into_iter()
+                .filter(|ch| !already_in.contains(&ch.to_lowercase()))
+                .collect();
+            if !to_join.is_empty() {
+                tracing::info!(%session_id, %did, count = to_join.len(), "Auto-rejoining saved channels");
+                for channel in to_join {
                     super::channel::handle_join(
                         conn, &channel, None, state, server_name, session_id, send,
                     );
