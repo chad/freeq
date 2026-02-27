@@ -168,6 +168,12 @@ impl Db {
                 bundle_json TEXT NOT NULL,
                 updated_at  INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS user_channels (
+                did     TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                PRIMARY KEY (did, channel)
+            );
             ",
         )?;
 
@@ -625,6 +631,33 @@ impl Db {
             let bundle = serde_json::from_str(&json_str).unwrap_or(serde_json::Value::Null);
             Ok((did, bundle))
         })?;
+        rows.collect()
+    }
+
+    // ── User channel persistence (auto-rejoin) ────────────────────────
+
+    /// Record that a DID-authenticated user has joined a channel.
+    pub fn add_user_channel(&self, did: &str, channel: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO user_channels (did, channel) VALUES (?1, ?2)",
+            params![did, channel],
+        )?;
+        Ok(())
+    }
+
+    /// Record that a DID-authenticated user has left a channel.
+    pub fn remove_user_channel(&self, did: &str, channel: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "DELETE FROM user_channels WHERE did = ?1 AND channel = ?2",
+            params![did, channel],
+        )?;
+        Ok(())
+    }
+
+    /// Get all channels a DID-authenticated user was last in.
+    pub fn get_user_channels(&self, did: &str) -> SqlResult<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT channel FROM user_channels WHERE did = ?1")?;
+        let rows = stmt.query_map(params![did], |row| row.get(0))?;
         rows.collect()
     }
 

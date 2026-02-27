@@ -297,5 +297,20 @@ pub(super) fn try_complete_registration(
         );
         send(state, session_id, format!("{no_motd}\r\n"));
     }
+
+    // Auto-rejoin channels for DID-authenticated users
+    if let Some(ref did) = conn.authenticated_did {
+        let did = did.clone();
+        if let Some(channels) = state.with_db(|db| db.get_user_channels(&did)) {
+            if !channels.is_empty() {
+                tracing::info!(%session_id, %did, count = channels.len(), "Auto-rejoining saved channels");
+                for channel in channels {
+                    super::channel::handle_join(
+                        conn, &channel, None, state, server_name, session_id, send,
+                    );
+                }
+            }
+        }
+    }
 }
 

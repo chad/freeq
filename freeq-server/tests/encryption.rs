@@ -887,6 +887,74 @@ mod channel_encryption {
 // 9. DID-based Group Encryption (ENC2)
 // ═══════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════
+// 10. User Channel Persistence (auto-rejoin)
+// ═══════════════════════════════════════════════════════════════════
+
+mod user_channels {
+    use freeq_server::db::Db;
+
+    #[test]
+    fn add_and_get_channels() {
+        let db = Db::open_memory().unwrap();
+        db.add_user_channel("did:plc:alice", "#general").unwrap();
+        db.add_user_channel("did:plc:alice", "#random").unwrap();
+
+        let channels = db.get_user_channels("did:plc:alice").unwrap();
+        assert_eq!(channels.len(), 2);
+        assert!(channels.contains(&"#general".to_string()));
+        assert!(channels.contains(&"#random".to_string()));
+    }
+
+    #[test]
+    fn remove_channel() {
+        let db = Db::open_memory().unwrap();
+        db.add_user_channel("did:plc:alice", "#general").unwrap();
+        db.add_user_channel("did:plc:alice", "#random").unwrap();
+        db.remove_user_channel("did:plc:alice", "#general").unwrap();
+
+        let channels = db.get_user_channels("did:plc:alice").unwrap();
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0], "#random");
+    }
+
+    #[test]
+    fn empty_for_unknown_did() {
+        let db = Db::open_memory().unwrap();
+        let channels = db.get_user_channels("did:plc:nobody").unwrap();
+        assert!(channels.is_empty());
+    }
+
+    #[test]
+    fn duplicate_add_ignored() {
+        let db = Db::open_memory().unwrap();
+        db.add_user_channel("did:plc:alice", "#general").unwrap();
+        db.add_user_channel("did:plc:alice", "#general").unwrap();
+
+        let channels = db.get_user_channels("did:plc:alice").unwrap();
+        assert_eq!(channels.len(), 1);
+    }
+
+    #[test]
+    fn per_user_isolation() {
+        let db = Db::open_memory().unwrap();
+        db.add_user_channel("did:plc:alice", "#alice-only").unwrap();
+        db.add_user_channel("did:plc:bob", "#bob-only").unwrap();
+
+        let alice = db.get_user_channels("did:plc:alice").unwrap();
+        let bob = db.get_user_channels("did:plc:bob").unwrap();
+        assert_eq!(alice, vec!["#alice-only"]);
+        assert_eq!(bob, vec!["#bob-only"]);
+    }
+
+    #[test]
+    fn remove_nonexistent_is_noop() {
+        let db = Db::open_memory().unwrap();
+        // Should not error
+        db.remove_user_channel("did:plc:alice", "#nonexistent").unwrap();
+    }
+}
+
 mod group_encryption {
     use freeq_sdk::e2ee_did::GroupKey;
 

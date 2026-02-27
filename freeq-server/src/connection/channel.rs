@@ -326,6 +326,13 @@ pub(super) fn handle_join(
         }
     }
 
+    // Persist channel membership for auto-rejoin
+    if let Some(did) = did {
+        let did_owned = did.to_string();
+        let channel_owned = channel.to_string();
+        state.with_db(|db| db.add_user_channel(&did_owned, &channel_owned));
+    }
+
     // Send topic if set (332 + 333)
     {
         let channels = state.channels.lock();
@@ -1337,6 +1344,13 @@ pub(super) fn handle_part(
         });
 
     // NOTE: Presence is NOT in CRDT (avoids ghost users on crash)
+
+    // Remove from auto-rejoin list
+    if let Some(ref did) = conn.authenticated_did {
+        let did_owned = did.clone();
+        let channel_owned = channel.to_string();
+        state.with_db(|db| db.remove_user_channel(&did_owned, &channel_owned));
+    }
 
     // Broadcast PART to S2S peers
     let event_id = s2s_next_event_id(state);

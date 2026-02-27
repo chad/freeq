@@ -34,6 +34,22 @@ let autoJoinChannels: string[] = [];
 // Channels we're currently in (for rejoin on reconnect)
 let joinedChannels = new Set<string>();
 
+const SAVED_CHANNELS_KEY = 'freeq-joined-channels';
+
+function saveJoinedChannels() {
+  try {
+    localStorage.setItem(SAVED_CHANNELS_KEY, JSON.stringify([...joinedChannels]));
+  } catch { /* quota exceeded, etc */ }
+}
+
+function loadSavedChannels(): string[] {
+  try {
+    const stored = localStorage.getItem(SAVED_CHANNELS_KEY);
+    if (stored) return JSON.parse(stored);
+  } catch { /* corrupted */ }
+  return [];
+}
+
 // Background WHOIS lookups (suppress output for these)
 const backgroundWhois = new Set<string>();
 
@@ -460,10 +476,17 @@ async function handleLine(rawLine: string) {
       nick = serverNick;
       store.setNick(nick);
       store.setRegistered(true);
-      // Auto-join channels (first connect uses autoJoinChannels, reconnects use joinedChannels)
+      // Auto-join channels:
+      // 1. Explicit channels from connect() call (e.g. invite link)
+      // 2. Channels from current session (reconnect)
+      // 3. Saved channels from localStorage (fresh page load)
+      // For DID-authenticated users, the server also auto-joins saved channels,
+      // but sending JOIN for already-joined channels is harmless (server ignores).
       const toJoin = autoJoinChannels.length > 0
         ? autoJoinChannels
-        : [...joinedChannels];
+        : joinedChannels.size > 0
+          ? [...joinedChannels]
+          : loadSavedChannels();
       for (const ch of toJoin) {
         if (ch.trim()) raw(`JOIN ${ch.trim()}`);
       }
@@ -493,6 +516,7 @@ async function handleLine(rawLine: string) {
         store.clearMembers(channel); // Clear stale members before NAMES reply arrives
         store.setActiveChannel(channel);
         joinedChannels.add(channel.toLowerCase());
+        saveJoinedChannels();
         // Fetch pinned messages
         fetchPins(channel);
       }
@@ -514,6 +538,7 @@ async function handleLine(rawLine: string) {
       if (from === nick) {
         store.removeChannel(channel);
         joinedChannels.delete(channel.toLowerCase());
+        saveJoinedChannels();
       } else {
         store.removeMember(channel, from);
         store.addSystemMessage(channel, `${from} left`);
@@ -534,6 +559,7 @@ async function handleLine(rawLine: string) {
       if (kicked.toLowerCase() === nick.toLowerCase()) {
         store.removeChannel(channel);
         joinedChannels.delete(channel.toLowerCase());
+        saveJoinedChannels();
         store.addSystemMessage('server', `Kicked from ${channel} by ${from}: ${reason}`);
       } else {
         store.removeMember(channel, kicked);
