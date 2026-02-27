@@ -775,6 +775,8 @@ function TypingIndicatorBar({ channel }: { channel: string }) {
 // ── Main export ──
 
 /** Pinned messages bar — shows at the top of the channel message area. */
+const EMPTY_PINS: PinnedMessage[] = [];
+
 function PinnedBar({ pins, messages }: { pins: PinnedMessage[]; messages: Message[] }) {
   const [expanded, setExpanded] = useState(false);
   if (pins.length === 0) return null;
@@ -838,7 +840,7 @@ export function MessageList() {
     return s.channels.get(s.activeChannel.toLowerCase())?.messages || [];
   });
   const lastReadMsgId = useStore((s) => s.channels.get(s.activeChannel.toLowerCase())?.lastReadMsgId);
-  const pins = useStore((s) => s.channels.get(s.activeChannel.toLowerCase())?.pins || []);
+  const pins = useStore((s) => s.channels.get(s.activeChannel.toLowerCase())?.pins ?? EMPTY_PINS);
   const density = useStore((s) => s.messageDensity);
   const ref = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
