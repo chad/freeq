@@ -88,6 +88,125 @@ export function ChannelSettingsPanel() {
   );
 }
 
+const POLICY_EXAMPLES = [
+  {
+    label: 'Code of Conduct',
+    icon: '📜',
+    description: 'Require users to accept community guidelines before joining',
+    rulesText: 'Be respectful. No harassment, spam, or hate speech. Violations result in removal.',
+  },
+  {
+    label: 'GitHub Contributors',
+    icon: '🐙',
+    description: 'Only repo collaborators can join — great for project channels',
+    rulesText: 'This channel is for project contributors. Verify your GitHub access to join.',
+  },
+  {
+    label: 'Bluesky Community',
+    icon: '🦋',
+    description: 'Require following a Bluesky account to join',
+    rulesText: 'Follow our community account on Bluesky to access this channel.',
+  },
+];
+
+function NoPolicySetup({ rulesText, setRulesText, saving, handleSetRules }: {
+  rulesText: string;
+  setRulesText: (v: string) => void;
+  saving: boolean;
+  handleSetRules: () => void;
+}) {
+  const [showCustom, setShowCustom] = useState(false);
+
+  return (
+    <div className="space-y-4">
+      <div className="text-center py-2">
+        <div className="text-3xl mb-2">🛡️</div>
+        <p className="text-base text-fg font-semibold">Set up channel access</p>
+        <p className="text-xs text-fg-dim mt-1 max-w-xs mx-auto leading-relaxed">
+          Channel policies let you control who can join. Start with a template or write your own rules.
+        </p>
+      </div>
+
+      {/* Quick templates */}
+      <div className="space-y-2">
+        <label className="block text-xs text-fg-dim uppercase tracking-wide">Quick start</label>
+        {POLICY_EXAMPLES.map((ex) => (
+          <button
+            key={ex.label}
+            onClick={() => { setRulesText(ex.rulesText); setShowCustom(true); }}
+            className="w-full text-left p-3 bg-bg border border-border rounded-lg hover:border-accent/50 transition-colors group"
+          >
+            <div className="flex items-center gap-2.5">
+              <span className="text-lg">{ex.icon}</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-fg group-hover:text-accent transition-colors">{ex.label}</p>
+                <p className="text-xs text-fg-dim">{ex.description}</p>
+              </div>
+              <svg className="w-4 h-4 text-fg-dim group-hover:text-accent" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z" clipRule="evenodd" />
+              </svg>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* Custom or selected rules */}
+      {!showCustom ? (
+        <button
+          onClick={() => setShowCustom(true)}
+          className="w-full p-2.5 border border-dashed border-border rounded-lg text-sm text-fg-dim hover:border-accent hover:text-accent transition-colors"
+        >
+          ✏️ Write custom rules
+        </button>
+      ) : (
+        <div className="animate-fadeIn">
+          <label className="block text-xs text-fg-dim uppercase tracking-wide mb-2">
+            Channel rules
+          </label>
+          <textarea
+            value={rulesText}
+            onChange={(e) => setRulesText(e.target.value)}
+            placeholder="Describe the rules users must accept to join this channel..."
+            rows={3}
+            autoFocus
+            className="w-full bg-bg border border-border rounded-lg p-3 text-sm text-fg placeholder-fg-dim resize-none focus:outline-none focus:border-accent"
+          />
+          <div className="flex items-center justify-between mt-2">
+            <p className="text-[10px] text-fg-dim">
+              Users will see these rules and must accept to join.
+            </p>
+            <button
+              onClick={handleSetRules}
+              disabled={!rulesText.trim() || saving}
+              className="px-4 py-1.5 text-sm font-medium bg-accent text-bg rounded-lg hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {saving ? 'Saving…' : 'Set Policy'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Docs link */}
+      <div className="border-t border-border pt-3 mt-3">
+        <a
+          href="https://github.com/chad/freeq/blob/main/docs/POLICY.md"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-2 text-xs text-fg-dim hover:text-accent transition-colors group"
+        >
+          <svg className="w-3.5 h-3.5 text-fg-dim group-hover:text-accent" viewBox="0 0 20 20" fill="currentColor">
+            <path d="M9 4.804A7.968 7.968 0 005.5 4c-1.255 0-2.443.29-3.5.804v10A7.969 7.969 0 015.5 14c1.669 0 3.218.51 4.5 1.385A7.962 7.962 0 0114.5 14c1.255 0 2.443.29 3.5.804v-10A7.968 7.968 0 0014.5 4c-1.255 0-2.443.29-3.5.804V14a.5.5 0 01-1 0V4.804z" />
+          </svg>
+          <span>Read the policy documentation</span>
+          <svg className="w-3 h-3 opacity-50" viewBox="0 0 20 20" fill="currentColor">
+            <path fillRule="evenodd" d="M5.22 14.78a.75.75 0 001.06 0l7.22-7.22v5.69a.75.75 0 001.5 0v-7.5a.75.75 0 00-.75-.75h-7.5a.75.75 0 000 1.5h5.69l-7.22 7.22a.75.75 0 000 1.06z" clipRule="evenodd" />
+          </svg>
+        </a>
+      </div>
+    </div>
+  );
+}
+
 function SettingsContent({ channel, onClose }: { channel: string; onClose: () => void }) {
   const nick = useStore((s) => s.nick);
   const channels = useStore((s) => s.channels);
@@ -281,14 +400,24 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
                   </pre>
                 </details>
               </div>
+            ) : isOp ? (
+              /* Guided setup for ops when no policy exists */
+              <NoPolicySetup rulesText={rulesText} setRulesText={setRulesText} saving={saving} handleSetRules={handleSetRules} />
             ) : (
-              <p className="text-sm text-fg-dim">No policy set. Add rules to gate channel access.</p>
+              /* Read-only view for non-ops */
+              <div className="text-center py-6">
+                <div className="text-3xl mb-2">🔓</div>
+                <p className="text-sm text-fg-muted font-medium">Open Channel</p>
+                <p className="text-xs text-fg-dim mt-1">
+                  This channel has no access policy — anyone can join and participate.
+                </p>
+              </div>
             )}
 
-            {isOp && (
+            {isOp && policy?.policy && (
               <div>
                 <label className="block text-xs text-fg-dim uppercase tracking-wide mb-2">
-                  {policy?.policy ? 'Update rules' : 'Set channel rules'}
+                  Update rules
                 </label>
                 <textarea
                   value={rulesText}
@@ -302,12 +431,9 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
                   disabled={!rulesText.trim() || saving}
                   className="mt-2 px-4 py-1.5 text-sm font-medium bg-accent text-bg rounded-lg hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {saving ? 'Saving…' : policy?.policy ? 'Update Policy' : 'Set Policy'}
+                  {saving ? 'Saving…' : 'Update Policy'}
                 </button>
               </div>
-            )}
-            {!isOp && !policy?.policy && (
-              <p className="text-sm text-fg-dim">No policy set on this channel.</p>
             )}
           </div>
         )}
@@ -315,8 +441,12 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
         {!loading && tab === 'requirements' && (
           <div className="space-y-4">
             {!policy?.policy && (
-              <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-3 text-sm text-yellow-400">
-                Set channel rules first before adding verifiers.
+              <div className="text-center py-4">
+                <div className="text-2xl mb-2">🔑</div>
+                <p className="text-sm text-fg-muted font-medium">No verifiers configured</p>
+                <p className="text-xs text-fg-dim mt-1 max-w-xs mx-auto">
+                  Set channel rules on the Rules tab first, then add verifiers here to require credentials for access.
+                </p>
               </div>
             )}
 
@@ -417,8 +547,12 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
         {!loading && tab === 'roles' && (
           <div className="space-y-4">
             {!policy?.policy && (
-              <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-3 text-sm text-yellow-400">
-                Set channel rules first before configuring roles.
+              <div className="text-center py-4">
+                <div className="text-2xl mb-2">👑</div>
+                <p className="text-sm text-fg-muted font-medium">No role rules configured</p>
+                <p className="text-xs text-fg-dim mt-1 max-w-xs mx-auto">
+                  Set channel rules and add verifiers first. Then configure which credentials auto-grant op, moderator, or voice status.
+                </p>
               </div>
             )}
 

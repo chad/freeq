@@ -540,14 +540,11 @@ async fn api_channels(State(state): State<Arc<SharedState>>) -> Json<Vec<Channel
     let channels = state.channels.lock();
     let mut list: Vec<ChannelInfo> = channels
         .iter()
-        .filter(|(name, ch)| {
-            // Hide internal test channels
-            if name.contains("_zqtest_") { return false; }
-            // Show channels with members, or with a topic, or well-known channels
+        .filter(|(_name, ch)| {
+            // Show channels with members, or with a topic set
             let has_members = !ch.members.is_empty() || !ch.remote_members.is_empty();
             let has_topic = ch.topic.is_some();
-            let well_known = name.starts_with("#freeq") || name.starts_with("#demo-");
-            has_members || has_topic || well_known
+            has_members || has_topic
         })
         .map(|(name, ch)| ChannelInfo {
             name: name.clone(),
