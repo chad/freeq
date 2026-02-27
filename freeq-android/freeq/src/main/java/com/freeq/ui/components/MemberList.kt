@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.*
@@ -85,12 +86,14 @@ private fun MemberRow(member: MemberInfo, onMemberClick: ((String) -> Unit)? = n
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // Online dot
+        val isAway = member.awayMsg != null
+
+        // Presence dot — yellow if away, green if available
         Box(
             modifier = Modifier
                 .size(8.dp)
                 .clip(CircleShape)
-                .background(FreeqColors.success)
+                .background(if (isAway) FreeqColors.warning else FreeqColors.success)
         )
 
         UserAvatar(nick = member.nick, size = 32.dp)
@@ -111,7 +114,8 @@ private fun MemberRow(member: MemberInfo, onMemberClick: ((String) -> Unit)? = n
                 Text(
                     text = member.nick,
                     fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onBackground
+                    color = if (isAway) MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onBackground
                 )
                 if (AvatarCache.avatarUrl(member.nick) != null) {
                     Icon(
@@ -121,6 +125,29 @@ private fun MemberRow(member: MemberInfo, onMemberClick: ((String) -> Unit)? = n
                         modifier = Modifier.size(13.dp)
                     )
                 }
+                if (isAway) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = FreeqColors.warning.copy(alpha = 0.15f)
+                    ) {
+                        Text(
+                            text = "Away",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = FreeqColors.warning,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+            }
+            // Away message text
+            if (isAway && member.awayMsg?.isNotEmpty() == true) {
+                Text(
+                    text = member.awayMsg!!,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    maxLines = 1
+                )
             }
         }
     }

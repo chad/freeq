@@ -1,7 +1,9 @@
 package com.freeq.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
@@ -77,6 +79,33 @@ fun UserProfileSheet(
                         contentDescription = "Verified",
                         tint = FreeqColors.accent,
                         modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
+            // Away status
+            appState.awayMessage(nick)?.let { awayMsg ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(FreeqColors.warning, CircleShape)
+                    )
+                    Text(
+                        text = "Away",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = FreeqColors.warning
+                    )
+                }
+                if (awayMsg.isNotEmpty()) {
+                    Text(
+                        text = awayMsg,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }

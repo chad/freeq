@@ -413,6 +413,14 @@ class AppState(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun awayMessage(nick: String): String? {
+        for (ch in channels) {
+            val member = ch.members.firstOrNull { it.nick.equals(nick, ignoreCase = true) }
+            if (member?.awayMsg != null) return member.awayMsg
+        }
+        return null
+    }
+
     fun updateAwayStatus(nick: String, awayMsg: String?) {
         for (ch in channels) {
             val idx = ch.members.indexOfFirst { it.nick.equals(nick, ignoreCase = true) }
