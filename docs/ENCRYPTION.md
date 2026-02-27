@@ -227,6 +227,23 @@ Trade-offs:
 - **Compromised PDS**: Uploaded media controlled by PDS operator
 - **Message forgery by server**: Closed for modern clients (client-side signing). Legacy clients still use server-attested signatures.
 
+### Federation security (S2S)
+
+Federated peers are now authorization-checked:
+
+- **Mode changes** (+o, +v, +t, +i, +n, +m, +k): Receiving server verifies the setter is an op before executing
+- **Kicks**: Receiving server verifies the kicker is an op
+- **Topic** (+t channels): Only ops can set topics — no "trust the peer" fallback
+- **Joins**: Receiving server enforces bans and +i (invite-only) on incoming S2S joins
+- **Rate limiting**: 100 events/sec per peer; excess dropped with warning log
+
+A rogue federated peer **cannot**:
+- Grant themselves op status
+- Kick users from channels they don't control
+- Change topics on locked channels
+- Bypass bans by joining from a different server
+- Flood the server with events
+
 ---
 
 ## Philosophy
