@@ -154,6 +154,12 @@ impl Db {
                 did  TEXT PRIMARY KEY,
                 nick TEXT NOT NULL UNIQUE
             );
+
+            CREATE TABLE IF NOT EXISTS prekey_bundles (
+                did         TEXT PRIMARY KEY,
+                bundle_json TEXT NOT NULL,
+                updated_at  INTEGER NOT NULL
+            );
             ",
         )?;
 
@@ -495,6 +501,46 @@ impl Db {
             params![channel, sender, stored_text, timestamp as i64, tags_json, msgid, replaces_msgid],
         )?;
         Ok(())
+    }
+
+    // ── Pre-key bundles (E2EE) ────────────────────────────────────────
+
+    /// Store or update a pre-key bundle for a DID.
+    pub fn save_prekey_bundle(&self, did: &str, bundle_json: &str) -> SqlResult<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default().as_secs();
+        self.conn.execute(
+            "INSERT INTO prekey_bundles (did, bundle_json, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(did) DO UPDATE SET bundle_json=excluded.bundle_json, updated_at=excluded.updated_at",
+            params![did, bundle_json, now as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Load a pre-key bundle for a DID.
+    pub fn get_prekey_bundle(&self, did: &str) -> SqlResult<Option<serde_json::Value>> {
+        let mut stmt = self.conn.prepare("SELECT bundle_json FROM prekey_bundles WHERE did = ?1")?;
+        let mut rows = stmt.query_map(params![did], |row| {
+            let json_str: String = row.get(0)?;
+            Ok(serde_json::from_str(&json_str).unwrap_or(serde_json::Value::Null))
+        })?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Load all pre-key bundles (for populating in-memory cache on startup).
+    pub fn load_all_prekey_bundles(&self) -> SqlResult<Vec<(String, serde_json::Value)>> {
+        let mut stmt = self.conn.prepare("SELECT did, bundle_json FROM prekey_bundles")?;
+        let rows = stmt.query_map([], |row| {
+            let did: String = row.get(0)?;
+            let json_str: String = row.get(1)?;
+            let bundle = serde_json::from_str(&json_str).unwrap_or(serde_json::Value::Null);
+            Ok((did, bundle))
+        })?;
+        rows.collect()
     }
 
     // ── Identities (DID-nick bindings) ─────────────────────────────────

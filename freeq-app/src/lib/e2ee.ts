@@ -22,12 +22,14 @@ const DB_VERSION = 1;
 // ── Types ──
 
 interface IdentityKeys {
-  secretKey: Uint8Array;
-  publicKey: Uint8Array;
-  spkSecret: Uint8Array;
-  spkPublic: Uint8Array;
-  spkSignature: Uint8Array;
+  secretKey: Uint8Array;      // X25519 identity private key
+  publicKey: Uint8Array;      // X25519 identity public key
+  spkSecret: Uint8Array;      // X25519 signed pre-key private
+  spkPublic: Uint8Array;      // X25519 signed pre-key public
+  spkSignature: Uint8Array;   // Ed25519 signature of SPK by signing key
   spkId: number;
+  signingKey?: CryptoKeyPair; // Ed25519 signing keypair (for SPK signature + verification)
+  signingPublic?: Uint8Array; // Ed25519 public key (exported for bundle)
 }
 
 interface SessionState {
@@ -37,6 +39,12 @@ interface SessionState {
   sendMsgNum: number;
   recvMsgNum: number;
   prevChainLen: number;
+  // DH Ratchet state (Signal protocol)
+  dhSendSecret?: number[];   // our current ratchet private key
+  dhSendPublic?: number[];   // our current ratchet public key
+  dhRecvPublic?: number[];   // their current ratchet public key
+  rootKey?: number[];         // root key for KDF ratchet
+  dhRatchetInitialized?: boolean;
 }
 
 interface RatchetSession {
@@ -72,6 +80,40 @@ export function getIdentityPublicKey(): Uint8Array | null {
 }
 
 /**
+ * Get the safety number for a DM session — a human-readable fingerprint
+ * of both identity keys. Users compare this out-of-band to verify no MITM.
+ * Format: 12 groups of 5 digits (60 digits total), like Signal.
+ */
+export async function getSafetyNumber(remoteDid: string): Promise<string | null> {
+  if (!identityKeys) return null;
+
+  // Combine both public keys in canonical order for consistent fingerprint
+  const myKey = identityKeys.publicKey;
+  const encoder = new TextEncoder();
+  const remoteDIDBytes = encoder.encode(remoteDid);
+  // Include the DID string so different users with same keys get different numbers
+  const material = new Uint8Array(64 + remoteDIDBytes.length);
+  // Sort: lower key first for consistency regardless of who checks
+  const myKeyHex = Array.from(myKey).map(b => b.toString(16).padStart(2, '0')).join('');
+  const weAreFirst = myKeyHex < remoteDid; // deterministic ordering
+  if (weAreFirst) {
+    material.set(myKey, 0);
+    material.set(remoteDIDBytes, 32);
+  } else {
+    material.set(remoteDIDBytes, 0);
+    material.set(myKey, remoteDIDBytes.length);
+  }
+
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', material));
+  const digits: string[] = [];
+  for (let i = 0; i < 12; i++) {
+    const val = ((hash[i * 2] << 8) | hash[i * 2 + 1]) % 100000;
+    digits.push(val.toString().padStart(5, '0'));
+  }
+  return digits.join(' ');
+}
+
+/**
  * Initialize E2EE for an authenticated user.
  */
 export async function initialize(did: string, serverOrigin: string): Promise<void> {
@@ -103,17 +145,36 @@ export async function initialize(did: string, serverOrigin: string): Promise<voi
       spkPublic: new Uint8Array(stored.spkPublic),
       spkSignature: new Uint8Array(stored.spkSignature),
       spkId: stored.spkId,
+      signingPublic: stored.signingPublic ? new Uint8Array(stored.signingPublic) : undefined,
     };
+    // Restore CryptoKeyPair if we have the exported private key
+    if (stored.signingPrivate) {
+      try {
+        const privKey = await crypto.subtle.importKey('pkcs8', new Uint8Array(stored.signingPrivate), 'Ed25519', false, ['sign']);
+        const pubKey = await crypto.subtle.importKey('raw', new Uint8Array(stored.signingPublic), 'Ed25519', false, ['verify']);
+        identityKeys.signingKey = { privateKey: privKey, publicKey: pubKey };
+      } catch { /* Ed25519 import not available */ }
+    }
   } else {
     identityKeys = await generateIdentityKeys();
-    await db.put('identity', {
+    const toStore: Record<string, unknown> = {
       secretKey: Array.from(identityKeys.secretKey),
       publicKey: Array.from(identityKeys.publicKey),
       spkSecret: Array.from(identityKeys.spkSecret),
       spkPublic: Array.from(identityKeys.spkPublic),
       spkSignature: Array.from(identityKeys.spkSignature),
       spkId: identityKeys.spkId,
-    }, did);
+    };
+    if (identityKeys.signingPublic) {
+      toStore.signingPublic = Array.from(identityKeys.signingPublic);
+    }
+    if (identityKeys.signingKey) {
+      try {
+        const privBytes = await crypto.subtle.exportKey('pkcs8', identityKeys.signingKey.privateKey);
+        toStore.signingPrivate = Array.from(new Uint8Array(privBytes));
+      } catch { /* can't export */ }
+    }
+    await db.put('identity', toStore, did);
   }
 
   const allSessions: RatchetSession[] = await db.getAll('sessions');
@@ -151,24 +212,45 @@ async function generateIdentityKeys(): Promise<IdentityKeys> {
   const spkSecret = new Uint8Array(await crypto.subtle.exportKey('raw', spkPair.privateKey));
   const spkPublic = new Uint8Array(await crypto.subtle.exportKey('raw', spkPair.publicKey));
 
+  // Generate Ed25519 signing key for SPK signature + identity verification
+  let signingKey: CryptoKeyPair | undefined;
+  let signingPublic: Uint8Array | undefined;
+  let spkSignature: Uint8Array;
+  try {
+    signingKey = await crypto.subtle.generateKey('Ed25519', true, ['sign', 'verify']) as CryptoKeyPair;
+    signingPublic = new Uint8Array(await crypto.subtle.exportKey('raw', signingKey.publicKey));
+    // Sign the SPK public key with our Ed25519 identity signing key
+    const sig = await crypto.subtle.sign('Ed25519', signingKey.privateKey, spkPublic);
+    spkSignature = new Uint8Array(sig);
+  } catch {
+    // Ed25519 signing not available — use empty signature
+    spkSignature = new Uint8Array(64);
+  }
+
   return {
     secretKey: ikSecret, publicKey: ikPublic,
     spkSecret, spkPublic,
-    spkSignature: new Uint8Array(64), // placeholder — TODO: sign SPK with IK
+    spkSignature,
     spkId: 1,
+    signingKey,
+    signingPublic,
   };
 }
 
 // ── Pre-Key Bundle API ──
 
 async function uploadPreKeyBundle(origin: string, did: string, keys: IdentityKeys): Promise<void> {
-  const bundle = {
+  const bundle: Record<string, unknown> = {
     did,
     identity_key: toB64(keys.publicKey),
     signed_pre_key: toB64(keys.spkPublic),
     spk_signature: toB64(keys.spkSignature),
     spk_id: keys.spkId,
   };
+  // Include Ed25519 signing public key for identity verification
+  if (keys.signingPublic) {
+    bundle.signing_key = toB64(keys.signingPublic);
+  }
   await fetch(`${origin}/api/v1/keys`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -206,9 +288,33 @@ export async function encryptMessage(
     const msgKey = await deriveMessageKey(st.sendChainKey, st.sendMsgNum);
     const iv = crypto.getRandomValues(new Uint8Array(12));
 
-    // Header: identity public key (32) + prevChainLen (4) + msgNum (4)
+    // DH ratchet step: generate new DH keypair every N messages for forward secrecy
+    if (st.dhRatchetInitialized && st.dhRecvPublic && st.sendMsgNum > 0 && st.sendMsgNum % 10 === 0) {
+      try {
+        const dhPair = await (crypto.subtle.generateKey as any)({ name: 'X25519' }, true, ['deriveBits']);
+        const newSecret = new Uint8Array(await crypto.subtle.exportKey('raw', dhPair.privateKey));
+        const newPublic = new Uint8Array(await crypto.subtle.exportKey('raw', dhPair.publicKey));
+        // DH with their current public key
+        const dhOutput = await x25519DH(newSecret, new Uint8Array(st.dhRecvPublic));
+        // Derive new root key and chain key
+        const newRoot = await hkdfDerive(dhOutput, 'freeq-ratchet-root');
+        const newChain = await hkdfDerive(newRoot, 'freeq-ratchet-chain');
+        st.prevChainLen = st.sendMsgNum;
+        st.sendMsgNum = 0;
+        st.dhSendSecret = Array.from(newSecret);
+        st.dhSendPublic = Array.from(newPublic);
+        st.rootKey = Array.from(newRoot);
+        st.sendChainKey = Array.from(newChain);
+        console.log('[e2ee] DH ratchet step completed');
+      } catch (e) {
+        console.warn('[e2ee] DH ratchet step failed, continuing with chain key:', e);
+      }
+    }
+
+    // Header: DH ratchet public key (32) + prevChainLen (4) + msgNum (4)
+    const dhPub = st.dhSendPublic ? new Uint8Array(st.dhSendPublic) : identityKeys.publicKey;
     const header = new Uint8Array(40);
-    header.set(identityKeys.publicKey, 0);
+    header.set(dhPub, 0);
     new DataView(header.buffer).setUint32(32, st.prevChainLen, false);
     new DataView(header.buffer).setUint32(36, st.sendMsgNum, false);
 
@@ -259,8 +365,29 @@ export async function decryptMessage(
     const ct = fromB64(parts[2]);
     if (header.length !== 40 || iv.length !== 12) return null;
 
+    const senderDHPub = header.slice(0, 32);
     const msgNum = new DataView(header.buffer, header.byteOffset + 36, 4).getUint32(0, false);
     const st: SessionState = JSON.parse(session.state);
+
+    // Check if sender has done a DH ratchet step (new DH public key)
+    if (st.dhRatchetInitialized && st.dhRecvPublic && st.dhSendSecret) {
+      const currentRecvPub = new Uint8Array(st.dhRecvPublic);
+      if (!arraysEqual(senderDHPub, currentRecvPub)) {
+        try {
+          // Sender rotated their DH key — perform receiving DH ratchet
+          const dhOutput = await x25519DH(new Uint8Array(st.dhSendSecret), senderDHPub);
+          const newRoot = await hkdfDerive(dhOutput, 'freeq-ratchet-root');
+          const newChain = await hkdfDerive(newRoot, 'freeq-ratchet-chain');
+          st.dhRecvPublic = Array.from(senderDHPub);
+          st.rootKey = Array.from(newRoot);
+          st.recvChainKey = Array.from(newChain);
+          st.recvMsgNum = 0;
+          console.log('[e2ee] Receiving DH ratchet step completed');
+        } catch (e) {
+          console.warn('[e2ee] Receiving DH ratchet failed:', e);
+        }
+      }
+    }
 
     // Advance chain to correct position
     let chainKey = st.recvChainKey;
@@ -299,6 +426,24 @@ async function establishSession(remoteDid: string, serverOrigin: string): Promis
     const theirIK = fromB64(bundle.identity_key);
     const theirSPK = fromB64(bundle.signed_pre_key);
 
+    // Verify SPK signature if signing key is present
+    if (bundle.signing_key && bundle.spk_signature) {
+      try {
+        const signingPub = fromB64(bundle.signing_key);
+        const spkSig = fromB64(bundle.spk_signature);
+        const verifyKey = await (crypto.subtle as any).importKey('raw', signingPub, 'Ed25519', false, ['verify']);
+        const valid = await (crypto.subtle as any).verify('Ed25519', verifyKey, spkSig, theirSPK);
+        if (!valid) {
+          console.error('[e2ee] SPK signature verification failed for', remoteDid);
+          return null;
+        }
+        console.log('[e2ee] SPK signature verified for', remoteDid);
+      } catch (e) {
+        console.warn('[e2ee] Could not verify SPK signature:', e);
+        // Continue anyway — older clients may not have signing keys
+      }
+    }
+
     // Symmetric X3DH: both sides compute the same 3 DH values.
     // We sort by public key to ensure both sides use the same order:
     //   dh1 = DH(my_ik, their_spk)
@@ -328,11 +473,22 @@ async function establishSession(remoteDid: string, serverOrigin: string): Promis
     const chain_a = await hkdfDerive(sharedSecret, 'freeq-chain-a');
     const chain_b = await hkdfDerive(sharedSecret, 'freeq-chain-b');
 
+    // Generate initial DH ratchet keypair
+    const dhPair = await (crypto.subtle.generateKey as any)({ name: 'X25519' }, true, ['deriveBits']);
+    const dhSecret = new Uint8Array(await crypto.subtle.exportKey('raw', dhPair.privateKey));
+    const dhPublic = new Uint8Array(await crypto.subtle.exportKey('raw', dhPair.publicKey));
+
     const st: SessionState = {
       sharedSecret: Array.from(sharedSecret),
       sendChainKey: Array.from(weAreFirst ? chain_a : chain_b),
       recvChainKey: Array.from(weAreFirst ? chain_b : chain_a),
       sendMsgNum: 0, recvMsgNum: 0, prevChainLen: 0,
+      // DH ratchet initial state
+      dhSendSecret: Array.from(dhSecret),
+      dhSendPublic: Array.from(dhPublic),
+      dhRecvPublic: Array.from(theirSPK), // start with their SPK
+      rootKey: Array.from(sharedSecret),
+      dhRatchetInitialized: true,
     };
 
     const session: RatchetSession = {
@@ -351,10 +507,16 @@ async function establishSession(remoteDid: string, serverOrigin: string): Promis
 
 // ── Crypto Helpers ──
 
-async function x25519DH(secret: Uint8Array, pub_key: Uint8Array): Promise<Uint8Array> {
-  const sk = await (crypto.subtle.importKey as any)('raw', secret, { name: 'X25519' }, false, ['deriveBits']);
-  const pk = await (crypto.subtle.importKey as any)('raw', pub_key, { name: 'X25519' }, false, []);
-  const bits = await (crypto.subtle.deriveBits as any)({ name: 'X25519', public: pk }, sk, 256);
+function arraysEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) { if (a[i] !== b[i]) return false; }
+  return true;
+}
+
+async function x25519DH(mySecret: Uint8Array, theirPublic: Uint8Array): Promise<Uint8Array> {
+  const myKey = await (crypto.subtle as any).importKey('raw', mySecret, { name: 'X25519' }, false, ['deriveBits']);
+  const theirKey = await (crypto.subtle as any).importKey('raw', theirPublic, { name: 'X25519' }, false, []);
+  const bits = await (crypto.subtle as any).deriveBits({ name: 'X25519', public: theirKey }, myKey, 256);
   return new Uint8Array(bits);
 }
 

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { fetchProfile, type ATProfile } from '../lib/profiles';
 import { useStore } from '../store';
 import { sendWhois } from '../irc/client';
+import * as e2ee from '../lib/e2ee';
 
 interface UserPopoverProps {
   nick: string;
@@ -16,14 +17,23 @@ export function UserPopover({ nick, did, position, onClose }: UserPopoverProps) 
   const setActive = useStore((s) => s.setActiveChannel);
   const addChannel = useStore((s) => s.addChannel);
   const whois = useStore((s) => s.whoisCache.get(nick.toLowerCase()));
+  const [safetyNumber, setSafetyNumber] = useState<string | null>(null);
 
   useEffect(() => {
     // Always trigger WHOIS to get latest info
     sendWhois(nick);
   }, [nick]);
 
-  // Fetch AT profile when we have a DID (from prop or whois)
   const effectiveDid = did || whois?.did;
+
+  // Fetch safety number for E2EE verification
+  useEffect(() => {
+    if (effectiveDid && e2ee.hasSession(effectiveDid)) {
+      e2ee.getSafetyNumber(effectiveDid).then(setSafetyNumber);
+    }
+  }, [effectiveDid]);
+
+  // Fetch AT profile when we have a DID (from prop or whois)
   useEffect(() => {
     if (effectiveDid && !profile) {
       setLoading(true);
@@ -94,6 +104,21 @@ export function UserPopover({ nick, did, position, onClose }: UserPopoverProps) 
               title="Click to copy DID"
             >
               {effectiveDid}
+            </div>
+          )}
+
+          {/* E2EE Safety Number */}
+          {safetyNumber && (
+            <div className="mt-2 p-2 bg-success/5 border border-success/20 rounded-lg">
+              <div className="text-[10px] text-success font-semibold mb-1 flex items-center gap-1">
+                🔒 Encrypted DM — Safety Number
+              </div>
+              <div className="text-[10px] font-mono text-fg-dim leading-relaxed tracking-wider">
+                {safetyNumber}
+              </div>
+              <div className="text-[9px] text-fg-dim mt-1">
+                Compare with your contact to verify encryption
+              </div>
             </div>
           )}
 

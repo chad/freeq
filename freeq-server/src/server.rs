@@ -580,7 +580,20 @@ impl SharedState {
     }
 }
 
-/// Load or generate a persistent ed25519 signing key for message signing + DB key derivation.
+/// Derive a DB encryption key from the signing key (migration/fallback).
+fn derive_key_from_signing(signing_key: &ed25519_dalek::SigningKey) -> [u8; 32] {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let mut mac = Hmac::<Sha256>::new_from_slice(signing_key.to_bytes().as_slice())
+        .expect("HMAC key");
+    mac.update(b"freeq-db-encryption-v1");
+    let result = mac.finalize();
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&result.into_bytes());
+    key
+}
+
+/// Load or generate a persistent ed25519 signing key for message signing.
 fn load_msg_signing_key(data_dir: &str) -> ed25519_dalek::SigningKey {
     let key_path = std::path::Path::new(data_dir).join("msg-signing-key.secret");
     if key_path.exists() {
@@ -626,17 +639,36 @@ impl Server {
             self.config.data_dir.as_deref().unwrap_or(".")
         );
 
-        // Derive a separate AES-256 key from the signing key for DB encryption at rest
+        // Load or generate a separate DB encryption key (independent of signing key).
+        // This ensures a signing key compromise doesn't also compromise encrypted data.
         let db_encryption_key: [u8; 32] = {
-            use hmac::{Hmac, Mac};
-            use sha2::Sha256;
-            let mut mac = Hmac::<Sha256>::new_from_slice(msg_signing_key.to_bytes().as_slice())
-                .expect("HMAC key");
-            mac.update(b"freeq-db-encryption-v1");
-            let result = mac.finalize();
-            let mut key = [0u8; 32];
-            key.copy_from_slice(&result.into_bytes());
-            key
+            let key_path = std::path::Path::new(
+                self.config.data_dir.as_deref().unwrap_or(".")
+            ).join("db-encryption-key.secret");
+            if key_path.exists() {
+                if let Ok(data) = std::fs::read(&key_path) {
+                    if let Ok(bytes) = <[u8; 32]>::try_from(data.as_slice()) {
+                        tracing::info!("Loaded DB encryption key from {}", key_path.display());
+                        bytes
+                    } else {
+                        // Corrupt key — derive from signing key as migration path
+                        tracing::warn!("Corrupt DB encryption key, deriving from signing key");
+                        derive_key_from_signing(&msg_signing_key)
+                    }
+                } else {
+                    derive_key_from_signing(&msg_signing_key)
+                }
+            } else {
+                // First run with separate key: derive from signing key for backward compat
+                // with existing encrypted messages, then persist for future independence.
+                let key = derive_key_from_signing(&msg_signing_key);
+                if let Err(e) = std::fs::write(&key_path, key) {
+                    tracing::error!("Failed to persist DB encryption key: {e}");
+                } else {
+                    tracing::info!("Generated DB encryption key at {}", key_path.display());
+                }
+                key
+            }
         };
 
         let db = match &self.config.db_path {
@@ -713,6 +745,20 @@ impl Server {
 
         // msg_signing_key already loaded above (needed for DB encryption key derivation)
 
+        // Load pre-key bundles from DB before moving db into struct
+        let prekey_bundles = {
+            let mut bundles = HashMap::new();
+            if let Some(ref db) = db {
+                if let Ok(saved) = db.load_all_prekey_bundles() {
+                    tracing::info!("Loaded {} pre-key bundles from DB", saved.len());
+                    for (did, bundle) in saved {
+                        bundles.insert(did, bundle);
+                    }
+                }
+            }
+            bundles
+        };
+
         Ok(Arc::new(SharedState {
             server_name: self.config.server_name.clone(),
             challenge_store: ChallengeStore::new(self.config.challenge_timeout_secs),
@@ -763,7 +809,7 @@ impl Server {
                     }
                 }
             },
-            prekey_bundles: Mutex::new(HashMap::new()),
+            prekey_bundles: Mutex::new(prekey_bundles),
             msg_timestamps: Mutex::new(HashMap::new()),
             ip_connections: Mutex::new(HashMap::new()),
             msg_signing_key,

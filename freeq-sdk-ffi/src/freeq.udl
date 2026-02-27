@@ -99,6 +99,52 @@ interface FreeqClient {
     string? current_nick();
 };
 
+dictionary PreKeyBundle {
+    string identity_key;
+    string signed_pre_key;
+    string spk_signature;
+    u32 spk_id;
+};
+
+dictionary SafetyNumber {
+    string number;
+};
+
+interface FreeqE2ee {
+    constructor();
+
+    [Throws=FreeqError]
+    PreKeyBundle generate_keys();
+
+    [Throws=FreeqError]
+    PreKeyBundle restore_keys(string ik_secret_b64, string spk_secret_b64);
+
+    [Throws=FreeqError]
+    sequence<string> export_keys();
+
+    [Throws=FreeqError]
+    void establish_session(string remote_did, string their_ik_b64, string their_spk_b64);
+
+    [Throws=FreeqError]
+    string encrypt_message(string remote_did, string plaintext);
+
+    [Throws=FreeqError]
+    string decrypt_message(string remote_did, string wire);
+
+    boolean has_session(string remote_did);
+
+    boolean is_encrypted(string text);
+
+    [Throws=FreeqError]
+    SafetyNumber get_safety_number(string remote_did);
+
+    [Throws=FreeqError]
+    string export_session(string remote_did);
+
+    [Throws=FreeqError]
+    void import_session(string remote_did, string json);
+};
+
 [Error]
 enum FreeqError {
     "ConnectionFailed",

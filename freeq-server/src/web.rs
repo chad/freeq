@@ -1716,11 +1716,18 @@ async fn api_get_keys(
     State(state): State<Arc<crate::server::SharedState>>,
     axum::extract::Path(did): axum::extract::Path<String>,
 ) -> impl axum::response::IntoResponse {
-    let bundles = state.prekey_bundles.lock();
-    match bundles.get(&did) {
-        Some(bundle) => (
+    // Check in-memory cache first, then fall back to DB
+    let bundle = {
+        let bundles = state.prekey_bundles.lock();
+        bundles.get(&did).cloned()
+    };
+    let bundle = bundle.or_else(|| {
+        state.with_db(|db| db.get_prekey_bundle(&did)).flatten()
+    });
+    match bundle {
+        Some(b) => (
             axum::http::StatusCode::OK,
-            axum::Json(serde_json::json!({ "bundle": bundle })),
+            axum::Json(serde_json::json!({ "bundle": b })),
         ),
         None => (
             axum::http::StatusCode::NOT_FOUND,
@@ -1746,6 +1753,10 @@ async fn api_upload_keys(
         (Some(did), Some(bundle)) => {
             state.prekey_bundles.lock()
                 .insert(did.to_string(), bundle.clone());
+            // Persist to DB so bundles survive server restart
+            let bundle_json = serde_json::to_string(bundle).unwrap_or_default();
+            let did_owned = did.to_string();
+            state.with_db(|db| db.save_prekey_bundle(&did_owned, &bundle_json));
             (
                 axum::http::StatusCode::OK,
                 axum::Json(serde_json::json!({ "ok": true })),

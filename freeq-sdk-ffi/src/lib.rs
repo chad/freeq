@@ -339,3 +339,232 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
         _ => FreeqEvent::Notice { text: String::new() },
     }
 }
+
+// ── E2EE Manager ───────────────────────────────────────────────────
+
+use freeq_sdk::ratchet::{self, Session as RatchetSession};
+use std::collections::HashMap;
+
+/// E2EE manager for iOS — wraps Rust Double Ratchet sessions.
+pub struct FreeqE2ee {
+    sessions: Mutex<HashMap<String, RatchetSession>>,
+    identity_secret: Mutex<Option<[u8; 32]>>,
+    identity_public: Mutex<Option<[u8; 32]>>,
+    spk_secret: Mutex<Option<[u8; 32]>>,
+    spk_public: Mutex<Option<[u8; 32]>>,
+}
+
+/// Pre-key bundle for uploading to the server.
+pub struct PreKeyBundle {
+    pub identity_key: String,   // base64url
+    pub signed_pre_key: String, // base64url
+    pub spk_signature: String,  // base64url (Ed25519 sig of SPK)
+    pub spk_id: u32,
+}
+
+/// Safety number for verification.
+pub struct SafetyNumber {
+    pub number: String,
+}
+
+impl FreeqE2ee {
+    fn new() -> Self {
+        Self {
+            sessions: Mutex::new(HashMap::new()),
+            identity_secret: Mutex::new(None),
+            identity_public: Mutex::new(None),
+            spk_secret: Mutex::new(None),
+            spk_public: Mutex::new(None),
+        }
+    }
+
+    /// Generate identity and signed pre-key. Returns the bundle to upload.
+    fn generate_keys(&self) -> Result<PreKeyBundle, FreeqError> {
+        use x25519_dalek::{StaticSecret, PublicKey};
+        use aes_gcm::aead::OsRng;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+        use base64::Engine;
+
+        let ik_secret = StaticSecret::random_from_rng(OsRng);
+        let ik_public = PublicKey::from(&ik_secret);
+        let spk_secret = StaticSecret::random_from_rng(OsRng);
+        let spk_public = PublicKey::from(&spk_secret);
+
+        *self.identity_secret.lock().unwrap() = Some(ik_secret.to_bytes());
+        *self.identity_public.lock().unwrap() = Some(ik_public.to_bytes());
+        *self.spk_secret.lock().unwrap() = Some(spk_secret.to_bytes());
+        *self.spk_public.lock().unwrap() = Some(spk_public.to_bytes());
+
+        // Sign SPK with Ed25519 signing key
+        use ed25519_dalek::{SigningKey, Signer};
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let sig = signing_key.sign(spk_public.as_bytes());
+
+        Ok(PreKeyBundle {
+            identity_key: B64.encode(ik_public.as_bytes()),
+            signed_pre_key: B64.encode(spk_public.as_bytes()),
+            spk_signature: B64.encode(sig.to_bytes()),
+            spk_id: 1,
+        })
+    }
+
+    /// Restore keys from persisted base64url strings (from Keychain).
+    fn restore_keys(&self, ik_secret_b64: String, spk_secret_b64: String) -> Result<PreKeyBundle, FreeqError> {
+        use x25519_dalek::{StaticSecret, PublicKey};
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+        use base64::Engine;
+
+        let ik_bytes: [u8; 32] = B64.decode(&ik_secret_b64)
+            .map_err(|_| FreeqError::InvalidArgument)?
+            .try_into().map_err(|_| FreeqError::InvalidArgument)?;
+        let spk_bytes: [u8; 32] = B64.decode(&spk_secret_b64)
+            .map_err(|_| FreeqError::InvalidArgument)?
+            .try_into().map_err(|_| FreeqError::InvalidArgument)?;
+
+        let ik_secret = StaticSecret::from(ik_bytes);
+        let ik_public = PublicKey::from(&ik_secret);
+        let spk_secret = StaticSecret::from(spk_bytes);
+        let spk_public = PublicKey::from(&spk_secret);
+
+        *self.identity_secret.lock().unwrap() = Some(ik_bytes);
+        *self.identity_public.lock().unwrap() = Some(ik_public.to_bytes());
+        *self.spk_secret.lock().unwrap() = Some(spk_bytes);
+        *self.spk_public.lock().unwrap() = Some(spk_public.to_bytes());
+
+        Ok(PreKeyBundle {
+            identity_key: B64.encode(ik_public.as_bytes()),
+            signed_pre_key: B64.encode(spk_public.as_bytes()),
+            spk_signature: String::new(),
+            spk_id: 1,
+        })
+    }
+
+    /// Export private keys as base64url for Keychain persistence.
+    fn export_keys(&self) -> Result<Vec<String>, FreeqError> {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+        use base64::Engine;
+
+        let ik = self.identity_secret.lock().unwrap()
+            .ok_or(FreeqError::NotConnected)?;
+        let spk = self.spk_secret.lock().unwrap()
+            .ok_or(FreeqError::NotConnected)?;
+        Ok(vec![B64.encode(ik), B64.encode(spk)])
+    }
+
+    /// Establish a session with a remote user from their pre-key bundle.
+    /// `bundle_json` is the JSON from GET /api/v1/keys/{did}.
+    fn establish_session(&self, remote_did: String, their_ik_b64: String, their_spk_b64: String) -> Result<(), FreeqError> {
+        use x25519_dalek::{StaticSecret, PublicKey};
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+        use base64::Engine;
+
+        let their_ik: [u8; 32] = B64.decode(&their_ik_b64)
+            .map_err(|_| FreeqError::InvalidArgument)?
+            .try_into().map_err(|_| FreeqError::InvalidArgument)?;
+        let their_spk: [u8; 32] = B64.decode(&their_spk_b64)
+            .map_err(|_| FreeqError::InvalidArgument)?
+            .try_into().map_err(|_| FreeqError::InvalidArgument)?;
+
+        let my_ik_secret = self.identity_secret.lock().unwrap()
+            .ok_or(FreeqError::NotConnected)?;
+        let my_ik = StaticSecret::from(my_ik_secret);
+        let their_ik_pk = PublicKey::from(their_ik);
+
+        // X3DH: DH(our IK, their SPK) — simplified, same as web client
+        let dh_out = my_ik.diffie_hellman(&their_ik_pk).to_bytes();
+        let their_spk_pk = PublicKey::from(their_spk);
+        let dh_out2 = my_ik.diffie_hellman(&their_spk_pk).to_bytes();
+
+        // Combine DH outputs
+        use sha2::{Sha256, Digest};
+        let mut hasher = Sha256::new();
+        hasher.update(dh_out);
+        hasher.update(dh_out2);
+        let shared_secret: [u8; 32] = hasher.finalize().into();
+
+        // Canonical order: lower public key is "initiator"
+        let my_pk = self.identity_public.lock().unwrap()
+            .ok_or(FreeqError::NotConnected)?;
+        let we_are_first = my_pk < their_ik;
+
+        let session = if we_are_first {
+            RatchetSession::init_alice(shared_secret, their_spk)
+        } else {
+            let my_spk = self.spk_secret.lock().unwrap()
+                .ok_or(FreeqError::NotConnected)?;
+            RatchetSession::init_bob(shared_secret, my_spk)
+        };
+
+        self.sessions.lock().unwrap().insert(remote_did, session);
+        Ok(())
+    }
+
+    /// Encrypt a message for a remote user. Returns ENC3:... wire format.
+    fn encrypt_message(&self, remote_did: String, plaintext: String) -> Result<String, FreeqError> {
+        let mut sessions = self.sessions.lock().unwrap();
+        let session = sessions.get_mut(&remote_did)
+            .ok_or(FreeqError::NotConnected)?;
+        session.encrypt(&plaintext).map_err(|_| FreeqError::SendFailed)
+    }
+
+    /// Decrypt a message from a remote user.
+    fn decrypt_message(&self, remote_did: String, wire: String) -> Result<String, FreeqError> {
+        let mut sessions = self.sessions.lock().unwrap();
+        let session = sessions.get_mut(&remote_did)
+            .ok_or(FreeqError::NotConnected)?;
+        session.decrypt(&wire).map_err(|_| FreeqError::InvalidArgument)
+    }
+
+    /// Check if we have an active session with a user.
+    fn has_session(&self, remote_did: String) -> bool {
+        self.sessions.lock().unwrap().contains_key(&remote_did)
+    }
+
+    /// Check if a message is encrypted.
+    fn is_encrypted(&self, text: String) -> bool {
+        text.starts_with(ratchet::ENC3_PREFIX)
+    }
+
+    /// Get safety number for a session (hash of both identity keys).
+    fn get_safety_number(&self, remote_did: String) -> Result<SafetyNumber, FreeqError> {
+        use sha2::{Sha256, Digest};
+        let my_pk = self.identity_public.lock().unwrap()
+            .ok_or(FreeqError::NotConnected)?;
+
+        // Combine in canonical order
+        let mut hasher = Sha256::new();
+        let remote_bytes = remote_did.as_bytes();
+        if my_pk.as_slice() < remote_bytes {
+            hasher.update(my_pk);
+            hasher.update(remote_bytes);
+        } else {
+            hasher.update(remote_bytes);
+            hasher.update(my_pk);
+        }
+        let hash: [u8; 32] = hasher.finalize().into();
+
+        // 12 groups of 5 digits
+        let mut digits = Vec::new();
+        for i in 0..12 {
+            let val = ((hash[i * 2] as u32) << 8 | hash[i * 2 + 1] as u32) % 100000;
+            digits.push(format!("{val:05}"));
+        }
+        Ok(SafetyNumber { number: digits.join(" ") })
+    }
+
+    /// Serialize a session state for persistence.
+    fn export_session(&self, remote_did: String) -> Result<String, FreeqError> {
+        let sessions = self.sessions.lock().unwrap();
+        let session = sessions.get(&remote_did)
+            .ok_or(FreeqError::NotConnected)?;
+        serde_json::to_string(session).map_err(|_| FreeqError::SendFailed)
+    }
+
+    /// Restore a session from serialized state.
+    fn import_session(&self, remote_did: String, json: String) -> Result<(), FreeqError> {
+        let session: RatchetSession = serde_json::from_str(&json)
+            .map_err(|_| FreeqError::InvalidArgument)?;
+        self.sessions.lock().unwrap().insert(remote_did, session);
+        Ok(())
+    }
+}

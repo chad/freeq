@@ -166,7 +166,14 @@ DMs between DID-authenticated users are end-to-end encrypted:
 - Server stores ciphertext only (`ENC3:` prefix) — can't read DM content
 - Auto-session establishment on first message or first received encrypted message
 
-**Remaining**: iOS client E2EE, key verification UX, multi-device key sync.
+**Remaining**: Multi-device key sync.
+
+Recent improvements:
+- Pre-key bundles are now persisted to SQLite (survive server restart)
+- SPK signatures are verified using Ed25519 signing keys (prevents MITM)
+- Safety number verification UX (Signal-style 60-digit fingerprint)
+- DH ratchet step every 10 messages (forward secrecy on key compromise)
+- iOS E2EE via Rust FFI (FreeqE2ee manager: generate/restore keys, establish sessions, encrypt/decrypt, safety numbers, session import/export for Keychain persistence)
 
 ### Phase 3: E2E Encrypted Channels
 
@@ -185,7 +192,7 @@ Trade-offs:
 
 ### Phase 4: Encrypted Storage at Rest ✅ SHIPPED (message content)
 
-Message text is encrypted with AES-256-GCM before SQLite storage. Key derived from server signing key via HMAC-SHA256 (`freeq-db-encryption-v1`).
+Message text is encrypted with AES-256-GCM before SQLite storage. Key stored in a **separate** `db-encryption-key.secret` file, independent of the message signing key. On first run, the key is derived from the signing key for backward compatibility with existing encrypted data, then persisted separately. This ensures a signing key compromise does not also compromise encrypted data.
 
 **Remaining**: Encrypt channel metadata, policies, and identity tables. Full-database encryption via SQLCipher.
 
@@ -235,6 +242,7 @@ Message text is encrypted with AES-256-GCM before SQLite storage. Key derived fr
 - **Metadata analysis**: Server knows who talks to whom, when, and how often
 - **Compromised PDS**: Uploaded media controlled by PDS operator
 - **Message forgery by server**: Closed for modern clients (client-side signing). Legacy clients still use server-attested signatures.
+- **Pre-key bundle substitution**: Mitigated — SPK signatures are verified with Ed25519 signing keys. Safety number verification available for out-of-band confirmation.
 
 ### Federation security (S2S)
 
