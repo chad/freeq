@@ -276,6 +276,14 @@ export function ComposeBox() {
         return;
       }
     }
+    // Auto-grow textarea after text paste
+    setTimeout(() => {
+      const el = inputRef.current;
+      if (el) {
+        el.style.height = 'auto';
+        el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+      }
+    }, 0);
   }, [handleFileSelect]);
 
   const cancelReplyEdit = () => {
@@ -300,16 +308,19 @@ export function ComposeBox() {
       handleCommand(trimmed, activeChannel);
     } else if (activeChannel !== 'server') {
       const target = ch?.name || activeChannel;
+      // Split multi-line text into separate messages (IRC doesn't support \n)
+      const lines = trimmed.split(/\r?\n/).filter(l => l.trim());
       if (editingMsg && editingMsg.channel.toLowerCase() === activeChannel.toLowerCase()) {
-        // Edit mode
-        sendEdit(target, editingMsg.msgId, trimmed);
+        // Edit mode — send as single message (join lines with space)
+        sendEdit(target, editingMsg.msgId, lines.join(' '));
         useStore.getState().setEditingMsg(null);
       } else if (replyTo && replyTo.channel.toLowerCase() === activeChannel.toLowerCase()) {
-        // Reply mode
-        sendReply(target, replyTo.msgId, trimmed);
+        // Reply mode — first line is the reply, rest are follow-up messages
+        sendReply(target, replyTo.msgId, lines[0]);
         useStore.getState().setReplyTo(null);
+        for (let i = 1; i < lines.length; i++) sendMessage(target, lines[i]);
       } else {
-        sendMessage(target, trimmed);
+        for (const line of lines) sendMessage(target, line);
       }
     }
     setText('');
@@ -454,7 +465,7 @@ export function ComposeBox() {
     const el = inputRef.current;
     if (el) {
       el.style.height = 'auto';
-      el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+      el.style.height = Math.min(el.scrollHeight, 200) + 'px';
       updateAutocomplete(el.value, el.selectionStart || 0);
 
       // Slash command autocomplete
@@ -679,7 +690,7 @@ export function ComposeBox() {
                     : `Message ${ch?.name || activeChannel}`
             }
             rows={1}
-            className="flex-1 bg-transparent px-3 py-2.5 text-base text-fg outline-none placeholder:text-fg-dim resize-none min-h-[44px] max-h-[140px] leading-relaxed"
+            className="flex-1 bg-transparent px-3 py-2.5 text-base text-fg outline-none placeholder:text-fg-dim resize-none min-h-[44px] max-h-[200px] leading-relaxed"
             autoComplete="off"
             spellCheck
           />
