@@ -652,7 +652,7 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                     }
                 } else if (text.startsWith("MOTD:") && state.collectingMotd) {
                     state.motdLines.add(text.removePrefix("MOTD:"))
-                } else if (!state.collectingMotd) {
+                } else if (!state.collectingMotd && text.isNotBlank()) {
                     // Server error or notice — show to user
                     state.errorMessage.value = text
                 }
