@@ -19,12 +19,12 @@ freeq has encryption at multiple layers — transport, authentication, federatio
 | **Server ↔ Auth Broker** | ✅ Yes | HTTPS + HMAC-SHA256 | All broker API calls over TLS; request bodies signed with shared secret |
 | **Auth Broker ↔ Bluesky PDS** | ✅ Yes | HTTPS + OAuth 2.0 + DPoP | Token-bound proof-of-possession; PDS credentials never leave the broker |
 | **Server ↔ Server (S2S)** | ✅ Yes | QUIC (iroh) | iroh uses Noise protocol over QUIC; peer identity = Ed25519 public key |
-| **Server ↔ SQLite (at rest)** | ❌ No | Plaintext on disk | Messages, channels, history stored unencrypted |
+| **Server ↔ SQLite (at rest)** | ✅ Yes | AES-256-GCM per message | Key derived from server signing key via HMAC; backward-compatible with legacy plaintext |
 | **Server ↔ Policy DB (at rest)** | ❌ No | Plaintext on disk | Channel policies, credentials |
-| **Message content (in transit)** | 🟡 Transport only | TLS protects the pipe, not the payload | Server sees plaintext; no E2E encryption yet |
-| **Message content (at rest)** | ❌ No | Stored as plaintext in SQLite | History, search, moderation all need plaintext today |
+| **Message content (in transit)** | 🟡 Transport only | TLS protects the pipe, not the payload | Server sees plaintext; E2E DMs available |
+| **Message content (at rest)** | ✅ Yes | AES-256-GCM (EAR1: prefix) | New messages encrypted; old messages readable as-is |
 | **Message signatures** | ✅ Yes (client + server) | ed25519 via `+freeq.at/sig` IRCv3 tag | Client-side signing with session keys; server fallback for legacy clients |
-| **DM content** | 🟡 Transport only | Same as channel messages | Server can read DMs; no E2E yet |
+| **DM content** | 🟡 E2E available | Double Ratchet (X3DH + AES-256-GCM) | E2EE auto-enabled between DID-authenticated users; server sees ciphertext |
 | **File uploads (in transit)** | ✅ Yes | HTTPS to server → HTTPS to PDS | Uploaded via TLS to server, proxied via TLS to AT Protocol PDS |
 | **File uploads (at rest)** | 🟡 PDS-dependent | Stored on user's PDS (Bluesky infra) | Not under freeq's control; PDS may or may not encrypt at rest |
 | **Authentication challenge** | ✅ Yes | Cryptographic challenge-response | Server issues nonce → client signs with DID key → server verifies |
@@ -97,9 +97,13 @@ This matters because:
 - The server operator can read DMs
 - Law enforcement requests to the server operator expose content
 
-### 2. Data at Rest
+### 2. Data at Rest (Partial)
 
-SQLite databases store messages, channel state, and history as plaintext on disk. There's no encryption at rest. A compromised server filesystem exposes everything.
+Message content is now encrypted at rest using AES-256-GCM. Each message is individually encrypted before SQLite storage, with a key derived from the server's signing key via HMAC-SHA256. Legacy messages (stored before encryption was enabled) remain readable as plaintext.
+
+**What's encrypted**: Message text in the `messages` table (PRIVMSG, NOTICE, edits).
+
+**What's NOT encrypted**: Channel metadata, policies, identities, sender nicks, timestamps. A compromised disk still reveals who talked to whom and when — but not what they said.
 
 ### 3. Message Signatures (Partial)
 
@@ -148,16 +152,21 @@ For clients that don't support signing (legacy IRC clients), the server still si
 
 Client session signing keys are published at `GET /api/v1/signing-keys/{did}` so any party can verify signatures independently.
 
-### Phase 2: End-to-End Encryption for DMs
+### Phase 2: End-to-End Encryption for DMs ✅ SHIPPED
 
-**Status**: Planned
+**Status**: Implemented (web client)
 
-DMs between DID-authenticated users should be end-to-end encrypted:
+DMs between DID-authenticated users are end-to-end encrypted:
 
-- Key exchange via DID document keys (no manual key exchange)
-- Double Ratchet or similar protocol for forward secrecy
-- Server stores ciphertext only — can't read DM content
-- Multi-device key sync via DID-linked key backup
+- X25519 key exchange (X3DH — Extended Triple Diffie-Hellman)
+- Double Ratchet with AES-256-GCM message encryption
+- Pre-key bundles uploaded to server for async key exchange
+- Sessions persisted in IndexedDB (survive page reload)
+- Canonical DH ordering ensures both sides derive the same shared secret
+- Server stores ciphertext only (`ENC3:` prefix) — can't read DM content
+- Auto-session establishment on first message or first received encrypted message
+
+**Remaining**: iOS client E2EE, key verification UX, multi-device key sync.
 
 ### Phase 3: E2E Encrypted Channels
 
@@ -174,11 +183,11 @@ Trade-offs:
 - Moderation becomes harder (server can't inspect content)
 - This may be opt-in per channel rather than default
 
-### Phase 4: Encrypted Storage at Rest
+### Phase 4: Encrypted Storage at Rest ✅ SHIPPED (message content)
 
-- SQLite encryption via SQLCipher or similar
-- Key management tied to server identity
-- Backup encryption
+Message text is encrypted with AES-256-GCM before SQLite storage. Key derived from server signing key via HMAC-SHA256 (`freeq-db-encryption-v1`).
+
+**Remaining**: Encrypt channel metadata, policies, and identity tables. Full-database encryption via SQLCipher.
 
 ### Phase 5: HSM for Server Keys
 
@@ -193,13 +202,13 @@ Trade-offs:
 | Feature | freeq (today) | Slack | Discord | Signal | Matrix |
 |---------|:---:|:---:|:---:|:---:|:---:|
 | Transport encryption | ✅ | ✅ | ✅ | ✅ | ✅ |
-| E2E DMs | ❌ | ❌ | ❌ | ✅ | ✅* |
+| E2E DMs | ✅ | ❌ | ❌ | ✅ | ✅* |
 | E2E group chat | ❌ | ❌ | ❌ | ✅ | ✅* |
 | Message signatures | ✅* | ❌ | ❌ | ✅ | ❌ |
 | Decentralized identity | ✅ | ❌ | ❌ | ❌ | ✅ |
 | Server can read messages | Yes | Yes | Yes | No | Yes* |
 | Open protocol | ✅ | ❌ | ❌ | ✅ | ✅ |
-| Encrypted at rest | ❌ | Unknown | Unknown | ✅ | Varies |
+| Encrypted at rest | ✅* | Unknown | Unknown | ✅ | Varies |
 | IP cloaking | ✅ | N/A | ✅ | ✅ | Varies |
 
 *Matrix E2E is opt-in and [has had verification UX issues](https://matrix.org/blog/2024/matrix-2-0/).  
