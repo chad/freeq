@@ -5,6 +5,11 @@ import androidx.compose.foundation.background
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -17,6 +22,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Reply
@@ -28,6 +34,9 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -113,6 +122,11 @@ fun MessageList(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
+        // Skeleton loading while messages haven't arrived
+        if (messages.isEmpty()) {
+            SkeletonLoading()
+        }
+
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
@@ -645,6 +659,92 @@ private fun MessageBubble(
         }
     } // Column
     } // Box (swipe-to-reply)
+}
+
+@Composable
+private fun SkeletonLoading() {
+    val transition = rememberInfiniteTransition(label = "shimmer")
+    val shimmerX by transition.animateFloat(
+        initialValue = -1f,
+        targetValue = 2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1500),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "shimmerX"
+    )
+
+    val shimmerBrush = Brush.linearGradient(
+        colors = listOf(Color.Transparent, Color.White.copy(alpha = 0.08f), Color.Transparent),
+        start = Offset(shimmerX * 400f, 0f),
+        end = Offset(shimmerX * 400f + 250f, 0f)
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(vertical = 8.dp),
+        verticalArrangement = Arrangement.Bottom
+    ) {
+        repeat(5) { i ->
+            SkeletonRow(short = i % 3 == 1, shimmerBrush = shimmerBrush)
+        }
+    }
+}
+
+@Composable
+private fun SkeletonRow(short: Boolean, shimmerBrush: Brush) {
+    val bgColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        // Avatar placeholder
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .background(bgColor, CircleShape)
+                .then(Modifier.background(shimmerBrush, CircleShape))
+        )
+
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Nick + timestamp
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(80.dp, 14.dp)
+                        .background(bgColor, RoundedCornerShape(4.dp))
+                        .then(Modifier.background(shimmerBrush, RoundedCornerShape(4.dp)))
+                )
+                Box(
+                    modifier = Modifier
+                        .size(40.dp, 10.dp)
+                        .background(bgColor, RoundedCornerShape(4.dp))
+                        .then(Modifier.background(shimmerBrush, RoundedCornerShape(4.dp)))
+                )
+            }
+            // Text line 1
+            Box(
+                modifier = Modifier
+                    .size(if (short) 120.dp else 220.dp, 14.dp)
+                    .background(bgColor, RoundedCornerShape(4.dp))
+                    .then(Modifier.background(shimmerBrush, RoundedCornerShape(4.dp)))
+            )
+            // Text line 2 (only for non-short)
+            if (!short) {
+                Box(
+                    modifier = Modifier
+                        .size(160.dp, 14.dp)
+                        .background(bgColor, RoundedCornerShape(4.dp))
+                        .then(Modifier.background(shimmerBrush, RoundedCornerShape(4.dp)))
+                )
+            }
+        }
+    }
 }
 
 @Composable
