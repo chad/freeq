@@ -8,6 +8,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,6 +17,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.freeq.model.AppState
+import com.freeq.ui.components.ChannelSettingsSheet
 import com.freeq.ui.components.ComposeBar
 import com.freeq.ui.components.MemberList
 import com.freeq.ui.components.MessageList
@@ -37,6 +39,7 @@ fun ChatDetailScreen(
 
     var showMembers by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
+    var showChannelSettings by remember { mutableStateOf(false) }
     var profileSheetNick by remember { mutableStateOf<String?>(null) }
     var scrollToMessageId by remember { mutableStateOf<String?>(null) }
     val isChannel = channelName.startsWith("#")
@@ -65,7 +68,11 @@ fun ChatDetailScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
+                    Column(
+                        modifier = if (isChannel && channelState != null)
+                            Modifier.clickable { showChannelSettings = true }
+                        else Modifier
+                    ) {
                         Text(
                             channelName,
                             fontSize = 17.sp,
@@ -204,6 +211,19 @@ fun ChatDetailScreen(
                     } else {
                         onNavigateToChat?.invoke(channel)
                     }
+                }
+            )
+        }
+
+        // Channel settings sheet
+        if (showChannelSettings && isChannel) {
+            ChannelSettingsSheet(
+                channelState = channelState,
+                appState = appState,
+                onDismiss = { showChannelSettings = false },
+                onLeave = {
+                    appState.activeChannel.value = null
+                    onBack()
                 }
             )
         }

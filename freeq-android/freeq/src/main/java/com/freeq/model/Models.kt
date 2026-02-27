@@ -28,11 +28,15 @@ data class ChatMessage(
 data class MemberInfo(
     val nick: String,
     val isOp: Boolean,
-    val isVoiced: Boolean
+    val isHalfop: Boolean = false,
+    val isVoiced: Boolean,
+    val awayMsg: String? = null,
+    val did: String? = null
 ) {
     val prefix: String
         get() = when {
             isOp -> "@"
+            isHalfop -> "%"
             isVoiced -> "+"
             else -> ""
         }
@@ -68,6 +72,42 @@ class ChannelState(val name: String) {
             messages.add(msg)
         }
     }
+
+    fun applyEdit(originalId: String, newId: String?, newText: String) {
+        val idx = findMessage(originalId) ?: return
+        messages[idx] = messages[idx].copy(text = newText, isEdited = true)
+        if (newId != null) messageIds.add(newId)
+    }
+
+    fun applyDelete(msgId: String) {
+        val idx = findMessage(msgId) ?: return
+        messages[idx] = messages[idx].copy(isDeleted = true, text = "")
+    }
+
+    fun applyReaction(msgId: String, emoji: String, from: String): Boolean {
+        val idx = findMessage(msgId) ?: return true
+        val msg = messages[idx]
+        // Build entirely new collections — mutating in place causes old.equals(new)
+        // to be true on the data class, so LazyColumn skips recomposition.
+        val newReactions = mutableMapOf<String, MutableSet<String>>()
+        var added = true
+        for ((e, nicks) in msg.reactions) {
+            if (e == emoji) {
+                val newNicks = nicks.toMutableSet()
+                if (from in newNicks) { newNicks.remove(from); added = false }
+                else { newNicks.add(from); added = true }
+                if (newNicks.isNotEmpty()) newReactions[e] = newNicks
+            } else {
+                newReactions[e] = nicks.toMutableSet()
+            }
+        }
+        if (emoji !in msg.reactions) {
+            newReactions[emoji] = mutableSetOf(from)
+            added = true
+        }
+        messages[idx] = msg.copy(reactions = newReactions)
+        return added
+    }
 }
 
 // ── Connection state ──
@@ -102,13 +142,22 @@ class AppState(application: Application) : AndroidViewModel(application) {
     val lastReadTimestamps = mutableStateMapOf<String, Long>()
     var isDarkTheme = mutableStateOf(true)
 
+    val batches = mutableMapOf<String, BatchBuffer>()
+    data class BatchBuffer(val target: String, val messages: MutableList<ChatMessage> = mutableListOf())
+
+    // MOTD
+    val motdLines = mutableStateListOf<String>()
+    var showMotd = mutableStateOf(false)
+    internal var collectingMotd = false
+
     private var client: FreeqClient? = null
     private var lastTypingSent: Long = 0
-    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    var reconnectAttempts = 0
+    internal val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     val notificationManager = FreeqNotificationManager(application)
     val networkMonitor = NetworkMonitor(application).also { it.bind(this) }
 
-    private val prefs: SharedPreferences
+    internal val prefs: SharedPreferences
         get() = getApplication<Application>().getSharedPreferences("freeq", Context.MODE_PRIVATE)
 
     val activeChannelState: ChannelState?
@@ -243,17 +292,20 @@ class AppState(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendReaction(target: String, msgId: String, emoji: String) {
-        sendRaw("@+react=$emoji;+reply=$msgId TAGMSG $target")
+        val ch = channels.firstOrNull { it.name.equals(target, ignoreCase = true) }
+            ?: dmBuffers.firstOrNull { it.name.equals(target, ignoreCase = true) }
+        val added = ch?.applyReaction(msgId, emoji, nick.value) ?: true
+        if (added) {
+            sendRaw("@+react=$emoji;+reply=$msgId TAGMSG $target")
+        }
     }
 
     fun deleteMessage(target: String, msgId: String) {
-        sendRaw("@+draft/delete=$msgId TAGMSG $target")
+        // Optimistic local delete — server doesn't echo TAGMSG to sender
         val ch = channels.firstOrNull { it.name.equals(target, ignoreCase = true) }
             ?: dmBuffers.firstOrNull { it.name.equals(target, ignoreCase = true) }
-        val idx = ch?.findMessage(msgId)
-        if (ch != null && idx != null) {
-            ch.messages[idx] = ch.messages[idx].copy(isDeleted = true)
-        }
+        ch?.applyDelete(msgId)
+        sendRaw("@+draft/delete=$msgId TAGMSG $target")
     }
 
     fun sendTyping(target: String) {
@@ -335,6 +387,48 @@ class AppState(application: Application) : AndroidViewModel(application) {
             stale.forEach { ch.typingUsers.remove(it) }
         }
     }
+
+    fun renameUser(oldNick: String, newNick: String) {
+        for (ch in channels) {
+            val idx = ch.members.indexOfFirst { it.nick.equals(oldNick, ignoreCase = true) }
+            if (idx >= 0) {
+                ch.members[idx] = ch.members[idx].copy(nick = newNick)
+            }
+            ch.typingUsers.remove(oldNick)?.let { ch.typingUsers[newNick] = it }
+        }
+        val dmIdx = dmBuffers.indexOfFirst { it.name.equals(oldNick, ignoreCase = true) }
+        if (dmIdx >= 0) {
+            val old = dmBuffers[dmIdx]
+            val renamed = ChannelState(newNick)
+            renamed.messages.addAll(old.messages)
+            renamed.members.addAll(old.members)
+            renamed.topic.value = old.topic.value
+            renamed.typingUsers.putAll(old.typingUsers)
+            dmBuffers.removeAt(dmIdx)
+            dmBuffers.add(renamed)
+            unreadCounts.remove(old.name)?.let { unreadCounts[newNick] = it }
+        }
+        if (nick.value.equals(oldNick, ignoreCase = true)) {
+            nick.value = newNick
+        }
+    }
+
+    fun awayMessage(nick: String): String? {
+        for (ch in channels) {
+            val member = ch.members.firstOrNull { it.nick.equals(nick, ignoreCase = true) }
+            if (member?.awayMsg != null) return member.awayMsg
+        }
+        return null
+    }
+
+    fun updateAwayStatus(nick: String, awayMsg: String?) {
+        for (ch in channels) {
+            val idx = ch.members.indexOfFirst { it.nick.equals(nick, ignoreCase = true) }
+            if (idx >= 0) {
+                ch.members[idx] = ch.members[idx].copy(awayMsg = awayMsg)
+            }
+        }
+    }
 }
 
 // ── Event handler ──
@@ -354,6 +448,7 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
 
             is FreeqEvent.Registered -> {
                 state.connectionState.value = ConnectionState.Registered
+                state.reconnectAttempts = 0
                 state.nick.value = event.nick
                 state.autoJoinChannels.toList().forEach { state.joinChannel(it) }
             }
@@ -412,26 +507,6 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                 val ircMsg = event.msg
                 val isSelf = ircMsg.fromNick.equals(state.nick.value, ignoreCase = true)
 
-                // Edit: update existing message in-place
-                val editTarget = ircMsg.replacesMsgid
-                if (editTarget != null) {
-                    val ch = if (ircMsg.target.startsWith("#")) {
-                        state.channels.firstOrNull { it.name.equals(ircMsg.target, ignoreCase = true) }
-                    } else {
-                        val bufferName = if (isSelf) ircMsg.target else ircMsg.fromNick
-                        state.dmBuffers.firstOrNull { it.name.equals(bufferName, ignoreCase = true) }
-                    }
-                    val idx = ch?.findMessage(editTarget)
-                    if (ch != null && idx != null) {
-                        ch.messages[idx] = ch.messages[idx].copy(
-                            text = ircMsg.text,
-                            isEdited = true
-                        )
-                    }
-                    ch?.typingUsers?.remove(ircMsg.fromNick)
-                    return
-                }
-
                 val msg = ChatMessage(
                     id = ircMsg.msgid ?: UUID.randomUUID().toString(),
                     from = ircMsg.fromNick,
@@ -440,6 +515,39 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                     timestamp = Date(ircMsg.timestampMs),
                     replyTo = ircMsg.replyTo
                 )
+
+                // Handle edits (prefer editOf, fall back to replacesMsgid)
+                val editTarget = ircMsg.editOf ?: ircMsg.replacesMsgid
+                if (editTarget != null) {
+                    val batchId = ircMsg.batchId
+                    if (batchId != null) {
+                        state.batches[batchId]?.let { batch ->
+                            val idx = batch.messages.indexOfFirst { it.id == editTarget }
+                            if (idx >= 0) {
+                                batch.messages[idx] = batch.messages[idx].copy(text = ircMsg.text, isEdited = true)
+                            } else {
+                                batch.messages.add(msg)
+                            }
+                        }
+                        return
+                    }
+                    val ch = if (ircMsg.target.startsWith("#")) {
+                        state.channels.firstOrNull { it.name.equals(ircMsg.target, ignoreCase = true) }
+                    } else {
+                        val bufferName = if (isSelf) ircMsg.target else ircMsg.fromNick
+                        state.dmBuffers.firstOrNull { it.name.equals(bufferName, ignoreCase = true) }
+                    }
+                    ch?.applyEdit(editTarget, ircMsg.msgid, ircMsg.text)
+                    ch?.typingUsers?.remove(ircMsg.fromNick)
+                    return
+                }
+
+                // If part of CHATHISTORY batch, buffer for later merge
+                val batchId = ircMsg.batchId
+                if (batchId != null && state.batches.containsKey(batchId)) {
+                    state.batches[batchId]?.messages?.add(msg)
+                    return
+                }
 
                 if (ircMsg.target.startsWith("#")) {
                     val ch = state.getOrCreateChannel(ircMsg.target)
@@ -470,7 +578,7 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                 val ch = state.getOrCreateChannel(event.channel)
                 ch.members.clear()
                 ch.members.addAll(event.members.map {
-                    MemberInfo(nick = it.nick, isOp = it.isOp, isVoiced = it.isVoiced)
+                    MemberInfo(nick = it.nick, isOp = it.isOp, isHalfop = it.isHalfop, isVoiced = it.isVoiced, awayMsg = it.awayMsg)
                 })
                 AvatarCache.prefetchAll(event.members.map { it.nick })
             }
@@ -481,7 +589,21 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
             }
 
             is FreeqEvent.ModeChanged -> {
-                // Rely on NAMES to refresh member status
+                val nick = event.arg ?: return
+                val ch = state.channels.firstOrNull { it.name.equals(event.channel, ignoreCase = true) } ?: return
+                val idx = ch.members.indexOfFirst { it.nick.equals(nick, ignoreCase = true) }
+                if (idx >= 0) {
+                    val m = ch.members[idx]
+                    ch.members[idx] = when (event.mode) {
+                        "+o" -> m.copy(isOp = true)
+                        "-o" -> m.copy(isOp = false)
+                        "+h" -> m.copy(isHalfop = true)
+                        "-h" -> m.copy(isHalfop = false)
+                        "+v" -> m.copy(isVoiced = true)
+                        "-v" -> m.copy(isVoiced = false)
+                        else -> m
+                    }
+                }
             }
 
             is FreeqEvent.Kicked -> {
@@ -514,7 +636,26 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
             }
 
             is FreeqEvent.Notice -> {
-                // Could display in a notice buffer
+                val text = event.text
+                if (text == "MOTD:START") {
+                    state.collectingMotd = true
+                    state.motdLines.clear()
+                } else if (text == "MOTD:END") {
+                    state.collectingMotd = false
+                    if (state.motdLines.isNotEmpty()) {
+                        val content = state.motdLines.joinToString("\n")
+                        val hash = content.hashCode().toString(36)
+                        val seenHash = state.prefs.getString("motd_seen_hash", null)
+                        if (hash != seenHash) {
+                            state.showMotd.value = true
+                        }
+                    }
+                } else if (text.startsWith("MOTD:") && state.collectingMotd) {
+                    state.motdLines.add(text.removePrefix("MOTD:"))
+                } else if (!state.collectingMotd && text.isNotBlank()) {
+                    // Server error or notice — show to user
+                    state.errorMessage.value = text
+                }
             }
 
             is FreeqEvent.Disconnected -> {
@@ -522,6 +663,84 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                 if (event.reason.isNotEmpty()) {
                     state.errorMessage.value = "Disconnected: ${event.reason}"
                 }
+                // Auto-reconnect with exponential backoff (2s, 4s, 8s, 16s, 30s cap)
+                if (state.nick.value.isNotEmpty()) {
+                    state.reconnectAttempts++
+                    val delay = minOf(1L shl minOf(state.reconnectAttempts, 5), 30L)
+                    state.scope.launch {
+                        kotlinx.coroutines.delay(delay * 1000)
+                        if (state.connectionState.value == ConnectionState.Disconnected
+                            && state.nick.value.isNotEmpty()) {
+                            state.connect(state.nick.value)
+                        }
+                    }
+                }
+            }
+
+            is FreeqEvent.TagMsg -> {
+                val tags = event.msg.tags.associate { it.key to it.value }
+                val target = event.msg.target
+                val from = event.msg.from
+                // Typing indicators (ignore self)
+                tags["+typing"]?.let { typing ->
+                    if (!from.equals(state.nick.value, ignoreCase = true)) {
+                        val bufferName = if (target.startsWith("#")) target else from
+                        val ch = if (bufferName.startsWith("#"))
+                            state.channels.firstOrNull { it.name.equals(bufferName, ignoreCase = true) }
+                        else
+                            state.dmBuffers.firstOrNull { it.name.equals(bufferName, ignoreCase = true) }
+                        ch?.let {
+                            if (typing == "active") it.typingUsers[from] = Date()
+                            else if (typing == "done") it.typingUsers.remove(from)
+                        }
+                    }
+                }
+
+                // Message deletion (ignore self — already handled optimistically by deleteMessage)
+                tags["+draft/delete"]?.let { deleteId ->
+                    if (!from.equals(state.nick.value, ignoreCase = true)) {
+                        val bufferName = if (target.startsWith("#")) target else from
+                        val ch = if (bufferName.startsWith("#"))
+                            state.channels.firstOrNull { it.name.equals(bufferName, ignoreCase = true) }
+                        else
+                            state.dmBuffers.firstOrNull { it.name.equals(bufferName, ignoreCase = true) }
+                        ch?.applyDelete(deleteId)
+                    }
+                }
+
+                // Reactions (ignore self — already handled optimistically by sendReaction)
+                val emoji = tags["+react"]
+                val replyId = tags["+reply"]
+                if (emoji != null && replyId != null && !from.equals(state.nick.value, ignoreCase = true)) {
+                    val bufferName = if (target.startsWith("#")) target else from
+                    val ch = if (bufferName.startsWith("#"))
+                        state.channels.firstOrNull { it.name.equals(bufferName, ignoreCase = true) }
+                    else
+                        state.dmBuffers.firstOrNull { it.name.equals(bufferName, ignoreCase = true) }
+                    ch?.applyReaction(replyId, emoji, from)
+                }
+            }
+
+            is FreeqEvent.NickChanged -> {
+                state.renameUser(event.oldNick, event.newNick)
+            }
+
+            is FreeqEvent.AwayChanged -> {
+                state.updateAwayStatus(event.nick, event.awayMsg)
+            }
+
+            is FreeqEvent.BatchStart -> {
+                state.batches[event.id] = AppState.BatchBuffer(target = event.target)
+            }
+
+            is FreeqEvent.BatchEnd -> {
+                val batch = state.batches.remove(event.id) ?: return
+                val sorted = batch.messages.sortedBy { it.timestamp }
+                val ch = if (batch.target.startsWith("#"))
+                    state.getOrCreateChannel(batch.target)
+                else
+                    state.getOrCreateDM(batch.target)
+                sorted.forEach { ch.appendIfNew(it) }
             }
         }
     }

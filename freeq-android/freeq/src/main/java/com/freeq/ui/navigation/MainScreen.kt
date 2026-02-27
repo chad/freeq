@@ -36,6 +36,16 @@ fun MainScreen(appState: AppState) {
 
     val totalUnread = appState.unreadCounts.values.sum()
 
+    // Snackbar for server errors/notices
+    val snackbarHostState = remember { SnackbarHostState() }
+    val errorMessage by appState.errorMessage
+    LaunchedEffect(errorMessage) {
+        errorMessage?.let {
+            snackbarHostState.showSnackbar(it, duration = SnackbarDuration.Short)
+            appState.errorMessage.value = null
+        }
+    }
+
     // Handle pending navigation from notification tap
     val pendingNav = appState.pendingNavigation.value
     LaunchedEffect(pendingNav) {
@@ -49,6 +59,7 @@ fun MainScreen(appState: AppState) {
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             if (showBottomBar) {
                 NavigationBar(

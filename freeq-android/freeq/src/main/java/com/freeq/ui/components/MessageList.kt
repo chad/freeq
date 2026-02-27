@@ -1,11 +1,28 @@
 package com.freeq.ui.components
 
+import android.view.ContextThemeWrapper
 import androidx.compose.foundation.background
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Reply
@@ -13,10 +30,19 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -24,10 +50,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.freeq.model.AppState
+import com.freeq.model.AvatarCache
 import com.freeq.model.ChannelState
 import com.freeq.model.ChatMessage
+import com.freeq.model.MemberInfo
 import com.freeq.ui.theme.FreeqColors
 import com.freeq.ui.theme.Theme
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -41,6 +70,7 @@ fun MessageList(
 ) {
     val messages = channelState.messages
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
     var lightboxUrl by remember { mutableStateOf<String?>(null) }
     var highlightedMessageId by remember { mutableStateOf<String?>(null) }
@@ -64,9 +94,32 @@ fun MessageList(
         }
     }
 
-    // Auto-scroll to bottom on new messages (skip if we just scrolled to a search result)
+    // Track whether the user is near the bottom of the list
+    val isNearBottom by remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val totalItems = layoutInfo.totalItemsCount
+            totalItems == 0 || lastVisible >= totalItems - 3
+        }
+    }
+
+    // On first load, scroll to last-read position (or bottom if none)
+    var initialScrollDone by remember { mutableStateOf(false) }
     LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty() && scrollToMessageId == null) {
+        if (!initialScrollDone && messages.isNotEmpty()) {
+            val targetIdx = if (lastReadId != null) {
+                val idx = messages.indexOfFirst { it.id == lastReadId }
+                if (idx >= 0) idx else messages.size - 1
+            } else if (lastReadTimestamp > 0) {
+                val idx = messages.indexOfLast { it.timestamp.time <= lastReadTimestamp }
+                if (idx >= 0) idx else messages.size - 1
+            } else {
+                messages.size - 1
+            }
+            listState.scrollToItem(targetIdx)
+            initialScrollDone = true
+        } else if (initialScrollDone && messages.isNotEmpty() && scrollToMessageId == null && isNearBottom && !listState.isScrollInProgress) {
             listState.animateScrollToItem(messages.size - 1)
         }
     }
@@ -82,6 +135,11 @@ fun MessageList(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
+        // Skeleton loading while messages haven't arrived
+        if (messages.isEmpty()) {
+            SkeletonLoading()
+        }
+
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize(),
@@ -152,6 +210,84 @@ fun MessageList(
             }
         }
 
+        // Scroll-to-bottom FAB
+        AnimatedVisibility(
+            visible = !isNearBottom && messages.isNotEmpty(),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 12.dp),
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut()
+        ) {
+            val lastMsg = messages.lastOrNull { it.from.isNotEmpty() }
+            Surface(
+                onClick = {
+                    scope.launch {
+                        listState.animateScrollToItem(messages.size - 1)
+                    }
+                },
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 4.dp,
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .fillMaxWidth()
+            ) {
+                if (lastMsg != null) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        UserAvatar(nick = lastMsg.from, size = 28.dp)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = lastMsg.from,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Theme.nickColor(lastMsg.from),
+                                maxLines = 1
+                            )
+                            Text(
+                                text = lastMsg.text.take(60),
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Icon(
+                            Icons.Default.KeyboardArrowDown,
+                            contentDescription = "Scroll to bottom",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier
+                            .padding(10.dp)
+                            .fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            "Scroll to bottom",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
         // Image lightbox overlay
         lightboxUrl?.let { url ->
             ImageLightbox(url = url, onDismiss = { lightboxUrl = null })
@@ -169,6 +305,7 @@ fun MessageList(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageBubble(
     msg: ChatMessage,
@@ -182,6 +319,7 @@ private fun MessageBubble(
     onThreadClick: ((ChatMessage) -> Unit)? = null
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    var showEmojiPicker by remember { mutableStateOf(false) }
     val haptic = LocalHapticFeedback.current
     val isOwn = msg.from.equals(appState.nick.value, ignoreCase = true)
     val isMention = !isOwn && appState.nick.value.isNotEmpty() &&
@@ -193,10 +331,67 @@ private fun MessageBubble(
         else -> Modifier
     }
 
+    val accentColor = FreeqColors.accent
+
+    // Swipe-to-reply gesture state
+    val swipeOffset = remember { Animatable(0f) }
+    val swipeScope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val swipeThresholdPx = with(density) { 60.dp.toPx() }
+    var hasTriggered by remember { mutableStateOf(false) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .pointerInput(msg.id) {
+                detectHorizontalDragGestures(
+                    onDragStart = { hasTriggered = false },
+                    onDragEnd = {
+                        if (swipeOffset.value >= swipeThresholdPx) {
+                            appState.replyingTo.value = msg
+                        }
+                        swipeScope.launch { swipeOffset.animateTo(0f) }
+                    },
+                    onDragCancel = {
+                        swipeScope.launch { swipeOffset.animateTo(0f) }
+                    },
+                    onHorizontalDrag = { _, dragAmount ->
+                        val newValue = (swipeOffset.value + dragAmount).coerceIn(0f, swipeThresholdPx * 1.2f)
+                        swipeScope.launch { swipeOffset.snapTo(newValue) }
+                        if (!hasTriggered && newValue >= swipeThresholdPx) {
+                            hasTriggered = true
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        }
+                    }
+                )
+            }
+    ) {
+        // Reply icon behind the message
+        Icon(
+            Icons.AutoMirrored.Filled.Reply,
+            contentDescription = "Reply",
+            tint = FreeqColors.accent,
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = 12.dp)
+                .size(20.dp)
+                .alpha((swipeOffset.value / swipeThresholdPx).coerceIn(0f, 1f))
+        )
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .offset { IntOffset(swipeOffset.value.toInt(), 0) }
             .then(bgModifier)
+            .then(
+                if (isMention) Modifier.drawBehind {
+                    drawRect(
+                        color = accentColor,
+                        topLeft = androidx.compose.ui.geometry.Offset.Zero,
+                        size = androidx.compose.ui.geometry.Size(3.dp.toPx(), size.height)
+                    )
+                } else Modifier
+            )
             .padding(
                 start = 16.dp,
                 end = 16.dp,
@@ -250,26 +445,52 @@ private fun MessageBubble(
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .clickable { showMenu = true }
+                    .combinedClickable(
+                        onClick = { showMenu = true },
+                        onDoubleClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            appState.activeChannel.value?.let { target ->
+                                appState.sendReaction(target, msg.id, "\u2764\uFE0F")
+                            }
+                        }
+                    )
             ) {
                 // Header: nick + time
                 if (showHeader) {
+                    val memberPrefix = channelState.members
+                        .firstOrNull { it.nick.equals(msg.from, ignoreCase = true) }
+                        ?.prefix ?: ""
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = msg.from,
+                            text = memberPrefix + msg.from,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = Theme.nickColor(msg.from),
                             modifier = Modifier.clickable { onNickClick?.invoke(msg.from) }
                         )
+                        if (AvatarCache.avatarUrl(msg.from) != null) {
+                            Icon(
+                                Icons.Default.CheckCircle,
+                                contentDescription = "Verified",
+                                tint = FreeqColors.accent,
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
                         Text(
                             text = formatTime(msg.timestamp),
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
+                        if (msg.isEdited) {
+                            Text(
+                                text = "(edited)",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                        }
                     }
                 }
 
@@ -280,15 +501,6 @@ private fun MessageBubble(
                     fromNick = msg.from,
                     onImageClick = onImageClick
                 )
-
-                if (msg.isEdited) {
-                    Text(
-                        text = "(edited)",
-                        fontSize = 11.sp,
-                        fontStyle = FontStyle.Italic,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                    )
-                }
 
                 // Reactions
                 if (msg.reactions.isNotEmpty()) {
@@ -337,6 +549,32 @@ private fun MessageBubble(
             expanded = showMenu,
             onDismissRequest = { showMenu = false }
         ) {
+            // Quick-react emoji row
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                listOf("\uD83D\uDC4D", "\u2764\uFE0F", "\uD83D\uDE02", "\uD83D\uDE2E", "\uD83D\uDE22", "\uD83D\uDC4E").forEach { emoji ->
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            appState.activeChannel.value?.let { target ->
+                                appState.sendReaction(target, msg.id, emoji)
+                            }
+                            showMenu = false
+                        }
+                    ) {
+                        Text(
+                            emoji,
+                            fontSize = 20.sp,
+                            modifier = Modifier.padding(8.dp)
+                        )
+                    }
+                }
+            }
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
             DropdownMenuItem(
                 text = { Text("Reply") },
                 onClick = {
@@ -365,6 +603,14 @@ private fun MessageBubble(
                 },
                 leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) }
             )
+            DropdownMenuItem(
+                text = { Text("Add Reaction") },
+                onClick = {
+                    showMenu = false
+                    showEmojiPicker = true
+                },
+                leadingIcon = { Icon(Icons.Default.AddReaction, contentDescription = null) }
+            )
             if (isOwn) {
                 DropdownMenuItem(
                     text = { Text("Edit") },
@@ -390,6 +636,124 @@ private fun MessageBubble(
                             tint = FreeqColors.danger
                         )
                     }
+                )
+            }
+        }
+
+        // Emoji picker dialog
+        if (showEmojiPicker) {
+            AlertDialog(
+                onDismissRequest = { showEmojiPicker = false },
+                confirmButton = {},
+                title = { Text("Add Reaction") },
+                containerColor = MaterialTheme.colorScheme.surface,
+                text = {
+                    AndroidView(
+                        factory = { context ->
+                            val darkContext = ContextThemeWrapper(
+                                context,
+                                android.R.style.Theme_DeviceDefault
+                            )
+                            androidx.emoji2.emojipicker.EmojiPickerView(darkContext).apply {
+                                setOnEmojiPickedListener { emojiViewItem ->
+                                    appState.activeChannel.value?.let { target ->
+                                        appState.sendReaction(target, msg.id, emojiViewItem.emoji)
+                                    }
+                                    showEmojiPicker = false
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(350.dp)
+                    )
+                }
+            )
+        }
+    } // Column
+    } // Box (swipe-to-reply)
+}
+
+@Composable
+private fun SkeletonLoading() {
+    val transition = rememberInfiniteTransition(label = "shimmer")
+    val shimmerX by transition.animateFloat(
+        initialValue = -1f,
+        targetValue = 2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1500),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "shimmerX"
+    )
+
+    val shimmerBrush = Brush.linearGradient(
+        colors = listOf(Color.Transparent, Color.White.copy(alpha = 0.08f), Color.Transparent),
+        start = Offset(shimmerX * 400f, 0f),
+        end = Offset(shimmerX * 400f + 250f, 0f)
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(vertical = 8.dp),
+        verticalArrangement = Arrangement.Bottom
+    ) {
+        repeat(5) { i ->
+            SkeletonRow(short = i % 3 == 1, shimmerBrush = shimmerBrush)
+        }
+    }
+}
+
+@Composable
+private fun SkeletonRow(short: Boolean, shimmerBrush: Brush) {
+    val bgColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        // Avatar placeholder
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .background(bgColor, CircleShape)
+                .then(Modifier.background(shimmerBrush, CircleShape))
+        )
+
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Nick + timestamp
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    modifier = Modifier
+                        .size(80.dp, 14.dp)
+                        .background(bgColor, RoundedCornerShape(4.dp))
+                        .then(Modifier.background(shimmerBrush, RoundedCornerShape(4.dp)))
+                )
+                Box(
+                    modifier = Modifier
+                        .size(40.dp, 10.dp)
+                        .background(bgColor, RoundedCornerShape(4.dp))
+                        .then(Modifier.background(shimmerBrush, RoundedCornerShape(4.dp)))
+                )
+            }
+            // Text line 1
+            Box(
+                modifier = Modifier
+                    .size(if (short) 120.dp else 220.dp, 14.dp)
+                    .background(bgColor, RoundedCornerShape(4.dp))
+                    .then(Modifier.background(shimmerBrush, RoundedCornerShape(4.dp)))
+            )
+            // Text line 2 (only for non-short)
+            if (!short) {
+                Box(
+                    modifier = Modifier
+                        .size(160.dp, 14.dp)
+                        .background(bgColor, RoundedCornerShape(4.dp))
+                        .then(Modifier.background(shimmerBrush, RoundedCornerShape(4.dp)))
                 )
             }
         }

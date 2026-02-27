@@ -1741,7 +1741,9 @@ public object FfiConverterTypeChannelTopic: FfiConverterRustBuffer<ChannelTopic>
 data class IrcMember (
     var `nick`: kotlin.String, 
     var `isOp`: kotlin.Boolean, 
-    var `isVoiced`: kotlin.Boolean
+    var `isHalfop`: kotlin.Boolean, 
+    var `isVoiced`: kotlin.Boolean, 
+    var `awayMsg`: kotlin.String?
 ) {
     
     companion object
@@ -1756,19 +1758,25 @@ public object FfiConverterTypeIrcMember: FfiConverterRustBuffer<IrcMember> {
             FfiConverterString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
+            FfiConverterOptionalString.read(buf),
         )
     }
 
     override fun allocationSize(value: IrcMember) = (
             FfiConverterString.allocationSize(value.`nick`) +
             FfiConverterBoolean.allocationSize(value.`isOp`) +
-            FfiConverterBoolean.allocationSize(value.`isVoiced`)
+            FfiConverterBoolean.allocationSize(value.`isHalfop`) +
+            FfiConverterBoolean.allocationSize(value.`isVoiced`) +
+            FfiConverterOptionalString.allocationSize(value.`awayMsg`)
     )
 
     override fun write(value: IrcMember, buf: ByteBuffer) {
             FfiConverterString.write(value.`nick`, buf)
             FfiConverterBoolean.write(value.`isOp`, buf)
+            FfiConverterBoolean.write(value.`isHalfop`, buf)
             FfiConverterBoolean.write(value.`isVoiced`, buf)
+            FfiConverterOptionalString.write(value.`awayMsg`, buf)
     }
 }
 
@@ -1781,6 +1789,8 @@ data class IrcMessage (
     var `msgid`: kotlin.String?, 
     var `replyTo`: kotlin.String?, 
     var `replacesMsgid`: kotlin.String?, 
+    var `editOf`: kotlin.String?, 
+    var `batchId`: kotlin.String?, 
     var `isAction`: kotlin.Boolean, 
     var `timestampMs`: kotlin.Long
 ) {
@@ -1800,6 +1810,8 @@ public object FfiConverterTypeIrcMessage: FfiConverterRustBuffer<IrcMessage> {
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterLong.read(buf),
         )
@@ -1812,6 +1824,8 @@ public object FfiConverterTypeIrcMessage: FfiConverterRustBuffer<IrcMessage> {
             FfiConverterOptionalString.allocationSize(value.`msgid`) +
             FfiConverterOptionalString.allocationSize(value.`replyTo`) +
             FfiConverterOptionalString.allocationSize(value.`replacesMsgid`) +
+            FfiConverterOptionalString.allocationSize(value.`editOf`) +
+            FfiConverterOptionalString.allocationSize(value.`batchId`) +
             FfiConverterBoolean.allocationSize(value.`isAction`) +
             FfiConverterLong.allocationSize(value.`timestampMs`)
     )
@@ -1823,8 +1837,78 @@ public object FfiConverterTypeIrcMessage: FfiConverterRustBuffer<IrcMessage> {
             FfiConverterOptionalString.write(value.`msgid`, buf)
             FfiConverterOptionalString.write(value.`replyTo`, buf)
             FfiConverterOptionalString.write(value.`replacesMsgid`, buf)
+            FfiConverterOptionalString.write(value.`editOf`, buf)
+            FfiConverterOptionalString.write(value.`batchId`, buf)
             FfiConverterBoolean.write(value.`isAction`, buf)
             FfiConverterLong.write(value.`timestampMs`, buf)
+    }
+}
+
+
+
+data class TagEntry (
+    var `key`: kotlin.String, 
+    var `value`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeTagEntry: FfiConverterRustBuffer<TagEntry> {
+    override fun read(buf: ByteBuffer): TagEntry {
+        return TagEntry(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: TagEntry) = (
+            FfiConverterString.allocationSize(value.`key`) +
+            FfiConverterString.allocationSize(value.`value`)
+    )
+
+    override fun write(value: TagEntry, buf: ByteBuffer) {
+            FfiConverterString.write(value.`key`, buf)
+            FfiConverterString.write(value.`value`, buf)
+    }
+}
+
+
+
+data class TagMessage (
+    var `from`: kotlin.String, 
+    var `target`: kotlin.String, 
+    var `tags`: List<TagEntry>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeTagMessage: FfiConverterRustBuffer<TagMessage> {
+    override fun read(buf: ByteBuffer): TagMessage {
+        return TagMessage(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterSequenceTypeTagEntry.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: TagMessage) = (
+            FfiConverterString.allocationSize(value.`from`) +
+            FfiConverterString.allocationSize(value.`target`) +
+            FfiConverterSequenceTypeTagEntry.allocationSize(value.`tags`)
+    )
+
+    override fun write(value: TagMessage, buf: ByteBuffer) {
+            FfiConverterString.write(value.`from`, buf)
+            FfiConverterString.write(value.`target`, buf)
+            FfiConverterSequenceTypeTagEntry.write(value.`tags`, buf)
     }
 }
 
@@ -1925,8 +2009,25 @@ sealed class FreeqEvent {
         companion object
     }
     
+    data class NickChanged(
+        val `oldNick`: kotlin.String, 
+        val `newNick`: kotlin.String) : FreeqEvent() {
+        companion object
+    }
+    
+    data class AwayChanged(
+        val `nick`: kotlin.String, 
+        val `awayMsg`: kotlin.String?) : FreeqEvent() {
+        companion object
+    }
+    
     data class Message(
         val `msg`: IrcMessage) : FreeqEvent() {
+        companion object
+    }
+    
+    data class TagMsg(
+        val `msg`: TagMessage) : FreeqEvent() {
         companion object
     }
     
@@ -1961,6 +2062,18 @@ sealed class FreeqEvent {
     data class UserQuit(
         val `nick`: kotlin.String, 
         val `reason`: kotlin.String) : FreeqEvent() {
+        companion object
+    }
+    
+    data class BatchStart(
+        val `id`: kotlin.String, 
+        val `batchType`: kotlin.String, 
+        val `target`: kotlin.String) : FreeqEvent() {
+        companion object
+    }
+    
+    data class BatchEnd(
+        val `id`: kotlin.String) : FreeqEvent() {
         companion object
     }
     
@@ -2003,37 +2116,56 @@ public object FfiConverterTypeFreeqEvent : FfiConverterRustBuffer<FreeqEvent>{
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            7 -> FreeqEvent.Message(
+            7 -> FreeqEvent.NickChanged(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            8 -> FreeqEvent.AwayChanged(
+                FfiConverterString.read(buf),
+                FfiConverterOptionalString.read(buf),
+                )
+            9 -> FreeqEvent.Message(
                 FfiConverterTypeIrcMessage.read(buf),
                 )
-            8 -> FreeqEvent.Names(
+            10 -> FreeqEvent.TagMsg(
+                FfiConverterTypeTagMessage.read(buf),
+                )
+            11 -> FreeqEvent.Names(
                 FfiConverterString.read(buf),
                 FfiConverterSequenceTypeIrcMember.read(buf),
                 )
-            9 -> FreeqEvent.TopicChanged(
+            12 -> FreeqEvent.TopicChanged(
                 FfiConverterString.read(buf),
                 FfiConverterTypeChannelTopic.read(buf),
                 )
-            10 -> FreeqEvent.ModeChanged(
+            13 -> FreeqEvent.ModeChanged(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterOptionalString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            11 -> FreeqEvent.Kicked(
+            14 -> FreeqEvent.Kicked(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            12 -> FreeqEvent.UserQuit(
+            15 -> FreeqEvent.UserQuit(
                 FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            13 -> FreeqEvent.Notice(
+            16 -> FreeqEvent.BatchStart(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            14 -> FreeqEvent.Disconnected(
+            17 -> FreeqEvent.BatchEnd(
+                FfiConverterString.read(buf),
+                )
+            18 -> FreeqEvent.Notice(
+                FfiConverterString.read(buf),
+                )
+            19 -> FreeqEvent.Disconnected(
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
@@ -2084,11 +2216,34 @@ public object FfiConverterTypeFreeqEvent : FfiConverterRustBuffer<FreeqEvent>{
                 + FfiConverterString.allocationSize(value.`nick`)
             )
         }
+        is FreeqEvent.NickChanged -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`oldNick`)
+                + FfiConverterString.allocationSize(value.`newNick`)
+            )
+        }
+        is FreeqEvent.AwayChanged -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`nick`)
+                + FfiConverterOptionalString.allocationSize(value.`awayMsg`)
+            )
+        }
         is FreeqEvent.Message -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
                 4UL
                 + FfiConverterTypeIrcMessage.allocationSize(value.`msg`)
+            )
+        }
+        is FreeqEvent.TagMsg -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterTypeTagMessage.allocationSize(value.`msg`)
             )
         }
         is FreeqEvent.Names -> {
@@ -2133,6 +2288,22 @@ public object FfiConverterTypeFreeqEvent : FfiConverterRustBuffer<FreeqEvent>{
                 4UL
                 + FfiConverterString.allocationSize(value.`nick`)
                 + FfiConverterString.allocationSize(value.`reason`)
+            )
+        }
+        is FreeqEvent.BatchStart -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`id`)
+                + FfiConverterString.allocationSize(value.`batchType`)
+                + FfiConverterString.allocationSize(value.`target`)
+            )
+        }
+        is FreeqEvent.BatchEnd -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`id`)
             )
         }
         is FreeqEvent.Notice -> {
@@ -2184,25 +2355,42 @@ public object FfiConverterTypeFreeqEvent : FfiConverterRustBuffer<FreeqEvent>{
                 FfiConverterString.write(value.`nick`, buf)
                 Unit
             }
-            is FreeqEvent.Message -> {
+            is FreeqEvent.NickChanged -> {
                 buf.putInt(7)
+                FfiConverterString.write(value.`oldNick`, buf)
+                FfiConverterString.write(value.`newNick`, buf)
+                Unit
+            }
+            is FreeqEvent.AwayChanged -> {
+                buf.putInt(8)
+                FfiConverterString.write(value.`nick`, buf)
+                FfiConverterOptionalString.write(value.`awayMsg`, buf)
+                Unit
+            }
+            is FreeqEvent.Message -> {
+                buf.putInt(9)
                 FfiConverterTypeIrcMessage.write(value.`msg`, buf)
                 Unit
             }
+            is FreeqEvent.TagMsg -> {
+                buf.putInt(10)
+                FfiConverterTypeTagMessage.write(value.`msg`, buf)
+                Unit
+            }
             is FreeqEvent.Names -> {
-                buf.putInt(8)
+                buf.putInt(11)
                 FfiConverterString.write(value.`channel`, buf)
                 FfiConverterSequenceTypeIrcMember.write(value.`members`, buf)
                 Unit
             }
             is FreeqEvent.TopicChanged -> {
-                buf.putInt(9)
+                buf.putInt(12)
                 FfiConverterString.write(value.`channel`, buf)
                 FfiConverterTypeChannelTopic.write(value.`topic`, buf)
                 Unit
             }
             is FreeqEvent.ModeChanged -> {
-                buf.putInt(10)
+                buf.putInt(13)
                 FfiConverterString.write(value.`channel`, buf)
                 FfiConverterString.write(value.`mode`, buf)
                 FfiConverterOptionalString.write(value.`arg`, buf)
@@ -2210,7 +2398,7 @@ public object FfiConverterTypeFreeqEvent : FfiConverterRustBuffer<FreeqEvent>{
                 Unit
             }
             is FreeqEvent.Kicked -> {
-                buf.putInt(11)
+                buf.putInt(14)
                 FfiConverterString.write(value.`channel`, buf)
                 FfiConverterString.write(value.`nick`, buf)
                 FfiConverterString.write(value.`by`, buf)
@@ -2218,18 +2406,30 @@ public object FfiConverterTypeFreeqEvent : FfiConverterRustBuffer<FreeqEvent>{
                 Unit
             }
             is FreeqEvent.UserQuit -> {
-                buf.putInt(12)
+                buf.putInt(15)
                 FfiConverterString.write(value.`nick`, buf)
                 FfiConverterString.write(value.`reason`, buf)
                 Unit
             }
+            is FreeqEvent.BatchStart -> {
+                buf.putInt(16)
+                FfiConverterString.write(value.`id`, buf)
+                FfiConverterString.write(value.`batchType`, buf)
+                FfiConverterString.write(value.`target`, buf)
+                Unit
+            }
+            is FreeqEvent.BatchEnd -> {
+                buf.putInt(17)
+                FfiConverterString.write(value.`id`, buf)
+                Unit
+            }
             is FreeqEvent.Notice -> {
-                buf.putInt(13)
+                buf.putInt(18)
                 FfiConverterString.write(value.`text`, buf)
                 Unit
             }
             is FreeqEvent.Disconnected -> {
-                buf.putInt(14)
+                buf.putInt(19)
                 FfiConverterString.write(value.`reason`, buf)
                 Unit
             }
@@ -2348,6 +2548,34 @@ public object FfiConverterSequenceTypeIrcMember: FfiConverterRustBuffer<List<Irc
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeIrcMember.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeTagEntry: FfiConverterRustBuffer<List<TagEntry>> {
+    override fun read(buf: ByteBuffer): List<TagEntry> {
+        val len = buf.getInt()
+        return List<TagEntry>(len) {
+            FfiConverterTypeTagEntry.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<TagEntry>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeTagEntry.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<TagEntry>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeTagEntry.write(it, buf)
         }
     }
 }
