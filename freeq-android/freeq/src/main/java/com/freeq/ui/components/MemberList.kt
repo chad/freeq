@@ -141,9 +141,9 @@ private fun MemberRow(member: MemberInfo, onMemberClick: ((String) -> Unit)? = n
                 }
             }
             // Away message text
-            if (isAway && member.awayMsg?.isNotEmpty() == true) {
+            if (isAway && !member.awayMsg.isNullOrEmpty()) {
                 Text(
-                    text = member.awayMsg!!,
+                    text = member.awayMsg,
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                     maxLines = 1
