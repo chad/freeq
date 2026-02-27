@@ -443,9 +443,7 @@ async fn api_verify_message(
         // Also check active sessions
         .or_else(|| {
             let n2s = state.nick_to_session.lock();
-            let session = n2s.iter()
-                .find(|(n, _)| n.eq_ignore_ascii_case(sender_nick))
-                .map(|(_, s)| s.clone());
+            let session = n2s.get_session(sender_nick).map(|s| s.to_string());
             session.and_then(|s| state.session_dids.lock().get(&s).cloned())
         });
 
@@ -639,7 +637,7 @@ async fn api_user(
     Path(nick): Path<String>,
     State(state): State<Arc<SharedState>>,
 ) -> Result<Json<UserResponse>, StatusCode> {
-    let session = state.nick_to_session.lock().get(&nick).cloned();
+    let session = state.nick_to_session.lock().get_session(&nick).map(|s| s.to_string());
     let online = session.is_some();
 
     let (did, handle) = if let Some(ref session_id) = session {
@@ -675,7 +673,7 @@ async fn api_user_whois(
     Path(nick): Path<String>,
     State(state): State<Arc<SharedState>>,
 ) -> Result<Json<WhoisResponse>, StatusCode> {
-    let session = state.nick_to_session.lock().get(&nick).cloned();
+    let session = state.nick_to_session.lock().get_session(&nick).map(|s| s.to_string());
     let online = session.is_some();
 
     let (did, handle) = if let Some(ref session_id) = session {

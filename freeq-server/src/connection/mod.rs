@@ -372,9 +372,8 @@ where
                     }
                     let nick_lower = nick.to_lowercase();
                     let in_use_by_session = state.nick_to_session.lock()
-                        .iter()
-                        .find(|(k, _)| k.to_lowercase() == nick_lower)
-                        .map(|(_, sid)| sid.clone());
+                        .get_session(&nick)
+                        .map(|s| s.to_string());
                     let in_use = in_use_by_session.is_some();
 
                     // Check if the nick is in use by the same DID (multi-device OK)
@@ -427,12 +426,9 @@ where
                     } else {
                         let old_nick = conn.nick.clone();
                         if let Some(ref old) = old_nick {
-                            state.nick_to_session.lock().remove(old);
+                            state.nick_to_session.lock().remove_by_nick(old);
                         }
-                        state
-                            .nick_to_session
-                            .lock()
-                            .insert(nick.clone(), session_id.clone());
+                        state.nick_to_session.lock().insert(&nick, &session_id);
                         conn.nick = Some(nick.clone());
 
                         if conn.registered {
@@ -770,13 +766,14 @@ where
                 let mut replies = Vec::new();
                 for nick in msg.params.iter().take(5) {
                     let n2s = state.nick_to_session.lock();
-                    if let Some(sid) = n2s.get(nick) {
+                    if let Some(sid) = n2s.get_session(nick) {
+                        let sid = sid.to_string();
                         let is_op = {
                             let channels = state.channels.lock();
-                            channels.values().any(|ch| ch.ops.contains(sid))
+                            channels.values().any(|ch| ch.ops.contains(&sid))
                         };
                         let prefix = if is_op { "*" } else { "" };
-                        let did = state.session_dids.lock().get(sid).cloned();
+                        let did = state.session_dids.lock().get(&sid).cloned();
                         let host = helpers::cloaked_host_for_did(did.as_deref());
                         replies.push(format!("{nick}{prefix}=+{nick}@{host}"));
                     }
@@ -791,7 +788,7 @@ where
                 if !conn.registered { continue; }
                 let n2s = state.nick_to_session.lock();
                 let online: Vec<&str> = msg.params.iter()
-                    .filter(|nick| n2s.contains_key(*nick))
+                    .filter(|nick| n2s.contains_nick(nick))
                     .map(|s| s.as_str())
                     .collect();
                 let reply = Message::from_server(
@@ -916,7 +913,7 @@ where
             }
             drop(conns);
             drop(channels);
-            state.nick_to_session.lock().remove(nick);
+            state.nick_to_session.lock().remove_by_nick(nick);
 
             // Broadcast QUIT to S2S peers only for last session
             let origin = state.server_iroh_id.lock().clone().unwrap_or_default();

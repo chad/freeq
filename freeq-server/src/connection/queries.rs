@@ -21,8 +21,8 @@ pub(super) fn handle_whois(
     let target_session = state
         .nick_to_session
         .lock()
-        .get(target_nick)
-        .cloned();
+        .get_session(target_nick)
+        .map(|s| s.to_string());
 
     let Some(target_session) = target_session else {
         // Check if this is a remote user (from S2S)
@@ -208,12 +208,10 @@ pub(super) fn handle_who(
         let channels = state.channels.lock();
         if let Some(ch) = channels.get(&channel) {
             let n2s = state.nick_to_session.lock();
-            let reverse: std::collections::HashMap<&String, &String> =
-                n2s.iter().map(|(n, s)| (s, n)).collect();
             let away = state.session_away.lock();
 
             for session in &ch.members {
-                if let Some(member_nick) = reverse.get(session) {
+                if let Some(member_nick) = n2s.get_nick(session) {
                     let user = "~u";
                     let host = "host";
                     let away_flag = if away.contains_key(session) { "G" } else { "H" };
@@ -245,7 +243,7 @@ pub(super) fn handle_who(
         send(state, session_id, format!("{end}\r\n"));
     } else {
         // WHO for a nick
-        let target_session = state.nick_to_session.lock().get(target).cloned();
+        let target_session = state.nick_to_session.lock().get_session(target).map(|s| s.to_string());
         if let Some(ref session) = target_session {
             let away = state.session_away.lock();
             let away_flag = if away.contains_key(session) { "G" } else { "H" };

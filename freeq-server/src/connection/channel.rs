@@ -420,13 +420,11 @@ pub(super) fn handle_join(
         drop(channels);
         // Local members: look up nick from session ID (deduplicated for multi-device)
         let nicks = state.nick_to_session.lock();
-        let reverse: std::collections::HashMap<&String, &String> =
-            nicks.iter().map(|(n, s)| (s, n)).collect();
         let mut seen_nicks = std::collections::HashSet::new();
         let mut list: Vec<String> = member_sessions
             .iter()
             .filter_map(|s| {
-                reverse.get(s).and_then(|n| {
+                nicks.get_nick(s).and_then(|n| {
                     let nick_lower = n.to_lowercase();
                     if !seen_nicks.insert(nick_lower) { return None; }
                     let prefix = if ops.contains(s) {
@@ -976,11 +974,9 @@ pub(super) fn handle_kick(
             .get(channel)
             .map(|ch| {
                 // Find target session ID
-                let target_lower = target_nick.to_lowercase();
                 let n2s = state.nick_to_session.lock();
-                n2s.iter()
-                    .find(|(n, _)| n.to_lowercase() == target_lower)
-                    .map(|(_, sid)| ch.ops.contains(sid) || ch.halfops.contains(sid))
+                n2s.get_session(target_nick)
+                    .map(|sid| ch.ops.contains(sid) || ch.halfops.contains(sid))
                     .unwrap_or(false)
             })
             .unwrap_or(false);
@@ -1373,13 +1369,11 @@ pub(super) fn handle_names(
         };
         drop(channels);
         let nicks = state.nick_to_session.lock();
-        let reverse: std::collections::HashMap<&String, &String> =
-            nicks.iter().map(|(n, s)| (s, n)).collect();
         let mut seen_nicks = std::collections::HashSet::new();
         let mut list: Vec<String> = member_sessions
             .iter()
             .filter_map(|s| {
-                reverse.get(s).and_then(|n| {
+                nicks.get_nick(s).and_then(|n| {
                     // Deduplicate by nick (multi-device: same nick, multiple sessions)
                     let nick_lower = n.to_lowercase();
                     if !seen_nicks.insert(nick_lower) { return None; }

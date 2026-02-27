@@ -52,9 +52,7 @@ pub(super) fn resolve_channel_target(
     // Check local: case-insensitive nick → session, session ∈ channel.members
     let local_session = {
         let n2s = state.nick_to_session.lock();
-        n2s.iter()
-            .find(|(n, _)| n.to_lowercase() == nick_lower)
-            .map(|(_, sid)| sid.clone())
+        n2s.get_session(target_nick).map(|s| s.to_string())
     };
     if let Some(ref sid) = local_session {
         let in_channel = state.channels.lock()
@@ -104,12 +102,10 @@ pub(super) fn resolve_network_target(
 ) -> NetworkTarget {
     let nick_lower = target_nick.to_lowercase();
 
-    // Check local first (case-insensitive)
+    // Check local first (case-insensitive — NickMap handles it)
     let local_sid = {
         let n2s = state.nick_to_session.lock();
-        n2s.iter()
-            .find(|(n, _)| n.to_lowercase() == nick_lower)
-            .map(|(_, sid)| sid.clone())
+        n2s.get_session(target_nick).map(|s| s.to_string())
     };
     if let Some(sid) = local_sid {
         return NetworkTarget::Local { session_id: sid };

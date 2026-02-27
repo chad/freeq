@@ -257,14 +257,99 @@ impl TopicInfo {
 }
 
 /// Shared state accessible by all connection handlers.
+/// Case-insensitive nick↔session map.
+///
+/// All keys are stored lowercase. Display-case nicks are stored separately
+/// so NAMES/WHO/WHOIS return the user's preferred casing.
+///
+/// O(1) lookup by nick or session_id — no more linear scans.
+#[derive(Debug, Default)]
+pub struct NickMap {
+    /// lowercase_nick → session_id
+    nick_to_sid: HashMap<String, String>,
+    /// session_id → display_nick (original case)
+    sid_to_nick: HashMap<String, String>,
+}
+
+impl NickMap {
+    pub fn new() -> Self { Self::default() }
+
+    /// Insert a nick→session mapping. Nick is stored case-insensitively.
+    pub fn insert(&mut self, display_nick: &str, session_id: &str) {
+        let lower = display_nick.to_lowercase();
+        // Remove old mapping for this session if it had a different nick
+        if let Some(old_nick) = self.sid_to_nick.remove(session_id) {
+            self.nick_to_sid.remove(&old_nick.to_lowercase());
+        }
+        // Remove old mapping for this nick if a different session held it
+        if let Some(old_sid) = self.nick_to_sid.remove(&lower) {
+            self.sid_to_nick.remove(&old_sid);
+        }
+        self.nick_to_sid.insert(lower, session_id.to_string());
+        self.sid_to_nick.insert(session_id.to_string(), display_nick.to_string());
+    }
+
+    /// Look up session_id by nick (case-insensitive). O(1).
+    pub fn get_session(&self, nick: &str) -> Option<&str> {
+        self.nick_to_sid.get(&nick.to_lowercase()).map(|s| s.as_str())
+    }
+
+    /// Look up display nick by session_id. O(1).
+    pub fn get_nick(&self, session_id: &str) -> Option<&str> {
+        self.sid_to_nick.get(session_id).map(|s| s.as_str())
+    }
+
+    /// Check if a nick is in use (case-insensitive).
+    pub fn contains_nick(&self, nick: &str) -> bool {
+        self.nick_to_sid.contains_key(&nick.to_lowercase())
+    }
+
+    /// Remove by nick (case-insensitive). Returns the session_id if found.
+    pub fn remove_by_nick(&mut self, nick: &str) -> Option<String> {
+        let lower = nick.to_lowercase();
+        if let Some(sid) = self.nick_to_sid.remove(&lower) {
+            self.sid_to_nick.remove(&sid);
+            Some(sid)
+        } else {
+            None
+        }
+    }
+
+    /// Remove by session_id. Returns the display nick if found.
+    pub fn remove_by_session(&mut self, session_id: &str) -> Option<String> {
+        if let Some(nick) = self.sid_to_nick.remove(session_id) {
+            self.nick_to_sid.remove(&nick.to_lowercase());
+            Some(nick)
+        } else {
+            None
+        }
+    }
+
+    /// Iterate all (display_nick, session_id) pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.sid_to_nick.iter().map(|(sid, nick)| (nick.as_str(), sid.as_str()))
+    }
+
+    /// Number of entries.
+    pub fn len(&self) -> usize {
+        self.nick_to_sid.len()
+    }
+
+    /// Check if a nick is held by a specific session.
+    pub fn nick_belongs_to(&self, nick: &str, session_id: &str) -> bool {
+        self.nick_to_sid.get(&nick.to_lowercase())
+            .is_some_and(|sid| sid == session_id)
+    }
+}
+
 pub struct SharedState {
     pub server_name: String,
     pub challenge_store: ChallengeStore,
     pub did_resolver: DidResolver,
     /// session_id -> sender for writing lines to that client
     pub connections: Mutex<HashMap<String, mpsc::Sender<String>>>,
-    /// nick -> session_id
-    pub nick_to_session: Mutex<HashMap<String, String>>,
+    /// nick -> session_id (case-insensitive: keys are always lowercase)
+    pub nick_to_session: Mutex<NickMap>,
     /// session_id -> authenticated DID (for WHOIS lookups by other connections)
     pub session_dids: Mutex<HashMap<String, String>>,
     /// DID -> all active session IDs for multi-device support.
@@ -620,7 +705,7 @@ impl Server {
             challenge_store: ChallengeStore::new(self.config.challenge_timeout_secs),
             did_resolver: self.resolver.clone(),
             connections: Mutex::new(HashMap::new()),
-            nick_to_session: Mutex::new(HashMap::new()),
+            nick_to_session: Mutex::new(NickMap::new()),
             session_dids: Mutex::new(HashMap::new()),
             did_sessions: Mutex::new(HashMap::new()),
             channels: Mutex::new(channels),
@@ -1118,10 +1203,9 @@ async fn process_s2s_message(
 
         // Build nick list (local + remote)
         let n2s = state.nick_to_session.lock();
-        let reverse: HashMap<&String, &String> = n2s.iter().map(|(n, s)| (s, n)).collect();
         let mut nick_list: Vec<String> = ch.members.iter()
             .filter_map(|s| {
-                reverse.get(s).map(|n| {
+                n2s.get_nick(s).map(|n| {
                     let prefix = if ch.ops.contains(s) { "@" }
                         else if ch.halfops.contains(s) { "%" }
                         else if ch.voiced.contains(s) { "+" }
@@ -1146,7 +1230,7 @@ async fn process_s2s_message(
         let conns = state.connections.lock();
         for session_id in &local_members {
             // Look up this member's nick for the reply prefix
-            let member_nick = reverse.get(session_id).map(|n| n.as_str()).unwrap_or("*");
+            let member_nick = n2s.get_nick(session_id).unwrap_or("*");
             let names_line = format!(
                 ":{} 353 {} = {} :{}\r\n:{} 366 {} {} :End of /NAMES list\r\n",
                 state.server_name, member_nick, channel, nick_str,
@@ -1241,10 +1325,9 @@ async fn process_s2s_message(
                     if ch.no_ext_msg {
                         let nick = from.split('!').next().unwrap_or(&from);
                         let is_member = ch.has_remote_member(nick)
-                            || ch.members.iter().any(|sid| {
-                                state.nick_to_session.lock()
-                                    .iter().any(|(n, s)| n.to_lowercase() == nick.to_lowercase() && s == sid)
-                            });
+                            || state.nick_to_session.lock()
+                                .get_session(&nick)
+                                .is_some_and(|sid| ch.members.contains(sid));
                         if !is_member {
                             tracing::debug!(channel = %target, from = %from, "S2S PRIVMSG blocked by +n");
                             return;
@@ -1307,12 +1390,8 @@ async fn process_s2s_message(
                 }
             } else {
                 // Case-insensitive nick lookup for PM delivery
-                let n2s = state.nick_to_session.lock();
-                let target_lower = target.to_lowercase();
-                let sid = n2s.iter()
-                    .find(|(n, _)| n.to_lowercase() == target_lower)
-                    .map(|(_, s)| s.clone());
-                drop(n2s);
+                let sid = state.nick_to_session.lock()
+                    .get_session(&target).map(|s| s.to_string());
                 if let Some(sid) = sid {
                     let has_tags = state.cap_message_tags.lock().contains(&sid);
                     let line = if has_tags { &tagged_line } else { &plain_line };
@@ -1557,17 +1636,16 @@ async fn process_s2s_message(
             let response = {
                 let channels = state.channels.lock();
                 let n2s = state.nick_to_session.lock();
-                let s2n: HashMap<&String, &String> = n2s.iter().map(|(n, s)| (s, n)).collect();
 
                 let dids = state.session_dids.lock();
                 let channel_info: Vec<crate::s2s::ChannelInfo> = channels.iter().map(|(name, ch)| {
                     let nicks: Vec<String> = ch.members.iter()
-                        .filter_map(|sid| s2n.get(sid).map(|n| (*n).clone()))
+                        .filter_map(|sid| n2s.get_nick(sid).map(|n| n.to_string()))
                         .collect();
                     let nick_info: Vec<crate::s2s::SyncNick> = ch.members.iter()
                         .filter_map(|sid| {
-                            s2n.get(sid).map(|n| crate::s2s::SyncNick {
-                                nick: (*n).clone(),
+                            n2s.get_nick(sid).map(|n| crate::s2s::SyncNick {
+                                nick: n.to_string(),
                                 is_op: ch.ops.contains(sid),
                                 did: dids.get(sid).cloned(),
                             })
@@ -1862,13 +1940,8 @@ async fn process_s2s_message(
                             // Find the target by nick and apply the mode.
                             if let Some(ref target_nick) = arg {
                                 // Case-insensitive local nick lookup
-                                let target_sid = {
-                                    let n2s = state.nick_to_session.lock();
-                                    let lower = target_nick.to_lowercase();
-                                    n2s.iter()
-                                        .find(|(n, _)| n.to_lowercase() == lower)
-                                        .map(|(_, s)| s.clone())
-                                };
+                                let target_sid = state.nick_to_session.lock()
+                                    .get_session(target_nick).map(|s| s.to_string());
                                 if let Some(ref sid) = target_sid {
                                     let set = if mode_char == 'o' {
                                         &mut ch.ops
@@ -1957,15 +2030,9 @@ async fn process_s2s_message(
 
             let kick_line = format!(":{by}!remote@s2s KICK {channel} {nick} :{reason}\r\n");
 
-            // Case-insensitive nick lookup: IRC nicks are case-insensitive
-            // but nick_to_session stores them in original case.
-            let target_session = {
-                let n2s = state.nick_to_session.lock();
-                let nick_lower = nick.to_lowercase();
-                n2s.iter()
-                    .find(|(n, _)| n.to_lowercase() == nick_lower)
-                    .map(|(_, sid)| sid.clone())
-            };
+            // Case-insensitive nick lookup (NickMap handles this in O(1))
+            let target_session = state.nick_to_session.lock()
+                .get_session(&nick).map(|s| s.to_string());
 
             if let Some(ref sid) = target_session {
                 // Target is local — broadcast KICK to channel, remove member

@@ -45,10 +45,8 @@ pub(super) fn attach_same_did(
         // Ensure nick is in nick_to_session
         if let Some(ref nick) = conn.nick {
             let mut nts = state.nick_to_session.lock();
-            let nick_lower = nick.to_lowercase();
-            let already_mapped = nts.keys().any(|k| k.to_lowercase() == nick_lower);
-            if !already_mapped {
-                nts.insert(nick.clone(), session_id.to_string());
+            if !nts.contains_nick(nick) {
+                nts.insert(nick, session_id);
                 tracing::info!(nick = %nick, "Registered nick for DID {did}");
             }
         }
@@ -57,12 +55,10 @@ pub(super) fn attach_same_did(
             .filter(|n| n.ends_with('_'))
             .map(|n| (n.clone(), n.trim_end_matches('_').to_string()));
         if let Some((current_nick, desired)) = reclaim {
-            let nick_free = !state.nick_to_session.lock()
-                .keys().any(|k| k.to_lowercase() == desired.to_lowercase());
-            if nick_free {
-                state.nick_to_session.lock().remove(&current_nick);
-                state.nick_to_session.lock()
-                    .insert(desired.clone(), session_id.to_string());
+            let mut nts = state.nick_to_session.lock();
+            if !nts.contains_nick(&desired) {
+                nts.remove_by_nick(&current_nick);
+                nts.insert(&desired, session_id);
                 tracing::info!(old = %current_nick, new = %desired, "Reclaimed nick");
                 conn.nick = Some(desired);
             }
@@ -79,8 +75,11 @@ pub(super) fn attach_same_did(
         let nts = state.nick_to_session.lock();
         let sd = state.session_dids.lock();
         nts.iter()
-            .find(|(_, sid)| sd.get(*sid).map_or(false, |d| d == &did))
-            .map(|(nick, _)| nick.clone())
+            .find(|&(_, sid)| {
+                let sid_str: &str = sid;
+                sd.get(sid_str).map_or(false, |d| d == &did)
+            })
+            .map(|(nick, _)| nick.to_string())
     };
 
     // Adopt the canonical nick
@@ -88,7 +87,7 @@ pub(super) fn attach_same_did(
         if conn.nick.as_ref().map(|n| n.to_lowercase()) != Some(canon.to_lowercase()) {
             // Remove any nick mapping we created during CAP/SASL
             if let Some(ref old_nick) = conn.nick {
-                state.nick_to_session.lock().remove(old_nick);
+                state.nick_to_session.lock().remove_by_nick(old_nick);
             }
             conn.nick = Some(canon.clone());
         }
@@ -143,7 +142,7 @@ pub(super) fn attach_same_did(
             let mut names: Vec<String> = Vec::new();
             let mut seen_nicks = std::collections::HashSet::new();
             for member_sid in &ch.members {
-                if let Some((member_nick, _)) = nts.iter().find(|(_, s)| *s == member_sid) {
+                if let Some(member_nick) = nts.get_nick(member_sid) {
                     let nick_lower = member_nick.to_lowercase();
                     if seen_nicks.contains(&nick_lower) { continue; }
                     seen_nicks.insert(nick_lower);
@@ -211,8 +210,8 @@ pub(super) fn try_complete_registration(
                     vec!["*", &format!("Nick {nick} is registered — renamed to {guest_nick}. Authenticate to reclaim.")],
                 );
                 send(state, session_id, format!("{notice}\r\n"));
-                state.nick_to_session.lock().remove(nick);
-                state.nick_to_session.lock().insert(guest_nick.clone(), session_id.to_string());
+                state.nick_to_session.lock().remove_by_nick(nick);
+                state.nick_to_session.lock().insert(&guest_nick, session_id);
                 conn.nick = Some(guest_nick);
             }
         }

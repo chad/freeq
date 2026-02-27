@@ -61,9 +61,7 @@ pub(crate) fn relay_to_nick(
     let target_lower = target.to_lowercase();
     let local_session = {
         let n2s = state.nick_to_session.lock();
-        n2s.iter()
-            .find(|(n, _)| n.to_lowercase() == target_lower)
-            .map(|(_, sid)| sid.clone())
+        n2s.get_session(target).map(|s| s.to_string())
     };
     if let Some(sid) = local_session {
         return RouteResult::Local(sid);
