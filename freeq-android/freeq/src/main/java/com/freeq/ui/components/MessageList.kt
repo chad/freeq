@@ -4,6 +4,7 @@ import android.view.ContextThemeWrapper
 import androidx.compose.foundation.background
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -11,6 +12,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -25,9 +27,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -299,9 +305,56 @@ private fun MessageBubble(
     }
 
     val accentColor = FreeqColors.accent
+
+    // Swipe-to-reply gesture state
+    val swipeOffset = remember { Animatable(0f) }
+    val swipeScope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    val swipeThresholdPx = with(density) { 60.dp.toPx() }
+    var hasTriggered by remember { mutableStateOf(false) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .pointerInput(msg.id) {
+                detectHorizontalDragGestures(
+                    onDragStart = { hasTriggered = false },
+                    onDragEnd = {
+                        if (swipeOffset.value >= swipeThresholdPx) {
+                            appState.replyingTo.value = msg
+                        }
+                        swipeScope.launch { swipeOffset.animateTo(0f) }
+                    },
+                    onDragCancel = {
+                        swipeScope.launch { swipeOffset.animateTo(0f) }
+                    },
+                    onHorizontalDrag = { _, dragAmount ->
+                        val newValue = (swipeOffset.value + dragAmount).coerceIn(0f, swipeThresholdPx * 1.2f)
+                        swipeScope.launch { swipeOffset.snapTo(newValue) }
+                        if (!hasTriggered && newValue >= swipeThresholdPx) {
+                            hasTriggered = true
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        }
+                    }
+                )
+            }
+    ) {
+        // Reply icon behind the message
+        Icon(
+            Icons.AutoMirrored.Filled.Reply,
+            contentDescription = "Reply",
+            tint = FreeqColors.accent,
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = 12.dp)
+                .size(20.dp)
+                .alpha((swipeOffset.value / swipeThresholdPx).coerceIn(0f, 1f))
+        )
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .offset { IntOffset(swipeOffset.value.toInt(), 0) }
             .then(bgModifier)
             .then(
                 if (isMention) Modifier.drawBehind {
@@ -590,7 +643,8 @@ private fun MessageBubble(
                 }
             )
         }
-    }
+    } // Column
+    } // Box (swipe-to-reply)
 }
 
 @Composable
