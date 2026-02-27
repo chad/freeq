@@ -203,8 +203,8 @@ If something feels “too clever,” it’s probably wrong.
 - [x] **`away-notify` cap** — ✅ DONE. Broadcast AWAY changes to shared channel members. Server, SDK, TUI, and web client all support it.
 - [x] **S2S authorization on Kick/Mode** — ✅ DONE. Receiving server verifies the kicker/mode-setter is an op (via remote_members is_op, founder_did, or did_ops) before executing. Unauthorized mode/kick events are rejected with warning log.
 - [x] **S2S authorization on Topic** — ✅ DONE. +t channels reject topic changes from non-ops. Removed "trust unknown users" fallback.
-- [ ] **SyncResponse channel creation limit** — Cap channels created via sync to prevent a rogue peer from creating thousands of channels.
-- [ ] **ChannelCreated should propagate default modes** — Receiving side uses `or_default()` which sets all modes to false. Should inherit +nt defaults so remote channels have standard protections.
+- [x] **SyncResponse channel creation limit** — ✅ DONE. Capped at 500 channels per peer. Excess logged and dropped.
+- [x] **ChannelCreated should propagate default modes** — ✅ DONE. New channels from S2S get +nt defaults.
 - [ ] **Invites should sync via S2S** — Currently invites are local server state only. A user invited on server A can only join on server A. Relay invite tokens to peers.
 - [x] **S2S rate limiting** — ✅ DONE. 100 events/sec per peer, drops with warning log.
 - [ ] **DPoP nonce retry for SASL verification** — PDS nonce rotation causes server-side verification to fail.
@@ -214,12 +214,12 @@ If something feels “too clever,” it’s probably wrong.
 - [ ] **Topic merge consistency** — SyncResponse ignores remote topic if local is set, but CRDT reconciliation overwrites. Two systems with different merge strategies cause flapping.
 - [ ] **Channel key removal propagation** — `-k` can't propagate via SyncResponse (only additive). Needs protocol change or CRDT-backed key state.
 - [ ] **S2S authentication (allowlist enforcement)** — `--s2s-allowed-peers` only checks incoming. Formalize mutual auth.
-- [ ] **Ban sync + enforcement** — Bans are local-only despite CRDT support. Wire up S2S ban propagation.
+- [x] **Ban sync + enforcement** — ✅ DONE. S2sMessage::Ban variant, authorized set/remove, SyncResponse carries bans, additive merge.
 - [x] **S2S Join enforcement** — ✅ DONE. Incoming S2S Joins check bans (nick + DID) and +i (invite only). Blocked joins logged.
-- [ ] **Hostname cloaking** — All users show `host` placeholder. Implement cloaking for public deployments.
-- [ ] **IRCv3: account-notify / extended-join** — Broadcast DID on auth and in JOIN.
-- [ ] **IRCv3: CHATHISTORY** — On-demand history retrieval (persistence layer supports it).
-- [ ] **Connection limits** — Per-IP connection limits.
+- [x] **Hostname cloaking** — ✅ DONE. `freeq/plc/xxxxxxxx` for DID users, `freeq/guest` for guests.
+- [x] **IRCv3: account-notify / extended-join** — ✅ DONE. DID broadcast on SASL success and extended JOIN.
+- [x] **IRCv3: CHATHISTORY** — ✅ DONE. On-demand history retrieval with batch support.
+- [x] **Connection limits** — ✅ DONE. 20 per-IP at TCP + WebSocket level.
 - [ ] **OPER command** — Server operator status for remote admin.
 - [ ] **TUI auto-reconnection** — Reconnect with backoff, rejoin channels.
 - [ ] **Normalize nick_to_session to lowercase keys** — Avoids O(n) linear scan on every case-insensitive nick lookup. Currently all nick lookups iterate the full map.
