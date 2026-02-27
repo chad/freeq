@@ -483,11 +483,17 @@ async function handleLine(rawLine: string) {
       // 3. Saved channels from localStorage (fresh page load)
       // For DID-authenticated users, the server also auto-joins saved channels,
       // but sending JOIN for already-joined channels is harmless (server ignores).
-      const toJoin = autoJoinChannels.length > 0
+      let toJoin = autoJoinChannels.length > 0
         ? autoJoinChannels
         : joinedChannels.size > 0
           ? [...joinedChannels]
           : loadSavedChannels();
+      // Always include #freeq for new users (no saved channels)
+      if (toJoin.length === 0) toJoin = ['#freeq'];
+      // Ensure #freeq is always in the list
+      if (!toJoin.some(ch => ch.toLowerCase().replace(/^#/, '') === 'freeq' || ch.toLowerCase() === '#freeq')) {
+        toJoin.unshift('#freeq');
+      }
       for (const ch of toJoin) {
         if (ch.trim()) raw(`JOIN ${ch.trim()}`);
       }

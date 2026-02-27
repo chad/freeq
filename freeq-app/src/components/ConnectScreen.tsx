@@ -4,6 +4,25 @@ import { useStore } from '../store';
 
 type LoginMode = 'at-proto' | 'guest';
 
+function AuthStep({ done, active, label }: { done?: boolean; active?: boolean; label: string }) {
+  return (
+    <div className={`flex items-center gap-2 text-[11px] ${done ? 'text-success' : active ? 'text-fg-muted' : 'text-fg-dim/40'}`}>
+      {done ? (
+        <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
+        </svg>
+      ) : active ? (
+        <svg className="w-3.5 h-3.5 shrink-0 animate-spin" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
+          <circle cx="8" cy="8" r="6" strokeDasharray="28" strokeDashoffset="8" strokeLinecap="round" />
+        </svg>
+      ) : (
+        <div className="w-3.5 h-3.5 shrink-0 rounded-full border border-current opacity-30" />
+      )}
+      <span>{label}</span>
+    </div>
+  );
+}
+
 function friendlyError(error: string): string {
   if (error.includes('SASL authentication failed'))
     return 'Could not verify your identity. Make sure your handle is correct and try again.';
@@ -92,7 +111,10 @@ export function ConnectScreen() {
       const existing = localStorage.getItem(LS_CHANNELS) || '';
       const merged = new Set(existing.split(',').map(s => s.trim()).filter(Boolean));
       merged.add(ch);
-      return [...merged].join(',');
+      const result = [...merged].join(',');
+      // Persist through OAuth redirect
+      localStorage.setItem(LS_CHANNELS, result);
+      return result;
     }
     return localStorage.getItem(LS_CHANNELS) || '#freeq';
   });
@@ -312,11 +334,11 @@ export function ConnectScreen() {
               ? 'Waiting for Bluesky authorization...'
               : 'Connecting to identity provider...'}
           </p>
-          <p className="text-fg-dim/50 text-[10px] mt-2">
-            {oauthPending
-              ? 'Complete the login in the popup window'
-              : 'This may take a few seconds on first connect'}
-          </p>
+          <div className="mt-3 space-y-1.5 text-left max-w-[200px] mx-auto">
+            <AuthStep done label="Resolving identity" />
+            <AuthStep done={!oauthPending} active={oauthPending} label={oauthPending ? 'Authorize in popup' : 'Verifying credentials'} />
+            <AuthStep active={!oauthPending} label="Establishing session" />
+          </div>
           {authError && (
             <p className="text-danger text-xs mt-3">{authError}</p>
           )}
@@ -340,10 +362,21 @@ export function ConnectScreen() {
           <h1 className="text-3xl font-bold tracking-tight">
             <span className="text-accent">free</span><span className="text-fg">q</span>
           </h1>
-          <p className="text-fg-dim text-xs mt-1 leading-relaxed">
-            Decentralized chat with verified identity.<br />
-            Sign in with Bluesky, or join as a guest.
+          <p className="text-fg-dim text-xs mt-1 leading-relaxed max-w-[300px] mx-auto">
+            Chat where your identity is yours. Messages are cryptographically signed.
+            No platform lock-in. E2EE DMs.
           </p>
+          <div className="flex justify-center gap-4 mt-2.5 text-[10px] text-fg-dim">
+            <span className="flex items-center gap-1">
+              <span className="text-success">✓</span> Signed messages
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="text-success">🔒</span> E2EE DMs
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="text-accent">🦋</span> Bluesky identity
+            </span>
+          </div>
         </div>
 
         {/* Mode tabs */}

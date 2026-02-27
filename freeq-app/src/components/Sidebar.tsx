@@ -143,11 +143,24 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
         <div className="flex items-center gap-2.5">
           <SelfAvatar nick={nick} did={authDid} />
           <div className="min-w-0 flex-1">
-            <div className="text-[15px] font-semibold truncate">{nick}</div>
-            {authDid && (
-              <div className="text-xs text-fg-dim truncate" title={authDid}>
-                {authDid}
-              </div>
+            <div className="text-[15px] font-semibold truncate flex items-center gap-1">
+              {nick}
+              {authDid && <span className="text-accent text-xs" title="Verified AT Protocol identity">✓</span>}
+            </div>
+            {authDid && (() => {
+              const handle = localStorage.getItem('freeq-handle');
+              return handle ? (
+                <div className="text-[11px] text-fg-dim truncate flex items-center gap-1" title={authDid}>
+                  <span className="text-accent">🦋</span> {handle}
+                </div>
+              ) : (
+                <div className="text-[11px] text-fg-dim truncate" title={authDid}>
+                  {authDid.slice(0, 24)}…
+                </div>
+              );
+            })()}
+            {!authDid && (
+              <div className="text-[11px] text-fg-dim">Guest</div>
             )}
           </div>
           <button

@@ -527,7 +527,10 @@ async fn api_health(State(state): State<Arc<SharedState>>) -> Json<HealthRespons
     let start = START_TIME.get_or_init(SystemTime::now);
     let uptime = start.elapsed().unwrap_or_default().as_secs();
     let connections = state.connections.lock().len();
-    let channels = state.channels.lock().len();
+    // Count only channels with members (not empty shells)
+    let channels = state.channels.lock().values()
+        .filter(|ch| !ch.members.is_empty() || !ch.remote_members.is_empty())
+        .count();
     Json(HealthResponse {
         server_name: state.server_name.clone(),
         connections,
