@@ -409,6 +409,8 @@ function MessageContent({ msg }: { msg: Message }) {
       {/* Link preview for other URLs (not images, Bluesky, or YouTube) */}
       {!bskyMatch && !ytMatch && imageUrls.length === 0 && (() => {
         const urlMatch = msg.text.match(/(https?:\/\/[^\s<]+)/);
+        // Skip blob proxy URLs, audio/video URLs — they're media, not web pages
+        if (urlMatch && /\/api\/v1\/blob|\.(?:m4a|mp3|mp4|mov|webm|ogg|wav|aac)/i.test(urlMatch[1])) return null;
         return urlMatch ? <LinkPreview url={urlMatch[1]} /> : null;
       })()}
     </div>
