@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -198,10 +199,20 @@ private fun MessageBubble(
         else -> Modifier
     }
 
+    val accentColor = FreeqColors.accent
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .then(bgModifier)
+            .then(
+                if (isMention) Modifier.drawBehind {
+                    drawRect(
+                        color = accentColor,
+                        topLeft = androidx.compose.ui.geometry.Offset.Zero,
+                        size = androidx.compose.ui.geometry.Size(3.dp.toPx(), size.height)
+                    )
+                } else Modifier
+            )
             .padding(
                 start = 16.dp,
                 end = 16.dp,
