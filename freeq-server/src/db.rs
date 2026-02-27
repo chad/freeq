@@ -110,6 +110,14 @@ impl Db {
         Ok(db)
     }
 
+    /// Open an in-memory database with encryption at rest (for testing).
+    pub fn open_encrypted_memory(key: [u8; 32]) -> SqlResult<Self> {
+        let conn = Connection::open_in_memory()?;
+        let db = Self { conn, encryption_key: Some(key) };
+        db.init()?;
+        Ok(db)
+    }
+
     fn init(&self) -> SqlResult<()> {
         self.conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         self.conn.execute_batch("PRAGMA foreign_keys=ON;")?;
@@ -500,6 +508,83 @@ impl Db {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![channel, sender, stored_text, timestamp as i64, tags_json, msgid, replaces_msgid],
         )?;
+        Ok(())
+    }
+
+    /// Get raw (potentially encrypted) message text for testing.
+    /// Returns the stored text without decryption.
+    pub fn get_raw_message_text(&self, channel: &str, timestamp: u64) -> SqlResult<String> {
+        self.conn.query_row(
+            "SELECT text FROM messages WHERE channel = ?1 AND timestamp = ?2",
+            params![channel, timestamp as i64],
+            |row| row.get(0),
+        )
+    }
+
+    /// Get DM history between two users.
+    pub fn dm_history(&self, user_a: &str, user_b: &str, limit: usize, before_ts: Option<u64>) -> SqlResult<Vec<MessageRow>> {
+        let sql = if before_ts.is_some() {
+            "SELECT id, channel, sender, text, timestamp, tags_json, msgid, replaces_msgid, deleted_at
+             FROM messages
+             WHERE ((channel = ?1 AND sender LIKE ?2) OR (channel = ?2 AND sender LIKE ?1))
+               AND (deleted_at IS NULL)
+               AND timestamp < ?4
+             ORDER BY timestamp ASC LIMIT ?3"
+        } else {
+            "SELECT id, channel, sender, text, timestamp, tags_json, msgid, replaces_msgid, deleted_at
+             FROM messages
+             WHERE ((channel = ?1 AND sender LIKE ?2) OR (channel = ?2 AND sender LIKE ?1))
+               AND (deleted_at IS NULL)
+             ORDER BY timestamp ASC LIMIT ?3"
+        };
+        let mut stmt = self.conn.prepare(sql)?;
+        let parse_row = |row: &rusqlite::Row| -> SqlResult<MessageRow> {
+            let tags_json: String = row.get(5)?;
+            let tags: HashMap<String, String> =
+                serde_json::from_str(&tags_json).unwrap_or_default();
+            Ok(MessageRow {
+                id: row.get(0)?,
+                channel: row.get(1)?,
+                sender: row.get(2)?,
+                text: row.get(3)?,
+                timestamp: row.get::<_, i64>(4)? as u64,
+                tags,
+                msgid: row.get(6)?,
+                replaces_msgid: row.get(7)?,
+                deleted_at: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
+            })
+        };
+        let mut result: Vec<MessageRow> = if let Some(ts) = before_ts {
+            stmt.query_map(params![user_a, format!("%{user_b}%"), limit as i64, ts as i64], parse_row)?
+                .collect::<SqlResult<_>>()?
+        } else {
+            stmt.query_map(params![user_a, format!("%{user_b}%"), limit as i64], parse_row)?
+                .collect::<SqlResult<_>>()?
+        };
+        if let Some(ref key) = self.encryption_key {
+            for row in &mut result { row.text = decrypt_at_rest(key, &row.text); }
+        }
+        Ok(result)
+    }
+
+    /// Edit a message (update text by msgid).
+    pub fn edit_message(&self, msgid: &str, _sender: &str, new_text: &str, new_msgid: Option<&str>) -> SqlResult<()> {
+        let stored_text = if let Some(ref key) = self.encryption_key {
+            encrypt_at_rest(key, new_text)
+        } else {
+            new_text.to_string()
+        };
+        if let Some(new_id) = new_msgid {
+            self.conn.execute(
+                "UPDATE messages SET text = ?1, replaces_msgid = ?2 WHERE msgid = ?3",
+                params![stored_text, new_id, msgid],
+            )?;
+        } else {
+            self.conn.execute(
+                "UPDATE messages SET text = ?1 WHERE msgid = ?2",
+                params![stored_text, msgid],
+            )?;
+        }
         Ok(())
     }
 

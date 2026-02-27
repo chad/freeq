@@ -52,3 +52,8 @@ toml = "0.8"
 freeq-sdk = { path = "../freeq-sdk" }
 rcgen = "0.13"
 tempfile = "3"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+aes-gcm = "0.10"
+base64 = "0.22"
+sha2 = "0.10"
+hmac = "0.12"
