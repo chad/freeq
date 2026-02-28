@@ -498,6 +498,14 @@ async function handleLine(rawLine: string) {
         if (ch.trim()) raw(`JOIN ${ch.trim()}`);
       }
       autoJoinChannels = [];
+      // Restore last active channel after joins complete
+      const savedActive = localStorage.getItem('freeq-active-channel');
+      if (savedActive && savedActive !== 'server') {
+        setTimeout(() => {
+          const ch = useStore.getState().channels.get(savedActive.toLowerCase());
+          if (ch) useStore.getState().setActiveChannel(savedActive);
+        }, 500);
+      }
       break;
     }
     case '433': // Nick in use — append underscore and retry
@@ -521,7 +529,11 @@ async function handleLine(rawLine: string) {
       if (from === nick) {
         store.addChannel(channel);
         store.clearMembers(channel); // Clear stale members before NAMES reply arrives
-        store.setActiveChannel(channel);
+        // Only auto-switch if no saved channel preference or still on server tab
+        const savedActive = localStorage.getItem('freeq-active-channel');
+        if (!savedActive || store.activeChannel === 'server') {
+          store.setActiveChannel(channel);
+        }
         joinedChannels.add(channel.toLowerCase());
         saveJoinedChannels();
         // Fetch pinned messages

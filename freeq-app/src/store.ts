@@ -342,6 +342,7 @@ export const useStore = create<Store>((set, get) => ({
       ch.mentionCount = 0;
       channels.set(name.toLowerCase(), { ...ch });
     }
+    if (name !== 'server') localStorage.setItem('freeq-active-channel', name);
     return { activeChannel: name, channels };
   }),
 
