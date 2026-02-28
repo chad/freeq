@@ -99,9 +99,7 @@ struct ChatsTab: View {
 
     private var allConversations: [ChannelState] {
         (appState.channels + appState.dmBuffers).sorted { a, b in
-            let aTime = a.messages.last?.timestamp ?? .distantPast
-            let bTime = b.messages.last?.timestamp ?? .distantPast
-            return aTime > bTime
+            a.lastActivity > b.lastActivity
         }
     }
 

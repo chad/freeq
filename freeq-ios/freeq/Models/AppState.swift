@@ -25,6 +25,8 @@ class ChannelState: ObservableObject, Identifiable {
     @Published var members: [MemberInfo] = []
     @Published var topic: String = ""
     @Published var typingUsers: [String: Date] = [:]  // nick -> last typing time
+    /// Tracks the most recent activity (message, join, topic change, etc.)
+    var lastActivity: Date = Date()
 
     var id: String { name }
 
@@ -59,6 +61,10 @@ class ChannelState: ObservableObject, Identifiable {
             messages.insert(msg, at: idx)
         } else {
             messages.append(msg)
+        }
+        // Update last activity for sorting
+        if msg.timestamp > lastActivity {
+            lastActivity = msg.timestamp
         }
     }
 
@@ -613,6 +619,7 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
 
         case .joined(let channel, let nick):
             let ch = state.getOrCreateChannel(channel)
+            ch.lastActivity = Date()
             if nick.lowercased() == state.nick.lowercased() {
                 if state.activeChannel == nil {
                     state.activeChannel = channel
@@ -738,6 +745,7 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
         case .topicChanged(let channel, let topic):
             let ch = state.getOrCreateChannel(channel)
             ch.topic = topic.text
+            ch.lastActivity = Date()
 
         case .modeChanged(let channel, let mode, let arg, _):
             guard let nick = arg else { break }
