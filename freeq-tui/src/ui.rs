@@ -1,14 +1,14 @@
 //! Ratatui rendering for the TUI.
 
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
-use ratatui::Frame;
 
-#[cfg(feature = "inline-images")]
-use crate::app::{ImageState, IMAGE_ROWS};
 use crate::app::App;
+#[cfg(feature = "inline-images")]
+use crate::app::{IMAGE_ROWS, ImageState};
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
@@ -16,7 +16,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         .constraints([
             Constraint::Length(1), // status bar
             Constraint::Length(1), // tab bar
-            Constraint::Min(3),   // message + nicklist area
+            Constraint::Min(3),    // message + nicklist area
             Constraint::Length(3), // input
         ])
         .split(frame.area());
@@ -30,8 +30,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Min(20),       // messages
-                Constraint::Length(18),     // nick list
+                Constraint::Min(20),    // messages
+                Constraint::Length(18), // nick list
             ])
             .split(chunks[2]);
         draw_messages(frame, app, cols[0]);
@@ -62,11 +62,19 @@ fn draw_net_popup(frame: &mut Frame, app: &App) {
     // Clear background
     frame.render_widget(Clear, popup_area);
 
-    let uptime = app.connected_at.map(|t| {
-        let d = t.elapsed();
-        let secs = d.as_secs();
-        format!("{}h {:02}m {:02}s", secs / 3600, (secs % 3600) / 60, secs % 60)
-    }).unwrap_or_else(|| "—".to_string());
+    let uptime = app
+        .connected_at
+        .map(|t| {
+            let d = t.elapsed();
+            let secs = d.as_secs();
+            format!(
+                "{}h {:02}m {:02}s",
+                secs / 3600,
+                (secs % 3600) / 60,
+                secs % 60
+            )
+        })
+        .unwrap_or_else(|| "—".to_string());
 
     let mut lines = vec![
         Line::from(""),
@@ -74,7 +82,9 @@ fn draw_net_popup(frame: &mut Frame, app: &App) {
             Span::styled("  Transport:  ", Style::default().fg(Color::DarkGray)),
             Span::styled(
                 format!("{} {}", app.transport.icon(), app.transport.description()),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
@@ -95,7 +105,11 @@ fn draw_net_popup(frame: &mut Frame, app: &App) {
         ]),
         Line::from(vec![
             Span::styled("  Auth:       ", Style::default().fg(Color::DarkGray)),
-            Span::raw(app.authenticated_did.as_deref().unwrap_or("guest (unauthenticated)")),
+            Span::raw(
+                app.authenticated_did
+                    .as_deref()
+                    .unwrap_or("guest (unauthenticated)"),
+            ),
         ]),
     ];
 
@@ -112,7 +126,11 @@ fn draw_net_popup(frame: &mut Frame, app: &App) {
     let e2ee_str = if e2ee_channels.is_empty() {
         "none".to_string()
     } else {
-        e2ee_channels.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+        e2ee_channels
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     };
     lines.push(Line::from(vec![
         Span::styled("  E2EE:       ", Style::default().fg(Color::DarkGray)),
@@ -120,7 +138,11 @@ fn draw_net_popup(frame: &mut Frame, app: &App) {
     ]));
 
     // P2P status
-    let p2p_str = if app.p2p_handle.is_some() { "active" } else { "inactive" };
+    let p2p_str = if app.p2p_handle.is_some() {
+        "active"
+    } else {
+        "inactive"
+    };
     lines.push(Line::from(vec![
         Span::styled("  P2P DMs:    ", Style::default().fg(Color::DarkGray)),
         Span::raw(p2p_str),
@@ -158,21 +180,33 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         None => " guest".to_string(),
     };
 
-    let uptime = app.connected_at.map(|t| {
-        let d = t.elapsed();
-        if d.as_secs() < 60 { format!("{}s", d.as_secs()) }
-        else if d.as_secs() < 3600 { format!("{}m", d.as_secs() / 60) }
-        else { format!("{}h{}m", d.as_secs() / 3600, (d.as_secs() % 3600) / 60) }
-    }).unwrap_or_default();
+    let uptime = app
+        .connected_at
+        .map(|t| {
+            let d = t.elapsed();
+            if d.as_secs() < 60 {
+                format!("{}s", d.as_secs())
+            } else if d.as_secs() < 3600 {
+                format!("{}m", d.as_secs() / 60)
+            } else {
+                format!("{}h{}m", d.as_secs() / 3600, (d.as_secs() % 3600) / 60)
+            }
+        })
+        .unwrap_or_default();
 
     let spans = vec![
         Span::styled(
             format!(" {} {} ", app.transport.icon(), app.transport.label()),
-            Style::default().bg(badge_bg).fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .bg(badge_bg)
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!(" {} | {}{} | {} ",
-                app.connection_state, app.nick, auth_str, uptime),
+            format!(
+                " {} | {}{} | {} ",
+                app.connection_state, app.nick, auth_str, uptime
+            ),
             Style::default().bg(Color::DarkGray).fg(Color::White),
         ),
     ];
@@ -188,35 +222,45 @@ fn draw_tab_bar(frame: &mut Frame, app: &App, area: Rect) {
         .position(|n| n == &app.active_buffer)
         .unwrap_or(0);
 
-    let titles: Vec<Line> = names.iter().map(|n| {
-        let buf = app.buffers.get(n);
-        let unread = buf.map(|b| b.unread).unwrap_or(0);
-        let has_mention = buf.map(|b| b.has_mention).unwrap_or(false);
-        let is_active = n == &app.active_buffer;
+    let titles: Vec<Line> = names
+        .iter()
+        .map(|n| {
+            let buf = app.buffers.get(n);
+            let unread = buf.map(|b| b.unread).unwrap_or(0);
+            let has_mention = buf.map(|b| b.has_mention).unwrap_or(false);
+            let is_active = n == &app.active_buffer;
 
-        if is_active {
-            Line::from(n.as_str())
-        } else if has_mention {
-            // Red bold for mentions
-            Line::from(vec![
-                Span::styled(n.as_str(), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-                Span::styled(format!(" ({unread})"), Style::default().fg(Color::Red)),
-            ])
-        } else if unread > 0 {
-            // Cyan for unread activity
-            Line::from(vec![
-                Span::styled(n.as_str(), Style::default().fg(Color::Cyan)),
-                Span::styled(format!(" ({unread})"), Style::default().fg(Color::Cyan)),
-            ])
-        } else {
-            Line::from(n.as_str())
-        }
-    }).collect();
+            if is_active {
+                Line::from(n.as_str())
+            } else if has_mention {
+                // Red bold for mentions
+                Line::from(vec![
+                    Span::styled(
+                        n.as_str(),
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(format!(" ({unread})"), Style::default().fg(Color::Red)),
+                ])
+            } else if unread > 0 {
+                // Cyan for unread activity
+                Line::from(vec![
+                    Span::styled(n.as_str(), Style::default().fg(Color::Cyan)),
+                    Span::styled(format!(" ({unread})"), Style::default().fg(Color::Cyan)),
+                ])
+            } else {
+                Line::from(n.as_str())
+            }
+        })
+        .collect();
 
     let tabs = Tabs::new(titles)
         .select(active_idx)
         .style(Style::default().fg(Color::DarkGray))
-        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
         .divider("|");
 
     frame.render_widget(tabs, area);
@@ -250,7 +294,9 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
     /// Calculate how many terminal rows a message needs when wrapped.
     fn wrapped_height(msg: &crate::app::BufferLine, width: usize) -> usize {
-        if width == 0 { return 1; }
+        if width == 0 {
+            return 1;
+        }
         let text_len = if msg.is_system {
             // "HH:MM:SS *** message"
             msg.timestamp.len() + 1 + 4 + msg.text.len()
@@ -258,25 +304,29 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             // "HH:MM:SS <nick> message"
             msg.timestamp.len() + 1 + msg.from.len() + 2 + 1 + msg.text.len()
         };
-        text_len.div_ceil(width)  // ceil division
+        text_len.div_ceil(width) // ceil division
     }
 
     // Calculate height of each message including wrapping + images
-    let msg_heights: Vec<usize> = buffer.messages.iter().map(|msg| {
-        #[allow(unused_mut)]
-        let mut h = wrapped_height(msg, inner_width);
-        #[cfg(feature = "inline-images")]
-        if has_picker {
-            if let Some(ref url) = msg.image_url {
-                let cache = app.image_cache.lock().unwrap();
-                if matches!(cache.get(url.as_str()), Some(ImageState::Ready(_))) {
-                    h += IMAGE_ROWS as usize;
+    let msg_heights: Vec<usize> = buffer
+        .messages
+        .iter()
+        .map(|msg| {
+            #[allow(unused_mut)]
+            let mut h = wrapped_height(msg, inner_width);
+            #[cfg(feature = "inline-images")]
+            if has_picker {
+                if let Some(ref url) = msg.image_url {
+                    let cache = app.image_cache.lock().unwrap();
+                    if matches!(cache.get(url.as_str()), Some(ImageState::Ready(_))) {
+                        h += IMAGE_ROWS as usize;
+                    }
                 }
             }
-        }
-        let _ = (has_picker, &msg.image_url); // suppress unused warnings
-        h
-    }).collect();
+            let _ = (has_picker, &msg.image_url); // suppress unused warnings
+            h
+        })
+        .collect();
 
     let scroll = buffer.scroll as usize;
 
@@ -329,8 +379,8 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
 
         // Render the message with word wrapping
         if y < max_y {
-            use ratatui::widgets::Wrap;
             use ratatui::text::Text;
+            use ratatui::widgets::Wrap;
 
             let is_mention = !msg.is_system
                 && !app.nick.is_empty()
@@ -361,7 +411,9 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     Span::styled(
                         format!("<{}> ", msg.from),
                         if is_mention {
-                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD)
                         } else {
                             Style::default().fg(Color::Green)
                         },
@@ -402,7 +454,9 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                         }
                     }
                     if let Some(proto) = app.image_protos.get_mut(url) {
-                        let widget = ratatui_image::StatefulImage::<ratatui_image::protocol::StatefulProtocol>::default();
+                        let widget = ratatui_image::StatefulImage::<
+                            ratatui_image::protocol::StatefulProtocol,
+                        >::default();
                         frame.render_stateful_widget(widget, img_area, proto);
                     }
                 } else if matches!(cache.get(url.as_str()), Some(ImageState::Loading)) {
@@ -430,14 +484,20 @@ fn draw_nicklist(frame: &mut Frame, app: &App, area: Rect) {
     let mut nicks = buffer.nicks.clone();
     nicks.sort_by(|a, b| {
         let rank = |n: &str| -> u8 {
-            if n.starts_with('@') { 0 }
-            else if n.starts_with('+') { 1 }
-            else { 2 }
+            if n.starts_with('@') {
+                0
+            } else if n.starts_with('+') {
+                1
+            } else {
+                2
+            }
         };
         rank(a).cmp(&rank(b)).then(a.cmp(b))
     });
 
-    let nick_scroll = buffer.nick_scroll.min(nicks.len().saturating_sub(inner_height));
+    let nick_scroll = buffer
+        .nick_scroll
+        .min(nicks.len().saturating_sub(inner_height));
     let lines: Vec<Line> = nicks
         .iter()
         .skip(nick_scroll)
@@ -448,17 +508,25 @@ fn draw_nicklist(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 ("", n.as_str())
             };
-            let prefix_color = if prefix == "@" { Color::Yellow } else { Color::Cyan };
+            let prefix_color = if prefix == "@" {
+                Color::Yellow
+            } else {
+                Color::Cyan
+            };
             Line::from(vec![
-                Span::styled(prefix, Style::default().fg(prefix_color).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    prefix,
+                    Style::default()
+                        .fg(prefix_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(name),
             ])
         })
         .collect();
 
     let title = format!(" {} ", nicks.len());
-    let nicklist = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title(title));
+    let nicklist = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(title));
     frame.render_widget(nicklist, area);
 }
 

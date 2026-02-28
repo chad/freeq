@@ -47,9 +47,9 @@
 //! ```
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
-use aes_gcm::{Aes256Gcm, AeadCore, Nonce};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use aes_gcm::{AeadCore, Aes256Gcm, Nonce};
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hkdf::Hkdf;
 use sha2::Sha256;
 
@@ -126,7 +126,9 @@ impl GroupKey {
             return Err(DecryptError::MalformedMessage);
         }
 
-        let epoch: u64 = parts[0].parse().map_err(|_| DecryptError::MalformedMessage)?;
+        let epoch: u64 = parts[0]
+            .parse()
+            .map_err(|_| DecryptError::MalformedMessage)?;
         if epoch != self.epoch {
             return Err(DecryptError::EpochMismatch {
                 expected: self.epoch,
@@ -186,12 +188,12 @@ impl DmKey {
         my_private: &[u8; 32],
         their_public_bytes: &[u8],
     ) -> Result<Self, String> {
+        use k256::PublicKey as K256Pub;
         use k256::ecdh::diffie_hellman;
         use k256::elliptic_curve::sec1::FromEncodedPoint;
-        use k256::PublicKey as K256Pub;
 
-        let my_scalar = k256::NonZeroScalar::try_from(&my_private[..])
-            .map_err(|_| "Invalid private key")?;
+        let my_scalar =
+            k256::NonZeroScalar::try_from(&my_private[..]).map_err(|_| "Invalid private key")?;
 
         let their_point = k256::EncodedPoint::from_bytes(their_public_bytes)
             .map_err(|_| "Invalid public key encoding")?;
@@ -245,9 +247,7 @@ impl DmKey {
 
         let body = body.strip_prefix("dm:").ok_or(DecryptError::NotDm)?;
 
-        let (nonce_b64, ct_b64) = body
-            .split_once(':')
-            .ok_or(DecryptError::MalformedMessage)?;
+        let (nonce_b64, ct_b64) = body.split_once(':').ok_or(DecryptError::MalformedMessage)?;
 
         let nonce_bytes = URL_SAFE_NO_PAD
             .decode(nonce_b64)
@@ -366,7 +366,13 @@ mod tests {
 
         let wire = k1.encrypt("test").unwrap();
         let err = k2.decrypt(&wire).unwrap_err();
-        assert!(matches!(err, DecryptError::EpochMismatch { expected: 2, got: 1 }));
+        assert!(matches!(
+            err,
+            DecryptError::EpochMismatch {
+                expected: 2,
+                got: 1
+            }
+        ));
     }
 
     #[test]
@@ -392,21 +398,11 @@ mod tests {
         let sk_b_bytes: [u8; 32] = sk_b.to_bytes().into();
 
         // Both sides derive the same DM key
-        let dm_a = DmKey::from_secp256k1(
-            "did:plc:alice",
-            "did:plc:bob",
-            &sk_a_bytes,
-            &pk_b_bytes,
-        )
-        .unwrap();
+        let dm_a = DmKey::from_secp256k1("did:plc:alice", "did:plc:bob", &sk_a_bytes, &pk_b_bytes)
+            .unwrap();
 
-        let dm_b = DmKey::from_secp256k1(
-            "did:plc:bob",
-            "did:plc:alice",
-            &sk_b_bytes,
-            &pk_a_bytes,
-        )
-        .unwrap();
+        let dm_b = DmKey::from_secp256k1("did:plc:bob", "did:plc:alice", &sk_b_bytes, &pk_a_bytes)
+            .unwrap();
 
         // A encrypts, B decrypts
         let wire = dm_a.encrypt("Secret DM").unwrap();
@@ -432,15 +428,12 @@ mod tests {
         let sk_a_bytes: [u8; 32] = sk_a.to_bytes().into();
         let sk_c_bytes: [u8; 32] = sk_c.to_bytes().into();
 
-        let dm_ab = DmKey::from_secp256k1(
-            "did:plc:alice", "did:plc:bob",
-            &sk_a_bytes, &pk_b_bytes,
-        ).unwrap();
+        let dm_ab = DmKey::from_secp256k1("did:plc:alice", "did:plc:bob", &sk_a_bytes, &pk_b_bytes)
+            .unwrap();
 
-        let dm_ca = DmKey::from_secp256k1(
-            "did:plc:charlie", "did:plc:alice",
-            &sk_c_bytes, &pk_a_bytes,
-        ).unwrap();
+        let dm_ca =
+            DmKey::from_secp256k1("did:plc:charlie", "did:plc:alice", &sk_c_bytes, &pk_a_bytes)
+                .unwrap();
 
         let wire = dm_ab.encrypt("For Bob only").unwrap();
         assert!(dm_ca.decrypt(&wire).is_err());

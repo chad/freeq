@@ -18,7 +18,10 @@ use tokio::time::timeout;
 /// Helper: start a server on a random port with a static DID resolver.
 async fn start_test_server(
     resolver: DidResolver,
-) -> (std::net::SocketAddr, tokio::task::JoinHandle<anyhow::Result<()>>) {
+) -> (
+    std::net::SocketAddr,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
     let config = freeq_server::config::ServerConfig {
         listen_addr: "127.0.0.1:0".to_string(),
         server_name: "test-server".to_string(),
@@ -73,7 +76,13 @@ async fn guest_connection() {
     let (handle, mut events) = client::connect(config, None);
 
     // Should get Connected then Registered
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Connected),
+        "Connected",
+    )
+    .await;
     let reg = expect_event(
         &mut events,
         2000,
@@ -104,10 +113,8 @@ async fn authenticated_secp256k1() {
 
     let (addr, server_handle) = start_test_server(resolver).await;
 
-    let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(
-        did_str.to_string(),
-        private_key,
-    ));
+    let signer: Arc<dyn ChallengeSigner> =
+        Arc::new(KeySigner::new(did_str.to_string(), private_key));
 
     let config = ConnectConfig {
         server_addr: addr.to_string(),
@@ -119,7 +126,13 @@ async fn authenticated_secp256k1() {
 
     let (handle, mut events) = client::connect(config, Some(signer));
 
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Connected),
+        "Connected",
+    )
+    .await;
     let auth = expect_event(
         &mut events,
         2000,
@@ -162,10 +175,8 @@ async fn authenticated_ed25519() {
 
     let (addr, server_handle) = start_test_server(resolver).await;
 
-    let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(
-        did_str.to_string(),
-        private_key,
-    ));
+    let signer: Arc<dyn ChallengeSigner> =
+        Arc::new(KeySigner::new(did_str.to_string(), private_key));
 
     let config = ConnectConfig {
         server_addr: addr.to_string(),
@@ -177,7 +188,13 @@ async fn authenticated_ed25519() {
 
     let (handle, mut events) = client::connect(config, Some(signer));
 
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Connected),
+        "Connected",
+    )
+    .await;
     expect_event(
         &mut events,
         2000,
@@ -214,10 +231,8 @@ async fn auth_fails_wrong_key() {
 
     let (addr, server_handle) = start_test_server(resolver).await;
 
-    let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(
-        did_str.to_string(),
-        signer_key,
-    ));
+    let signer: Arc<dyn ChallengeSigner> =
+        Arc::new(KeySigner::new(did_str.to_string(), signer_key));
 
     let config = ConnectConfig {
         server_addr: addr.to_string(),
@@ -229,7 +244,13 @@ async fn auth_fails_wrong_key() {
 
     let (handle, mut events) = client::connect(config, Some(signer));
 
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Connected),
+        "Connected",
+    )
+    .await;
 
     // Should get AuthFailed
     expect_event(
@@ -276,7 +297,13 @@ async fn auth_fails_unknown_did() {
 
     let (handle, mut events) = client::connect(config, Some(signer));
 
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Connected),
+        "Connected",
+    )
+    .await;
     expect_event(
         &mut events,
         2000,
@@ -311,7 +338,13 @@ async fn channel_messaging() {
         ..Default::default()
     };
     let (handle1, mut events1) = client::connect(config1, None);
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Registered { .. }), "Alice registered").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
 
     // Connect client 2
     let config2 = ConnectConfig {
@@ -322,7 +355,13 @@ async fn channel_messaging() {
         ..Default::default()
     };
     let (handle2, mut events2) = client::connect(config2, None);
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Registered { .. }), "Bob registered").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Bob registered",
+    )
+    .await;
 
     // Both join #test
     handle1.join("#test").await.unwrap();
@@ -364,7 +403,10 @@ async fn channel_messaging() {
     )
     .await;
 
-    if let Event::Message { from, target, text, .. } = msg {
+    if let Event::Message {
+        from, target, text, ..
+    } = msg
+    {
         assert_eq!(from, "alice");
         assert_eq!(target, "#test");
         assert_eq!(text, "hello bob!");
@@ -407,10 +449,8 @@ async fn mixed_auth_and_guest_in_channel() {
     let (addr, server_handle) = start_test_server(resolver).await;
 
     // Authenticated client
-    let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(
-        did_str.to_string(),
-        private_key,
-    ));
+    let signer: Arc<dyn ChallengeSigner> =
+        Arc::new(KeySigner::new(did_str.to_string(), private_key));
     let config_auth = ConnectConfig {
         server_addr: addr.to_string(),
         nick: "authed".to_string(),
@@ -419,8 +459,20 @@ async fn mixed_auth_and_guest_in_channel() {
         ..Default::default()
     };
     let (handle_auth, mut events_auth) = client::connect(config_auth, Some(signer));
-    expect_event(&mut events_auth, 2000, |e| matches!(e, Event::Authenticated { .. }), "Auth").await;
-    expect_event(&mut events_auth, 2000, |e| matches!(e, Event::Registered { .. }), "Reg").await;
+    expect_event(
+        &mut events_auth,
+        2000,
+        |e| matches!(e, Event::Authenticated { .. }),
+        "Auth",
+    )
+    .await;
+    expect_event(
+        &mut events_auth,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Reg",
+    )
+    .await;
 
     // Guest client
     let config_guest = ConnectConfig {
@@ -431,14 +483,32 @@ async fn mixed_auth_and_guest_in_channel() {
         ..Default::default()
     };
     let (handle_guest, mut events_guest) = client::connect(config_guest, None);
-    expect_event(&mut events_guest, 2000, |e| matches!(e, Event::Registered { .. }), "Guest reg").await;
+    expect_event(
+        &mut events_guest,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Guest reg",
+    )
+    .await;
 
     // Both join
     handle_auth.join("#mixed").await.unwrap();
-    expect_event(&mut events_auth, 2000, |e| matches!(e, Event::Joined { .. }), "Auth join").await;
+    expect_event(
+        &mut events_auth,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Auth join",
+    )
+    .await;
 
     handle_guest.join("#mixed").await.unwrap();
-    expect_event(&mut events_guest, 2000, |e| matches!(e, Event::Joined { .. }), "Guest join").await;
+    expect_event(
+        &mut events_guest,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Guest join",
+    )
+    .await;
 
     // Guest sends message, authed user receives it (filter by sender)
     handle_guest.privmsg("#mixed", "from guest").await.unwrap();
@@ -487,7 +557,13 @@ async fn nick_collision() {
         ..Default::default()
     };
     let (handle1, mut events1) = client::connect(config1, None);
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Registered { .. }), "User1 registered").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "User1 registered",
+    )
+    .await;
 
     // Second client with same nick — should get a raw 433 (ERR_NICKNAMEINUSE)
     let config2 = ConnectConfig {
@@ -498,7 +574,13 @@ async fn nick_collision() {
         ..Default::default()
     };
     let (_handle2, mut events2) = client::connect(config2, None);
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Connected), "User2 connected").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Connected),
+        "User2 connected",
+    )
+    .await;
 
     // Should see a 433 in the raw lines
     let found_433 = expect_event(
@@ -529,11 +611,23 @@ async fn channel_topic() {
         ..Default::default()
     };
     let (handle1, mut events1) = client::connect(config1, None);
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Registered { .. }), "Alice registered").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
 
     // Join channel
     handle1.join("#test").await.unwrap();
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { .. }), "Alice joined").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Alice joined",
+    )
+    .await;
 
     // Set topic
     handle1.raw("TOPIC #test :Hello World").await.unwrap();
@@ -562,7 +656,13 @@ async fn channel_topic() {
         ..Default::default()
     };
     let (handle2, mut events2) = client::connect(config2, None);
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Registered { .. }), "Bob registered").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Bob registered",
+    )
+    .await;
 
     handle2.join("#test").await.unwrap();
 
@@ -594,10 +694,22 @@ async fn channel_ops_and_kick() {
         ..Default::default()
     };
     let (handle1, mut events1) = client::connect(config1, None);
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Registered { .. }), "Alice registered").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
 
     handle1.join("#ops-test").await.unwrap();
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { .. }), "Alice joined").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Alice joined",
+    )
+    .await;
 
     // Verify Alice has @ in NAMES
     let names_event = expect_event(
@@ -605,9 +717,13 @@ async fn channel_ops_and_kick() {
         2000,
         |e| matches!(e, Event::Names { channel, .. } if channel == "#ops-test"),
         "Alice NAMES",
-    ).await;
+    )
+    .await;
     if let Event::Names { nicks, .. } = names_event {
-        assert!(nicks.iter().any(|n| n == "@alice"), "Alice should be @alice, got: {nicks:?}");
+        assert!(
+            nicks.iter().any(|n| n == "@alice"),
+            "Alice should be @alice, got: {nicks:?}"
+        );
     }
 
     // Bob joins — not opped
@@ -619,10 +735,22 @@ async fn channel_ops_and_kick() {
         ..Default::default()
     };
     let (handle2, mut events2) = client::connect(config2, None);
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Registered { .. }), "Bob registered").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Bob registered",
+    )
+    .await;
 
     handle2.join("#ops-test").await.unwrap();
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Joined { .. }), "Bob joined").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bob joined",
+    )
+    .await;
 
     // Bob tries to kick Alice — should fail (not op)
     handle2.raw("KICK #ops-test alice :bye").await.unwrap();
@@ -631,7 +759,8 @@ async fn channel_ops_and_kick() {
         2000,
         |e| matches!(e, Event::RawLine(line) if line.contains("482")),
         "Bob gets chanop error",
-    ).await;
+    )
+    .await;
     assert!(matches!(err, Event::RawLine(_)));
 
     // Alice ops Bob
@@ -652,19 +781,35 @@ async fn channel_ops_and_kick() {
         ..Default::default()
     };
     let (handle3, mut events3) = client::connect(config3, None);
-    expect_event(&mut events3, 2000, |e| matches!(e, Event::Registered { .. }), "Charlie registered").await;
+    expect_event(
+        &mut events3,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Charlie registered",
+    )
+    .await;
 
     handle3.join("#ops-test").await.unwrap();
-    expect_event(&mut events3, 2000, |e| matches!(e, Event::Joined { .. }), "Charlie joined").await;
+    expect_event(
+        &mut events3,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Charlie joined",
+    )
+    .await;
 
     // Bob (now op) kicks Charlie
-    handle2.raw("KICK #ops-test charlie :troublemaker").await.unwrap();
+    handle2
+        .raw("KICK #ops-test charlie :troublemaker")
+        .await
+        .unwrap();
     let kick_event = expect_event(
         &mut events3,
         2000,
         |e| matches!(e, Event::Kicked { nick, by, .. } if nick == "charlie" && by == "bob"),
         "Charlie sees kick",
-    ).await;
+    )
+    .await;
     assert!(matches!(kick_event, Event::Kicked { reason, .. } if reason == "troublemaker"));
 
     handle1.quit(None).await.unwrap();
@@ -686,9 +831,21 @@ async fn topic_lock_mode() {
         ..Default::default()
     };
     let (handle1, mut events1) = client::connect(config1, None);
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Registered { .. }), "Alice registered").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
     handle1.join("#lock-test").await.unwrap();
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { .. }), "Alice joined").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Alice joined",
+    )
+    .await;
 
     // Bob joins
     let config2 = ConnectConfig {
@@ -699,9 +856,21 @@ async fn topic_lock_mode() {
         ..Default::default()
     };
     let (handle2, mut events2) = client::connect(config2, None);
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Registered { .. }), "Bob registered").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Bob registered",
+    )
+    .await;
     handle2.join("#lock-test").await.unwrap();
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Joined { .. }), "Bob joined").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bob joined",
+    )
+    .await;
 
     // Channel now has +nt by default. Alice removes +t so Bob can test topic setting.
     handle1.raw("MODE #lock-test -t").await.unwrap();
@@ -710,7 +879,8 @@ async fn topic_lock_mode() {
         2000,
         |e| matches!(e, Event::ModeChanged { mode, .. } if mode == "-t"),
         "Alice removes +t",
-    ).await;
+    )
+    .await;
 
     // Bob can set topic (no +t now)
     handle2.raw("TOPIC #lock-test :Bob's topic").await.unwrap();
@@ -719,7 +889,8 @@ async fn topic_lock_mode() {
         2000,
         |e| matches!(e, Event::TopicChanged { topic, .. } if topic == "Bob's topic"),
         "Bob sets topic",
-    ).await;
+    )
+    .await;
 
     // Alice re-locks topic (+t)
     handle1.raw("MODE #lock-test +t").await.unwrap();
@@ -728,7 +899,8 @@ async fn topic_lock_mode() {
         2000,
         |e| matches!(e, Event::ModeChanged { mode, .. } if mode == "+t"),
         "Alice sees +t",
-    ).await;
+    )
+    .await;
 
     // Bob tries to set topic — should fail
     handle2.raw("TOPIC #lock-test :Nope").await.unwrap();
@@ -737,17 +909,22 @@ async fn topic_lock_mode() {
         2000,
         |e| matches!(e, Event::RawLine(line) if line.contains("482")),
         "Bob gets chanop error on topic",
-    ).await;
+    )
+    .await;
     assert!(matches!(err, Event::RawLine(_)));
 
     // Alice can still set topic
-    handle1.raw("TOPIC #lock-test :Alice's topic").await.unwrap();
+    handle1
+        .raw("TOPIC #lock-test :Alice's topic")
+        .await
+        .unwrap();
     expect_event(
         &mut events1,
         2000,
         |e| matches!(e, Event::TopicChanged { topic, .. } if topic == "Alice's topic"),
         "Alice sets topic with +t",
-    ).await;
+    )
+    .await;
 
     handle1.quit(None).await.unwrap();
     handle2.quit(None).await.unwrap();
@@ -769,17 +946,31 @@ async fn ban_hostmask() {
         ..Default::default()
     };
     let (handle1, mut events1) = client::connect(config1, None);
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Registered { .. }), "Alice registered").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
     handle1.join("#ban-test").await.unwrap();
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { .. }), "Alice joined").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Alice joined",
+    )
+    .await;
 
     // Ban bob's hostmask pattern
     handle1.raw("MODE #ban-test +b bob!*@*").await.unwrap();
     expect_event(
-        &mut events1, 2000,
+        &mut events1,
+        2000,
         |e| matches!(e, Event::ModeChanged { mode, .. } if mode == "+b"),
         "Ban set",
-    ).await;
+    )
+    .await;
 
     // Bob tries to join — should be banned
     let config2 = ConnectConfig {
@@ -790,27 +981,43 @@ async fn ban_hostmask() {
         ..Default::default()
     };
     let (handle2, mut events2) = client::connect(config2, None);
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Registered { .. }), "Bob registered").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Bob registered",
+    )
+    .await;
 
     handle2.join("#ban-test").await.unwrap();
     // Should get 474 ERR_BANNEDFROMCHAN
     expect_event(
-        &mut events2, 2000,
+        &mut events2,
+        2000,
         |e| matches!(e, Event::RawLine(line) if line.contains("474")),
         "Bob banned",
-    ).await;
+    )
+    .await;
 
     // Alice removes ban
     handle1.raw("MODE #ban-test -b bob!*@*").await.unwrap();
     expect_event(
-        &mut events1, 2000,
+        &mut events1,
+        2000,
         |e| matches!(e, Event::ModeChanged { mode, .. } if mode == "-b"),
         "Ban removed",
-    ).await;
+    )
+    .await;
 
     // Bob can now join
     handle2.join("#ban-test").await.unwrap();
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Joined { .. }), "Bob joins after unban").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bob joins after unban",
+    )
+    .await;
 
     handle1.quit(None).await.unwrap();
     handle2.quit(None).await.unwrap();
@@ -839,9 +1046,21 @@ async fn ban_by_did() {
         ..Default::default()
     };
     let (handle_bob, mut events_bob) = client::connect(config_bob, None);
-    expect_event(&mut events_bob, 2000, |e| matches!(e, Event::Registered { .. }), "Bob registered").await;
+    expect_event(
+        &mut events_bob,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Bob registered",
+    )
+    .await;
     handle_bob.join("#did-ban").await.unwrap();
-    expect_event(&mut events_bob, 2000, |e| matches!(e, Event::Joined { .. }), "Bob joined").await;
+    expect_event(
+        &mut events_bob,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bob joined",
+    )
+    .await;
 
     // Alice connects with auth
     let signer = Arc::new(KeySigner::new(did.to_string(), private_key));
@@ -853,32 +1072,66 @@ async fn ban_by_did() {
         ..Default::default()
     };
     let (handle_alice, mut events_alice) = client::connect(config_alice, Some(signer));
-    expect_event(&mut events_alice, 2000, |e| matches!(e, Event::Authenticated { .. }), "Alice authed").await;
-    expect_event(&mut events_alice, 2000, |e| matches!(e, Event::Registered { .. }), "Alice registered").await;
+    expect_event(
+        &mut events_alice,
+        2000,
+        |e| matches!(e, Event::Authenticated { .. }),
+        "Alice authed",
+    )
+    .await;
+    expect_event(
+        &mut events_alice,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
 
     // Alice joins
     handle_alice.join("#did-ban").await.unwrap();
-    expect_event(&mut events_alice, 2000, |e| matches!(e, Event::Joined { .. }), "Alice joined").await;
+    expect_event(
+        &mut events_alice,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Alice joined",
+    )
+    .await;
 
     // Bob bans Alice by DID
-    handle_bob.raw(&format!("MODE #did-ban +b {did}")).await.unwrap();
+    handle_bob
+        .raw(&format!("MODE #did-ban +b {did}"))
+        .await
+        .unwrap();
     expect_event(
-        &mut events_bob, 2000,
+        &mut events_bob,
+        2000,
         |e| matches!(e, Event::ModeChanged { mode, .. } if mode == "+b"),
         "DID ban set",
-    ).await;
+    )
+    .await;
 
     // Kick Alice
-    handle_bob.raw("KICK #did-ban alice :DID banned").await.unwrap();
-    expect_event(&mut events_alice, 2000, |e| matches!(e, Event::Kicked { .. }), "Alice kicked").await;
+    handle_bob
+        .raw("KICK #did-ban alice :DID banned")
+        .await
+        .unwrap();
+    expect_event(
+        &mut events_alice,
+        2000,
+        |e| matches!(e, Event::Kicked { .. }),
+        "Alice kicked",
+    )
+    .await;
 
     // Alice tries to rejoin — should be DID-banned
     handle_alice.join("#did-ban").await.unwrap();
     expect_event(
-        &mut events_alice, 2000,
+        &mut events_alice,
+        2000,
         |e| matches!(e, Event::RawLine(line) if line.contains("474")),
         "Alice DID-banned",
-    ).await;
+    )
+    .await;
 
     handle_bob.quit(None).await.unwrap();
     handle_alice.quit(None).await.unwrap();
@@ -900,16 +1153,30 @@ async fn invite_only_channel() {
         ..Default::default()
     };
     let (handle1, mut events1) = client::connect(config1, None);
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Registered { .. }), "Alice registered").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
     handle1.join("#invite-test").await.unwrap();
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { .. }), "Alice joined").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Alice joined",
+    )
+    .await;
 
     handle1.raw("MODE #invite-test +i").await.unwrap();
     expect_event(
-        &mut events1, 2000,
+        &mut events1,
+        2000,
         |e| matches!(e, Event::ModeChanged { mode, .. } if mode == "+i"),
         "+i set",
-    ).await;
+    )
+    .await;
 
     // Bob tries to join — should fail
     let config2 = ConnectConfig {
@@ -920,28 +1187,44 @@ async fn invite_only_channel() {
         ..Default::default()
     };
     let (handle2, mut events2) = client::connect(config2, None);
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Registered { .. }), "Bob registered").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Bob registered",
+    )
+    .await;
 
     handle2.join("#invite-test").await.unwrap();
     expect_event(
-        &mut events2, 2000,
+        &mut events2,
+        2000,
         |e| matches!(e, Event::RawLine(line) if line.contains("473")),
         "Bob rejected (invite only)",
-    ).await;
+    )
+    .await;
 
     // Alice invites Bob
     handle1.raw("INVITE bob #invite-test").await.unwrap();
 
     // Bob should receive invite notification
     expect_event(
-        &mut events2, 2000,
+        &mut events2,
+        2000,
         |e| matches!(e, Event::Invited { channel, .. } if channel == "#invite-test"),
         "Bob invited",
-    ).await;
+    )
+    .await;
 
     // Now Bob can join
     handle2.join("#invite-test").await.unwrap();
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Joined { .. }), "Bob joins after invite").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bob joins after invite",
+    )
+    .await;
 
     handle1.quit(None).await.unwrap();
     handle2.quit(None).await.unwrap();
@@ -963,9 +1246,21 @@ async fn message_history_replay() {
         ..Default::default()
     };
     let (handle1, mut events1) = client::connect(config1, None);
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Registered { .. }), "Alice registered").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
     handle1.join("#history").await.unwrap();
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { .. }), "Alice joined").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Alice joined",
+    )
+    .await;
 
     handle1.privmsg("#history", "first message").await.unwrap();
     handle1.privmsg("#history", "second message").await.unwrap();
@@ -981,22 +1276,32 @@ async fn message_history_replay() {
         ..Default::default()
     };
     let (handle2, mut events2) = client::connect(config2, None);
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Registered { .. }), "Bob registered").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Bob registered",
+    )
+    .await;
     handle2.join("#history").await.unwrap();
 
     // Bob should receive the history as messages
     let msg1 = expect_event(
-        &mut events2, 2000,
+        &mut events2,
+        2000,
         |e| matches!(e, Event::Message { text, .. } if text == "first message"),
         "Bob sees first history message",
-    ).await;
+    )
+    .await;
     assert!(matches!(msg1, Event::Message { .. }));
 
     let msg2 = expect_event(
-        &mut events2, 2000,
+        &mut events2,
+        2000,
         |e| matches!(e, Event::Message { text, .. } if text == "second message"),
         "Bob sees second history message",
-    ).await;
+    )
+    .await;
     assert!(matches!(msg2, Event::Message { .. }));
 
     handle1.quit(None).await.unwrap();
@@ -1028,8 +1333,20 @@ async fn nick_ownership() {
         ..Default::default()
     };
     let (handle1, mut events1) = client::connect(config1, Some(signer));
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Authenticated { .. }), "Alice authed").await;
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Registered { .. }), "Alice registered").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Authenticated { .. }),
+        "Alice authed",
+    )
+    .await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
 
     // Alice disconnects
     handle1.quit(None).await.unwrap();
@@ -1049,10 +1366,12 @@ async fn nick_ownership() {
     // At registration, the nick ownership check renames them to GuestXXXX.
     // They should get a Registered event with a Guest nick, not "alice".
     let reg = expect_event(
-        &mut events2, 2000,
+        &mut events2,
+        2000,
         |e| matches!(e, Event::Registered { nick } if nick != "alice"),
         "Imposter registered with different nick",
-    ).await;
+    )
+    .await;
     if let Event::Registered { nick } = reg {
         assert!(nick.starts_with("Guest"), "Expected GuestXXXX, got {nick}");
     }
@@ -1074,9 +1393,21 @@ async fn quit_broadcast() {
         ..Default::default()
     };
     let (handle1, mut events1) = client::connect(config1, None);
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Registered { .. }), "Alice registered").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
     handle1.join("#quit-test").await.unwrap();
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { .. }), "Alice joined").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Alice joined",
+    )
+    .await;
 
     let config2 = ConnectConfig {
         server_addr: addr.to_string(),
@@ -1086,22 +1417,42 @@ async fn quit_broadcast() {
         ..Default::default()
     };
     let (handle2, mut events2) = client::connect(config2, None);
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Registered { .. }), "Bob registered").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Bob registered",
+    )
+    .await;
     handle2.join("#quit-test").await.unwrap();
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Joined { .. }), "Bob joined").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bob joined",
+    )
+    .await;
 
     // Drain bob's join event from alice's stream
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { nick, .. } if nick == "bob"), "Alice sees bob join").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Joined { nick, .. } if nick == "bob"),
+        "Alice sees bob join",
+    )
+    .await;
 
     // Bob quits
     handle2.quit(Some("goodbye")).await.unwrap();
 
     // Alice should see bob's QUIT
     expect_event(
-        &mut events1, 2000,
+        &mut events1,
+        2000,
         |e| matches!(e, Event::UserQuit { nick, .. } if nick == "bob"),
         "Alice sees bob quit",
-    ).await;
+    )
+    .await;
 
     handle1.quit(None).await.unwrap();
     server_handle.abort();
@@ -1130,8 +1481,8 @@ async fn auth_fails_expired_challenge() {
     let (addr, server_handle) = server.start().await.unwrap();
 
     // Use raw TCP to introduce a delay between receiving challenge and sending response
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::TcpStream;
 
@@ -1141,30 +1492,44 @@ async fn auth_fails_expired_challenge() {
 
     wr.write_all(b"CAP LS 302\r\n").await.unwrap();
     wr.write_all(b"NICK expired\r\n").await.unwrap();
-    wr.write_all(b"USER expired 0 * :Expired\r\n").await.unwrap();
+    wr.write_all(b"USER expired 0 * :Expired\r\n")
+        .await
+        .unwrap();
 
     let mut line = String::new();
     loop {
         line.clear();
         reader.read_line(&mut line).await.unwrap();
-        if line.contains("sasl") || line.contains("SASL") { break; }
+        if line.contains("sasl") || line.contains("SASL") {
+            break;
+        }
     }
 
     wr.write_all(b"CAP REQ :sasl\r\n").await.unwrap();
     loop {
         line.clear();
         reader.read_line(&mut line).await.unwrap();
-        if line.contains("ACK") { break; }
+        if line.contains("ACK") {
+            break;
+        }
     }
 
-    wr.write_all(b"AUTHENTICATE ATPROTO-CHALLENGE\r\n").await.unwrap();
+    wr.write_all(b"AUTHENTICATE ATPROTO-CHALLENGE\r\n")
+        .await
+        .unwrap();
     loop {
         line.clear();
         reader.read_line(&mut line).await.unwrap();
-        if line.starts_with("AUTHENTICATE ") && !line.contains("+") { break; }
+        if line.starts_with("AUTHENTICATE ") && !line.contains("+") {
+            break;
+        }
     }
 
-    let challenge_b64 = line.trim().strip_prefix("AUTHENTICATE ").unwrap().to_string();
+    let challenge_b64 = line
+        .trim()
+        .strip_prefix("AUTHENTICATE ")
+        .unwrap()
+        .to_string();
     let challenge_bytes = URL_SAFE_NO_PAD.decode(&challenge_b64).unwrap();
 
     // Wait for the challenge to expire (1s timeout, need > 1s with whole-second timestamps)
@@ -1181,7 +1546,9 @@ async fn auth_fails_expired_challenge() {
     });
     let response_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&response).unwrap());
 
-    wr.write_all(format!("AUTHENTICATE {response_b64}\r\n").as_bytes()).await.unwrap();
+    wr.write_all(format!("AUTHENTICATE {response_b64}\r\n").as_bytes())
+        .await
+        .unwrap();
 
     // Should get 904 (SASL failure) due to expired challenge
     let mut got_failure = false;
@@ -1199,7 +1566,10 @@ async fn auth_fails_expired_challenge() {
             _ => break,
         }
     }
-    assert!(got_failure, "Expected 904 SASL failure for expired challenge");
+    assert!(
+        got_failure,
+        "Expected 904 SASL failure for expired challenge"
+    );
 
     wr.write_all(b"CAP END\r\n").await.unwrap();
 
@@ -1229,8 +1599,8 @@ async fn auth_fails_expired_challenge() {
 
 #[tokio::test]
 async fn auth_fails_replayed_nonce() {
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::TcpStream;
 
@@ -1251,30 +1621,44 @@ async fn auth_fails_replayed_nonce() {
 
     wr.write_all(b"CAP LS 302\r\n").await.unwrap();
     wr.write_all(b"NICK replaytest\r\n").await.unwrap();
-    wr.write_all(b"USER replaytest 0 * :Test\r\n").await.unwrap();
+    wr.write_all(b"USER replaytest 0 * :Test\r\n")
+        .await
+        .unwrap();
 
     let mut line = String::new();
     loop {
         line.clear();
         reader.read_line(&mut line).await.unwrap();
-        if line.contains("sasl") || line.contains("SASL") { break; }
+        if line.contains("sasl") || line.contains("SASL") {
+            break;
+        }
     }
 
     wr.write_all(b"CAP REQ :sasl\r\n").await.unwrap();
     loop {
         line.clear();
         reader.read_line(&mut line).await.unwrap();
-        if line.contains("ACK") { break; }
+        if line.contains("ACK") {
+            break;
+        }
     }
 
-    wr.write_all(b"AUTHENTICATE ATPROTO-CHALLENGE\r\n").await.unwrap();
+    wr.write_all(b"AUTHENTICATE ATPROTO-CHALLENGE\r\n")
+        .await
+        .unwrap();
     loop {
         line.clear();
         reader.read_line(&mut line).await.unwrap();
-        if line.starts_with("AUTHENTICATE ") && !line.contains("+") { break; }
+        if line.starts_with("AUTHENTICATE ") && !line.contains("+") {
+            break;
+        }
     }
 
-    let challenge_b64 = line.trim().strip_prefix("AUTHENTICATE ").unwrap().to_string();
+    let challenge_b64 = line
+        .trim()
+        .strip_prefix("AUTHENTICATE ")
+        .unwrap()
+        .to_string();
     let challenge_bytes = URL_SAFE_NO_PAD.decode(&challenge_b64).unwrap();
 
     let signature = private_key.sign(&challenge_bytes);
@@ -1287,13 +1671,17 @@ async fn auth_fails_replayed_nonce() {
     });
     let response_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&response).unwrap());
 
-    wr.write_all(format!("AUTHENTICATE {response_b64}\r\n").as_bytes()).await.unwrap();
+    wr.write_all(format!("AUTHENTICATE {response_b64}\r\n").as_bytes())
+        .await
+        .unwrap();
 
     // Read until 903 (success)
     loop {
         line.clear();
         reader.read_line(&mut line).await.unwrap();
-        if line.contains("903") { break; }
+        if line.contains("903") {
+            break;
+        }
     }
 
     wr.write_all(b"CAP END\r\nQUIT\r\n").await.unwrap();
@@ -1309,31 +1697,43 @@ async fn auth_fails_replayed_nonce() {
 
     wr2.write_all(b"CAP LS 302\r\n").await.unwrap();
     wr2.write_all(b"NICK replaytest2\r\n").await.unwrap();
-    wr2.write_all(b"USER replaytest2 0 * :Test\r\n").await.unwrap();
+    wr2.write_all(b"USER replaytest2 0 * :Test\r\n")
+        .await
+        .unwrap();
 
     loop {
         line.clear();
         reader2.read_line(&mut line).await.unwrap();
-        if line.contains("sasl") || line.contains("SASL") { break; }
+        if line.contains("sasl") || line.contains("SASL") {
+            break;
+        }
     }
 
     wr2.write_all(b"CAP REQ :sasl\r\n").await.unwrap();
     loop {
         line.clear();
         reader2.read_line(&mut line).await.unwrap();
-        if line.contains("ACK") { break; }
+        if line.contains("ACK") {
+            break;
+        }
     }
 
-    wr2.write_all(b"AUTHENTICATE ATPROTO-CHALLENGE\r\n").await.unwrap();
+    wr2.write_all(b"AUTHENTICATE ATPROTO-CHALLENGE\r\n")
+        .await
+        .unwrap();
     // Get the NEW challenge (different nonce)
     loop {
         line.clear();
         reader2.read_line(&mut line).await.unwrap();
-        if line.starts_with("AUTHENTICATE ") && !line.contains("+") { break; }
+        if line.starts_with("AUTHENTICATE ") && !line.contains("+") {
+            break;
+        }
     }
 
     // Replay the OLD response (signed over old challenge bytes, not this new one)
-    wr2.write_all(format!("AUTHENTICATE {response_b64}\r\n").as_bytes()).await.unwrap();
+    wr2.write_all(format!("AUTHENTICATE {response_b64}\r\n").as_bytes())
+        .await
+        .unwrap();
 
     // Should get 904 (SASL failure) — signature doesn't match new challenge
     let mut got_failure = false;
@@ -1372,9 +1772,21 @@ async fn channel_key() {
         ..Default::default()
     };
     let (handle1, mut events1) = client::connect(config1, None);
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Registered { .. }), "Alice registered").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
     handle1.join("#secret").await.unwrap();
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { .. }), "Alice joined").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Alice joined",
+    )
+    .await;
 
     // Set channel key
     handle1.raw("MODE #secret +k hunter2").await.unwrap();
@@ -1389,17 +1801,33 @@ async fn channel_key() {
         ..Default::default()
     };
     let (handle2, mut events2) = client::connect(config2, None);
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Registered { .. }), "Bob registered").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Bob registered",
+    )
+    .await;
     handle2.join("#secret").await.unwrap();
 
     // Bob should get a RawLine with 475 (ERR_BADCHANNELKEY)
-    expect_event(&mut events2, 2000, |e| {
-        matches!(e, Event::RawLine(line) if line.contains("475"))
-    }, "Bob gets 475 ERR_BADCHANNELKEY").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::RawLine(line) if line.contains("475")),
+        "Bob gets 475 ERR_BADCHANNELKEY",
+    )
+    .await;
 
     // Bob tries again with the correct key
     handle2.raw("JOIN #secret hunter2").await.unwrap();
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Joined { channel, nick } if channel == "#secret" && nick == "bob"), "Bob joined with key").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Joined { channel, nick } if channel == "#secret" && nick == "bob"),
+        "Bob joined with key",
+    )
+    .await;
 
     // Alice removes the key
     handle1.raw("MODE #secret -k").await.unwrap();
@@ -1414,9 +1842,21 @@ async fn channel_key() {
         ..Default::default()
     };
     let (handle3, mut events3) = client::connect(config3, None);
-    expect_event(&mut events3, 2000, |e| matches!(e, Event::Registered { .. }), "Carol registered").await;
+    expect_event(
+        &mut events3,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Carol registered",
+    )
+    .await;
     handle3.join("#secret").await.unwrap();
-    expect_event(&mut events3, 2000, |e| matches!(e, Event::Joined { channel, nick } if channel == "#secret" && nick == "carol"), "Carol joined").await;
+    expect_event(
+        &mut events3,
+        2000,
+        |e| matches!(e, Event::Joined { channel, nick } if channel == "#secret" && nick == "carol"),
+        "Carol joined",
+    )
+    .await;
 
     handle1.quit(None).await.unwrap();
     handle2.quit(None).await.unwrap();
@@ -1442,8 +1882,14 @@ async fn tls_connection() {
     let dir = tempfile::tempdir().unwrap();
     let cert_path = dir.path().join("cert.pem");
     let key_path = dir.path().join("key.pem");
-    std::fs::File::create(&cert_path).unwrap().write_all(cert_pem.as_bytes()).unwrap();
-    std::fs::File::create(&key_path).unwrap().write_all(key_pem.as_bytes()).unwrap();
+    std::fs::File::create(&cert_path)
+        .unwrap()
+        .write_all(cert_pem.as_bytes())
+        .unwrap();
+    std::fs::File::create(&key_path)
+        .unwrap()
+        .write_all(key_pem.as_bytes())
+        .unwrap();
 
     let config = freeq_server::config::ServerConfig {
         listen_addr: "127.0.0.1:0".to_string(),
@@ -1471,8 +1917,20 @@ async fn tls_connection() {
 
     let (handle, mut events) = client::connect(tls_config, None);
 
-    expect_event(&mut events, 3000, |e| matches!(e, Event::Connected), "Connected via TLS").await;
-    expect_event(&mut events, 3000, |e| matches!(e, Event::Registered { .. }), "Registered via TLS").await;
+    expect_event(
+        &mut events,
+        3000,
+        |e| matches!(e, Event::Connected),
+        "Connected via TLS",
+    )
+    .await;
+    expect_event(
+        &mut events,
+        3000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Registered via TLS",
+    )
+    .await;
 
     // Also verify the plain port still works
     let plain_config = ConnectConfig {
@@ -1484,8 +1942,20 @@ async fn tls_connection() {
     };
 
     let (handle2, mut events2) = client::connect(plain_config, None);
-    expect_event(&mut events2, 3000, |e| matches!(e, Event::Connected), "Connected via plain").await;
-    expect_event(&mut events2, 3000, |e| matches!(e, Event::Registered { .. }), "Registered via plain").await;
+    expect_event(
+        &mut events2,
+        3000,
+        |e| matches!(e, Event::Connected),
+        "Connected via plain",
+    )
+    .await;
+    expect_event(
+        &mut events2,
+        3000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Registered via plain",
+    )
+    .await;
 
     handle.quit(None).await.unwrap();
     handle2.quit(None).await.unwrap();
@@ -1507,9 +1977,21 @@ async fn media_tags_passthrough() {
         ..Default::default()
     };
     let (handle1, mut events1) = client::connect(config1, None);
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Registered { .. }), "Alice registered").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
     handle1.join("#media").await.unwrap();
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { .. }), "Alice joined").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Alice joined",
+    )
+    .await;
 
     // Bob connects
     let config2 = ConnectConfig {
@@ -1520,12 +2002,30 @@ async fn media_tags_passthrough() {
         ..Default::default()
     };
     let (handle2, mut events2) = client::connect(config2, None);
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Registered { .. }), "Bob registered").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Bob registered",
+    )
+    .await;
     handle2.join("#media").await.unwrap();
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Joined { .. }), "Bob joined").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bob joined",
+    )
+    .await;
 
     // Drain bob's join from alice's stream
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { nick, .. } if nick == "bob"), "Alice sees bob").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Joined { nick, .. } if nick == "bob"),
+        "Alice sees bob",
+    )
+    .await;
 
     // Alice sends a media message with tags
     let media = freeq_sdk::media::MediaAttachment {
@@ -1549,8 +2049,14 @@ async fn media_tags_passthrough() {
 
     if let Event::Message { tags, text, .. } = msg {
         // Tags should be present (both clients negotiated message-tags)
-        assert_eq!(tags.get("content-type").map(|s| s.as_str()), Some("image/jpeg"));
-        assert_eq!(tags.get("media-url").map(|s| s.as_str()), Some("https://cdn.example.com/photo.jpg"));
+        assert_eq!(
+            tags.get("content-type").map(|s| s.as_str()),
+            Some("image/jpeg")
+        );
+        assert_eq!(
+            tags.get("media-url").map(|s| s.as_str()),
+            Some("https://cdn.example.com/photo.jpg")
+        );
         assert_eq!(tags.get("media-alt").map(|s| s.as_str()), Some("A sunset"));
         assert_eq!(tags.get("media-w").map(|s| s.as_str()), Some("1200"));
         // Fallback text should contain the URL
@@ -1576,9 +2082,21 @@ async fn tagmsg_and_reactions() {
         ..Default::default()
     };
     let (handle1, mut events1) = client::connect(config1, None);
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Registered { .. }), "Alice registered").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
     handle1.join("#react").await.unwrap();
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { .. }), "Alice joined").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Alice joined",
+    )
+    .await;
 
     let config2 = ConnectConfig {
         server_addr: addr.to_string(),
@@ -1588,19 +2106,40 @@ async fn tagmsg_and_reactions() {
         ..Default::default()
     };
     let (handle2, mut events2) = client::connect(config2, None);
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Registered { .. }), "Bob registered").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Bob registered",
+    )
+    .await;
     handle2.join("#react").await.unwrap();
-    expect_event(&mut events2, 2000, |e| matches!(e, Event::Joined { .. }), "Bob joined").await;
+    expect_event(
+        &mut events2,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bob joined",
+    )
+    .await;
 
     // Drain bob's join from alice
-    expect_event(&mut events1, 2000, |e| matches!(e, Event::Joined { nick, .. } if nick == "bob"), "Alice sees bob").await;
+    expect_event(
+        &mut events1,
+        2000,
+        |e| matches!(e, Event::Joined { nick, .. } if nick == "bob"),
+        "Alice sees bob",
+    )
+    .await;
 
     // Alice sends a reaction via TAGMSG
     let reaction = freeq_sdk::media::Reaction {
         emoji: "🔥".to_string(),
         msgid: None,
     };
-    handle1.send_tagmsg("#react", reaction.to_tags()).await.unwrap();
+    handle1
+        .send_tagmsg("#react", reaction.to_tags())
+        .await
+        .unwrap();
 
     // Bob should receive the TAGMSG with reaction tags
     let msg = expect_event(
@@ -1627,7 +2166,10 @@ async fn tagmsg_and_reactions() {
 async fn start_test_server_with_db(
     resolver: DidResolver,
     db_path: &str,
-) -> (std::net::SocketAddr, tokio::task::JoinHandle<anyhow::Result<()>>) {
+) -> (
+    std::net::SocketAddr,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
     let config = freeq_server::config::ServerConfig {
         listen_addr: "127.0.0.1:0".to_string(),
         server_name: "test-server".to_string(),
@@ -1657,13 +2199,34 @@ async fn persistence_messages_survive_restart() {
             ..Default::default()
         };
         let (handle, mut events) = client::connect(config, None);
-        expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
-        expect_event(&mut events, 2000, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Connected),
+            "Connected",
+        )
+        .await;
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Registered { .. }),
+            "Registered",
+        )
+        .await;
 
         handle.join("#persist").await.unwrap();
-        expect_event(&mut events, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#persist"), "Joined").await;
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Joined { channel, .. } if channel == "#persist"),
+            "Joined",
+        )
+        .await;
 
-        handle.privmsg("#persist", "hello from first server").await.unwrap();
+        handle
+            .privmsg("#persist", "hello from first server")
+            .await
+            .unwrap();
         // Give time for the message to be stored
         tokio::time::sleep(Duration::from_millis(100)).await;
 
@@ -1684,21 +2247,47 @@ async fn persistence_messages_survive_restart() {
             ..Default::default()
         };
         let (handle, mut events) = client::connect(config, None);
-        expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
-        expect_event(&mut events, 2000, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Connected),
+            "Connected",
+        )
+        .await;
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Registered { .. }),
+            "Registered",
+        )
+        .await;
 
         handle.join("#persist").await.unwrap();
-        expect_event(&mut events, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#persist"), "Joined").await;
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Joined { channel, .. } if channel == "#persist"),
+            "Joined",
+        )
+        .await;
 
         // Should receive the replayed message from the first server instance
         let msg = expect_event(
-            &mut events, 2000,
+            &mut events,
+            2000,
             |e| matches!(e, Event::Message { text, .. } if text == "hello from first server"),
             "History replay from persisted DB",
-        ).await;
+        )
+        .await;
 
-        if let Event::Message { from, target, text, .. } = msg {
-            assert!(from.contains("alice"), "Message should be from alice, got: {from}");
+        if let Event::Message {
+            from, target, text, ..
+        } = msg
+        {
+            assert!(
+                from.contains("alice"),
+                "Message should be from alice, got: {from}"
+            );
             assert_eq!(target, "#persist");
             assert_eq!(text, "hello from first server");
         }
@@ -1726,13 +2315,34 @@ async fn persistence_topic_survives_restart() {
             ..Default::default()
         };
         let (handle, mut events) = client::connect(config, None);
-        expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
-        expect_event(&mut events, 2000, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Connected),
+            "Connected",
+        )
+        .await;
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Registered { .. }),
+            "Registered",
+        )
+        .await;
 
         handle.join("#topictest").await.unwrap();
-        expect_event(&mut events, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#topictest"), "Joined").await;
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Joined { channel, .. } if channel == "#topictest"),
+            "Joined",
+        )
+        .await;
 
-        handle.raw("TOPIC #topictest :Persistent topic!").await.unwrap();
+        handle
+            .raw("TOPIC #topictest :Persistent topic!")
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         handle.quit(None).await.unwrap();
@@ -1752,11 +2362,29 @@ async fn persistence_topic_survives_restart() {
             ..Default::default()
         };
         let (handle, mut events) = client::connect(config, None);
-        expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
-        expect_event(&mut events, 2000, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Connected),
+            "Connected",
+        )
+        .await;
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Registered { .. }),
+            "Registered",
+        )
+        .await;
 
         handle.join("#topictest").await.unwrap();
-        expect_event(&mut events, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#topictest"), "Joined").await;
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Joined { channel, .. } if channel == "#topictest"),
+            "Joined",
+        )
+        .await;
 
         // Should receive the topic on join
         let _topic = expect_event(
@@ -1788,11 +2416,29 @@ async fn persistence_bans_survive_restart() {
             ..Default::default()
         };
         let (handle, mut events) = client::connect(config, None);
-        expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
-        expect_event(&mut events, 2000, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Connected),
+            "Connected",
+        )
+        .await;
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Registered { .. }),
+            "Registered",
+        )
+        .await;
 
         handle.join("#btest").await.unwrap();
-        expect_event(&mut events, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#btest"), "Joined").await;
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Joined { channel, .. } if channel == "#btest"),
+            "Joined",
+        )
+        .await;
 
         // As channel creator, we're op — set a ban
         handle.raw("MODE #btest +b bad!*@*").await.unwrap();
@@ -1813,7 +2459,6 @@ async fn persistence_bans_survive_restart() {
     }
 }
 
-
 #[tokio::test]
 async fn persistence_nick_ownership_survives_restart() {
     let dir = tempfile::tempdir().unwrap();
@@ -1832,7 +2477,8 @@ async fn persistence_nick_ownership_survives_restart() {
     {
         let (addr, server_handle) = start_test_server_with_db(resolver, db_str).await;
 
-        let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(did_str.to_string(), private_key));
+        let signer: Arc<dyn ChallengeSigner> =
+            Arc::new(KeySigner::new(did_str.to_string(), private_key));
         let config = ConnectConfig {
             server_addr: addr.to_string(),
             nick: "claimed".to_string(),
@@ -1841,8 +2487,20 @@ async fn persistence_nick_ownership_survives_restart() {
             ..Default::default()
         };
         let (handle, mut events) = client::connect(config, Some(signer));
-        expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
-        expect_event(&mut events, 3000, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Connected),
+            "Connected",
+        )
+        .await;
+        expect_event(
+            &mut events,
+            3000,
+            |e| matches!(e, Event::Registered { .. }),
+            "Registered",
+        )
+        .await;
 
         handle.quit(None).await.unwrap();
         server_handle.abort();
@@ -1862,17 +2520,28 @@ async fn persistence_nick_ownership_survives_restart() {
             ..Default::default()
         };
         let (handle, mut events) = client::connect(config, None);
-        expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Connected),
+            "Connected",
+        )
+        .await;
 
         // The registered event should show a different nick (Guest*)
         let reg = expect_event(
-            &mut events, 2000,
+            &mut events,
+            2000,
             |e| matches!(e, Event::Registered { .. }),
             "Registered",
-        ).await;
+        )
+        .await;
 
         if let Event::Registered { nick, .. } = reg {
-            assert!(nick.starts_with("Guest"), "Guest should be renamed, got: {nick}");
+            assert!(
+                nick.starts_with("Guest"),
+                "Guest should be renamed, got: {nick}"
+            );
         }
 
         handle.quit(None).await.unwrap();
@@ -1895,9 +2564,21 @@ async fn halfop_mode() {
         ..Default::default()
     };
     let (handle_op, mut events_op) = client::connect(config_op, None);
-    expect_event(&mut events_op, 5000, |e| matches!(e, Event::Registered { .. }), "op registered").await;
+    expect_event(
+        &mut events_op,
+        5000,
+        |e| matches!(e, Event::Registered { .. }),
+        "op registered",
+    )
+    .await;
     handle_op.join("#halftest").await.unwrap();
-    expect_event(&mut events_op, 5000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#halftest"), "op joined").await;
+    expect_event(
+        &mut events_op,
+        5000,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#halftest"),
+        "op joined",
+    )
+    .await;
 
     // Halfop user joins
     let config_half = ConnectConfig {
@@ -1908,9 +2589,21 @@ async fn halfop_mode() {
         ..Default::default()
     };
     let (handle_half, mut events_half) = client::connect(config_half, None);
-    expect_event(&mut events_half, 5000, |e| matches!(e, Event::Registered { .. }), "mod registered").await;
+    expect_event(
+        &mut events_half,
+        5000,
+        |e| matches!(e, Event::Registered { .. }),
+        "mod registered",
+    )
+    .await;
     handle_half.join("#halftest").await.unwrap();
-    expect_event(&mut events_half, 5000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#halftest"), "mod joined").await;
+    expect_event(
+        &mut events_half,
+        5000,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#halftest"),
+        "mod joined",
+    )
+    .await;
 
     // Regular user joins
     let config_user = ConnectConfig {
@@ -1921,9 +2614,21 @@ async fn halfop_mode() {
         ..Default::default()
     };
     let (handle_user, mut events_user) = client::connect(config_user, None);
-    expect_event(&mut events_user, 5000, |e| matches!(e, Event::Registered { .. }), "user registered").await;
+    expect_event(
+        &mut events_user,
+        5000,
+        |e| matches!(e, Event::Registered { .. }),
+        "user registered",
+    )
+    .await;
     handle_user.join("#halftest").await.unwrap();
-    expect_event(&mut events_user, 5000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#halftest"), "user joined").await;
+    expect_event(
+        &mut events_user,
+        5000,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#halftest"),
+        "user joined",
+    )
+    .await;
 
     // Drain any pending events
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -1932,34 +2637,85 @@ async fn halfop_mode() {
     while events_user.try_recv().is_ok() {}
 
     // Op grants +h to mod
-    handle_op.raw("MODE #halftest +h halftest_mod").await.unwrap();
+    handle_op
+        .raw("MODE #halftest +h halftest_mod")
+        .await
+        .unwrap();
     expect_event(&mut events_half, 5000, |e| matches!(e, Event::ModeChanged { channel, mode, .. } if channel == "#halftest" && mode == "+h"), "mod gets +h").await;
 
     // Halfop can kick regular user
-    handle_half.raw("KICK #halftest halftest_user :moderated").await.unwrap();
-    expect_event(&mut events_user, 5000, |e| matches!(e, Event::Kicked { channel, .. } if channel == "#halftest"), "user kicked by halfop").await;
+    handle_half
+        .raw("KICK #halftest halftest_user :moderated")
+        .await
+        .unwrap();
+    expect_event(
+        &mut events_user,
+        5000,
+        |e| matches!(e, Event::Kicked { channel, .. } if channel == "#halftest"),
+        "user kicked by halfop",
+    )
+    .await;
 
     // User rejoins
     handle_user.join("#halftest").await.unwrap();
-    expect_event(&mut events_user, 5000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#halftest"), "user rejoined").await;
+    expect_event(
+        &mut events_user,
+        5000,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#halftest"),
+        "user rejoined",
+    )
+    .await;
     tokio::time::sleep(Duration::from_millis(200)).await;
     while events_half.try_recv().is_ok() {}
 
     // Halfop CANNOT kick op
-    handle_half.raw("KICK #halftest halftest_op :nope").await.unwrap();
-    expect_event(&mut events_half, 5000, |e| matches!(e, Event::ServerNotice { text } if text.contains("operator")), "halfop can't kick op").await;
+    handle_half
+        .raw("KICK #halftest halftest_op :nope")
+        .await
+        .unwrap();
+    expect_event(
+        &mut events_half,
+        5000,
+        |e| matches!(e, Event::ServerNotice { text } if text.contains("operator")),
+        "halfop can't kick op",
+    )
+    .await;
 
     // Halfop can set +v
-    handle_half.raw("MODE #halftest +v halftest_user").await.unwrap();
-    expect_event(&mut events_user, 5000, |e| matches!(e, Event::ModeChanged { mode, .. } if mode == "+v"), "halfop sets +v").await;
+    handle_half
+        .raw("MODE #halftest +v halftest_user")
+        .await
+        .unwrap();
+    expect_event(
+        &mut events_user,
+        5000,
+        |e| matches!(e, Event::ModeChanged { mode, .. } if mode == "+v"),
+        "halfop sets +v",
+    )
+    .await;
 
     // Halfop CANNOT set +o
-    handle_half.raw("MODE #halftest +o halftest_user").await.unwrap();
-    expect_event(&mut events_half, 5000, |e| matches!(e, Event::ServerNotice { text } if text.contains("Moderators can only set")), "halfop can't set +o").await;
+    handle_half
+        .raw("MODE #halftest +o halftest_user")
+        .await
+        .unwrap();
+    expect_event(
+        &mut events_half,
+        5000,
+        |e| matches!(e, Event::ServerNotice { text } if text.contains("Moderators can only set")),
+        "halfop can't set +o",
+    )
+    .await;
 
     // Halfop CANNOT set +m
     handle_half.raw("MODE #halftest +m").await.unwrap();
-    expect_event(&mut events_half, 5000, |e| matches!(e, Event::ServerNotice { text } if text.contains("Moderators can only set")), "halfop can't set +m").await;
+    expect_event(
+        &mut events_half,
+        5000,
+        |e| matches!(e, Event::ServerNotice { text } if text.contains("Moderators can only set")),
+        "halfop can't set +m",
+    )
+    .await;
 
     // Op sets +m, halfop can still speak
     handle_op.raw("MODE #halftest +m").await.unwrap();
@@ -1967,8 +2723,17 @@ async fn halfop_mode() {
     while events_op.try_recv().is_ok() {}
     while events_half.try_recv().is_ok() {}
 
-    handle_half.privmsg("#halftest", "halfop can speak").await.unwrap();
-    expect_event(&mut events_op, 5000, |e| matches!(e, Event::Message { text, .. } if text == "halfop can speak"), "halfop speaks in +m").await;
+    handle_half
+        .privmsg("#halftest", "halfop can speak")
+        .await
+        .unwrap();
+    expect_event(
+        &mut events_op,
+        5000,
+        |e| matches!(e, Event::Message { text, .. } if text == "halfop can speak"),
+        "halfop speaks in +m",
+    )
+    .await;
 }
 
 // ── Test: Message signing for DID-authenticated users ───────────────
@@ -1986,10 +2751,8 @@ async fn message_signing_authenticated_user() {
     let (addr, server_handle) = start_test_server(resolver).await;
 
     // Authenticated user
-    let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(
-        did_str.to_string(),
-        private_key,
-    ));
+    let signer: Arc<dyn ChallengeSigner> =
+        Arc::new(KeySigner::new(did_str.to_string(), private_key));
     let config = ConnectConfig {
         server_addr: addr.to_string(),
         nick: "signer".to_string(),
@@ -1998,7 +2761,13 @@ async fn message_signing_authenticated_user() {
         ..Default::default()
     };
     let (handle_auth, mut events_auth) = client::connect(config, Some(signer));
-    expect_event(&mut events_auth, 2000, |e| matches!(e, Event::Registered { .. }), "auth registered").await;
+    expect_event(
+        &mut events_auth,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "auth registered",
+    )
+    .await;
 
     // Guest user (to receive messages and check for sig tag)
     let config2 = ConnectConfig {
@@ -2009,40 +2778,80 @@ async fn message_signing_authenticated_user() {
         ..Default::default()
     };
     let (handle_guest, mut events_guest) = client::connect(config2, None);
-    expect_event(&mut events_guest, 2000, |e| matches!(e, Event::Registered { .. }), "guest registered").await;
+    expect_event(
+        &mut events_guest,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "guest registered",
+    )
+    .await;
 
     // Both join channel
     handle_auth.join("#sigtest").await.unwrap();
-    expect_event(&mut events_auth, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#sigtest"), "auth joined").await;
+    expect_event(
+        &mut events_auth,
+        2000,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#sigtest"),
+        "auth joined",
+    )
+    .await;
     handle_guest.join("#sigtest").await.unwrap();
-    expect_event(&mut events_guest, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#sigtest"), "guest joined").await;
+    expect_event(
+        &mut events_guest,
+        2000,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#sigtest"),
+        "guest joined",
+    )
+    .await;
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     while events_auth.try_recv().is_ok() {}
     while events_guest.try_recv().is_ok() {}
 
     // Authenticated user sends message
-    handle_auth.privmsg("#sigtest", "signed hello").await.unwrap();
+    handle_auth
+        .privmsg("#sigtest", "signed hello")
+        .await
+        .unwrap();
 
     // Guest should receive message WITH sig tag
-    let msg = expect_event(&mut events_guest, 2000, |e| {
-        matches!(e, Event::Message { text, .. } if text == "signed hello")
-    }, "guest got signed msg").await;
+    let msg = expect_event(
+        &mut events_guest,
+        2000,
+        |e| matches!(e, Event::Message { text, .. } if text == "signed hello"),
+        "guest got signed msg",
+    )
+    .await;
 
     if let Event::Message { tags, .. } = &msg {
-        assert!(tags.contains_key("+freeq.at/sig"), "Message from authenticated user should have +freeq.at/sig tag. Tags: {:?}", tags);
+        assert!(
+            tags.contains_key("+freeq.at/sig"),
+            "Message from authenticated user should have +freeq.at/sig tag. Tags: {:?}",
+            tags
+        );
         let sig = tags.get("+freeq.at/sig").unwrap();
         assert!(!sig.is_empty(), "Signature should not be empty");
     }
 
     // Guest sends a message — should NOT have sig tag
-    handle_guest.privmsg("#sigtest", "unsigned hello").await.unwrap();
-    let msg2 = expect_event(&mut events_auth, 2000, |e| {
-        matches!(e, Event::Message { text, .. } if text == "unsigned hello")
-    }, "auth got unsigned msg").await;
+    handle_guest
+        .privmsg("#sigtest", "unsigned hello")
+        .await
+        .unwrap();
+    let msg2 = expect_event(
+        &mut events_auth,
+        2000,
+        |e| matches!(e, Event::Message { text, .. } if text == "unsigned hello"),
+        "auth got unsigned msg",
+    )
+    .await;
 
     if let Event::Message { tags, .. } = &msg2 {
-        assert!(!tags.contains_key("+freeq.at/sig"), "Message from guest should NOT have +freeq.at/sig tag. Tags: {:?}", tags);
+        assert!(
+            !tags.contains_key("+freeq.at/sig"),
+            "Message from guest should NOT have +freeq.at/sig tag. Tags: {:?}",
+            tags
+        );
     }
 
     handle_auth.quit(None).await.unwrap();
@@ -2067,10 +2876,8 @@ async fn client_signature_verification() {
     let (addr, server_handle) = start_test_server(resolver).await;
 
     // Authenticated user
-    let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(
-        did_str.to_string(),
-        private_key,
-    ));
+    let signer: Arc<dyn ChallengeSigner> =
+        Arc::new(KeySigner::new(did_str.to_string(), private_key));
     let config = ConnectConfig {
         server_addr: addr.to_string(),
         nick: "csigner".to_string(),
@@ -2079,7 +2886,13 @@ async fn client_signature_verification() {
         ..Default::default()
     };
     let (handle_auth, mut events_auth) = client::connect(config, Some(signer));
-    expect_event(&mut events_auth, 2000, |e| matches!(e, Event::Registered { .. }), "auth registered").await;
+    expect_event(
+        &mut events_auth,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "auth registered",
+    )
+    .await;
 
     // Guest observer
     let config2 = ConnectConfig {
@@ -2090,13 +2903,31 @@ async fn client_signature_verification() {
         ..Default::default()
     };
     let (handle_guest, mut events_guest) = client::connect(config2, None);
-    expect_event(&mut events_guest, 2000, |e| matches!(e, Event::Registered { .. }), "guest registered").await;
+    expect_event(
+        &mut events_guest,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "guest registered",
+    )
+    .await;
 
     // Both join
     handle_auth.join("#csigtest").await.unwrap();
-    expect_event(&mut events_auth, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#csigtest"), "auth joined").await;
+    expect_event(
+        &mut events_auth,
+        2000,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#csigtest"),
+        "auth joined",
+    )
+    .await;
     handle_guest.join("#csigtest").await.unwrap();
-    expect_event(&mut events_guest, 2000, |e| matches!(e, Event::Joined { channel, .. } if channel == "#csigtest"), "guest joined").await;
+    expect_event(
+        &mut events_guest,
+        2000,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#csigtest"),
+        "guest joined",
+    )
+    .await;
 
     tokio::time::sleep(Duration::from_millis(200)).await;
     while events_auth.try_recv().is_ok() {}
@@ -2105,17 +2936,27 @@ async fn client_signature_verification() {
     // Send a message
     handle_auth.privmsg("#csigtest", "verify me").await.unwrap();
 
-    let msg = expect_event(&mut events_guest, 2000, |e| {
-        matches!(e, Event::Message { text, .. } if text == "verify me")
-    }, "got signed message").await;
+    let msg = expect_event(
+        &mut events_guest,
+        2000,
+        |e| matches!(e, Event::Message { text, .. } if text == "verify me"),
+        "got signed message",
+    )
+    .await;
 
     if let Event::Message { tags, .. } = &msg {
-        assert!(tags.contains_key("+freeq.at/sig"), "Should have sig tag: {:?}", tags);
+        assert!(
+            tags.contains_key("+freeq.at/sig"),
+            "Should have sig tag: {:?}",
+            tags
+        );
         // The signature should be present and non-empty
         let sig_b64 = tags.get("+freeq.at/sig").unwrap();
         assert!(!sig_b64.is_empty());
         // Verify it's a valid base64url-encoded 64-byte ed25519 signature
-        let sig_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(sig_b64).unwrap();
+        let sig_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(sig_b64)
+            .unwrap();
         assert_eq!(sig_bytes.len(), 64, "Ed25519 signature should be 64 bytes");
     }
 

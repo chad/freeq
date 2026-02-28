@@ -118,7 +118,10 @@ struct Args {
     max_delay: u64,
 
     /// Conversation topic/vibe
-    #[arg(long, default_value = "friends hanging out — dev life, music, food, travel, memes, hot takes, weekend plans")]
+    #[arg(
+        long,
+        default_value = "friends hanging out — dev life, music, food, travel, memes, hot takes, weekend plans"
+    )]
     topic: String,
 
     /// Use TLS
@@ -284,10 +287,14 @@ async fn main() -> Result<()> {
         let personality = persona.personality.to_string();
 
         tokio::spawn(async move {
-            let p = OwnedPersona { nick: nick.clone(), realname, personality };
+            let p = OwnedPersona {
+                nick: nick.clone(),
+                realname,
+                personality,
+            };
             if let Err(e) = run_bot(
-                &server, &channel, &p, &topic, &model, &api_key, chat_log, min_delay,
-                max_delay, tls,
+                &server, &channel, &p, &topic, &model, &api_key, chat_log, min_delay, max_delay,
+                tls,
             )
             .await
             {
@@ -327,7 +334,8 @@ async fn run_bot(
         user: persona.nick.clone(),
         realname: persona.realname.clone(),
         tls,
-        tls_insecure: false, web_token: None,
+        tls_insecure: false,
+        web_token: None,
     };
 
     let (handle, mut events) = client::connect(config, None);

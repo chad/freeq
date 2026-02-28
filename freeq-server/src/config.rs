@@ -124,7 +124,6 @@ pub struct ServerConfig {
     /// Comma-separated list.
     #[arg(long, value_delimiter = ',', env = "OPER_DIDS")]
     pub oper_dids: Vec<String>,
-
 }
 
 impl Default for ServerConfig {

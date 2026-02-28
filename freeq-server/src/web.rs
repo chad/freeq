@@ -12,12 +12,12 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::SystemTime;
 
+use axum::Router;
 use axum::extract::ws::{Message as WsMessage, WebSocket};
 use axum::extract::{Path, Query, State, WebSocketUpgrade};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Json, Redirect};
 use axum::routing::{get, post};
-use axum::Router;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tower_http::cors::CorsLayer;
@@ -155,17 +155,11 @@ impl AsyncWrite for WsBridge {
         Pin::new(&mut self.writer).poll_write(cx, buf)
     }
 
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         Pin::new(&mut self.writer).poll_flush(cx)
     }
 
-    fn poll_shutdown(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         Pin::new(&mut self.writer).poll_shutdown(cx)
     }
 }
@@ -203,22 +197,25 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/join/{channel}", get(channel_invite_page))
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)) // 12MB
         .layer({
-            use tower_http::cors::AllowOrigin;
             use axum::http::{Method, header};
+            use tower_http::cors::AllowOrigin;
             let origins = [
                 "https://irc.freeq.at",
                 "https://auth.freeq.at",
                 "https://freeq.at",
-                "http://127.0.0.1:5173",  // vite dev
+                "http://127.0.0.1:5173", // vite dev
                 "http://localhost:5173",
             ];
             CorsLayer::new()
                 .allow_origin(AllowOrigin::list(
-                    origins.iter().filter_map(|o| o.parse().ok())
+                    origins.iter().filter_map(|o| o.parse().ok()),
                 ))
                 .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-                .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION,
-                    "X-Broker-Signature".parse().unwrap()])
+                .allow_headers([
+                    header::CONTENT_TYPE,
+                    header::AUTHORIZATION,
+                    "X-Broker-Signature".parse().unwrap(),
+                ])
                 .allow_credentials(true)
         });
 
@@ -229,15 +226,29 @@ pub fn router(state: Arc<SharedState>) -> Router {
 
     // Build verifier router (stashed, merged after .with_state())
     let verifier_router = {
-        let github_config = state.config.github_client_id.as_ref().map(|id| {
-            crate::verifiers::GitHubConfig {
-                client_id: id.clone(),
-                client_secret: state.config.github_client_secret.clone().unwrap_or_default(),
-            }
-        });
+        let github_config =
+            state
+                .config
+                .github_client_id
+                .as_ref()
+                .map(|id| crate::verifiers::GitHubConfig {
+                    client_id: id.clone(),
+                    client_secret: state
+                        .config
+                        .github_client_secret
+                        .clone()
+                        .unwrap_or_default(),
+                });
         let issuer_did = format!("did:web:{}:verify", state.config.server_name);
-        let data_dir = state.config.db_path.as_ref()
-            .map(|p| std::path::Path::new(p).parent().unwrap_or(std::path::Path::new(".")))
+        let data_dir = state
+            .config
+            .db_path
+            .as_ref()
+            .map(|p| {
+                std::path::Path::new(p)
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."))
+            })
             .unwrap_or(std::path::Path::new("."));
         crate::verifiers::router(issuer_did, github_config, data_dir).map(|(r, _)| r)
     };
@@ -285,7 +296,8 @@ async fn ws_upgrade(
             return axum::http::StatusCode::TOO_MANY_REQUESTS.into_response();
         }
     }
-    ws.on_upgrade(move |socket| handle_ws(socket, state, ip)).into_response()
+    ws.on_upgrade(move |socket| handle_ws(socket, state, ip))
+        .into_response()
 }
 
 async fn handle_ws(socket: WebSocket, state: Arc<SharedState>, ip: std::net::IpAddr) {
@@ -301,7 +313,9 @@ async fn handle_ws(socket: WebSocket, state: Arc<SharedState>, ip: std::net::IpA
     let mut ip_conns = state.ip_connections.lock();
     if let Some(count) = ip_conns.get_mut(&ip) {
         *count = count.saturating_sub(1);
-        if *count == 0 { ip_conns.remove(&ip); }
+        if *count == 0 {
+            ip_conns.remove(&ip);
+        }
     }
 }
 
@@ -422,7 +436,9 @@ async fn api_verify_message(
                 break;
             }
         }
-        if found.is_some() { break; }
+        if found.is_some() {
+            break;
+        }
     }
     drop(channels);
 
@@ -435,10 +451,17 @@ async fn api_verify_message(
     let sender_nick = msg.from.split('!').next().unwrap_or(&msg.from);
 
     // Resolve sender's DID
-    let sender_did = state.nick_owners.lock()
+    let sender_did = state
+        .nick_owners
+        .lock()
         .iter()
         .find(|(_, did)| {
-            state.did_nicks.lock().get(*did).map(|n| n == sender_nick).unwrap_or(false)
+            state
+                .did_nicks
+                .lock()
+                .get(*did)
+                .map(|n| n == sender_nick)
+                .unwrap_or(false)
         })
         .map(|(_, did)| did.clone())
         // Also check active sessions
@@ -448,60 +471,67 @@ async fn api_verify_message(
             session.and_then(|s| state.session_dids.lock().get(&s).cloned())
         });
 
-    let canonical = sender_did.as_ref().map(|did| {
-        format!("{did}\0{found_channel}\0{}\0{}", msg.text, msg.timestamp)
-    });
+    let canonical = sender_did
+        .as_ref()
+        .map(|did| format!("{did}\0{found_channel}\0{}\0{}", msg.text, msg.timestamp));
 
     // Try to verify: first against client session key, then server key
     let mut verification = serde_json::json!(null);
     if let (Some(sig_b64), Some(canonical_str)) = (&sig_b64, &canonical) {
         use base64::Engine;
         if let Ok(sig_bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(sig_b64)
-            && sig_bytes.len() == 64 {
-                let sig_array: [u8; 64] = sig_bytes.try_into().unwrap();
-                let sig = ed25519_dalek::Signature::from_bytes(&sig_array);
-                let canonical_bytes = canonical_str.as_bytes();
+            && sig_bytes.len() == 64
+        {
+            let sig_array: [u8; 64] = sig_bytes.try_into().unwrap();
+            let sig = ed25519_dalek::Signature::from_bytes(&sig_array);
+            let canonical_bytes = canonical_str.as_bytes();
 
-                // Try client session key first
-                let mut verified_by = "none";
-                if let Some(ref did) = sender_did
-                    && let Some(pubkey_b64) = state.did_msg_keys.lock().get(did)
-                        && let Ok(pk_bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(pubkey_b64)
-                            && pk_bytes.len() == 32 {
-                                let pk_arr: [u8; 32] = pk_bytes.try_into().unwrap();
-                                if let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(&pk_arr) {
-                                    use ed25519_dalek::Verifier;
-                                    if vk.verify(canonical_bytes, &sig).is_ok() {
-                                        verified_by = "client-session-key";
-                                    }
-                                }
-                            }
-
-                // Fall back to server key
-                if verified_by == "none" {
+            // Try client session key first
+            let mut verified_by = "none";
+            if let Some(ref did) = sender_did
+                && let Some(pubkey_b64) = state.did_msg_keys.lock().get(did)
+                && let Ok(pk_bytes) =
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(pubkey_b64)
+                && pk_bytes.len() == 32
+            {
+                let pk_arr: [u8; 32] = pk_bytes.try_into().unwrap();
+                if let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(&pk_arr) {
                     use ed25519_dalek::Verifier;
-                    let server_vk = state.msg_signing_key.verifying_key();
-                    if server_vk.verify(canonical_bytes, &sig).is_ok() {
-                        verified_by = "server-key";
+                    if vk.verify(canonical_bytes, &sig).is_ok() {
+                        verified_by = "client-session-key";
                     }
                 }
-
-                let server_pubkey = base64::engine::general_purpose::URL_SAFE_NO_PAD
-                    .encode(state.msg_signing_key.verifying_key().as_bytes());
-                let client_pubkey = sender_did.as_ref()
-                    .and_then(|did| state.did_msg_keys.lock().get(did).cloned());
-
-                verification = serde_json::json!({
-                    "valid": verified_by != "none",
-                    "verified_by": verified_by,
-                    "server_public_key": server_pubkey,
-                    "client_public_key": client_pubkey,
-                });
             }
+
+            // Fall back to server key
+            if verified_by == "none" {
+                use ed25519_dalek::Verifier;
+                let server_vk = state.msg_signing_key.verifying_key();
+                if server_vk.verify(canonical_bytes, &sig).is_ok() {
+                    verified_by = "server-key";
+                }
+            }
+
+            let server_pubkey = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(state.msg_signing_key.verifying_key().as_bytes());
+            let client_pubkey = sender_did
+                .as_ref()
+                .and_then(|did| state.did_msg_keys.lock().get(did).cloned());
+
+            verification = serde_json::json!({
+                "valid": verified_by != "none",
+                "verified_by": verified_by,
+                "server_public_key": server_pubkey,
+                "client_public_key": client_pubkey,
+            });
+        }
     }
 
     let canonical_hex = canonical.as_ref().map(|c| {
-        c.as_bytes().iter().map(|b| format!("{:02x}", b)).collect::<String>()
+        c.as_bytes()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>()
     });
 
     Ok(Json(serde_json::json!({
@@ -524,7 +554,10 @@ async fn api_health(State(state): State<Arc<SharedState>>) -> Json<HealthRespons
     let uptime = start.elapsed().unwrap_or_default().as_secs();
     let connections = state.connections.lock().len();
     // Count only channels with members (not empty shells)
-    let channels = state.channels.lock().values()
+    let channels = state
+        .channels
+        .lock()
+        .values()
         .filter(|ch| !ch.members.is_empty() || !ch.remote_members.is_empty())
         .count();
     Json(HealthResponse {
@@ -645,18 +678,28 @@ async fn api_channel_pins(
     Path(name): Path<String>,
     State(state): State<Arc<SharedState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let channel = if name.starts_with('#') { name } else { format!("#{name}") };
+    let channel = if name.starts_with('#') {
+        name
+    } else {
+        format!("#{name}")
+    };
     let channels = state.channels.lock();
     match channels.get(&channel) {
         Some(ch) => {
-            let pins: Vec<serde_json::Value> = ch.pins.iter().map(|p| {
-                serde_json::json!({
-                    "msgid": p.msgid,
-                    "pinned_by": p.pinned_by,
-                    "pinned_at": p.pinned_at,
+            let pins: Vec<serde_json::Value> = ch
+                .pins
+                .iter()
+                .map(|p| {
+                    serde_json::json!({
+                        "msgid": p.msgid,
+                        "pinned_by": p.pinned_by,
+                        "pinned_at": p.pinned_at,
+                    })
                 })
-            }).collect();
-            Ok(Json(serde_json::json!({ "channel": channel, "pins": pins })))
+                .collect();
+            Ok(Json(
+                serde_json::json!({ "channel": channel, "pins": pins }),
+            ))
         }
         None => Err(StatusCode::NOT_FOUND),
     }
@@ -666,23 +709,19 @@ async fn api_user(
     Path(nick): Path<String>,
     State(state): State<Arc<SharedState>>,
 ) -> Result<Json<UserResponse>, StatusCode> {
-    let session = state.nick_to_session.lock().get_session(&nick).map(|s| s.to_string());
+    let session = state
+        .nick_to_session
+        .lock()
+        .get_session(&nick)
+        .map(|s| s.to_string());
     let online = session.is_some();
 
     let (did, handle) = if let Some(ref session_id) = session {
         let did = state.session_dids.lock().get(session_id).cloned();
-        let handle = state
-            .session_handles
-            .lock()
-            .get(session_id)
-            .cloned();
+        let handle = state.session_handles.lock().get(session_id).cloned();
         (did, handle)
     } else {
-        let did = state
-            .nick_owners
-            .lock()
-            .get(&nick.to_lowercase())
-            .cloned();
+        let did = state.nick_owners.lock().get(&nick.to_lowercase()).cloned();
         (did, None)
     };
 
@@ -702,23 +741,19 @@ async fn api_user_whois(
     Path(nick): Path<String>,
     State(state): State<Arc<SharedState>>,
 ) -> Result<Json<WhoisResponse>, StatusCode> {
-    let session = state.nick_to_session.lock().get_session(&nick).map(|s| s.to_string());
+    let session = state
+        .nick_to_session
+        .lock()
+        .get_session(&nick)
+        .map(|s| s.to_string());
     let online = session.is_some();
 
     let (did, handle) = if let Some(ref session_id) = session {
         let did = state.session_dids.lock().get(session_id).cloned();
-        let handle = state
-            .session_handles
-            .lock()
-            .get(session_id)
-            .cloned();
+        let handle = state.session_handles.lock().get(session_id).cloned();
         (did, handle)
     } else {
-        let did = state
-            .nick_owners
-            .lock()
-            .get(&nick.to_lowercase())
-            .cloned();
+        let did = state.nick_owners.lock().get(&nick.to_lowercase()).cloned();
         (did, None)
     };
 
@@ -777,8 +812,10 @@ async fn auth_broker_web_token(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Json<BrokerTokenResponse>, (StatusCode, String)> {
-    let secret = state.config.broker_shared_secret.clone()
-        .ok_or((StatusCode::FORBIDDEN, "Broker auth not configured".to_string()))?;
+    let secret = state.config.broker_shared_secret.clone().ok_or((
+        StatusCode::FORBIDDEN,
+        "Broker auth not configured".to_string(),
+    ))?;
     verify_broker_signature_raw(&secret, &headers, &body)?;
     let req: BrokerTokenRequest = serde_json::from_slice(&body)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid JSON: {e}")))?;
@@ -786,10 +823,19 @@ async fn auth_broker_web_token(
     let token = generate_random_string(32);
     state.web_auth_tokens.lock().insert(
         token.clone(),
-        (req.did.clone(), req.handle.clone(), std::time::Instant::now()),
+        (
+            req.did.clone(),
+            req.handle.clone(),
+            std::time::Instant::now(),
+        ),
     );
     let nick = mobile_nick_from_handle(&req.handle);
-    Ok(Json(BrokerTokenResponse { token, nick, did: req.did, handle: req.handle }))
+    Ok(Json(BrokerTokenResponse {
+        token,
+        nick,
+        did: req.did,
+        handle: req.handle,
+    }))
 }
 
 async fn auth_broker_session(
@@ -797,29 +843,39 @@ async fn auth_broker_session(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let secret = state.config.broker_shared_secret.clone()
-        .ok_or((StatusCode::FORBIDDEN, "Broker auth not configured".to_string()))?;
+    let secret = state.config.broker_shared_secret.clone().ok_or((
+        StatusCode::FORBIDDEN,
+        "Broker auth not configured".to_string(),
+    ))?;
     verify_broker_signature_raw(&secret, &headers, &body)?;
     let req: BrokerSessionRequest = serde_json::from_slice(&body)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid JSON: {e}")))?;
 
     tracing::info!(did = %req.did, "Broker pushed web session");
-    state.web_sessions.lock().insert(req.did.clone(), crate::server::WebSession {
-        did: req.did.clone(),
-        handle: req.handle.clone(),
-        pds_url: req.pds_url.clone(),
-        access_token: req.access_token.clone(),
-        dpop_key_b64: req.dpop_key_b64.clone(),
-        dpop_nonce: req.dpop_nonce.clone(),
-        created_at: std::time::Instant::now(),
-    });
+    state.web_sessions.lock().insert(
+        req.did.clone(),
+        crate::server::WebSession {
+            did: req.did.clone(),
+            handle: req.handle.clone(),
+            pds_url: req.pds_url.clone(),
+            access_token: req.access_token.clone(),
+            dpop_key_b64: req.dpop_key_b64.clone(),
+            dpop_nonce: req.dpop_nonce.clone(),
+            created_at: std::time::Instant::now(),
+        },
+    );
 
     // Mint an upload token for this DID (5 min TTL, used by mobile clients
     // that can't prove session ownership via WebSocket session_dids).
     let upload_token = generate_random_string(32);
-    state.upload_tokens.lock().insert(upload_token.clone(), (req.did.clone(), std::time::Instant::now()));
+    state.upload_tokens.lock().insert(
+        upload_token.clone(),
+        (req.did.clone(), std::time::Instant::now()),
+    );
 
-    Ok(Json(serde_json::json!({"ok": true, "upload_token": upload_token})))
+    Ok(Json(
+        serde_json::json!({"ok": true, "upload_token": upload_token}),
+    ))
 }
 
 /// Verify HMAC-SHA256 signature over raw request bytes with replay protection.
@@ -834,29 +890,47 @@ fn verify_broker_signature_raw(
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
 
-    let sig = headers.get("x-broker-signature")
+    let sig = headers
+        .get("x-broker-signature")
         .and_then(|v| v.to_str().ok())
-        .ok_or((StatusCode::UNAUTHORIZED, "Missing broker signature".to_string()))?;
+        .ok_or((
+            StatusCode::UNAUTHORIZED,
+            "Missing broker signature".to_string(),
+        ))?;
 
     // Replay protection: check timestamp freshness (optional for backward compat)
-    if let Some(ts_str) = headers.get("x-broker-timestamp").and_then(|v| v.to_str().ok())
-        && let Ok(ts) = ts_str.parse::<u64>() {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            if now.abs_diff(ts) > 60 {
-                return Err((StatusCode::UNAUTHORIZED, "Broker request expired (timestamp > 60s)".to_string()));
-            }
+    if let Some(ts_str) = headers
+        .get("x-broker-timestamp")
+        .and_then(|v| v.to_str().ok())
+        && let Ok(ts) = ts_str.parse::<u64>()
+    {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if now.abs_diff(ts) > 60 {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "Broker request expired (timestamp > 60s)".to_string(),
+            ));
         }
+    }
 
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "HMAC init failed".to_string()))?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "HMAC init failed".to_string(),
+        )
+    })?;
     mac.update(body_bytes);
-    let expected = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+    let expected =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
 
     if expected != sig {
-        return Err((StatusCode::UNAUTHORIZED, "Invalid broker signature".to_string()));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "Invalid broker signature".to_string(),
+        ));
     }
     Ok(())
 }
@@ -865,9 +939,7 @@ fn verify_broker_signature_raw(
 
 /// Serves the AT Protocol OAuth client-metadata.json document.
 /// The client_id for non-localhost origins is `{origin}/client-metadata.json`.
-async fn client_metadata(
-    headers: axum::http::HeaderMap,
-) -> Json<serde_json::Value> {
+async fn client_metadata(headers: axum::http::HeaderMap) -> Json<serde_json::Value> {
     let (web_origin, _) = derive_web_origin(&headers);
     let redirect_uri = format!("{web_origin}/auth/callback");
     let client_id = build_client_id(&web_origin, &redirect_uri);
@@ -891,15 +963,17 @@ async fn client_metadata(
 
 /// Derive web origin and scheme from Host header.
 fn derive_web_origin(headers: &axum::http::HeaderMap) -> (String, String) {
-    let raw_host = headers.get("host")
+    let raw_host = headers
+        .get("host")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("127.0.0.1:8080");
     let host = raw_host.replace("localhost", "127.0.0.1");
-    let scheme = if host.starts_with("127.") || host.starts_with("192.168.") || host.starts_with("10.") {
-        "http"
-    } else {
-        "https"
-    };
+    let scheme =
+        if host.starts_with("127.") || host.starts_with("192.168.") || host.starts_with("10.") {
+            "http"
+        } else {
+            "https"
+        };
     let origin = format!("{scheme}://{host}");
     (origin, scheme.to_string())
 }
@@ -920,12 +994,16 @@ fn derive_web_origin_from_config(config: &crate::config::ServerConfig) -> (Strin
 /// Build OAuth client_id. Loopback uses http://localhost?... form;
 /// production uses {origin}/client-metadata.json.
 fn build_client_id(web_origin: &str, redirect_uri: &str) -> String {
-    if web_origin.starts_with("http://127.") || web_origin.starts_with("http://192.168.") || web_origin.starts_with("http://10.") {
+    if web_origin.starts_with("http://127.")
+        || web_origin.starts_with("http://192.168.")
+        || web_origin.starts_with("http://10.")
+    {
         // Loopback client — use http://localhost form per AT Protocol spec
         let scope = "atproto transition:generic";
         format!(
             "http://localhost?redirect_uri={}&scope={}",
-            urlencod(redirect_uri), urlencod(scope),
+            urlencod(redirect_uri),
+            urlencod(scope),
         )
     } else {
         // Production — client_id is the URL of the client-metadata.json document
@@ -998,7 +1076,10 @@ try {
     (
         [
             ("content-type", "text/html; charset=utf-8"),
-            ("content-security-policy", "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'"),
+            (
+                "content-security-policy",
+                "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
+            ),
         ],
         html,
     )
@@ -1016,35 +1097,93 @@ async fn auth_login(
 
     // Resolve handle → DID → PDS
     let resolver = freeq_sdk::did::DidResolver::http();
-    let did = resolver.resolve_handle(&handle).await
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Cannot resolve handle: {e}")))?;
-    let did_doc = resolver.resolve(&did).await
+    let did = resolver.resolve_handle(&handle).await.map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Cannot resolve handle: {e}"),
+        )
+    })?;
+    let did_doc = resolver
+        .resolve(&did)
+        .await
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Cannot resolve DID: {e}")))?;
-    let pds_url = freeq_sdk::pds::pds_endpoint(&did_doc)
-        .ok_or_else(|| (StatusCode::BAD_REQUEST, "No PDS in DID document".to_string()))?;
+    let pds_url = freeq_sdk::pds::pds_endpoint(&did_doc).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "No PDS in DID document".to_string(),
+        )
+    })?;
 
     // Discover authorization server
     let client = reqwest::Client::new();
-    let pr_url = format!("{}/.well-known/oauth-protected-resource", pds_url.trim_end_matches('/'));
-    let pr_meta: serde_json::Value = client.get(&pr_url).send().await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PDS metadata fetch failed: {e}")))?
-        .json().await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PDS metadata parse failed: {e}")))?;
+    let pr_url = format!(
+        "{}/.well-known/oauth-protected-resource",
+        pds_url.trim_end_matches('/')
+    );
+    let pr_meta: serde_json::Value = client
+        .get(&pr_url)
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("PDS metadata fetch failed: {e}"),
+            )
+        })?
+        .json()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("PDS metadata parse failed: {e}"),
+            )
+        })?;
 
-    let auth_server = pr_meta["authorization_servers"][0].as_str()
-        .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No authorization server".to_string()))?;
+    let auth_server = pr_meta["authorization_servers"][0]
+        .as_str()
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_GATEWAY,
+                "No authorization server".to_string(),
+            )
+        })?;
 
-    let as_url = format!("{}/.well-known/oauth-authorization-server", auth_server.trim_end_matches('/'));
-    let auth_meta: serde_json::Value = client.get(&as_url).send().await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Auth server metadata failed: {e}")))?
-        .json().await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Auth server metadata parse failed: {e}")))?;
+    let as_url = format!(
+        "{}/.well-known/oauth-authorization-server",
+        auth_server.trim_end_matches('/')
+    );
+    let auth_meta: serde_json::Value = client
+        .get(&as_url)
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Auth server metadata failed: {e}"),
+            )
+        })?
+        .json()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Auth server metadata parse failed: {e}"),
+            )
+        })?;
 
-    let authorization_endpoint = auth_meta["authorization_endpoint"].as_str()
-        .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No authorization_endpoint".to_string()))?;
-    let token_endpoint = auth_meta["token_endpoint"].as_str()
+    let authorization_endpoint = auth_meta["authorization_endpoint"]
+        .as_str()
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_GATEWAY,
+                "No authorization_endpoint".to_string(),
+            )
+        })?;
+    let token_endpoint = auth_meta["token_endpoint"]
+        .as_str()
         .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No token_endpoint".to_string()))?;
-    let par_endpoint = auth_meta["pushed_authorization_request_endpoint"].as_str()
+    let par_endpoint = auth_meta["pushed_authorization_request_endpoint"]
+        .as_str()
         .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No PAR endpoint".to_string()))?;
 
     // Build redirect URI and client_id
@@ -1070,56 +1209,101 @@ async fn auth_login(
     ];
 
     // Try without nonce first
-    let dpop_proof = dpop_key.proof("POST", par_endpoint, None, None)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DPoP proof failed: {e}")))?;
-    let resp = client.post(par_endpoint).header("DPoP", &dpop_proof).form(&params).send().await
+    let dpop_proof = dpop_key
+        .proof("POST", par_endpoint, None, None)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DPoP proof failed: {e}"),
+            )
+        })?;
+    let resp = client
+        .post(par_endpoint)
+        .header("DPoP", &dpop_proof)
+        .form(&params)
+        .send()
+        .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR failed: {e}")))?;
 
     let status = resp.status();
-    let dpop_nonce = resp.headers().get("dpop-nonce")
-        .and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+    let dpop_nonce = resp
+        .headers()
+        .get("dpop-nonce")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
 
     let par_resp: serde_json::Value = if status.as_u16() == 400 && dpop_nonce.is_some() {
         // Retry with nonce
         let nonce = dpop_nonce.as_deref().unwrap();
-        let dpop_proof2 = dpop_key.proof("POST", par_endpoint, Some(nonce), None)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DPoP retry failed: {e}")))?;
-        let resp2 = client.post(par_endpoint).header("DPoP", &dpop_proof2).form(&params).send().await
+        let dpop_proof2 = dpop_key
+            .proof("POST", par_endpoint, Some(nonce), None)
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("DPoP retry failed: {e}"),
+                )
+            })?;
+        let resp2 = client
+            .post(par_endpoint)
+            .header("DPoP", &dpop_proof2)
+            .form(&params)
+            .send()
+            .await
             .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR retry failed: {e}")))?;
         if !resp2.status().is_success() {
             let text = resp2.text().await.unwrap_or_default();
             return Err((StatusCode::BAD_GATEWAY, format!("PAR failed: {text}")));
         }
-        resp2.json().await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR parse failed: {e}")))?
+        resp2
+            .json()
+            .await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR parse failed: {e}")))?
     } else if status.is_success() {
-        resp.json().await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR parse failed: {e}")))?
+        resp.json()
+            .await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR parse failed: {e}")))?
     } else {
         let text = resp.text().await.unwrap_or_default();
-        return Err((StatusCode::BAD_GATEWAY, format!("PAR failed ({status}): {text}")));
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            format!("PAR failed ({status}): {text}"),
+        ));
     };
 
-    let request_uri = par_resp["request_uri"].as_str()
-        .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No request_uri in PAR response".to_string()))?;
+    let request_uri = par_resp["request_uri"].as_str().ok_or_else(|| {
+        (
+            StatusCode::BAD_GATEWAY,
+            "No request_uri in PAR response".to_string(),
+        )
+    })?;
 
     // Store pending session
-    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
-    state.oauth_pending.lock().insert(oauth_state.clone(), crate::server::OAuthPending {
-        handle: handle.clone(),
-        did: did.clone(),
-        pds_url: pds_url.clone(),
-        code_verifier,
-        redirect_uri: redirect_uri.clone(),
-        client_id: client_id.clone(),
-        token_endpoint: token_endpoint.to_string(),
-        dpop_key_b64: dpop_key.to_base64url(),
-        created_at: now,
-        mobile: q.mobile.as_deref() == Some("1"),
-    });
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    state.oauth_pending.lock().insert(
+        oauth_state.clone(),
+        crate::server::OAuthPending {
+            handle: handle.clone(),
+            did: did.clone(),
+            pds_url: pds_url.clone(),
+            code_verifier,
+            redirect_uri: redirect_uri.clone(),
+            client_id: client_id.clone(),
+            token_endpoint: token_endpoint.to_string(),
+            dpop_key_b64: dpop_key.to_base64url(),
+            created_at: now,
+            mobile: q.mobile.as_deref() == Some("1"),
+        },
+    );
 
     // Redirect to authorization server
     let auth_url = format!(
         "{}?client_id={}&request_uri={}",
-        authorization_endpoint, urlencod(&client_id), urlencod(request_uri),
+        authorization_endpoint,
+        urlencod(&client_id),
+        urlencod(request_uri),
     );
 
     tracing::info!(handle = %handle, did = %did, "OAuth login started, redirecting to auth server");
@@ -1145,27 +1329,50 @@ async fn auth_callback(
     // Check for error
     if let Some(error) = &q.error {
         let desc = q.error_description.as_deref().unwrap_or("Unknown error");
-        return Ok(Html(oauth_result_page(&format!("Error: {error}: {desc}"), None)));
+        return Ok(Html(oauth_result_page(
+            &format!("Error: {error}: {desc}"),
+            None,
+        )));
     }
 
-    let code = q.code.as_deref()
+    let code = q
+        .code
+        .as_deref()
         .ok_or_else(|| (StatusCode::BAD_REQUEST, "Missing code".to_string()))?;
-    let oauth_state = q.state.as_deref()
+    let oauth_state = q
+        .state
+        .as_deref()
         .ok_or_else(|| (StatusCode::BAD_REQUEST, "Missing state".to_string()))?;
 
     // Look up pending session
-    let pending = state.oauth_pending.lock().remove(oauth_state)
-        .ok_or_else(|| (StatusCode::BAD_REQUEST, "Unknown or expired OAuth state".to_string()))?;
+    let pending = state
+        .oauth_pending
+        .lock()
+        .remove(oauth_state)
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                "Unknown or expired OAuth state".to_string(),
+            )
+        })?;
 
     // Check expiry (5 minutes)
-    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     if now - pending.created_at > 300 {
         return Err((StatusCode::BAD_REQUEST, "OAuth session expired".to_string()));
     }
 
     // Exchange code for token
-    let dpop_key = freeq_sdk::oauth::DpopKey::from_base64url(&pending.dpop_key_b64)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DPoP key error: {e}")))?;
+    let dpop_key =
+        freeq_sdk::oauth::DpopKey::from_base64url(&pending.dpop_key_b64).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DPoP key error: {e}"),
+            )
+        })?;
 
     let client = reqwest::Client::new();
     let params = [
@@ -1177,41 +1384,88 @@ async fn auth_callback(
     ];
 
     // Try without nonce
-    let dpop_proof = dpop_key.proof("POST", &pending.token_endpoint, None, None)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DPoP proof failed: {e}")))?;
-    let resp = client.post(&pending.token_endpoint).header("DPoP", &dpop_proof).form(&params).send().await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token exchange failed: {e}")))?;
+    let dpop_proof = dpop_key
+        .proof("POST", &pending.token_endpoint, None, None)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DPoP proof failed: {e}"),
+            )
+        })?;
+    let resp = client
+        .post(&pending.token_endpoint)
+        .header("DPoP", &dpop_proof)
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Token exchange failed: {e}"),
+            )
+        })?;
 
     let status = resp.status();
-    let dpop_nonce = resp.headers().get("dpop-nonce")
-        .and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+    let dpop_nonce = resp
+        .headers()
+        .get("dpop-nonce")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
 
-    let token_resp: serde_json::Value = if (status.as_u16() == 400 || status.as_u16() == 401) && dpop_nonce.is_some() {
-        let nonce = dpop_nonce.as_deref().unwrap();
-        let dpop_proof2 = dpop_key.proof("POST", &pending.token_endpoint, Some(nonce), None)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DPoP retry failed: {e}")))?;
-        let resp2 = client.post(&pending.token_endpoint).header("DPoP", &dpop_proof2).form(&params).send().await
-            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token retry failed: {e}")))?;
-        if !resp2.status().is_success() {
-            let text = resp2.text().await.unwrap_or_default();
-            return Ok(Html(oauth_result_page(&format!("Token exchange failed: {text}"), None)));
-        }
-        resp2.json().await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token parse failed: {e}")))?
-    } else if status.is_success() {
-        resp.json().await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token parse failed: {e}")))?
-    } else {
-        let text = resp.text().await.unwrap_or_default();
-        return Ok(Html(oauth_result_page(&format!("Token exchange failed ({status}): {text}"), None)));
-    };
+    let token_resp: serde_json::Value =
+        if (status.as_u16() == 400 || status.as_u16() == 401) && dpop_nonce.is_some() {
+            let nonce = dpop_nonce.as_deref().unwrap();
+            let dpop_proof2 = dpop_key
+                .proof("POST", &pending.token_endpoint, Some(nonce), None)
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("DPoP retry failed: {e}"),
+                    )
+                })?;
+            let resp2 = client
+                .post(&pending.token_endpoint)
+                .header("DPoP", &dpop_proof2)
+                .form(&params)
+                .send()
+                .await
+                .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token retry failed: {e}")))?;
+            if !resp2.status().is_success() {
+                let text = resp2.text().await.unwrap_or_default();
+                return Ok(Html(oauth_result_page(
+                    &format!("Token exchange failed: {text}"),
+                    None,
+                )));
+            }
+            resp2
+                .json()
+                .await
+                .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token parse failed: {e}")))?
+        } else if status.is_success() {
+            resp.json()
+                .await
+                .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token parse failed: {e}")))?
+        } else {
+            let text = resp.text().await.unwrap_or_default();
+            return Ok(Html(oauth_result_page(
+                &format!("Token exchange failed ({status}): {text}"),
+                None,
+            )));
+        };
 
-    let access_token = token_resp["access_token"].as_str()
+    let access_token = token_resp["access_token"]
+        .as_str()
         .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No access_token".to_string()))?;
 
     // Generate a one-time web auth token for SASL
     let web_token = generate_random_string(32);
     state.web_auth_tokens.lock().insert(
         web_token.clone(),
-        (pending.did.clone(), pending.handle.clone(), std::time::Instant::now()),
+        (
+            pending.did.clone(),
+            pending.handle.clone(),
+            std::time::Instant::now(),
+        ),
     );
 
     let result = crate::server::OAuthResult {
@@ -1223,15 +1477,18 @@ async fn auth_callback(
     };
 
     // Store web session for server-proxied operations (media upload)
-    state.web_sessions.lock().insert(pending.did.clone(), crate::server::WebSession {
-        did: pending.did.clone(),
-        handle: pending.handle.clone(),
-        pds_url: pending.pds_url.clone(),
-        access_token: access_token.to_string(),
-        dpop_key_b64: pending.dpop_key_b64.clone(),
-        dpop_nonce: dpop_nonce.clone(),
-        created_at: std::time::Instant::now(),
-    });
+    state.web_sessions.lock().insert(
+        pending.did.clone(),
+        crate::server::WebSession {
+            did: pending.did.clone(),
+            handle: pending.handle.clone(),
+            pds_url: pending.pds_url.clone(),
+            access_token: access_token.to_string(),
+            dpop_key_b64: pending.dpop_key_b64.clone(),
+            dpop_nonce: dpop_nonce.clone(),
+            created_at: std::time::Instant::now(),
+        },
+    );
 
     tracing::info!(did = %pending.did, handle = %pending.handle, mobile = pending.mobile, "OAuth callback: token obtained, session stored");
 
@@ -1251,7 +1508,10 @@ async fn auth_callback(
     }
 
     // Return HTML page that posts result to parent window
-    Ok(Html(oauth_result_page("Authentication successful!", Some(&result))))
+    Ok(Html(oauth_result_page(
+        "Authentication successful!",
+        Some(&result),
+    )))
 }
 
 /// Generate the HTML page returned by the OAuth callback.
@@ -1324,7 +1584,7 @@ p {{ color: #a6adc8; }}
 
 fn generate_pkce() -> (String, String) {
     use base64::Engine;
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let verifier = generate_random_string(32);
     let hash = Sha256::digest(verifier.as_bytes());
     let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash);
@@ -1340,7 +1600,7 @@ fn generate_random_string(len: usize) -> String {
 }
 
 fn urlencod(s: &str) -> String {
-    use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
     utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
 }
 
@@ -1374,7 +1634,9 @@ async fn api_upload(
     let mut channel = None::<String>;
     let mut cross_post = false;
 
-    while let Some(field) = multipart.next_field().await
+    while let Some(field) = multipart
+        .next_field()
+        .await
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Multipart error: {e}")))?
     {
         let name = field.name().unwrap_or("").to_string();
@@ -1383,24 +1645,37 @@ async fn api_upload(
                 if let Some(ct) = field.content_type() {
                     content_type = ct.to_string();
                 }
-                let bytes = field.bytes().await
+                let bytes = field
+                    .bytes()
+                    .await
                     .map_err(|e| (StatusCode::BAD_REQUEST, format!("File read error: {e}")))?;
                 if bytes.len() > 10 * 1024 * 1024 {
-                    return Err((StatusCode::PAYLOAD_TOO_LARGE, "File too large (max 10MB)".into()));
+                    return Err((
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "File too large (max 10MB)".into(),
+                    ));
                 }
                 file_data = Some(bytes.to_vec());
             }
             "did" => {
-                did = field.text().await
+                did = field
+                    .text()
+                    .await
                     .map_err(|e| (StatusCode::BAD_REQUEST, format!("DID read error: {e}")))?;
             }
             "alt" => {
-                alt = Some(field.text().await
-                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("Alt read error: {e}")))?);
+                alt = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Alt read error: {e}")))?,
+                );
             }
             "channel" => {
-                channel = Some(field.text().await
-                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("Channel read error: {e}")))?);
+                channel =
+                    Some(field.text().await.map_err(|e| {
+                        (StatusCode::BAD_REQUEST, format!("Channel read error: {e}"))
+                    })?);
             }
             "cross_post" => {
                 let val = field.text().await.unwrap_or_default();
@@ -1410,7 +1685,8 @@ async fn api_upload(
         }
     }
 
-    let file_data = file_data.ok_or_else(|| (StatusCode::BAD_REQUEST, "No file provided".into()))?;
+    let file_data =
+        file_data.ok_or_else(|| (StatusCode::BAD_REQUEST, "No file provided".into()))?;
     if did.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "No DID provided".into()));
     }
@@ -1420,10 +1696,14 @@ async fn api_upload(
     //   1. X-Upload-Token header (HMAC-SHA256 over DID, minted by broker session push)
     //   2. DID must have an active WebSocket session on this server
     // This prevents arbitrary callers from using stored PDS credentials.
-    let has_upload_token = headers.get("x-upload-token")
+    let has_upload_token = headers
+        .get("x-upload-token")
         .and_then(|v| v.to_str().ok())
         .is_some_and(|token| {
-            state.upload_tokens.lock().get(token)
+            state
+                .upload_tokens
+                .lock()
+                .get(token)
                 .is_some_and(|(t_did, created)| t_did == &did && created.elapsed().as_secs() < 300)
         });
     let has_active_session = {
@@ -1432,7 +1712,10 @@ async fn api_upload(
     };
     if !has_upload_token && !has_active_session {
         tracing::warn!(did = %did, "Upload rejected: no active WebSocket session or upload token");
-        return Err((StatusCode::UNAUTHORIZED, "Upload requires an active connection for this DID".into()));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "Upload requires an active connection for this DID".into(),
+        ));
     }
 
     // Look up the user's web session (PDS credentials)
@@ -1442,13 +1725,21 @@ async fn api_upload(
         None => {
             let count = state.web_sessions.lock().len();
             tracing::warn!(did = %did, session_count = count, "Upload 401: no web session for DID");
-            return Err((StatusCode::UNAUTHORIZED, "No active session for this DID — please re-authenticate".into()));
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "No active session for this DID — please re-authenticate".into(),
+            ));
         }
     };
 
     // Upload to PDS using stored DPoP credentials
-    let dpop_key = freeq_sdk::oauth::DpopKey::from_base64url(&session.dpop_key_b64)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DPoP key error: {e}")))?;
+    let dpop_key =
+        freeq_sdk::oauth::DpopKey::from_base64url(&session.dpop_key_b64).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DPoP key error: {e}"),
+            )
+        })?;
 
     let result = freeq_sdk::media::upload_media_to_pds(
         &session.pds_url,
@@ -1461,16 +1752,19 @@ async fn api_upload(
         alt.as_deref(),
         channel.as_deref(),
         cross_post,
-    ).await.map_err(|e| {
+    )
+    .await
+    .map_err(|e| {
         tracing::warn!(did = %did, error = %e, "Media upload failed");
         (StatusCode::BAD_GATEWAY, format!("PDS upload failed: {e}"))
     })?;
 
     // Update stored DPoP nonce so subsequent uploads don't start stale
     if let Some(ref new_nonce) = result.updated_nonce
-        && let Some(session) = state.web_sessions.lock().get_mut(&did) {
-            session.dpop_nonce = Some(new_nonce.clone());
-        }
+        && let Some(session) = state.web_sessions.lock().get_mut(&did)
+    {
+        session.dpop_nonce = Some(new_nonce.clone());
+    }
 
     // For non-image content, proxy through our server to avoid PDS
     // Content-Disposition: attachment and sandbox CSP blocking playback
@@ -1491,7 +1785,6 @@ async fn api_upload(
         "size": result.size,
     })))
 }
-
 
 // ── Channel invite page ────────────────────────────────────────────────
 
@@ -1518,7 +1811,11 @@ async fn channel_invite_page(
     let server = &state.config.server_name;
     let topic_html = topic_text.as_deref().unwrap_or("No topic set");
     let channel_display = channel.trim_start_matches('#');
-    let member_word = if member_count == 1 { "member" } else { "members" };
+    let member_word = if member_count == 1 {
+        "member"
+    } else {
+        "members"
+    };
 
     Html(format!(r##"<!DOCTYPE html>
 <html lang="en">
@@ -1616,9 +1913,10 @@ async fn api_blob_proxy(
     // Forward Range header if present (needed for AVPlayer / video seeking)
     let mut req = client.get(url);
     if let Some(range) = headers.get(axum::http::header::RANGE)
-        && let Ok(range_str) = range.to_str() {
-            req = req.header("Range", range_str);
-        }
+        && let Ok(range_str) = range.to_str()
+    {
+        req = req.header("Range", range_str);
+    }
 
     let resp = match req.send().await {
         Ok(r) => r,
@@ -1664,18 +1962,28 @@ async fn api_blob_proxy(
     };
 
     let mut resp_headers = axum::http::HeaderMap::new();
-    resp_headers.insert(axum::http::header::CONTENT_TYPE, content_type.parse().unwrap_or_else(|_| "application/octet-stream".parse().unwrap()));
-    resp_headers.insert(axum::http::header::CACHE_CONTROL, "public, max-age=86400".parse().unwrap());
+    resp_headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        content_type
+            .parse()
+            .unwrap_or_else(|_| "application/octet-stream".parse().unwrap()),
+    );
+    resp_headers.insert(
+        axum::http::header::CACHE_CONTROL,
+        "public, max-age=86400".parse().unwrap(),
+    );
     resp_headers.insert(axum::http::header::ACCEPT_RANGES, "bytes".parse().unwrap());
 
     if let Some(cr) = content_range
-        && let Ok(val) = cr.parse() {
-            resp_headers.insert(axum::http::header::CONTENT_RANGE, val);
-        }
+        && let Ok(val) = cr.parse()
+    {
+        resp_headers.insert(axum::http::header::CONTENT_RANGE, val);
+    }
     if let Some(cl) = content_length
-        && let Ok(val) = cl.parse() {
-            resp_headers.insert(axum::http::header::CONTENT_LENGTH, val);
-        }
+        && let Ok(val) = cl.parse()
+    {
+        resp_headers.insert(axum::http::header::CONTENT_LENGTH, val);
+    }
 
     (status, resp_headers, bytes).into_response()
 }
@@ -1686,25 +1994,43 @@ async fn api_og_preview(Query(q): Query<OgQuery>) -> impl IntoResponse {
     // Validate URL
     let url = match url::Url::parse(&q.url) {
         Ok(u) if u.scheme() == "http" || u.scheme() == "https" => u,
-        _ => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid URL"}))).into_response(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid URL"})),
+            )
+                .into_response();
+        }
     };
 
     // Block SSRF: reject private/loopback IPs and hostnames
     if let Some(host) = url.host_str() {
         // Block obvious private hostnames
         let host_lower = host.to_lowercase();
-        if host_lower == "localhost" || host_lower.ends_with(".local") || host_lower.ends_with(".internal") {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Private host"}))).into_response();
+        if host_lower == "localhost"
+            || host_lower.ends_with(".local")
+            || host_lower.ends_with(".internal")
+        {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Private host"})),
+            )
+                .into_response();
         }
         // Resolve and check for private IPs
         if let Ok(addrs) = tokio::net::lookup_host(format!("{host}:80")).await {
             for addr in addrs {
                 let ip = addr.ip();
-                if ip.is_loopback() || ip.is_unspecified()
+                if ip.is_loopback()
+                    || ip.is_unspecified()
                     || matches!(ip, std::net::IpAddr::V4(v4) if v4.is_private() || v4.is_link_local())
                     || matches!(ip, std::net::IpAddr::V6(v6) if v6.is_loopback())
                 {
-                    return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Private IP"}))).into_response();
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({"error": "Private IP"})),
+                    )
+                        .into_response();
                 }
             }
         }
@@ -1717,27 +2043,46 @@ async fn api_og_preview(Query(q): Query<OgQuery>) -> impl IntoResponse {
         .build()
         .unwrap();
 
-    let resp = match client.get(url.as_str())
+    let resp = match client
+        .get(url.as_str())
         .header("User-Agent", "freeq/1.0 (link preview)")
         .send()
         .await
     {
         Ok(r) => r,
-        Err(_) => return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": "Fetch failed"}))).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": "Fetch failed"})),
+            )
+                .into_response();
+        }
     };
 
     // Only process HTML
-    let ct = resp.headers().get("content-type")
+    let ct = resp
+        .headers()
+        .get("content-type")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if !ct.contains("text/html") {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Not HTML"}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Not HTML"})),
+        )
+            .into_response();
     }
 
     // Limit body size to 256KB
     let body = match resp.bytes().await {
         Ok(b) if b.len() <= 256 * 1024 => String::from_utf8_lossy(&b).to_string(),
-        _ => return (StatusCode::BAD_GATEWAY, Json(serde_json::json!({"error": "Body too large"}))).into_response(),
+        _ => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::json!({"error": "Body too large"})),
+            )
+                .into_response();
+        }
     };
 
     // Parse OG tags
@@ -1748,41 +2093,42 @@ async fn api_og_preview(Query(q): Query<OgQuery>) -> impl IntoResponse {
         ];
         for pat in &patterns {
             if let Ok(re) = regex::Regex::new(pat)
-                && let Some(caps) = re.captures(&body) {
-                    return caps.get(1).map(|m| decode_html_entities(m.as_str()));
-                }
+                && let Some(caps) = re.captures(&body)
+            {
+                return caps.get(1).map(|m| decode_html_entities(m.as_str()));
+            }
         }
         None
     };
 
     // Also try <title> tag
-    let title = get_meta("og:title")
-        .or_else(|| {
-            regex::Regex::new(r"<title[^>]*>([^<]+)</title>")
-                .ok()
-                .and_then(|re| re.captures(&body))
-                .and_then(|caps| caps.get(1))
-                .map(|m| decode_html_entities(m.as_str()))
-        });
+    let title = get_meta("og:title").or_else(|| {
+        regex::Regex::new(r"<title[^>]*>([^<]+)</title>")
+            .ok()
+            .and_then(|re| re.captures(&body))
+            .and_then(|caps| caps.get(1))
+            .map(|m| decode_html_entities(m.as_str()))
+    });
 
     Json(serde_json::json!({
         "title": title,
         "description": get_meta("og:description").or_else(|| get_meta("description")),
         "image": get_meta("og:image"),
         "site_name": get_meta("og:site_name"),
-    })).into_response()
+    }))
+    .into_response()
 }
 
 fn decode_html_entities(s: &str) -> String {
     s.replace("&amp;", "&")
-     .replace("&lt;", "<")
-     .replace("&gt;", ">")
-     .replace("&quot;", "\"")
-     .replace("&#39;", "'")
-     .replace("&apos;", "'")
-     .replace("&#x27;", "'")
-     .replace("&#x2F;", "/")
-     .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&#x27;", "'")
+        .replace("&#x2F;", "/")
+        .replace("&nbsp;", " ")
 }
 
 // ── E2EE Pre-Key Bundle API ────────────────────────────────────────
@@ -1797,9 +2143,7 @@ async fn api_get_keys(
         let bundles = state.prekey_bundles.lock();
         bundles.get(&did).cloned()
     };
-    let bundle = bundle.or_else(|| {
-        state.with_db(|db| db.get_prekey_bundle(&did)).flatten()
-    });
+    let bundle = bundle.or_else(|| state.with_db(|db| db.get_prekey_bundle(&did)).flatten());
     match bundle {
         Some(b) => (
             axum::http::StatusCode::OK,
@@ -1827,7 +2171,9 @@ async fn api_upload_keys(
 
     match (did, bundle) {
         (Some(did), Some(bundle)) => {
-            state.prekey_bundles.lock()
+            state
+                .prekey_bundles
+                .lock()
                 .insert(did.to_string(), bundle.clone());
             // Persist to DB so bundles survive server restart
             let bundle_json = serde_json::to_string(bundle).unwrap_or_default();
@@ -1854,10 +2200,15 @@ async fn security_headers(
     let headers = resp.headers_mut();
     headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
     headers.insert("X-Frame-Options", "DENY".parse().unwrap());
-    headers.insert("Referrer-Policy", "strict-origin-when-cross-origin".parse().unwrap());
+    headers.insert(
+        "Referrer-Policy",
+        "strict-origin-when-cross-origin".parse().unwrap(),
+    );
     headers.insert(
         "Strict-Transport-Security",
-        "max-age=63072000; includeSubDomains; preload".parse().unwrap(),
+        "max-age=63072000; includeSubDomains; preload"
+            .parse()
+            .unwrap(),
     );
     // Only set CSP if the handler didn't already set one (e.g. /auth/mobile needs inline scripts)
     if !headers.contains_key("content-security-policy") {
