@@ -171,27 +171,39 @@ function parseTextSegmentsCached(text: string): TextSegment[] {
   return segments;
 }
 
+/** Render newline characters as <br> elements for inline text. */
+function renderWithBreaks(text: string): React.ReactNode {
+  if (!text.includes('\n')) return text;
+  const parts = text.split('\n');
+  return parts.map((p, i) => (
+    <span key={i}>{i > 0 && <br />}{p}</span>
+  ));
+}
+
 /** Render text segments as React elements (XSS-safe — no innerHTML). */
 function renderTextSafe(text: string): React.ReactElement {
   const segments = parseTextSegmentsCached(text);
+  // Decode literal \n sequences when message contains code blocks
+  const hasCodeBlock = segments.some(s => s.type === 'codeblock');
   return (
     <>
       {segments.map((seg, i) => {
+        const content = hasCodeBlock ? seg.content.replace(/\\n/g, '\n') : seg.content;
         switch (seg.type) {
           case 'link':
-            return <a key={i} href={seg.href} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline break-all">{seg.content}</a>;
+            return <a key={i} href={seg.href} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline break-all">{content}</a>;
           case 'codeblock':
-            return <pre key={i} className="bg-surface rounded px-2 py-1.5 my-1 text-[13px] font-mono overflow-x-auto">{seg.content}</pre>;
+            return <pre key={i} className="bg-surface rounded px-2 py-1.5 my-1 text-[13px] font-mono overflow-x-auto whitespace-pre-wrap">{content.replace(/^\n|\n$/g, '')}</pre>;
           case 'code':
-            return <code key={i} className="bg-surface px-1 py-0.5 rounded text-[13px] font-mono text-pink">{seg.content}</code>;
+            return <code key={i} className="bg-surface px-1 py-0.5 rounded text-[13px] font-mono text-pink">{content}</code>;
           case 'bold':
-            return <strong key={i}>{seg.content}</strong>;
+            return <strong key={i}>{renderWithBreaks(content)}</strong>;
           case 'italic':
-            return <em key={i}>{seg.content}</em>;
+            return <em key={i}>{renderWithBreaks(content)}</em>;
           case 'strike':
-            return <del key={i} className="text-fg-dim">{seg.content}</del>;
+            return <del key={i} className="text-fg-dim">{renderWithBreaks(content)}</del>;
           default:
-            return <span key={i}>{seg.content}</span>;
+            return <span key={i}>{renderWithBreaks(content)}</span>;
         }
       })}
     </>
