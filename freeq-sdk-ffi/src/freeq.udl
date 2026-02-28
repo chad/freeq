@@ -72,6 +72,9 @@ interface FreeqClient {
     void set_web_token(string token);
 
     [Throws=FreeqError]
+    void set_platform(string platform);
+
+    [Throws=FreeqError]
     void connect();
 
     void disconnect();

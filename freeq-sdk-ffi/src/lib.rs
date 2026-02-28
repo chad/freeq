@@ -150,6 +150,7 @@ pub struct FreeqClient {
     handle: Arc<Mutex<Option<freeq_sdk::client::ClientHandle>>>,
     connected: Arc<Mutex<bool>>,
     web_token: Arc<Mutex<Option<String>>>,
+    platform: Arc<Mutex<String>>,
 }
 
 impl FreeqClient {
@@ -165,12 +166,18 @@ impl FreeqClient {
             handle: Arc::new(Mutex::new(None)),
             connected: Arc::new(Mutex::new(false)),
             web_token: Arc::new(Mutex::new(None)),
+            platform: Arc::new(Mutex::new("freeq ios".to_string())),
         })
     }
 
     pub fn set_web_token(&self, token: String) -> Result<(), FreeqError> {
         tracing::debug!("[FFI] set_web_token called, token len={}", token.len());
         *self.web_token.lock().unwrap() = Some(token);
+        Ok(())
+    }
+
+    pub fn set_platform(&self, platform: String) -> Result<(), FreeqError> {
+        *self.platform.lock().unwrap() = platform;
         Ok(())
     }
 
@@ -186,7 +193,7 @@ impl FreeqClient {
             server_addr: self.server.clone(),
             nick: nick.clone(),
             user: nick.clone(),
-            realname: "freeq ios".to_string(),
+            realname: self.platform.lock().unwrap().clone(),
             tls: self.server.contains(":6697") || self.server.contains(":443"),
             tls_insecure: false,
             web_token,

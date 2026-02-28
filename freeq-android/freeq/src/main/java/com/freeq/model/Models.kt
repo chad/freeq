@@ -248,6 +248,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
         try {
             val handler = AndroidEventHandler(this)
             client = FreeqClient(serverAddress.value, nickName, handler)
+            client?.setPlatform("freeq android")
 
             pendingWebToken?.let { token ->
                 client?.setWebToken(token)

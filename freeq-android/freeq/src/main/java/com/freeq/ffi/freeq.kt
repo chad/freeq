@@ -759,6 +759,34 @@ internal open class UniffiVTableCallbackInterfaceEventHandler(
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -792,11 +820,37 @@ fun uniffi_freeq_sdk_ffi_checksum_method_freeqclient_send_message(
 ): Short
 fun uniffi_freeq_sdk_ffi_checksum_method_freeqclient_send_raw(
 ): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqclient_set_platform(
+): Short
 fun uniffi_freeq_sdk_ffi_checksum_method_freeqclient_set_topic(
 ): Short
 fun uniffi_freeq_sdk_ffi_checksum_method_freeqclient_set_web_token(
 ): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_decrypt_message(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_encrypt_message(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_establish_session(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_export_keys(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_export_session(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_generate_keys(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_get_safety_number(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_has_session(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_import_session(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_is_encrypted(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_restore_keys(
+): Short
 fun uniffi_freeq_sdk_ffi_checksum_constructor_freeqclient_new(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_constructor_freeqe2ee_new(
 ): Short
 fun uniffi_freeq_sdk_ffi_checksum_method_eventhandler_on_event(
 ): Short
@@ -874,10 +928,40 @@ fun uniffi_freeq_sdk_ffi_fn_method_freeqclient_send_message(`ptr`: Pointer,`targ
 ): Unit
 fun uniffi_freeq_sdk_ffi_fn_method_freeqclient_send_raw(`ptr`: Pointer,`line`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_freeq_sdk_ffi_fn_method_freeqclient_set_platform(`ptr`: Pointer,`platform`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
 fun uniffi_freeq_sdk_ffi_fn_method_freeqclient_set_topic(`ptr`: Pointer,`channel`: RustBuffer.ByValue,`topic`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_freeq_sdk_ffi_fn_method_freeqclient_set_web_token(`ptr`: Pointer,`token`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
+fun uniffi_freeq_sdk_ffi_fn_clone_freeqe2ee(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Pointer
+fun uniffi_freeq_sdk_ffi_fn_free_freeqe2ee(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_freeq_sdk_ffi_fn_constructor_freeqe2ee_new(uniffi_out_err: UniffiRustCallStatus, 
+): Pointer
+fun uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_decrypt_message(`ptr`: Pointer,`remoteDid`: RustBuffer.ByValue,`wire`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_encrypt_message(`ptr`: Pointer,`remoteDid`: RustBuffer.ByValue,`plaintext`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_establish_session(`ptr`: Pointer,`remoteDid`: RustBuffer.ByValue,`theirIkB64`: RustBuffer.ByValue,`theirSpkB64`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_export_keys(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_export_session(`ptr`: Pointer,`remoteDid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_generate_keys(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_get_safety_number(`ptr`: Pointer,`remoteDid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_has_session(`ptr`: Pointer,`remoteDid`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Byte
+fun uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_import_session(`ptr`: Pointer,`remoteDid`: RustBuffer.ByValue,`json`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_is_encrypted(`ptr`: Pointer,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Byte
+fun uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_restore_keys(`ptr`: Pointer,`ikSecretB64`: RustBuffer.ByValue,`spkSecretB64`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
 fun uniffi_freeq_sdk_ffi_fn_init_callback_vtable_eventhandler(`vtable`: UniffiVTableCallbackInterfaceEventHandler,
 ): Unit
 fun ffi_freeq_sdk_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -1033,13 +1117,52 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqclient_send_raw() != 34247.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqclient_set_platform() != 50791.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqclient_set_topic() != 15675.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqclient_set_web_token() != 47149.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_decrypt_message() != 42382.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_encrypt_message() != 62650.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_establish_session() != 56917.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_export_keys() != 16238.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_export_session() != 59639.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_generate_keys() != 15232.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_get_safety_number() != 41976.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_has_session() != 23626.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_import_session() != 33038.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_is_encrypted() != 52163.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_restore_keys() != 54360.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_freeq_sdk_ffi_checksum_constructor_freeqclient_new() != 42979.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_constructor_freeqe2ee_new() != 45627.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_freeq_sdk_ffi_checksum_method_eventhandler_on_event() != 8369.toShort()) {
@@ -1217,6 +1340,29 @@ private class JavaLangRefCleanable(
     val cleanable: java.lang.ref.Cleaner.Cleanable
 ) : UniffiCleaner.Cleanable {
     override fun clean() = cleanable.clean()
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterUInt: FfiConverter<UInt, Int> {
+    override fun lift(value: Int): UInt {
+        return value.toUInt()
+    }
+
+    override fun read(buf: ByteBuffer): UInt {
+        return lift(buf.getInt())
+    }
+
+    override fun lower(value: UInt): Int {
+        return value.toInt()
+    }
+
+    override fun allocationSize(value: UInt) = 4UL
+
+    override fun write(value: UInt, buf: ByteBuffer) {
+        buf.putInt(value.toInt())
+    }
 }
 
 /**
@@ -1441,6 +1587,8 @@ public interface FreeqClientInterface {
     
     fun `sendRaw`(`line`: kotlin.String)
     
+    fun `setPlatform`(`platform`: kotlin.String)
+    
     fun `setTopic`(`channel`: kotlin.String, `topic`: kotlin.String)
     
     fun `setWebToken`(`token`: kotlin.String)
@@ -1645,6 +1793,18 @@ open class FreeqClient: Disposable, AutoCloseable, FreeqClientInterface
     
 
     
+    @Throws(FreeqException::class)override fun `setPlatform`(`platform`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FreeqException) { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqclient_set_platform(
+        it, FfiConverterString.lower(`platform`),_status)
+}
+    }
+    
+    
+
+    
     @Throws(FreeqException::class)override fun `setTopic`(`channel`: kotlin.String, `topic`: kotlin.String)
         = 
     callWithPointer {
@@ -1698,6 +1858,396 @@ public object FfiConverterTypeFreeqClient: FfiConverter<FreeqClient, Pointer> {
     override fun allocationSize(value: FreeqClient) = 8UL
 
     override fun write(value: FreeqClient, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
+// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// to the live Rust struct on the other side of the FFI.
+//
+// Each instance implements core operations for working with the Rust `Arc<T>` and the
+// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque pointer to the underlying Rust struct.
+//     Method calls need to read this pointer from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its pointer should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
+//      before it can pass the pointer over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+public interface FreeqE2eeInterface {
+    
+    fun `decryptMessage`(`remoteDid`: kotlin.String, `wire`: kotlin.String): kotlin.String
+    
+    fun `encryptMessage`(`remoteDid`: kotlin.String, `plaintext`: kotlin.String): kotlin.String
+    
+    fun `establishSession`(`remoteDid`: kotlin.String, `theirIkB64`: kotlin.String, `theirSpkB64`: kotlin.String)
+    
+    fun `exportKeys`(): List<kotlin.String>
+    
+    fun `exportSession`(`remoteDid`: kotlin.String): kotlin.String
+    
+    fun `generateKeys`(): PreKeyBundle
+    
+    fun `getSafetyNumber`(`remoteDid`: kotlin.String): SafetyNumber
+    
+    fun `hasSession`(`remoteDid`: kotlin.String): kotlin.Boolean
+    
+    fun `importSession`(`remoteDid`: kotlin.String, `json`: kotlin.String)
+    
+    fun `isEncrypted`(`text`: kotlin.String): kotlin.Boolean
+    
+    fun `restoreKeys`(`ikSecretB64`: kotlin.String, `spkSecretB64`: kotlin.String): PreKeyBundle
+    
+    companion object
+}
+
+open class FreeqE2ee: Disposable, AutoCloseable, FreeqE2eeInterface
+{
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+    constructor() :
+        this(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_constructor_freeqe2ee_new(
+        _status)
+}
+    )
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+        override fun run() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_free_freeqe2ee(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall() { status ->
+            UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_clone_freeqe2ee(pointer!!, status)
+        }
+    }
+
+    
+    @Throws(FreeqException::class)override fun `decryptMessage`(`remoteDid`: kotlin.String, `wire`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FreeqException) { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_decrypt_message(
+        it, FfiConverterString.lower(`remoteDid`),FfiConverterString.lower(`wire`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(FreeqException::class)override fun `encryptMessage`(`remoteDid`: kotlin.String, `plaintext`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FreeqException) { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_encrypt_message(
+        it, FfiConverterString.lower(`remoteDid`),FfiConverterString.lower(`plaintext`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(FreeqException::class)override fun `establishSession`(`remoteDid`: kotlin.String, `theirIkB64`: kotlin.String, `theirSpkB64`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FreeqException) { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_establish_session(
+        it, FfiConverterString.lower(`remoteDid`),FfiConverterString.lower(`theirIkB64`),FfiConverterString.lower(`theirSpkB64`),_status)
+}
+    }
+    
+    
+
+    
+    @Throws(FreeqException::class)override fun `exportKeys`(): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FreeqException) { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_export_keys(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(FreeqException::class)override fun `exportSession`(`remoteDid`: kotlin.String): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FreeqException) { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_export_session(
+        it, FfiConverterString.lower(`remoteDid`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(FreeqException::class)override fun `generateKeys`(): PreKeyBundle {
+            return FfiConverterTypePreKeyBundle.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FreeqException) { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_generate_keys(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(FreeqException::class)override fun `getSafetyNumber`(`remoteDid`: kotlin.String): SafetyNumber {
+            return FfiConverterTypeSafetyNumber.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FreeqException) { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_get_safety_number(
+        it, FfiConverterString.lower(`remoteDid`),_status)
+}
+    }
+    )
+    }
+    
+
+    override fun `hasSession`(`remoteDid`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_has_session(
+        it, FfiConverterString.lower(`remoteDid`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(FreeqException::class)override fun `importSession`(`remoteDid`: kotlin.String, `json`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FreeqException) { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_import_session(
+        it, FfiConverterString.lower(`remoteDid`),FfiConverterString.lower(`json`),_status)
+}
+    }
+    
+    
+
+    override fun `isEncrypted`(`text`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_is_encrypted(
+        it, FfiConverterString.lower(`text`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(FreeqException::class)override fun `restoreKeys`(`ikSecretB64`: kotlin.String, `spkSecretB64`: kotlin.String): PreKeyBundle {
+            return FfiConverterTypePreKeyBundle.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FreeqException) { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_restore_keys(
+        it, FfiConverterString.lower(`ikSecretB64`),FfiConverterString.lower(`spkSecretB64`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+
+    
+    
+    companion object
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFreeqE2ee: FfiConverter<FreeqE2ee, Pointer> {
+
+    override fun lower(value: FreeqE2ee): Pointer {
+        return value.uniffiClonePointer()
+    }
+
+    override fun lift(value: Pointer): FreeqE2ee {
+        return FreeqE2ee(value)
+    }
+
+    override fun read(buf: ByteBuffer): FreeqE2ee {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(Pointer(buf.getLong()))
+    }
+
+    override fun allocationSize(value: FreeqE2ee) = 8UL
+
+    override fun write(value: FreeqE2ee, buf: ByteBuffer) {
         // The Rust code always expects pointers written as 8 bytes,
         // and will fail to compile if they don't fit.
         buf.putLong(Pointer.nativeValue(lower(value)))
@@ -1841,6 +2391,74 @@ public object FfiConverterTypeIrcMessage: FfiConverterRustBuffer<IrcMessage> {
             FfiConverterOptionalString.write(value.`batchId`, buf)
             FfiConverterBoolean.write(value.`isAction`, buf)
             FfiConverterLong.write(value.`timestampMs`, buf)
+    }
+}
+
+
+
+data class PreKeyBundle (
+    var `identityKey`: kotlin.String, 
+    var `signedPreKey`: kotlin.String, 
+    var `spkSignature`: kotlin.String, 
+    var `spkId`: kotlin.UInt
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypePreKeyBundle: FfiConverterRustBuffer<PreKeyBundle> {
+    override fun read(buf: ByteBuffer): PreKeyBundle {
+        return PreKeyBundle(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: PreKeyBundle) = (
+            FfiConverterString.allocationSize(value.`identityKey`) +
+            FfiConverterString.allocationSize(value.`signedPreKey`) +
+            FfiConverterString.allocationSize(value.`spkSignature`) +
+            FfiConverterUInt.allocationSize(value.`spkId`)
+    )
+
+    override fun write(value: PreKeyBundle, buf: ByteBuffer) {
+            FfiConverterString.write(value.`identityKey`, buf)
+            FfiConverterString.write(value.`signedPreKey`, buf)
+            FfiConverterString.write(value.`spkSignature`, buf)
+            FfiConverterUInt.write(value.`spkId`, buf)
+    }
+}
+
+
+
+data class SafetyNumber (
+    var `number`: kotlin.String
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeSafetyNumber: FfiConverterRustBuffer<SafetyNumber> {
+    override fun read(buf: ByteBuffer): SafetyNumber {
+        return SafetyNumber(
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: SafetyNumber) = (
+            FfiConverterString.allocationSize(value.`number`)
+    )
+
+    override fun write(value: SafetyNumber, buf: ByteBuffer) {
+            FfiConverterString.write(value.`number`, buf)
     }
 }
 
@@ -2520,6 +3138,34 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         } else {
             buf.put(1)
             FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.String>> {
+    override fun read(buf: ByteBuffer): List<kotlin.String> {
+        val len = buf.getInt()
+        return List<kotlin.String>(len) {
+            FfiConverterString.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.String>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterString.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.String>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterString.write(it, buf)
         }
     }
 }
