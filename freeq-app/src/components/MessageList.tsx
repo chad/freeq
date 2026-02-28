@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState, useMemo, memo } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { useStore, type Message, type PinnedMessage } from '../store';
 import { getNick, requestHistory, sendReaction } from '../irc/client';
 import { fetchProfile, getCachedProfile, type ATProfile } from '../lib/profiles';
