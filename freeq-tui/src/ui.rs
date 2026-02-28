@@ -188,7 +188,30 @@ fn draw_tab_bar(frame: &mut Frame, app: &App, area: Rect) {
         .position(|n| n == &app.active_buffer)
         .unwrap_or(0);
 
-    let titles: Vec<Line> = names.iter().map(|n| Line::from(n.as_str())).collect();
+    let titles: Vec<Line> = names.iter().map(|n| {
+        let buf = app.buffers.get(n);
+        let unread = buf.map(|b| b.unread).unwrap_or(0);
+        let has_mention = buf.map(|b| b.has_mention).unwrap_or(false);
+        let is_active = n == &app.active_buffer;
+
+        if is_active {
+            Line::from(n.as_str())
+        } else if has_mention {
+            // Red bold for mentions
+            Line::from(vec![
+                Span::styled(n.as_str(), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(format!(" ({unread})"), Style::default().fg(Color::Red)),
+            ])
+        } else if unread > 0 {
+            // Cyan for unread activity
+            Line::from(vec![
+                Span::styled(n.as_str(), Style::default().fg(Color::Cyan)),
+                Span::styled(format!(" ({unread})"), Style::default().fg(Color::Cyan)),
+            ])
+        } else {
+            Line::from(n.as_str())
+        }
+    }).collect();
 
     let tabs = Tabs::new(titles)
         .select(active_idx)
@@ -309,6 +332,10 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             use ratatui::widgets::Wrap;
             use ratatui::text::Text;
 
+            let is_mention = !msg.is_system
+                && !app.nick.is_empty()
+                && msg.text.to_lowercase().contains(&app.nick.to_lowercase());
+
             let text = if msg.is_system {
                 Text::from(Line::from(vec![
                     Span::styled(
@@ -321,6 +348,11 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     ),
                 ]))
             } else {
+                let msg_style = if is_mention {
+                    Style::default().fg(Color::White).bg(Color::DarkGray)
+                } else {
+                    Style::default()
+                };
                 Text::from(Line::from(vec![
                     Span::styled(
                         format!("{} ", msg.timestamp),
@@ -328,9 +360,13 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     ),
                     Span::styled(
                         format!("<{}> ", msg.from),
-                        Style::default().fg(Color::Green),
+                        if is_mention {
+                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::Green)
+                        },
                     ),
-                    Span::raw(&msg.text),
+                    Span::styled(&msg.text, msg_style),
                 ]))
             };
 
@@ -401,8 +437,10 @@ fn draw_nicklist(frame: &mut Frame, app: &App, area: Rect) {
         rank(a).cmp(&rank(b)).then(a.cmp(b))
     });
 
+    let nick_scroll = buffer.nick_scroll.min(nicks.len().saturating_sub(inner_height));
     let lines: Vec<Line> = nicks
         .iter()
+        .skip(nick_scroll)
         .take(inner_height)
         .map(|n| {
             let (prefix, name) = if n.starts_with('@') || n.starts_with('+') {

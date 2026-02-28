@@ -429,6 +429,8 @@ async fn run_app(
                     EditAction::PrevBuffer => app.prev_buffer(),
                     EditAction::ScrollUp(n) => {
                         if let Some(buf) = app.buffers.get_mut(&app.active_buffer) {
+                            // Ctrl+scroll or Alt+scroll could scroll nick list
+                            // For now, just scroll messages
                             buf.scroll = buf.scroll.saturating_add(n);
                         }
                     }
@@ -1415,12 +1417,16 @@ async fn process_input(
                 app.status_msg("  /reconnect          Force reconnect to server");
                 app.status_msg("  /raw line           Send raw IRC command");
                 app.status_msg("  /quit [message]     Disconnect (/q)");
+                app.status_msg("── Navigation ───────────────────────────");
+                app.status_msg("  /switch [name]    List or switch buffers (/sw)");
                 app.status_msg("── Keys ─────────────────────────────────");
                 app.status_msg("  Tab               Nick-complete (or next buffer if empty)");
                 app.status_msg("  Shift-Tab         Previous buffer");
                 app.status_msg("  Ctrl-N / Ctrl-P   Switch buffers");
-                app.status_msg("  PageUp / PageDown - Scroll");
-                app.status_msg("  Ctrl-C / Ctrl-Q   - Quit");
+                app.status_msg("  PageUp / PageDown Scroll messages");
+                app.status_msg("  Ctrl-C / Ctrl-Q   Quit");
+                app.status_msg("── Indicators ───────────────────────────");
+                app.status_msg("  Tab bar shows (N) for unread, RED for mentions");
             }
             "/nick" => {
                 if !arg.is_empty() {
@@ -1479,6 +1485,34 @@ async fn process_input(
                 } else {
                     let limit = if arg.is_empty() { "50" } else { arg };
                     handle.raw(&format!("CHATHISTORY LATEST {channel} * {limit}")).await?;
+                }
+            }
+            "/switch" | "/sw" => {
+                if arg.is_empty() {
+                    // List all buffers with unread counts
+                    let names = app.buffer_names();
+                    app.status_msg("── Buffers ──────────────────────────────");
+                    for name in &names {
+                        let buf = app.buffers.get(name);
+                        let unread = buf.map(|b| b.unread).unwrap_or(0);
+                        let mention = buf.map(|b| b.has_mention).unwrap_or(false);
+                        let marker = if name == &app.active_buffer { " ← active" }
+                            else if mention { " ← MENTION" }
+                            else if unread > 0 { &format!(" ({unread} unread)") }
+                            else { "" };
+                        app.status_msg(&format!("  {name}{marker}"));
+                    }
+                    app.status_msg("  /switch <name> to switch");
+                } else {
+                    // Fuzzy match: find buffer whose name contains the arg
+                    let target = arg.to_lowercase();
+                    let names = app.buffer_names();
+                    if let Some(name) = names.iter().find(|n| n.contains(&target)) {
+                        let name = name.clone();
+                        app.switch_to(&name);
+                    } else {
+                        app.status_msg(&format!("No buffer matching '{arg}'"));
+                    }
                 }
             }
             _ => {
@@ -1649,6 +1683,21 @@ fn fetch_image_if_needed_direct(cache: &crate::app::ImageCache, url: &str) {
 
 /// Kick off a background fetch for an image URL if not already cached.
 fn fetch_image_if_needed(cache: &crate::app::ImageCache, url: &str) {
+    // Only fetch from https and known hosts
+    if !url.starts_with("https://") {
+        return;
+    }
+    // Extract host from URL for allowlist check
+    let host = url.strip_prefix("https://")
+        .and_then(|s| s.split('/').next())
+        .and_then(|s| s.split(':').next())
+        .unwrap_or("");
+    let allowed = host.ends_with(".bsky.network") || host == "cdn.bsky.app"
+        || host.ends_with(".bsky.app") || host.ends_with("freeq.at");
+    if !allowed {
+        return;
+    }
+
     let mut guard = cache.lock().unwrap();
     if guard.contains_key(url) {
         return;
@@ -1656,23 +1705,51 @@ fn fetch_image_if_needed(cache: &crate::app::ImageCache, url: &str) {
     guard.insert(url.to_string(), crate::app::ImageState::Loading);
     drop(guard);
 
+    // Evict old entries before adding new ones
+    crate::app::evict_image_cache(cache);
+
     let cache = cache.clone();
     let url = url.to_string();
     tokio::spawn(async move {
-        match reqwest::get(&url).await {
-            Ok(resp) => match resp.bytes().await {
-                Ok(bytes) => match image::load_from_memory(&bytes) {
-                    Ok(img) => {
-                        cache.lock().unwrap().insert(url, crate::app::ImageState::Ready(img));
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()
+            .unwrap_or_default();
+
+        match client.get(&url).send().await {
+            Ok(resp) => {
+                // Check content-length before downloading
+                if let Some(len) = resp.content_length() {
+                    if len > crate::app::MAX_IMAGE_BYTES as u64 {
+                        cache.lock().unwrap().insert(url, crate::app::ImageState::Failed("Too large".into()));
+                        return;
+                    }
+                }
+                match resp.bytes().await {
+                    Ok(bytes) if bytes.len() <= crate::app::MAX_IMAGE_BYTES => {
+                        match image::load_from_memory(&bytes) {
+                            Ok(img) => {
+                                // Downscale large images to save memory
+                                let img = if img.width() > 800 || img.height() > 600 {
+                                    img.thumbnail(800, 600)
+                                } else {
+                                    img
+                                };
+                                cache.lock().unwrap().insert(url, crate::app::ImageState::Ready(img));
+                            }
+                            Err(e) => {
+                                cache.lock().unwrap().insert(url, crate::app::ImageState::Failed(e.to_string()));
+                            }
+                        }
+                    }
+                    Ok(_) => {
+                        cache.lock().unwrap().insert(url, crate::app::ImageState::Failed("Too large".into()));
                     }
                     Err(e) => {
                         cache.lock().unwrap().insert(url, crate::app::ImageState::Failed(e.to_string()));
                     }
-                },
-                Err(e) => {
-                    cache.lock().unwrap().insert(url, crate::app::ImageState::Failed(e.to_string()));
                 }
-            },
+            }
             Err(e) => {
                 cache.lock().unwrap().insert(url, crate::app::ImageState::Failed(e.to_string()));
             }

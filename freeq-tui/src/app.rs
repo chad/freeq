@@ -39,6 +39,11 @@ pub type ImageCache = Arc<Mutex<HashMap<String, ImageState>>>;
 #[cfg(feature = "inline-images")]
 pub const IMAGE_ROWS: u16 = 10;
 
+/// Maximum entries in the image cache (LRU eviction).
+const MAX_IMAGE_CACHE: usize = 50;
+/// Maximum image download size (10 MB).
+pub const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+
 /// A named message buffer (channel, PM, or status).
 #[derive(Debug)]
 pub struct Buffer {
@@ -49,6 +54,12 @@ pub struct Buffer {
     pub topic: Option<String>,
     /// Scroll offset from the bottom (0 = at bottom).
     pub scroll: u16,
+    /// Unread message count since the buffer was last active.
+    pub unread: usize,
+    /// Whether any unread message mentions the user's nick.
+    pub has_mention: bool,
+    /// Scroll offset for nick list (0 = top).
+    pub nick_scroll: usize,
 }
 
 /// In-progress BATCH buffer (e.g., CHATHISTORY).
@@ -66,6 +77,9 @@ impl Buffer {
             nicks: Vec::new(),
             topic: None,
             scroll: 0,
+            unread: 0,
+            has_mention: false,
+            nick_scroll: 0,
         }
     }
 
@@ -82,7 +96,7 @@ impl Buffer {
         self.push(BufferLine {
             timestamp: now_str(),
             from: String::new(),
-            text: text.to_string(),
+            text: sanitize_text(text),
             is_system: true,
             image_url: None,
         });
@@ -283,13 +297,28 @@ impl App {
             target.to_string()
         };
 
+        let clean_text = sanitize_text(text);
+        let clean_from = sanitize_text(from);
+        let buf_key = buffer_name.to_lowercase();
+        let is_active = buf_key == self.active_buffer;
+
         self.buffer_mut(&buffer_name).push(BufferLine {
             timestamp: now_str(),
-            from: from.to_string(),
-            text: text.to_string(),
+            from: clean_from,
+            text: clean_text.clone(),
             is_system: false,
             image_url: None,
         });
+
+        // Track unread + mentions for inactive buffers
+        if !is_active && from != self.nick {
+            if let Some(buf) = self.buffers.get_mut(&buf_key) {
+                buf.unread += 1;
+                if clean_text.to_lowercase().contains(&self.nick.to_lowercase()) {
+                    buf.has_mention = true;
+                }
+            }
+        }
     }
 
     /// Start a BATCH (e.g., CHATHISTORY).
@@ -341,6 +370,7 @@ impl App {
         if let Some(pos) = keys.iter().position(|k| k == &self.active_buffer) {
             let next = (pos + 1) % keys.len();
             self.active_buffer = keys[next].clone();
+            self.clear_active_unread();
         }
     }
 
@@ -350,6 +380,24 @@ impl App {
         if let Some(pos) = keys.iter().position(|k| k == &self.active_buffer) {
             let prev = if pos == 0 { keys.len() - 1 } else { pos - 1 };
             self.active_buffer = keys[prev].clone();
+            self.clear_active_unread();
+        }
+    }
+
+    /// Switch to a named buffer.
+    pub fn switch_to(&mut self, name: &str) {
+        let key = name.to_lowercase();
+        if self.buffers.contains_key(&key) {
+            self.active_buffer = key;
+            self.clear_active_unread();
+        }
+    }
+
+    /// Clear unread state for the currently active buffer.
+    fn clear_active_unread(&mut self) {
+        if let Some(buf) = self.buffers.get_mut(&self.active_buffer) {
+            buf.unread = 0;
+            buf.has_mention = false;
         }
     }
 
@@ -404,4 +452,38 @@ impl App {
 
 fn now_str() -> String {
     chrono::Local::now().format("%H:%M:%S").to_string()
+}
+
+/// Strip terminal control characters (ESC sequences, C0/C1 controls) from text.
+/// Prevents malicious users from injecting escape sequences that could
+/// mess up the terminal display.
+pub fn sanitize_text(s: &str) -> String {
+    s.chars()
+        .filter(|&c| {
+            // Allow normal printable chars + newline/tab
+            c == '\n' || c == '\t' || (c >= ' ' && c != '\x7f')
+        })
+        .collect()
+}
+
+/// Evict oldest entries from image cache if over capacity.
+pub fn evict_image_cache(cache: &ImageCache) {
+    let mut guard = cache.lock().unwrap();
+    if guard.len() > MAX_IMAGE_CACHE {
+        // Simple eviction: remove Failed entries first, then arbitrary
+        let failed_keys: Vec<String> = guard.iter()
+            .filter(|(_, v)| matches!(v, ImageState::Failed(_)))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in failed_keys {
+            guard.remove(&k);
+            if guard.len() <= MAX_IMAGE_CACHE { return; }
+        }
+        // Still over? Remove arbitrary entries until within limit
+        let keys: Vec<String> = guard.keys().cloned().collect();
+        for k in keys {
+            if guard.len() <= MAX_IMAGE_CACHE { break; }
+            guard.remove(&k);
+        }
+    }
 }
