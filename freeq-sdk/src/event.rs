@@ -47,10 +47,15 @@ pub enum Event {
         id: String,
     },
 
-    /// NAMES list for a channel.
+    /// NAMES list for a channel (one 353 reply; may arrive in multiple parts).
     Names {
         channel: String,
         nicks: Vec<String>,
+    },
+
+    /// End of NAMES list (366).
+    NamesEnd {
+        channel: String,
     },
 
     /// Channel mode changed.

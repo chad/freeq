@@ -940,8 +940,23 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
         }
         Event::Names { channel, nicks } => {
             let buf = app.buffer_mut(&channel);
-            buf.nicks = nicks.clone();
-            buf.push_system(&format!("Users: {}", nicks.join(", ")));
+            // Accumulate nicks from multiple 353 replies (server may split across lines)
+            // A new NAMES list starts fresh only when the first entry isn't already present
+            if nicks.is_empty() {
+                // Empty 353 — server sent no nicks (shouldn't happen, but handle gracefully)
+            } else if buf.names_pending {
+                // Continuation of an existing NAMES batch
+                buf.nicks.extend(nicks.clone());
+            } else {
+                // Start of a new NAMES reply — replace
+                buf.nicks = nicks.clone();
+                buf.names_pending = true;
+            }
+        }
+        Event::NamesEnd { channel } => {
+            let buf = app.buffer_mut(&channel);
+            buf.names_pending = false;
+            buf.push_system(&format!("Users: {}", buf.nicks.join(", ")));
         }
         Event::UserQuit { nick, reason } => {
             // Remove from all channel nick lists and show quit message

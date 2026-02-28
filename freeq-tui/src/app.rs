@@ -60,6 +60,8 @@ pub struct Buffer {
     pub has_mention: bool,
     /// Scroll offset for nick list (0 = top).
     pub nick_scroll: usize,
+    /// Whether we're accumulating nicks from multiple 353 replies.
+    pub names_pending: bool,
 }
 
 /// In-progress BATCH buffer (e.g., CHATHISTORY).
@@ -80,6 +82,7 @@ impl Buffer {
             unread: 0,
             has_mention: false,
             nick_scroll: 0,
+            names_pending: false,
         }
     }
 

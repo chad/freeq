@@ -308,6 +308,10 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
             }).collect();
             FreeqEvent::Names { channel: channel.clone(), members }
         }
+        Event::NamesEnd { .. } => {
+            // NamesEnd is informational; map to empty notice for FFI consumers
+            FreeqEvent::Notice { text: String::new() }
+        }
         Event::ModeChanged { channel, mode, arg, set_by } => FreeqEvent::ModeChanged {
             channel: channel.clone(), mode: mode.clone(), arg: arg.clone(), set_by: set_by.clone(),
         },

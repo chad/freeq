@@ -814,6 +814,13 @@ where
                                 let _ = event_tx.send(Event::Names { channel, nicks }).await;
                             }
                         }
+                        "366" => {
+                            // RPL_ENDOFNAMES
+                            if msg.params.len() >= 2 {
+                                let channel = msg.params[1].clone();
+                                let _ = event_tx.send(Event::NamesEnd { channel }).await;
+                            }
+                        }
                         "PING" => {
                             let token = msg.params.first().map(|s| s.as_str()).unwrap_or("");
                             writer.write_all(format!("PONG :{token}\r\n").as_bytes()).await?;
