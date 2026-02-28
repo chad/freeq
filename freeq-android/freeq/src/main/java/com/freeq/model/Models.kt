@@ -147,6 +147,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     var brokerToken: String? = null
     var authBrokerBase: String = "https://irc.freeq.at/auth/broker"
     private var brokerRetryCount = 0
+    internal var intentionalDisconnect = false
 
     val hasSavedSession: Boolean
         get() = brokerToken != null && nick.value.isNotEmpty()
@@ -239,6 +240,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     // ── Connection ──
 
     fun connect(nickName: String) {
+        intentionalDisconnect = false
         nick.value = nickName
         connectionState.value = ConnectionState.Connecting
         errorMessage.value = null
@@ -263,6 +265,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     }
 
     fun disconnect() {
+        intentionalDisconnect = true
         client?.disconnect()
         connectionState.value = ConnectionState.Disconnected
         channels.clear()
@@ -274,11 +277,13 @@ class AppState(application: Application) : AndroidViewModel(application) {
     }
 
     fun logout() {
-        disconnect()
+        intentionalDisconnect = true
         brokerToken = null
+        pendingWebToken = null
         securePrefs.edit().remove("brokerToken").remove("did").apply()
         prefs.edit().remove("nick").apply()
         nick.value = ""
+        disconnect()
     }
 
     fun reconnectSavedSession() {
@@ -791,7 +796,7 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                     state.errorMessage.value = "Disconnected: ${event.reason}"
                 }
                 // Auto-reconnect: prefer broker session restore, fall back to plain reconnect
-                if (state.nick.value.isNotEmpty()) {
+                if (state.nick.value.isNotEmpty() && !state.intentionalDisconnect) {
                     state.reconnectAttempts++
                     val delay = minOf(1L shl minOf(state.reconnectAttempts, 5), 30L)
                     state.scope.launch {
