@@ -1145,3 +1145,386 @@ async fn handle_s2s_connection(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trust_level_parse() {
+        assert_eq!(TrustLevel::parse_level("full"), TrustLevel::Full);
+        assert_eq!(TrustLevel::parse_level("relay"), TrustLevel::Relay);
+        assert_eq!(TrustLevel::parse_level("readonly"), TrustLevel::Readonly);
+        assert_eq!(TrustLevel::parse_level("read-only"), TrustLevel::Readonly);
+        assert_eq!(TrustLevel::parse_level("ro"), TrustLevel::Readonly);
+        assert_eq!(TrustLevel::parse_level("FULL"), TrustLevel::Full);
+        assert_eq!(TrustLevel::parse_level("unknown"), TrustLevel::Full); // default
+    }
+
+    #[test]
+    fn trust_level_capabilities() {
+        assert!(TrustLevel::Full.can_relay());
+        assert!(TrustLevel::Full.can_admin());
+
+        assert!(TrustLevel::Relay.can_relay());
+        assert!(!TrustLevel::Relay.can_admin());
+
+        assert!(!TrustLevel::Readonly.can_relay());
+        assert!(!TrustLevel::Readonly.can_admin());
+    }
+
+    #[test]
+    fn trust_config_parsing() {
+        let entries = vec![
+            "abc123:full".to_string(),
+            "def456:relay".to_string(),
+            "ghi789:readonly".to_string(),
+        ];
+        let config = parse_trust_config(&entries);
+        assert_eq!(config.get("abc123"), Some(&TrustLevel::Full));
+        assert_eq!(config.get("def456"), Some(&TrustLevel::Relay));
+        assert_eq!(config.get("ghi789"), Some(&TrustLevel::Readonly));
+        assert_eq!(config.get("unknown"), None);
+    }
+
+    #[test]
+    fn trust_config_empty() {
+        let config = parse_trust_config(&[]);
+        assert!(config.is_empty());
+    }
+
+    #[test]
+    fn signed_envelope_roundtrip() {
+        let secret = iroh::SecretKey::from_bytes(&rand::random::<[u8; 32]>());
+        let server_id = secret.public().to_string();
+
+        let trust_config = HashMap::new();
+        let (broadcast_tx, _) = mpsc::channel(1);
+        let (event_tx, _) = mpsc::channel(1);
+
+        let manager = S2sManager {
+            server_id: server_id.clone(),
+            server_name: "test".to_string(),
+            peers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            peer_names: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            event_tx,
+            event_counter: AtomicU64::new(0),
+            dedup: Arc::new(DedupSet::new()),
+            broadcast_tx,
+            conn_gen: Arc::new(AtomicU64::new(0)),
+            signing_key: Arc::new(secret),
+            trust_config,
+            peer_trust: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            pending_rotations: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            authenticated_peers: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+        };
+
+        // Sign a message
+        let msg = S2sMessage::Privmsg {
+            event_id: "test:1".to_string(),
+            from: "alice!a@b".to_string(),
+            target: "#test".to_string(),
+            text: "hello world".to_string(),
+            origin: server_id.clone(),
+            msgid: Some("MSG123".to_string()),
+            sig: None,
+        };
+
+        let signed = manager.sign_message(&msg);
+        match &signed {
+            S2sMessage::Signed { payload, signature, signer } => {
+                assert_eq!(signer, &server_id);
+                // Verify
+                let inner = manager.verify_signed(payload, signature, signer, &server_id);
+                assert!(inner.is_some(), "Signature should verify");
+                match inner.unwrap() {
+                    S2sMessage::Privmsg { text, .. } => assert_eq!(text, "hello world"),
+                    _ => panic!("Expected Privmsg"),
+                }
+            }
+            _ => panic!("Expected Signed envelope"),
+        }
+    }
+
+    #[test]
+    fn signed_envelope_rejects_wrong_signer() {
+        let secret = iroh::SecretKey::from_bytes(&rand::random::<[u8; 32]>());
+        let other_secret = iroh::SecretKey::from_bytes(&rand::random::<[u8; 32]>());
+        let server_id = secret.public().to_string();
+        let other_id = other_secret.public().to_string();
+
+        let (broadcast_tx, _) = mpsc::channel(1);
+        let (event_tx, _) = mpsc::channel(1);
+
+        let manager = S2sManager {
+            server_id: server_id.clone(),
+            server_name: "test".to_string(),
+            peers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            peer_names: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            event_tx,
+            event_counter: AtomicU64::new(0),
+            dedup: Arc::new(DedupSet::new()),
+            broadcast_tx,
+            conn_gen: Arc::new(AtomicU64::new(0)),
+            signing_key: Arc::new(secret),
+            trust_config: HashMap::new(),
+            peer_trust: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            pending_rotations: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            authenticated_peers: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+        };
+
+        let msg = S2sMessage::SyncRequest;
+        let signed = manager.sign_message(&msg);
+
+        match &signed {
+            S2sMessage::Signed { payload, signature, signer } => {
+                // Verify with wrong authenticated peer ID — should reject
+                let result = manager.verify_signed(payload, signature, signer, &other_id);
+                assert!(result.is_none(), "Should reject signer mismatch");
+            }
+            _ => panic!("Expected Signed"),
+        }
+    }
+
+    #[test]
+    fn signed_envelope_rejects_tampered_payload() {
+        let secret = iroh::SecretKey::from_bytes(&rand::random::<[u8; 32]>());
+        let server_id = secret.public().to_string();
+
+        let (broadcast_tx, _) = mpsc::channel(1);
+        let (event_tx, _) = mpsc::channel(1);
+
+        let manager = S2sManager {
+            server_id: server_id.clone(),
+            server_name: "test".to_string(),
+            peers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            peer_names: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            event_tx,
+            event_counter: AtomicU64::new(0),
+            dedup: Arc::new(DedupSet::new()),
+            broadcast_tx,
+            conn_gen: Arc::new(AtomicU64::new(0)),
+            signing_key: Arc::new(secret),
+            trust_config: HashMap::new(),
+            peer_trust: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            pending_rotations: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            authenticated_peers: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+        };
+
+        let msg = S2sMessage::Privmsg {
+            event_id: "test:1".to_string(),
+            from: "alice!a@b".to_string(),
+            target: "#test".to_string(),
+            text: "original".to_string(),
+            origin: server_id.clone(),
+            msgid: None,
+            sig: None,
+        };
+
+        let signed = manager.sign_message(&msg);
+        match signed {
+            S2sMessage::Signed { payload: _, signature, signer } => {
+                // Tamper: encode a different payload
+                let tampered = S2sMessage::Privmsg {
+                    event_id: "test:1".to_string(),
+                    from: "alice!a@b".to_string(),
+                    target: "#test".to_string(),
+                    text: "TAMPERED".to_string(),
+                    origin: server_id.clone(),
+                    msgid: None,
+                    sig: None,
+                };
+                let tampered_json = serde_json::to_string(&tampered).unwrap();
+                let tampered_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                    .encode(tampered_json.as_bytes());
+
+                let result = manager.verify_signed(&tampered_b64, &signature, &signer, &server_id);
+                assert!(result.is_none(), "Should reject tampered payload");
+            }
+            _ => panic!("Expected Signed"),
+        }
+    }
+
+    #[test]
+    fn key_rotation_roundtrip() {
+        let secret = iroh::SecretKey::from_bytes(&rand::random::<[u8; 32]>());
+        let new_secret = iroh::SecretKey::from_bytes(&rand::random::<[u8; 32]>());
+        let server_id = secret.public().to_string();
+        let new_id = new_secret.public().to_string();
+
+        let (broadcast_tx, _) = mpsc::channel(1);
+        let (event_tx, _) = mpsc::channel(1);
+
+        let manager = S2sManager {
+            server_id: server_id.clone(),
+            server_name: "test".to_string(),
+            peers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            peer_names: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            event_tx,
+            event_counter: AtomicU64::new(0),
+            dedup: Arc::new(DedupSet::new()),
+            broadcast_tx,
+            conn_gen: Arc::new(AtomicU64::new(0)),
+            signing_key: Arc::new(secret),
+            trust_config: HashMap::new(),
+            peer_trust: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            pending_rotations: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            authenticated_peers: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+        };
+
+        let rotation = manager.announce_rotation(&new_id);
+        match rotation {
+            S2sMessage::KeyRotation { ref old_id, ref new_id, timestamp, ref signature } => {
+                assert!(manager.verify_rotation(old_id, new_id, timestamp, signature, &server_id));
+            }
+            _ => panic!("Expected KeyRotation"),
+        }
+    }
+
+    #[test]
+    fn key_rotation_rejects_wrong_signer() {
+        let secret = iroh::SecretKey::from_bytes(&rand::random::<[u8; 32]>());
+        let other_secret = iroh::SecretKey::from_bytes(&rand::random::<[u8; 32]>());
+        let new_secret = iroh::SecretKey::from_bytes(&rand::random::<[u8; 32]>());
+        let server_id = secret.public().to_string();
+        let other_id = other_secret.public().to_string();
+        let new_id = new_secret.public().to_string();
+
+        let (broadcast_tx, _) = mpsc::channel(1);
+        let (event_tx, _) = mpsc::channel(1);
+
+        let manager = S2sManager {
+            server_id: server_id.clone(),
+            server_name: "test".to_string(),
+            peers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            peer_names: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            event_tx,
+            event_counter: AtomicU64::new(0),
+            dedup: Arc::new(DedupSet::new()),
+            broadcast_tx,
+            conn_gen: Arc::new(AtomicU64::new(0)),
+            signing_key: Arc::new(secret),
+            trust_config: HashMap::new(),
+            peer_trust: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            pending_rotations: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            authenticated_peers: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+        };
+
+        let rotation = manager.announce_rotation(&new_id);
+        match rotation {
+            S2sMessage::KeyRotation { ref old_id, ref new_id, timestamp, ref signature } => {
+                // Verify with wrong authenticated peer — should reject
+                assert!(!manager.verify_rotation(old_id, new_id, timestamp, signature, &other_id));
+            }
+            _ => panic!("Expected KeyRotation"),
+        }
+    }
+
+    #[test]
+    fn key_rotation_rejects_expired() {
+        let secret = iroh::SecretKey::from_bytes(&rand::random::<[u8; 32]>());
+        let new_secret = iroh::SecretKey::from_bytes(&rand::random::<[u8; 32]>());
+        let server_id = secret.public().to_string();
+        let new_id = new_secret.public().to_string();
+
+        let (broadcast_tx, _) = mpsc::channel(1);
+        let (event_tx, _) = mpsc::channel(1);
+
+        let manager = S2sManager {
+            server_id: server_id.clone(),
+            server_name: "test".to_string(),
+            peers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            peer_names: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            event_tx,
+            event_counter: AtomicU64::new(0),
+            dedup: Arc::new(DedupSet::new()),
+            broadcast_tx,
+            conn_gen: Arc::new(AtomicU64::new(0)),
+            signing_key: Arc::new(secret.clone()),
+            trust_config: HashMap::new(),
+            peer_trust: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            pending_rotations: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            authenticated_peers: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+        };
+
+        // Manually create a rotation with an old timestamp
+        let old_timestamp = 1000; // way in the past
+        let msg = format!("rotate:{}:{}:{}", server_id, new_id, old_timestamp);
+        let sig = secret.sign(msg.as_bytes());
+        let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(sig.to_bytes());
+
+        assert!(!manager.verify_rotation(&server_id, &new_id, old_timestamp, &sig_b64, &server_id));
+    }
+
+    #[test]
+    fn hello_serialization_with_new_fields() {
+        let hello = S2sMessage::Hello {
+            peer_id: "abc123".to_string(),
+            server_name: "test-server".to_string(),
+            protocol_version: 2,
+            trust_level: Some("full".to_string()),
+        };
+        let json = serde_json::to_string(&hello).unwrap();
+        assert!(json.contains("protocol_version"));
+        assert!(json.contains("trust_level"));
+
+        // Verify backward compat: old Hello without new fields still parses
+        let old_json = r#"{"type":"hello","peer_id":"abc","server_name":"old"}"#;
+        let parsed: S2sMessage = serde_json::from_str(old_json).unwrap();
+        match parsed {
+            S2sMessage::Hello { protocol_version, trust_level, .. } => {
+                assert_eq!(protocol_version, 0); // default
+                assert!(trust_level.is_none()); // default
+            }
+            _ => panic!("Expected Hello"),
+        }
+    }
+
+    #[test]
+    fn hello_ack_serialization() {
+        let ack = S2sMessage::HelloAck {
+            peer_id: "abc123".to_string(),
+            accepted: true,
+            trust_level: Some("relay".to_string()),
+        };
+        let json = serde_json::to_string(&ack).unwrap();
+        let parsed: S2sMessage = serde_json::from_str(&json).unwrap();
+        match parsed {
+            S2sMessage::HelloAck { accepted, trust_level, .. } => {
+                assert!(accepted);
+                assert_eq!(trust_level.as_deref(), Some("relay"));
+            }
+            _ => panic!("Expected HelloAck"),
+        }
+    }
+
+    #[test]
+    fn signed_envelope_serialization() {
+        let signed = S2sMessage::Signed {
+            payload: "dGVzdA".to_string(),
+            signature: "c2ln".to_string(),
+            signer: "abc123".to_string(),
+        };
+        let json = serde_json::to_string(&signed).unwrap();
+        assert!(json.contains(r#""type":"signed""#));
+        let parsed: S2sMessage = serde_json::from_str(&json).unwrap();
+        match parsed {
+            S2sMessage::Signed { payload, .. } => assert_eq!(payload, "dGVzdA"),
+            _ => panic!("Expected Signed"),
+        }
+    }
+
+    #[test]
+    fn dedup_set_basic() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let dedup = DedupSet::new();
+            assert!(dedup.check_and_insert("peer1", "peer1:100").await);
+            assert!(!dedup.check_and_insert("peer1", "peer1:100").await); // duplicate
+            assert!(!dedup.check_and_insert("peer1", "peer1:50").await);  // below high water
+            assert!(dedup.check_and_insert("peer1", "peer1:200").await);  // new
+            assert!(dedup.check_and_insert("peer2", "peer2:50").await);   // different peer
+        });
+    }
+}
