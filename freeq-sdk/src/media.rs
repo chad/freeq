@@ -392,6 +392,7 @@ pub async fn upload_media_to_pds(
         size,
         mime_type: mime,
         url,
+        updated_nonce: current_nonce,
     })
 }
 
@@ -430,13 +431,17 @@ async fn dpop_post(
         }
 
         if (resp.status() == 401 || resp.status() == 400) && attempt < 2 {
-            let _body = resp.text().await.unwrap_or_default();
+            let body = resp.text().await.unwrap_or_default();
+            tracing::debug!(method, attempt, body = %body, "DPoP retry (nonce rotation or auth)");
             continue;
         }
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
+            if status.as_u16() == 401 {
+                anyhow::bail!("Authentication expired ({status}). Please re-authenticate. PDS response: {body}");
+            }
             anyhow::bail!("{status}: {body}");
         }
 
@@ -457,6 +462,8 @@ pub struct MediaUploadResult {
     pub mime_type: String,
     /// Publicly accessible URL for the media.
     pub url: String,
+    /// Updated DPoP nonce (for caching to avoid stale nonce on next request).
+    pub updated_nonce: Option<String>,
 }
 
 #[cfg(test)]

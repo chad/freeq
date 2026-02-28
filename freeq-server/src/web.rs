@@ -1470,6 +1470,13 @@ async fn api_upload(
         (StatusCode::BAD_GATEWAY, format!("PDS upload failed: {e}"))
     })?;
 
+    // Update stored DPoP nonce so subsequent uploads don't start stale
+    if let Some(ref new_nonce) = result.updated_nonce {
+        if let Some(session) = state.web_sessions.lock().get_mut(&did) {
+            session.dpop_nonce = Some(new_nonce.clone());
+        }
+    }
+
     // For non-image content, proxy through our server to avoid PDS
     // Content-Disposition: attachment and sandbox CSP blocking playback
     let client_url = if !result.mime_type.starts_with("image/") {
@@ -1865,7 +1872,7 @@ async fn security_headers(
     if !headers.contains_key("content-security-policy") {
         headers.insert(
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' wss: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'".parse().unwrap(),
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' wss: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'".parse().unwrap(),
         );
     }
     resp

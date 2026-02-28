@@ -1168,6 +1168,40 @@ impl Server {
         Ok((addr, handle))
     }
 
+    /// Start the server with both IRC and HTTP listeners.
+    /// Returns (irc_addr, http_addr, handle).
+    pub async fn start_with_web(self) -> Result<(SocketAddr, SocketAddr, JoinHandle<Result<()>>)> {
+        let listener = TcpListener::bind(&self.config.listen_addr).await?;
+        let irc_addr = listener.local_addr()?;
+
+        let web_listener = TcpListener::bind("127.0.0.1:0").await?;
+        let web_addr = web_listener.local_addr()?;
+
+        let state = self.build_state()?;
+
+        let web_state = Arc::clone(&state);
+        let router = crate::web::router(web_state);
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(web_listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await {
+                tracing::error!("HTTP server error: {e}");
+            }
+        });
+
+        let handle = tokio::spawn(async move {
+            loop {
+                let (stream, _addr) = listener.accept().await?;
+                let state = Arc::clone(&state);
+                tokio::spawn(async move {
+                    if let Err(e) = connection::handle(stream, state).await {
+                        tracing::error!("Connection error: {e}");
+                    }
+                });
+            }
+        });
+
+        Ok((irc_addr, web_addr, handle))
+    }
+
     /// Start the server with both plain and TLS listeners for testing.
     /// Returns (plain_addr, tls_addr, handle).
     pub async fn start_tls(self) -> Result<(SocketAddr, SocketAddr, JoinHandle<Result<()>>)> {
