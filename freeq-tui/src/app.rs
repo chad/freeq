@@ -119,6 +119,7 @@ pub struct MediaUploader {
 pub enum Transport {
     Tcp,
     Tls,
+    #[allow(dead_code)]
     WebSocket,
     Iroh,
 }
@@ -311,14 +312,13 @@ impl App {
         });
 
         // Track unread + mentions for inactive buffers
-        if !is_active && from != self.nick {
-            if let Some(buf) = self.buffers.get_mut(&buf_key) {
+        if !is_active && from != self.nick
+            && let Some(buf) = self.buffers.get_mut(&buf_key) {
                 buf.unread += 1;
                 if clean_text.to_lowercase().contains(&self.nick.to_lowercase()) {
                     buf.has_mention = true;
                 }
             }
-        }
     }
 
     /// Start a BATCH (e.g., CHATHISTORY).

@@ -386,11 +386,10 @@ pub struct VerifiableCredential {
 impl VerifiableCredential {
     /// Check if the credential has expired.
     pub fn is_expired(&self) -> bool {
-        if let Some(ref exp) = self.expires_at {
-            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(exp) {
+        if let Some(ref exp) = self.expires_at
+            && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(exp) {
                 return dt < chrono::Utc::now();
             }
-        }
         false
     }
 }

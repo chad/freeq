@@ -27,7 +27,7 @@ use axum::{
 };
 use clap::Parser;
 use ed25519_dalek::SigningKey;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 use parking_lot::Mutex;
 
@@ -232,7 +232,7 @@ async fn github_callback(
 
     // Check org membership
     let org_ok = http
-        .get(&format!("https://api.github.com/user/memberships/orgs/{}", pending.org))
+        .get(format!("https://api.github.com/user/memberships/orgs/{}", pending.org))
         .header("Authorization", format!("Bearer {access_token}"))
         .header("User-Agent", "freeq-credential-issuer")
         .send()

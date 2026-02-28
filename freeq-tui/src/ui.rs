@@ -258,7 +258,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             // "HH:MM:SS <nick> message"
             msg.timestamp.len() + 1 + msg.from.len() + 2 + 1 + msg.text.len()
         };
-        (text_len + width - 1) / width  // ceil division
+        text_len.div_ceil(width)  // ceil division
     }
 
     // Calculate height of each message including wrapping + images

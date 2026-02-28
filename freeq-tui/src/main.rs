@@ -277,7 +277,7 @@ async fn main() -> Result<()> {
         config: connect_config,
         signer: signer.clone(),
         channels: resolved.channels.clone(),
-        iroh_addr: iroh_addr.clone(),
+        _iroh_addr: iroh_addr.clone(),
     });
 
     let result = run_app(&mut terminal, &mut app, &mut handle, &mut events, &mut reconnect_info).await;
@@ -442,7 +442,7 @@ struct ReconnectInfo {
     config: ConnectConfig,
     signer: Option<Arc<dyn ChallengeSigner>>,
     channels: Vec<String>,
-    iroh_addr: Option<String>,
+    _iroh_addr: Option<String>,
 }
 
 async fn run_app(
@@ -587,8 +587,8 @@ async fn run_app(
                 app.status_msg(&format!("Will reconnect in {secs}s..."));
             }
 
-            if let Some(at) = app.reconnect_at {
-                if std::time::Instant::now() >= at {
+            if let Some(at) = app.reconnect_at
+                && std::time::Instant::now() >= at {
                     app.reconnect_at = None;
                     app.reconnect_pending = false;
 
@@ -609,11 +609,10 @@ async fn run_app(
                                 }
                                 // Also rejoin any channels we were in (from buffers)
                                 for buf_name in app.buffers.keys() {
-                                    if buf_name.starts_with('#') || buf_name.starts_with('&') {
-                                        if !ri.channels.iter().any(|c| c.eq_ignore_ascii_case(buf_name)) {
+                                    if (buf_name.starts_with('#') || buf_name.starts_with('&'))
+                                        && !ri.channels.iter().any(|c| c.eq_ignore_ascii_case(buf_name)) {
                                             let _ = handle.join(buf_name).await;
                                         }
-                                    }
                                 }
 
                                 app.reconnect_delay = Duration::from_secs(1);
@@ -635,7 +634,6 @@ async fn run_app(
                         app.should_quit = true;
                     }
                 }
-            }
         }
 
         if app.should_quit {
@@ -720,9 +718,7 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
         Event::Message { from, target, text, tags } => {
             // Try E2EE decryption if we have a key for this channel
             let (text, was_encrypted) = {
-                let buf_key = if target.starts_with('#') || target.starts_with('&') {
-                    target.to_lowercase()
-                } else if from == app.nick {
+                let buf_key = if target.starts_with('#') || target.starts_with('&') || from == app.nick {
                     target.to_lowercase()
                 } else {
                     from.to_lowercase()
@@ -733,7 +729,7 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                             Ok(plaintext) => (plaintext, true),
                             Err(_) => {
                                 // Wrong key or tampered — show error inline
-                                (format!("🔒 [encrypted message — wrong key or corrupted]"), false)
+                                ("🔒 [encrypted message — wrong key or corrupted]".to_string(), false)
                             }
                         }
                     } else {
@@ -743,7 +739,7 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                     }
                 } else if freeq_sdk::e2ee::is_encrypted(&text) {
                     // Encrypted but we don't have the key
-                    (format!("🔒 [encrypted message — use /encrypt <passphrase> to decrypt]"), false)
+                    ("🔒 [encrypted message — use /encrypt <passphrase> to decrypt]".to_string(), false)
                 } else {
                     (text.clone(), false)
                 }
@@ -1810,12 +1806,11 @@ fn fetch_image_if_needed(cache: &crate::app::ImageCache, url: &str) {
         match client.get(&url).send().await {
             Ok(resp) => {
                 // Check content-length before downloading
-                if let Some(len) = resp.content_length() {
-                    if len > crate::app::MAX_IMAGE_BYTES as u64 {
+                if let Some(len) = resp.content_length()
+                    && len > crate::app::MAX_IMAGE_BYTES as u64 {
                         cache.lock().unwrap().insert(url, crate::app::ImageState::Failed("Too large".into()));
                         return;
                     }
-                }
                 match resp.bytes().await {
                     Ok(bytes) if bytes.len() <= crate::app::MAX_IMAGE_BYTES => {
                         match image::load_from_memory(&bytes) {
@@ -1850,20 +1845,18 @@ fn fetch_image_if_needed(cache: &crate::app::ImageCache, url: &str) {
 
 /// Format a media attachment for display in the TUI.
 fn format_timestamp(tags: &std::collections::HashMap<String, String>) -> String {
-    if let Some(ts) = tags.get("time") {
-        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
+    if let Some(ts) = tags.get("time")
+        && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
             return dt.with_timezone(&chrono::Local).format("%H:%M:%S").to_string();
         }
-    }
     chrono::Local::now().format("%H:%M:%S").to_string()
 }
 
 fn parse_timestamp_ms(tags: &std::collections::HashMap<String, String>) -> i64 {
-    if let Some(ts) = tags.get("time") {
-        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
+    if let Some(ts) = tags.get("time")
+        && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
             return dt.timestamp_millis();
         }
-    }
     chrono::Local::now().timestamp_millis()
 }
 
@@ -1874,12 +1867,11 @@ fn push_line_to_buffer(
     timestamp_ms: i64,
     line: crate::app::BufferLine,
 ) {
-    if let Some(id) = batch_id {
-        if app.batches.contains_key(id) {
+    if let Some(id) = batch_id
+        && app.batches.contains_key(id) {
             app.add_batch_line(id, timestamp_ms, line);
             return;
         }
-    }
     app.buffer_mut(buf_name).push(line);
 }
 

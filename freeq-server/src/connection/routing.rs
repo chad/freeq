@@ -58,7 +58,7 @@ pub(crate) fn relay_to_nick(
     event_id: String,
 ) -> RouteResult {
     // 1. Local delivery (case-insensitive nick lookup)
-    let target_lower = target.to_lowercase();
+    let _target_lower = target.to_lowercase();
     let local_session = {
         let n2s = state.nick_to_session.lock();
         n2s.get_session(target).map(|s| s.to_string())

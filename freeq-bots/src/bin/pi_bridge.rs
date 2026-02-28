@@ -186,11 +186,10 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
                 if tags.contains_key("batch") { continue; }
 
                 // Only accept DM or control channel
-                if let Some(ch) = &channel {
-                    if !target.eq_ignore_ascii_case(ch) && !target.eq_ignore_ascii_case(&current_nick) {
+                if let Some(ch) = &channel
+                    && !target.eq_ignore_ascii_case(ch) && !target.eq_ignore_ascii_case(&current_nick) {
                         continue;
                     }
-                }
 
                 // Require prefix
                 let trimmed = text.trim();

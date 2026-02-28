@@ -33,3 +33,6 @@ base64 = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }
 futures = "0.3"
+
+[lints]
+workspace = true

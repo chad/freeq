@@ -57,3 +57,6 @@ aes-gcm = "0.10"
 base64 = "0.22"
 sha2 = "0.10"
 hmac = "0.12"
+
+[lints]
+workspace = true

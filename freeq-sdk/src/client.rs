@@ -365,13 +365,8 @@ pub async fn establish_iroh_connection(addr: &str) -> Result<EstablishedConnecti
     tokio::spawn(async move {
         let mut recv = recv;
         let mut buf = vec![0u8; 4096];
-        loop {
-            match recv.read(&mut buf).await {
-                Ok(Some(n)) => {
-                    if bridge_write.write_all(&buf[..n]).await.is_err() { break; }
-                }
-                Ok(None) | Err(_) => break,
-            }
+        while let Ok(Some(n)) = recv.read(&mut buf).await {
+            if bridge_write.write_all(&buf[..n]).await.is_err() { break; }
         }
         let _ = bridge_write.shutdown().await;
     });
@@ -744,26 +739,23 @@ where
                         }
                         // Handle DPOP_NONCE notice during SASL — update signer nonce
                         "NOTICE" if sasl_in_progress => {
-                            if let Some(text) = msg.params.last() {
-                                if let Some(nonce) = text.strip_prefix("DPOP_NONCE ") {
-                                    if let Some(ref s) = signer {
+                            if let Some(text) = msg.params.last()
+                                && let Some(nonce) = text.strip_prefix("DPOP_NONCE ")
+                                    && let Some(ref s) = signer {
                                         s.set_dpop_nonce(nonce.trim());
                                     }
                                     // Server will re-issue AUTHENTICATE challenge next
-                                }
-                            }
                         }
                         // 900 RPL_LOGGEDIN — server tells us our authenticated DID
                         "900" => {
                             // :server 900 nick :You are now logged in as did:plc:...
-                            if let Some(text) = msg.params.last() {
-                                if let Some(did) = text.split("as ").last() {
+                            if let Some(text) = msg.params.last()
+                                && let Some(did) = text.split("as ").last() {
                                     let did = did.trim().to_string();
                                     if did.starts_with("did:") {
                                         authenticated_did = Some(did);
                                     }
                                 }
-                            }
                         }
                         "903" => {
                             sasl_in_progress = false;
@@ -792,7 +784,7 @@ where
                             writer.write_all(b"CAP END\r\n").await?;
                         }
                         "BATCH" => {
-                            if let Some(ref_id) = msg.params.get(0) {
+                            if let Some(ref_id) = msg.params.first() {
                                 if let Some(id) = ref_id.strip_prefix('+') {
                                     let batch_type = msg.params.get(1).cloned().unwrap_or_default();
                                     let target = msg.params.get(2).cloned().unwrap_or_default();
@@ -1166,8 +1158,7 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
             }
             if caps_str.contains("sasl") && (signer.is_some() || web_token.is_some()) {
                 req_caps.push("sasl");
-            } else {
-            }
+            } 
             if req_caps.is_empty() {
                 // eprintln!("  No caps to request, sending CAP END");
                 writer.write_all(b"CAP END\r\n").await?;

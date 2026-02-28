@@ -275,15 +275,17 @@ impl Db {
             let did_ops: std::collections::HashSet<String> =
                 serde_json::from_str(&did_ops_json).unwrap_or_default();
 
-            let mut ch = ChannelState::default();
-            ch.topic = topic;
-            ch.topic_locked = topic_locked;
-            ch.invite_only = invite_only;
-            ch.no_ext_msg = no_ext_msg;
-            ch.moderated = moderated;
-            ch.key = key;
-            ch.founder_did = founder_did;
-            ch.did_ops = did_ops;
+            let ch = ChannelState {
+                topic,
+                topic_locked,
+                invite_only,
+                no_ext_msg,
+                moderated,
+                key,
+                founder_did,
+                did_ops,
+                ..Default::default()
+            };
             Ok((name, ch))
         })?;
 

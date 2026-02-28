@@ -32,3 +32,6 @@ whoami = "1"
 [features]
 default = []
 inline-images = ["ratatui-image"]
+
+[lints]
+workspace = true

@@ -20,7 +20,7 @@ struct BrokerConfig {
     public_url: String,
     freeq_server_url: String,
     shared_secret: String,
-    db_path: String,
+    _db_path: String,
 }
 
 struct BrokerState {
@@ -135,14 +135,13 @@ struct DidService {
 async fn resolve_handle(handle: &str) -> Result<String, anyhow::Error> {
     // Try HTTPS well-known first
     let url = format!("https://{handle}/.well-known/atproto-did");
-    if let Ok(resp) = reqwest::get(&url).await {
-        if resp.status().is_success() {
+    if let Ok(resp) = reqwest::get(&url).await
+        && resp.status().is_success() {
             let did = resp.text().await?.trim().to_string();
             if did.starts_with("did:") {
                 return Ok(did);
             }
         }
-    }
 
     // Fallback to public API (DNS TXT)
     let api_url = format!(
@@ -197,7 +196,7 @@ struct AuthCallbackQuery {
     code: Option<String>,
     error: Option<String>,
     error_description: Option<String>,
-    iss: Option<String>,
+    _iss: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -246,7 +245,7 @@ async fn main() {
     init_db(&db).expect("Failed to init db");
 
     let state = Arc::new(BrokerState {
-        config: BrokerConfig { public_url, freeq_server_url, shared_secret, db_path },
+        config: BrokerConfig { public_url, freeq_server_url, shared_secret, _db_path: db_path },
         pending: Mutex::new(std::collections::HashMap::new()),
         db: Mutex::new(db),
     });
@@ -385,18 +384,16 @@ async fn auth_login(
     let request_uri = par_resp["request_uri"].as_str()
         .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No request_uri in PAR response".to_string()))?;
 
-    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let _now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
     let mut return_to = q.return_to.clone();
     let is_popup = is_truthy(q.popup.as_deref());
     let is_mobile = is_truthy(q.mobile.as_deref());
 
-    if return_to.is_none() {
-        if let Some(referer) = headers.get("referer").and_then(|v| v.to_str().ok()) {
-            if let Ok(url) = url::Url::parse(referer) {
+    if return_to.is_none()
+        && let Some(referer) = headers.get("referer").and_then(|v| v.to_str().ok())
+            && let Ok(url) = url::Url::parse(referer) {
                 return_to = Some(url.origin().ascii_serialization());
             }
-        }
-    }
     if return_to.is_none() && !is_mobile {
         return_to = Some("https://irc.freeq.at".to_string());
     }

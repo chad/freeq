@@ -46,3 +46,6 @@ rustls-tls = ["reqwest/rustls-tls"]
 [dev-dependencies]
 clap = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[lints]
+workspace = true

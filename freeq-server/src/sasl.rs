@@ -315,12 +315,10 @@ async fn verify_pds_oauth(
 
         if (status.as_u16() == 400 || status.as_u16() == 401)
             && text.contains("use_dpop_nonce")
-        {
-            if let Some(nonce) = new_nonce {
+            && let Some(nonce) = new_nonce {
                 tracing::info!(did = %response.did, "DPoP nonce required by PDS, signaling client to retry");
                 return Err(format!("DPOP_NONCE:{nonce}"));
             }
-        }
 
         return Err(format!("PDS OAuth verification failed ({status}): {text}"));
     }

@@ -28,7 +28,7 @@ pub(crate) mod routing;
 use std::sync::Arc;
 
 use anyhow::Result;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
@@ -262,12 +262,11 @@ where
     let send_healthy = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let send_healthy_ref = send_healthy.clone();
     let send = move |state: &Arc<SharedState>, session_id: &str, msg: String| {
-        if let Some(tx) = state.connections.lock().get(session_id) {
-            if tx.try_send(msg).is_err() {
+        if let Some(tx) = state.connections.lock().get(session_id)
+            && tx.try_send(msg).is_err() {
                 tracing::warn!(session_id, "Send buffer full or closed");
                 send_healthy_ref.store(false, std::sync::atomic::Ordering::Relaxed);
             }
-        }
     };
 
     let mut line_buf = String::new();
@@ -378,12 +377,12 @@ where
                     }
                     let nick_lower = nick.to_lowercase();
                     let in_use_by_session = state.nick_to_session.lock()
-                        .get_session(&nick)
+                        .get_session(nick)
                         .map(|s| s.to_string());
                     let in_use = in_use_by_session.is_some();
 
                     // Check if the nick is in use by the same DID (multi-device OK)
-                    let in_use_by_same_did = in_use_by_session.as_ref().map_or(false, |sid| {
+                    let in_use_by_same_did = in_use_by_session.as_ref().is_some_and(|sid| {
                         let session_dids = state.session_dids.lock();
                         let my_did = conn.authenticated_did.as_deref();
                         match (session_dids.get(sid), my_did) {
@@ -434,7 +433,7 @@ where
                         if let Some(ref old) = old_nick {
                             state.nick_to_session.lock().remove_by_nick(old);
                         }
-                        state.nick_to_session.lock().insert(&nick, &session_id);
+                        state.nick_to_session.lock().insert(nick, &session_id);
                         conn.nick = Some(nick.clone());
 
                         if conn.registered {
@@ -453,11 +452,10 @@ where
                             for ch in channels.values() {
                                 if ch.members.contains(&session_id) {
                                     for member in &ch.members {
-                                        if notified.insert(member.clone()) {
-                                            if let Some(tx) = conns.get(member) {
+                                        if notified.insert(member.clone())
+                                            && let Some(tx) = conns.get(member) {
                                                 let _ = tx.try_send(nick_msg.clone());
                                             }
-                                        }
                                     }
                                 }
                             }
@@ -1151,11 +1149,10 @@ fn broadcast_quit(state: &Arc<SharedState>, session_id: &str, hostmask: &str) {
     for ch in channels.values() {
         if ch.members.contains(session_id) {
             for member in &ch.members {
-                if member != session_id {
-                    if let Some(tx) = conns.get(member) {
+                if member != session_id
+                    && let Some(tx) = conns.get(member) {
                         let _ = tx.try_send(quit_msg.clone());
                     }
-                }
             }
         }
     }

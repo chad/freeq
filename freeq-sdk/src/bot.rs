@@ -191,7 +191,7 @@ pub struct Bot {
     /// Command prefix (e.g. "!", ".", "bot:").
     prefix: String,
     /// Bot's nick (for PM detection).
-    nick: String,
+    _nick: String,
     /// Registered commands.
     commands: Vec<CommandEntry>,
     /// Admin DIDs (can use any Admin-level command).
@@ -209,7 +209,7 @@ impl Bot {
     pub fn new(prefix: &str, nick: &str) -> Self {
         Self {
             prefix: prefix.to_string(),
-            nick: nick.to_string(),
+            _nick: nick.to_string(),
             commands: Vec::new(),
             admin_dids: Vec::new(),
             fallback: None,
@@ -308,115 +308,111 @@ impl Bot {
 
     /// Process an event. Call this in your event loop.
     pub async fn handle_event(&self, handle: &ClientHandle, event: &Event) {
-        match event {
-            Event::Message {
+        if let Event::Message {
                 from,
                 target,
                 text,
                 tags,
-            } => {
-                // Ignore CHATHISTORY batches (avoid replaying history)
-                if tags.contains_key("batch") {
+            } = event {
+            // Ignore CHATHISTORY batches (avoid replaying history)
+            if tags.contains_key("batch") {
+                return;
+            }
+            let is_channel = target.starts_with('#') || target.starts_with('&');
+            let sender_did = tags.get("account").cloned();
+
+            if let Some(cmd_text) = text.strip_prefix(&self.prefix) {
+                let parts: Vec<&str> = cmd_text.splitn(2, ' ').collect();
+                let cmd_name = parts[0].to_lowercase();
+                let args_raw = parts.get(1).unwrap_or(&"").to_string();
+                let args: Vec<String> = if args_raw.is_empty() {
+                    Vec::new()
+                } else {
+                    args_raw.split_whitespace().map(|s| s.to_string()).collect()
+                };
+
+                let reply_target = if is_channel { target } else { from };
+
+                // Rate limiting
+                if let Some(ref limiter) = self.rate_limiter
+                    && !limiter.check(from) {
+                        let _ = handle.privmsg(reply_target, "Slow down — too many commands.").await;
+                        return;
+                    }
+
+                // Input size check
+                if self.max_args_len > 0 && args_raw.len() > self.max_args_len {
+                    let _ = handle.privmsg(reply_target,
+                        &format!("Input too long (max {} chars).", self.max_args_len)).await;
                     return;
                 }
-                let is_channel = target.starts_with('#') || target.starts_with('&');
-                let sender_did = tags.get("account").cloned();
 
-                if let Some(cmd_text) = text.strip_prefix(&self.prefix) {
-                    let parts: Vec<&str> = cmd_text.splitn(2, ' ').collect();
-                    let cmd_name = parts[0].to_lowercase();
-                    let args_raw = parts.get(1).unwrap_or(&"").to_string();
-                    let args: Vec<String> = if args_raw.is_empty() {
-                        Vec::new()
-                    } else {
-                        args_raw.split_whitespace().map(|s| s.to_string()).collect()
-                    };
+                // Built-in help command
+                if cmd_name == "help" {
+                    let _ = self.send_help(handle, reply_target).await;
+                    return;
+                }
 
-                    let reply_target = if is_channel { target } else { from };
-
-                    // Rate limiting
-                    if let Some(ref limiter) = self.rate_limiter {
-                        if !limiter.check(from) {
-                            let _ = handle.privmsg(reply_target, "Slow down — too many commands.").await;
-                            return;
-                        }
-                    }
-
-                    // Input size check
-                    if self.max_args_len > 0 && args_raw.len() > self.max_args_len {
-                        let _ = handle.privmsg(reply_target,
-                            &format!("Input too long (max {} chars).", self.max_args_len)).await;
-                        return;
-                    }
-
-                    // Built-in help command
-                    if cmd_name == "help" {
-                        let _ = self.send_help(handle, reply_target).await;
-                        return;
-                    }
-
-                    // Find matching command
-                    if let Some(entry) = self.commands.iter().find(|c| c.name == cmd_name) {
-                        // Check permissions
-                        match entry.permission {
-                            Permission::Anyone => {}
-                            Permission::Authenticated => {
-                                if sender_did.is_none() {
-                                    let reply_target = if is_channel { target } else { from };
-                                    let _ = handle
-                                        .privmsg(reply_target, "This command requires authentication.")
-                                        .await;
-                                    return;
-                                }
-                            }
-                            Permission::Admin => {
-                                let is_admin = sender_did.as_ref().is_some_and(|d| {
-                                    self.admin_dids.contains(d) || entry.allowed_dids.contains(d)
-                                });
-                                if !is_admin {
-                                    let reply_target = if is_channel { target } else { from };
-                                    let _ = handle
-                                        .privmsg(reply_target, "Permission denied.")
-                                        .await;
-                                    return;
-                                }
+                // Find matching command
+                if let Some(entry) = self.commands.iter().find(|c| c.name == cmd_name) {
+                    // Check permissions
+                    match entry.permission {
+                        Permission::Anyone => {}
+                        Permission::Authenticated => {
+                            if sender_did.is_none() {
+                                let reply_target = if is_channel { target } else { from };
+                                let _ = handle
+                                    .privmsg(reply_target, "This command requires authentication.")
+                                    .await;
+                                return;
                             }
                         }
-
-                        let ctx = CommandContext {
-                            handle: handle.clone(),
-                            sender: from.clone(),
-                            target: target.clone(),
-                            command: cmd_name,
-                            args,
-                            args_raw,
-                            is_channel,
-                            sender_did,
-                            tags: tags.clone(),
-                        };
-
-                        if let Err(e) = (entry.handler)(ctx).await {
-                            tracing::warn!(command = %entry.name, error = %e, "Command handler error");
+                        Permission::Admin => {
+                            let is_admin = sender_did.as_ref().is_some_and(|d| {
+                                self.admin_dids.contains(d) || entry.allowed_dids.contains(d)
+                            });
+                            if !is_admin {
+                                let reply_target = if is_channel { target } else { from };
+                                let _ = handle
+                                    .privmsg(reply_target, "Permission denied.")
+                                    .await;
+                                return;
+                            }
                         }
                     }
-                } else if let Some(ref fallback) = self.fallback {
+
                     let ctx = CommandContext {
                         handle: handle.clone(),
                         sender: from.clone(),
                         target: target.clone(),
-                        command: String::new(),
-                        args: text.split_whitespace().map(|s| s.to_string()).collect(),
-                        args_raw: text.clone(),
+                        command: cmd_name,
+                        args,
+                        args_raw,
                         is_channel,
                         sender_did,
                         tags: tags.clone(),
                     };
-                    if let Err(e) = (fallback)(ctx).await {
-                        tracing::warn!(error = %e, "Fallback handler error");
+
+                    if let Err(e) = (entry.handler)(ctx).await {
+                        tracing::warn!(command = %entry.name, error = %e, "Command handler error");
                     }
                 }
+            } else if let Some(ref fallback) = self.fallback {
+                let ctx = CommandContext {
+                    handle: handle.clone(),
+                    sender: from.clone(),
+                    target: target.clone(),
+                    command: String::new(),
+                    args: text.split_whitespace().map(|s| s.to_string()).collect(),
+                    args_raw: text.clone(),
+                    is_channel,
+                    sender_did,
+                    tags: tags.clone(),
+                };
+                if let Err(e) = (fallback)(ctx).await {
+                    tracing::warn!(error = %e, "Fallback handler error");
+                }
             }
-            _ => {}
         }
     }
 

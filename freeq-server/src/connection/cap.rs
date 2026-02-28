@@ -311,7 +311,6 @@ pub(super) async fn handle_authenticate(
                             send(state, session_id, format!("{fail}\r\n"));
                             if conn.sasl_failures >= 3 {
                                 send(state, session_id, "ERROR :Too many SASL failures\r\n".to_string());
-                                return;
                             }
                         }
                     }

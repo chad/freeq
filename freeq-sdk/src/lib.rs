@@ -1,3 +1,4 @@
+#![allow(deprecated)] // generic_array::from_slice in transitive crypto deps
 //! IRC AT Protocol SDK
 //!
 //! A reusable client library for connecting to IRC servers that support

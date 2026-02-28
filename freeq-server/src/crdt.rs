@@ -231,8 +231,8 @@ impl ClusterDoc {
             "set_by_did": set_by_did,
             "origin_peer": origin_peer,
         });
-        let _ = doc.put(automerge::ROOT, &format!("topic:{channel}"), value.to_string());
-        let _ = doc.put(automerge::ROOT, &format!("topic_by:{channel}"), set_by);
+        let _ = doc.put(automerge::ROOT, format!("topic:{channel}"), value.to_string());
+        let _ = doc.put(automerge::ROOT, format!("topic_by:{channel}"), set_by);
         self.metrics.lock().await.change_count += 1;
     }
 
@@ -339,9 +339,9 @@ impl ClusterDoc {
 
         // Check existing: only write if absent OR our actor_id is smaller
         // (min-actor-wins for deterministic convergence)
-        if let Ok(Some((existing_val, _))) = doc.get(automerge::ROOT, &key) {
-            if let Some(existing_str) = value_to_string(&existing_val) {
-                if let Ok(existing) = serde_json::from_str::<serde_json::Value>(&existing_str) {
+        if let Ok(Some((existing_val, _))) = doc.get(automerge::ROOT, &key)
+            && let Some(existing_str) = value_to_string(&existing_val)
+                && let Ok(existing) = serde_json::from_str::<serde_json::Value>(&existing_str) {
                     let existing_actor = existing.get("actor_id")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
@@ -350,8 +350,6 @@ impl ClusterDoc {
                         return; // Keep existing — they win
                     }
                 }
-            }
-        }
 
         let _ = doc.put(automerge::ROOT, &key, value.to_string());
         self.metrics.lock().await.change_count += 1;
@@ -434,11 +432,10 @@ impl ClusterDoc {
             None => return !require_did, // No DID: reject if strict, allow if compat
         };
         // Founder always has authority
-        if let Some(founder) = self.founder(channel).await {
-            if founder == did {
+        if let Some(founder) = self.founder(channel).await
+            && founder == did {
                 return true;
             }
-        }
         // DID-ops have authority
         let ops = self.channel_did_ops(channel).await;
         ops.contains(&did.to_string())
@@ -453,11 +450,10 @@ impl ClusterDoc {
             Some(d) => d,
             None => return !require_did,
         };
-        if let Some(founder) = self.founder(channel).await {
-            if founder == did {
+        if let Some(founder) = self.founder(channel).await
+            && founder == did {
                 return true;
             }
-        }
         let ops = self.channel_did_ops(channel).await;
         ops.contains(&did.to_string())
     }

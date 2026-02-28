@@ -828,11 +828,10 @@ fn is_channel_op(
         if ch.ops.contains(session_id) {
             return true;
         }
-        if let Some(d) = did {
-            if ch.did_ops.contains(d) || ch.founder_did.as_deref() == Some(d) {
+        if let Some(d) = did
+            && (ch.did_ops.contains(d) || ch.founder_did.as_deref() == Some(d)) {
                 return true;
             }
-        }
     }
     false
 }

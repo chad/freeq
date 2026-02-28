@@ -77,8 +77,8 @@ pub async fn audit(
     let mut file_contents = String::new();
     for name in &key_files {
         let path = repo_dir.join(name);
-        if path.exists() {
-            if let Ok(content) = tokio::fs::read_to_string(&path).await {
+        if path.exists()
+            && let Ok(content) = tokio::fs::read_to_string(&path).await {
                 let truncated = if content.len() > 3000 {
                     format!("{}... (truncated)", &content[..3000])
                 } else {
@@ -86,7 +86,6 @@ pub async fn audit(
                 };
                 file_contents.push_str(&format!("\n### {name}\n```\n{truncated}\n```\n"));
             }
-        }
     }
 
     // Also try to find the main source structure

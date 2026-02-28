@@ -27,11 +27,11 @@ fn resolve_signature(
     let canonical = format!("{did}\0{target}\0{text}\0{timestamp}");
 
     // If client provided a signature, verify it against their registered key
-    if let Some(sig_b64) = client_sig {
-        if let Some(vk) = state.session_msg_keys.lock().get(&conn.id).cloned() {
+    if let Some(sig_b64) = client_sig
+        && let Some(vk) = state.session_msg_keys.lock().get(&conn.id).cloned() {
             use base64::Engine;
-            if let Ok(sig_bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(sig_b64) {
-                if sig_bytes.len() == 64 {
+            if let Ok(sig_bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(sig_b64)
+                && sig_bytes.len() == 64 {
                     let sig_array: [u8; 64] = sig_bytes.try_into().unwrap();
                     let sig = ed25519_dalek::Signature::from_bytes(&sig_array);
                     use ed25519_dalek::Verifier;
@@ -46,9 +46,7 @@ fn resolve_signature(
                         );
                     }
                 }
-            }
         }
-    }
 
     // Fallback: server signs on behalf of authenticated user
     use ed25519_dalek::Signer;
@@ -968,10 +966,9 @@ fn handle_delete(
         if sid == &conn.id {
             continue; // Don't echo delete back to sender
         }
-        if tag_caps.contains(sid) {
-            if let Some(tx) = conns.get(sid) {
+        if tag_caps.contains(sid)
+            && let Some(tx) = conns.get(sid) {
                 let _ = tx.try_send(tagged_line.clone());
             }
-        }
     }
 }

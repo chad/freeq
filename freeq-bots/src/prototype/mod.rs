@@ -179,22 +179,20 @@ pub async fn build(
             let result = match tools::execute_tool(&workspace, &tu.name, &tu.input).await {
                 Ok(output) => {
                     // Check for deploy URL in output
-                    if tu.name == "deploy" {
-                        if let Some(url) = extract_deploy_url(&output) {
+                    if tu.name == "deploy"
+                        && let Some(url) = extract_deploy_url(&output) {
                             deployed_url = Some(url.clone());
                             output::deploy_result(handle, channel, &deployer(), &url).await?;
                             memory.set(&project_name, "deploy", "url", &url)?;
                         }
-                    }
 
                     // Store files in memory
-                    if tu.name == "write_file" {
-                        if let (Some(path), Some(content)) =
+                    if tu.name == "write_file"
+                        && let (Some(path), Some(content)) =
                             (tu.input["path"].as_str(), tu.input["content"].as_str())
                         {
                             memory.set(&project_name, "file", path, content)?;
                         }
-                    }
 
                     output
                 }

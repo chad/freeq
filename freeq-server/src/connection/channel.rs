@@ -101,15 +101,15 @@ pub(super) fn handle_join(
     // Channels without policies are open (backwards compatible).
     // `policy_role` captures the attestation role for mode mapping after join.
     let mut policy_role: Option<String> = None;
-    if let Some(ref engine) = state.policy_engine {
-        if let Ok(Some(_policy)) = engine.get_policy(channel) {
+    if let Some(ref engine) = state.policy_engine
+        && let Ok(Some(_policy)) = engine.get_policy(channel) {
             // Channel has a policy — user must have a valid attestation
             match did {
                 Some(user_did) => {
                     // DID ops and founders bypass policy checks
                     let is_did_op = {
                         let channels = state.channels.lock();
-                        channels.get(&channel.to_ascii_lowercase()).map_or(false, |ch| {
+                        channels.get(&channel.to_ascii_lowercase()).is_some_and(|ch| {
                             ch.founder_did.as_deref() == Some(user_did) || ch.did_ops.contains(user_did)
                         })
                     };
@@ -159,7 +159,6 @@ pub(super) fn handle_join(
                 }
             }
         }
-    }
 
     {
         let mut channels = state.channels.lock();
@@ -380,11 +379,10 @@ pub(super) fn handle_join(
                 let mut msg_tags = if has_tags_cap { hist.tags.clone() } else { std::collections::HashMap::new() };
 
                 // Add msgid tag if available
-                if has_tags_cap {
-                    if let Some(ref mid) = hist.msgid {
+                if has_tags_cap
+                    && let Some(ref mid) = hist.msgid {
                         msg_tags.insert("msgid".to_string(), mid.clone());
                     }
-                }
 
                 // Add server-time tag
                 if has_time_cap {
@@ -657,20 +655,18 @@ pub(super) fn handle_mode(
                         // Apply ephemeral op/voice on the remote member locally
                         {
                             let mut channels = state.channels.lock();
-                            if let Some(chan) = channels.get_mut(channel) {
-                                if ch == 'o' {
-                                    if let Some(remote) = chan.remote_members.get_mut(target_nick) {
+                            if let Some(chan) = channels.get_mut(channel)
+                                && ch == 'o'
+                                    && let Some(remote) = chan.remote_members.get_mut(target_nick) {
                                         remote.is_op = adding;
                                     }
-                                }
                                 // +v: no is_voiced on RemoteMember, but we still
                                 // broadcast the mode so the remote server can apply it.
-                            }
                         }
 
                         // If the user has a DID, also update did_ops for persistence + CRDT
-                        if ch == 'o' {
-                            if let Some(ref did) = rm.did {
+                        if ch == 'o'
+                            && let Some(ref did) = rm.did {
                                 {
                                     let mut channels = state.channels.lock();
                                     if let Some(chan) = channels.get_mut(channel) {
@@ -706,7 +702,6 @@ pub(super) fn handle_mode(
                             // Guest without DID: ephemeral op still applied above
                             // (is_op flag on remote_members). Won't survive reconnect
                             // but works for the session — same as regular IRC.
-                        }
 
                         // Broadcast mode change to local channel + S2S
                         let sign = if adding { "+" } else { "-" };
@@ -1062,8 +1057,7 @@ pub(super) fn handle_kick(
     }
 }
 
-/// Broadcast a raw message to all members of a channel.
-
+/// Handle INVITE command.
 pub(super) fn handle_invite(
     conn: &Connection,
     target_nick: &str,
@@ -1167,9 +1161,7 @@ pub(super) fn handle_invite(
     }
 }
 
-/// Broadcast an S2S message to all peer servers (if S2S is active).
-/// This is fire-and-forget: spawns a task so we don't block the caller.
-
+/// Handle TOPIC command.
 pub(super) fn handle_topic(
     conn: &Connection,
     channel: &str,
@@ -1400,11 +1392,9 @@ pub(super) fn handle_names(
                         if ops.contains(s) { p.push('@'); }
                         if voiced.contains(s) { p.push('+'); }
                         p
-                    } else {
-                        if ops.contains(s) { "@".to_string() }
-                        else if voiced.contains(s) { "+".to_string() }
-                        else { String::new() }
-                    };
+                    } else if ops.contains(s) { "@".to_string() }
+                    else if voiced.contains(s) { "+".to_string() }
+                    else { String::new() };
                     Some(format!("{prefix}{n}"))
                 })
             })

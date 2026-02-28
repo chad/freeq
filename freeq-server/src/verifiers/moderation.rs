@@ -25,7 +25,6 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 /// In-memory roster of active moderator appointments.
 /// In production, this would be backed by a database.

@@ -303,6 +303,12 @@ pub struct DedupSet {
     high_water: tokio::sync::Mutex<HashMap<String, u64>>,
 }
 
+impl Default for DedupSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DedupSet {
     pub fn new() -> Self {
         Self {
@@ -346,11 +352,10 @@ impl DedupSet {
         }
 
         // Evict oldest if at capacity — O(1) with VecDeque
-        if peer_seen.len() >= DEDUP_CAPACITY {
-            if let Some(oldest) = peer_order.pop_front() {
+        if peer_seen.len() >= DEDUP_CAPACITY
+            && let Some(oldest) = peer_order.pop_front() {
                 peer_seen.remove(&oldest);
             }
-        }
 
         peer_seen.insert(event_id.to_string());
         peer_order.push_back(event_id.to_string());

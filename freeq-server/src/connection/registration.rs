@@ -119,21 +119,20 @@ pub(super) fn attach_same_did(
         nts.iter()
             .find(|&(_, sid)| {
                 let sid_str: &str = sid;
-                sd.get(sid_str).map_or(false, |d| d == &did)
+                sd.get(sid_str) == Some(&did)
             })
             .map(|(nick, _)| nick.to_string())
     };
 
     // Adopt the canonical nick
-    if let Some(ref canon) = canonical_nick {
-        if conn.nick.as_ref().map(|n| n.to_lowercase()) != Some(canon.to_lowercase()) {
+    if let Some(ref canon) = canonical_nick
+        && conn.nick.as_ref().map(|n| n.to_lowercase()) != Some(canon.to_lowercase()) {
             // Remove any nick mapping we created during CAP/SASL
             if let Some(ref old_nick) = conn.nick {
                 state.nick_to_session.lock().remove_by_nick(old_nick);
             }
             conn.nick = Some(canon.clone());
         }
-    }
 
     // Find all channels the DID is in via existing sessions
     let channels_to_join: Vec<String> = {
@@ -352,15 +351,14 @@ pub(super) fn try_complete_registration(
             // Topic
             {
                 let channels = state.channels.lock();
-                if let Some(ch) = channels.get(&ch_name.to_lowercase()) {
-                    if let Some(ref topic) = ch.topic {
+                if let Some(ch) = channels.get(&ch_name.to_lowercase())
+                    && let Some(ref topic) = ch.topic {
                         let topic_msg = crate::irc::Message::from_server(
                             server_name, crate::irc::RPL_TOPIC,
                             vec![&nick, ch_name, &topic.text],
                         );
                         send(state, session_id, format!("{topic_msg}\r\n"));
                     }
-                }
             }
 
             // Names (sends NAMREPLY + ENDOFNAMES → triggers client CHATHISTORY request)

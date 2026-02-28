@@ -456,18 +456,18 @@ async fn api_verify_message(
     let mut verification = serde_json::json!(null);
     if let (Some(sig_b64), Some(canonical_str)) = (&sig_b64, &canonical) {
         use base64::Engine;
-        if let Ok(sig_bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(sig_b64) {
-            if sig_bytes.len() == 64 {
+        if let Ok(sig_bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(sig_b64)
+            && sig_bytes.len() == 64 {
                 let sig_array: [u8; 64] = sig_bytes.try_into().unwrap();
                 let sig = ed25519_dalek::Signature::from_bytes(&sig_array);
                 let canonical_bytes = canonical_str.as_bytes();
 
                 // Try client session key first
                 let mut verified_by = "none";
-                if let Some(ref did) = sender_did {
-                    if let Some(pubkey_b64) = state.did_msg_keys.lock().get(did) {
-                        if let Ok(pk_bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(pubkey_b64) {
-                            if pk_bytes.len() == 32 {
+                if let Some(ref did) = sender_did
+                    && let Some(pubkey_b64) = state.did_msg_keys.lock().get(did)
+                        && let Ok(pk_bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(pubkey_b64)
+                            && pk_bytes.len() == 32 {
                                 let pk_arr: [u8; 32] = pk_bytes.try_into().unwrap();
                                 if let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(&pk_arr) {
                                     use ed25519_dalek::Verifier;
@@ -476,9 +476,6 @@ async fn api_verify_message(
                                     }
                                 }
                             }
-                        }
-                    }
-                }
 
                 // Fall back to server key
                 if verified_by == "none" {
@@ -501,7 +498,6 @@ async fn api_verify_message(
                     "client_public_key": client_pubkey,
                 });
             }
-        }
     }
 
     let canonical_hex = canonical.as_ref().map(|c| {
@@ -843,8 +839,8 @@ fn verify_broker_signature_raw(
         .ok_or((StatusCode::UNAUTHORIZED, "Missing broker signature".to_string()))?;
 
     // Replay protection: check timestamp freshness (optional for backward compat)
-    if let Some(ts_str) = headers.get("x-broker-timestamp").and_then(|v| v.to_str().ok()) {
-        if let Ok(ts) = ts_str.parse::<u64>() {
+    if let Some(ts_str) = headers.get("x-broker-timestamp").and_then(|v| v.to_str().ok())
+        && let Ok(ts) = ts_str.parse::<u64>() {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -853,7 +849,6 @@ fn verify_broker_signature_raw(
                 return Err((StatusCode::UNAUTHORIZED, "Broker request expired (timestamp > 60s)".to_string()));
             }
         }
-    }
 
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
         .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "HMAC init failed".to_string()))?;
@@ -910,6 +905,7 @@ fn derive_web_origin(headers: &axum::http::HeaderMap) -> (String, String) {
 }
 
 /// Derive web origin from server config (for startup-time use, no headers available).
+#[allow(dead_code)]
 fn derive_web_origin_from_config(config: &crate::config::ServerConfig) -> (String, String) {
     let addr = config.web_addr.as_deref().unwrap_or("127.0.0.1:8080");
     let host = addr.replace("localhost", "127.0.0.1");
@@ -1471,11 +1467,10 @@ async fn api_upload(
     })?;
 
     // Update stored DPoP nonce so subsequent uploads don't start stale
-    if let Some(ref new_nonce) = result.updated_nonce {
-        if let Some(session) = state.web_sessions.lock().get_mut(&did) {
+    if let Some(ref new_nonce) = result.updated_nonce
+        && let Some(session) = state.web_sessions.lock().get_mut(&did) {
             session.dpop_nonce = Some(new_nonce.clone());
         }
-    }
 
     // For non-image content, proxy through our server to avoid PDS
     // Content-Disposition: attachment and sandbox CSP blocking playback
@@ -1620,11 +1615,10 @@ async fn api_blob_proxy(
 
     // Forward Range header if present (needed for AVPlayer / video seeking)
     let mut req = client.get(url);
-    if let Some(range) = headers.get(axum::http::header::RANGE) {
-        if let Ok(range_str) = range.to_str() {
+    if let Some(range) = headers.get(axum::http::header::RANGE)
+        && let Ok(range_str) = range.to_str() {
             req = req.header("Range", range_str);
         }
-    }
 
     let resp = match req.send().await {
         Ok(r) => r,
@@ -1674,16 +1668,14 @@ async fn api_blob_proxy(
     resp_headers.insert(axum::http::header::CACHE_CONTROL, "public, max-age=86400".parse().unwrap());
     resp_headers.insert(axum::http::header::ACCEPT_RANGES, "bytes".parse().unwrap());
 
-    if let Some(cr) = content_range {
-        if let Ok(val) = cr.parse() {
+    if let Some(cr) = content_range
+        && let Ok(val) = cr.parse() {
             resp_headers.insert(axum::http::header::CONTENT_RANGE, val);
         }
-    }
-    if let Some(cl) = content_length {
-        if let Ok(val) = cl.parse() {
+    if let Some(cl) = content_length
+        && let Ok(val) = cl.parse() {
             resp_headers.insert(axum::http::header::CONTENT_LENGTH, val);
         }
-    }
 
     (status, resp_headers, bytes).into_response()
 }
@@ -1755,11 +1747,10 @@ async fn api_og_preview(Query(q): Query<OgQuery>) -> impl IntoResponse {
             format!(r#"<meta[^>]*content=["']([^"']*)["'][^>]*(?:property|name)=["']{prop}["']"#),
         ];
         for pat in &patterns {
-            if let Ok(re) = regex::Regex::new(pat) {
-                if let Some(caps) = re.captures(&body) {
+            if let Ok(re) = regex::Regex::new(pat)
+                && let Some(caps) = re.captures(&body) {
                     return caps.get(1).map(|m| decode_html_entities(m.as_str()));
                 }
-            }
         }
         None
     };

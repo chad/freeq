@@ -149,6 +149,12 @@ pub struct PluginManager {
     plugins: Vec<Box<dyn Plugin>>,
 }
 
+impl Default for PluginManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PluginManager {
     pub fn new() -> Self {
         Self {

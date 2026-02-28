@@ -116,7 +116,7 @@ fn eval_inner(
                 c.credential_type == *credential_type
                     && issuer
                         .as_ref()
-                        .map_or(true, |req_issuer| c.issuer == *req_issuer)
+                        .is_none_or(|req_issuer| c.issuer == *req_issuer)
             });
             if found {
                 EvalResult::Satisfied

@@ -139,7 +139,7 @@ async fn do_check(
     target: &str,
     callback: &str,
     state: &Arc<VerifierState>,
-    is_initial: bool,
+    _is_initial: bool,
 ) -> axum::response::Response {
     let http = reqwest::Client::new();
 

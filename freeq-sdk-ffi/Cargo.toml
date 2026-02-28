@@ -28,3 +28,6 @@ aes-gcm = "0.10"
 
 [build-dependencies]
 uniffi = { version = "0.29", features = ["build"] }
+
+[lints]
+workspace = true

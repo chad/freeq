@@ -295,12 +295,12 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
         }
         Event::Names { channel, nicks } => {
             let members = nicks.iter().map(|n| {
-                let (is_op, is_halfop, is_voiced, nick) = if n.starts_with('@') {
-                    (true, false, false, n[1..].to_string())
-                } else if n.starts_with('%') {
-                    (false, true, false, n[1..].to_string())
-                } else if n.starts_with('+') {
-                    (false, false, true, n[1..].to_string())
+                let (is_op, is_halfop, is_voiced, nick) = if let Some(rest) = n.strip_prefix('@') {
+                    (true, false, false, rest.to_string())
+                } else if let Some(rest) = n.strip_prefix('%') {
+                    (false, true, false, rest.to_string())
+                } else if let Some(rest) = n.strip_prefix('+') {
+                    (false, false, true, rest.to_string())
                 } else {
                     (false, false, false, n.clone())
                 };

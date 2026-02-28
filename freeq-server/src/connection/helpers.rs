@@ -202,11 +202,10 @@ pub(crate) fn broadcast_account_notify(
             let conns = state.connections.lock();
             for member_sid in &ch.members {
                 if member_sid != session_id && !notified.contains(member_sid) {
-                    if cap_set.contains(member_sid) {
-                        if let Some(tx) = conns.get(member_sid) {
+                    if cap_set.contains(member_sid)
+                        && let Some(tx) = conns.get(member_sid) {
                             let _ = tx.try_send(line.clone());
                         }
-                    }
                     notified.insert(member_sid.clone());
                 }
             }

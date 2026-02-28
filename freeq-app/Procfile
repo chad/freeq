@@ -1,1 +1,1 @@
-web: npx serve dist -s -l ${PORT:-3000}
+web: npx -y serve dist -s -l ${PORT:-3000}

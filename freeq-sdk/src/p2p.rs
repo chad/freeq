@@ -308,14 +308,9 @@ async fn run_peer_session(
     tokio::spawn(async move {
         let mut recv = recv;
         let mut buf = vec![0u8; 4096];
-        loop {
-            match recv.read(&mut buf).await {
-                Ok(Some(n)) => {
-                    if bridge_write.write_all(&buf[..n]).await.is_err() {
-                        break;
-                    }
-                }
-                Ok(None) | Err(_) => break,
+        while let Ok(Some(n)) = recv.read(&mut buf).await {
+            if bridge_write.write_all(&buf[..n]).await.is_err() {
+                break;
             }
         }
         let _ = bridge_write.shutdown().await;

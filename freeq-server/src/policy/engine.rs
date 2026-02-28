@@ -74,7 +74,7 @@ impl PolicyEngine {
     ) -> Result<(PolicyDocument, AuthoritySet), PolicyError> {
         // Validate requirements
         eval::validate_structure(&requirements)
-            .map_err(|e| PolicyError::Validation(e))?;
+            .map_err(PolicyError::Validation)?;
         for (role, req) in &role_requirements {
             eval::validate_structure(req)
                 .map_err(|e| PolicyError::Validation(format!("Role {role}: {e}")))?;
@@ -131,7 +131,7 @@ impl PolicyEngine {
     ) -> Result<PolicyDocument, PolicyError> {
         // Validate
         eval::validate_structure(&requirements)
-            .map_err(|e| PolicyError::Validation(e))?;
+            .map_err(PolicyError::Validation)?;
 
         let current = self.store.get_current_policy(channel_id)?
             .ok_or_else(|| PolicyError::Validation("No existing policy to update".into()))?;
@@ -163,7 +163,7 @@ impl PolicyEngine {
         credential_endpoints: std::collections::BTreeMap<String, crate::policy::types::CredentialEndpoint>,
     ) -> Result<PolicyDocument, PolicyError> {
         eval::validate_structure(&requirements)
-            .map_err(|e| PolicyError::Validation(e))?;
+            .map_err(PolicyError::Validation)?;
 
         let current = self.store.get_current_policy(channel_id)?
             .ok_or_else(|| PolicyError::Validation("No existing policy to update".into()))?;
@@ -214,8 +214,8 @@ impl PolicyEngine {
             if existing.policy_id == policy_id {
                 // Check expiry for continuous validity
                 if let Some(ref expires_at) = existing.expires_at {
-                    if let Ok(exp) = chrono::DateTime::parse_from_rfc3339(expires_at) {
-                        if exp > Utc::now() {
+                    if let Ok(exp) = chrono::DateTime::parse_from_rfc3339(expires_at)
+                        && exp > Utc::now() {
                             let jid = existing.join_id.clone().unwrap_or_default();
                             return Ok(JoinResult::Confirmed {
                                 attestation: existing,
@@ -223,7 +223,6 @@ impl PolicyEngine {
                             });
                         }
                         // Expired — fall through to re-evaluate
-                    }
                 } else {
                     // No expiry (join_time model) — still valid
                     let jid = existing.join_id.clone().unwrap_or_default();

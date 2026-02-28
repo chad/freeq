@@ -141,6 +141,13 @@ impl Resolved {
             .or_else(|| session.server.clone())
             .unwrap_or_else(|| DEFAULT_SERVER.to_string());
 
+        // Ensure server has a port; default to 6697 (TLS) if missing
+        let server = if server.contains(':') {
+            server
+        } else {
+            format!("{server}:6697")
+        };
+
         let handle = cli.handle.clone()
             .or_else(|| config.handle.clone())
             .or_else(|| session.handle.clone());

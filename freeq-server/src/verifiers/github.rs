@@ -200,7 +200,7 @@ async fn verify_org_membership(
 ) -> axum::response::Response {
     // Try authenticated membership endpoint first (sees private memberships)
     let is_member = http
-        .get(&format!(
+        .get(format!(
             "https://api.github.com/user/memberships/orgs/{}",
             org
         ))
@@ -216,7 +216,7 @@ async fn verify_org_membership(
         // GET /orgs/{org}/repos then check collaborator status
         // For now, try the simpler public membership check as fallback
         let is_public = http
-            .get(&format!(
+            .get(format!(
                 "https://api.github.com/orgs/{}/public_members/{}",
                 org, username
             ))
@@ -265,7 +265,7 @@ async fn verify_repo_collaborator(
     // Check if the user is a collaborator on the repo
     // GET /repos/{owner}/{repo}/collaborators/{username} → 204 if yes
     let is_collaborator = http
-        .get(&format!(
+        .get(format!(
             "https://api.github.com/repos/{}/collaborators/{}",
             repo, username
         ))
@@ -279,7 +279,7 @@ async fn verify_repo_collaborator(
     if !is_collaborator {
         // Also check if they have push access via the repo endpoint
         let has_push = match http
-            .get(&format!("https://api.github.com/repos/{}", repo))
+            .get(format!("https://api.github.com/repos/{}", repo))
             .header("Authorization", format!("Bearer {access_token}"))
             .header("User-Agent", "freeq-verifier")
             .send()
@@ -315,7 +315,7 @@ async fn verify_repo_collaborator(
             "repo": repo,
         }),
         &format!("{username} has access to {repo}"),
-        &format!("{repo}"),
+        repo,
     )
     .await
 }
@@ -329,7 +329,7 @@ async fn issue_credential(
     credential_type: &str,
     claims: serde_json::Value,
     verified_msg: &str,
-    badge_label: &str,
+    _badge_label: &str,
 ) -> axum::response::Response {
     let mut vc = VerifiableCredential {
         credential_type_tag: "FreeqCredential/v1".into(),

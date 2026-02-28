@@ -136,9 +136,7 @@ impl Factory {
                 }
             }
             _ => {
-                output::say(handle, channel, &product(), &format!(
-                    "Unknown command. Try: build <spec>, status, pause, resume, spec, files"
-                )).await?;
+                output::say(handle, channel, &product(), "Unknown command. Try: build <spec>, status, pause, resume, spec, files").await?;
             }
         }
         Ok(())
@@ -285,20 +283,18 @@ impl Factory {
 
                 let result = match tools::execute_tool(&workspace, &tu.name, &tu.input).await {
                     Ok(out) => {
-                        if tu.name == "deploy" {
-                            if let Some(url) = extract_url(&out) {
+                        if tu.name == "deploy"
+                            && let Some(url) = extract_url(&out) {
                                 deployed_url = Some(url.clone());
                                 output::deploy_result(handle, channel, &deployer(), &url).await?;
                                 memory.set(&project_name, "deploy", "url", &url)?;
                             }
-                        }
-                        if tu.name == "write_file" {
-                            if let (Some(path), Some(content)) =
+                        if tu.name == "write_file"
+                            && let (Some(path), Some(content)) =
                                 (tu.input["path"].as_str(), tu.input["content"].as_str())
                             {
                                 memory.set(&project_name, "file", path, content)?;
                             }
-                        }
                         out
                     }
                     Err(e) => {

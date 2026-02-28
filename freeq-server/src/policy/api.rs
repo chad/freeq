@@ -534,22 +534,19 @@ async fn resolve_issuer_key(
 
     // Look for Ed25519 key in verification methods
     for method in &did_doc.verification_method {
-        if let Some(ref multibase) = method.public_key_multibase {
-            if let Some(key) = decode_multibase_ed25519(multibase) {
+        if let Some(ref multibase) = method.public_key_multibase
+            && let Some(key) = decode_multibase_ed25519(multibase) {
                 return Ok(key);
             }
-        }
     }
 
     // Also check assertionMethod (inline methods)
     for entry in &did_doc.assertion_method {
-        if let freeq_sdk::did::StringOrMap::Inline(method) = entry {
-            if let Some(ref multibase) = method.public_key_multibase {
-                if let Some(key) = decode_multibase_ed25519(multibase) {
+        if let freeq_sdk::did::StringOrMap::Inline(method) = entry
+            && let Some(ref multibase) = method.public_key_multibase
+                && let Some(key) = decode_multibase_ed25519(multibase) {
                     return Ok(key);
                 }
-            }
-        }
     }
 
     Err("No Ed25519 public key found in issuer DID document".into())
@@ -578,6 +575,7 @@ fn decode_multibase_ed25519(multibase: &str) -> Option<[u8; 32]> {
 }
 
 /// Decode an Ed25519 public key from JWK.
+#[allow(dead_code)]
 fn decode_jwk_ed25519(jwk: &serde_json::Value) -> Option<[u8; 32]> {
     use base64::Engine;
     let kty = jwk.get("kty")?.as_str()?;
@@ -787,7 +785,7 @@ fn flatten_requirements(
                 c.credential_type == *credential_type
                     && issuer
                         .as_ref()
-                        .map_or(true, |iss| c.issuer == *iss)
+                        .is_none_or(|iss| c.issuer == *iss)
             });
             let action = if satisfied {
                 None

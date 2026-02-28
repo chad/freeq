@@ -52,3 +52,8 @@ hmac = "0.12"
 iroh = "0.96"
 iroh-quinn = "0.16"
 automerge = "0.5"
+
+[workspace.lints.clippy]
+too_many_arguments = "allow"
+large_enum_variant = "allow"
+await_holding_lock = "allow"
