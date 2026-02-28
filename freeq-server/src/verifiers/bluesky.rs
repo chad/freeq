@@ -13,10 +13,10 @@ use super::VerifierState;
 use crate::policy::credentials;
 use crate::policy::types::VerifiableCredential;
 use axum::{
+    Router,
     extract::{Query, State},
     response::IntoResponse,
     routing::get,
-    Router,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -41,7 +41,8 @@ async fn resolve_handle(http: &reqwest::Client, handle: &str) -> Option<String> 
         "https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle={}",
         handle
     );
-    let resp = http.get(&url)
+    let resp = http
+        .get(&url)
         .header("User-Agent", "freeq-verifier")
         .send()
         .await
@@ -55,11 +56,7 @@ async fn resolve_handle(http: &reqwest::Client, handle: &str) -> Option<String> 
 
 /// Check if `actor_did` follows `target_did` using the public API.
 /// Walks the follows list (paginated) looking for the target.
-async fn check_follows(
-    http: &reqwest::Client,
-    actor_did: &str,
-    target_did: &str,
-) -> bool {
+async fn check_follows(http: &reqwest::Client, actor_did: &str, target_did: &str) -> bool {
     let mut cursor: Option<String> = None;
     // Check up to 10 pages (1000 follows)
     for _ in 0..10 {
@@ -108,7 +105,8 @@ async fn resolve_did_to_handle(http: &reqwest::Client, did: &str) -> Option<Stri
         "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor={}",
         did
     );
-    let resp = http.get(&url)
+    let resp = http
+        .get(&url)
         .header("User-Agent", "freeq-verifier")
         .send()
         .await
@@ -178,9 +176,7 @@ async fn do_check(
                 "follows_did": target_did,
             }),
             issued_at: chrono::Utc::now().to_rfc3339(),
-            expires_at: Some(
-                (chrono::Utc::now() + chrono::Duration::days(7)).to_rfc3339(),
-            ),
+            expires_at: Some((chrono::Utc::now() + chrono::Duration::days(7)).to_rfc3339()),
             signature: String::new(),
         };
         credentials::sign_credential(&mut vc, &state.signing_key).unwrap();

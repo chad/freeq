@@ -73,8 +73,7 @@ impl PolicyEngine {
         role_requirements: std::collections::BTreeMap<String, Requirement>,
     ) -> Result<(PolicyDocument, AuthoritySet), PolicyError> {
         // Validate requirements
-        eval::validate_structure(&requirements)
-            .map_err(PolicyError::Validation)?;
+        eval::validate_structure(&requirements).map_err(PolicyError::Validation)?;
         for (role, req) in &role_requirements {
             eval::validate_structure(req)
                 .map_err(|e| PolicyError::Validation(format!("Role {role}: {e}")))?;
@@ -115,7 +114,8 @@ impl PolicyEngine {
             receipt_embedding: ReceiptEmbedding::Require,
             policy_locations: vec![],
             limits: None,
-            transparency: None, credential_endpoints: std::collections::BTreeMap::new(),
+            transparency: None,
+            credential_endpoints: std::collections::BTreeMap::new(),
         };
         let policy = self.store.store_policy(policy)?;
 
@@ -130,10 +130,11 @@ impl PolicyEngine {
         role_requirements: std::collections::BTreeMap<String, Requirement>,
     ) -> Result<PolicyDocument, PolicyError> {
         // Validate
-        eval::validate_structure(&requirements)
-            .map_err(PolicyError::Validation)?;
+        eval::validate_structure(&requirements).map_err(PolicyError::Validation)?;
 
-        let current = self.store.get_current_policy(channel_id)?
+        let current = self
+            .store
+            .get_current_policy(channel_id)?
             .ok_or_else(|| PolicyError::Validation("No existing policy to update".into()))?;
 
         let policy = PolicyDocument {
@@ -149,7 +150,8 @@ impl PolicyEngine {
             receipt_embedding: current.receipt_embedding.clone(),
             policy_locations: current.policy_locations.clone(),
             limits: current.limits.clone(),
-            transparency: current.transparency.clone(), credential_endpoints: current.credential_endpoints.clone(),
+            transparency: current.transparency.clone(),
+            credential_endpoints: current.credential_endpoints.clone(),
         };
         self.store.store_policy(policy)
     }
@@ -160,12 +162,16 @@ impl PolicyEngine {
         channel_id: &str,
         requirements: Requirement,
         role_requirements: std::collections::BTreeMap<String, Requirement>,
-        credential_endpoints: std::collections::BTreeMap<String, crate::policy::types::CredentialEndpoint>,
+        credential_endpoints: std::collections::BTreeMap<
+            String,
+            crate::policy::types::CredentialEndpoint,
+        >,
     ) -> Result<PolicyDocument, PolicyError> {
-        eval::validate_structure(&requirements)
-            .map_err(PolicyError::Validation)?;
+        eval::validate_structure(&requirements).map_err(PolicyError::Validation)?;
 
-        let current = self.store.get_current_policy(channel_id)?
+        let current = self
+            .store
+            .get_current_policy(channel_id)?
             .ok_or_else(|| PolicyError::Validation("No existing policy to update".into()))?;
 
         let policy = PolicyDocument {
@@ -215,14 +221,15 @@ impl PolicyEngine {
                 // Check expiry for continuous validity
                 if let Some(ref expires_at) = existing.expires_at {
                     if let Ok(exp) = chrono::DateTime::parse_from_rfc3339(expires_at)
-                        && exp > Utc::now() {
-                            let jid = existing.join_id.clone().unwrap_or_default();
-                            return Ok(JoinResult::Confirmed {
-                                attestation: existing,
-                                join_id: jid,
-                            });
-                        }
-                        // Expired — fall through to re-evaluate
+                        && exp > Utc::now()
+                    {
+                        let jid = existing.join_id.clone().unwrap_or_default();
+                        return Ok(JoinResult::Confirmed {
+                            attestation: existing,
+                            join_id: jid,
+                        });
+                    }
+                    // Expired — fall through to re-evaluate
                 } else {
                     // No expiry (join_time model) — still valid
                     let jid = existing.join_id.clone().unwrap_or_default();
@@ -274,19 +281,16 @@ impl PolicyEngine {
                 )?;
 
                 // Confirm join
-                self.store.update_join_state(&join_id, JoinState::JoinConfirmed)?;
+                self.store
+                    .update_join_state(&join_id, JoinState::JoinConfirmed)?;
 
                 Ok(JoinResult::Confirmed {
                     attestation,
                     join_id,
                 })
             }
-            EvalResult::Failed(reason) => {
-                Ok(JoinResult::Failed(reason))
-            }
-            EvalResult::Error(err) => {
-                Ok(JoinResult::Failed(format!("Evaluation error: {err}")))
-            }
+            EvalResult::Failed(reason) => Ok(JoinResult::Failed(reason)),
+            EvalResult::Error(err) => Ok(JoinResult::Failed(format!("Evaluation error: {err}"))),
         }
     }
 
@@ -320,9 +324,7 @@ impl PolicyEngine {
     ) -> Result<MembershipAttestation, PolicyError> {
         let now = Utc::now();
         let expires_at = match validity_model {
-            ValidityModel::Continuous => {
-                Some((now + chrono::Duration::hours(1)).to_rfc3339())
-            }
+            ValidityModel::Continuous => Some((now + chrono::Duration::hours(1)).to_rfc3339()),
             ValidityModel::JoinTime => None,
         };
 
@@ -387,7 +389,9 @@ impl PolicyEngine {
         channel_id: &str,
         subject_did: &str,
     ) -> Result<Option<String>, PolicyError> {
-        Ok(self.store.get_attestation(channel_id, subject_did)?
+        Ok(self
+            .store
+            .get_attestation(channel_id, subject_did)?
             .map(|a| a.role))
     }
 
@@ -429,7 +433,8 @@ impl PolicyEngine {
         issuer: &str,
         metadata: &serde_json::Value,
     ) -> Result<(), PolicyError> {
-        self.store.store_credential(subject_did, credential_type, issuer, metadata)
+        self.store
+            .store_credential(subject_did, credential_type, issuer, metadata)
     }
 
     /// Invalidate expired attestations. Returns count of invalidated.
@@ -498,12 +503,16 @@ mod tests {
             credentials: vec![],
             proofs: HashSet::new(),
         };
-        let result = engine.process_join("#test", "did:plc:user1", &evidence).unwrap();
+        let result = engine
+            .process_join("#test", "did:plc:user1", &evidence)
+            .unwrap();
         assert!(matches!(result, JoinResult::Failed(_)));
 
         // Accept rules and join
         evidence.accepted_hashes.insert(rules_hash.clone());
-        let result = engine.process_join("#test", "did:plc:user1", &evidence).unwrap();
+        let result = engine
+            .process_join("#test", "did:plc:user1", &evidence)
+            .unwrap();
         match result {
             JoinResult::Confirmed { attestation, .. } => {
                 assert_eq!(attestation.subject_did, "did:plc:user1");
@@ -522,7 +531,9 @@ mod tests {
             credentials: vec![],
             proofs: HashSet::new(),
         };
-        let result = engine.process_join("#open", "did:plc:user1", &evidence).unwrap();
+        let result = engine
+            .process_join("#open", "did:plc:user1", &evidence)
+            .unwrap();
         assert!(matches!(result, JoinResult::NoPolicy));
     }
 
@@ -563,7 +574,9 @@ mod tests {
             credentials: vec![],
             proofs: HashSet::new(),
         };
-        let result = engine.process_join("#project", "did:plc:regular", &evidence).unwrap();
+        let result = engine
+            .process_join("#project", "did:plc:regular", &evidence)
+            .unwrap();
         match result {
             JoinResult::Confirmed { attestation, .. } => {
                 assert_eq!(attestation.role, "member");
@@ -576,7 +589,9 @@ mod tests {
             credential_type: "github_membership".into(),
             issuer: "github".into(),
         });
-        let result = engine.process_join("#project", "did:plc:committer", &evidence).unwrap();
+        let result = engine
+            .process_join("#project", "did:plc:committer", &evidence)
+            .unwrap();
         match result {
             JoinResult::Confirmed { attestation, .. } => {
                 assert_eq!(attestation.role, "op");
@@ -593,7 +608,9 @@ mod tests {
         let (p1, _) = engine
             .create_channel_policy(
                 "#versioned",
-                Requirement::Accept { hash: hash1.clone() },
+                Requirement::Accept {
+                    hash: hash1.clone(),
+                },
                 std::collections::BTreeMap::new(),
             )
             .unwrap();
@@ -602,7 +619,9 @@ mod tests {
         let p2 = engine
             .update_channel_policy(
                 "#versioned",
-                Requirement::Accept { hash: hash2.clone() },
+                Requirement::Accept {
+                    hash: hash2.clone(),
+                },
                 std::collections::BTreeMap::new(),
             )
             .unwrap();
@@ -637,11 +656,22 @@ mod tests {
         };
 
         // Join twice — second should return existing attestation
-        let r1 = engine.process_join("#idem", "did:plc:user", &evidence).unwrap();
-        let r2 = engine.process_join("#idem", "did:plc:user", &evidence).unwrap();
+        let r1 = engine
+            .process_join("#idem", "did:plc:user", &evidence)
+            .unwrap();
+        let r2 = engine
+            .process_join("#idem", "did:plc:user", &evidence)
+            .unwrap();
 
         match (r1, r2) {
-            (JoinResult::Confirmed { attestation: a1, .. }, JoinResult::Confirmed { attestation: a2, .. }) => {
+            (
+                JoinResult::Confirmed {
+                    attestation: a1, ..
+                },
+                JoinResult::Confirmed {
+                    attestation: a2, ..
+                },
+            ) => {
                 assert_eq!(a1.attestation_id, a2.attestation_id);
             }
             _ => panic!("Expected both to be Confirmed"),
@@ -667,8 +697,12 @@ mod tests {
             proofs: HashSet::new(),
         };
 
-        engine.process_join("#logged", "did:plc:user1", &evidence).unwrap();
-        engine.process_join("#logged", "did:plc:user2", &evidence).unwrap();
+        engine
+            .process_join("#logged", "did:plc:user1", &evidence)
+            .unwrap();
+        engine
+            .process_join("#logged", "did:plc:user2", &evidence)
+            .unwrap();
 
         let entries = engine.store().get_log_entries("#logged", None).unwrap();
         assert_eq!(entries.len(), 2);
@@ -695,7 +729,9 @@ mod tests {
             proofs: HashSet::new(),
         };
 
-        let result = engine.process_join("#signed", "did:plc:user1", &evidence).unwrap();
+        let result = engine
+            .process_join("#signed", "did:plc:user1", &evidence)
+            .unwrap();
         match result {
             JoinResult::Confirmed { attestation, .. } => {
                 // Signature should be non-empty
@@ -746,7 +782,11 @@ mod tests {
         );
 
         engine
-            .create_channel_policy("#roles", Requirement::Accept { hash: hash.clone() }, role_reqs)
+            .create_channel_policy(
+                "#roles",
+                Requirement::Accept { hash: hash.clone() },
+                role_reqs,
+            )
             .unwrap();
 
         let evidence = UserEvidence {
@@ -755,9 +795,17 @@ mod tests {
             proofs: HashSet::new(),
         };
 
-        engine.process_join("#roles", "did:plc:regular", &evidence).unwrap();
-        assert_eq!(engine.get_member_role("#roles", "did:plc:regular").unwrap(), Some("member".into()));
-        assert_eq!(engine.get_member_role("#roles", "did:plc:nobody").unwrap(), None);
+        engine
+            .process_join("#roles", "did:plc:regular", &evidence)
+            .unwrap();
+        assert_eq!(
+            engine.get_member_role("#roles", "did:plc:regular").unwrap(),
+            Some("member".into())
+        );
+        assert_eq!(
+            engine.get_member_role("#roles", "did:plc:nobody").unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -791,7 +839,8 @@ mod tests {
             receipt_embedding: ReceiptEmbedding::Allow,
             policy_locations: vec![],
             limits: None,
-            transparency: None, credential_endpoints: std::collections::BTreeMap::new(),
+            transparency: None,
+            credential_endpoints: std::collections::BTreeMap::new(),
         };
         engine.store.store_policy(policy).unwrap();
 
@@ -801,7 +850,9 @@ mod tests {
             proofs: HashSet::new(),
         };
 
-        let result = engine.process_join("#expire", "did:plc:user1", &evidence).unwrap();
+        let result = engine
+            .process_join("#expire", "did:plc:user1", &evidence)
+            .unwrap();
         match &result {
             JoinResult::Confirmed { attestation, .. } => {
                 // Continuous validity: should have an expiry
@@ -820,16 +871,22 @@ mod tests {
             "github_username": "octocat",
             "org": "freeq",
         });
-        engine.store_credential("did:plc:dev1", "github_membership", "github", &metadata).unwrap();
+        engine
+            .store_credential("did:plc:dev1", "github_membership", "github", &metadata)
+            .unwrap();
 
         // Build evidence auto-collects credentials
-        let evidence = engine.build_evidence("did:plc:dev1", HashSet::new()).unwrap();
+        let evidence = engine
+            .build_evidence("did:plc:dev1", HashSet::new())
+            .unwrap();
         assert_eq!(evidence.credentials.len(), 1);
         assert_eq!(evidence.credentials[0].credential_type, "github_membership");
         assert_eq!(evidence.credentials[0].issuer, "github");
 
         // User without credentials
-        let evidence = engine.build_evidence("did:plc:nobody", HashSet::new()).unwrap();
+        let evidence = engine
+            .build_evidence("did:plc:nobody", HashSet::new())
+            .unwrap();
         assert!(evidence.credentials.is_empty());
     }
 
@@ -844,7 +901,9 @@ mod tests {
             "op".to_string(),
             Requirement::All {
                 requirements: vec![
-                    Requirement::Accept { hash: rules_hash.clone() },
+                    Requirement::Accept {
+                        hash: rules_hash.clone(),
+                    },
                     Requirement::Present {
                         credential_type: "github_membership".into(),
                         issuer: Some("github".into()),
@@ -852,19 +911,29 @@ mod tests {
                 ],
             },
         );
-        engine.create_channel_policy(
-            "#project",
-            Requirement::Accept { hash: rules_hash.clone() },
-            role_reqs,
-        ).unwrap();
+        engine
+            .create_channel_policy(
+                "#project",
+                Requirement::Accept {
+                    hash: rules_hash.clone(),
+                },
+                role_reqs,
+            )
+            .unwrap();
 
         // Store GitHub credential for dev1
         let metadata = serde_json::json!({ "org": "freeq", "github_username": "dev1" });
-        engine.store_credential("did:plc:dev1", "github_membership", "github", &metadata).unwrap();
+        engine
+            .store_credential("did:plc:dev1", "github_membership", "github", &metadata)
+            .unwrap();
 
         // dev1 accepts policy — should get "op" role (has GitHub cred)
-        let evidence = engine.build_evidence("did:plc:dev1", HashSet::from([rules_hash.clone()])).unwrap();
-        let result = engine.process_join("#project", "did:plc:dev1", &evidence).unwrap();
+        let evidence = engine
+            .build_evidence("did:plc:dev1", HashSet::from([rules_hash.clone()]))
+            .unwrap();
+        let result = engine
+            .process_join("#project", "did:plc:dev1", &evidence)
+            .unwrap();
         match result {
             JoinResult::Confirmed { attestation, .. } => {
                 assert_eq!(attestation.role, "op");
@@ -873,8 +942,12 @@ mod tests {
         }
 
         // regular user accepts policy — should get "member" role (no GitHub cred)
-        let evidence = engine.build_evidence("did:plc:regular", HashSet::from([rules_hash.clone()])).unwrap();
-        let result = engine.process_join("#project", "did:plc:regular", &evidence).unwrap();
+        let evidence = engine
+            .build_evidence("did:plc:regular", HashSet::from([rules_hash.clone()]))
+            .unwrap();
+        let result = engine
+            .process_join("#project", "did:plc:regular", &evidence)
+            .unwrap();
         match result {
             JoinResult::Confirmed { attestation, .. } => {
                 assert_eq!(attestation.role, "member");

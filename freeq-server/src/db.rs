@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use rusqlite::{params, Connection, Result as SqlResult};
+use rusqlite::{Connection, Result as SqlResult, params};
 
 use crate::server::{BanEntry, ChannelState, TopicInfo};
 
@@ -15,7 +15,7 @@ const EAR_PREFIX: &str = "EAR1:";
 
 /// Encrypt text with AES-256-GCM for storage at rest.
 fn encrypt_at_rest(key: &[u8; 32], plaintext: &str) -> String {
-    use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead, Nonce};
+    use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
     let cipher = Aes256Gcm::new(key.into());
     let nonce_bytes: [u8; 12] = rand::random();
     let nonce = Nonce::from_slice(&nonce_bytes);
@@ -25,7 +25,10 @@ fn encrypt_at_rest(key: &[u8; 32], plaintext: &str) -> String {
             let mut combined = Vec::with_capacity(12 + ct.len());
             combined.extend_from_slice(&nonce_bytes);
             combined.extend_from_slice(&ct);
-            format!("{EAR_PREFIX}{}", base64::engine::general_purpose::STANDARD.encode(&combined))
+            format!(
+                "{EAR_PREFIX}{}",
+                base64::engine::general_purpose::STANDARD.encode(&combined)
+            )
         }
         Err(_) => plaintext.to_string(), // fallback: store plaintext
     }
@@ -36,7 +39,7 @@ fn decrypt_at_rest(key: &[u8; 32], stored: &str) -> String {
     if !stored.starts_with(EAR_PREFIX) {
         return stored.to_string(); // not encrypted — return as-is (legacy data)
     }
-    use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead, Nonce};
+    use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
     use base64::Engine;
     let b64 = &stored[EAR_PREFIX.len()..];
     match base64::engine::general_purpose::STANDARD.decode(b64) {
@@ -89,7 +92,10 @@ impl Db {
     /// Open (or create) the database at the given path.
     pub fn open<P: AsRef<Path>>(path: P) -> SqlResult<Self> {
         let conn = Connection::open(path)?;
-        let db = Self { conn, encryption_key: None };
+        let db = Self {
+            conn,
+            encryption_key: None,
+        };
         db.init()?;
         Ok(db)
     }
@@ -97,7 +103,10 @@ impl Db {
     /// Open a database with encryption at rest for message content.
     pub fn open_encrypted<P: AsRef<Path>>(path: P, key: [u8; 32]) -> SqlResult<Self> {
         let conn = Connection::open(path)?;
-        let db = Self { conn, encryption_key: Some(key) };
+        let db = Self {
+            conn,
+            encryption_key: Some(key),
+        };
         db.init()?;
         Ok(db)
     }
@@ -105,7 +114,10 @@ impl Db {
     /// Open an in-memory database (for testing).
     pub fn open_memory() -> SqlResult<Self> {
         let conn = Connection::open_in_memory()?;
-        let db = Self { conn, encryption_key: None };
+        let db = Self {
+            conn,
+            encryption_key: None,
+        };
         db.init()?;
         Ok(db)
     }
@@ -113,7 +125,10 @@ impl Db {
     /// Open an in-memory database with encryption at rest (for testing).
     pub fn open_encrypted_memory(key: [u8; 32]) -> SqlResult<Self> {
         let conn = Connection::open_in_memory()?;
-        let db = Self { conn, encryption_key: Some(key) };
+        let db = Self {
+            conn,
+            encryption_key: Some(key),
+        };
         db.init()?;
         Ok(db)
     }
@@ -200,9 +215,8 @@ impl Db {
 
     /// Save or update a channel's metadata (topic, modes, key).
     pub fn save_channel(&self, name: &str, ch: &ChannelState) -> SqlResult<()> {
-        let did_ops_json = serde_json::to_string(
-            &ch.did_ops.iter().collect::<Vec<_>>()
-        ).unwrap_or_else(|_| "[]".to_string());
+        let did_ops_json = serde_json::to_string(&ch.did_ops.iter().collect::<Vec<_>>())
+            .unwrap_or_else(|_| "[]".to_string());
         self.conn.execute(
             "INSERT INTO channels (name, topic_text, topic_set_by, topic_set_at, topic_locked, invite_only, no_ext_msg, moderated, key, founder_did, did_ops_json)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
@@ -236,8 +250,10 @@ impl Db {
 
     /// Delete a channel from the database (when it becomes empty and should be cleaned up).
     pub fn delete_channel(&self, name: &str) -> SqlResult<()> {
-        self.conn.execute("DELETE FROM channels WHERE name = ?1", params![name])?;
-        self.conn.execute("DELETE FROM bans WHERE channel = ?1", params![name])?;
+        self.conn
+            .execute("DELETE FROM channels WHERE name = ?1", params![name])?;
+        self.conn
+            .execute("DELETE FROM bans WHERE channel = ?1", params![name])?;
         Ok(())
     }
 
@@ -261,7 +277,9 @@ impl Db {
             let no_ext_msg: bool = row.get::<_, Option<i32>>(7)?.unwrap_or(0) != 0;
             let moderated: bool = row.get::<_, Option<i32>>(8)?.unwrap_or(0) != 0;
             let founder_did: Option<String> = row.get(9)?;
-            let did_ops_json: String = row.get::<_, Option<String>>(10)?.unwrap_or_else(|| "[]".to_string());
+            let did_ops_json: String = row
+                .get::<_, Option<String>>(10)?
+                .unwrap_or_else(|| "[]".to_string());
 
             let topic = match (topic_text, topic_set_by, topic_set_at) {
                 (Some(text), Some(set_by), Some(set_at)) => Some(TopicInfo {
@@ -295,13 +313,22 @@ impl Db {
         }
 
         // Load bans
-        let mut stmt = self.conn.prepare("SELECT channel, mask, set_by, set_at FROM bans")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT channel, mask, set_by, set_at FROM bans")?;
         let ban_rows = stmt.query_map([], |row| {
             let channel: String = row.get(0)?;
             let mask: String = row.get(1)?;
             let set_by: String = row.get(2)?;
             let set_at: i64 = row.get(3)?;
-            Ok((channel, BanEntry { mask, set_by, set_at: set_at as u64 }))
+            Ok((
+                channel,
+                BanEntry {
+                    mask,
+                    set_by,
+                    set_at: set_at as u64,
+                },
+            ))
         })?;
 
         for row in ban_rows {
@@ -355,7 +382,14 @@ impl Db {
         self.conn.execute(
             "INSERT INTO messages (channel, sender, text, timestamp, tags_json, msgid)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![channel, sender, stored_text, timestamp as i64, tags_json, msgid],
+            params![
+                channel,
+                sender,
+                stored_text,
+                timestamp as i64,
+                tags_json,
+                msgid
+            ],
         )?;
         Ok(())
     }
@@ -377,7 +411,10 @@ impl Db {
                  ORDER BY timestamp DESC, id DESC
                  LIMIT ?3"
             )?;
-            let rows = stmt.query_map(params![channel, before_ts as i64, limit as i64], map_message_row)?;
+            let rows = stmt.query_map(
+                params![channel, before_ts as i64, limit as i64],
+                map_message_row,
+            )?;
             rows.collect::<SqlResult<Vec<_>>>()?
         } else {
             let mut stmt = self.conn.prepare(
@@ -415,10 +452,15 @@ impl Db {
              ORDER BY timestamp ASC, id ASC
              LIMIT ?3"
         )?;
-        let rows = stmt.query_map(params![channel, after as i64, limit as i64], map_message_row)?;
+        let rows = stmt.query_map(
+            params![channel, after as i64, limit as i64],
+            map_message_row,
+        )?;
         let mut result = rows.collect::<SqlResult<Vec<_>>>()?;
         if let Some(ref key) = self.encryption_key {
-            for row in &mut result { row.text = decrypt_at_rest(key, &row.text); }
+            for row in &mut result {
+                row.text = decrypt_at_rest(key, &row.text);
+            }
         }
         Ok(result)
     }
@@ -444,7 +486,9 @@ impl Db {
         )?;
         let mut result = rows.collect::<SqlResult<Vec<_>>>()?;
         if let Some(ref key) = self.encryption_key {
-            for row in &mut result { row.text = decrypt_at_rest(key, &row.text); }
+            for row in &mut result {
+                row.text = decrypt_at_rest(key, &row.text);
+            }
         }
         Ok(result)
     }
@@ -461,7 +505,11 @@ impl Db {
     }
 
     /// Find a message by its msgid. Returns the sender (hostmask) for authorship check.
-    pub fn get_message_by_msgid(&self, channel: &str, msgid: &str) -> SqlResult<Option<MessageRow>> {
+    pub fn get_message_by_msgid(
+        &self,
+        channel: &str,
+        msgid: &str,
+    ) -> SqlResult<Option<MessageRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, channel, sender, text, timestamp, tags_json, msgid, replaces_msgid, deleted_at
              FROM messages
@@ -530,7 +578,13 @@ impl Db {
     }
 
     /// Get DM history between two users.
-    pub fn dm_history(&self, user_a: &str, user_b: &str, limit: usize, before_ts: Option<u64>) -> SqlResult<Vec<MessageRow>> {
+    pub fn dm_history(
+        &self,
+        user_a: &str,
+        user_b: &str,
+        limit: usize,
+        before_ts: Option<u64>,
+    ) -> SqlResult<Vec<MessageRow>> {
         let sql = if before_ts.is_some() {
             "SELECT id, channel, sender, text, timestamp, tags_json, msgid, replaces_msgid, deleted_at
              FROM messages
@@ -563,20 +617,34 @@ impl Db {
             })
         };
         let mut result: Vec<MessageRow> = if let Some(ts) = before_ts {
-            stmt.query_map(params![user_a, format!("%{user_b}%"), limit as i64, ts as i64], parse_row)?
-                .collect::<SqlResult<_>>()?
+            stmt.query_map(
+                params![user_a, format!("%{user_b}%"), limit as i64, ts as i64],
+                parse_row,
+            )?
+            .collect::<SqlResult<_>>()?
         } else {
-            stmt.query_map(params![user_a, format!("%{user_b}%"), limit as i64], parse_row)?
-                .collect::<SqlResult<_>>()?
+            stmt.query_map(
+                params![user_a, format!("%{user_b}%"), limit as i64],
+                parse_row,
+            )?
+            .collect::<SqlResult<_>>()?
         };
         if let Some(ref key) = self.encryption_key {
-            for row in &mut result { row.text = decrypt_at_rest(key, &row.text); }
+            for row in &mut result {
+                row.text = decrypt_at_rest(key, &row.text);
+            }
         }
         Ok(result)
     }
 
     /// Edit a message (update text by msgid).
-    pub fn edit_message(&self, msgid: &str, _sender: &str, new_text: &str, new_msgid: Option<&str>) -> SqlResult<()> {
+    pub fn edit_message(
+        &self,
+        msgid: &str,
+        _sender: &str,
+        new_text: &str,
+        new_msgid: Option<&str>,
+    ) -> SqlResult<()> {
         let stored_text = if let Some(ref key) = self.encryption_key {
             encrypt_at_rest(key, new_text)
         } else {
@@ -602,7 +670,8 @@ impl Db {
     pub fn save_prekey_bundle(&self, did: &str, bundle_json: &str) -> SqlResult<()> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default().as_secs();
+            .unwrap_or_default()
+            .as_secs();
         self.conn.execute(
             "INSERT INTO prekey_bundles (did, bundle_json, updated_at) VALUES (?1, ?2, ?3)
              ON CONFLICT(did) DO UPDATE SET bundle_json=excluded.bundle_json, updated_at=excluded.updated_at",
@@ -613,7 +682,9 @@ impl Db {
 
     /// Load a pre-key bundle for a DID.
     pub fn get_prekey_bundle(&self, did: &str) -> SqlResult<Option<serde_json::Value>> {
-        let mut stmt = self.conn.prepare("SELECT bundle_json FROM prekey_bundles WHERE did = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT bundle_json FROM prekey_bundles WHERE did = ?1")?;
         let mut rows = stmt.query_map(params![did], |row| {
             let json_str: String = row.get(0)?;
             Ok(serde_json::from_str(&json_str).unwrap_or(serde_json::Value::Null))
@@ -626,7 +697,9 @@ impl Db {
 
     /// Load all pre-key bundles (for populating in-memory cache on startup).
     pub fn load_all_prekey_bundles(&self) -> SqlResult<Vec<(String, serde_json::Value)>> {
-        let mut stmt = self.conn.prepare("SELECT did, bundle_json FROM prekey_bundles")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT did, bundle_json FROM prekey_bundles")?;
         let rows = stmt.query_map([], |row| {
             let did: String = row.get(0)?;
             let json_str: String = row.get(1)?;
@@ -658,7 +731,9 @@ impl Db {
 
     /// Get all channels a DID-authenticated user was last in.
     pub fn get_user_channels(&self, did: &str) -> SqlResult<Vec<String>> {
-        let mut stmt = self.conn.prepare("SELECT channel FROM user_channels WHERE did = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT channel FROM user_channels WHERE did = ?1")?;
         let rows = stmt.query_map(params![did], |row| row.get(0))?;
         rows.collect()
     }
@@ -689,7 +764,9 @@ impl Db {
 
     /// Look up a DID by nick.
     pub fn get_identity_by_nick(&self, nick: &str) -> SqlResult<Option<IdentityRow>> {
-        let mut stmt = self.conn.prepare("SELECT did, nick FROM identities WHERE nick = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT did, nick FROM identities WHERE nick = ?1")?;
         let mut rows = stmt.query_map(params![nick], |row| {
             Ok(IdentityRow {
                 did: row.get(0)?,
@@ -704,7 +781,9 @@ impl Db {
 
     /// Look up a nick by DID.
     pub fn get_identity_by_did(&self, did: &str) -> SqlResult<Option<IdentityRow>> {
-        let mut stmt = self.conn.prepare("SELECT did, nick FROM identities WHERE did = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT did, nick FROM identities WHERE did = ?1")?;
         let mut rows = stmt.query_map(params![did], |row| {
             Ok(IdentityRow {
                 did: row.get(0)?,
@@ -720,12 +799,12 @@ impl Db {
 
 fn map_message_row(row: &rusqlite::Row) -> SqlResult<MessageRow> {
     let tags_json: String = row.get(5)?;
-    let tags: HashMap<String, String> =
-        serde_json::from_str(&tags_json).unwrap_or_default();
+    let tags: HashMap<String, String> = serde_json::from_str(&tags_json).unwrap_or_default();
     // New columns may not exist in old schemas — handle gracefully
     let msgid: Option<String> = row.get(6).unwrap_or(None);
     let replaces_msgid: Option<String> = row.get(7).unwrap_or(None);
-    let deleted_at: Option<u64> = row.get::<_, Option<i64>>(8)
+    let deleted_at: Option<u64> = row
+        .get::<_, Option<i64>>(8)
         .unwrap_or(None)
         .map(|v| v as u64);
     Ok(MessageRow {
@@ -785,10 +864,18 @@ mod tests {
         let ch = ChannelState::default();
         db.save_channel("#test", &ch).unwrap();
 
-        let ban = BanEntry { mask: "bad!*@*".to_string(), set_by: "op!o@host".to_string(), set_at: 1700000000 };
+        let ban = BanEntry {
+            mask: "bad!*@*".to_string(),
+            set_by: "op!o@host".to_string(),
+            set_at: 1700000000,
+        };
         db.add_ban("#test", &ban).unwrap();
 
-        let ban2 = BanEntry { mask: "did:plc:abc".to_string(), set_by: "op!o@host".to_string(), set_at: 1700000001 };
+        let ban2 = BanEntry {
+            mask: "did:plc:abc".to_string(),
+            set_by: "op!o@host".to_string(),
+            set_at: 1700000001,
+        };
         db.add_ban("#test", &ban2).unwrap();
 
         let loaded = db.load_channels().unwrap();
@@ -812,9 +899,33 @@ mod tests {
         let mut tags = HashMap::new();
         tags.insert("content-type".to_string(), "image/jpeg".to_string());
 
-        db.insert_message("#test", "alice!a@host", "hello", 1000, &HashMap::new(), Some("01TEST00000000000000000001")).unwrap();
-        db.insert_message("#test", "bob!b@host", "world", 1001, &tags, Some("01TEST00000000000000000002")).unwrap();
-        db.insert_message("#test", "alice!a@host", "third", 1002, &HashMap::new(), Some("01TEST00000000000000000003")).unwrap();
+        db.insert_message(
+            "#test",
+            "alice!a@host",
+            "hello",
+            1000,
+            &HashMap::new(),
+            Some("01TEST00000000000000000001"),
+        )
+        .unwrap();
+        db.insert_message(
+            "#test",
+            "bob!b@host",
+            "world",
+            1001,
+            &tags,
+            Some("01TEST00000000000000000002"),
+        )
+        .unwrap();
+        db.insert_message(
+            "#test",
+            "alice!a@host",
+            "third",
+            1002,
+            &HashMap::new(),
+            Some("01TEST00000000000000000003"),
+        )
+        .unwrap();
 
         // Get last 2
         let msgs = db.get_messages("#test", 2, None).unwrap();
@@ -860,7 +971,11 @@ mod tests {
         let db = Db::open_memory().unwrap();
         let ch = ChannelState::default();
         db.save_channel("#test", &ch).unwrap();
-        let ban = BanEntry { mask: "bad!*@*".to_string(), set_by: "op".to_string(), set_at: 0 };
+        let ban = BanEntry {
+            mask: "bad!*@*".to_string(),
+            set_by: "op".to_string(),
+            set_at: 0,
+        };
         db.add_ban("#test", &ban).unwrap();
 
         db.delete_channel("#test").unwrap();
@@ -872,8 +987,10 @@ mod tests {
     #[test]
     fn messages_different_channels() {
         let db = Db::open_memory().unwrap();
-        db.insert_message("#a", "u", "msg-a", 1000, &HashMap::new(), None).unwrap();
-        db.insert_message("#b", "u", "msg-b", 1001, &HashMap::new(), None).unwrap();
+        db.insert_message("#a", "u", "msg-a", 1000, &HashMap::new(), None)
+            .unwrap();
+        db.insert_message("#b", "u", "msg-b", 1001, &HashMap::new(), None)
+            .unwrap();
 
         let a = db.get_messages("#a", 100, None).unwrap();
         assert_eq!(a.len(), 1);
@@ -889,7 +1006,11 @@ mod tests {
         let db = Db::open_memory().unwrap();
         let ch = ChannelState::default();
         db.save_channel("#test", &ch).unwrap();
-        let ban = BanEntry { mask: "bad!*@*".to_string(), set_by: "op".to_string(), set_at: 0 };
+        let ban = BanEntry {
+            mask: "bad!*@*".to_string(),
+            set_by: "op".to_string(),
+            set_at: 0,
+        };
         db.add_ban("#test", &ban).unwrap();
         db.add_ban("#test", &ban).unwrap(); // should not error
 

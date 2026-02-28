@@ -163,10 +163,7 @@ impl PluginManager {
     }
 
     /// Load plugins from all sources: CLI args, plugin directory, etc.
-    pub fn load(
-        plugin_args: &[String],
-        plugin_dir: Option<&str>,
-    ) -> Self {
+    pub fn load(plugin_args: &[String], plugin_dir: Option<&str>) -> Self {
         let mut mgr = Self::new();
         let registry = builtin_plugins();
 
@@ -330,8 +327,14 @@ impl IdentityOverridePlugin {
             for rule in rule_array {
                 if let Some(display_id) = rule.get("display_id").and_then(|v| v.as_str()) {
                     rules.push(OverrideRule {
-                        handle: rule.get("handle").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                        did: rule.get("did").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        handle: rule
+                            .get("handle")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                        did: rule
+                            .get("did")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
                         display_id: display_id.to_string(),
                     });
                 }
@@ -394,10 +397,10 @@ fn load_plugin_toml(
     path: &Path,
     registry: &HashMap<&str, PluginFactory>,
 ) -> Result<Box<dyn Plugin>, String> {
-    let content =
-        std::fs::read_to_string(path).map_err(|e| format!("read error: {e}"))?;
-    let table: toml::Value =
-        content.parse().map_err(|e| format!("TOML parse error: {e}"))?;
+    let content = std::fs::read_to_string(path).map_err(|e| format!("read error: {e}"))?;
+    let table: toml::Value = content
+        .parse()
+        .map_err(|e| format!("TOML parse error: {e}"))?;
 
     let name = table
         .get("name")
@@ -406,9 +409,7 @@ fn load_plugin_toml(
 
     // Special handling for plugins that need the full TOML table
     match name {
-        "identity-override" => {
-            Ok(Box::new(IdentityOverridePlugin::from_toml(&table)))
-        }
+        "identity-override" => Ok(Box::new(IdentityOverridePlugin::from_toml(&table))),
         _ => {
             // Fall back to generic factory with flat config
             let factory = registry

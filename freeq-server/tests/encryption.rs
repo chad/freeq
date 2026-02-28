@@ -29,7 +29,15 @@ mod encryption_at_rest {
     #[test]
     fn encrypted_message_roundtrip() {
         let db = make_db();
-        db.insert_message("#test", "alice", "Hello world!", 1000, &HashMap::new(), Some("msg001")).unwrap();
+        db.insert_message(
+            "#test",
+            "alice",
+            "Hello world!",
+            1000,
+            &HashMap::new(),
+            Some("msg001"),
+        )
+        .unwrap();
         let msgs = db.get_messages("#test", 10, None).unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].text, "Hello world!");
@@ -41,18 +49,37 @@ mod encryption_at_rest {
         // Verify the raw DB content has EAR1: prefix
         let key: [u8; 32] = [0xCD; 32];
         let db = Db::open_encrypted_memory(key).unwrap();
-        db.insert_message("#test", "alice", "Secret message", 1000, &HashMap::new(), None).unwrap();
+        db.insert_message(
+            "#test",
+            "alice",
+            "Secret message",
+            1000,
+            &HashMap::new(),
+            None,
+        )
+        .unwrap();
 
         // Read raw text from SQLite (bypassing decryption)
         let raw = db.get_raw_message_text("#test", 1000).unwrap();
-        assert!(raw.starts_with("EAR1:"), "Raw stored text should have EAR1 prefix, got: {raw}");
+        assert!(
+            raw.starts_with("EAR1:"),
+            "Raw stored text should have EAR1 prefix, got: {raw}"
+        );
         assert_ne!(raw, "Secret message", "Should not be plaintext");
     }
 
     #[test]
     fn plaintext_db_stores_plaintext() {
         let db = make_plain_db();
-        db.insert_message("#test", "alice", "Not encrypted", 1000, &HashMap::new(), None).unwrap();
+        db.insert_message(
+            "#test",
+            "alice",
+            "Not encrypted",
+            1000,
+            &HashMap::new(),
+            None,
+        )
+        .unwrap();
         let raw = db.get_raw_message_text("#test", 1000).unwrap();
         assert_eq!(raw, "Not encrypted");
     }
@@ -61,7 +88,15 @@ mod encryption_at_rest {
     fn legacy_plaintext_readable_by_encrypted_db() {
         // Simulate: old DB has plaintext, new DB has encryption key
         let db = make_plain_db();
-        db.insert_message("#test", "alice", "Legacy message", 1000, &HashMap::new(), None).unwrap();
+        db.insert_message(
+            "#test",
+            "alice",
+            "Legacy message",
+            1000,
+            &HashMap::new(),
+            None,
+        )
+        .unwrap();
 
         // Now open the same connection with a key and read back
         // (In practice this is the backward compatibility path)
@@ -75,7 +110,8 @@ mod encryption_at_rest {
         let key2: [u8; 32] = [0x02; 32];
 
         let db1 = Db::open_encrypted_memory(key1).unwrap();
-        db1.insert_message("#test", "alice", "Secret", 1000, &HashMap::new(), None).unwrap();
+        db1.insert_message("#test", "alice", "Secret", 1000, &HashMap::new(), None)
+            .unwrap();
 
         // Read raw EAR1 data
         let raw = db1.get_raw_message_text("#test", 1000).unwrap();
@@ -84,7 +120,8 @@ mod encryption_at_rest {
         // Trying to decrypt with wrong key should fail gracefully
         // (decrypt_at_rest returns the raw EAR1 string on failure, not plaintext)
         let db2 = Db::open_encrypted_memory(key2).unwrap();
-        db2.insert_message("#test", "alice", &raw, 1000, &HashMap::new(), None).unwrap();
+        db2.insert_message("#test", "alice", &raw, 1000, &HashMap::new(), None)
+            .unwrap();
         let msgs = db2.get_messages("#test", 10, None).unwrap();
         // With wrong key, decrypt fails and returns EAR1-prefixed ciphertext
         // (which is then re-encrypted with key2... so we just verify it's not "Secret")
@@ -95,7 +132,8 @@ mod encryption_at_rest {
     fn unicode_encrypted_roundtrip() {
         let db = make_db();
         let text = "こんにちは 🔐 мир العالم 🌍";
-        db.insert_message("#test", "alice", text, 1000, &HashMap::new(), None).unwrap();
+        db.insert_message("#test", "alice", text, 1000, &HashMap::new(), None)
+            .unwrap();
         let msgs = db.get_messages("#test", 10, None).unwrap();
         assert_eq!(msgs[0].text, text);
     }
@@ -103,7 +141,8 @@ mod encryption_at_rest {
     #[test]
     fn empty_message_encrypted_roundtrip() {
         let db = make_db();
-        db.insert_message("#test", "alice", "", 1000, &HashMap::new(), None).unwrap();
+        db.insert_message("#test", "alice", "", 1000, &HashMap::new(), None)
+            .unwrap();
         let msgs = db.get_messages("#test", 10, None).unwrap();
         assert_eq!(msgs[0].text, "");
     }
@@ -112,7 +151,8 @@ mod encryption_at_rest {
     fn large_message_encrypted_roundtrip() {
         let db = make_db();
         let text = "A".repeat(8000); // near IRC line limit
-        db.insert_message("#test", "alice", &text, 1000, &HashMap::new(), None).unwrap();
+        db.insert_message("#test", "alice", &text, 1000, &HashMap::new(), None)
+            .unwrap();
         let msgs = db.get_messages("#test", 10, None).unwrap();
         assert_eq!(msgs[0].text, text);
     }
@@ -121,7 +161,15 @@ mod encryption_at_rest {
     fn many_messages_encrypted() {
         let db = make_db();
         for i in 0..100 {
-            db.insert_message("#test", "alice", &format!("msg-{i}"), 1000 + i, &HashMap::new(), None).unwrap();
+            db.insert_message(
+                "#test",
+                "alice",
+                &format!("msg-{i}"),
+                1000 + i,
+                &HashMap::new(),
+                None,
+            )
+            .unwrap();
         }
         let msgs = db.get_messages("#test", 200, None).unwrap();
         assert_eq!(msgs.len(), 100);
@@ -133,8 +181,10 @@ mod encryption_at_rest {
     #[test]
     fn encrypted_messages_across_channels() {
         let db = make_db();
-        db.insert_message("#chan-a", "alice", "msg in A", 1000, &HashMap::new(), None).unwrap();
-        db.insert_message("#chan-b", "bob", "msg in B", 1001, &HashMap::new(), None).unwrap();
+        db.insert_message("#chan-a", "alice", "msg in A", 1000, &HashMap::new(), None)
+            .unwrap();
+        db.insert_message("#chan-b", "bob", "msg in B", 1001, &HashMap::new(), None)
+            .unwrap();
 
         let a = db.get_messages("#chan-a", 10, None).unwrap();
         let b = db.get_messages("#chan-b", 10, None).unwrap();
@@ -153,12 +203,24 @@ mod encryption_at_rest {
     #[test]
     fn edit_encrypted_message() {
         let db = make_db();
-        db.insert_message("#test", "alice", "original", 1000, &HashMap::new(), Some("msg001")).unwrap();
-        db.edit_message("msg001", "alice", "edited text", Some("msg002")).unwrap();
+        db.insert_message(
+            "#test",
+            "alice",
+            "original",
+            1000,
+            &HashMap::new(),
+            Some("msg001"),
+        )
+        .unwrap();
+        db.edit_message("msg001", "alice", "edited text", Some("msg002"))
+            .unwrap();
 
         let msgs = db.get_messages("#test", 10, None).unwrap();
         // The edited message should show new text
-        let edited = msgs.iter().find(|m| m.msgid.as_deref() == Some("msg001")).unwrap();
+        let edited = msgs
+            .iter()
+            .find(|m| m.msgid.as_deref() == Some("msg001"))
+            .unwrap();
         assert_eq!(edited.text, "edited text");
     }
 
@@ -168,7 +230,8 @@ mod encryption_at_rest {
         let mut tags = HashMap::new();
         tags.insert("+freeq.at/sig".to_string(), "somesig".to_string());
         tags.insert("msgid".to_string(), "test123".to_string());
-        db.insert_message("#test", "alice", "signed msg", 1000, &tags, Some("test123")).unwrap();
+        db.insert_message("#test", "alice", "signed msg", 1000, &tags, Some("test123"))
+            .unwrap();
 
         let msgs = db.get_messages("#test", 10, None).unwrap();
         assert_eq!(msgs[0].text, "signed msg");
@@ -198,8 +261,10 @@ mod prekey_bundles {
     #[test]
     fn update_bundle_overwrites() {
         let db = Db::open_memory().unwrap();
-        db.save_prekey_bundle("did:plc:alice", r#"{"version":1}"#).unwrap();
-        db.save_prekey_bundle("did:plc:alice", r#"{"version":2}"#).unwrap();
+        db.save_prekey_bundle("did:plc:alice", r#"{"version":1}"#)
+            .unwrap();
+        db.save_prekey_bundle("did:plc:alice", r#"{"version":2}"#)
+            .unwrap();
 
         let loaded = db.get_prekey_bundle("did:plc:alice").unwrap().unwrap();
         assert_eq!(loaded["version"], 2);
@@ -215,9 +280,12 @@ mod prekey_bundles {
     #[test]
     fn load_all_bundles() {
         let db = Db::open_memory().unwrap();
-        db.save_prekey_bundle("did:plc:alice", r#"{"key":"a"}"#).unwrap();
-        db.save_prekey_bundle("did:plc:bob", r#"{"key":"b"}"#).unwrap();
-        db.save_prekey_bundle("did:plc:charlie", r#"{"key":"c"}"#).unwrap();
+        db.save_prekey_bundle("did:plc:alice", r#"{"key":"a"}"#)
+            .unwrap();
+        db.save_prekey_bundle("did:plc:bob", r#"{"key":"b"}"#)
+            .unwrap();
+        db.save_prekey_bundle("did:plc:charlie", r#"{"key":"c"}"#)
+            .unwrap();
 
         let all = db.load_all_prekey_bundles().unwrap();
         assert_eq!(all.len(), 3);
@@ -241,7 +309,8 @@ mod prekey_bundles {
     #[test]
     fn bundle_survives_multiple_loads() {
         let db = Db::open_memory().unwrap();
-        db.save_prekey_bundle("did:plc:alice", r#"{"test":true}"#).unwrap();
+        db.save_prekey_bundle("did:plc:alice", r#"{"test":true}"#)
+            .unwrap();
 
         // Load multiple times
         for _ in 0..5 {
@@ -256,9 +325,9 @@ mod prekey_bundles {
 // ═══════════════════════════════════════════════════════════════════
 
 mod message_signing {
-    use ed25519_dalek::{SigningKey, Signer, Verifier, VerifyingKey};
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
     use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+    use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 
     /// Canonical form used by the server for message signing.
     fn canonical_form(sender_did: &str, target: &str, text: &str, timestamp: &str) -> Vec<u8> {
@@ -355,7 +424,12 @@ mod message_signing {
     #[test]
     fn unicode_message_signable() {
         let key = SigningKey::generate(&mut rand::thread_rng());
-        let data = canonical_form("did:plc:alice", "#test", "こんにちは 🔐", "2024-01-01T00:00:00Z");
+        let data = canonical_form(
+            "did:plc:alice",
+            "#test",
+            "こんにちは 🔐",
+            "2024-01-01T00:00:00Z",
+        );
         let sig = key.sign(&data);
         let pub_key = VerifyingKey::from(&key);
         assert!(pub_key.verify(&data, &sig).is_ok());
@@ -448,9 +522,9 @@ mod key_separation {
 // ═══════════════════════════════════════════════════════════════════
 
 mod double_ratchet_extended {
-    use freeq_sdk::ratchet::{Session, is_encrypted, ENC3_PREFIX};
-    use x25519_dalek::{StaticSecret, PublicKey};
     use aes_gcm::aead::OsRng;
+    use freeq_sdk::ratchet::{ENC3_PREFIX, Session, is_encrypted};
+    use x25519_dalek::{PublicKey, StaticSecret};
 
     fn make_sessions() -> (Session, Session) {
         let shared_secret = [42u8; 32];
@@ -558,10 +632,12 @@ mod double_ratchet_extended {
         let parts: Vec<&str> = body.splitn(3, ':').collect();
         // Tamper with header (flip first byte)
         let mut header_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(parts[0]).unwrap();
+            .decode(parts[0])
+            .unwrap();
         header_bytes[0] ^= 0xFF;
         use base64::Engine;
-        let tampered_header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&header_bytes);
+        let tampered_header =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&header_bytes);
         let tampered = format!("{ENC3_PREFIX}{tampered_header}:{}:{}", parts[1], parts[2]);
         assert!(bob.decrypt(&tampered).is_err());
     }
@@ -615,9 +691,17 @@ mod double_ratchet_extended {
         assert_eq!(parts.len(), 3, "Should be header:nonce:ciphertext");
 
         use base64::Engine;
-        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(parts[0]).unwrap();
-        let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(parts[1]).unwrap();
-        assert_eq!(header.len(), 40, "Header: 32 ratchet key + 4 prev_chain + 4 msg_num");
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(parts[0])
+            .unwrap();
+        let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(parts[1])
+            .unwrap();
+        assert_eq!(
+            header.len(),
+            40,
+            "Header: 32 ratchet key + 4 prev_chain + 4 msg_num"
+        );
         assert_eq!(nonce.len(), 12, "AES-GCM nonce is 12 bytes");
     }
 
@@ -682,9 +766,9 @@ mod double_ratchet_extended {
 // ═══════════════════════════════════════════════════════════════════
 
 mod spk_signing {
-    use ed25519_dalek::{SigningKey, Signer, Verifier, VerifyingKey};
-    use x25519_dalek::{StaticSecret, PublicKey};
+    use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
     use rand::rngs::OsRng;
+    use x25519_dalek::{PublicKey, StaticSecret};
 
     #[test]
     fn sign_and_verify_spk() {
@@ -731,8 +815,8 @@ mod spk_signing {
 
     #[test]
     fn spk_signature_base64url_roundtrip() {
-        use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
         use base64::Engine;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 
         let signing_key = SigningKey::generate(&mut OsRng);
         let spk_secret = StaticSecret::random_from_rng(OsRng);
@@ -744,7 +828,11 @@ mod spk_signing {
         let restored_sig = ed25519_dalek::Signature::from_slice(&decoded).unwrap();
 
         let verifying_key = VerifyingKey::from(&signing_key);
-        assert!(verifying_key.verify(spk_public.as_bytes(), &restored_sig).is_ok());
+        assert!(
+            verifying_key
+                .verify(spk_public.as_bytes(), &restored_sig)
+                .is_ok()
+        );
     }
 }
 
@@ -753,7 +841,7 @@ mod spk_signing {
 // ═══════════════════════════════════════════════════════════════════
 
 mod safety_numbers {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
 
     /// Mirrors the Rust FFI safety number algorithm.
     fn compute_safety_number(my_public: &[u8; 32], remote_did: &str) -> String {
@@ -827,14 +915,8 @@ mod safety_numbers {
         // These won't match because each side uses their OWN key + OTHER's DID.
         // That's expected — the web client uses both public keys in sorted order.
         // But each individual computation is deterministic.
-        assert_eq!(
-            compute_safety_number(&key_a, "did:plc:bob"),
-            na
-        );
-        assert_eq!(
-            compute_safety_number(&key_b, "did:plc:alice"),
-            nb
-        );
+        assert_eq!(compute_safety_number(&key_a, "did:plc:bob"), na);
+        assert_eq!(compute_safety_number(&key_b, "did:plc:alice"), nb);
     }
 }
 
@@ -843,7 +925,7 @@ mod safety_numbers {
 // ═══════════════════════════════════════════════════════════════════
 
 mod channel_encryption {
-    use freeq_sdk::e2ee::{derive_key, encrypt, decrypt, is_encrypted, ENC_PREFIX};
+    use freeq_sdk::e2ee::{ENC_PREFIX, decrypt, derive_key, encrypt, is_encrypted};
 
     #[test]
     fn roundtrip() {
@@ -951,7 +1033,8 @@ mod user_channels {
     fn remove_nonexistent_is_noop() {
         let db = Db::open_memory().unwrap();
         // Should not error
-        db.remove_user_channel("did:plc:alice", "#nonexistent").unwrap();
+        db.remove_user_channel("did:plc:alice", "#nonexistent")
+            .unwrap();
     }
 }
 

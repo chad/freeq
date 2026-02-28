@@ -100,10 +100,7 @@ async fn handle_event(handle: &ClientHandle, args: &Args, event: Event) -> Resul
         Event::Registered { nick } => println!("Registered as {nick}"),
 
         Event::Message {
-            from,
-            target,
-            text,
-            ..
+            from, target, text, ..
         } => {
             // Only respond to channel messages (not PMs) in our channel
             let is_channel = target.starts_with('#') || target.starts_with('&');
@@ -130,10 +127,7 @@ async fn handle_event(handle: &ClientHandle, args: &Args, event: Event) -> Resul
                     }
                     "help" => {
                         handle
-                            .privmsg(
-                                &target,
-                                "Commands: !echo <msg>, !ping, !help, !about",
-                            )
+                            .privmsg(&target, "Commands: !echo <msg>, !ping, !help, !about")
                             .await?;
                     }
                     "about" => {
@@ -149,9 +143,7 @@ async fn handle_event(handle: &ClientHandle, args: &Args, event: Event) -> Resul
             }
         }
 
-        Event::Joined {
-            channel, nick, ..
-        } => {
+        Event::Joined { channel, nick, .. } => {
             if nick != args.nick {
                 println!("{nick} joined {channel}");
             }

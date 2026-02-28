@@ -6,8 +6,8 @@
 //! - KeySigner: real cryptographic signing (secp256k1/ed25519)
 //! - PdsSessionSigner: PDS session-based authentication (app-password or OAuth)
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 
 use crate::crypto::PrivateKey;
@@ -184,7 +184,11 @@ impl PdsSessionSigner {
     /// Returns `Ok(())` if the token was refreshed, `Err` if no refresh
     /// token is stored or the PDS rejected it.
     pub async fn refresh(&self) -> anyhow::Result<()> {
-        let refresh_jwt = self.refresh_token.read().unwrap().clone()
+        let refresh_jwt = self
+            .refresh_token
+            .read()
+            .unwrap()
+            .clone()
             .ok_or_else(|| anyhow::anyhow!("No refresh token available"))?;
 
         let new_session = crate::pds::refresh_session(&self.pds_url, &refresh_jwt).await?;

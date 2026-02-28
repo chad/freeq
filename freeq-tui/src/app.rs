@@ -231,7 +231,9 @@ impl App {
         let mut buffers = BTreeMap::new();
         let mut status = Buffer::new("status");
         let mode_name = if vi_mode { "vi" } else { "emacs" };
-        status.push_system(&format!("Welcome to freeq ({mode_name} mode). Type /help for commands."));
+        status.push_system(&format!(
+            "Welcome to freeq ({mode_name} mode). Type /help for commands."
+        ));
         buffers.insert("status".to_string(), status);
 
         let mode = if vi_mode { Mode::Vi } else { Mode::Emacs };
@@ -275,9 +277,7 @@ impl App {
     /// Get or create a buffer.
     pub fn buffer_mut(&mut self, name: &str) -> &mut Buffer {
         let key = name.to_lowercase();
-        self.buffers
-            .entry(key)
-            .or_insert_with(|| Buffer::new(name))
+        self.buffers.entry(key).or_insert_with(|| Buffer::new(name))
     }
 
     /// Push a system message to the status buffer.
@@ -312,21 +312,29 @@ impl App {
         });
 
         // Track unread + mentions for inactive buffers
-        if !is_active && from != self.nick
-            && let Some(buf) = self.buffers.get_mut(&buf_key) {
-                buf.unread += 1;
-                if clean_text.to_lowercase().contains(&self.nick.to_lowercase()) {
-                    buf.has_mention = true;
-                }
+        if !is_active
+            && from != self.nick
+            && let Some(buf) = self.buffers.get_mut(&buf_key)
+        {
+            buf.unread += 1;
+            if clean_text
+                .to_lowercase()
+                .contains(&self.nick.to_lowercase())
+            {
+                buf.has_mention = true;
             }
+        }
     }
 
     /// Start a BATCH (e.g., CHATHISTORY).
     pub fn start_batch(&mut self, id: &str, target: &str) {
-        self.batches.insert(id.to_string(), BatchBuffer {
-            target: target.to_string(),
-            lines: Vec::new(),
-        });
+        self.batches.insert(
+            id.to_string(),
+            BatchBuffer {
+                target: target.to_string(),
+                lines: Vec::new(),
+            },
+        );
     }
 
     /// Add a line to a batch by ID.
@@ -359,7 +367,10 @@ impl App {
         self.buffers.remove(&key);
         if self.active_buffer == key {
             // Switch to first available buffer, or "status"
-            self.active_buffer = self.buffers.keys().next()
+            self.active_buffer = self
+                .buffers
+                .keys()
+                .next()
                 .cloned()
                 .unwrap_or_else(|| "status".to_string());
         }
@@ -471,18 +482,23 @@ pub fn evict_image_cache(cache: &ImageCache) {
     let mut guard = cache.lock().unwrap();
     if guard.len() > MAX_IMAGE_CACHE {
         // Simple eviction: remove Failed entries first, then arbitrary
-        let failed_keys: Vec<String> = guard.iter()
+        let failed_keys: Vec<String> = guard
+            .iter()
             .filter(|(_, v)| matches!(v, ImageState::Failed(_)))
             .map(|(k, _)| k.clone())
             .collect();
         for k in failed_keys {
             guard.remove(&k);
-            if guard.len() <= MAX_IMAGE_CACHE { return; }
+            if guard.len() <= MAX_IMAGE_CACHE {
+                return;
+            }
         }
         // Still over? Remove arbitrary entries until within limit
         let keys: Vec<String> = guard.keys().cloned().collect();
         for k in keys {
-            if guard.len() <= MAX_IMAGE_CACHE { break; }
+            if guard.len() <= MAX_IMAGE_CACHE {
+                break;
+            }
             guard.remove(&k);
         }
     }

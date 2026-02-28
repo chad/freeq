@@ -12,7 +12,10 @@ use crate::tools::{self, Workspace};
 use freeq_sdk::client::ClientHandle;
 
 fn auditor() -> AgentId {
-    AgentId { role: "auditor".to_string(), color: None }
+    AgentId {
+        role: "auditor".to_string(),
+        color: None,
+    }
 }
 
 const SYSTEM: &str = r#"You are a principal engineer performing an architecture audit.
@@ -36,16 +39,34 @@ pub async fn audit(
     llm: &LlmClient,
     workspace_base: &Path,
 ) -> Result<()> {
-    output::status(handle, channel, &auditor(), "🔍", &format!("Starting audit: {target}")).await?;
+    output::status(
+        handle,
+        channel,
+        &auditor(),
+        "🔍",
+        &format!("Starting audit: {target}"),
+    )
+    .await?;
 
     let workspace = Workspace::create(workspace_base, "audit-workspace").await?;
 
     // Clone if it's a URL, otherwise treat as local
     if target.starts_with("http") || target.contains("github.com") {
         output::status(handle, channel, &auditor(), "📥", "Cloning repository...").await?;
-        let clone_result = tools::shell(&workspace, &format!("git clone --depth 1 {target} repo 2>&1"), 60).await?;
+        let clone_result = tools::shell(
+            &workspace,
+            &format!("git clone --depth 1 {target} repo 2>&1"),
+            60,
+        )
+        .await?;
         if clone_result.contains("fatal") {
-            output::error(handle, channel, &auditor(), &format!("Clone failed: {clone_result}")).await?;
+            output::error(
+                handle,
+                channel,
+                &auditor(),
+                &format!("Clone failed: {clone_result}"),
+            )
+            .await?;
             return Ok(());
         }
     }
@@ -67,25 +88,40 @@ pub async fn audit(
     // Read key files
     output::status(handle, channel, &auditor(), "📄", "Reading key files...").await?;
     let key_files = [
-        "Cargo.toml", "package.json", "requirements.txt", "go.mod",
-        "Dockerfile", "docker-compose.yml", "docker-compose.yaml",
-        "Procfile", "Makefile", ".github/workflows/ci.yml",
-        "README.md", "src/main.rs", "src/lib.rs", "app.py", "main.py",
-        "src/index.ts", "src/index.js", "main.go", "cmd/main.go",
+        "Cargo.toml",
+        "package.json",
+        "requirements.txt",
+        "go.mod",
+        "Dockerfile",
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "Procfile",
+        "Makefile",
+        ".github/workflows/ci.yml",
+        "README.md",
+        "src/main.rs",
+        "src/lib.rs",
+        "app.py",
+        "main.py",
+        "src/index.ts",
+        "src/index.js",
+        "main.go",
+        "cmd/main.go",
     ];
 
     let mut file_contents = String::new();
     for name in &key_files {
         let path = repo_dir.join(name);
         if path.exists()
-            && let Ok(content) = tokio::fs::read_to_string(&path).await {
-                let truncated = if content.len() > 3000 {
-                    format!("{}... (truncated)", &content[..3000])
-                } else {
-                    content
-                };
-                file_contents.push_str(&format!("\n### {name}\n```\n{truncated}\n```\n"));
-            }
+            && let Ok(content) = tokio::fs::read_to_string(&path).await
+        {
+            let truncated = if content.len() > 3000 {
+                format!("{}... (truncated)", &content[..3000])
+            } else {
+                content
+            };
+            file_contents.push_str(&format!("\n### {name}\n```\n{truncated}\n```\n"));
+        }
     }
 
     // Also try to find the main source structure
@@ -99,7 +135,14 @@ pub async fn audit(
         "Audit this repository.\n\n## File Tree\n```\n{tree}\n```\n\n## Source Files\n```\n{src_tree}\n```\n\n## Key File Contents\n{file_contents}"
     );
 
-    output::status(handle, channel, &auditor(), "🧠", "Analyzing architecture...").await?;
+    output::status(
+        handle,
+        channel,
+        &auditor(),
+        "🧠",
+        "Analyzing architecture...",
+    )
+    .await?;
     let analysis = llm.complete(SYSTEM, &prompt).await?;
 
     // Post the audit results

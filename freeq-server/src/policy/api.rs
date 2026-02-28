@@ -9,11 +9,11 @@ use super::eval::{Credential, UserEvidence};
 use super::types::*;
 use crate::server::SharedState;
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -87,11 +87,10 @@ struct LogQuery {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 fn get_engine(state: &SharedState) -> Result<&super::PolicyEngine, (StatusCode, &'static str)> {
-    state
-        .policy_engine
-        .as_ref()
-        .map(|e| e.as_ref())
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "Policy framework not enabled"))
+    state.policy_engine.as_ref().map(|e| e.as_ref()).ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "Policy framework not enabled",
+    ))
 }
 
 fn normalize_channel(channel: &str) -> String {
@@ -350,12 +349,7 @@ async fn verify_github(
                 "verified_at": chrono::Utc::now().to_rfc3339(),
             });
 
-            match engine.store_credential(
-                &req.did,
-                "github_membership",
-                "github",
-                &metadata,
-            ) {
+            match engine.store_credential(&req.did, "github_membership", "github", &metadata) {
                 Ok(()) => {
                     tracing::info!(
                         did = %req.did, username = %req.github_username, org = %req.org,
@@ -373,22 +367,20 @@ async fn verify_github(
                 Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
             }
         }
-        Ok(resp) if resp.status().as_u16() == 404 => {
-            (
-                StatusCode::FORBIDDEN,
-                Json(CredentialResponse {
-                    status: "not_verified".into(),
-                    credential_type: "github_membership".into(),
-                    issuer: "github".into(),
-                    error: Some(format!(
-                        "{} is not a public member of {}",
-                        req.github_username, req.org
-                    )),
-                    metadata: None,
-                }),
-            )
-                .into_response()
-        }
+        Ok(resp) if resp.status().as_u16() == 404 => (
+            StatusCode::FORBIDDEN,
+            Json(CredentialResponse {
+                status: "not_verified".into(),
+                credential_type: "github_membership".into(),
+                issuer: "github".into(),
+                error: Some(format!(
+                    "{} is not a public member of {}",
+                    req.github_username, req.org
+                )),
+                metadata: None,
+            }),
+        )
+            .into_response(),
         Ok(resp) => {
             let status = resp.status();
             (
@@ -498,12 +490,9 @@ async fn present_credential(
     }
 
     // Valid! Store as a local credential
-    if let Err(e) = engine.store_credential(
-        &vc.subject,
-        &vc.credential_type,
-        &vc.issuer,
-        &vc.claims,
-    ) {
+    if let Err(e) =
+        engine.store_credential(&vc.subject, &vc.credential_type, &vc.issuer, &vc.claims)
+    {
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
 
@@ -535,18 +524,20 @@ async fn resolve_issuer_key(
     // Look for Ed25519 key in verification methods
     for method in &did_doc.verification_method {
         if let Some(ref multibase) = method.public_key_multibase
-            && let Some(key) = decode_multibase_ed25519(multibase) {
-                return Ok(key);
-            }
+            && let Some(key) = decode_multibase_ed25519(multibase)
+        {
+            return Ok(key);
+        }
     }
 
     // Also check assertionMethod (inline methods)
     for entry in &did_doc.assertion_method {
         if let freeq_sdk::did::StringOrMap::Inline(method) = entry
             && let Some(ref multibase) = method.public_key_multibase
-                && let Some(key) = decode_multibase_ed25519(multibase) {
-                    return Ok(key);
-                }
+            && let Some(key) = decode_multibase_ed25519(multibase)
+        {
+            return Ok(key);
+        }
     }
 
     Err("No Ed25519 public key found in issuer DID document".into())
@@ -584,7 +575,9 @@ fn decode_jwk_ed25519(jwk: &serde_json::Value) -> Option<[u8; 32]> {
         return None;
     }
     let x = jwk.get("x")?.as_str()?;
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(x).ok()?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(x)
+        .ok()?;
     if bytes.len() == 32 {
         let mut key = [0u8; 32];
         key.copy_from_slice(&bytes);
@@ -783,9 +776,7 @@ fn flatten_requirements(
         } => {
             let satisfied = evidence.credentials.iter().any(|c| {
                 c.credential_type == *credential_type
-                    && issuer
-                        .as_ref()
-                        .is_none_or(|iss| c.issuer == *iss)
+                    && issuer.as_ref().is_none_or(|iss| c.issuer == *iss)
             });
             let action = if satisfied {
                 None
@@ -845,9 +836,7 @@ fn flatten_requirements(
 }
 
 /// Collect all ACCEPT hashes from a policy (requirements + role requirements).
-fn collect_accept_hashes(
-    policy: &super::types::PolicyDocument,
-) -> HashSet<String> {
+fn collect_accept_hashes(policy: &super::types::PolicyDocument) -> HashSet<String> {
     let mut hashes = HashSet::new();
     collect_hashes_from_req(&policy.requirements, &mut hashes);
     for req in policy.role_requirements.values() {
@@ -859,11 +848,17 @@ fn collect_accept_hashes(
 fn collect_hashes_from_req(req: &super::types::Requirement, out: &mut HashSet<String>) {
     use super::types::Requirement;
     match req {
-        Requirement::Accept { hash } => { out.insert(hash.clone()); }
-        Requirement::All { requirements } | Requirement::Any { requirements } => {
-            for r in requirements { collect_hashes_from_req(r, out); }
+        Requirement::Accept { hash } => {
+            out.insert(hash.clone());
         }
-        Requirement::Not { requirement } => { collect_hashes_from_req(requirement, out); }
+        Requirement::All { requirements } | Requirement::Any { requirements } => {
+            for r in requirements {
+                collect_hashes_from_req(r, out);
+            }
+        }
+        Requirement::Not { requirement } => {
+            collect_hashes_from_req(requirement, out);
+        }
         _ => {}
     }
 }

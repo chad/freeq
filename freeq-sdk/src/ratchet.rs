@@ -23,9 +23,9 @@
 //! AES-GCM encryption, so it can't be tampered with.
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
-use aes_gcm::{Aes256Gcm, AeadCore, Nonce};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
+use aes_gcm::{AeadCore, Aes256Gcm, Nonce};
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use sha2::Sha256;
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -57,8 +57,8 @@ fn kdf_root(root_key: &[u8; 32], dh_out: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
 /// KDF for the symmetric chain. Advances the chain key and produces
 /// a message key.
 fn kdf_chain(chain_key: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
-    use hmac::digest::KeyInit;
     use hmac::Mac;
+    use hmac::digest::KeyInit;
     type HmacSha256 = hmac::Hmac<Sha256>;
 
     // Message key = HMAC(chain_key, 0x01)
@@ -111,7 +111,11 @@ impl Header {
         ratchet_key.copy_from_slice(&data[..32]);
         let prev_chain_len = u32::from_be_bytes(data[32..36].try_into().unwrap());
         let msg_num = u32::from_be_bytes(data[36..40].try_into().unwrap());
-        Ok(Self { ratchet_key, prev_chain_len, msg_num })
+        Ok(Self {
+            ratchet_key,
+            prev_chain_len,
+            msg_num,
+        })
     }
 }
 
@@ -187,9 +191,7 @@ impl Session {
     /// `shared_secret` comes from X3DH.
     /// `our_ratchet_keypair` is our signed pre-key (used as initial ratchet key).
     pub fn init_bob(shared_secret: [u8; 32], our_ratchet_secret: [u8; 32]) -> Self {
-        let our_public = PublicKey::from(
-            &StaticSecret::from(our_ratchet_secret)
-        ).to_bytes();
+        let our_public = PublicKey::from(&StaticSecret::from(our_ratchet_secret)).to_bytes();
 
         Session {
             dh_self_secret: our_ratchet_secret,
@@ -228,15 +230,15 @@ impl Session {
         self.send_msg_num += 1;
 
         // Encrypt with AES-256-GCM, using header as AAD
-        let cipher = Aes256Gcm::new_from_slice(&msg_key)
-            .map_err(|_| RatchetError::CryptoError)?;
+        let cipher = Aes256Gcm::new_from_slice(&msg_key).map_err(|_| RatchetError::CryptoError)?;
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
         let header_bytes = header.to_bytes();
         let payload = aes_gcm::aead::Payload {
             msg: plaintext.as_bytes(),
             aad: &header_bytes,
         };
-        let ciphertext = cipher.encrypt(&nonce, payload)
+        let ciphertext = cipher
+            .encrypt(&nonce, payload)
             .map_err(|_| RatchetError::CryptoError)?;
 
         // Wire format
@@ -249,7 +251,8 @@ impl Session {
 
     /// Decrypt a wire-format encrypted message.
     pub fn decrypt(&mut self, wire: &str) -> Result<String, RatchetError> {
-        let body = wire.strip_prefix(ENC3_PREFIX)
+        let body = wire
+            .strip_prefix(ENC3_PREFIX)
             .ok_or(RatchetError::NotEncrypted)?;
 
         let parts: Vec<&str> = body.splitn(3, ':').collect();
@@ -257,11 +260,14 @@ impl Session {
             return Err(RatchetError::MalformedMessage);
         }
 
-        let header_bytes = B64.decode(parts[0])
+        let header_bytes = B64
+            .decode(parts[0])
             .map_err(|_| RatchetError::MalformedMessage)?;
-        let nonce_bytes = B64.decode(parts[1])
+        let nonce_bytes = B64
+            .decode(parts[1])
             .map_err(|_| RatchetError::MalformedMessage)?;
-        let ct_bytes = B64.decode(parts[2])
+        let ct_bytes = B64
+            .decode(parts[2])
             .map_err(|_| RatchetError::MalformedMessage)?;
 
         if nonce_bytes.len() != 12 {
@@ -276,7 +282,8 @@ impl Session {
         }
 
         // If the sender's ratchet key changed, perform a DH ratchet step
-        let their_key_changed = self.dh_remote
+        let their_key_changed = self
+            .dh_remote
             .map(|k| k != header.ratchet_key)
             .unwrap_or(true);
 
@@ -311,10 +318,7 @@ impl Session {
             self.dh_self_public = new_public.to_bytes();
 
             // New sending chain
-            let dh_out = dh(
-                &StaticSecret::from(self.dh_self_secret),
-                &their_pk,
-            );
+            let dh_out = dh(&StaticSecret::from(self.dh_self_secret), &their_pk);
             let (root_key, send_chain_key) = kdf_root(&self.root_key, &dh_out);
             self.root_key = root_key;
             self.send_chain_key = Some(send_chain_key);
@@ -385,14 +389,14 @@ fn decrypt_with_key(
     nonce_bytes: &[u8],
     ct_bytes: &[u8],
 ) -> Result<String, RatchetError> {
-    let cipher = Aes256Gcm::new_from_slice(msg_key)
-        .map_err(|_| RatchetError::CryptoError)?;
+    let cipher = Aes256Gcm::new_from_slice(msg_key).map_err(|_| RatchetError::CryptoError)?;
     let nonce = Nonce::from_slice(nonce_bytes);
     let payload = aes_gcm::aead::Payload {
         msg: ct_bytes,
         aad: header_bytes,
     };
-    let plaintext = cipher.decrypt(nonce, payload)
+    let plaintext = cipher
+        .decrypt(nonce, payload)
         .map_err(|_| RatchetError::DecryptFailed)?;
     String::from_utf8(plaintext).map_err(|_| RatchetError::InvalidUtf8)
 }
@@ -535,8 +539,10 @@ mod tests {
         // because Bob's ratchet key has changed and old Alice doesn't
         // have the chain keys derived from the new DH ratchet steps
         let mut old_alice = Session::from_bytes(&alice_state).unwrap();
-        assert!(old_alice.decrypt(&w8).is_err(),
-            "Old session state should not decrypt messages from advanced ratchet");
+        assert!(
+            old_alice.decrypt(&w8).is_err(),
+            "Old session state should not decrypt messages from advanced ratchet"
+        );
     }
 
     #[test]

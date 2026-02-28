@@ -17,10 +17,10 @@ use super::VerifierState;
 use crate::policy::credentials;
 use crate::policy::types::VerifiableCredential;
 use axum::{
+    Json, Router,
     extract::{Query, State},
     response::{Html, IntoResponse},
     routing::{get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -53,15 +53,14 @@ pub fn routes() -> Router<Arc<VerifierState>> {
 }
 
 /// Landing page — shows appointment form for channel ops.
-async fn start_page(
-    Query(params): Query<HashMap<String, String>>,
-) -> impl IntoResponse {
+async fn start_page(Query(params): Query<HashMap<String, String>>) -> impl IntoResponse {
     let channel = params.get("channel").cloned().unwrap_or_default();
     let callback = params.get("callback").cloned().unwrap_or_default();
     let subject_did = params.get("subject_did").cloned().unwrap_or_default();
     let appointer_did = params.get("appointer_did").cloned().unwrap_or_default();
 
-    Html(format!(r#"<!DOCTYPE html>
+    Html(format!(
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -108,12 +107,13 @@ async fn start_page(
   </form>
 </div>
 </body>
-</html>"#))
+</html>"#
+    ))
 }
 
 #[derive(Deserialize)]
 struct AppointRequest {
-    subject: String,     // DID or handle
+    subject: String, // DID or handle
     channel: String,
     appointer_did: String,
     callback: String,
@@ -165,7 +165,11 @@ async fn appoint(
     };
     let _ = credentials::sign_credential(&mut credential, &state.signing_key);
 
-    let credential_id = format!("mod-{}-{}", channel_lower, &subject_did[..20.min(subject_did.len())]);
+    let credential_id = format!(
+        "mod-{}-{}",
+        channel_lower,
+        &subject_did[..20.min(subject_did.len())]
+    );
 
     // Store in roster
     {
@@ -188,7 +192,8 @@ async fn appoint(
     if !req.callback.is_empty() {
         let http = reqwest::Client::new();
         let payload = serde_json::json!({ "credential": credential });
-        let _ = http.post(&req.callback)
+        let _ = http
+            .post(&req.callback)
             .json(&payload)
             .timeout(std::time::Duration::from_secs(10))
             .send()
@@ -196,7 +201,8 @@ async fn appoint(
     }
 
     // Return success page that posts back to opener
-    Html(format!(r#"<!DOCTYPE html>
+    Html(format!(
+        r#"<!DOCTYPE html>
 <html><head>
 <meta charset="utf-8">
 <title>Moderator Appointed</title>
@@ -263,13 +269,18 @@ async fn roster(
     let channel_lower = query.channel.to_lowercase();
     let roster = state.mod_roster.lock();
     let now = chrono::Utc::now();
-    let active: Vec<&ModAppointment> = roster.channels
+    let active: Vec<&ModAppointment> = roster
+        .channels
         .get(&channel_lower)
         .map(|entries| {
-            entries.iter()
-                .filter(|a| !a.revoked && chrono::DateTime::parse_from_rfc3339(&a.expires_at)
-                    .map(|exp| exp > now)
-                    .unwrap_or(false))
+            entries
+                .iter()
+                .filter(|a| {
+                    !a.revoked
+                        && chrono::DateTime::parse_from_rfc3339(&a.expires_at)
+                            .map(|exp| exp > now)
+                            .unwrap_or(false)
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -286,9 +297,14 @@ async fn resolve_handle_to_did(http: &reqwest::Client, handle: &str) -> Option<S
         "https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle={}",
         handle
     );
-    let resp = http.get(&url)
+    let resp = http
+        .get(&url)
         .timeout(std::time::Duration::from_secs(5))
-        .send().await.ok()?;
+        .send()
+        .await
+        .ok()?;
     let json: serde_json::Value = resp.json().await.ok()?;
-    json.get("did").and_then(|v| v.as_str()).map(|s| s.to_string())
+    json.get("did")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }

@@ -22,11 +22,11 @@ pub mod did;
 pub mod e2ee;
 pub mod e2ee_did;
 pub mod event;
-pub mod ratchet;
-pub mod x3dh;
 pub mod irc;
 pub mod media;
 pub mod oauth;
 #[cfg(feature = "iroh-transport")]
 pub mod p2p;
 pub mod pds;
+pub mod ratchet;
+pub mod x3dh;

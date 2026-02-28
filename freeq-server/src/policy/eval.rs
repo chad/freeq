@@ -65,7 +65,9 @@ fn validate_inner(req: &Requirement, depth: u32, node_count: &mut u32) -> Result
     }
     *node_count += 1;
     if *node_count > MAX_NODES {
-        return Err(format!("Requirement tree exceeds max node count of {MAX_NODES}"));
+        return Err(format!(
+            "Requirement tree exceeds max node count of {MAX_NODES}"
+        ));
     }
 
     match req {
@@ -296,12 +298,8 @@ mod tests {
     fn test_any_first_satisfied() {
         let req = Requirement::Any {
             requirements: vec![
-                Requirement::Accept {
-                    hash: "a".into(),
-                },
-                Requirement::Accept {
-                    hash: "b".into(),
-                },
+                Requirement::Accept { hash: "a".into() },
+                Requirement::Accept { hash: "b".into() },
             ],
         };
         let mut ev = empty_evidence();
@@ -313,12 +311,8 @@ mod tests {
     fn test_any_none_satisfied() {
         let req = Requirement::Any {
             requirements: vec![
-                Requirement::Accept {
-                    hash: "a".into(),
-                },
-                Requirement::Accept {
-                    hash: "b".into(),
-                },
+                Requirement::Accept { hash: "a".into() },
+                Requirement::Accept { hash: "b".into() },
             ],
         };
         let ev = empty_evidence();
@@ -379,9 +373,7 @@ mod tests {
     #[test]
     fn test_validate_depth_limit() {
         // Build a deeply nested NOT chain
-        let mut req = Requirement::Accept {
-            hash: "x".into(),
-        };
+        let mut req = Requirement::Accept { hash: "x".into() };
         for _ in 0..10 {
             req = Requirement::Not {
                 requirement: Box::new(req),

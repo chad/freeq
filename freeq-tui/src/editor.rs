@@ -126,36 +126,96 @@ impl LineEditor {
             KeyCode::PageDown => EditAction::ScrollDown(10),
 
             // Movement
-            KeyCode::Left if ctrl => { self.word_back(); EditAction::None }
-            KeyCode::Right if ctrl => { self.word_forward(); EditAction::None }
-            KeyCode::Left => { self.cursor_left(); EditAction::None }
-            KeyCode::Right => { self.cursor_right(); EditAction::None }
-            KeyCode::Home => { self.cursor = 0; EditAction::None }
-            KeyCode::End => { self.cursor = self.text.len(); EditAction::None }
+            KeyCode::Left if ctrl => {
+                self.word_back();
+                EditAction::None
+            }
+            KeyCode::Right if ctrl => {
+                self.word_forward();
+                EditAction::None
+            }
+            KeyCode::Left => {
+                self.cursor_left();
+                EditAction::None
+            }
+            KeyCode::Right => {
+                self.cursor_right();
+                EditAction::None
+            }
+            KeyCode::Home => {
+                self.cursor = 0;
+                EditAction::None
+            }
+            KeyCode::End => {
+                self.cursor = self.text.len();
+                EditAction::None
+            }
 
-            KeyCode::Backspace => { self.backspace(); EditAction::None }
-            KeyCode::Delete => { self.delete_char(); EditAction::None }
+            KeyCode::Backspace => {
+                self.backspace();
+                EditAction::None
+            }
+            KeyCode::Delete => {
+                self.delete_char();
+                EditAction::None
+            }
 
             KeyCode::Char(c) if ctrl => self.handle_ctrl(c),
             KeyCode::Char(c) if alt => self.handle_alt(c),
-            KeyCode::Char(c) => { self.insert(c); EditAction::None }
+            KeyCode::Char(c) => {
+                self.insert(c);
+                EditAction::None
+            }
             _ => EditAction::None,
         }
     }
 
     fn handle_ctrl(&mut self, c: char) -> EditAction {
         match c {
-            'a' => { self.cursor = 0; EditAction::None }
-            'e' => { self.cursor = self.text.len(); EditAction::None }
-            'f' => { self.cursor_right(); EditAction::None }
-            'b' => { self.cursor_left(); EditAction::None }
-            'd' => { self.delete_char(); EditAction::None }
-            'h' => { self.backspace(); EditAction::None }
-            'k' => { self.kill_to_end(); EditAction::None }
-            'u' => { self.kill_to_start(); EditAction::None }
-            'w' => { self.kill_word_back(); EditAction::None }
-            'y' => { self.yank(); EditAction::None }
-            't' => { self.transpose(); EditAction::None }
+            'a' => {
+                self.cursor = 0;
+                EditAction::None
+            }
+            'e' => {
+                self.cursor = self.text.len();
+                EditAction::None
+            }
+            'f' => {
+                self.cursor_right();
+                EditAction::None
+            }
+            'b' => {
+                self.cursor_left();
+                EditAction::None
+            }
+            'd' => {
+                self.delete_char();
+                EditAction::None
+            }
+            'h' => {
+                self.backspace();
+                EditAction::None
+            }
+            'k' => {
+                self.kill_to_end();
+                EditAction::None
+            }
+            'u' => {
+                self.kill_to_start();
+                EditAction::None
+            }
+            'w' => {
+                self.kill_word_back();
+                EditAction::None
+            }
+            'y' => {
+                self.yank();
+                EditAction::None
+            }
+            't' => {
+                self.transpose();
+                EditAction::None
+            }
             'l' => EditAction::None, // ignore (would clear screen)
             'n' => EditAction::NextBuffer,
             'p' => EditAction::PrevBuffer,
@@ -165,13 +225,34 @@ impl LineEditor {
 
     fn handle_alt(&mut self, c: char) -> EditAction {
         match c {
-            'f' => { self.word_forward(); EditAction::None }
-            'b' => { self.word_back(); EditAction::None }
-            'd' => { self.kill_word_forward(); EditAction::None }
-            'u' => { self.upcase_word(); EditAction::None }
-            'l' => { self.downcase_word(); EditAction::None }
-            'c' => { self.capitalize_word(); EditAction::None }
-            't' => { self.transpose_words(); EditAction::None }
+            'f' => {
+                self.word_forward();
+                EditAction::None
+            }
+            'b' => {
+                self.word_back();
+                EditAction::None
+            }
+            'd' => {
+                self.kill_word_forward();
+                EditAction::None
+            }
+            'u' => {
+                self.upcase_word();
+                EditAction::None
+            }
+            'l' => {
+                self.downcase_word();
+                EditAction::None
+            }
+            'c' => {
+                self.capitalize_word();
+                EditAction::None
+            }
+            't' => {
+                self.transpose_words();
+                EditAction::None
+            }
             'n' => EditAction::NextBuffer,
             'p' | 'h' => EditAction::PrevBuffer,
             _ => EditAction::None,
@@ -199,23 +280,51 @@ impl LineEditor {
             KeyCode::BackTab => EditAction::PrevBuffer,
             KeyCode::PageUp => EditAction::ScrollUp(10),
             KeyCode::PageDown => EditAction::ScrollDown(10),
-            KeyCode::Left => { self.cursor_left(); EditAction::None }
-            KeyCode::Right => { self.cursor_right(); EditAction::None }
-            KeyCode::Home => { self.cursor = 0; EditAction::None }
-            KeyCode::End => { self.cursor = self.text.len(); EditAction::None }
-            KeyCode::Backspace => { self.backspace(); EditAction::None }
-            KeyCode::Delete => { self.delete_char(); EditAction::None }
-            KeyCode::Char(c) if ctrl => {
-                match c {
-                    'w' => { self.kill_word_back(); EditAction::None }
-                    'u' => { self.kill_to_start(); EditAction::None }
-                    'h' => { self.backspace(); EditAction::None }
-                    'n' => EditAction::NextBuffer,
-                    'p' => EditAction::PrevBuffer,
-                    _ => EditAction::None,
-                }
+            KeyCode::Left => {
+                self.cursor_left();
+                EditAction::None
             }
-            KeyCode::Char(c) => { self.insert(c); EditAction::None }
+            KeyCode::Right => {
+                self.cursor_right();
+                EditAction::None
+            }
+            KeyCode::Home => {
+                self.cursor = 0;
+                EditAction::None
+            }
+            KeyCode::End => {
+                self.cursor = self.text.len();
+                EditAction::None
+            }
+            KeyCode::Backspace => {
+                self.backspace();
+                EditAction::None
+            }
+            KeyCode::Delete => {
+                self.delete_char();
+                EditAction::None
+            }
+            KeyCode::Char(c) if ctrl => match c {
+                'w' => {
+                    self.kill_word_back();
+                    EditAction::None
+                }
+                'u' => {
+                    self.kill_to_start();
+                    EditAction::None
+                }
+                'h' => {
+                    self.backspace();
+                    EditAction::None
+                }
+                'n' => EditAction::NextBuffer,
+                'p' => EditAction::PrevBuffer,
+                _ => EditAction::None,
+            },
+            KeyCode::Char(c) => {
+                self.insert(c);
+                EditAction::None
+            }
             _ => EditAction::None,
         }
     }
@@ -225,7 +334,10 @@ impl LineEditor {
     fn handle_vi_normal(&mut self, key: KeyEvent) -> EditAction {
         match key.code {
             // Mode switching
-            KeyCode::Char('i') => { self.vi_mode = ViMode::Insert; EditAction::None }
+            KeyCode::Char('i') => {
+                self.vi_mode = ViMode::Insert;
+                EditAction::None
+            }
             KeyCode::Char('a') => {
                 self.vi_mode = ViMode::Insert;
                 self.cursor_right();
@@ -243,9 +355,18 @@ impl LineEditor {
             }
 
             // Movement
-            KeyCode::Char('h') | KeyCode::Left => { self.cursor_left(); EditAction::None }
-            KeyCode::Char('l') | KeyCode::Right => { self.cursor_right(); EditAction::None }
-            KeyCode::Char('0') | KeyCode::Home => { self.cursor = 0; EditAction::None }
+            KeyCode::Char('h') | KeyCode::Left => {
+                self.cursor_left();
+                EditAction::None
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                self.cursor_right();
+                EditAction::None
+            }
+            KeyCode::Char('0') | KeyCode::Home => {
+                self.cursor = 0;
+                EditAction::None
+            }
             KeyCode::Char('$') | KeyCode::End => {
                 if !self.text.is_empty() {
                     self.cursor = self.prev_char_boundary(self.text.len());
@@ -256,14 +377,32 @@ impl LineEditor {
                 self.cursor = self.text.find(|c: char| !c.is_whitespace()).unwrap_or(0);
                 EditAction::None
             }
-            KeyCode::Char('w') => { self.word_forward(); EditAction::None }
-            KeyCode::Char('b') => { self.word_back(); EditAction::None }
-            KeyCode::Char('e') => { self.word_end(); EditAction::None }
+            KeyCode::Char('w') => {
+                self.word_forward();
+                EditAction::None
+            }
+            KeyCode::Char('b') => {
+                self.word_back();
+                EditAction::None
+            }
+            KeyCode::Char('e') => {
+                self.word_end();
+                EditAction::None
+            }
 
             // Editing
-            KeyCode::Char('x') | KeyCode::Delete => { self.delete_char(); EditAction::None }
-            KeyCode::Char('X') => { self.backspace(); EditAction::None }
-            KeyCode::Char('D') => { self.kill_to_end(); EditAction::None }
+            KeyCode::Char('x') | KeyCode::Delete => {
+                self.delete_char();
+                EditAction::None
+            }
+            KeyCode::Char('X') => {
+                self.backspace();
+                EditAction::None
+            }
+            KeyCode::Char('D') => {
+                self.kill_to_end();
+                EditAction::None
+            }
             KeyCode::Char('C') => {
                 self.kill_to_end();
                 self.vi_mode = ViMode::Insert;
@@ -280,16 +419,26 @@ impl LineEditor {
                 self.vi_mode = ViMode::Insert;
                 EditAction::None
             }
-            KeyCode::Char('p') => { self.paste_after(); EditAction::None }
-            KeyCode::Char('P') => { self.yank(); EditAction::None }
+            KeyCode::Char('p') => {
+                self.paste_after();
+                EditAction::None
+            }
+            KeyCode::Char('P') => {
+                self.yank();
+                EditAction::None
+            }
 
             // History
             KeyCode::Char('k') | KeyCode::Up => EditAction::HistoryUp,
             KeyCode::Char('j') | KeyCode::Down => EditAction::HistoryDown,
 
             // Scroll
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => EditAction::ScrollUp(10),
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => EditAction::ScrollDown(10),
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                EditAction::ScrollUp(10)
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                EditAction::ScrollDown(10)
+            }
             KeyCode::PageUp => EditAction::ScrollUp(10),
             KeyCode::PageDown => EditAction::ScrollDown(10),
 
@@ -393,7 +542,8 @@ impl LineEditor {
         let c1: String = self.text[prev_pos..pos].to_string();
         let next_pos = self.next_char_boundary(pos);
         let c2: String = self.text[pos..next_pos].to_string();
-        self.text.replace_range(prev_pos..next_pos, &format!("{c2}{c1}"));
+        self.text
+            .replace_range(prev_pos..next_pos, &format!("{c2}{c1}"));
         self.cursor = next_pos;
     }
 
@@ -401,9 +551,13 @@ impl LineEditor {
         let bytes = self.text.as_bytes();
         let mut i = self.cursor;
         // Skip current word
-        while i < bytes.len() && !bytes[i].is_ascii_whitespace() { i += 1; }
+        while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
         // Skip whitespace
-        while i < bytes.len() && bytes[i].is_ascii_whitespace() { i += 1; }
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
         self.cursor = i;
     }
 
@@ -411,18 +565,28 @@ impl LineEditor {
         let bytes = self.text.as_bytes();
         let mut i = self.cursor;
         // Skip whitespace before
-        while i > 0 && bytes[i - 1].is_ascii_whitespace() { i -= 1; }
+        while i > 0 && bytes[i - 1].is_ascii_whitespace() {
+            i -= 1;
+        }
         // Skip word
-        while i > 0 && !bytes[i - 1].is_ascii_whitespace() { i -= 1; }
+        while i > 0 && !bytes[i - 1].is_ascii_whitespace() {
+            i -= 1;
+        }
         self.cursor = i;
     }
 
     fn word_end(&mut self) {
         let bytes = self.text.as_bytes();
         let mut i = self.cursor;
-        if i < bytes.len() { i += 1; }
-        while i < bytes.len() && bytes[i].is_ascii_whitespace() { i += 1; }
-        while i < bytes.len() && !bytes[i].is_ascii_whitespace() { i += 1; }
+        if i < bytes.len() {
+            i += 1;
+        }
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
         i = i.saturating_sub(1);
         self.cursor = i;
     }
@@ -446,7 +610,10 @@ impl LineEditor {
         if self.cursor < end {
             let mut chars = self.text[self.cursor..end].chars();
             if let Some(first) = chars.next() {
-                let word: String = first.to_uppercase().chain(chars.map(|c| c.to_lowercase().next().unwrap_or(c))).collect();
+                let word: String = first
+                    .to_uppercase()
+                    .chain(chars.map(|c| c.to_lowercase().next().unwrap_or(c)))
+                    .collect();
                 self.text.replace_range(self.cursor..end, &word);
                 self.cursor += word.len();
             }
@@ -459,22 +626,31 @@ impl LineEditor {
         let start2 = {
             let bytes = self.text.as_bytes();
             let mut i = self.cursor;
-            while i > 0 && bytes[i - 1].is_ascii_whitespace() { i -= 1; }
-            while i > 0 && !bytes[i - 1].is_ascii_whitespace() { i -= 1; }
+            while i > 0 && bytes[i - 1].is_ascii_whitespace() {
+                i -= 1;
+            }
+            while i > 0 && !bytes[i - 1].is_ascii_whitespace() {
+                i -= 1;
+            }
             i
         };
         let start1 = {
             let bytes = self.text.as_bytes();
             let mut i = start2;
-            while i > 0 && bytes[i - 1].is_ascii_whitespace() { i -= 1; }
-            while i > 0 && !bytes[i - 1].is_ascii_whitespace() { i -= 1; }
+            while i > 0 && bytes[i - 1].is_ascii_whitespace() {
+                i -= 1;
+            }
+            while i > 0 && !bytes[i - 1].is_ascii_whitespace() {
+                i -= 1;
+            }
             i
         };
         if start1 < start2 && start2 <= self.cursor && self.cursor <= end2 {
             let word1 = self.text[start1..start2].trim().to_string();
             let space = self.text[start1 + word1.len()..start2].to_string();
             let word2 = self.text[start2..end2].to_string();
-            self.text.replace_range(start1..end2, &format!("{word2}{space}{word1}"));
+            self.text
+                .replace_range(start1..end2, &format!("{word2}{space}{word1}"));
             self.cursor = start1 + word2.len() + space.len() + word1.len();
         }
     }
@@ -484,28 +660,40 @@ impl LineEditor {
     fn find_word_start_back(&self) -> usize {
         let bytes = self.text.as_bytes();
         let mut i = self.cursor;
-        while i > 0 && bytes[i - 1].is_ascii_whitespace() { i -= 1; }
-        while i > 0 && !bytes[i - 1].is_ascii_whitespace() { i -= 1; }
+        while i > 0 && bytes[i - 1].is_ascii_whitespace() {
+            i -= 1;
+        }
+        while i > 0 && !bytes[i - 1].is_ascii_whitespace() {
+            i -= 1;
+        }
         i
     }
 
     fn find_word_end_forward(&self) -> usize {
         let bytes = self.text.as_bytes();
         let mut i = self.cursor;
-        while i < bytes.len() && !bytes[i].is_ascii_whitespace() { i += 1; }
-        while i < bytes.len() && bytes[i].is_ascii_whitespace() { i += 1; }
+        while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
         i
     }
 
     fn prev_char_boundary(&self, pos: usize) -> usize {
         let mut i = pos.saturating_sub(1);
-        while i > 0 && !self.text.is_char_boundary(i) { i -= 1; }
+        while i > 0 && !self.text.is_char_boundary(i) {
+            i -= 1;
+        }
         i
     }
 
     fn next_char_boundary(&self, pos: usize) -> usize {
         let mut i = pos + 1;
-        while i < self.text.len() && !self.text.is_char_boundary(i) { i += 1; }
+        while i < self.text.len() && !self.text.is_char_boundary(i) {
+            i += 1;
+        }
         i.min(self.text.len())
     }
 }

@@ -52,8 +52,8 @@
 //! }
 //! ```
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use ed25519_dalek::{Signer, Verifier};
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -109,14 +109,24 @@ impl SignedPreKey {
         let secret = StaticSecret::random_from_rng(OsRng);
         let public = PublicKey::from(&secret);
         let signature = did_signing_key.sign(public.as_bytes()).to_bytes().to_vec();
-        Self { id, secret, public, signature }
+        Self {
+            id,
+            secret,
+            public,
+            signature,
+        }
     }
 
     /// Restore from stored data.
     pub fn from_parts(id: u32, secret_bytes: [u8; 32], signature: Vec<u8>) -> Self {
         let secret = StaticSecret::from(secret_bytes);
         let public = PublicKey::from(&secret);
-        Self { id, secret, public, signature }
+        Self {
+            id,
+            secret,
+            public,
+            signature,
+        }
     }
 }
 
@@ -150,8 +160,12 @@ impl PreKeyBundle {
 
     /// Extract the identity public key.
     pub fn identity_public(&self) -> Result<PublicKey, X3dhError> {
-        let bytes = B64.decode(&self.identity_key).map_err(|_| X3dhError::InvalidBundle)?;
-        if bytes.len() != 32 { return Err(X3dhError::InvalidBundle); }
+        let bytes = B64
+            .decode(&self.identity_key)
+            .map_err(|_| X3dhError::InvalidBundle)?;
+        if bytes.len() != 32 {
+            return Err(X3dhError::InvalidBundle);
+        }
         let mut arr = [0u8; 32];
         arr.copy_from_slice(&bytes);
         Ok(PublicKey::from(arr))
@@ -159,8 +173,12 @@ impl PreKeyBundle {
 
     /// Extract the signed pre-key public key.
     pub fn signed_pre_key_public(&self) -> Result<PublicKey, X3dhError> {
-        let bytes = B64.decode(&self.signed_pre_key).map_err(|_| X3dhError::InvalidBundle)?;
-        if bytes.len() != 32 { return Err(X3dhError::InvalidBundle); }
+        let bytes = B64
+            .decode(&self.signed_pre_key)
+            .map_err(|_| X3dhError::InvalidBundle)?;
+        if bytes.len() != 32 {
+            return Err(X3dhError::InvalidBundle);
+        }
         let mut arr = [0u8; 32];
         arr.copy_from_slice(&bytes);
         Ok(PublicKey::from(arr))
@@ -171,11 +189,16 @@ impl PreKeyBundle {
         &self,
         did_verify_key: &ed25519_dalek::VerifyingKey,
     ) -> Result<(), X3dhError> {
-        let spk_bytes = B64.decode(&self.signed_pre_key).map_err(|_| X3dhError::InvalidBundle)?;
-        let sig_bytes = B64.decode(&self.spk_signature).map_err(|_| X3dhError::InvalidBundle)?;
+        let spk_bytes = B64
+            .decode(&self.signed_pre_key)
+            .map_err(|_| X3dhError::InvalidBundle)?;
+        let sig_bytes = B64
+            .decode(&self.spk_signature)
+            .map_err(|_| X3dhError::InvalidBundle)?;
         let signature = ed25519_dalek::Signature::from_slice(&sig_bytes)
             .map_err(|_| X3dhError::InvalidSignature)?;
-        did_verify_key.verify(&spk_bytes, &signature)
+        did_verify_key
+            .verify(&spk_bytes, &signature)
             .map_err(|_| X3dhError::InvalidSignature)
     }
 }
@@ -217,9 +240,9 @@ pub fn initiate(
     let ek_public = PublicKey::from(&ek_secret);
 
     // X3DH: three DH computations
-    let dh1 = our_identity.secret.diffie_hellman(&spk_b);  // DH(IK_A, SPK_B)
-    let dh2 = ek_secret.diffie_hellman(&ik_b);              // DH(EK_A, IK_B)
-    let dh3 = ek_secret.diffie_hellman(&spk_b);             // DH(EK_A, SPK_B)
+    let dh1 = our_identity.secret.diffie_hellman(&spk_b); // DH(IK_A, SPK_B)
+    let dh2 = ek_secret.diffie_hellman(&ik_b); // DH(EK_A, IK_B)
+    let dh3 = ek_secret.diffie_hellman(&spk_b); // DH(EK_A, SPK_B)
 
     // Concatenate and derive shared secret
     let mut ikm = Vec::with_capacity(96);
@@ -249,9 +272,11 @@ pub fn respond(
     our_spk: &SignedPreKey,
     initial_msg: &InitialMessage,
 ) -> Result<([u8; 32], [u8; 32]), X3dhError> {
-    let ik_a_bytes = B64.decode(&initial_msg.identity_key)
+    let ik_a_bytes = B64
+        .decode(&initial_msg.identity_key)
         .map_err(|_| X3dhError::InvalidBundle)?;
-    let ek_a_bytes = B64.decode(&initial_msg.ephemeral_key)
+    let ek_a_bytes = B64
+        .decode(&initial_msg.ephemeral_key)
         .map_err(|_| X3dhError::InvalidBundle)?;
 
     if ik_a_bytes.len() != 32 || ek_a_bytes.len() != 32 {
@@ -272,9 +297,9 @@ pub fn respond(
     }
 
     // X3DH: three DH computations (Bob's side, reversed)
-    let dh1 = our_spk.secret.diffie_hellman(&ik_a);          // DH(SPK_B, IK_A)
-    let dh2 = our_identity.secret.diffie_hellman(&ek_a);     // DH(IK_B, EK_A)
-    let dh3 = our_spk.secret.diffie_hellman(&ek_a);          // DH(SPK_B, EK_A)
+    let dh1 = our_spk.secret.diffie_hellman(&ik_a); // DH(SPK_B, IK_A)
+    let dh2 = our_identity.secret.diffie_hellman(&ek_a); // DH(IK_B, EK_A)
+    let dh3 = our_spk.secret.diffie_hellman(&ek_a); // DH(SPK_B, EK_A)
 
     let mut ikm = Vec::with_capacity(96);
     ikm.extend_from_slice(dh1.as_bytes());
@@ -331,24 +356,16 @@ mod tests {
         let result = initiate(&alice_identity, "did:plc:alice", &bob_bundle).unwrap();
 
         // Bob responds
-        let (bob_shared, bob_ratchet_secret) = respond(
-            &bob_identity,
-            &bob_spk,
-            &result.initial_message,
-        ).unwrap();
+        let (bob_shared, bob_ratchet_secret) =
+            respond(&bob_identity, &bob_spk, &result.initial_message).unwrap();
 
         // Both derived the same shared secret
         assert_eq!(result.shared_secret, bob_shared);
 
         // Initialize Double Ratchet sessions
-        let mut alice_session = crate::ratchet::Session::init_alice(
-            result.shared_secret,
-            result.their_ratchet_key,
-        );
-        let mut bob_session = crate::ratchet::Session::init_bob(
-            bob_shared,
-            bob_ratchet_secret,
-        );
+        let mut alice_session =
+            crate::ratchet::Session::init_alice(result.shared_secret, result.their_ratchet_key);
+        let mut bob_session = crate::ratchet::Session::init_bob(bob_shared, bob_ratchet_secret);
 
         // Exchange messages
         let w1 = alice_session.encrypt("Hello from X3DH!").unwrap();

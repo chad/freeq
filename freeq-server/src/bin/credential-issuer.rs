@@ -19,17 +19,17 @@
 //!   GET  /health                            — Health check
 
 use axum::{
+    Json, Router,
     extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Redirect},
     routing::get,
-    Json, Router,
 };
 use clap::Parser;
 use ed25519_dalek::SigningKey;
+use parking_lot::Mutex;
 use serde::Deserialize;
 use std::sync::Arc;
-use parking_lot::Mutex;
 
 #[derive(Parser)]
 struct Args {
@@ -79,9 +79,10 @@ async fn main() -> anyhow::Result<()> {
     // Generate or load signing key
     let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
     let public_key = signing_key.verifying_key();
-    let public_key_multibase = format!("z{}", bs58::encode(
-        [&[0xed, 0x01], public_key.as_bytes().as_slice()].concat()
-    ).into_string());
+    let public_key_multibase = format!(
+        "z{}",
+        bs58::encode([&[0xed, 0x01], public_key.as_bytes().as_slice()].concat()).into_string()
+    );
 
     tracing::info!("Credential issuer starting");
     tracing::info!("  DID: {}", args.did);
@@ -113,9 +114,10 @@ async fn main() -> anyhow::Result<()> {
 /// Serve the DID document with our Ed25519 public key.
 async fn did_document(State(state): State<Arc<IssuerState>>) -> impl IntoResponse {
     let public_key = state.signing_key.verifying_key();
-    let public_key_multibase = format!("z{}", bs58::encode(
-        [&[0xed, 0x01], public_key.as_bytes().as_slice()].concat()
-    ).into_string());
+    let public_key_multibase = format!(
+        "z{}",
+        bs58::encode([&[0xed, 0x01], public_key.as_bytes().as_slice()].concat()).into_string()
+    );
 
     let key_id = format!("{}#key-1", state.did);
 
@@ -176,17 +178,26 @@ async fn github_callback(
 ) -> impl IntoResponse {
     let code = match q.get("code") {
         Some(c) => c.clone(),
-        None => return axum::response::Html(String::from("<h1>Error</h1><p>No code</p>")).into_response(),
+        None => {
+            return axum::response::Html(String::from("<h1>Error</h1><p>No code</p>"))
+                .into_response();
+        }
     };
     let oauth_state = match q.get("state") {
         Some(s) => s.clone(),
-        None => return axum::response::Html(String::from("<h1>Error</h1><p>No state</p>")).into_response(),
+        None => {
+            return axum::response::Html(String::from("<h1>Error</h1><p>No state</p>"))
+                .into_response();
+        }
     };
 
     let pending = state.pending.lock().remove(&oauth_state);
     let pending = match pending {
         Some(p) if p.created_at.elapsed() < std::time::Duration::from_secs(300) => p,
-        _ => return axum::response::Html(String::from("<h1>Error</h1><p>Expired or unknown</p>")).into_response(),
+        _ => {
+            return axum::response::Html(String::from("<h1>Error</h1><p>Expired or unknown</p>"))
+                .into_response();
+        }
     };
 
     let http = reqwest::Client::new();
@@ -210,7 +221,10 @@ async fn github_callback(
 
     let access_token = match token_json["access_token"].as_str() {
         Some(t) => t.to_string(),
-        None => return axum::response::Html(String::from("<h1>Error</h1><p>No access token</p>")).into_response(),
+        None => {
+            return axum::response::Html(String::from("<h1>Error</h1><p>No access token</p>"))
+                .into_response();
+        }
     };
 
     // Get authenticated username
@@ -227,12 +241,18 @@ async fn github_callback(
 
     let username = match user_json["login"].as_str() {
         Some(u) => u.to_string(),
-        None => return axum::response::Html(String::from("<h1>Error</h1><p>Cannot get username</p>")).into_response(),
+        None => {
+            return axum::response::Html(String::from("<h1>Error</h1><p>Cannot get username</p>"))
+                .into_response();
+        }
     };
 
     // Check org membership
     let org_ok = http
-        .get(format!("https://api.github.com/user/memberships/orgs/{}", pending.org))
+        .get(format!(
+            "https://api.github.com/user/memberships/orgs/{}",
+            pending.org
+        ))
         .header("Authorization", format!("Bearer {access_token}"))
         .header("User-Agent", "freeq-credential-issuer")
         .send()
@@ -244,7 +264,8 @@ async fn github_callback(
         return axum::response::Html(format!(
             "<h1>Not a member</h1><p>{username} is not a member of {}</p>",
             pending.org
-        )).into_response();
+        ))
+        .into_response();
     }
 
     // Issue signed credential
@@ -301,7 +322,9 @@ async fn github_callback(
         org = pending.org,
         did = pending.subject_did,
         expires = vc.expires_at.as_deref().unwrap_or("never"),
-        vc_oneline = serde_json::to_string(&vc).unwrap_or_default().replace('"', "&quot;"),
+        vc_oneline = serde_json::to_string(&vc)
+            .unwrap_or_default()
+            .replace('"', "&quot;"),
     );
 
     axum::response::Html(html).into_response()

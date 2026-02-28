@@ -1,10 +1,10 @@
 #![allow(clippy::too_many_arguments)]
 //! IRC registration (NICK/USER completion).
 
-use std::sync::Arc;
+use super::Connection;
 use crate::irc::{self, Message};
 use crate::server::SharedState;
-use super::Connection;
+use std::sync::Arc;
 
 /// Attach a new session to existing sessions with the same DID.
 /// Instead of ghosting (killing) old sessions, this enables multi-device:
@@ -26,7 +26,9 @@ pub(super) fn attach_same_did(
     };
 
     // Register this session in did_sessions
-    state.did_sessions.lock()
+    state
+        .did_sessions
+        .lock()
         .entry(did.clone())
         .or_default()
         .insert(session_id.to_string());
@@ -59,16 +61,28 @@ pub(super) fn attach_same_did(
         for (ch_name, was_op, was_voiced, was_halfop) in &ghost.channels {
             if let Some(ch) = channels.get_mut(&ch_name.to_lowercase()) {
                 ch.members.insert(session_id.to_string());
-                if *was_op { ch.ops.insert(session_id.to_string()); }
-                if *was_voiced { ch.voiced.insert(session_id.to_string()); }
-                if *was_halfop { ch.halfops.insert(session_id.to_string()); }
+                if *was_op {
+                    ch.ops.insert(session_id.to_string());
+                }
+                if *was_voiced {
+                    ch.voiced.insert(session_id.to_string());
+                }
+                if *was_halfop {
+                    ch.halfops.insert(session_id.to_string());
+                }
             }
         }
         drop(channels);
 
         // Store reclaimed channel names so try_complete_registration can send
         // synthetic state AFTER the client is fully registered (needed for CHATHISTORY).
-        conn.ghost_channels = Some(ghost.channels.iter().map(|(name, _, _, _)| name.clone()).collect());
+        conn.ghost_channels = Some(
+            ghost
+                .channels
+                .iter()
+                .map(|(name, _, _, _)| name.clone())
+                .collect(),
+        );
 
         return;
     }
@@ -76,7 +90,8 @@ pub(super) fn attach_same_did(
     // Find existing sessions for this DID
     let existing_sessions: Vec<String> = {
         let session_dids = state.session_dids.lock();
-        session_dids.iter()
+        session_dids
+            .iter()
             .filter(|(sid, d)| d.as_str() == did && sid.as_str() != session_id)
             .map(|(sid, _)| sid.clone())
             .collect()
@@ -93,7 +108,9 @@ pub(super) fn attach_same_did(
             }
         }
         // Reclaim if we got a fallback nick with trailing '_'
-        let reclaim = conn.nick.as_ref()
+        let reclaim = conn
+            .nick
+            .as_ref()
             .filter(|n| n.ends_with('_'))
             .map(|n| (n.clone(), n.trim_end_matches('_').to_string()));
         if let Some((current_nick, desired)) = reclaim {
@@ -126,21 +143,21 @@ pub(super) fn attach_same_did(
 
     // Adopt the canonical nick
     if let Some(ref canon) = canonical_nick
-        && conn.nick.as_ref().map(|n| n.to_lowercase()) != Some(canon.to_lowercase()) {
-            // Remove any nick mapping we created during CAP/SASL
-            if let Some(ref old_nick) = conn.nick {
-                state.nick_to_session.lock().remove_by_nick(old_nick);
-            }
-            conn.nick = Some(canon.clone());
+        && conn.nick.as_ref().map(|n| n.to_lowercase()) != Some(canon.to_lowercase())
+    {
+        // Remove any nick mapping we created during CAP/SASL
+        if let Some(ref old_nick) = conn.nick {
+            state.nick_to_session.lock().remove_by_nick(old_nick);
         }
+        conn.nick = Some(canon.clone());
+    }
 
     // Find all channels the DID is in via existing sessions
     let channels_to_join: Vec<String> = {
         let channels = state.channels.lock();
-        channels.iter()
-            .filter(|(_, ch)| {
-                existing_sessions.iter().any(|sid| ch.members.contains(sid))
-            })
+        channels
+            .iter()
+            .filter(|(_, ch)| existing_sessions.iter().any(|sid| ch.members.contains(sid)))
             .map(|(name, _)| name.clone())
             .collect()
     };
@@ -154,8 +171,12 @@ pub(super) fn attach_same_did(
                 // Copy op/voice status from existing session
                 let is_op = existing_sessions.iter().any(|s| ch.ops.contains(s));
                 let is_voiced = existing_sessions.iter().any(|s| ch.voiced.contains(s));
-                if is_op { ch.ops.insert(session_id.to_string()); }
-                if is_voiced { ch.voiced.insert(session_id.to_string()); }
+                if is_op {
+                    ch.ops.insert(session_id.to_string());
+                }
+                if is_voiced {
+                    ch.voiced.insert(session_id.to_string());
+                }
             }
         }
     }
@@ -166,14 +187,19 @@ pub(super) fn attach_same_did(
     for ch_name in &channels_to_join {
         // Synthesize JOIN for the client
         let host = super::helpers::cloaked_host_for_did(Some(did.as_str()));
-        send(state, session_id, format!(":{nick}!~u@{host} JOIN {ch_name}\r\n"));
+        send(
+            state,
+            session_id,
+            format!(":{nick}!~u@{host} JOIN {ch_name}\r\n"),
+        );
 
         // Send topic
         let channels = state.channels.lock();
         if let Some(ch) = channels.get(ch_name) {
             if let Some(ref topic) = ch.topic {
                 let topic_msg = crate::irc::Message::from_server(
-                    server_name, crate::irc::RPL_TOPIC,
+                    server_name,
+                    crate::irc::RPL_TOPIC,
                     vec![nick, ch_name, &topic.text],
                 );
                 send(state, session_id, format!("{topic_msg}\r\n"));
@@ -185,7 +211,9 @@ pub(super) fn attach_same_did(
             for member_sid in &ch.members {
                 if let Some(member_nick) = nts.get_nick(member_sid) {
                     let nick_lower = member_nick.to_lowercase();
-                    if seen_nicks.contains(&nick_lower) { continue; }
+                    if seen_nicks.contains(&nick_lower) {
+                        continue;
+                    }
                     seen_nicks.insert(nick_lower);
                     let prefix = if ch.ops.contains(member_sid) {
                         "@"
@@ -200,11 +228,13 @@ pub(super) fn attach_same_did(
             drop(channels);
             let names_str = names.join(" ");
             let names_msg = crate::irc::Message::from_server(
-                server_name, crate::irc::RPL_NAMREPLY,
+                server_name,
+                crate::irc::RPL_NAMREPLY,
                 vec![nick, "=", ch_name, &names_str],
             );
             let end_msg = crate::irc::Message::from_server(
-                server_name, crate::irc::RPL_ENDOFNAMES,
+                server_name,
+                crate::irc::RPL_ENDOFNAMES,
                 vec![nick, ch_name, "End of /NAMES list"],
             );
             send(state, session_id, format!("{names_msg}\r\n{end_msg}\r\n"));
@@ -248,7 +278,12 @@ pub(super) fn try_complete_registration(
                 let notice = Message::from_server(
                     server_name,
                     "NOTICE",
-                    vec!["*", &format!("Nick {nick} is registered — renamed to {guest_nick}. Authenticate to reclaim.")],
+                    vec![
+                        "*",
+                        &format!(
+                            "Nick {nick} is registered — renamed to {guest_nick}. Authenticate to reclaim."
+                        ),
+                    ],
                 );
                 send(state, session_id, format!("{notice}\r\n"));
                 state.nick_to_session.lock().remove_by_nick(nick);
@@ -268,7 +303,9 @@ pub(super) fn try_complete_registration(
 
     // Store iroh endpoint ID in shared state for WHOIS lookups
     if let Some(ref iroh_id) = conn.iroh_endpoint_id {
-        state.session_iroh_ids.lock()
+        state
+            .session_iroh_ids
+            .lock()
             .insert(session_id.to_string(), iroh_id.clone());
     }
 
@@ -317,11 +354,8 @@ pub(super) fn try_complete_registration(
         );
         send(state, session_id, format!("{start}\r\n"));
         for line in motd.lines() {
-            let motd_line = Message::from_server(
-                server_name,
-                irc::RPL_MOTD,
-                vec![nick, &format!("- {line}")],
-            );
+            let motd_line =
+                Message::from_server(server_name, irc::RPL_MOTD, vec![nick, &format!("- {line}")]);
             send(state, session_id, format!("{motd_line}\r\n"));
         }
         let end = Message::from_server(
@@ -352,13 +386,15 @@ pub(super) fn try_complete_registration(
             {
                 let channels = state.channels.lock();
                 if let Some(ch) = channels.get(&ch_name.to_lowercase())
-                    && let Some(ref topic) = ch.topic {
-                        let topic_msg = crate::irc::Message::from_server(
-                            server_name, crate::irc::RPL_TOPIC,
-                            vec![&nick, ch_name, &topic.text],
-                        );
-                        send(state, session_id, format!("{topic_msg}\r\n"));
-                    }
+                    && let Some(ref topic) = ch.topic
+                {
+                    let topic_msg = crate::irc::Message::from_server(
+                        server_name,
+                        crate::irc::RPL_TOPIC,
+                        vec![&nick, ch_name, &topic.text],
+                    );
+                    send(state, session_id, format!("{topic_msg}\r\n"));
+                }
             }
 
             // Names (sends NAMREPLY + ENDOFNAMES → triggers client CHATHISTORY request)
@@ -379,18 +415,24 @@ pub(super) fn try_complete_registration(
                     .map(|(name, _)| name.to_lowercase())
                     .collect()
             };
-            let to_join: Vec<String> = channels.into_iter()
+            let to_join: Vec<String> = channels
+                .into_iter()
                 .filter(|ch| !already_in.contains(&ch.to_lowercase()))
                 .collect();
             if !to_join.is_empty() {
                 tracing::info!(%session_id, %did, count = to_join.len(), "Auto-rejoining saved channels");
                 for channel in to_join {
                     super::channel::handle_join(
-                        conn, &channel, None, state, server_name, session_id, send,
+                        conn,
+                        &channel,
+                        None,
+                        state,
+                        server_name,
+                        session_id,
+                        send,
                     );
                 }
             }
         }
     }
 }
-

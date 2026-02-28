@@ -12,8 +12,8 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result, bail};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -102,7 +102,8 @@ impl OAuthSession {
             self.pds_url.trim_end_matches('/')
         );
         let proof = self.dpop_key.proof(
-            "GET", &url,
+            "GET",
+            &url,
             self.dpop_nonce.as_deref(),
             Some(&self.access_token),
         )?;
@@ -123,9 +124,10 @@ impl OAuthSession {
 
 /// Default path for the cached session file.
 pub fn default_session_path(handle: &str) -> std::path::PathBuf {
-    let config_dir = dirs::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-    config_dir.join("freeq-tui").join(format!("{handle}.session.json"))
+    let config_dir = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    config_dir
+        .join("freeq-tui")
+        .join(format!("{handle}.session.json"))
 }
 
 /// Authorization server metadata (RFC 8414 / AT Protocol extensions).
@@ -320,9 +322,10 @@ pub async fn login(handle: &str) -> Result<OAuthSession> {
 
     // 9. Verify DID matches
     if let Some(ref token_did) = token_did
-        && token_did != &did {
-            bail!("DID mismatch: resolved {did} but token is for {token_did}");
-        }
+        && token_did != &did
+    {
+        bail!("DID mismatch: resolved {did} but token is for {token_did}");
+    }
 
     // 10. Probe PDS getSession to discover the DPoP nonce
     //     The PDS will reject our first call but return the nonce we need.
@@ -425,33 +428,34 @@ async fn push_authorization_request(
 
     // If we got a use_dpop_nonce error, retry with the nonce
     if status.as_u16() == 400
-        && let Some(ref nonce) = dpop_nonce {
-            let dpop_proof_retry = dpop_key.proof("POST", par_endpoint, Some(nonce), None)?;
-            let resp2 = client
-                .post(par_endpoint)
-                .header("DPoP", &dpop_proof_retry)
-                .form(&params)
-                .send()
-                .await
-                .context("PAR retry request failed")?;
+        && let Some(ref nonce) = dpop_nonce
+    {
+        let dpop_proof_retry = dpop_key.proof("POST", par_endpoint, Some(nonce), None)?;
+        let resp2 = client
+            .post(par_endpoint)
+            .header("DPoP", &dpop_proof_retry)
+            .form(&params)
+            .send()
+            .await
+            .context("PAR retry request failed")?;
 
-            if !resp2.status().is_success() {
-                let status = resp2.status();
-                let text = resp2.text().await.unwrap_or_default();
-                bail!("PAR failed ({status}): {text}");
-            }
-
-            let par_resp: serde_json::Value = resp2.json().await?;
-            let request_uri = par_resp["request_uri"]
-                .as_str()
-                .context("No request_uri in PAR response")?;
-
-            return Ok(format!(
-                "{authorization_endpoint}?client_id={}&request_uri={}",
-                urlencod(client_id),
-                urlencod(request_uri),
-            ));
+        if !resp2.status().is_success() {
+            let status = resp2.status();
+            let text = resp2.text().await.unwrap_or_default();
+            bail!("PAR failed ({status}): {text}");
         }
+
+        let par_resp: serde_json::Value = resp2.json().await?;
+        let request_uri = par_resp["request_uri"]
+            .as_str()
+            .context("No request_uri in PAR response")?;
+
+        return Ok(format!(
+            "{authorization_endpoint}?client_id={}&request_uri={}",
+            urlencod(client_id),
+            urlencod(request_uri),
+        ));
+    }
 
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
@@ -501,9 +505,7 @@ async fn wait_for_callback(listener: TcpListener, expected_state: &str) -> Resul
 
         // Check for errors
         if let Some(error) = params.get("error") {
-            let desc = params
-                .get("error_description")
-                .unwrap_or(&"Unknown error");
+            let desc = params.get("error_description").unwrap_or(&"Unknown error");
             let body = format!(
                 "<html><body><h1>Authorization Failed</h1>\
                  <p>{error}: {desc}</p>\
@@ -596,8 +598,10 @@ async fn exchange_code(
             bail!("Token exchange failed ({status}): {text}");
         }
 
-        let token_resp: TokenResponse =
-            resp2.json().await.context("Failed to parse token response")?;
+        let token_resp: TokenResponse = resp2
+            .json()
+            .await
+            .context("Failed to parse token response")?;
         return Ok((token_resp.access_token, token_resp.sub));
     }
 
@@ -606,7 +610,10 @@ async fn exchange_code(
         bail!("Token exchange failed ({status}): {text}");
     }
 
-    let token_resp: TokenResponse = resp.json().await.context("Failed to parse token response")?;
+    let token_resp: TokenResponse = resp
+        .json()
+        .await
+        .context("Failed to parse token response")?;
     Ok((token_resp.access_token, token_resp.sub))
 }
 

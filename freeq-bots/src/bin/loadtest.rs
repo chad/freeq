@@ -16,7 +16,7 @@ use anyhow::Result;
 use clap::Parser;
 use freeq_sdk::client::{ClientHandle, ConnectConfig};
 use freeq_sdk::event::Event;
-use tokio::sync::{mpsc, Mutex, Barrier};
+use tokio::sync::{Barrier, Mutex, mpsc};
 use tokio::time::timeout;
 
 #[derive(Parser, Debug)]
@@ -111,7 +111,11 @@ async fn main() -> Result<()> {
             channel_names[(i + 1) % args.channels].clone(),
         ];
         // Dedup if channels == 1
-        let user_channels: Vec<String> = user_channels.into_iter().collect::<HashSet<_>>().into_iter().collect();
+        let user_channels: Vec<String> = user_channels
+            .into_iter()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
 
         let config = ConnectConfig {
             server_addr: args.server.clone(),
@@ -119,7 +123,8 @@ async fn main() -> Result<()> {
             user: nick.clone(),
             realname: format!("Load test user {i}"),
             tls: args.tls,
-            tls_insecure: args.tls, web_token: None,
+            tls_insecure: args.tls,
+            web_token: None,
         };
 
         let (handle, events) = freeq_sdk::client::connect(config, None);
@@ -193,7 +198,11 @@ async fn main() -> Result<()> {
                 }
             }
             if joined.len() < user_channels.len() {
-                eprintln!("  ⚠️  {nick} only joined {}/{} channels", joined.len(), user_channels.len());
+                eprintln!(
+                    "  ⚠️  {nick} only joined {}/{} channels",
+                    joined.len(),
+                    user_channels.len()
+                );
             }
 
             // Synchronize: all users wait here before sending
@@ -206,7 +215,12 @@ async fn main() -> Result<()> {
                 let mut count = 0usize;
                 loop {
                     match timeout(Duration::from_secs(15), events.recv()).await {
-                        Ok(Some(Event::Message { from: _from, target, text, .. })) => {
+                        Ok(Some(Event::Message {
+                            from: _from,
+                            target,
+                            text,
+                            ..
+                        })) => {
                             if let Some(id) = extract_msg_id(&text) {
                                 let mut t = recv_tracker.lock().await;
                                 t.received
@@ -257,7 +271,10 @@ async fn main() -> Result<()> {
 
     // Wait for all tasks
     let results = futures::future::join_all(tasks).await;
-    let succeeded = results.iter().filter(|r| r.as_ref().map(|(_, ok)| *ok).unwrap_or(false)).count();
+    let succeeded = results
+        .iter()
+        .filter(|r| r.as_ref().map(|(_, ok)| *ok).unwrap_or(false))
+        .count();
     let failed = args.users - succeeded;
 
     let elapsed = start_connect.elapsed();
@@ -288,18 +305,25 @@ async fn main() -> Result<()> {
 
     for (ch, sent_ids) in &t.sent {
         // Find all users that were in this channel (received at least one msg from it)
-        let receivers: Vec<&String> = t.received.keys()
+        let receivers: Vec<&String> = t
+            .received
+            .keys()
             .filter(|(_, c)| c == ch)
             .map(|(nick, _)| nick)
             .collect();
 
         for receiver_nick in &receivers {
-            let received_ids = t.received.get(&((*receiver_nick).clone(), ch.clone()))
+            let received_ids = t
+                .received
+                .get(&((*receiver_nick).clone(), ch.clone()))
                 .map(|s| s.len())
                 .unwrap_or(0);
 
             // Expected = all msgs NOT from this user (no echo-message)
-            let sent_by_self = sent_ids.iter().filter(|id| id.starts_with(&format!("{receiver_nick}:"))).count();
+            let sent_by_self = sent_ids
+                .iter()
+                .filter(|id| id.starts_with(&format!("{receiver_nick}:")))
+                .count();
             let expected = sent_ids.len() - sent_by_self;
 
             total_expected += expected;
@@ -322,7 +346,10 @@ async fn main() -> Result<()> {
     println!("   Total received: {total_received}");
     println!("   Total missing:  {total_missing}");
     println!("   Delivery rate:  {delivery_rate:.1}%");
-    println!("   Throughput:     {:.0} msgs/sec", total_sent as f64 / elapsed.as_secs_f64());
+    println!(
+        "   Throughput:     {:.0} msgs/sec",
+        total_sent as f64 / elapsed.as_secs_f64()
+    );
     println!();
 
     if delivery_rate >= 99.9 {

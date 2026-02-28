@@ -80,14 +80,17 @@ pub fn sha256_hex(data: &[u8]) -> String {
 pub fn hmac_sign<T: Serialize>(value: &T, key: &[u8]) -> Result<String, serde_json::Error> {
     use hmac::{Hmac, Mac};
     let canonical = canonicalize(value)?;
-    let mut mac = Hmac::<Sha256>::new_from_slice(key)
-        .expect("HMAC key length is always valid");
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC key length is always valid");
     mac.update(canonical.as_bytes());
     Ok(hex::encode(mac.finalize().into_bytes()))
 }
 
 /// Verify an HMAC-SHA256 signature over the JCS-canonicalized representation.
-pub fn hmac_verify<T: Serialize>(value: &T, key: &[u8], signature: &str) -> Result<bool, serde_json::Error> {
+pub fn hmac_verify<T: Serialize>(
+    value: &T,
+    key: &[u8],
+    signature: &str,
+) -> Result<bool, serde_json::Error> {
     let expected = hmac_sign(value, key)?;
     // Constant-time comparison
     Ok(expected == signature)
