@@ -68,7 +68,15 @@ class MainActivity : ComponentActivity() {
                 val did = uri.getQueryParameter("did")
 
                 state.pendingWebToken = token
+                state.brokerToken = token
                 did?.let { state.authenticatedDID.value = it }
+                // Persist secrets for session restore
+                state.securePrefs.edit()
+                    .putString("brokerToken", token)
+                    .apply()
+                did?.let {
+                    state.securePrefs.edit().putString("did", it).apply()
+                }
                 state.serverAddress.value = "irc.freeq.at:6667"
                 state.connect(nick)
             }
