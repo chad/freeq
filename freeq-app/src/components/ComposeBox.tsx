@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo, type KeyboardEvent, type DragEvent } from 'react';
 import { useStore } from '../store';
 import { sendMessage, sendReply, sendEdit, joinChannel, partChannel, setTopic, setMode, kickUser, inviteUser, setAway, rawCommand, sendWhois } from '../irc/client';
-import { EmojiPicker } from './EmojiPicker';
+import { EmojiPicker, EMOJI_DATA } from './EmojiPicker';
 import { SlashCommands, getCommandCount } from './SlashCommands';
 import { FormatToolbar } from './FormatToolbar';
 
@@ -112,6 +112,21 @@ export function ComposeBox() {
         }
       }
     }
+    // Emoji autocomplete (:keyword)
+    const colonIdx = before.lastIndexOf(':');
+    if (colonIdx >= 0 && (colonIdx === 0 || before[colonIdx - 1] === ' ')) {
+      const partial = before.slice(colonIdx + 1).toLowerCase();
+      if (partial.length > 0 && !partial.includes(' ')) {
+        const matches = EMOJI_DATA
+          .filter(([, ...kws]) => kws.some(k => k.startsWith(partial) || k.includes(partial)))
+          .slice(0, 8)
+          .map(([emoji, ...kws]) => `${emoji} ${kws[0]}`);
+        if (matches.length > 0) {
+          setAutocomplete({ items: matches, selected: 0, startPos: colonIdx });
+          return;
+        }
+      }
+    }
     setAutocomplete(null);
   };
 
@@ -120,7 +135,13 @@ export function ComposeBox() {
     const before = text.slice(0, autocomplete.startPos);
     const after = text.slice(inputRef.current?.selectionStart || text.length);
     const isChannel = item.startsWith('#');
-    const newText = before + (isChannel ? item : `@${item}`) + ' ' + after;
+    const isEmoji = /^\p{Emoji}/u.test(item);
+    let newText: string;
+    if (isEmoji) {
+      newText = before + item.split(' ')[0] + ' ' + after;
+    } else {
+      newText = before + (isChannel ? item : `@${item}`) + ' ' + after;
+    }
     setText(newText);
     setAutocomplete(null);
     inputRef.current?.focus();
@@ -612,10 +633,12 @@ export function ComposeBox() {
             >
               {item.startsWith('#') ? (
                 <span className="text-accent text-xs">#</span>
+              ) : /^\p{Emoji}/u.test(item) ? (
+                <span className="text-base">{item.split(' ')[0]}</span>
               ) : (
                 <span className="text-purple text-xs">@</span>
               )}
-              {item.replace(/^#/, '')}
+              {/^\p{Emoji}/u.test(item) ? item.split(' ').slice(1).join(' ') : item.replace(/^#/, '')}
             </button>
           ))}
         </div>

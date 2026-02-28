@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useMemo } from 'react';
 
 // Emoji data: [emoji, ...keywords]
-const EMOJI_DATA: [string, ...string[]][] = [
+export const EMOJI_DATA: [string, ...string[]][] = [
   // Smileys
   ['😀','grin','happy','smile'],['😃','smile','happy'],['😄','laugh','happy'],['😁','grin','teeth'],
   ['😂','laugh','cry','lol','tears'],['🤣','rofl','lol','laugh'],['🥹','grateful','touched','cry'],
