@@ -17,6 +17,8 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
+serde = { workspace = true }
+toml = "0.8"
 ratatui = "0.30"
 crossterm = "0.29"
 hex = "0.4"
@@ -25,6 +27,7 @@ ratatui-image = { version = "10", optional = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 reqwest = { workspace = true }
 open = "5"
+whoami = "1"
 
 [features]
 default = []

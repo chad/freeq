@@ -1,4 +1,5 @@
 mod app;
+mod config;
 mod editor;
 mod ui;
 
@@ -26,16 +27,22 @@ use ratatui::Terminal;
 use crate::app::App;
 
 /// Minimal TUI client for IRC with AT Protocol authentication.
+///
+/// Just run `freeq-tui` to connect to irc.freeq.at with TLS.
+/// Settings are saved to ~/.config/freeq/tui.toml and channels
+/// are restored from your last session.
 #[derive(Parser, Debug)]
 #[command(name = "freeq-tui", version, about)]
 struct Cli {
-    /// Server address (host:port).
-    server: String,
+    /// Server address (host:port). Default: irc.freeq.at:6697
+    #[arg(short = 's', long)]
+    server: Option<String>,
 
-    /// IRC nickname.
-    nick: String,
+    /// IRC nickname. Default: derived from handle or system username.
+    #[arg(short = 'n', long)]
+    nick: Option<String>,
 
-    /// Connect with TLS.
+    /// Connect with TLS (auto-detected for port 6697).
     #[arg(long)]
     tls: bool,
 
@@ -87,86 +94,125 @@ struct Cli {
     /// Example: -c '#hello,#general'
     #[arg(short = 'c', long = "channel")]
     channels: Option<String>,
+
+    /// Save current CLI args as defaults in config file.
+    #[arg(long)]
+    save_config: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Build signer before entering the TUI
-    let (signer, media_uploader) = build_signer(&cli).await?;
+    // Load persistent config + session
+    let cfg = config::Config::load();
+    let session = config::Session::load();
 
-    let auth_status = if signer.is_some() {
-        "authenticating"
-    } else {
-        "guest"
+    // --save-config: persist current CLI args and exit
+    if cli.save_config {
+        let mut new_cfg = cfg.clone();
+        if let Some(ref s) = cli.server { new_cfg.server = Some(s.clone()); }
+        if let Some(ref n) = cli.nick { new_cfg.nick = Some(n.clone()); }
+        if let Some(ref h) = cli.handle { new_cfg.handle = Some(h.clone()); }
+        if cli.tls { new_cfg.tls = Some(true); }
+        if cli.tls_insecure { new_cfg.tls_insecure = Some(true); }
+        if cli.vi { new_cfg.vi = Some(true); }
+        if let Some(ref ch) = cli.channels {
+            new_cfg.channels = Some(ch.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect());
+        }
+        if let Some(ref a) = cli.iroh_addr { new_cfg.iroh_addr = Some(a.clone()); }
+        new_cfg.save();
+        let path = dirs::config_dir().unwrap_or_default().join("freeq").join("tui.toml");
+        eprintln!("Config saved to {}", path.display());
+        return Ok(());
+    }
+
+    // Resolve effective settings: CLI > config > session > defaults
+    let resolved = config::Resolved::merge(&cli, &cfg, &session);
+
+    eprintln!("freeq-tui — server: {}, nick: {}, channels: {}",
+        resolved.server,
+        resolved.nick,
+        if resolved.channels.is_empty() { "(none)".to_string() } else { resolved.channels.join(", ") },
+    );
+    if let Some(ref h) = resolved.handle {
+        eprintln!("  handle: {h}");
+    }
+
+    // Build a CLI-like struct with resolved values for build_signer
+    let effective_cli = Cli {
+        server: Some(resolved.server.clone()),
+        nick: Some(resolved.nick.clone()),
+        handle: resolved.handle.clone(),
+        tls: resolved.tls,
+        tls_insecure: resolved.tls_insecure,
+        vi: resolved.vi,
+        channels: if resolved.channels.is_empty() { None } else { Some(resolved.channels.join(",")) },
+        iroh_addr: resolved.iroh_addr.clone(),
+        app_password: cli.app_password.clone(),
+        did: cli.did.clone(),
+        key_file: cli.key_file.clone(),
+        key_type: cli.key_type.clone(),
+        gen_key: cli.gen_key,
+        reauth: cli.reauth,
+        save_config: false,
     };
-    // Establish connection BEFORE entering the TUI so errors are visible on stderr.
-    //
-    // Transport priority:
-    //   1. Explicit --iroh-addr (user knows the endpoint ID)
-    //   2. Auto-discovered iroh (probe server via CAP LS, upgrade if available)
-    //   3. TCP/TLS (fallback)
-    let iroh_addr = if let Some(ref addr) = cli.iroh_addr {
+
+    let (signer, media_uploader) = build_signer(&effective_cli).await?;
+
+    let auth_status = if signer.is_some() { "authenticating" } else { "guest" };
+
+    // Transport priority: iroh > TCP/TLS
+    let iroh_addr = if let Some(ref addr) = resolved.iroh_addr {
         Some(addr.clone())
     } else {
-        // Probe the server for iroh support
-        eprintln!("Probing {} for iroh transport...", cli.server);
-        let use_tls = cli.tls || cli.server.ends_with(":6697");
-        match client::discover_iroh_id(&cli.server, use_tls, cli.tls_insecure).await {
+        eprintln!("Probing {} for iroh transport...", resolved.server);
+        match client::discover_iroh_id(&resolved.server, resolved.tls, resolved.tls_insecure).await {
             Some(id) => {
                 eprintln!("  Server advertises iroh: {}", &id[..16.min(id.len())]);
                 Some(id)
             }
             None => {
-                eprintln!("  No iroh available, using TCP");
+                eprintln!("  No iroh available, using {}", if resolved.tls { "TLS" } else { "TCP" });
                 None
             }
         }
     };
 
     let conn = if let Some(ref iroh_addr) = iroh_addr {
-        eprintln!("Connecting via iroh to {} as {} ({auth_status})...", &iroh_addr[..16.min(iroh_addr.len())], cli.nick);
+        eprintln!("Connecting via iroh to {} as {} ({auth_status})...", &iroh_addr[..16.min(iroh_addr.len())], resolved.nick);
         client::establish_iroh_connection(iroh_addr).await?
     } else {
-        eprintln!("Connecting to {} as {} ({auth_status})...", cli.server, cli.nick);
-
-        // Auto-detect TLS from port 6697
-        let use_tls = cli.tls || cli.server.ends_with(":6697");
-        if use_tls && !cli.tls {
-            eprintln!("  (auto-enabling TLS for port 6697)");
+        eprintln!("Connecting to {} as {} ({auth_status})...", resolved.server, resolved.nick);
+        if resolved.tls {
+            eprintln!("  (TLS enabled)");
         }
 
         client::establish_connection(&ConnectConfig {
-            server_addr: cli.server.clone(),
-            nick: cli.nick.clone(),
-            user: cli.nick.clone(),
-            realname: "IRC AT TUI Client".to_string(),
-            tls: use_tls,
-            tls_insecure: cli.tls_insecure, web_token: None,
+            server_addr: resolved.server.clone(),
+            nick: resolved.nick.clone(),
+            user: resolved.nick.clone(),
+            realname: "freeq tui".to_string(),
+            tls: resolved.tls,
+            tls_insecure: resolved.tls_insecure,
+            web_token: None,
         }).await?
     };
 
-    let config = ConnectConfig {
-        server_addr: iroh_addr.as_deref().unwrap_or(&cli.server).to_string(),
-        nick: cli.nick.clone(),
-        user: cli.nick.clone(),
-        realname: "IRC AT TUI Client".to_string(),
-        tls: cli.tls || cli.server.ends_with(":6697"),
-        tls_insecure: cli.tls_insecure, web_token: None,
+    let connect_config = ConnectConfig {
+        server_addr: iroh_addr.as_deref().unwrap_or(&resolved.server).to_string(),
+        nick: resolved.nick.clone(),
+        user: resolved.nick.clone(),
+        realname: "freeq tui".to_string(),
+        tls: resolved.tls,
+        tls_insecure: resolved.tls_insecure,
+        web_token: None,
     };
 
-    let (mut handle, mut events) = client::connect_with_stream(conn, config.clone(), signer.clone());
+    let (mut handle, mut events) = client::connect_with_stream(conn, connect_config.clone(), signer.clone());
 
-    // Auto-join channels (queued until registration completes)
-    let auto_join_channels: Vec<String> = cli.channels.as_deref()
-        .unwrap_or("")
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    for ch in &auto_join_channels {
+    // Auto-join channels
+    for ch in &resolved.channels {
         let _ = handle.join(ch).await;
     }
 
@@ -189,30 +235,41 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(std::io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(&cli.nick, cli.vi);
-    // Set transport info
+    let mut app = App::new(&resolved.nick, resolved.vi);
     if iroh_addr.is_some() {
         app.transport = app::Transport::Iroh;
         app.iroh_endpoint_id = iroh_addr.clone();
-    } else if cli.tls || cli.server.ends_with(":6697") {
+    } else if resolved.tls {
         app.transport = app::Transport::Tls;
     } else {
         app.transport = app::Transport::Tcp;
     }
-    app.server_addr = cli.server.clone();
+    app.server_addr = resolved.server.clone();
     app.connected_at = Some(std::time::Instant::now());
     app.media_uploader = media_uploader;
     #[cfg(feature = "inline-images")]
     { app.picker = picker; }
 
     let mut reconnect_info = Some(ReconnectInfo {
-        config,
+        config: connect_config,
         signer: signer.clone(),
-        channels: auto_join_channels,
+        channels: resolved.channels.clone(),
         iroh_addr: iroh_addr.clone(),
     });
 
     let result = run_app(&mut terminal, &mut app, &mut handle, &mut events, &mut reconnect_info).await;
+
+    // Save session state on exit (channels, server, nick, handle)
+    let open_channels: Vec<String> = app.buffers.keys()
+        .filter(|k| k.starts_with('#') || k.starts_with('&'))
+        .cloned()
+        .collect();
+    config::Session {
+        server: Some(resolved.server),
+        nick: Some(app.nick.clone()),
+        handle: resolved.handle,
+        channels: open_channels,
+    }.save();
 
     // Restore terminal
     disable_raw_mode()?;
@@ -598,7 +655,7 @@ fn process_p2p_event(app: &mut App, event: freeq_sdk::p2p::P2pEvent) {
     }
 }
 
-fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle) {
+fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle) {
     match event {
         Event::Connected => {
             app.connection_state = "connected".to_string();
@@ -673,7 +730,6 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
             let timestamp = format_timestamp(&tags);
             let timestamp_ms = parse_timestamp_ms(&tags);
             let batch_id = tags.get("batch");
-            let in_batch = batch_id.map(|id| app.batches.contains_key(id)).unwrap_or(false);
 
             // Check for media attachment in tags
             let media = freeq_sdk::media::MediaAttachment::from_tags(&tags);
@@ -750,18 +806,10 @@ fn process_irc_event(app: &mut App, event: Event, handle: &client::ClientHandle)
                         image_url: None,
                     });
 
-                    // Auto-fetch link previews for URLs in messages (from others)
-                    if !in_batch && from != app.nick {
-                        if let Some(url) = extract_url(&text) {
-                            let handle_clone = handle.clone();
-                            let target_clone = target.clone();
-                            tokio::spawn(async move {
-                                if let Ok(preview) = freeq_sdk::media::fetch_link_preview(&url).await {
-                                    let _ = handle_clone.send_link_preview(&target_clone, &preview).await;
-                                }
-                            });
-                        }
-                    }
+                    // Note: auto-fetch of link previews disabled.
+                    // Use /preview <url> to manually fetch + share a preview.
+                    // Auto-fetching arbitrary URLs from messages is a privacy/security risk
+                    // (leaks IP to URL host, potential SSRF, sends messages on user's behalf).
                 }
             }
         }
@@ -1419,6 +1467,7 @@ async fn process_input(
                 app.status_msg("  /quit [message]     Disconnect (/q)");
                 app.status_msg("── Navigation ───────────────────────────");
                 app.status_msg("  /switch [name]    List or switch buffers (/sw)");
+                app.status_msg("  /config           Show config + session state");
                 app.status_msg("── Keys ─────────────────────────────────");
                 app.status_msg("  Tab               Nick-complete (or next buffer if empty)");
                 app.status_msg("  Shift-Tab         Previous buffer");
@@ -1486,6 +1535,25 @@ async fn process_input(
                     let limit = if arg.is_empty() { "50" } else { arg };
                     handle.raw(&format!("CHATHISTORY LATEST {channel} * {limit}")).await?;
                 }
+            }
+            "/config" | "/settings" => {
+                let cfg = config::Config::load();
+                let session = config::Session::load();
+                app.status_msg("── Config (~/.config/freeq/tui.toml) ────");
+                app.status_msg(&format!("  server:  {}", cfg.server.as_deref().unwrap_or("(default: irc.freeq.at:6697)")));
+                app.status_msg(&format!("  nick:    {}", cfg.nick.as_deref().unwrap_or("(auto)")));
+                app.status_msg(&format!("  handle:  {}", cfg.handle.as_deref().unwrap_or("(none)")));
+                app.status_msg(&format!("  tls:     {}", cfg.tls.map(|b| b.to_string()).unwrap_or("(auto)".into())));
+                app.status_msg(&format!("  vi:      {}", cfg.vi.unwrap_or(false)));
+                let cfg_ch = cfg.channels.as_ref().map(|v| v.join(", ")).unwrap_or("(none)".into());
+                app.status_msg(&format!("  channels: {cfg_ch}"));
+                app.status_msg("── Session (~/.config/freeq/session.toml) ─");
+                app.status_msg(&format!("  last server:  {}", session.server.as_deref().unwrap_or("(none)")));
+                app.status_msg(&format!("  last nick:    {}", session.nick.as_deref().unwrap_or("(none)")));
+                let ses_ch = if session.channels.is_empty() { "(none)".into() } else { session.channels.join(", ") };
+                app.status_msg(&format!("  channels:     {ses_ch}"));
+                app.status_msg("  Tip: use --save-config to persist current CLI args");
+                app.status_msg("  Tip: channels are auto-saved on quit");
             }
             "/switch" | "/sw" => {
                 if arg.is_empty() {
