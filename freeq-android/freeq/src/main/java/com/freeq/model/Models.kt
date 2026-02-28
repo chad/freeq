@@ -380,10 +380,13 @@ class AppState(application: Application) : AndroidViewModel(application) {
         sendRaw("@+typing=done TAGMSG $target")
         lastTypingSent = 0
 
+        val hasCodeBlock = text.contains("```")
+
         // Edit mode
         val editing = editingMessage.value
         if (editing != null) {
-            val escaped = text.replace("\r", "").replace("\n", " ")
+            val escaped = if (hasCodeBlock) text.replace("\r", "").replace("\n", "\\n")
+                          else text.replace("\r", "").replace("\n", " ")
             sendRaw("@+draft/edit=${editing.id} PRIVMSG $target :$escaped")
             editingMessage.value = null
             return
@@ -392,14 +395,17 @@ class AppState(application: Application) : AndroidViewModel(application) {
         // Reply mode
         val reply = replyingTo.value
         if (reply != null) {
-            val escaped = text.replace("\r", "").replace("\n", " ")
+            val escaped = if (hasCodeBlock) text.replace("\r", "").replace("\n", "\\n")
+                          else text.replace("\r", "").replace("\n", " ")
             sendRaw("@+reply=${reply.id} PRIVMSG $target :$escaped")
             replyingTo.value = null
             return
         }
 
+        // Code block: encode newlines as literal \n and send as one message
+        val sendText = if (hasCodeBlock) text.replace("\r", "").replace("\n", "\\n") else text
         try {
-            client?.sendMessage(target, text)
+            client?.sendMessage(target, sendText)
         } catch (_: Exception) {
             errorMessage.value = "Send failed"
         }

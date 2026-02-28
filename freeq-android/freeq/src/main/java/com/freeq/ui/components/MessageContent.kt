@@ -150,8 +150,27 @@ internal fun replaceEmojiShortcodes(text: String): String {
 
 private val BOLD_PATTERN = Regex("""\*\*(.+?)\*\*""")
 private val CODE_PATTERN = Regex("""`([^`]+)`""")
+private val CODE_BLOCK_PATTERN = Regex("""```([\s\S]*?)```""")
 
 private data class StyledSpan(val start: Int, val end: Int, val style: SpanStyle, val displayText: String)
+
+private data class ContentPart(val text: String, val isCodeBlock: Boolean)
+
+private fun splitCodeBlocks(text: String): List<ContentPart> {
+    val parts = mutableListOf<ContentPart>()
+    var lastEnd = 0
+    CODE_BLOCK_PATTERN.findAll(text).forEach { match ->
+        if (match.range.first > lastEnd) {
+            parts.add(ContentPart(text.substring(lastEnd, match.range.first), false))
+        }
+        parts.add(ContentPart(match.groupValues[1], true))
+        lastEnd = match.range.last + 1
+    }
+    if (lastEnd < text.length) {
+        parts.add(ContentPart(text.substring(lastEnd), false))
+    }
+    return parts
+}
 
 private fun formatMarkdown(text: String, codeBg: Color): AnnotatedString {
     val spans = mutableListOf<StyledSpan>()
@@ -233,6 +252,42 @@ fun MessageContent(
                     fontStyle = FontStyle.Italic,
                     color = MaterialTheme.colorScheme.onBackground
                 )
+            } else if (showText.contains("```")) {
+                // Has code blocks — render as column with distinct code block styling
+                val hasEncodedNewlines = showText.contains("\\n")
+                val parts = splitCodeBlocks(showText)
+                Column {
+                    for (part in parts) {
+                        if (part.isCodeBlock) {
+                            val decoded = if (hasEncodedNewlines)
+                                part.text.replace("\\n", "\n").trim()
+                            else part.text.trim()
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp)
+                                    .background(codeBg, RoundedCornerShape(6.dp))
+                                    .padding(8.dp)
+                            ) {
+                                Text(
+                                    text = decoded,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+                            }
+                        } else if (part.text.isNotEmpty()) {
+                            val decoded = if (hasEncodedNewlines)
+                                part.text.replace("\\n", "\n")
+                            else part.text
+                            Text(
+                                text = formatMarkdown(decoded, codeBg),
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                        }
+                    }
+                }
             } else {
                 val styled = formatMarkdown(showText, codeBg)
                 Text(
