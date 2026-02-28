@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Proposal: Web Transport for freeq — freeq</title>
+  <style>
+    :root { --bg: #0c0c0f; --fg: #e4e4e7; --fg-dim: #71717a; --accent: #818cf8; --surface: #18181b; --border: #27272a; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; line-height: 1.7; }
+    .container { max-width: 800px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+    .nav { display: flex; align-items: center; gap: 1rem; padding: 1rem 0 2rem; border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
+    .nav a { color: var(--accent); text-decoration: none; font-size: 14px; }
+    .nav a:hover { text-decoration: underline; }
+    .nav .brand { font-weight: 700; font-size: 18px; color: var(--accent); }
+    h1 { font-size: 2rem; margin: 0 0 1rem; color: var(--fg); }
+    h2 { font-size: 1.4rem; margin: 2rem 0 0.75rem; color: var(--fg); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+    h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; color: var(--fg); }
+    p { margin: 0.75rem 0; }
+    a { color: var(--accent); }
+    code { background: var(--surface); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; font-family: 'SF Mono', 'Fira Code', monospace; }
+    pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; margin: 1rem 0; }
+    pre code { background: none; padding: 0; font-size: 0.85em; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    th, td { text-align: left; padding: 0.5rem 0.75rem; border: 1px solid var(--border); }
+    th { background: var(--surface); font-weight: 600; }
+    ul, ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+    li { margin: 0.25rem 0; }
+    blockquote { border-left: 3px solid var(--accent); padding-left: 1rem; color: var(--fg-dim); margin: 1rem 0; }
+    hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+    strong { color: #fff; }
+    img { max-width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <nav class="nav">
+      <span class="brand">freeq</span>
+      <a href="/">← Back to app</a>
+      <a href="/docs/">All docs</a>
+    </nav>
+    <h1>Proposal: Web Transport for freeq</h1>
+<h2>Summary</h2>
+<p>Add WebSocket and HTTP access to freeq. The WebSocket carries raw IRC
+lines — not a new JSON protocol. The HTTP layer provides read-only REST
+endpoints backed by the persistence layer. No web UI ships with the server.</p>
+<p>This proposal assumes persistence (SQLite) is already implemented.</p>
+<h2>Design Principles</h2>
+<p>freeq is infrastructure, not a product. The web layer follows from that:</p>
+<ul>
+<li><p><strong>One protocol.</strong> IRC is the wire protocol. WebSocket is a transport, not
+a new protocol. Web clients speak IRC over WebSocket, the same way they
+speak IRC over TCP. This is how KiwiIRC, The Lounge, and IRCCloud work.
+No JSON wire format, no tagged unions, no second parser.</p>
+</li>
+<li><p><strong>REST is read-only.</strong> The HTTP API exposes data that&#39;s already persisted:
+channel history, user identity, server health. It does not accept commands.
+If you want to send a message, open a WebSocket and send <code>PRIVMSG</code>. This
+keeps the API surface minimal and the command path singular.</p>
+</li>
+<li><p><strong>No web UI in this repo.</strong> A web frontend is a product. Anyone can build
+one against the WebSocket + REST endpoints. Shipping one here would create
+maintenance obligations and feature pressure that don&#39;t belong in an
+infrastructure project. If we want a reference web client later, it gets
+its own repo.</p>
+</li>
+<li><p><strong>No new auth system.</strong> Web clients authenticate the same way IRC clients
+do: CAP negotiation → SASL <code>ATPROTO-CHALLENGE</code> → done. The messages
+happen to travel over WebSocket instead of TCP. No session tokens, no
+cookies, no parallel auth flow.</p>
+</li>
+</ul>
+<h2>What This Gets Us</h2>
+<ul>
+<li><p><strong>Browser access</strong> without a bouncer. Any WebSocket-capable IRC library
+works. A thin JS wrapper around <code>new WebSocket()</code> + IRC line parsing is
+all a web client needs.</p>
+</li>
+<li><p><strong>Bot and integration ecosystem</strong> via REST. Fetching history, looking up
+DIDs, checking health — these are the HTTP-shaped operations that tools
+actually need. They read from the database; they don&#39;t need a persistent
+connection.</p>
+</li>
+<li><p><strong>Cross-protocol messaging for free.</strong> IRC-over-TCP and IRC-over-WebSocket
+clients share the same server state. A message sent from a TCP client
+appears in a WebSocket client&#39;s channel, and vice versa. No translation
+layer, no event mapping, no dual-protocol bugs.</p>
+</li>
+</ul>
+<h2>Architecture</h2>
+<pre><code>IRC clients ──TCP──▸ ┌────────────────────┐ ◂──WS── Browsers
+                     │   Connection Mux   │
+                     │   (TCP + WS both   │
+                     │    feed into the    │
+                     │    same handler)    │
+                     ├────────────────────┤
+                     │   Server State     │  ← SharedState (unchanged)
+                     ├────────────────────┤
+                     │   SQLite           │  ← persistence layer
+                     └────────────────────┘
+                            ▲
+                     HTTP ──┘  (read-only REST)
+</code></pre>
+<p>The WebSocket handler upgrades the HTTP connection, then hands the resulting
+bidirectional byte stream to the same <code>connection::handle_generic()</code> that
+TLS connections already use. From the server&#39;s perspective, a WebSocket
+client is just another <code>AsyncRead + AsyncWrite</code> stream. No new connection
+type, no adapter pattern, no engine extraction.</p>
+<h3>File Changes</h3>
+<pre><code>freeq-server/
+  src/
+    connection.rs   Add WebSocket stream adapter (AsyncRead/AsyncWrite over WS frames)
+    web.rs          NEW — axum router: WS upgrade endpoint + REST endpoints
+    db.rs           Already exists (persistence layer)
+    config.rs       Add --web-addr flag
+    main.rs         Start HTTP listener alongside TCP
+    server.rs       SharedState gets a Db handle (already done by persistence)
+</code></pre>
+<p>No new crates. No new workspace members. No engine extraction.</p>
+<h3>WebSocket Transport</h3>
+<p>The WebSocket endpoint (<code>/irc</code>) upgrades to a WebSocket connection, then
+wraps it in an adapter that implements <code>AsyncRead + AsyncWrite</code> by mapping
+between WebSocket text frames and IRC line bytes:</p>
+<ul>
+<li><strong>Inbound:</strong> Each WebSocket text frame contains one IRC line (without
+<code>\r\n</code>). The adapter appends <code>\r\n</code> and yields the bytes to the reader.</li>
+<li><strong>Outbound:</strong> The adapter splits on <code>\r\n</code> and sends each IRC line as a
+WebSocket text frame.</li>
+</ul>
+<p>This adapter is ~50 lines of code. Once it exists, <code>handle_generic()</code> works
+unchanged. CAP negotiation, SASL, PRIVMSG, JOIN — everything works because
+the server sees IRC lines, not WebSocket frames.</p>
+<h3>REST API</h3>
+<p>Read-only endpoints backed by SQLite queries. No authentication required for
+public data; DID-gated endpoints can come later if needed.</p>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>GET /api/health</code></td>
+<td>Server uptime, connection count, channel count</td>
+</tr>
+<tr>
+<td><code>GET /api/channels</code></td>
+<td>List active channels (name, member count, topic)</td>
+</tr>
+<tr>
+<td><code>GET /api/channels/{name}/history?limit=N&amp;before=T</code></td>
+<td>Message history (paginated by timestamp)</td>
+</tr>
+<tr>
+<td><code>GET /api/channels/{name}/topic</code></td>
+<td>Current topic with metadata</td>
+</tr>
+<tr>
+<td><code>GET /api/users/{nick}</code></td>
+<td>User info: DID, handle, online status</td>
+</tr>
+<tr>
+<td><code>GET /api/users/{nick}/whois</code></td>
+<td>Same data as IRC WHOIS, as JSON</td>
+</tr>
+</tbody></table>
+<p>All responses are JSON. All timestamps are Unix seconds. Pagination uses
+<code>before</code> (timestamp) and <code>limit</code> (default 50, max 200).</p>
+<p>No <code>POST</code>, <code>PUT</code>, <code>DELETE</code>, or <code>PATCH</code> endpoints. If you want to act on the
+server, speak IRC.</p>
+<h3>New Dependencies</h3>
+<table>
+<thead>
+<tr>
+<th>Crate</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>axum</code></td>
+<td>HTTP framework + WebSocket upgrade</td>
+</tr>
+<tr>
+<td><code>tower-http</code></td>
+<td>CORS middleware</td>
+</tr>
+</tbody></table>
+<p>Both are tokio-native. axum&#39;s WebSocket support is built on <code>tokio-tungstenite</code>
+which is already battle-tested. No heavyweight additions.</p>
+<h3>Configuration</h3>
+<pre><code>--web-addr &lt;ADDR&gt;    HTTP/WebSocket listener address [default: none]
+</code></pre>
+<p>If <code>--web-addr</code> is not set, no HTTP listener starts. The server behaves
+exactly as it does today. WebSocket and REST are opt-in, zero-cost when
+unused.</p>
+<h2>Implementation Plan</h2>
+<h3>Phase 1: WebSocket transport</h3>
+<ol>
+<li>Add axum dependency with <code>ws</code> feature</li>
+<li>Implement <code>WsStream</code> adapter (AsyncRead + AsyncWrite over WebSocket)</li>
+<li>Add <code>/irc</code> WebSocket upgrade route</li>
+<li>Wire up <code>connection::handle_generic()</code> for WebSocket streams</li>
+<li>Add <code>--web-addr</code> to config</li>
+<li>Start HTTP listener in <code>main.rs</code> when configured</li>
+<li>Test: connect via WebSocket, complete SASL auth, join channel, exchange
+messages with a TCP client</li>
+</ol>
+<h3>Phase 2: REST endpoints</h3>
+<ol>
+<li>Add read-only routes backed by <code>Db</code> queries</li>
+<li>Add CORS middleware (permissive by default for API consumers)</li>
+<li>Test: fetch channel history, verify it matches what was sent over IRC</li>
+</ol>
+<h3>Phase 3: (future, not this proposal) Access control</h3>
+<p>If needed later: API keys, DID-based bearer tokens for accessing private
+channel history, rate limiting per IP. Not building this until there&#39;s a
+concrete need.</p>
+<h2>What This Does NOT Do</h2>
+<ul>
+<li><strong>No JSON wire protocol.</strong> Web clients speak IRC. One protocol to test,
+document, and debug.</li>
+<li><strong>No engine extraction.</strong> The server&#39;s internal structure stays as-is.
+WebSocket connections enter through the same code path as TLS connections.
+Refactoring <code>connection.rs</code> is a separate concern, done when warranted by
+code quality, not by transport requirements.</li>
+<li><strong>No web UI.</strong> No static file serving, no <code>--web-static</code> flag, no
+frontend framework. Build a web client in a separate repo if you want one.</li>
+<li><strong>No write API.</strong> REST is for reading. IRC is for writing. One command
+path means one place to enforce permissions, rate limits, and audit.</li>
+<li><strong>No new auth mechanism.</strong> SASL <code>ATPROTO-CHALLENGE</code> over WebSocket. Same
+flow, same code, same security properties. Session tokens are a different
+auth system with different security properties — we don&#39;t need two.</li>
+</ul>
+<h2>Open Questions</h2>
+<ol>
+<li><p><strong>Should REST endpoints require authentication?</strong> Channel list and public
+channel history probably don&#39;t need it. Private channel history (if we
+add +s/+p modes) would. Start open, add auth when channel privacy modes
+exist.</p>
+</li>
+<li><p><strong>Binary frames or text frames for WebSocket?</strong> Text frames are
+debuggable (you can see IRC lines in browser devtools). Binary frames
+are marginally more efficient. Leaning text — debuggability matters more
+than bandwidth for a chat protocol.</p>
+</li>
+<li><p><strong>Should the REST API version its URLs?</strong> (<code>/api/v1/...</code>) Probably yes,
+costs nothing, prevents future pain. But don&#39;t over-engineer — v1 is the
+only version until it isn&#39;t.</p>
+</li>
+</ol>
+  </div>
+</body>
+</html>

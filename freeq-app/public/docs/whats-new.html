@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>What's Different About Freeq — freeq</title>
+  <style>
+    :root { --bg: #0c0c0f; --fg: #e4e4e7; --fg-dim: #71717a; --accent: #818cf8; --surface: #18181b; --border: #27272a; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; line-height: 1.7; }
+    .container { max-width: 800px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+    .nav { display: flex; align-items: center; gap: 1rem; padding: 1rem 0 2rem; border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
+    .nav a { color: var(--accent); text-decoration: none; font-size: 14px; }
+    .nav a:hover { text-decoration: underline; }
+    .nav .brand { font-weight: 700; font-size: 18px; color: var(--accent); }
+    h1 { font-size: 2rem; margin: 0 0 1rem; color: var(--fg); }
+    h2 { font-size: 1.4rem; margin: 2rem 0 0.75rem; color: var(--fg); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+    h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; color: var(--fg); }
+    p { margin: 0.75rem 0; }
+    a { color: var(--accent); }
+    code { background: var(--surface); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; font-family: 'SF Mono', 'Fira Code', monospace; }
+    pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; margin: 1rem 0; }
+    pre code { background: none; padding: 0; font-size: 0.85em; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    th, td { text-align: left; padding: 0.5rem 0.75rem; border: 1px solid var(--border); }
+    th { background: var(--surface); font-weight: 600; }
+    ul, ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+    li { margin: 0.25rem 0; }
+    blockquote { border-left: 3px solid var(--accent); padding-left: 1rem; color: var(--fg-dim); margin: 1rem 0; }
+    hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+    strong { color: #fff; }
+    img { max-width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <nav class="nav">
+      <span class="brand">freeq</span>
+      <a href="/">← Back to app</a>
+      <a href="/docs/">All docs</a>
+    </nav>
+    <h1>What&#39;s Different About Freeq</h1>
+<p>Freeq is a fully compatible IRC server. Any IRC client can connect and use it
+normally. But underneath, several things work differently — and if you care
+about identity, encryption, or federation, they might matter to you.</p>
+<hr>
+<h2>Your Identity Is Yours</h2>
+<p>Standard IRC has no real concept of identity. You pick a nick, maybe register
+it with NickServ, and hope nobody impersonates you on another network.</p>
+<p>Freeq uses <a href="https://atproto.com">AT Protocol</a> (the protocol behind Bluesky)
+for authentication. Your IRC identity is your DID — the same cryptographic
+identifier behind your Bluesky account. When you authenticate:</p>
+<ul>
+<li>Your nick is <strong>bound to your DID</strong>. No one else can use it — not on this
+server, and not on any federated server.</li>
+<li>WHOIS shows your <strong>verified Bluesky handle</strong> (e.g. <code>chadfowler.com</code>).</li>
+<li>Bans, invites, and channel ops are tied to your DID, not your nick or IP.
+They survive reconnects, nick changes, and even work across servers.</li>
+</ul>
+<p>Authentication happens via SASL with a custom mechanism (<code>ATPROTO-CHALLENGE</code>).
+The server sends a cryptographic challenge; your client signs it with your
+AT Protocol credentials. <strong>Your private keys never leave your machine.</strong></p>
+<p>You can authenticate with:</p>
+<ul>
+<li><strong>Browser-based OAuth</strong> (like logging into any Bluesky app)</li>
+<li><strong>App passwords</strong> (for headless/bot use)</li>
+<li><strong>Direct cryptographic signatures</strong> (if you manage your own keys)</li>
+</ul>
+<p>If you don&#39;t authenticate, everything still works — you&#39;re just a guest.</p>
+<hr>
+<h2>Channels Have Owners, Not Just Ops</h2>
+<p>In standard IRC, channel ownership is fragile. If everyone leaves, the
+channel resets. Ops are granted per-session and disappear on disconnect.</p>
+<p>Freeq introduces <strong>DID-based channel authority</strong>:</p>
+<ul>
+<li>The first authenticated user to create a channel becomes its <strong>founder</strong>.
+Founder status is permanent — stored in a database, replicated via CRDT,
+and survives server restarts.</li>
+<li>Channel ops can be granted <strong>by DID</strong>. If you&#39;re opped and you reconnect
+tomorrow from a different IP with a different nick, you&#39;re still an op.</li>
+<li>The founder can never be de-opped.</li>
+</ul>
+<p>Bans work the same way: <code>MODE #channel +b did:plc:abc123</code> bans an identity,
+not a hostmask. No more whack-a-mole with IP changes and nick switches.</p>
+<hr>
+<h2>Servers Federate Without a Central Authority</h2>
+<p>Traditional IRC federation (RFC 2813) uses a spanning tree of trusted
+servers with a shared, fragile namespace. Netsplits are catastrophic.
+Most modern networks just don&#39;t federate.</p>
+<p>Freeq servers federate over <a href="https://iroh.computer">iroh</a> QUIC connections.
+Each server is independent and maintains its own state. Channel authority
+(founders, DID-based ops, topics) converges using
+<a href="https://automerge.org">Automerge CRDTs</a> — no timestamps, no conflicts,
+no split-brain.</p>
+<p>What syncs across servers:</p>
+<ul>
+<li>Channel messages, membership, topics</li>
+<li>DID-based ops and founder status</li>
+<li>Nick ownership</li>
+</ul>
+<p>What stays local:</p>
+<ul>
+<li>TCP connections and sessions</li>
+<li>Rate limiting and connection state</li>
+</ul>
+<p>Servers discover each other by iroh endpoint ID (a public key). There&#39;s no
+DNS, no hub server, no registration process. You point your server at a
+peer&#39;s endpoint ID and they&#39;re linked.</p>
+<pre><code class="language-sh"># That&#39;s it. Two servers, federated.
+freeq-server --iroh
+freeq-server --iroh --s2s-peers &lt;other-server-endpoint-id&gt;
+</code></pre>
+<hr>
+<h2>NAT Traversal Built In</h2>
+<p>IRC has always struggled with NAT. DCC doesn&#39;t work. Server linking
+requires public IPs and open ports.</p>
+<p>Freeq&#39;s iroh transport gives you QUIC connections that punch through NAT
+automatically, with relay fallback when direct connections aren&#39;t possible.
+This works for both client↔server and server↔server links.</p>
+<p>The server advertises its iroh endpoint in <code>CAP LS</code>. Clients that support
+it auto-upgrade — no configuration needed.</p>
+<hr>
+<h2>End-to-End Encrypted Channels</h2>
+<p>Standard IRC messages are plaintext on the server. Always have been.</p>
+<p>Freeq supports client-side AES-256-GCM encryption per channel. The server
+sees only ciphertext. Everyone in the channel shares a passphrase; key
+derivation uses HKDF-SHA256 salted with the channel name.</p>
+<pre><code>/encrypt my-secret-passphrase
+</code></pre>
+<p>There&#39;s also a DID-based encryption mode where the group key is derived
+from the sorted DIDs of channel members — no shared secret needed, and
+the key rotates automatically when membership changes.</p>
+<hr>
+<h2>Peer-to-Peer DMs That Skip the Server</h2>
+<p>Want to talk to someone without any server in the middle? Freeq clients
+can open direct iroh QUIC connections to each other for encrypted DMs.</p>
+<pre><code>/p2p start
+/p2p connect &lt;their-endpoint-id&gt;
+/p2p msg &lt;id&gt; hello
+</code></pre>
+<p>The server is never involved. Messages don&#39;t touch IRC at all. Peer
+endpoint IDs are discoverable via WHOIS.</p>
+<hr>
+<h2>Four Transports, One Protocol</h2>
+<p>IRC has always been TCP. Freeq speaks IRC over four transports, and you
+can mix them freely in the same channel:</p>
+<table>
+<thead>
+<tr>
+<th>Transport</th>
+<th>What it gives you</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>TCP</strong> (:6667)</td>
+<td>Standard IRC — works with every client ever made</td>
+</tr>
+<tr>
+<td><strong>TLS</strong> (:6697)</td>
+<td>Encrypted standard IRC</td>
+</tr>
+<tr>
+<td><strong>WebSocket</strong></td>
+<td>Browser clients, no plugins needed</td>
+</tr>
+<tr>
+<td><strong>iroh QUIC</strong></td>
+<td>NAT traversal, E2E encryption, P2P federation</td>
+</tr>
+</tbody></table>
+<p>All four feed into the same protocol handler. The server doesn&#39;t care
+how you got there.</p>
+<hr>
+<h2>Message History That Just Works</h2>
+<p>When you join a channel, the server replays recent messages as standard
+PRIVMSGs. No special client support needed — your existing IRC client
+shows them. Clients that negotiate <code>server-time</code> and <code>batch</code> get proper
+timestamps and grouping.</p>
+<p>History is stored in SQLite and survives restarts.</p>
+<hr>
+<h2>Rich Media Over IRC</h2>
+<p>Freeq uses IRCv3 message tags to carry structured media metadata alongside
+plain text. The same message has two representations:</p>
+<ul>
+<li><strong>Tags</strong>: content type, URL, dimensions, alt text (for rich clients)</li>
+<li><strong>Body</strong>: description + URL (for every other client)</li>
+</ul>
+<p>In WeeChat you see a clickable link. In the Freeq TUI you see an inline
+media badge. The server never handles media bytes — images and files are
+hosted on your AT Protocol PDS (Bluesky&#39;s blob storage).</p>
+<hr>
+<h2>What Didn&#39;t Change</h2>
+<p>Freeq is still IRC. Specifically:</p>
+<ul>
+<li>Every standard IRC client works unmodified (as a guest)</li>
+<li>Channel modes, ops, bans, invites, kicks — all standard</li>
+<li>NAMES, WHO, WHOIS, LIST, MOTD — all standard</li>
+<li>CTCP ACTION (<code>/me</code>) works</li>
+<li>No new wire protocol — it&#39;s IRC lines on a TCP socket</li>
+<li>If you don&#39;t want authentication, don&#39;t use it</li>
+<li>If you don&#39;t want encryption, don&#39;t use it</li>
+<li>If you don&#39;t want federation, run one server</li>
+</ul>
+<p>The goal is to make IRC better without making it something else.</p>
+  </div>
+</body>
+</html>

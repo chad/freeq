@@ -1,0 +1,1873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Freeq Feature List — freeq</title>
+  <style>
+    :root { --bg: #0c0c0f; --fg: #e4e4e7; --fg-dim: #71717a; --accent: #818cf8; --surface: #18181b; --border: #27272a; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; line-height: 1.7; }
+    .container { max-width: 800px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+    .nav { display: flex; align-items: center; gap: 1rem; padding: 1rem 0 2rem; border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
+    .nav a { color: var(--accent); text-decoration: none; font-size: 14px; }
+    .nav a:hover { text-decoration: underline; }
+    .nav .brand { font-weight: 700; font-size: 18px; color: var(--accent); }
+    h1 { font-size: 2rem; margin: 0 0 1rem; color: var(--fg); }
+    h2 { font-size: 1.4rem; margin: 2rem 0 0.75rem; color: var(--fg); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+    h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; color: var(--fg); }
+    p { margin: 0.75rem 0; }
+    a { color: var(--accent); }
+    code { background: var(--surface); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; font-family: 'SF Mono', 'Fira Code', monospace; }
+    pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; margin: 1rem 0; }
+    pre code { background: none; padding: 0; font-size: 0.85em; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    th, td { text-align: left; padding: 0.5rem 0.75rem; border: 1px solid var(--border); }
+    th { background: var(--surface); font-weight: 600; }
+    ul, ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+    li { margin: 0.25rem 0; }
+    blockquote { border-left: 3px solid var(--accent); padding-left: 1rem; color: var(--fg-dim); margin: 1rem 0; }
+    hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+    strong { color: #fff; }
+    img { max-width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <nav class="nav">
+      <span class="brand">freeq</span>
+      <a href="/">← Back to app</a>
+      <a href="/docs/">All docs</a>
+    </nav>
+    <h1>Freeq Feature List</h1>
+<p>This document catalogs every feature implemented in Freeq, organized by category. Features unique to Freeq (not present in classic IRC) are marked with <strong>🆕</strong>. Features that extend or modify standard IRC behavior are marked with <strong>🔧</strong>. Standard IRC features are unmarked.</p>
+<hr>
+<h2>1. IRC Protocol — Core</h2>
+<h3>Connection &amp; Registration</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>NICK / USER registration</td>
+<td>✅</td>
+<td>Standard IRC registration flow</td>
+</tr>
+<tr>
+<td>NICK change after registration</td>
+<td>✅</td>
+<td>Broadcasts <code>:old NICK :new</code> to user + shared channels + S2S</td>
+</tr>
+<tr>
+<td>PING / PONG keepalive</td>
+<td>✅</td>
+<td>Both client→server and server→client</td>
+</tr>
+<tr>
+<td>QUIT with reason broadcast</td>
+<td>✅</td>
+<td>Broadcasts to all shared channels</td>
+</tr>
+<tr>
+<td>Connection timeout detection</td>
+<td>✅</td>
+<td>90s ping interval, 180s timeout</td>
+</tr>
+<tr>
+<td>Rate limiting (token bucket)</td>
+<td>✅</td>
+<td>10 cmd/sec; exempt during registration</td>
+</tr>
+<tr>
+<td>ERR_UNKNOWNCOMMAND (421)</td>
+<td>✅</td>
+<td>For unrecognized commands</td>
+</tr>
+</tbody></table>
+<h3>Channels</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>JOIN (single and multi-channel)</td>
+<td>✅</td>
+<td><code>JOIN #a,#b</code> with per-channel keys</td>
+</tr>
+<tr>
+<td>PART (single and multi-channel)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>PRIVMSG to channels</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>PRIVMSG to users (PM)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>NOTICE to channels and users</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>CTCP ACTION (<code>/me</code>)</td>
+<td>✅</td>
+<td>Via <code>\x01ACTION ...\x01</code></td>
+</tr>
+<tr>
+<td>TOPIC query and set</td>
+<td>✅</td>
+<td>RPL_TOPIC (332), RPL_TOPICWHOTIME (333), RPL_NOTOPIC (331)</td>
+</tr>
+<tr>
+<td>NAMES (353/366)</td>
+<td>✅</td>
+<td>With <code>@</code> and <code>+</code> prefixes for ops/voiced</td>
+</tr>
+<tr>
+<td>LIST (322/323)</td>
+<td>✅</td>
+<td>Channel list with member counts and topics</td>
+</tr>
+<tr>
+<td>WHO (352/315)</td>
+<td>✅</td>
+<td>Per-channel and global, shows DID/handle for authenticated users</td>
+</tr>
+<tr>
+<td>AWAY (301/305/306)</td>
+<td>✅</td>
+<td>Sets/clears away, RPL_AWAY on PM</td>
+</tr>
+<tr>
+<td>MOTD (375/372/376)</td>
+<td>✅</td>
+<td>On registration + standalone command</td>
+</tr>
+<tr>
+<td>KICK</td>
+<td>✅</td>
+<td>With reason, proper numeric errors</td>
+</tr>
+<tr>
+<td>INVITE</td>
+<td>✅</td>
+<td>RPL_INVITING (341), notifies target</td>
+</tr>
+</tbody></table>
+<h3>Channel Modes</h3>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>+o</code> / <code>-o</code> (channel operator)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td><code>+v</code> / <code>-v</code> (voice)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td><code>+b</code> / <code>-b</code> (ban)</td>
+<td>✅</td>
+<td>Hostmask + DID wildcard matching</td>
+</tr>
+<tr>
+<td><code>+i</code> / <code>-i</code> (invite-only)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td><code>+t</code> / <code>-t</code> (topic lock)</td>
+<td>✅</td>
+<td>Only ops can set topic when enabled</td>
+</tr>
+<tr>
+<td><code>+k</code> / <code>-k</code> (channel key)</td>
+<td>✅</td>
+<td>Password required to join</td>
+</tr>
+<tr>
+<td><code>+n</code> / <code>-n</code> (no external messages)</td>
+<td>✅</td>
+<td>Non-members can&#39;t send to channel</td>
+</tr>
+<tr>
+<td><code>+m</code> / <code>-m</code> (moderated)</td>
+<td>✅</td>
+<td>Only ops/voiced can speak</td>
+</tr>
+<tr>
+<td>MODE query (324)</td>
+<td>✅</td>
+<td>Lists current channel modes</td>
+</tr>
+<tr>
+<td>Ban list query (<code>+b</code> no arg)</td>
+<td>✅</td>
+<td>RPL_BANLIST (367), RPL_ENDOFBANLIST (368)</td>
+</tr>
+</tbody></table>
+<h3>User Modes</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>User mode query (221)</td>
+<td>✅</td>
+<td>Returns <code>+</code> (no user modes implemented)</td>
+</tr>
+</tbody></table>
+<h3>WHOIS</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>RPL_WHOISUSER (311)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>RPL_WHOISSERVER (312)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>RPL_ENDOFWHOIS (318)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>RPL_WHOISACCOUNT (330)</td>
+<td>🆕</td>
+<td>Shows authenticated DID</td>
+</tr>
+<tr>
+<td>Custom 671: AT Protocol handle</td>
+<td>🆕</td>
+<td>Shows resolved Bluesky handle</td>
+</tr>
+<tr>
+<td>Custom 672: iroh endpoint</td>
+<td>🆕</td>
+<td>Shows P2P iroh endpoint ID</td>
+</tr>
+<tr>
+<td>RPL_WHOISCHANNELS (319)</td>
+<td>✅</td>
+<td>For remote S2S users</td>
+</tr>
+</tbody></table>
+<h3>Informational Commands</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>VERSION (351)</td>
+<td>✅</td>
+<td>Server version and feature summary</td>
+</tr>
+<tr>
+<td>TIME (391)</td>
+<td>✅</td>
+<td>Server UTC time</td>
+</tr>
+<tr>
+<td>LUSERS (251-255)</td>
+<td>✅</td>
+<td>User/channel/server counts, local + remote</td>
+</tr>
+<tr>
+<td>ADMIN (256-259)</td>
+<td>✅</td>
+<td>Server admin info</td>
+</tr>
+<tr>
+<td>INFO (371/374)</td>
+<td>✅</td>
+<td>Server description and links</td>
+</tr>
+<tr>
+<td>USERHOST (302)</td>
+<td>✅</td>
+<td>Up to 5 nicks, with op status</td>
+</tr>
+<tr>
+<td>ISON (303)</td>
+<td>✅</td>
+<td>Online presence check</td>
+</tr>
+</tbody></table>
+<h3>Missing Standard IRC Commands</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>OPER (server operator)</td>
+<td>❌</td>
+<td>Not implemented</td>
+</tr>
+<tr>
+<td>WALLOPS</td>
+<td>❌</td>
+<td>Not implemented</td>
+</tr>
+<tr>
+<td>LINKS</td>
+<td>❌</td>
+<td>Not implemented</td>
+</tr>
+<tr>
+<td>STATS</td>
+<td>❌</td>
+<td>Not implemented</td>
+</tr>
+<tr>
+<td>Channel modes: <code>+s</code> / <code>+p</code> (secret/private)</td>
+<td>❌</td>
+<td>Not implemented</td>
+</tr>
+<tr>
+<td>Channel modes: <code>+l</code> (user limit)</td>
+<td>❌</td>
+<td>Not implemented</td>
+</tr>
+<tr>
+<td>Hostname cloaking</td>
+<td>❌</td>
+<td></td>
+</tr>
+<tr>
+<td>Reverse DNS lookup</td>
+<td>❌</td>
+<td></td>
+</tr>
+<tr>
+<td>K-line / G-line (server bans)</td>
+<td>❌</td>
+<td></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>2. IRCv3 Capabilities</h2>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>CAP LS / REQ / ACK / NAK / END</td>
+<td>✅</td>
+<td>IRCv3 capability negotiation</td>
+</tr>
+<tr>
+<td><code>sasl</code> capability</td>
+<td>✅</td>
+<td>With ATPROTO-CHALLENGE mechanism</td>
+</tr>
+<tr>
+<td><code>message-tags</code> capability</td>
+<td>✅</td>
+<td>Tag-aware routing per client</td>
+</tr>
+<tr>
+<td><code>server-time</code> capability</td>
+<td>✅</td>
+<td>Timestamps on history replay</td>
+</tr>
+<tr>
+<td><code>batch</code> capability</td>
+<td>✅</td>
+<td>History wrapped in <code>chathistory</code> batch</td>
+</tr>
+<tr>
+<td><code>multi-prefix</code> capability</td>
+<td>✅</td>
+<td>Shows all prefix chars in NAMES</td>
+</tr>
+<tr>
+<td><code>echo-message</code> capability</td>
+<td>✅</td>
+<td>Echoes own messages to negotiated clients</td>
+</tr>
+<tr>
+<td>TAGMSG (tags-only messages)</td>
+<td>✅</td>
+<td>With fallback for plain clients</td>
+</tr>
+<tr>
+<td><code>iroh=&lt;id&gt;</code> CAP advertisement</td>
+<td>🆕</td>
+<td>Transport discovery via CAP LS</td>
+</tr>
+<tr>
+<td>SASL AUTHENTICATE <code>*</code> abort</td>
+<td>✅</td>
+<td>Cleanly aborts SASL negotiation</td>
+</tr>
+</tbody></table>
+<p>| <code>account-notify</code> capability | ✅ | Broadcasts ACCOUNT on auth to shared channels |
+| <code>extended-join</code> capability | ✅ | JOIN includes account + realname |
+| <code>draft/chathistory</code> capability | ✅ | On-demand <code>CHATHISTORY LATEST/BEFORE/AFTER</code> |</p>
+<h3>Missing IRCv3 Extensions</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>away-notify</code></td>
+<td>❌</td>
+<td></td>
+</tr>
+<tr>
+<td><code>account-tag</code></td>
+<td>❌</td>
+<td></td>
+</tr>
+<tr>
+<td><code>labeled-response</code></td>
+<td>❌</td>
+<td></td>
+</tr>
+<tr>
+<td><code>invite-notify</code></td>
+<td>❌</td>
+<td></td>
+</tr>
+<tr>
+<td><code>chghost</code></td>
+<td>❌</td>
+<td></td>
+</tr>
+<tr>
+<td><code>cap-notify</code></td>
+<td>❌</td>
+<td></td>
+</tr>
+<tr>
+<td><code>setname</code></td>
+<td>❌</td>
+<td></td>
+</tr>
+<tr>
+<td><code>standard-replies</code></td>
+<td>❌</td>
+<td></td>
+</tr>
+<tr>
+<td><code>msgid</code> (message IDs)</td>
+<td>❌</td>
+<td></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>3. Authentication — SASL ATPROTO-CHALLENGE 🆕</h2>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Challenge-response SASL flow</td>
+<td>✅</td>
+<td>Custom <code>ATPROTO-CHALLENGE</code> mechanism</td>
+</tr>
+<tr>
+<td>Cryptographically random nonce (32 bytes)</td>
+<td>✅</td>
+<td>Per challenge</td>
+</tr>
+<tr>
+<td>Challenge single-use enforcement</td>
+<td>✅</td>
+<td>Consumed on take, replay blocked</td>
+</tr>
+<tr>
+<td>Configurable challenge timeout</td>
+<td>✅</td>
+<td>Default 60s, <code>--challenge-timeout-secs</code></td>
+</tr>
+<tr>
+<td>JSON-encoded challenges</td>
+<td>✅</td>
+<td>Deviation from binary: for debuggability</td>
+</tr>
+<tr>
+<td>RPL_LOGGEDIN (900)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>RPL_SASLSUCCESS (903)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>ERR_SASLFAIL (904)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Guest fallback (no SASL)</td>
+<td>✅</td>
+<td>Standard IRC clients work unmodified</td>
+</tr>
+</tbody></table>
+<h3>Verification Methods</h3>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>crypto</code> (DID document key signature)</td>
+<td>✅</td>
+<td>Signs raw challenge bytes</td>
+</tr>
+<tr>
+<td><code>pds-session</code> (app password Bearer JWT)</td>
+<td>✅</td>
+<td>Verifies via PDS <code>getSession</code></td>
+</tr>
+<tr>
+<td><code>pds-oauth</code> (DPoP-bound access token)</td>
+<td>✅</td>
+<td>DPoP proof forwarded to PDS</td>
+</tr>
+</tbody></table>
+<h3>Key Types</h3>
+<table>
+<thead>
+<tr>
+<th>Key Type</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>secp256k1</td>
+<td>✅</td>
+<td>MUST per spec — compressed SEC1 encoding</td>
+</tr>
+<tr>
+<td>ed25519</td>
+<td>✅</td>
+<td>SHOULD per spec</td>
+</tr>
+<tr>
+<td>Multibase/multicodec parsing</td>
+<td>✅</td>
+<td><code>z</code> prefix (base58btc), proper varint codecs</td>
+</tr>
+</tbody></table>
+<h3>DID Resolution</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>did:plc</code> resolution (plc.directory)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td><code>did:web</code> resolution</td>
+<td>✅</td>
+<td>Including path-based DIDs</td>
+</tr>
+<tr>
+<td>Handle resolution (<code>.well-known/atproto-did</code>)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>PDS endpoint extraction from DID doc</td>
+<td>✅</td>
+<td><code>AtprotoPersonalDataServer</code> service type</td>
+</tr>
+<tr>
+<td>PDS URL verification (claimed vs doc)</td>
+<td>✅</td>
+<td>Prevents spoofing</td>
+</tr>
+<tr>
+<td>Authentication key extraction</td>
+<td>✅</td>
+<td>From <code>authentication</code> + <code>assertionMethod</code></td>
+</tr>
+<tr>
+<td>Static resolver (testing)</td>
+<td>✅</td>
+<td>In-memory DID document map</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>4. DID-Aware IRC Features 🆕</h2>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>DID-based bans (<code>MODE +b did:plc:xyz</code>)</td>
+<td>✅</td>
+<td>Identity-based, survives nick changes</td>
+</tr>
+<tr>
+<td>DID-based invites</td>
+<td>✅</td>
+<td>Stored by DID, survive reconnect</td>
+</tr>
+<tr>
+<td>Nick ownership (DID binding)</td>
+<td>✅</td>
+<td>Persisted across restarts</td>
+</tr>
+<tr>
+<td>Nick enforcement at registration</td>
+<td>✅</td>
+<td>Non-owners renamed to <code>GuestXXXX</code></td>
+</tr>
+<tr>
+<td>Persistent DID-based channel ops</td>
+<td>✅</td>
+<td>Auto-op on rejoin by DID, persisted in DB</td>
+</tr>
+<tr>
+<td>Channel founder (first authenticated user)</td>
+<td>✅</td>
+<td>Can&#39;t be de-opped, persisted in DB</td>
+</tr>
+<tr>
+<td>DID in WHOIS output</td>
+<td>✅</td>
+<td>Numeric 330</td>
+</tr>
+<tr>
+<td>AT handle in WHOIS output</td>
+<td>✅</td>
+<td>Resolved asynchronously from DID doc</td>
+</tr>
+<tr>
+<td>Auto-op on empty channel rejoin</td>
+<td>✅</td>
+<td>First user joining empty+zero-ops channel gets ops</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>5. Transport Stack</h2>
+<h3>TCP / TLS (Standard)</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Plain TCP (port 6667)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>TLS (port 6697)</td>
+<td>✅</td>
+<td>rustls with configurable cert/key</td>
+</tr>
+<tr>
+<td>Auto-detect TLS by port (client)</td>
+<td>✅</td>
+<td>Port 6697 → TLS</td>
+</tr>
+<tr>
+<td>Self-signed cert support (client)</td>
+<td>✅</td>
+<td><code>--tls-insecure</code> flag</td>
+</tr>
+</tbody></table>
+<h3>WebSocket 🆕</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>WebSocket IRC transport (<code>/irc</code>)</td>
+<td>✅</td>
+<td>IRC-over-WS, not a new protocol</td>
+</tr>
+<tr>
+<td>Text frame ↔ IRC line bridging</td>
+<td>✅</td>
+<td>One line per frame, <code>\r\n</code> handling</td>
+</tr>
+<tr>
+<td><code>--web-addr</code> opt-in</td>
+<td>✅</td>
+<td>Zero-cost when disabled</td>
+</tr>
+<tr>
+<td>HTML test client</td>
+<td>✅</td>
+<td><code>test-client.html</code></td>
+</tr>
+</tbody></table>
+<h3>Iroh QUIC Transport 🆕</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Iroh endpoint for IRC connections</td>
+<td>✅</td>
+<td>ALPN: <code>freeq/iroh/1</code></td>
+</tr>
+<tr>
+<td>Persistent secret key (<code>iroh-key.secret</code>)</td>
+<td>✅</td>
+<td>Stable endpoint ID across restarts</td>
+</tr>
+<tr>
+<td>Iroh endpoint stored in SharedState</td>
+<td>✅</td>
+<td>Proper lifetime (no <code>mem::forget</code>)</td>
+</tr>
+<tr>
+<td>NAT hole-punching + relay fallback</td>
+<td>✅</td>
+<td>Via iroh&#39;s infrastructure</td>
+</tr>
+<tr>
+<td>Transport-agnostic handler</td>
+<td>✅</td>
+<td>All transports → <code>handle_generic()</code></td>
+</tr>
+<tr>
+<td>Iroh ID in CAP LS for auto-discovery</td>
+<td>✅</td>
+<td><code>iroh=&lt;endpoint-id&gt;</code></td>
+</tr>
+<tr>
+<td>Client auto-upgrade to iroh</td>
+<td>✅</td>
+<td>Probes CAP LS, reconnects via iroh</td>
+</tr>
+<tr>
+<td>Configurable iroh UDP port</td>
+<td>✅</td>
+<td><code>--iroh-port</code></td>
+</tr>
+<tr>
+<td>Connection held alive for session</td>
+<td>✅</td>
+<td>Explicit close with CONNECTION_CLOSE frame</td>
+</tr>
+<tr>
+<td>Bridge task abort on disconnect</td>
+<td>✅</td>
+<td>Clean cleanup</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>6. End-to-End Encryption (E2EE) 🆕</h2>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>AES-256-GCM channel encryption</td>
+<td>✅</td>
+<td>Per-channel passphrase</td>
+</tr>
+<tr>
+<td>HKDF-SHA256 key derivation</td>
+<td>✅</td>
+<td>Channel-name-salted</td>
+</tr>
+<tr>
+<td>Wire format: <code>ENC1:&lt;nonce&gt;:&lt;ciphertext&gt;</code></td>
+<td>✅</td>
+<td>Version-tagged, base64 encoded</td>
+</tr>
+<tr>
+<td>Server-transparent relay</td>
+<td>✅</td>
+<td>Server sees ciphertext only</td>
+</tr>
+<tr>
+<td><code>/encrypt</code> and <code>/decrypt</code> commands</td>
+<td>✅</td>
+<td>TUI commands</td>
+</tr>
+<tr>
+<td>Unicode passphrase support</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Tamper detection (GCM auth tag)</td>
+<td>✅</td>
+<td></td>
+</tr>
+</tbody></table>
+<h3>DID-Based E2EE (ENC2) 🆕</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Identity-bound group encryption</td>
+<td>✅</td>
+<td>Key derived from sorted member DIDs</td>
+</tr>
+<tr>
+<td>Wire format: <code>ENC2:&lt;epoch&gt;:&lt;nonce&gt;:&lt;ct&gt;</code></td>
+<td>✅</td>
+<td>Epoch tracks membership changes</td>
+</tr>
+<tr>
+<td>Group key rotation on member change</td>
+<td>✅</td>
+<td>New epoch = new key</td>
+</tr>
+<tr>
+<td>ECDH DM encryption (secp256k1)</td>
+<td>✅</td>
+<td>Pairwise key from DID document keys</td>
+</tr>
+<tr>
+<td>Wire format: <code>ENC2:dm:&lt;nonce&gt;:&lt;ct&gt;</code></td>
+<td>✅</td>
+<td>DM variant</td>
+</tr>
+<tr>
+<td>DID-sorted deterministic derivation</td>
+<td>✅</td>
+<td>Same members = same key regardless of order</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>7. Peer-to-Peer Encrypted DMs 🆕</h2>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Client-side iroh endpoint for DMs</td>
+<td>✅</td>
+<td>ALPN: <code>freeq/p2p-dm/1</code></td>
+</tr>
+<tr>
+<td>Direct encrypted QUIC connections</td>
+<td>✅</td>
+<td>Server-free</td>
+</tr>
+<tr>
+<td><code>/p2p start/id/connect/msg</code> commands</td>
+<td>✅</td>
+<td>TUI commands</td>
+</tr>
+<tr>
+<td>Newline-delimited JSON wire format</td>
+<td>✅</td>
+<td>Not IRC protocol</td>
+</tr>
+<tr>
+<td>Dedicated <code>p2p:&lt;id&gt;</code> TUI buffers</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Iroh endpoint ID in WHOIS (672)</td>
+<td>✅</td>
+<td>For peer discovery</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>8. Server-to-Server Federation (S2S) 🆕</h2>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Iroh QUIC-based S2S links</td>
+<td>✅</td>
+<td>ALPN: <code>freeq/s2s/1</code></td>
+</tr>
+<tr>
+<td><code>--s2s-peers</code> CLI option</td>
+<td>✅</td>
+<td>Connect to peers on startup</td>
+</tr>
+<tr>
+<td>Incoming S2S acceptance (when iroh enabled)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>ALPN-based routing (client vs S2S)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Origin tracking (loop prevention)</td>
+<td>✅</td>
+<td><code>origin</code> field in S2S messages</td>
+</tr>
+<tr>
+<td>Newline-delimited JSON S2S protocol</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Auto-reconnection with exponential backoff</td>
+<td>✅</td>
+<td>1s→60s cap, <code>connect_peer_with_retry()</code></td>
+</tr>
+<tr>
+<td>Diagnostic logging (byte/message counts)</td>
+<td>✅</td>
+<td>Which side ended link, close reasons</td>
+</tr>
+</tbody></table>
+<h3>What Syncs</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>PRIVMSG relay</td>
+<td>✅</td>
+<td>Channel messages, enforces +n/+m</td>
+</tr>
+<tr>
+<td>JOIN / PART / QUIT propagation</td>
+<td>✅</td>
+<td>Membership tracking per origin server</td>
+</tr>
+<tr>
+<td>NICK change propagation</td>
+<td>✅</td>
+<td>Updates remote_members map in all channels</td>
+</tr>
+<tr>
+<td>TOPIC sync</td>
+<td>✅</td>
+<td>Enforces +t on incoming S2S topics</td>
+</tr>
+<tr>
+<td>MODE sync (real-time)</td>
+<td>✅</td>
+<td>+t/+i/+n/+m/+k broadcast via S2S Mode message</td>
+</tr>
+<tr>
+<td>MODE sync (SyncResponse)</td>
+<td>✅</td>
+<td>Full state replacement (not additive)</td>
+</tr>
+<tr>
+<td>Remote member tracking</td>
+<td>✅</td>
+<td><code>remote_members</code> with DID, handle, is_op</td>
+</tr>
+<tr>
+<td>SyncRequest / SyncResponse</td>
+<td>✅</td>
+<td>Initial state exchange with rich nick_info</td>
+</tr>
+<tr>
+<td>NAMES includes remote members</td>
+<td>✅</td>
+<td>With op status from home server + DID-based</td>
+</tr>
+<tr>
+<td>WHOIS for remote users</td>
+<td>✅</td>
+<td>Shows DID, handle, origin</td>
+</tr>
+<tr>
+<td>DID-based ops sync</td>
+<td>✅</td>
+<td>Union merge</td>
+</tr>
+<tr>
+<td>Founder sync (first-write-wins)</td>
+<td>✅</td>
+<td>No timestamp dependency</td>
+</tr>
+<tr>
+<td>ChannelCreated propagation</td>
+<td>✅</td>
+<td>Founder + DID ops + created_at</td>
+</tr>
+</tbody></table>
+<h3>CRDT State Layer (Automerge)</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Flat-key Automerge document</td>
+<td>✅</td>
+<td>Avoids nested-map conflicts</td>
+</tr>
+<tr>
+<td>Channel membership CRDT</td>
+<td>✅</td>
+<td><code>member:{channel}:{nick}</code></td>
+</tr>
+<tr>
+<td>Topic CRDT (LWW)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Ban CRDT (add/remove)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Nick ownership CRDT</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Founder CRDT (first-write-wins)</td>
+<td>✅</td>
+<td>Conditional put, deterministic convergence</td>
+</tr>
+<tr>
+<td>DID ops CRDT (grant/revoke)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Sync message generation/receipt</td>
+<td>✅</td>
+<td>Automerge sync protocol</td>
+</tr>
+<tr>
+<td>Save/load from bytes</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td><strong>🆕</strong> Live CRDT sync via S2S</td>
+<td>✅</td>
+<td><code>CrdtSync</code> message type; mutations written to CRDT alongside in-memory state; Automerge sync messages exchanged on link establishment and after each remote sync</td>
+</tr>
+</tbody></table>
+<h3>S2S Limitations (see also docs/s2s-audit.md)</h3>
+<table>
+<thead>
+<tr>
+<th>Limitation</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Bans not propagated cross-server</td>
+<td>Only local bans enforced</td>
+</tr>
+<tr>
+<td>S2S Join doesn&#39;t check bans or +i</td>
+<td>Remote server should enforce</td>
+</tr>
+<tr>
+<td>ChannelCreated race in narrow window</td>
+<td>Both servers may create simultaneously</td>
+</tr>
+<tr>
+<td>Rogue server can add <code>did_ops</code></td>
+<td>Authorization-on-write not implemented</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>9. Persistence (SQLite)</h2>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>--db-path</code> opt-in</td>
+<td>✅</td>
+<td>In-memory by default</td>
+</tr>
+<tr>
+<td>WAL mode</td>
+<td>✅</td>
+<td>Good concurrent read performance</td>
+</tr>
+<tr>
+<td>Message history storage</td>
+<td>✅</td>
+<td>All channel messages</td>
+</tr>
+<tr>
+<td>Channel state persistence</td>
+<td>✅</td>
+<td>Topics, modes (+t/+i/+k/+n/+m), keys</td>
+</tr>
+<tr>
+<td>Ban persistence</td>
+<td>✅</td>
+<td>Hostmask and DID bans</td>
+</tr>
+<tr>
+<td>DID-nick identity bindings</td>
+<td>✅</td>
+<td>Survive restarts</td>
+</tr>
+<tr>
+<td>DID-based ops persistence</td>
+<td>✅</td>
+<td><code>did_ops_json</code> column</td>
+</tr>
+<tr>
+<td>Founder persistence</td>
+<td>✅</td>
+<td><code>founder_did</code> column</td>
+</tr>
+<tr>
+<td>History replay on JOIN</td>
+<td>✅</td>
+<td>Last 100 messages with <code>server-time</code> + <code>batch</code></td>
+</tr>
+<tr>
+<td>Message pruning</td>
+<td>✅</td>
+<td><code>--max-messages-per-channel</code> config</td>
+</tr>
+<tr>
+<td>Idempotent DB migration</td>
+<td>✅</td>
+<td><code>ALTER TABLE ADD COLUMN</code> on startup</td>
+</tr>
+<tr>
+<td>Graceful persistence failures</td>
+<td>✅</td>
+<td>Logged, don&#39;t crash server</td>
+</tr>
+<tr>
+<td>Load persisted state on startup</td>
+<td>✅</td>
+<td>Channels, bans, messages, identities</td>
+</tr>
+</tbody></table>
+<h3>Persistence Gaps</h3>
+<table>
+<thead>
+<tr>
+<th>Gap</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>No <code>--message-retention-days</code></td>
+<td>Only count-based pruning</td>
+</tr>
+<tr>
+<td>No full-text search</td>
+<td>SQLite FTS5 not wired up</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>10. REST API 🆕</h2>
+<table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>GET /api/v1/health</code></td>
+<td>✅</td>
+<td>Server stats</td>
+</tr>
+<tr>
+<td><code>GET /api/v1/channels</code></td>
+<td>✅</td>
+<td>List all channels</td>
+</tr>
+<tr>
+<td><code>GET /api/v1/channels/{name}/history</code></td>
+<td>✅</td>
+<td>Paginated, <code>?limit=N&amp;before=T</code></td>
+</tr>
+<tr>
+<td><code>GET /api/v1/channels/{name}/topic</code></td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td><code>GET /api/v1/users/{nick}</code></td>
+<td>✅</td>
+<td>Online status, DID, handle</td>
+</tr>
+<tr>
+<td><code>GET /api/v1/users/{nick}/whois</code></td>
+<td>✅</td>
+<td>+ channels</td>
+</tr>
+<tr>
+<td>CORS support</td>
+<td>✅</td>
+<td>Permissive by default</td>
+</tr>
+<tr>
+<td>Read-only (no write endpoints)</td>
+<td>✅</td>
+<td>By design</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>11. Rich Media (IRCv3 Tags) 🆕</h2>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Media attachment tags</td>
+<td>✅</td>
+<td><code>content-type</code>, <code>media-url</code>, <code>media-alt</code>, etc.</td>
+</tr>
+<tr>
+<td>Multipart/alternative semantics</td>
+<td>✅</td>
+<td>Tags for rich clients, body for plain clients</td>
+</tr>
+<tr>
+<td>Link preview tags</td>
+<td>✅</td>
+<td><code>text/x-link-preview</code> content type</td>
+</tr>
+<tr>
+<td>Reaction tags (<code>+react</code>)</td>
+<td>✅</td>
+<td>With TAGMSG, fallback ACTION for plain clients</td>
+</tr>
+<tr>
+<td>Media upload to AT Protocol PDS</td>
+<td>✅</td>
+<td>Blob upload + record pinning</td>
+</tr>
+<tr>
+<td><code>blue.irc.media</code> custom lexicon</td>
+<td>✅</td>
+<td>Prevents blob GC, doesn&#39;t pollute feed</td>
+</tr>
+<tr>
+<td>Optional cross-post to Bluesky feed</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>OpenGraph link preview fetching</td>
+<td>✅</td>
+<td>HTML parsing, 64KB limit</td>
+</tr>
+<tr>
+<td>CDN URL generation (bsky.app)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>DPoP nonce retry for PDS uploads</td>
+<td>✅</td>
+<td>Up to 3 attempts</td>
+</tr>
+<tr>
+<td>Tag escaping/unescaping (IRCv3 spec)</td>
+<td>✅</td>
+<td><code>\:</code>, <code>\s</code>, <code>\\</code>, <code>\r</code>, <code>\n</code></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>12. OAuth 2.0 (AT Protocol) 🆕</h2>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Browser-based OAuth login</td>
+<td>✅</td>
+<td>Opens system browser</td>
+</tr>
+<tr>
+<td>Authorization server discovery</td>
+<td>✅</td>
+<td>Protected resource metadata → AS metadata</td>
+</tr>
+<tr>
+<td>Pushed Authorization Request (PAR)</td>
+<td>✅</td>
+<td>Required by Bluesky</td>
+</tr>
+<tr>
+<td>PKCE (S256)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>DPoP key generation (P-256 / ES256)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>DPoP proof creation (RFC 9449)</td>
+<td>✅</td>
+<td>With <code>ath</code> claim</td>
+</tr>
+<tr>
+<td>DPoP nonce discovery and retry</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Token exchange</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Token refresh</td>
+<td>✅</td>
+<td><code>PdsSessionSigner</code> with <code>RwLock</code> interior mutability</td>
+</tr>
+<tr>
+<td>Session caching to disk</td>
+<td>✅</td>
+<td><code>~/.config/freeq-tui/&lt;handle&gt;.session.json</code></td>
+</tr>
+<tr>
+<td>Cached session validation</td>
+<td>✅</td>
+<td>Probes PDS on reuse</td>
+</tr>
+<tr>
+<td>Restrictive file permissions (0600)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Handle → DID → PDS resolution</td>
+<td>✅</td>
+<td></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>13. TUI Client</h2>
+<h3>Buffers &amp; Navigation</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Multi-buffer UI (status + channels + PMs)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Buffer switching (Ctrl-N/P, Alt-N/P, Shift-Tab)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Auto-buffer creation on JOIN/PM</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>P2P DM dedicated buffers</td>
+<td>✅</td>
+<td><code>p2p:&lt;short-id&gt;</code></td>
+</tr>
+<tr>
+<td>Unread indicator (●)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>PageUp/PageDown scroll</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Channel member list in buffer</td>
+<td>✅</td>
+<td></td>
+</tr>
+</tbody></table>
+<h3>Input Editing</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Emacs keybindings (default)</td>
+<td>✅</td>
+<td>Full readline-style</td>
+</tr>
+<tr>
+<td>Vi mode (<code>--vi</code>)</td>
+<td>✅</td>
+<td>Normal + Insert modes</td>
+</tr>
+<tr>
+<td>Kill ring (Ctrl-K/U/W/Y)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Word motion (Alt-F/B/D)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Case transforms (Alt-U/L/C)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Transpose (Ctrl-T)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Tab nick completion</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Input history (Up/Down)</td>
+<td>✅</td>
+<td></td>
+</tr>
+</tbody></table>
+<h3>Display</h3>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Status bar (transport, nick, auth, uptime)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Transport badge (color-coded)</td>
+<td>✅</td>
+<td>Red=TCP, Green=TLS, Cyan=WS, Magenta=Iroh</td>
+</tr>
+<tr>
+<td>Network info popup (<code>/net</code>)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Debug mode (<code>/debug</code>)</td>
+<td>✅</td>
+<td>Raw IRC lines</td>
+</tr>
+<tr>
+<td>Rich media display (🖼 badge)</td>
+<td>✅</td>
+<td>Image/video/audio formatting</td>
+</tr>
+<tr>
+<td>E2EE status display</td>
+<td>✅</td>
+<td>🔒 prefix on encrypted channels</td>
+</tr>
+</tbody></table>
+<h3>Commands (45+ total)</h3>
+<p><code>/join</code>, <code>/part</code>, <code>/msg</code>, <code>/me</code>, <code>/topic</code>, <code>/mode</code>, <code>/op</code>, <code>/deop</code>, <code>/voice</code>, <code>/kick</code>, <code>/ban</code>, <code>/unban</code>, <code>/invite</code>, <code>/whois</code>, <code>/names</code>, <code>/who</code>, <code>/list</code>, <code>/away</code>, <code>/motd</code>, <code>/nick</code>, <code>/raw</code>, <code>/encrypt</code>, <code>/decrypt</code>, <code>/p2p start</code>, <code>/p2p id</code>, <code>/p2p connect</code>, <code>/p2p msg</code>, <code>/net</code>, <code>/debug</code>, <code>/quit</code>, <code>/help</code>, <code>/commands</code>, plus MODE variants (+o/-o, +v/-v, +b/-b, +i/-i, +t/-t, +k/-k, +n/-n, +m/-m).</p>
+<hr>
+<h2>14. SDK</h2>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>(ClientHandle, Receiver&lt;Event&gt;)</code> pattern</td>
+<td>✅</td>
+<td>Any UI/bot can consume</td>
+</tr>
+<tr>
+<td>Pluggable <code>ChallengeSigner</code> trait</td>
+<td>✅</td>
+<td>KeySigner, PdsSessionSigner, StubSigner</td>
+</tr>
+<tr>
+<td><code>PdsSessionSigner</code> with token refresh</td>
+<td>✅</td>
+<td><code>RwLock</code> interior mutability, <code>new_with_refresh()</code></td>
+</tr>
+<tr>
+<td><code>establish_connection()</code> pre-TUI</td>
+<td>✅</td>
+<td>Connection errors before UI starts</td>
+</tr>
+<tr>
+<td>Iroh auto-discovery (<code>discover_iroh_id</code>)</td>
+<td>✅</td>
+<td>Probe CAP LS for iroh upgrade</td>
+</tr>
+<tr>
+<td>Tagged message sending</td>
+<td>✅</td>
+<td><code>send_tagged</code>, <code>send_media</code>, <code>send_reaction</code></td>
+</tr>
+<tr>
+<td>P2P DM subsystem</td>
+<td>✅</td>
+<td>Full lifecycle management</td>
+</tr>
+<tr>
+<td>E2EE encrypt/decrypt</td>
+<td>✅</td>
+<td>Library functions</td>
+</tr>
+<tr>
+<td>DID resolution</td>
+<td>✅</td>
+<td>HTTP and static resolvers</td>
+</tr>
+<tr>
+<td>Crypto key generation and signing</td>
+<td>✅</td>
+<td>secp256k1 + ed25519</td>
+</tr>
+<tr>
+<td>PDS client (create session, verify)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>Bluesky profile fetching</td>
+<td>✅</td>
+<td>Public API, no auth needed</td>
+</tr>
+<tr>
+<td>Media upload to PDS</td>
+<td>✅</td>
+<td>With DPoP retry</td>
+</tr>
+<tr>
+<td>Link preview fetching</td>
+<td>✅</td>
+<td>OpenGraph parsing</td>
+</tr>
+<tr>
+<td><strong>🆕</strong> Bot framework</td>
+<td>✅</td>
+<td>Command routing, permission levels (Anyone/Auth/Admin), auto-help</td>
+</tr>
+<tr>
+<td><strong>🆕</strong> DID-based E2EE (ENC2)</td>
+<td>✅</td>
+<td>Group key + ECDH DM encryption</td>
+</tr>
+<tr>
+<td>Echo bot example</td>
+<td>✅</td>
+<td><code>examples/echo_bot.rs</code></td>
+</tr>
+<tr>
+<td>Framework bot example</td>
+<td>✅</td>
+<td><code>examples/framework_bot.rs</code> — commands with permissions</td>
+</tr>
+<tr>
+<td>IRC message parser with tag support</td>
+<td>✅</td>
+<td></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>15. Testing</h2>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Count</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>SDK unit tests</td>
+<td>35</td>
+<td>IRC parsing, crypto, DID, media, auth</td>
+</tr>
+<tr>
+<td>Server unit tests</td>
+<td>33</td>
+<td>Parsing, SASL, channel state, DB, CRDT</td>
+</tr>
+<tr>
+<td>Integration tests</td>
+<td>27</td>
+<td>End-to-end auth flows, channel ops, persistence</td>
+</tr>
+<tr>
+<td>S2S acceptance tests</td>
+<td>39</td>
+<td>16 single-server + 14 S2S + 9 netsplit/reconnect</td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td><strong>134</strong></td>
+<td></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>16. Configuration</h2>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>--listen-addr</code></td>
+<td><code>127.0.0.1:6667</code></td>
+<td>Plain TCP</td>
+</tr>
+<tr>
+<td><code>--tls-listen-addr</code></td>
+<td><code>127.0.0.1:6697</code></td>
+<td>TLS</td>
+</tr>
+<tr>
+<td><code>--tls-cert</code> / <code>--tls-key</code></td>
+<td>None</td>
+<td>Enables TLS</td>
+</tr>
+<tr>
+<td><code>--server-name</code></td>
+<td><code>freeq</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>--challenge-timeout-secs</code></td>
+<td><code>60</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>--db-path</code></td>
+<td>None (in-memory)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>--web-addr</code></td>
+<td>None</td>
+<td>Enables HTTP/WS</td>
+</tr>
+<tr>
+<td><code>--iroh</code></td>
+<td>false</td>
+<td>Enables iroh</td>
+</tr>
+<tr>
+<td><code>--iroh-port</code></td>
+<td>random</td>
+<td></td>
+</tr>
+<tr>
+<td><code>--s2s-peers</code></td>
+<td>empty</td>
+<td>Comma-separated endpoint IDs</td>
+</tr>
+<tr>
+<td><code>--max-messages-per-channel</code></td>
+<td>None</td>
+<td>Message pruning</td>
+</tr>
+<tr>
+<td><code>--plugin</code></td>
+<td>None</td>
+<td>Load a plugin by name (repeatable)</td>
+</tr>
+<tr>
+<td><code>--plugin-dir</code></td>
+<td>None</td>
+<td>Directory of <code>*.toml</code> plugin configs</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>17. Plugin System 🆕</h2>
+<table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>Plugin</code> trait with event hooks</td>
+<td>✅</td>
+<td>Extensible server behavior</td>
+</tr>
+<tr>
+<td><code>PluginManager</code> in SharedState</td>
+<td>✅</td>
+<td>Dispatches events to all loaded plugins</td>
+</tr>
+<tr>
+<td>CLI activation (<code>--plugin name:k=v</code>)</td>
+<td>✅</td>
+<td>Inline config via key=value pairs</td>
+</tr>
+<tr>
+<td>Directory loading (<code>--plugin-dir</code>)</td>
+<td>✅</td>
+<td>Each <code>*.toml</code> file = one plugin</td>
+</tr>
+<tr>
+<td>TOML config format</td>
+<td>✅</td>
+<td>Supports multi-rule plugins</td>
+</tr>
+<tr>
+<td><code>on_auth</code> hook</td>
+<td>✅</td>
+<td>Override DID/handle after SASL auth</td>
+</tr>
+<tr>
+<td><code>identity-override</code> built-in plugin</td>
+<td>✅</td>
+<td>Match by handle or DID, replace display ID</td>
+</tr>
+<tr>
+<td>Example: <code>examples/plugins/kurt.toml</code></td>
+<td>✅</td>
+<td>TimeSync.bsky.social → 3|337</td>
+</tr>
+</tbody></table>
+  </div>
+</body>
+</html>

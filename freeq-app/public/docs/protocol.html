@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Freeq Protocol Notes — freeq</title>
+  <style>
+    :root { --bg: #0c0c0f; --fg: #e4e4e7; --fg-dim: #71717a; --accent: #818cf8; --surface: #18181b; --border: #27272a; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; line-height: 1.7; }
+    .container { max-width: 800px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+    .nav { display: flex; align-items: center; gap: 1rem; padding: 1rem 0 2rem; border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
+    .nav a { color: var(--accent); text-decoration: none; font-size: 14px; }
+    .nav a:hover { text-decoration: underline; }
+    .nav .brand { font-weight: 700; font-size: 18px; color: var(--accent); }
+    h1 { font-size: 2rem; margin: 0 0 1rem; color: var(--fg); }
+    h2 { font-size: 1.4rem; margin: 2rem 0 0.75rem; color: var(--fg); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+    h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; color: var(--fg); }
+    p { margin: 0.75rem 0; }
+    a { color: var(--accent); }
+    code { background: var(--surface); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; font-family: 'SF Mono', 'Fira Code', monospace; }
+    pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; margin: 1rem 0; }
+    pre code { background: none; padding: 0; font-size: 0.85em; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    th, td { text-align: left; padding: 0.5rem 0.75rem; border: 1px solid var(--border); }
+    th { background: var(--surface); font-weight: 600; }
+    ul, ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+    li { margin: 0.25rem 0; }
+    blockquote { border-left: 3px solid var(--accent); padding-left: 1rem; color: var(--fg-dim); margin: 1rem 0; }
+    hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+    strong { color: #fff; }
+    img { max-width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <nav class="nav">
+      <span class="brand">freeq</span>
+      <a href="/">← Back to app</a>
+      <a href="/docs/">All docs</a>
+    </nav>
+    <h1>Freeq Protocol Notes</h1>
+<h2>SASL Mechanism: ATPROTO-CHALLENGE</h2>
+<p>Freeq implements a custom SASL mechanism for authenticating IRC users with
+AT Protocol (Bluesky) identities. The mechanism name is <code>ATPROTO-CHALLENGE</code>.</p>
+<h3>Flow</h3>
+<pre><code>Client                          Server
+  |                               |
+  |  CAP REQ :sasl                |
+  |------------------------------&gt;|
+  |  CAP ACK :sasl                |
+  |&lt;------------------------------|
+  |  AUTHENTICATE ATPROTO-CHALLENGE
+  |------------------------------&gt;|
+  |  AUTHENTICATE &lt;base64 challenge&gt;
+  |&lt;------------------------------|
+  |  AUTHENTICATE &lt;base64 response&gt;
+  |------------------------------&gt;|
+  |  900 RPL_LOGGEDIN             |
+  |  903 RPL_SASLSUCCESS          |
+  |&lt;------------------------------|
+</code></pre>
+<h3>Challenge Format</h3>
+<p>The server sends a JSON challenge encoded as base64url:</p>
+<pre><code class="language-json">{
+  &quot;session_id&quot;: &quot;&lt;unique per TCP connection&gt;&quot;,
+  &quot;nonce&quot;: &quot;&lt;32 bytes, cryptographically random, base64url&gt;&quot;,
+  &quot;timestamp&quot;: &lt;unix epoch seconds&gt;
+}
+</code></pre>
+<h3>Response Format</h3>
+<p>The client responds with base64url-encoded JSON:</p>
+<pre><code class="language-json">{
+  &quot;did&quot;: &quot;did:plc:abc123...&quot;,
+  &quot;method&quot;: &quot;crypto&quot; | &quot;pds-session&quot; | &quot;pds-oauth&quot;,
+  &quot;signature&quot;: &quot;&lt;base64url signature over raw challenge bytes&gt;&quot;,
+  &quot;pds_url&quot;: &quot;https://bsky.social&quot;
+}
+</code></pre>
+<h3>Verification Methods</h3>
+<ol>
+<li><p><strong><code>crypto</code></strong> — Client signs the raw challenge bytes with a key listed in
+the DID document&#39;s <code>authentication</code> or <code>assertionMethod</code> sections.
+Supported curves: secp256k1 (required), ed25519 (recommended).</p>
+</li>
+<li><p><strong><code>pds-session</code></strong> — Client provides a Bearer JWT (from an app password
+session). Server calls <code>com.atproto.server.getSession</code> on the claimed
+PDS to verify the token belongs to the claimed DID.</p>
+</li>
+<li><p><strong><code>pds-oauth</code></strong> — Client provides a DPoP-bound OAuth access token.
+Server constructs a DPoP proof and calls <code>getSession</code> on the PDS.</p>
+</li>
+</ol>
+<h3>Security Properties</h3>
+<ul>
+<li><strong>Nonce uniqueness</strong>: Each challenge contains a 32-byte cryptographically
+random nonce. Challenges are single-use (invalidated after verification).</li>
+<li><strong>Timestamp window</strong>: Challenges expire after 60 seconds (configurable
+via <code>--challenge-timeout-secs</code>).</li>
+<li><strong>No private key transmission</strong>: The server never sees private keys.
+All verification uses public keys from DID documents or PDS token validation.</li>
+<li><strong>DID document resolution</strong>: The server resolves <code>did:plc</code> via plc.directory
+and <code>did:web</code> via HTTPS, then extracts verification keys.</li>
+</ul>
+<h3>Deviations from a Hypothetical IRCv3 Spec</h3>
+<ul>
+<li><strong>JSON encoding</strong>: Both challenge and response are JSON (not binary).
+This aids debuggability at the cost of a few extra bytes. A production
+IRCv3 specification would likely use a binary format.</li>
+<li><strong>Multi-method auth</strong>: The mechanism supports three verification methods
+(crypto, pds-session, pds-oauth). A formal spec might split these into
+separate SASL mechanism names.</li>
+<li><strong>Signature over raw bytes</strong>: The signature is over the raw challenge
+bytes (the decoded JSON), not a hash. This is simpler but means the
+signed payload is larger than strictly necessary.</li>
+</ul>
+<hr>
+<h2>DID-Aware IRC Extensions</h2>
+<h3>Nick Ownership</h3>
+<p>When a user authenticates, their nick is bound to their DID. This binding:</p>
+<ul>
+<li>Persists across server restarts (stored in SQLite)</li>
+<li>Prevents other users from using the nick</li>
+<li>Unauthenticated users claiming a registered nick are renamed to <code>GuestXXXX</code></li>
+<li>Propagated across federated servers via CRDT</li>
+</ul>
+<h3>DID-Based Channel Authority</h3>
+<ul>
+<li><strong>Founder</strong>: The first authenticated user to create a channel becomes its
+founder. Founder status is permanent and survives server restarts.</li>
+<li><strong>DID ops</strong>: Channel operators can be granted by DID. DID-based ops
+persist across reconnects and work across federated servers.</li>
+<li><strong>DID bans</strong>: <code>MODE +b did:plc:xyz</code> bans by identity rather than hostmask.
+DID bans survive nick changes.</li>
+</ul>
+<h3>WHOIS Extensions</h3>
+<p>Freeq adds custom WHOIS numerics:</p>
+<ul>
+<li><strong>330 (RPL_WHOISACCOUNT)</strong>: Shows the authenticated DID</li>
+<li><strong>671</strong>: Shows the resolved AT Protocol handle (e.g. <code>chadfowler.com</code>)</li>
+<li><strong>672</strong>: Shows the iroh P2P endpoint ID (if connected via iroh)</li>
+</ul>
+<hr>
+<h2>Transport Stack</h2>
+<p>All transports feed into the same IRC protocol handler. The server is
+transport-agnostic — clients can mix transports freely.</p>
+<table>
+<thead>
+<tr>
+<th>Transport</th>
+<th>Port</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>TCP</td>
+<td>6667</td>
+<td>Standard IRC</td>
+</tr>
+<tr>
+<td>TLS</td>
+<td>6697</td>
+<td>Standard IRC over TLS</td>
+</tr>
+<tr>
+<td>WebSocket</td>
+<td>configurable</td>
+<td>IRC-over-WebSocket at <code>/irc</code></td>
+</tr>
+<tr>
+<td>iroh QUIC</td>
+<td>auto</td>
+<td>NAT-traversing, end-to-end encrypted</td>
+</tr>
+</tbody></table>
+<h3>iroh Transport</h3>
+<p>The server advertises its iroh endpoint ID in CAP LS:</p>
+<pre><code>CAP * LS :sasl message-tags ... iroh=&lt;endpoint-id&gt;
+</code></pre>
+<p>Clients that support iroh can discover the endpoint and upgrade their
+connection to QUIC, gaining NAT traversal and relay fallback.</p>
+<h3>S2S Federation</h3>
+<p>Servers connect to each other over iroh QUIC links using a JSON-based
+protocol. State convergence uses Automerge CRDTs for:</p>
+<ul>
+<li>Channel membership</li>
+<li>Topics</li>
+<li>Nick ownership</li>
+<li>DID-based ops</li>
+<li>Bans</li>
+</ul>
+<p>See <code>docs/s2s-audit.md</code> for details on the S2S protocol.</p>
+<hr>
+<h2>IRCv3 Capabilities</h2>
+<p>Freeq supports these IRCv3 capabilities:</p>
+<table>
+<thead>
+<tr>
+<th>Capability</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>sasl</code></td>
+<td>ATPROTO-CHALLENGE mechanism</td>
+</tr>
+<tr>
+<td><code>message-tags</code></td>
+<td>Full tag routing per client</td>
+</tr>
+<tr>
+<td><code>server-time</code></td>
+<td>Timestamps on history replay</td>
+</tr>
+<tr>
+<td><code>batch</code></td>
+<td>History wrapped in chathistory batch</td>
+</tr>
+<tr>
+<td><code>multi-prefix</code></td>
+<td>All prefix chars in NAMES</td>
+</tr>
+<tr>
+<td><code>echo-message</code></td>
+<td>Echo own messages back</td>
+</tr>
+<tr>
+<td><code>account-notify</code></td>
+<td>ACCOUNT broadcast on auth</td>
+</tr>
+<tr>
+<td><code>extended-join</code></td>
+<td>JOIN includes account + realname</td>
+</tr>
+<tr>
+<td><code>draft/chathistory</code></td>
+<td>On-demand CHATHISTORY command</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>Plugin System</h2>
+<p>Freeq supports server plugins that hook into events:</p>
+<table>
+<thead>
+<tr>
+<th>Hook</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>on_connect</code></td>
+<td>New client connection (before registration)</td>
+</tr>
+<tr>
+<td><code>on_auth</code></td>
+<td>SASL authentication complete (can override displayed identity)</td>
+</tr>
+<tr>
+<td><code>on_join</code></td>
+<td>User joins a channel</td>
+</tr>
+<tr>
+<td><code>on_message</code></td>
+<td>PRIVMSG/NOTICE (can suppress or rewrite)</td>
+</tr>
+<tr>
+<td><code>on_nick_change</code></td>
+<td>Nick change</td>
+</tr>
+</tbody></table>
+<p>Plugins are compiled into the binary and activated by name via CLI or
+TOML config files. See <code>examples/plugins/</code> for examples.</p>
+  </div>
+</body>
+</html>

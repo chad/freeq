@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Channel Policy System — freeq</title>
+  <style>
+    :root { --bg: #0c0c0f; --fg: #e4e4e7; --fg-dim: #71717a; --accent: #818cf8; --surface: #18181b; --border: #27272a; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; line-height: 1.7; }
+    .container { max-width: 800px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+    .nav { display: flex; align-items: center; gap: 1rem; padding: 1rem 0 2rem; border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
+    .nav a { color: var(--accent); text-decoration: none; font-size: 14px; }
+    .nav a:hover { text-decoration: underline; }
+    .nav .brand { font-weight: 700; font-size: 18px; color: var(--accent); }
+    h1 { font-size: 2rem; margin: 0 0 1rem; color: var(--fg); }
+    h2 { font-size: 1.4rem; margin: 2rem 0 0.75rem; color: var(--fg); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+    h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; color: var(--fg); }
+    p { margin: 0.75rem 0; }
+    a { color: var(--accent); }
+    code { background: var(--surface); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; font-family: 'SF Mono', 'Fira Code', monospace; }
+    pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; margin: 1rem 0; }
+    pre code { background: none; padding: 0; font-size: 0.85em; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    th, td { text-align: left; padding: 0.5rem 0.75rem; border: 1px solid var(--border); }
+    th { background: var(--surface); font-weight: 600; }
+    ul, ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+    li { margin: 0.25rem 0; }
+    blockquote { border-left: 3px solid var(--accent); padding-left: 1rem; color: var(--fg-dim); margin: 1rem 0; }
+    hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+    strong { color: #fff; }
+    img { max-width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <nav class="nav">
+      <span class="brand">freeq</span>
+      <a href="/">← Back to app</a>
+      <a href="/docs/">All docs</a>
+    </nav>
+    <h1>Channel Policy System</h1>
+<p>freeq channels can have <strong>access policies</strong> that control who can join and what roles they receive. Policies are credential-based: users prove something about their identity (e.g., GitHub membership, Bluesky follows) to gain access.</p>
+<h2>Quick Start</h2>
+<h3>1. Set Channel Rules</h3>
+<p>As a channel operator (<code>+o</code>), set the rules users must accept:</p>
+<pre><code>/msg ChanServ POLICY #mychannel SET Be respectful. Follow our Code of Conduct.
+</code></pre>
+<p>Or use the <strong>Channel Settings</strong> panel in the web UI (click the gear icon).</p>
+<p>This creates a basic &quot;accept rules&quot; policy. Users see the rules and must accept to join.</p>
+<h3>2. Add Credential Verifiers (Optional)</h3>
+<p>Require users to prove something beyond accepting rules:</p>
+<pre><code># Require GitHub repo access
+/msg ChanServ POLICY #mychannel REQUIRE github_repo issuer=did:web:irc.freeq.at:verify url=/verify/github/start?repo=owner/repo label=GitHub_Repo
+
+# Require GitHub org membership
+/msg ChanServ POLICY #mychannel REQUIRE github_membership issuer=did:web:irc.freeq.at:verify url=/verify/github/start?org=myorg label=GitHub_Org
+
+# Require Bluesky follow
+/msg ChanServ POLICY #mychannel REQUIRE bluesky_follower issuer=did:web:irc.freeq.at:verify url=/verify/bluesky/start?target=handle.bsky.social label=Bluesky_Follow
+</code></pre>
+<h3>3. Configure Role Escalation (Optional)</h3>
+<p>Auto-grant channel modes based on credentials:</p>
+<pre><code># GitHub repo contributors get op (+o)
+/msg ChanServ POLICY #mychannel SET-ROLE op {&quot;type&quot;:&quot;PRESENT&quot;,&quot;credential_type&quot;:&quot;github_repo&quot;,&quot;issuer&quot;:&quot;did:web:irc.freeq.at:verify&quot;}
+
+# Moderators get halfop (+h)
+/msg ChanServ POLICY #mychannel SET-ROLE moderator {&quot;type&quot;:&quot;PRESENT&quot;,&quot;credential_type&quot;:&quot;channel_moderator&quot;,&quot;issuer&quot;:&quot;did:web:irc.freeq.at:verify&quot;}
+</code></pre>
+<h3>4. Remove Policy</h3>
+<pre><code>/msg ChanServ POLICY #mychannel CLEAR
+</code></pre>
+<h2>How It Works</h2>
+<ol>
+<li>User tries to join a channel with a policy</li>
+<li>Server checks if the user has valid credentials</li>
+<li>If not, the web/iOS client shows a gate modal with:<ul>
+<li>The channel rules</li>
+<li>Links to verify credentials (GitHub OAuth, etc.)</li>
+</ul>
+</li>
+<li>User completes verification → receives a signed credential</li>
+<li>User can now join the channel</li>
+<li>If role rules are configured, the user is auto-granted modes (op/voice/etc.)</li>
+</ol>
+<h2>Credential Types</h2>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Description</th>
+<th>Verifier</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>github_repo</code></td>
+<td>Push access to a GitHub repository</td>
+<td>GitHub OAuth</td>
+</tr>
+<tr>
+<td><code>github_membership</code></td>
+<td>Member of a GitHub organization</td>
+<td>GitHub OAuth</td>
+</tr>
+<tr>
+<td><code>bluesky_follower</code></td>
+<td>Follows a specific Bluesky account</td>
+<td>AT Protocol</td>
+</tr>
+<tr>
+<td><code>channel_moderator</code></td>
+<td>Appointed by channel ops</td>
+<td>Manual</td>
+</tr>
+</tbody></table>
+<h2>Web UI</h2>
+<p>The easiest way to manage policies is through the <strong>Channel Settings</strong> panel:</p>
+<ol>
+<li>Click the ⚙️ gear icon in the channel header</li>
+<li>Go to the <strong>Rules</strong> tab to set/update channel rules</li>
+<li>Go to the <strong>Verifiers</strong> tab to add credential requirements</li>
+<li>Go to the <strong>Roles</strong> tab to configure auto-granted modes</li>
+</ol>
+<p>The UI provides templates for common setups and shows the current policy in human-readable form.</p>
+<h2>Architecture</h2>
+<ul>
+<li>Policies are stored in a separate SQLite database (<code>irc-policy.db</code>)</li>
+<li>Credentials are signed by the server&#39;s verifier DID (<code>did:web:irc.freeq.at:verify</code>)</li>
+<li>Credentials are reusable within their TTL (default 5 minutes)</li>
+<li>DID operators and channel founders always bypass policy checks</li>
+<li>Policies are versioned — updating rules increments the version</li>
+</ul>
+<h2>API</h2>
+<pre><code>GET  /api/v1/policy/{channel}    — Fetch current policy
+POST /api/v1/policy/{channel}/accept — Accept channel rules (returns credential)
+</code></pre>
+<h2>Notes</h2>
+<ul>
+<li>Only channel operators (<code>+o</code>) can set/modify policies</li>
+<li>DID-authenticated users (<code>did:plc:...</code>) who are channel founders or DID-ops bypass all policy checks</li>
+<li>Guest users can satisfy <code>ACCEPT</code> requirements but not credential-based ones (they need a DID)</li>
+<li>Policies compose: <code>REQUIRE</code> adds to existing requirements with AND logic</li>
+</ul>
+  </div>
+</body>
+</html>

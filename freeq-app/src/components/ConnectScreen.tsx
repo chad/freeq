@@ -559,7 +559,7 @@ export function ConnectScreen() {
           <span className="text-border">·</span>
           <a href="https://github.com/chad/freeq" target="_blank" className="text-fg-dim hover:text-fg-muted">GitHub</a>
           <span className="text-border">·</span>
-          <a href="https://freeq.at/docs/" target="_blank" className="text-fg-dim hover:text-fg-muted">Docs</a>
+          <a href="/docs/" target="_blank" className="text-fg-dim hover:text-fg-muted">Docs</a>
         </div>
 
         {/* Live social proof */}

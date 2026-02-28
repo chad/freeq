@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Documentation — freeq</title>
+  <style>
+    :root { --bg: #0c0c0f; --fg: #e4e4e7; --fg-dim: #71717a; --accent: #818cf8; --surface: #18181b; --border: #27272a; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; line-height: 1.7; }
+    .container { max-width: 800px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+    .nav { display: flex; align-items: center; gap: 1rem; padding: 1rem 0 2rem; border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
+    .nav a { color: var(--accent); text-decoration: none; font-size: 14px; }
+    .nav a:hover { text-decoration: underline; }
+    .nav .brand { font-weight: 700; font-size: 18px; color: var(--accent); }
+    h1 { font-size: 2rem; margin: 0 0 1rem; }
+    ul { list-style: none; padding: 0; }
+    li { padding: 0.75rem 0; border-bottom: 1px solid var(--border); }
+    li a { color: var(--accent); text-decoration: none; font-size: 1.1rem; }
+    li a:hover { text-decoration: underline; }
+    p { color: var(--fg-dim); margin: 0.5rem 0 1.5rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <nav class="nav">
+      <span class="brand">freeq</span>
+      <a href="/">← Back to app</a>
+    </nav>
+    <h1>Documentation</h1>
+    <p>Guides, protocols, and architecture for freeq — IRC with AT Protocol identity.</p>
+    <ul><li><a href="/docs/architecture-decisions.html">Architecture Decisions: Protocol Boundary and Moderation</a></li><li><a href="/docs/bot-quickstart.html">Build Your First freeq Bot in 10 Minutes</a></li><li><a href="/docs/crdt-federation-audit.html">Freeq CRDT Federation Audit — Issues & Recommended Path Forward</a></li><li><a href="/docs/demo.html">freeq Policy & Authority Framework — Demo Walkthrough</a></li><li><a href="/docs/encryption.html">freeq Encryption & Security</a></li><li><a href="/docs/features.html">Freeq Feature List</a></li><li><a href="/docs/futuredirection.html">Future Direction</a></li><li><a href="/docs/known-limitations.html">Known Limitations</a></li><li><a href="/docs/pi-bridge.html">Pi IRC Bridge</a></li><li><a href="/docs/policy.html">Channel Policy System</a></li><li><a href="/docs/proposal-web-infra.html">Proposal: Web Transport for freeq</a></li><li><a href="/docs/protocol.html">Freeq Protocol Notes</a></li><li><a href="/docs/s2s-audit.html">S2S Sync Audit — Architectural Flaws</a></li><li><a href="/docs/sync-audit.html">S2S Sync Audit — Full Code Review</a></li><li><a href="/docs/web-app-plan.html">Freeq Web App — Design Plan</a></li><li><a href="/docs/whats-new.html">What's Different About Freeq</a></li></ul>
+  </div>
+</body>
+</html>

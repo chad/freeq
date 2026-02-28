@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pi IRC Bridge — freeq</title>
+  <style>
+    :root { --bg: #0c0c0f; --fg: #e4e4e7; --fg-dim: #71717a; --accent: #818cf8; --surface: #18181b; --border: #27272a; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; line-height: 1.7; }
+    .container { max-width: 800px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+    .nav { display: flex; align-items: center; gap: 1rem; padding: 1rem 0 2rem; border-bottom: 1px solid var(--border); margin-bottom: 2rem; }
+    .nav a { color: var(--accent); text-decoration: none; font-size: 14px; }
+    .nav a:hover { text-decoration: underline; }
+    .nav .brand { font-weight: 700; font-size: 18px; color: var(--accent); }
+    h1 { font-size: 2rem; margin: 0 0 1rem; color: var(--fg); }
+    h2 { font-size: 1.4rem; margin: 2rem 0 0.75rem; color: var(--fg); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+    h3 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; color: var(--fg); }
+    p { margin: 0.75rem 0; }
+    a { color: var(--accent); }
+    code { background: var(--surface); padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; font-family: 'SF Mono', 'Fira Code', monospace; }
+    pre { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; margin: 1rem 0; }
+    pre code { background: none; padding: 0; font-size: 0.85em; }
+    table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+    th, td { text-align: left; padding: 0.5rem 0.75rem; border: 1px solid var(--border); }
+    th { background: var(--surface); font-weight: 600; }
+    ul, ol { padding-left: 1.5rem; margin: 0.5rem 0; }
+    li { margin: 0.25rem 0; }
+    blockquote { border-left: 3px solid var(--accent); padding-left: 1rem; color: var(--fg-dim); margin: 1rem 0; }
+    hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+    strong { color: #fff; }
+    img { max-width: 100%; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <nav class="nav">
+      <span class="brand">freeq</span>
+      <a href="/">← Back to app</a>
+      <a href="/docs/">All docs</a>
+    </nav>
+    <h1>Pi IRC Bridge</h1>
+<p>This bridge lets you send instructions to the local pi session over IRC.
+It listens to a control channel (or DMs), only accepts commands from your DID,
+and writes them to a local JSONL queue.</p>
+<h2>Components</h2>
+<ul>
+<li><strong>pi bridge bot</strong>: <code>freeq-bots --bin pi_bridge</code></li>
+<li><strong>inbox reader</strong>: <code>scripts/pi-inbox.py</code> (reads queue and prints new tasks)</li>
+<li><strong>optional replies</strong>: write JSONL to <code>/tmp/freeq-pi-replies.jsonl</code></li>
+</ul>
+<h2>Configure</h2>
+<p>Required env vars:</p>
+<ul>
+<li><code>PI_ALLOWED_DID</code> — DID that can issue commands (e.g. <code>did:plc:...</code> for chadfowler.com)</li>
+<li><code>PI_BROKER_TOKEN</code> — broker session token from <code>https://auth.freeq.at/auth/login?handle=chadfowler.com</code></li>
+</ul>
+<p>Optional:</p>
+<ul>
+<li><code>PI_SERVER_ADDR</code> — default <code>irc.freeq.at:6667</code></li>
+<li><code>PI_BROKER_URL</code> — default <code>https://auth.freeq.at</code></li>
+<li><code>PI_CHANNEL</code> — control channel (e.g. <code>#pi-control</code>)</li>
+<li><code>PI_PREFIX</code> — default <code>!pi</code></li>
+<li><code>PI_OUTBOX</code> — default <code>/tmp/freeq-pi-queue.jsonl</code></li>
+<li><code>PI_REPLY_INBOX</code> — default <code>/tmp/freeq-pi-replies.jsonl</code></li>
+</ul>
+<h2>Run the bot</h2>
+<pre><code class="language-bash">PI_ALLOWED_DID=did:plc:... \
+PI_BROKER_TOKEN=... \
+PI_CHANNEL=#pi-control \
+PI_FIFO=/tmp/freeq-pi.fifo \
+cargo run -p freeq-bots --bin pi_bridge
+</code></pre>
+<h2>Run a live pi session (FIFO bridge)</h2>
+<p>This creates a FIFO and merges keyboard input + IRC commands into the pi session.</p>
+<pre><code class="language-bash">PI_CMD=pi \
+PI_FIFO=/tmp/freeq-pi.fifo \
+./scripts/run-pi-session.sh
+</code></pre>
+<h2>Send a command</h2>
+<p>From IRC (DM or in <code>#pi-control</code>):</p>
+<pre><code>!pi implement rate limiting for JOIN spam
+</code></pre>
+<p>The bot appends to <code>/tmp/freeq-pi-queue.jsonl</code>.</p>
+<h2>Read commands in the pi session</h2>
+<pre><code class="language-bash">./scripts/pi-inbox.py
+</code></pre>
+<h2>Send replies back to IRC</h2>
+<p>Append JSONL lines to <code>/tmp/freeq-pi-replies.jsonl</code>:</p>
+<pre><code class="language-json">{&quot;target&quot;:&quot;#pi-control&quot;,&quot;text&quot;:&quot;acknowledged — working on it&quot;}
+</code></pre>
+<p>If <code>target</code> is omitted, the bot uses <code>PI_CHANNEL</code>.</p>
+  </div>
+</body>
+</html>
