@@ -665,6 +665,7 @@ where
 
     let mut sasl_in_progress = false;
     let mut registered = false;
+    let mut nick_tries: u32 = 0;
     let mut web_token = config.web_token.clone();
     let mut authenticated_did: Option<String> = None;
     let mut pending_commands: Vec<Command> = Vec::new();
@@ -691,6 +692,26 @@ where
 
                 if let Some(msg) = Message::parse(&line_buf) {
                     match msg.command.as_str() {
+                        // ERR_NICKNAMEINUSE
+                        "433" => {
+                            // Nickname is already in use; try a variant before registration completes.
+                            // Use base nick from config and append a short suffix.
+                            nick_tries = nick_tries.saturating_add(1);
+                            if nick_tries <= 5 {
+                                let base = &config.nick;
+                                let alt = if nick_tries == 1 {
+                                    format!("{}1", base)
+                                } else {
+                                    format!("{}{}", base, nick_tries)
+                                };
+                                // Best-effort: attempt new nick immediately.
+                                writer.write_all(format!("NICK {}\r\n", alt).as_bytes()).await?;
+                            } else {
+                                // Give up; let reconnect logic handle it.
+                                let _ = event_tx.send(Event::Disconnected { reason: "Nick in use".to_string() }).await;
+                                break;
+                            }
+                        }
                         "CAP" => {
                             handle_cap_response(&msg, &signer, &web_token, &mut writer, &mut sasl_in_progress).await?;
                         }
@@ -719,6 +740,17 @@ where
                                 }
                             } else if let Some(ref signer) = signer {
                                 handle_authenticate_challenge(&msg, signer.as_ref(), &mut writer).await?;
+                            }
+                        }
+                        // Handle DPOP_NONCE notice during SASL — update signer nonce
+                        "NOTICE" if sasl_in_progress => {
+                            if let Some(text) = msg.params.last() {
+                                if let Some(nonce) = text.strip_prefix("DPOP_NONCE ") {
+                                    if let Some(ref s) = signer {
+                                        s.set_dpop_nonce(nonce.trim());
+                                    }
+                                    // Server will re-issue AUTHENTICATE challenge next
+                                }
                             }
                         }
                         // 900 RPL_LOGGEDIN — server tells us our authenticated DID
@@ -1283,14 +1315,16 @@ where
 
         let (handle, mut events) = connect_with_stream(conn, config.clone(), signer.clone());
 
-        // Rejoin channels
-        for ch in &reconnect_config.channels {
-            let _ = handle.join(ch).await;
-        }
-
         // Event loop
         let mut disconnected = false;
         while let Some(event) = events.recv().await {
+            // Join configured channels once registered with the server.
+            // (JOINs sent before registration are silently dropped by IRC servers.)
+            if matches!(&event, Event::Registered { .. }) {
+                for ch in &reconnect_config.channels {
+                    let _ = handle.join(ch).await;
+                }
+            }
             if matches!(&event, Event::Disconnected { .. }) {
                 disconnected = true;
             }

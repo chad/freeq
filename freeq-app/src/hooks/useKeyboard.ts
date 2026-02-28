@@ -17,7 +17,7 @@ export function useKeyboard(shortcuts: ShortcutMap, deps: unknown[] = []) {
       // Don't intercept when typing in inputs (unless it's a mod+key combo)
       const target = e.target as HTMLElement;
       const isInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
-      const hasMod = e.metaKey || e.ctrlKey;
+      const hasMod = e.metaKey || e.ctrlKey || e.altKey;
 
       if (isInput && !hasMod) return;
 

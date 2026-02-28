@@ -284,6 +284,21 @@ pub(super) async fn handle_authenticate(
                             // Broadcast account-notify to shared channels
                             broadcast_account_notify(state, session_id, &nick, &did);
                         }
+                        Err(reason) if reason.starts_with("DPOP_NONCE:") => {
+                            // DPoP nonce rotation: PDS requires a fresh nonce.
+                            // Re-issue a challenge so the client can retry with the nonce.
+                            let nonce = &reason["DPOP_NONCE:".len()..];
+                            tracing::info!(%session_id, %nonce, "DPoP nonce required, re-issuing challenge");
+
+                            send(state, session_id, format!(
+                                ":{server_name} NOTICE {} :DPOP_NONCE {nonce}\r\n",
+                                conn.nick_or_star()
+                            ));
+
+                            // Issue a new challenge for retry
+                            let encoded = state.challenge_store.create(session_id);
+                            send(state, session_id, format!("AUTHENTICATE {encoded}\r\n"));
+                        }
                         Err(reason) => {
                             tracing::warn!(%session_id, "SASL auth failed: {reason}");
                             conn.sasl_in_progress = false;

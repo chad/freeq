@@ -128,10 +128,18 @@ export default function App() {
 
   // Global keyboard shortcuts
   const switchToNth = useCallback((n: number) => {
-    const sorted = [...channels.values()]
-      .filter((ch) => ch.isJoined)
+    const favorites = useStore.getState().favorites;
+    const allJoined = [...channels.values()].filter((ch) => ch.isJoined);
+    const allChans = allJoined
+      .filter((ch) => ch.name.startsWith('#') || ch.name.startsWith('&'))
       .sort((a, b) => a.name.localeCompare(b.name));
-    if (sorted[n]) setActive(sorted[n].name);
+    const favList = allChans.filter((ch) => favorites.has(ch.name.toLowerCase()));
+    const chanList = allChans.filter((ch) => !favorites.has(ch.name.toLowerCase()));
+    const dmList = allJoined
+      .filter((ch) => !ch.name.startsWith('#') && !ch.name.startsWith('&') && ch.name !== 'server')
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const ordered = [...favList, ...chanList, ...dmList];
+    if (ordered[n]) setActive(ordered[n].name);
   }, [channels, setActive]);
 
   const switchChannel = useCallback((dir: -1 | 1) => {
@@ -150,15 +158,16 @@ export default function App() {
     'alt+ArrowDown': () => switchChannel(1),
     'mod+/': () => setShortcuts(true),
     'mod+b': () => useStore.getState().setBookmarksPanelOpen(true),
-    'mod+1': () => switchToNth(0),
-    'mod+2': () => switchToNth(1),
-    'mod+3': () => switchToNth(2),
-    'mod+4': () => switchToNth(3),
-    'mod+5': () => switchToNth(4),
-    'mod+6': () => switchToNth(5),
-    'mod+7': () => switchToNth(6),
-    'mod+8': () => switchToNth(7),
-    'mod+9': () => switchToNth(8),
+    'alt+1': () => switchToNth(0),
+    'alt+2': () => switchToNth(1),
+    'alt+3': () => switchToNth(2),
+    'alt+4': () => switchToNth(3),
+    'alt+5': () => switchToNth(4),
+    'alt+6': () => switchToNth(5),
+    'alt+7': () => switchToNth(6),
+    'alt+8': () => switchToNth(7),
+    'alt+9': () => switchToNth(8),
+    'alt+0': () => switchToNth(9),
     'escape': () => {
       setQuickSwitcher(false);
       setSettings(false);

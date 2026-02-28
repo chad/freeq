@@ -114,9 +114,36 @@ def docs_page(slug):
     else:
         filepath = REPO_DOCS_DIR / filename
     if not filepath.exists():
-        abort(404)
+        # Return helpful 404 with debug info
+        import json
+        info = {
+            "slug": slug,
+            "source": source,
+            "filename": filename,
+            "filepath": str(filepath),
+            "exists": filepath.exists(),
+            "site_docs_dir": str(SITE_DOCS_DIR),
+            "site_docs_exists": SITE_DOCS_DIR.exists(),
+            "site_docs_files": sorted(f.name for f in SITE_DOCS_DIR.iterdir()) if SITE_DOCS_DIR.exists() else [],
+        }
+        return f"<pre>Doc not found:\n{json.dumps(info, indent=2)}</pre>", 404
     doc = render_md(filepath)
     return render_template("doc_page.html", doc=doc)
+
+
+@app.route("/debug/docs")
+def debug_docs():
+    import json
+    result = {
+        "site_docs_dir": str(SITE_DOCS_DIR),
+        "site_docs_exists": SITE_DOCS_DIR.exists(),
+        "site_docs_files": sorted(f.name for f in SITE_DOCS_DIR.iterdir()) if SITE_DOCS_DIR.exists() else [],
+        "repo_docs_dir": str(REPO_DOCS_DIR),
+        "repo_docs_exists": REPO_DOCS_DIR.exists(),
+        "app_file": str(Path(__file__)),
+        "cwd": str(Path.cwd()),
+    }
+    return json.dumps(result, indent=2), 200, {"Content-Type": "application/json"}
 
 
 @app.route("/favicon.ico")

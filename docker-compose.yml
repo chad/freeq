@@ -1,0 +1,68 @@
+# freeq — IRC server + web client + auth broker + TLS termination
+#
+# Usage:
+#   cp .env.example .env   # edit with your values
+#   docker compose up -d
+#
+# Volumes:
+#   freeq-data: server database, keys, iroh state
+#   certs:      TLS certificates (mount your own or use certbot)
+
+services:
+  # ── IRC server + web client ──
+  server:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "6667:6667"       # IRC (plaintext)
+      - "8080:8080"       # Web client + WebSocket + REST API
+    volumes:
+      - freeq-data:/data
+    environment:
+      - RUST_LOG=info
+      - OPER_DIDS=${OPER_DIDS:-}
+      - OPER_PASSWORD=${OPER_PASSWORD:-}
+      - BROKER_SHARED_SECRET=${BROKER_SHARED_SECRET:-}
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
+    command:
+      - --bind=0.0.0.0:6667
+      - --web-addr=0.0.0.0:8080
+      - --web-static-dir=/app/web
+      - --db-path=/data/irc.db
+      - --data-dir=/data
+      - --server-name=${SERVER_NAME:-freeq}
+      - --motd=${MOTD:-Welcome to freeq}
+
+  # ── OAuth broker (optional — needed for web client AT Protocol login) ──
+  broker:
+    build: .
+    restart: unless-stopped
+    entrypoint: ["freeq-auth-broker"]
+    ports:
+      - "3080:3080"
+    environment:
+      - RUST_LOG=info
+      - BROKER_SHARED_SECRET=${BROKER_SHARED_SECRET:-}
+      - BROKER_LISTEN=0.0.0.0:3080
+    profiles:
+      - with-broker
+
+  # ── TLS termination (nginx) ──
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - certs:/etc/letsencrypt:ro
+    depends_on:
+      - server
+    profiles:
+      - with-tls
+
+volumes:
+  freeq-data:
+  certs:

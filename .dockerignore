@@ -1,0 +1,15 @@
+target/
+node_modules/
+freeq-app/node_modules/
+freeq-app/dist/
+freeq-site/
+freeq-web/
+*.secret
+*.db
+*.db-journal
+.git/
+.github/
+docs/
+*.md
+!freeq-server/**/*.md
+!freeq-sdk/**/*.md

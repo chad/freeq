@@ -64,6 +64,9 @@ pub trait ChallengeSigner: Send + Sync {
 
     /// Produce the SASL response for the given challenge bytes.
     fn respond(&self, challenge_bytes: &[u8]) -> anyhow::Result<ChallengeResponse>;
+
+    /// Update the DPoP nonce for PDS OAuth signers. Default is a no-op.
+    fn set_dpop_nonce(&self, _nonce: &str) {}
 }
 
 /// A real cryptographic signer using a private key.
@@ -171,6 +174,11 @@ impl PdsSessionSigner {
         &self.pds_url
     }
 
+    /// Update the DPoP nonce (used when the PDS rotates nonces during SASL).
+    pub fn set_dpop_nonce(&self, nonce: String) {
+        *self.dpop_nonce.write().unwrap() = Some(nonce);
+    }
+
     /// Refresh the session using the stored refresh token.
     ///
     /// Returns `Ok(())` if the token was refreshed, `Err` if no refresh
@@ -191,6 +199,10 @@ impl PdsSessionSigner {
 impl ChallengeSigner for PdsSessionSigner {
     fn did(&self) -> &str {
         &self.did
+    }
+
+    fn set_dpop_nonce(&self, nonce: &str) {
+        *self.dpop_nonce.write().unwrap() = Some(nonce.to_string());
     }
 
     fn respond(&self, _challenge_bytes: &[u8]) -> anyhow::Result<ChallengeResponse> {

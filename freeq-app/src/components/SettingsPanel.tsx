@@ -128,7 +128,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           <Section title="Keyboard Shortcuts">
             <ShortcutRow keys="⌘ K" desc="Quick switcher" />
             <ShortcutRow keys="⌘ F" desc="Search messages" />
-            <ShortcutRow keys="⌘ 1-9" desc="Switch channel" />
+            <ShortcutRow keys="⌥ 1-0" desc="Switch channel" />
             <ShortcutRow keys="Esc" desc="Close panel / cancel" />
             <ShortcutRow keys="↑" desc="Edit last message" />
             <ShortcutRow keys="Tab" desc="Autocomplete nick" />

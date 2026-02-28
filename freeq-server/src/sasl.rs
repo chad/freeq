@@ -305,7 +305,23 @@ async fn verify_pds_oauth(
 
     if !resp.status().is_success() {
         let status = resp.status();
+
+        // DPoP nonce rotation: PDS requires a nonce we didn't have (or ours expired).
+        // Extract the fresh nonce and return it so the client can retry SASL.
+        let new_nonce = resp.headers().get("dpop-nonce")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
         let text = resp.text().await.unwrap_or_default();
+
+        if (status.as_u16() == 400 || status.as_u16() == 401)
+            && text.contains("use_dpop_nonce")
+        {
+            if let Some(nonce) = new_nonce {
+                tracing::info!(did = %response.did, "DPoP nonce required by PDS, signaling client to retry");
+                return Err(format!("DPOP_NONCE:{nonce}"));
+            }
+        }
+
         return Err(format!("PDS OAuth verification failed ({status}): {text}"));
     }
 
