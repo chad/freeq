@@ -2054,7 +2054,6 @@ async fn message_signing_authenticated_user() {
 
 #[tokio::test]
 async fn client_signature_verification() {
-    use ed25519_dalek::Verifier;
     use base64::Engine;
 
     let private_key = PrivateKey::generate_secp256k1();

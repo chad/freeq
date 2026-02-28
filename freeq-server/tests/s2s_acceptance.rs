@@ -228,6 +228,7 @@ async fn wait_names_containing(
     }
 }
 
+#[allow(dead_code)]
 /// Wait for Names that do NOT include a specific nick.
 async fn wait_names_not_containing(
     rx: &mut mpsc::Receiver<Event>,
