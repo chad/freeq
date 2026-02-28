@@ -179,6 +179,102 @@ impl ClientHandle {
         };
         self.send_tagged(target, &fallback, preview.to_tags()).await
     }
+
+    // ── Convenience helpers ──
+
+    /// Send a reply to a specific message (adds +draft/reply tag).
+    pub async fn reply(&self, target: &str, msgid: &str, text: &str) -> Result<()> {
+        let mut tags = std::collections::HashMap::new();
+        tags.insert("+draft/reply".to_string(), msgid.to_string());
+        self.send_tagged(target, text, tags).await
+    }
+
+    /// Send a reply in a thread (same as reply — thread parent is the msgid).
+    pub async fn reply_in_thread(&self, target: &str, parent_msgid: &str, text: &str) -> Result<()> {
+        self.reply(target, parent_msgid, text).await
+    }
+
+    /// Send a typing indicator start.
+    pub async fn typing_start(&self, target: &str) -> Result<()> {
+        let mut tags = std::collections::HashMap::new();
+        tags.insert("+typing".to_string(), "active".to_string());
+        self.send_tagmsg(target, tags).await
+    }
+
+    /// Send a typing indicator stop.
+    pub async fn typing_stop(&self, target: &str) -> Result<()> {
+        let mut tags = std::collections::HashMap::new();
+        tags.insert("+typing".to_string(), "done".to_string());
+        self.send_tagmsg(target, tags).await
+    }
+
+    /// Join multiple channels at once.
+    pub async fn join_many(&self, channels: &[&str]) -> Result<()> {
+        if channels.is_empty() { return Ok(()); }
+        // IRC allows comma-separated JOIN
+        let joined = channels.join(",");
+        self.raw(&format!("JOIN {joined}")).await
+    }
+
+    /// Set a channel mode. Examples: `mode("#chan", "+o", Some("nick"))`.
+    pub async fn mode(&self, channel: &str, flags: &str, arg: Option<&str>) -> Result<()> {
+        match arg {
+            Some(a) => self.raw(&format!("MODE {channel} {flags} {a}")).await,
+            None => self.raw(&format!("MODE {channel} {flags}")).await,
+        }
+    }
+
+    /// Request latest N messages of history (CHATHISTORY LATEST).
+    pub async fn history_latest(&self, target: &str, count: usize) -> Result<()> {
+        self.raw(&format!("CHATHISTORY LATEST {target} * {count}")).await
+    }
+
+    /// Request N messages before a given msgid (CHATHISTORY BEFORE).
+    pub async fn history_before(&self, target: &str, msgid: &str, count: usize) -> Result<()> {
+        self.raw(&format!("CHATHISTORY BEFORE {target} msgid={msgid} {count}")).await
+    }
+
+    /// Request N messages after a given msgid (CHATHISTORY AFTER).
+    pub async fn history_after(&self, target: &str, msgid: &str, count: usize) -> Result<()> {
+        self.raw(&format!("CHATHISTORY AFTER {target} msgid={msgid} {count}")).await
+    }
+
+    /// Send a reaction emoji to a specific message.
+    pub async fn react(&self, target: &str, emoji: &str, msgid: &str) -> Result<()> {
+        let mut tags = std::collections::HashMap::new();
+        tags.insert("+draft/react".to_string(), emoji.to_string());
+        tags.insert("+draft/reply".to_string(), msgid.to_string());
+        self.send_tagmsg(target, tags).await
+    }
+
+    /// Edit a previously sent message.
+    pub async fn edit_message(&self, target: &str, original_msgid: &str, new_text: &str) -> Result<()> {
+        let mut tags = std::collections::HashMap::new();
+        tags.insert("+draft/edit".to_string(), original_msgid.to_string());
+        self.send_tagged(target, new_text, tags).await
+    }
+
+    /// Delete a previously sent message (via TAGMSG).
+    pub async fn delete_message(&self, target: &str, msgid: &str) -> Result<()> {
+        let mut tags = std::collections::HashMap::new();
+        tags.insert("+draft/delete".to_string(), msgid.to_string());
+        self.send_tagmsg(target, tags).await
+    }
+
+    /// Pin a message in a channel.
+    pub async fn pin(&self, channel: &str, msgid: &str) -> Result<()> {
+        self.raw(&format!("PIN {channel} {msgid}")).await
+    }
+
+    /// Unpin a message in a channel.
+    pub async fn unpin(&self, channel: &str, msgid: &str) -> Result<()> {
+        self.raw(&format!("UNPIN {channel} {msgid}")).await
+    }
+
+    /// Set the channel topic.
+    pub async fn topic(&self, channel: &str, topic: &str) -> Result<()> {
+        self.raw(&format!("TOPIC {channel} :{topic}")).await
+    }
 }
 
 /// Establish TCP (and optionally TLS) connection to the server.
@@ -1091,4 +1187,139 @@ async fn handle_authenticate_challenge<W: AsyncWrite + Unpin>(
         .await?;
 
     Ok(())
+}
+
+// ── Reconnect helper ──
+
+/// Configuration for automatic reconnection.
+#[derive(Debug, Clone)]
+pub struct ReconnectConfig {
+    /// Initial delay before first reconnect attempt.
+    pub initial_delay: std::time::Duration,
+    /// Maximum delay between reconnect attempts.
+    pub max_delay: std::time::Duration,
+    /// Multiplier for exponential backoff.
+    pub backoff_factor: f64,
+    /// Channels to rejoin after reconnecting.
+    pub channels: Vec<String>,
+}
+
+impl Default for ReconnectConfig {
+    fn default() -> Self {
+        Self {
+            initial_delay: std::time::Duration::from_secs(2),
+            max_delay: std::time::Duration::from_secs(30),
+            backoff_factor: 2.0,
+            channels: Vec::new(),
+        }
+    }
+}
+
+/// Run an event loop with automatic reconnection.
+///
+/// The `handler` is called for each event. When disconnected, the loop
+/// reconnects with exponential backoff and rejoins configured channels.
+///
+/// Returns only on unrecoverable errors or when the handler returns `Err`.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use freeq_sdk::client::{ConnectConfig, ReconnectConfig, run_with_reconnect};
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let config = ConnectConfig { /* ... */ ..Default::default() };
+/// let reconnect = ReconnectConfig {
+///     channels: vec!["#bots".into()],
+///     ..Default::default()
+/// };
+///
+/// run_with_reconnect(config, None, reconnect, |handle, event| {
+///     Box::pin(async move {
+///         // handle event
+///         Ok(())
+///     })
+/// }).await
+/// # }
+/// ```
+pub async fn run_with_reconnect<F>(
+    config: ConnectConfig,
+    signer: Option<Arc<dyn ChallengeSigner>>,
+    reconnect_config: ReconnectConfig,
+    handler: F,
+) -> Result<()>
+where
+    F: Fn(ClientHandle, Event) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> + Send + Sync,
+{
+    let mut delay = reconnect_config.initial_delay;
+    let mut consecutive_failures = 0u32;
+
+    loop {
+        // Connect
+        let conn = match establish_connection(&config).await {
+            Ok(c) => {
+                consecutive_failures = 0;
+                delay = reconnect_config.initial_delay;
+                c
+            }
+            Err(e) => {
+                consecutive_failures += 1;
+                tracing::warn!(
+                    error = %e,
+                    attempt = consecutive_failures,
+                    delay_secs = delay.as_secs(),
+                    "Connection failed, retrying"
+                );
+                tokio::time::sleep(delay).await;
+                // Exponential backoff with jitter
+                let jitter = rand_jitter(delay.as_millis() as u64 / 4);
+                delay = std::time::Duration::from_millis(
+                    ((delay.as_millis() as f64 * reconnect_config.backoff_factor) as u64 + jitter)
+                        .min(reconnect_config.max_delay.as_millis() as u64),
+                );
+                continue;
+            }
+        };
+
+        let (handle, mut events) = connect_with_stream(conn, config.clone(), signer.clone());
+
+        // Rejoin channels
+        for ch in &reconnect_config.channels {
+            let _ = handle.join(ch).await;
+        }
+
+        // Event loop
+        let mut disconnected = false;
+        while let Some(event) = events.recv().await {
+            if matches!(&event, Event::Disconnected { .. }) {
+                disconnected = true;
+            }
+            if let Err(e) = handler(handle.clone(), event).await {
+                tracing::error!(error = %e, "Handler error");
+                // Non-fatal: continue processing
+            }
+            if disconnected {
+                break;
+            }
+        }
+
+        tracing::info!(delay_secs = delay.as_secs(), "Disconnected, will reconnect");
+        tokio::time::sleep(delay).await;
+        let jitter = rand_jitter(delay.as_millis() as u64 / 4);
+        delay = std::time::Duration::from_millis(
+            ((delay.as_millis() as f64 * reconnect_config.backoff_factor) as u64 + jitter)
+                .min(reconnect_config.max_delay.as_millis() as u64),
+        );
+    }
+}
+
+/// Simple jitter: random value 0..max using thread_rng.
+fn rand_jitter(max: u64) -> u64 {
+    if max == 0 { return 0; }
+    // Simple pseudo-random using current time
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos() as u64;
+    nanos % max
 }

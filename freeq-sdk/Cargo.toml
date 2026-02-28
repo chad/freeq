@@ -33,6 +33,7 @@ iroh = { workspace = true, optional = true }
 iroh-quinn = { workspace = true, optional = true }
 open = { workspace = true }
 dirs = { workspace = true }
+parking_lot = "0.12"
 
 [features]
 default = ["iroh-transport", "aws-lc-rs", "native-tls"]

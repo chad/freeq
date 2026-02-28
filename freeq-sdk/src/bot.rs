@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::client::ClientHandle;
 use crate::event::Event;
@@ -59,19 +60,58 @@ impl CommandContext {
         self.args_raw.clone()
     }
 
+    /// Get the Nth argument (0-indexed), or None.
+    pub fn arg(&self, n: usize) -> Option<&str> {
+        self.args.get(n).map(|s| s.as_str())
+    }
+
+    /// Get the message ID (from IRCv3 tags), if present.
+    pub fn msgid(&self) -> Option<&str> {
+        self.tags.get("msgid").map(|s| s.as_str())
+    }
+
+    /// Reply target: channel if in-channel, sender nick if PM.
+    pub fn reply_target(&self) -> &str {
+        if self.is_channel { &self.target } else { &self.sender }
+    }
+
     /// Reply to the channel/user.
     pub async fn reply(&self, text: &str) -> anyhow::Result<()> {
-        let target = if self.is_channel {
-            &self.target
-        } else {
-            &self.sender
-        };
-        self.handle.privmsg(target, text).await
+        self.handle.privmsg(self.reply_target(), text).await
     }
 
     /// Reply with a prefix mentioning the sender.
     pub async fn reply_to(&self, text: &str) -> anyhow::Result<()> {
         self.reply(&format!("{}: {text}", self.sender)).await
+    }
+
+    /// Reply in a thread (references the original message's msgid).
+    pub async fn reply_in_thread(&self, text: &str) -> anyhow::Result<()> {
+        if let Some(msgid) = self.msgid() {
+            self.handle.reply(self.reply_target(), msgid, text).await
+        } else {
+            // No msgid available — fall back to regular reply
+            self.reply(text).await
+        }
+    }
+
+    /// Send a reaction emoji to the triggering message.
+    pub async fn react(&self, emoji: &str) -> anyhow::Result<()> {
+        if let Some(msgid) = self.msgid() {
+            self.handle.react(self.reply_target(), emoji, msgid).await
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Send a typing indicator (active).
+    pub async fn typing(&self) -> anyhow::Result<()> {
+        self.handle.typing_start(self.reply_target()).await
+    }
+
+    /// Send a typing indicator (done).
+    pub async fn typing_done(&self) -> anyhow::Result<()> {
+        self.handle.typing_stop(self.reply_target()).await
     }
 }
 
@@ -102,6 +142,50 @@ struct CommandEntry {
     allowed_dids: Vec<String>,
 }
 
+/// Per-user rate limiter.
+pub struct RateLimiter {
+    /// Max commands per window.
+    max_commands: u32,
+    /// Window duration.
+    window: std::time::Duration,
+    /// Buckets: nick → (window_start, count).
+    buckets: parking_lot::Mutex<HashMap<String, (Instant, u32)>>,
+}
+
+impl RateLimiter {
+    /// Create a rate limiter: `max` commands per `window` duration per user.
+    pub fn new(max_commands: u32, window: std::time::Duration) -> Self {
+        Self {
+            max_commands,
+            window,
+            buckets: parking_lot::Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Check if a user is within their rate limit. Returns true if allowed.
+    pub fn check(&self, nick: &str) -> bool {
+        let mut buckets = self.buckets.lock();
+        let now = Instant::now();
+        let entry = buckets.entry(nick.to_lowercase()).or_insert((now, 0));
+        if now.duration_since(entry.0) >= self.window {
+            *entry = (now, 1);
+            true
+        } else if entry.1 < self.max_commands {
+            entry.1 += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Prune expired entries (call periodically for long-running bots).
+    pub fn prune(&self) {
+        let mut buckets = self.buckets.lock();
+        let now = Instant::now();
+        buckets.retain(|_, (start, _)| now.duration_since(*start) < self.window * 2);
+    }
+}
+
 /// An IRC bot with command routing.
 pub struct Bot {
     /// Command prefix (e.g. "!", ".", "bot:").
@@ -114,6 +198,10 @@ pub struct Bot {
     admin_dids: Vec<String>,
     /// Called for messages that don't match any command.
     fallback: Option<Handler>,
+    /// Optional rate limiter.
+    rate_limiter: Option<Arc<RateLimiter>>,
+    /// Maximum argument string length (0 = unlimited).
+    max_args_len: usize,
 }
 
 impl Bot {
@@ -125,12 +213,34 @@ impl Bot {
             commands: Vec::new(),
             admin_dids: Vec::new(),
             fallback: None,
+            rate_limiter: None,
+            max_args_len: 500, // sensible default
         }
     }
 
     /// Add a global admin DID.
     pub fn admin(mut self, did: &str) -> Self {
         self.admin_dids.push(did.to_string());
+        self
+    }
+
+    /// Set a per-user rate limiter: `max` commands per `window`.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use freeq_sdk::bot::Bot;
+    /// let bot = Bot::new("!", "mybot")
+    ///     .rate_limit(5, std::time::Duration::from_secs(30));
+    /// ```
+    pub fn rate_limit(mut self, max: u32, window: std::time::Duration) -> Self {
+        self.rate_limiter = Some(Arc::new(RateLimiter::new(max, window)));
+        self
+    }
+
+    /// Set maximum argument length. Commands with longer args are rejected.
+    /// Default: 500 characters. Set to 0 for unlimited.
+    pub fn max_args(mut self, len: usize) -> Self {
+        self.max_args_len = len;
         self
     }
 
@@ -222,9 +332,26 @@ impl Bot {
                         args_raw.split_whitespace().map(|s| s.to_string()).collect()
                     };
 
+                    let reply_target = if is_channel { target } else { from };
+
+                    // Rate limiting
+                    if let Some(ref limiter) = self.rate_limiter {
+                        if !limiter.check(from) {
+                            let _ = handle.privmsg(reply_target, "Slow down — too many commands.").await;
+                            return;
+                        }
+                    }
+
+                    // Input size check
+                    if self.max_args_len > 0 && args_raw.len() > self.max_args_len {
+                        let _ = handle.privmsg(reply_target,
+                            &format!("Input too long (max {} chars).", self.max_args_len)).await;
+                        return;
+                    }
+
                     // Built-in help command
                     if cmd_name == "help" {
-                        let _ = self.send_help(handle, if is_channel { target } else { from }).await;
+                        let _ = self.send_help(handle, reply_target).await;
                         return;
                     }
 
