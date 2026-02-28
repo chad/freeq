@@ -67,7 +67,7 @@ SLUG_MAP = {
     "future": ("site", "FutureDirection.md"),
     "web-infra": ("site", "proposal-web-infra.md"),
     "whats-new": ("site", "WHATS-NEW.md"),
-    "demo": ("site", "demo.md"),
+    "demo": ("site", "DEMO.md"),
     "encryption": ("site", "ENCRYPTION.md"),
     "bot-quickstart": ("site", "BOT-QUICKSTART.md"),
     "policy-system": ("site", "POLICY.md"),
