@@ -1329,10 +1329,7 @@ async fn auth_callback(
     // Check for error
     if let Some(error) = &q.error {
         let desc = q.error_description.as_deref().unwrap_or("Unknown error");
-        return Ok(oauth_result_page(
-            &format!("Error: {error}: {desc}"),
-            None,
-        ));
+        return Ok(oauth_result_page(&format!("Error: {error}: {desc}"), None));
     }
 
     let code = q
