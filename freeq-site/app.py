@@ -69,6 +69,8 @@ SLUG_MAP = {
     "whats-new": ("site", "WHATS-NEW.md"),
     "demo": ("site", "demo.md"),
     "encryption": ("site", "ENCRYPTION.md"),
+    "bot-quickstart": ("site", "BOT-QUICKSTART.md"),
+    "policy-system": ("site", "POLICY.md"),
 }
 
 
