@@ -49,6 +49,7 @@ class ChannelState(val name: String) {
     val members = mutableStateListOf<MemberInfo>()
     var topic = mutableStateOf("")
     val typingUsers = mutableStateMapOf<String, Date>()
+    var lastActivityTime: Long = System.currentTimeMillis()
 
     private val messageIds = mutableSetOf<String>()
 
@@ -70,6 +71,9 @@ class ChannelState(val name: String) {
             if (idx >= 0) messages.add(idx, msg) else messages.add(msg)
         } else {
             messages.add(msg)
+        }
+        if (msg.timestamp.time > lastActivityTime) {
+            lastActivityTime = msg.timestamp.time
         }
     }
 
@@ -463,6 +467,7 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
 
             is FreeqEvent.Joined -> {
                 val ch = state.getOrCreateChannel(event.channel)
+                ch.lastActivityTime = System.currentTimeMillis()
                 if (event.nick.equals(state.nick.value, ignoreCase = true)) {
                     if (state.activeChannel.value == null) {
                         state.activeChannel.value = event.channel
@@ -586,6 +591,7 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
             is FreeqEvent.TopicChanged -> {
                 val ch = state.getOrCreateChannel(event.channel)
                 ch.topic.value = event.topic.text
+                ch.lastActivityTime = System.currentTimeMillis()
             }
 
             is FreeqEvent.ModeChanged -> {
