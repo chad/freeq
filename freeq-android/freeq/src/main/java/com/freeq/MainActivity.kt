@@ -62,18 +62,19 @@ class MainActivity : ComponentActivity() {
                 state.pendingNavigation.value = channel
             }
             else -> {
-                // OAuth callback: freeq://?token=...&nick=...&did=...
+                // OAuth callback: freeq://auth?token=...&broker_token=...&nick=...&did=...
                 val token = uri.getQueryParameter("token") ?: return
+                val brokerTok = uri.getQueryParameter("broker_token")
                 val nick = uri.getQueryParameter("nick") ?: return
                 val did = uri.getQueryParameter("did")
 
                 state.pendingWebToken = token
-                state.brokerToken = token
+                brokerTok?.let { state.brokerToken = it }
                 did?.let { state.authenticatedDID.value = it }
                 // Persist secrets for session restore
-                state.securePrefs.edit()
-                    .putString("brokerToken", token)
-                    .apply()
+                brokerTok?.let {
+                    state.securePrefs.edit().putString("brokerToken", it).apply()
+                }
                 did?.let {
                     state.securePrefs.edit().putString("did", it).apply()
                 }

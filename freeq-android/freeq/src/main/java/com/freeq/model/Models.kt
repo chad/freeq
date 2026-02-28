@@ -287,21 +287,25 @@ class AppState(application: Application) : AndroidViewModel(application) {
     }
 
     fun reconnectSavedSession() {
+
         if (!hasSavedSession || connectionState.value != ConnectionState.Disconnected) return
         if (pendingWebToken != null) { connect(nick.value); return }
 
         val token = brokerToken ?: return
+
         connectionState.value = ConnectionState.Connecting
 
         scope.launch {
             try {
                 val session = withContext(Dispatchers.IO) { fetchBrokerSession(token) }
+
                 brokerRetryCount = 0
                 pendingWebToken = session.token
                 authenticatedDID.value = session.did
                 securePrefs.edit().putString("did", session.did).apply()
                 connect(session.nick)
             } catch (e: Exception) {
+
                 brokerRetryCount++
                 if (brokerRetryCount <= 4) {
                     val delayMs = 3000L * (1L shl (brokerRetryCount - 1)) // 3, 6, 12, 24s
