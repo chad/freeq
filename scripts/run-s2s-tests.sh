@@ -81,6 +81,7 @@ RUST_LOG=freeq_server=info "$BINARY" \
     --data-dir "$DIR_B" \
     --iroh \
     --s2s-peers "$IROH_ID_A" \
+    --s2s-allowed-peers "$IROH_ID_A" \
     >> "$LOG_B" 2>&1 &
 PID_B=$!
 

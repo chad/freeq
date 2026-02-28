@@ -901,6 +901,26 @@ impl Server {
 
     /// Run the server, blocking forever.
     pub async fn run(self) -> Result<()> {
+        // Validate S2S config: if peers are configured, allowlist must be set.
+        // Without an allowlist, any iroh endpoint can connect and inject messages.
+        if !self.config.s2s_peers.is_empty() && self.config.s2s_allowed_peers.is_empty() {
+            anyhow::bail!(
+                "S2S peers configured but --s2s-allowed-peers is empty. \
+                 This would allow any server to connect. Set --s2s-allowed-peers \
+                 to the endpoint IDs of your trusted peers."
+            );
+        }
+        // Every outbound peer should also be in the allowlist (catches copy-paste mistakes)
+        for peer in &self.config.s2s_peers {
+            if !self.config.s2s_allowed_peers.contains(peer) {
+                tracing::warn!(
+                    peer = %peer,
+                    "S2S peer is in --s2s-peers but not in --s2s-allowed-peers — \
+                     they can connect outbound but won't be accepted inbound"
+                );
+            }
+        }
+
         let tls_acceptor = self.build_tls_acceptor()?;
         let web_addr = self.config.web_addr.clone();
         let state = self.build_state()?;
@@ -941,6 +961,16 @@ impl Server {
                     }
                 }
             });
+        }
+
+        // Warn if iroh is enabled without an S2S allowlist (open federation)
+        if (self.config.iroh || !self.config.s2s_peers.is_empty())
+            && self.config.s2s_allowed_peers.is_empty()
+        {
+            tracing::warn!(
+                "Iroh enabled without --s2s-allowed-peers: any server can connect via S2S. \
+                 Set --s2s-allowed-peers to restrict federation to trusted peers."
+            );
         }
 
         // Start iroh transport if configured
