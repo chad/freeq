@@ -1,7 +1,7 @@
 //! FFI wrapper around freeq-sdk for Swift/Kotlin consumption via UniFFI.
 
-use std::sync::{Arc, Mutex};
 use once_cell::sync::Lazy;
+use std::sync::{Arc, Mutex};
 
 static RUNTIME: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
     tokio::runtime::Builder::new_multi_thread()
@@ -54,24 +54,75 @@ pub struct ChannelTopic {
 
 pub enum FreeqEvent {
     Connected,
-    Registered { nick: String },
-    Authenticated { did: String },
-    AuthFailed { reason: String },
-    Joined { channel: String, nick: String },
-    Parted { channel: String, nick: String },
-    NickChanged { old_nick: String, new_nick: String },
-    AwayChanged { nick: String, away_msg: Option<String> },
-    Message { msg: IrcMessage },
-    TagMsg { msg: TagMessage },
-    Names { channel: String, members: Vec<IrcMember> },
-    TopicChanged { channel: String, topic: ChannelTopic },
-    ModeChanged { channel: String, mode: String, arg: Option<String>, set_by: String },
-    Kicked { channel: String, nick: String, by: String, reason: String },
-    UserQuit { nick: String, reason: String },
-    BatchStart { id: String, batch_type: String, target: String },
-    BatchEnd { id: String },
-    Notice { text: String },
-    Disconnected { reason: String },
+    Registered {
+        nick: String,
+    },
+    Authenticated {
+        did: String,
+    },
+    AuthFailed {
+        reason: String,
+    },
+    Joined {
+        channel: String,
+        nick: String,
+    },
+    Parted {
+        channel: String,
+        nick: String,
+    },
+    NickChanged {
+        old_nick: String,
+        new_nick: String,
+    },
+    AwayChanged {
+        nick: String,
+        away_msg: Option<String>,
+    },
+    Message {
+        msg: IrcMessage,
+    },
+    TagMsg {
+        msg: TagMessage,
+    },
+    Names {
+        channel: String,
+        members: Vec<IrcMember>,
+    },
+    TopicChanged {
+        channel: String,
+        topic: ChannelTopic,
+    },
+    ModeChanged {
+        channel: String,
+        mode: String,
+        arg: Option<String>,
+        set_by: String,
+    },
+    Kicked {
+        channel: String,
+        nick: String,
+        by: String,
+        reason: String,
+    },
+    UserQuit {
+        nick: String,
+        reason: String,
+    },
+    BatchStart {
+        id: String,
+        batch_type: String,
+        target: String,
+    },
+    BatchEnd {
+        id: String,
+    },
+    Notice {
+        text: String,
+    },
+    Disconnected {
+        reason: String,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -126,7 +177,11 @@ impl FreeqClient {
     pub fn connect(&self) -> Result<(), FreeqError> {
         let nick = self.nick.lock().unwrap().clone();
         let web_token = self.web_token.lock().unwrap().take();
-        tracing::debug!("[FFI] connect: nick={}, web_token={}", nick, web_token.is_some());
+        tracing::debug!(
+            "[FFI] connect: nick={}, web_token={}",
+            nick,
+            web_token.is_some()
+        );
         let config = freeq_sdk::client::ConnectConfig {
             server_addr: self.server.clone(),
             nick: nick.clone(),
@@ -181,38 +236,67 @@ impl FreeqClient {
     }
 
     pub fn join(&self, channel: String) -> Result<(), FreeqError> {
-        let handle = self.handle.lock().unwrap().clone().ok_or(FreeqError::NotConnected)?;
+        let handle = self
+            .handle
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(FreeqError::NotConnected)?;
         // Use spawn + oneshot to avoid block_on deadlock
         let (tx, rx) = std::sync::mpsc::channel();
         RUNTIME.spawn(async move {
-            let result = handle.join(&channel).await.map_err(|_| FreeqError::SendFailed);
+            let result = handle
+                .join(&channel)
+                .await
+                .map_err(|_| FreeqError::SendFailed);
             let _ = tx.send(result);
         });
         rx.recv().map_err(|_| FreeqError::SendFailed)?
     }
 
     pub fn part(&self, channel: String) -> Result<(), FreeqError> {
-        let handle = self.handle.lock().unwrap().clone().ok_or(FreeqError::NotConnected)?;
+        let handle = self
+            .handle
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(FreeqError::NotConnected)?;
         let (tx, rx) = std::sync::mpsc::channel();
         RUNTIME.spawn(async move {
-            let result = handle.raw(&format!("PART {channel}")).await.map_err(|_| FreeqError::SendFailed);
+            let result = handle
+                .raw(&format!("PART {channel}"))
+                .await
+                .map_err(|_| FreeqError::SendFailed);
             let _ = tx.send(result);
         });
         rx.recv().map_err(|_| FreeqError::SendFailed)?
     }
 
     pub fn send_message(&self, target: String, text: String) -> Result<(), FreeqError> {
-        let handle = self.handle.lock().unwrap().clone().ok_or(FreeqError::NotConnected)?;
+        let handle = self
+            .handle
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(FreeqError::NotConnected)?;
         let (tx, rx) = std::sync::mpsc::channel();
         RUNTIME.spawn(async move {
-            let result = handle.privmsg(&target, &text).await.map_err(|_| FreeqError::SendFailed);
+            let result = handle
+                .privmsg(&target, &text)
+                .await
+                .map_err(|_| FreeqError::SendFailed);
             let _ = tx.send(result);
         });
         rx.recv().map_err(|_| FreeqError::SendFailed)?
     }
 
     pub fn send_raw(&self, line: String) -> Result<(), FreeqError> {
-        let handle = self.handle.lock().unwrap().clone().ok_or(FreeqError::NotConnected)?;
+        let handle = self
+            .handle
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(FreeqError::NotConnected)?;
         let (tx, rx) = std::sync::mpsc::channel();
         RUNTIME.spawn(async move {
             let result = handle.raw(&line).await.map_err(|_| FreeqError::SendFailed);
@@ -246,10 +330,23 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
         Event::Connected => FreeqEvent::Connected,
         Event::Registered { nick } => FreeqEvent::Registered { nick: nick.clone() },
         Event::Authenticated { did } => FreeqEvent::Authenticated { did: did.clone() },
-        Event::AuthFailed { reason } => FreeqEvent::AuthFailed { reason: reason.clone() },
-        Event::Joined { channel, nick } => FreeqEvent::Joined { channel: channel.clone(), nick: nick.clone() },
-        Event::Parted { channel, nick } => FreeqEvent::Parted { channel: channel.clone(), nick: nick.clone() },
-        Event::Message { from, target, text, tags } => {
+        Event::AuthFailed { reason } => FreeqEvent::AuthFailed {
+            reason: reason.clone(),
+        },
+        Event::Joined { channel, nick } => FreeqEvent::Joined {
+            channel: channel.clone(),
+            nick: nick.clone(),
+        },
+        Event::Parted { channel, nick } => FreeqEvent::Parted {
+            channel: channel.clone(),
+            nick: nick.clone(),
+        },
+        Event::Message {
+            from,
+            target,
+            text,
+            tags,
+        } => {
             let msgid = tags.get("msgid").cloned();
             let reply_to = tags.get("+reply").cloned();
             let replaces_msgid = tags.get("+draft/edit").cloned();
@@ -257,11 +354,14 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
             let batch_id = tags.get("batch").cloned();
             let is_action = text.starts_with("\x01ACTION ") && text.ends_with('\x01');
             let clean_text = if is_action {
-                text.trim_start_matches("\x01ACTION ").trim_end_matches('\x01').to_string()
+                text.trim_start_matches("\x01ACTION ")
+                    .trim_end_matches('\x01')
+                    .to_string()
             } else {
                 text.clone()
             };
-            let ts = tags.get("time")
+            let ts = tags
+                .get("time")
                 .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
                 .map(|dt: chrono::DateTime<chrono::FixedOffset>| dt.timestamp_millis())
                 .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
@@ -281,10 +381,13 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
             }
         }
         Event::TagMsg { from, target, tags } => {
-            let tag_entries = tags.iter().map(|(k, v)| TagEntry {
-                key: k.clone(),
-                value: v.clone(),
-            }).collect::<Vec<_>>();
+            let tag_entries = tags
+                .iter()
+                .map(|(k, v)| TagEntry {
+                    key: k.clone(),
+                    value: v.clone(),
+                })
+                .collect::<Vec<_>>();
             FreeqEvent::TagMsg {
                 msg: TagMessage {
                     from: from.clone(),
@@ -294,36 +397,77 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
             }
         }
         Event::Names { channel, nicks } => {
-            let members = nicks.iter().map(|n| {
-                let (is_op, is_halfop, is_voiced, nick) = if let Some(rest) = n.strip_prefix('@') {
-                    (true, false, false, rest.to_string())
-                } else if let Some(rest) = n.strip_prefix('%') {
-                    (false, true, false, rest.to_string())
-                } else if let Some(rest) = n.strip_prefix('+') {
-                    (false, false, true, rest.to_string())
-                } else {
-                    (false, false, false, n.clone())
-                };
-                IrcMember { nick, is_op, is_halfop, is_voiced, away_msg: None }
-            }).collect();
-            FreeqEvent::Names { channel: channel.clone(), members }
+            let members = nicks
+                .iter()
+                .map(|n| {
+                    let (is_op, is_halfop, is_voiced, nick) =
+                        if let Some(rest) = n.strip_prefix('@') {
+                            (true, false, false, rest.to_string())
+                        } else if let Some(rest) = n.strip_prefix('%') {
+                            (false, true, false, rest.to_string())
+                        } else if let Some(rest) = n.strip_prefix('+') {
+                            (false, false, true, rest.to_string())
+                        } else {
+                            (false, false, false, n.clone())
+                        };
+                    IrcMember {
+                        nick,
+                        is_op,
+                        is_halfop,
+                        is_voiced,
+                        away_msg: None,
+                    }
+                })
+                .collect();
+            FreeqEvent::Names {
+                channel: channel.clone(),
+                members,
+            }
         }
         Event::NamesEnd { .. } => {
             // NamesEnd is informational; map to empty notice for FFI consumers
-            FreeqEvent::Notice { text: String::new() }
+            FreeqEvent::Notice {
+                text: String::new(),
+            }
         }
-        Event::ModeChanged { channel, mode, arg, set_by } => FreeqEvent::ModeChanged {
-            channel: channel.clone(), mode: mode.clone(), arg: arg.clone(), set_by: set_by.clone(),
-        },
-        Event::Kicked { channel, nick, by, reason } => FreeqEvent::Kicked {
-            channel: channel.clone(), nick: nick.clone(), by: by.clone(), reason: reason.clone(),
-        },
-        Event::TopicChanged { channel, topic, set_by } => FreeqEvent::TopicChanged {
+        Event::ModeChanged {
+            channel,
+            mode,
+            arg,
+            set_by,
+        } => FreeqEvent::ModeChanged {
             channel: channel.clone(),
-            topic: ChannelTopic { text: topic.clone(), set_by: set_by.clone() },
+            mode: mode.clone(),
+            arg: arg.clone(),
+            set_by: set_by.clone(),
+        },
+        Event::Kicked {
+            channel,
+            nick,
+            by,
+            reason,
+        } => FreeqEvent::Kicked {
+            channel: channel.clone(),
+            nick: nick.clone(),
+            by: by.clone(),
+            reason: reason.clone(),
+        },
+        Event::TopicChanged {
+            channel,
+            topic,
+            set_by,
+        } => FreeqEvent::TopicChanged {
+            channel: channel.clone(),
+            topic: ChannelTopic {
+                text: topic.clone(),
+                set_by: set_by.clone(),
+            },
         },
         Event::ServerNotice { text } => FreeqEvent::Notice { text: text.clone() },
-        Event::UserQuit { nick, reason } => FreeqEvent::UserQuit { nick: nick.clone(), reason: reason.clone() },
+        Event::UserQuit { nick, reason } => FreeqEvent::UserQuit {
+            nick: nick.clone(),
+            reason: reason.clone(),
+        },
         Event::NickChanged { old_nick, new_nick } => FreeqEvent::NickChanged {
             old_nick: old_nick.clone(),
             new_nick: new_nick.clone(),
@@ -332,15 +476,25 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
             nick: nick.clone(),
             away_msg: away_msg.clone(),
         },
-        Event::BatchStart { id, batch_type, target } => FreeqEvent::BatchStart {
+        Event::BatchStart {
+            id,
+            batch_type,
+            target,
+        } => FreeqEvent::BatchStart {
             id: id.clone(),
             batch_type: batch_type.clone(),
             target: target.clone(),
         },
         Event::BatchEnd { id } => FreeqEvent::BatchEnd { id: id.clone() },
-        Event::Disconnected { reason } => FreeqEvent::Disconnected { reason: reason.clone() },
-        Event::Invited { channel, by } => FreeqEvent::Notice { text: format!("{by} invited you to {channel}") },
-        _ => FreeqEvent::Notice { text: String::new() },
+        Event::Disconnected { reason } => FreeqEvent::Disconnected {
+            reason: reason.clone(),
+        },
+        Event::Invited { channel, by } => FreeqEvent::Notice {
+            text: format!("{by} invited you to {channel}"),
+        },
+        _ => FreeqEvent::Notice {
+            text: String::new(),
+        },
     }
 }
 
@@ -384,10 +538,10 @@ impl FreeqE2ee {
 
     /// Generate identity and signed pre-key. Returns the bundle to upload.
     fn generate_keys(&self) -> Result<PreKeyBundle, FreeqError> {
-        use x25519_dalek::{StaticSecret, PublicKey};
         use aes_gcm::aead::OsRng;
         use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
         use base64::Engine;
+        use x25519_dalek::{PublicKey, StaticSecret};
 
         let ik_secret = StaticSecret::random_from_rng(OsRng);
         let ik_public = PublicKey::from(&ik_secret);
@@ -400,7 +554,7 @@ impl FreeqE2ee {
         *self.spk_public.lock().unwrap() = Some(spk_public.to_bytes());
 
         // Sign SPK with Ed25519 signing key
-        use ed25519_dalek::{SigningKey, Signer};
+        use ed25519_dalek::{Signer, SigningKey};
         let signing_key = SigningKey::generate(&mut OsRng);
         let sig = signing_key.sign(spk_public.as_bytes());
 
@@ -413,17 +567,25 @@ impl FreeqE2ee {
     }
 
     /// Restore keys from persisted base64url strings (from Keychain).
-    fn restore_keys(&self, ik_secret_b64: String, spk_secret_b64: String) -> Result<PreKeyBundle, FreeqError> {
-        use x25519_dalek::{StaticSecret, PublicKey};
+    fn restore_keys(
+        &self,
+        ik_secret_b64: String,
+        spk_secret_b64: String,
+    ) -> Result<PreKeyBundle, FreeqError> {
         use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
         use base64::Engine;
+        use x25519_dalek::{PublicKey, StaticSecret};
 
-        let ik_bytes: [u8; 32] = B64.decode(&ik_secret_b64)
+        let ik_bytes: [u8; 32] = B64
+            .decode(&ik_secret_b64)
             .map_err(|_| FreeqError::InvalidArgument)?
-            .try_into().map_err(|_| FreeqError::InvalidArgument)?;
-        let spk_bytes: [u8; 32] = B64.decode(&spk_secret_b64)
+            .try_into()
+            .map_err(|_| FreeqError::InvalidArgument)?;
+        let spk_bytes: [u8; 32] = B64
+            .decode(&spk_secret_b64)
             .map_err(|_| FreeqError::InvalidArgument)?
-            .try_into().map_err(|_| FreeqError::InvalidArgument)?;
+            .try_into()
+            .map_err(|_| FreeqError::InvalidArgument)?;
 
         let ik_secret = StaticSecret::from(ik_bytes);
         let ik_public = PublicKey::from(&ik_secret);
@@ -448,28 +610,46 @@ impl FreeqE2ee {
         use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
         use base64::Engine;
 
-        let ik = self.identity_secret.lock().unwrap()
+        let ik = self
+            .identity_secret
+            .lock()
+            .unwrap()
             .ok_or(FreeqError::NotConnected)?;
-        let spk = self.spk_secret.lock().unwrap()
+        let spk = self
+            .spk_secret
+            .lock()
+            .unwrap()
             .ok_or(FreeqError::NotConnected)?;
         Ok(vec![B64.encode(ik), B64.encode(spk)])
     }
 
     /// Establish a session with a remote user from their pre-key bundle.
     /// `bundle_json` is the JSON from GET /api/v1/keys/{did}.
-    fn establish_session(&self, remote_did: String, their_ik_b64: String, their_spk_b64: String) -> Result<(), FreeqError> {
-        use x25519_dalek::{StaticSecret, PublicKey};
+    fn establish_session(
+        &self,
+        remote_did: String,
+        their_ik_b64: String,
+        their_spk_b64: String,
+    ) -> Result<(), FreeqError> {
         use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
         use base64::Engine;
+        use x25519_dalek::{PublicKey, StaticSecret};
 
-        let their_ik: [u8; 32] = B64.decode(&their_ik_b64)
+        let their_ik: [u8; 32] = B64
+            .decode(&their_ik_b64)
             .map_err(|_| FreeqError::InvalidArgument)?
-            .try_into().map_err(|_| FreeqError::InvalidArgument)?;
-        let their_spk: [u8; 32] = B64.decode(&their_spk_b64)
+            .try_into()
+            .map_err(|_| FreeqError::InvalidArgument)?;
+        let their_spk: [u8; 32] = B64
+            .decode(&their_spk_b64)
             .map_err(|_| FreeqError::InvalidArgument)?
-            .try_into().map_err(|_| FreeqError::InvalidArgument)?;
+            .try_into()
+            .map_err(|_| FreeqError::InvalidArgument)?;
 
-        let my_ik_secret = self.identity_secret.lock().unwrap()
+        let my_ik_secret = self
+            .identity_secret
+            .lock()
+            .unwrap()
             .ok_or(FreeqError::NotConnected)?;
         let my_ik = StaticSecret::from(my_ik_secret);
         let their_ik_pk = PublicKey::from(their_ik);
@@ -480,21 +660,27 @@ impl FreeqE2ee {
         let dh_out2 = my_ik.diffie_hellman(&their_spk_pk).to_bytes();
 
         // Combine DH outputs
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(dh_out);
         hasher.update(dh_out2);
         let shared_secret: [u8; 32] = hasher.finalize().into();
 
         // Canonical order: lower public key is "initiator"
-        let my_pk = self.identity_public.lock().unwrap()
+        let my_pk = self
+            .identity_public
+            .lock()
+            .unwrap()
             .ok_or(FreeqError::NotConnected)?;
         let we_are_first = my_pk < their_ik;
 
         let session = if we_are_first {
             RatchetSession::init_alice(shared_secret, their_spk)
         } else {
-            let my_spk = self.spk_secret.lock().unwrap()
+            let my_spk = self
+                .spk_secret
+                .lock()
+                .unwrap()
                 .ok_or(FreeqError::NotConnected)?;
             RatchetSession::init_bob(shared_secret, my_spk)
         };
@@ -506,17 +692,23 @@ impl FreeqE2ee {
     /// Encrypt a message for a remote user. Returns ENC3:... wire format.
     fn encrypt_message(&self, remote_did: String, plaintext: String) -> Result<String, FreeqError> {
         let mut sessions = self.sessions.lock().unwrap();
-        let session = sessions.get_mut(&remote_did)
+        let session = sessions
+            .get_mut(&remote_did)
             .ok_or(FreeqError::NotConnected)?;
-        session.encrypt(&plaintext).map_err(|_| FreeqError::SendFailed)
+        session
+            .encrypt(&plaintext)
+            .map_err(|_| FreeqError::SendFailed)
     }
 
     /// Decrypt a message from a remote user.
     fn decrypt_message(&self, remote_did: String, wire: String) -> Result<String, FreeqError> {
         let mut sessions = self.sessions.lock().unwrap();
-        let session = sessions.get_mut(&remote_did)
+        let session = sessions
+            .get_mut(&remote_did)
             .ok_or(FreeqError::NotConnected)?;
-        session.decrypt(&wire).map_err(|_| FreeqError::InvalidArgument)
+        session
+            .decrypt(&wire)
+            .map_err(|_| FreeqError::InvalidArgument)
     }
 
     /// Check if we have an active session with a user.
@@ -531,8 +723,11 @@ impl FreeqE2ee {
 
     /// Get safety number for a session (hash of both identity keys).
     fn get_safety_number(&self, remote_did: String) -> Result<SafetyNumber, FreeqError> {
-        use sha2::{Sha256, Digest};
-        let my_pk = self.identity_public.lock().unwrap()
+        use sha2::{Digest, Sha256};
+        let my_pk = self
+            .identity_public
+            .lock()
+            .unwrap()
             .ok_or(FreeqError::NotConnected)?;
 
         // Combine in canonical order
@@ -553,21 +748,22 @@ impl FreeqE2ee {
             let val = ((hash[i * 2] as u32) << 8 | hash[i * 2 + 1] as u32) % 100000;
             digits.push(format!("{val:05}"));
         }
-        Ok(SafetyNumber { number: digits.join(" ") })
+        Ok(SafetyNumber {
+            number: digits.join(" "),
+        })
     }
 
     /// Serialize a session state for persistence.
     fn export_session(&self, remote_did: String) -> Result<String, FreeqError> {
         let sessions = self.sessions.lock().unwrap();
-        let session = sessions.get(&remote_did)
-            .ok_or(FreeqError::NotConnected)?;
+        let session = sessions.get(&remote_did).ok_or(FreeqError::NotConnected)?;
         serde_json::to_string(session).map_err(|_| FreeqError::SendFailed)
     }
 
     /// Restore a session from serialized state.
     fn import_session(&self, remote_did: String, json: String) -> Result<(), FreeqError> {
-        let session: RatchetSession = serde_json::from_str(&json)
-            .map_err(|_| FreeqError::InvalidArgument)?;
+        let session: RatchetSession =
+            serde_json::from_str(&json).map_err(|_| FreeqError::InvalidArgument)?;
         self.sessions.lock().unwrap().insert(remote_did, session);
         Ok(())
     }

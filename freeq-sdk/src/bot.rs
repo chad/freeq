@@ -72,7 +72,11 @@ impl CommandContext {
 
     /// Reply target: channel if in-channel, sender nick if PM.
     pub fn reply_target(&self) -> &str {
-        if self.is_channel { &self.target } else { &self.sender }
+        if self.is_channel {
+            &self.target
+        } else {
+            &self.sender
+        }
     }
 
     /// Reply to the channel/user.
@@ -309,11 +313,12 @@ impl Bot {
     /// Process an event. Call this in your event loop.
     pub async fn handle_event(&self, handle: &ClientHandle, event: &Event) {
         if let Event::Message {
-                from,
-                target,
-                text,
-                tags,
-            } = event {
+            from,
+            target,
+            text,
+            tags,
+        } = event
+        {
             // Ignore CHATHISTORY batches (avoid replaying history)
             if tags.contains_key("batch") {
                 return;
@@ -335,15 +340,22 @@ impl Bot {
 
                 // Rate limiting
                 if let Some(ref limiter) = self.rate_limiter
-                    && !limiter.check(from) {
-                        let _ = handle.privmsg(reply_target, "Slow down — too many commands.").await;
-                        return;
-                    }
+                    && !limiter.check(from)
+                {
+                    let _ = handle
+                        .privmsg(reply_target, "Slow down — too many commands.")
+                        .await;
+                    return;
+                }
 
                 // Input size check
                 if self.max_args_len > 0 && args_raw.len() > self.max_args_len {
-                    let _ = handle.privmsg(reply_target,
-                        &format!("Input too long (max {} chars).", self.max_args_len)).await;
+                    let _ = handle
+                        .privmsg(
+                            reply_target,
+                            &format!("Input too long (max {} chars).", self.max_args_len),
+                        )
+                        .await;
                     return;
                 }
 
@@ -373,9 +385,7 @@ impl Bot {
                             });
                             if !is_admin {
                                 let reply_target = if is_channel { target } else { from };
-                                let _ = handle
-                                    .privmsg(reply_target, "Permission denied.")
-                                    .await;
+                                let _ = handle.privmsg(reply_target, "Permission denied.").await;
                                 return;
                             }
                         }

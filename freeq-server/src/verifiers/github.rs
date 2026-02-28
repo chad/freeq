@@ -12,11 +12,11 @@ use super::{PendingVerification, VerifierState};
 use crate::policy::credentials;
 use crate::policy::types::VerifiableCredential;
 use axum::{
+    Router,
     extract::{Query, State},
     http::StatusCode,
     response::{IntoResponse, Redirect},
     routing::get,
-    Router,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -46,10 +46,10 @@ async fn start(
     Query(q): Query<StartQuery>,
     State(state): State<Arc<VerifierState>>,
 ) -> Result<Redirect, (StatusCode, String)> {
-    let github = state
-        .github
-        .as_ref()
-        .ok_or((StatusCode::SERVICE_UNAVAILABLE, "GitHub not configured".into()))?;
+    let github = state.github.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "GitHub not configured".into(),
+    ))?;
 
     if q.org.is_none() && q.repo.is_none() {
         return Err((StatusCode::BAD_REQUEST, "Must specify org= or repo=".into()));
@@ -173,16 +173,19 @@ async fn callback(
     // Route to the appropriate verification
     if let Some(ref repo_name) = repo {
         return verify_repo_collaborator(
-            &state, &http, &access_token, &username, repo_name, &pending,
+            &state,
+            &http,
+            &access_token,
+            &username,
+            repo_name,
+            &pending,
         )
         .await;
     }
 
     if let Some(ref org_name) = org {
-        return verify_org_membership(
-            &state, &http, &access_token, &username, org_name, &pending,
-        )
-        .await;
+        return verify_org_membership(&state, &http, &access_token, &username, org_name, &pending)
+            .await;
     }
 
     error_page("No org or repo specified")
@@ -338,9 +341,7 @@ async fn issue_credential(
         credential_type: credential_type.into(),
         claims,
         issued_at: chrono::Utc::now().to_rfc3339(),
-        expires_at: Some(
-            (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339(),
-        ),
+        expires_at: Some((chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339()),
         signature: String::new(),
     };
     credentials::sign_credential(&mut vc, &state.signing_key).unwrap();
@@ -355,7 +356,8 @@ async fn issue_credential(
     // POST credential to callback URL
     let callback_result = if !pending.callback_url.is_empty() {
         tracing::info!(callback_url = %pending.callback_url, "POSTing credential to callback");
-        match http.post(&pending.callback_url)
+        match http
+            .post(&pending.callback_url)
             .json(&serde_json::json!({ "credential": vc }))
             .send()
             .await

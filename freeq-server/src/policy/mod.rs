@@ -22,4 +22,6 @@ pub mod types;
 pub use engine::{JoinResult, PolicyEngine};
 pub use store::{PolicyError, PolicyStore};
 // Re-export key types
-pub use types::{Requirement, PolicyDocument, AuthoritySet, MembershipAttestation, VerifiableCredential};
+pub use types::{
+    AuthoritySet, MembershipAttestation, PolicyDocument, Requirement, VerifiableCredential,
+};

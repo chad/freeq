@@ -8,12 +8,10 @@
 //!
 //! All work is visible in the channel in real-time.
 
-use std::path::Path;
 use anyhow::Result;
+use std::path::Path;
 
-use crate::llm::{
-    ContentBlock, LlmClient, Message, MessageContent, ToolResultBlock,
-};
+use crate::llm::{ContentBlock, LlmClient, Message, MessageContent, ToolResultBlock};
 use crate::memory::Memory;
 use crate::output::{self, AgentId};
 use crate::tools::{self, Workspace};
@@ -48,13 +46,22 @@ Work step by step:
 
 /// Agents shown in channel.
 fn architect() -> AgentId {
-    AgentId { role: "architect".to_string(), color: None }
+    AgentId {
+        role: "architect".to_string(),
+        color: None,
+    }
 }
 fn builder() -> AgentId {
-    AgentId { role: "builder".to_string(), color: None }
+    AgentId {
+        role: "builder".to_string(),
+        color: None,
+    }
 }
 fn deployer() -> AgentId {
-    AgentId { role: "deploy".to_string(), color: None }
+    AgentId {
+        role: "deploy".to_string(),
+        color: None,
+    }
 }
 
 /// Run the prototype pipeline for a spec.
@@ -69,7 +76,14 @@ pub async fn build(
     // Generate a project name from the spec
     let project_name = generate_project_name(llm, spec).await?;
 
-    output::status(handle, channel, &architect(), "🔍", &format!("Analyzing spec for: {project_name}")).await?;
+    output::status(
+        handle,
+        channel,
+        &architect(),
+        "🔍",
+        &format!("Analyzing spec for: {project_name}"),
+    )
+    .await?;
 
     // Create workspace
     let workspace = Workspace::create(workspace_base, &project_name).await?;
@@ -94,7 +108,13 @@ pub async fn build(
     loop {
         iteration += 1;
         if iteration > MAX_ITERATIONS {
-            output::error(handle, channel, &builder(), "Max iterations reached, stopping").await?;
+            output::error(
+                handle,
+                channel,
+                &builder(),
+                "Max iterations reached, stopping",
+            )
+            .await?;
             break;
         }
 
@@ -156,7 +176,14 @@ pub async fn build(
             match tu.name.as_str() {
                 "write_file" => {
                     let path = tu.input["path"].as_str().unwrap_or("?");
-                    output::status(handle, channel, &builder(), "✏️", &format!("Writing {path}")).await?;
+                    output::status(
+                        handle,
+                        channel,
+                        &builder(),
+                        "✏️",
+                        &format!("Writing {path}"),
+                    )
+                    .await?;
                 }
                 "shell" => {
                     let cmd = tu.input["command"].as_str().unwrap_or("?");
@@ -165,10 +192,18 @@ pub async fn build(
                     } else {
                         cmd.to_string()
                     };
-                    output::status(handle, channel, &builder(), "⚙️", &format!("Running: {short_cmd}")).await?;
+                    output::status(
+                        handle,
+                        channel,
+                        &builder(),
+                        "⚙️",
+                        &format!("Running: {short_cmd}"),
+                    )
+                    .await?;
                 }
                 "deploy" => {
-                    output::status(handle, channel, &deployer(), "🚀", "Deploying to miren...").await?;
+                    output::status(handle, channel, &deployer(), "🚀", "Deploying to miren...")
+                        .await?;
                 }
                 "list_files" => {
                     output::status(handle, channel, &builder(), "📁", "Listing files").await?;
@@ -180,25 +215,32 @@ pub async fn build(
                 Ok(output) => {
                     // Check for deploy URL in output
                     if tu.name == "deploy"
-                        && let Some(url) = extract_deploy_url(&output) {
-                            deployed_url = Some(url.clone());
-                            output::deploy_result(handle, channel, &deployer(), &url).await?;
-                            memory.set(&project_name, "deploy", "url", &url)?;
-                        }
+                        && let Some(url) = extract_deploy_url(&output)
+                    {
+                        deployed_url = Some(url.clone());
+                        output::deploy_result(handle, channel, &deployer(), &url).await?;
+                        memory.set(&project_name, "deploy", "url", &url)?;
+                    }
 
                     // Store files in memory
                     if tu.name == "write_file"
                         && let (Some(path), Some(content)) =
                             (tu.input["path"].as_str(), tu.input["content"].as_str())
-                        {
-                            memory.set(&project_name, "file", path, content)?;
-                        }
+                    {
+                        memory.set(&project_name, "file", path, content)?;
+                    }
 
                     output
                 }
                 Err(e) => {
                     let err = format!("Error: {e}");
-                    output::error(handle, channel, &builder(), &format!("Tool {} failed: {e}", tu.name)).await?;
+                    output::error(
+                        handle,
+                        channel,
+                        &builder(),
+                        &format!("Tool {} failed: {e}", tu.name),
+                    )
+                    .await?;
                     err
                 }
             };
@@ -228,7 +270,14 @@ pub async fn build(
         )
         .await?;
     } else {
-        output::status(handle, channel, &builder(), "⚠️", "Build complete but no deploy URL found").await?;
+        output::status(
+            handle,
+            channel,
+            &builder(),
+            "⚠️",
+            "Build complete but no deploy URL found",
+        )
+        .await?;
     }
 
     memory.log(&project_name, "event", "Build complete")?;

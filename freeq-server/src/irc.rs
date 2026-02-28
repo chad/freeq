@@ -108,7 +108,9 @@ impl fmt::Display for Message {
             write!(f, "@")?;
             let mut first = true;
             for (key, value) in &self.tags {
-                if !first { write!(f, ";")?; }
+                if !first {
+                    write!(f, ";")?;
+                }
                 first = false;
                 if value.is_empty() {
                     write!(f, "{key}")?;
@@ -124,7 +126,9 @@ impl fmt::Display for Message {
         }
         write!(f, "{}", self.command)?;
         for (i, param) in self.params.iter().enumerate() {
-            if i == self.params.len() - 1 && (param.contains(' ') || param.starts_with(':') || param.is_empty()) {
+            if i == self.params.len() - 1
+                && (param.contains(' ') || param.starts_with(':') || param.is_empty())
+            {
                 write!(f, " :{param}")?;
             } else {
                 write!(f, " {param}")?;
@@ -138,7 +142,9 @@ impl fmt::Display for Message {
 fn parse_tags(tag_str: &str) -> HashMap<String, String> {
     let mut tags = HashMap::new();
     for pair in tag_str.split(';') {
-        if pair.is_empty() { continue; }
+        if pair.is_empty() {
+            continue;
+        }
         if let Some((key, value)) = pair.split_once('=') {
             tags.insert(key.to_string(), unescape_tag_value(value));
         } else {
@@ -160,7 +166,10 @@ fn unescape_tag_value(s: &str) -> String {
                 Some('\\') => result.push('\\'),
                 Some('r') => result.push('\r'),
                 Some('n') => result.push('\n'),
-                Some(other) => { result.push('\\'); result.push(other); }
+                Some(other) => {
+                    result.push('\\');
+                    result.push(other);
+                }
                 None => result.push('\\'),
             }
         } else {
@@ -309,7 +318,10 @@ mod tests {
     fn parse_with_tags() {
         let msg = Message::parse("@content-type=image/jpeg;media-url=https://example.com/img.jpg :alice!a@host PRIVMSG #chan :photo").unwrap();
         assert_eq!(msg.tags.get("content-type").unwrap(), "image/jpeg");
-        assert_eq!(msg.tags.get("media-url").unwrap(), "https://example.com/img.jpg");
+        assert_eq!(
+            msg.tags.get("media-url").unwrap(),
+            "https://example.com/img.jpg"
+        );
         assert_eq!(msg.command, "PRIVMSG");
     }
 

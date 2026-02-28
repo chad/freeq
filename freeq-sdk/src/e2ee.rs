@@ -30,9 +30,9 @@
 //! different keys in different channels.
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
-use aes_gcm::{Aes256Gcm, AeadCore, Nonce};
-use base64::engine::general_purpose::STANDARD as B64;
+use aes_gcm::{AeadCore, Aes256Gcm, Nonce};
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as B64;
 use hkdf::Hkdf;
 use sha2::Sha256;
 
@@ -75,12 +75,14 @@ pub fn decrypt(key: &[u8; 32], wire: &str) -> Result<String, DecryptError> {
         .strip_prefix(ENC_PREFIX)
         .ok_or(DecryptError::NotEncrypted)?;
 
-    let (nonce_b64, ct_b64) = body
-        .split_once(':')
-        .ok_or(DecryptError::MalformedMessage)?;
+    let (nonce_b64, ct_b64) = body.split_once(':').ok_or(DecryptError::MalformedMessage)?;
 
-    let nonce_bytes = B64.decode(nonce_b64).map_err(|_| DecryptError::MalformedMessage)?;
-    let ct_bytes = B64.decode(ct_b64).map_err(|_| DecryptError::MalformedMessage)?;
+    let nonce_bytes = B64
+        .decode(nonce_b64)
+        .map_err(|_| DecryptError::MalformedMessage)?;
+    let ct_bytes = B64
+        .decode(ct_b64)
+        .map_err(|_| DecryptError::MalformedMessage)?;
 
     if nonce_bytes.len() != 12 {
         return Err(DecryptError::MalformedMessage);
@@ -165,7 +167,9 @@ mod tests {
         let mut wire = encrypt(&key, "hello").unwrap();
         // Flip a character in the ciphertext
         let len = wire.len();
-        unsafe { wire.as_bytes_mut()[len - 2] ^= 0xFF; }
+        unsafe {
+            wire.as_bytes_mut()[len - 2] ^= 0xFF;
+        }
         assert!(decrypt(&key, &wire).is_err());
     }
 

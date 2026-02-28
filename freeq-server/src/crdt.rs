@@ -32,8 +32,8 @@ use std::collections::HashMap;
 
 use automerge::{
     AutoCommit, ReadDoc,
-    transaction::Transactable,
     sync::{self, SyncDoc},
+    transaction::Transactable,
 };
 use tokio::sync::Mutex;
 
@@ -222,7 +222,14 @@ impl ClusterDoc {
     // ── Topic operations ────────────────────────────────────────────
 
     /// Set a channel's topic with provenance.
-    pub async fn set_topic(&self, channel: &str, topic: &str, set_by: &str, set_by_did: Option<&str>, origin_peer: &str) {
+    pub async fn set_topic(
+        &self,
+        channel: &str,
+        topic: &str,
+        set_by: &str,
+        set_by_did: Option<&str>,
+        origin_peer: &str,
+    ) {
         let mut doc = self.doc.lock().await;
         // Store rich provenance as JSON
         let value = serde_json::json!({
@@ -231,7 +238,11 @@ impl ClusterDoc {
             "set_by_did": set_by_did,
             "origin_peer": origin_peer,
         });
-        let _ = doc.put(automerge::ROOT, format!("topic:{channel}"), value.to_string());
+        let _ = doc.put(
+            automerge::ROOT,
+            format!("topic:{channel}"),
+            value.to_string(),
+        );
         let _ = doc.put(automerge::ROOT, format!("topic_by:{channel}"), set_by);
         self.metrics.lock().await.change_count += 1;
     }
@@ -239,7 +250,9 @@ impl ClusterDoc {
     /// Get a channel's topic: (text, set_by).
     pub async fn channel_topic(&self, channel: &str) -> Option<(String, String)> {
         let doc = self.doc.lock().await;
-        let (topic_val, _) = doc.get(automerge::ROOT, format!("topic:{channel}")).ok()??;
+        let (topic_val, _) = doc
+            .get(automerge::ROOT, format!("topic:{channel}"))
+            .ok()??;
         let raw = value_to_string(&topic_val)?;
         // Try parsing as JSON (new format with provenance)
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
@@ -248,7 +261,9 @@ impl ClusterDoc {
             Some((text, set_by))
         } else {
             // Legacy format: plain text topic
-            let (setter_val, _) = doc.get(automerge::ROOT, format!("topic_by:{channel}")).ok()??;
+            let (setter_val, _) = doc
+                .get(automerge::ROOT, format!("topic_by:{channel}"))
+                .ok()??;
             let setter = value_to_string(&setter_val)?;
             Some((raw, setter))
         }
@@ -257,7 +272,9 @@ impl ClusterDoc {
     /// Get full topic provenance for authority checking.
     pub async fn channel_topic_provenance(&self, channel: &str) -> Option<serde_json::Value> {
         let doc = self.doc.lock().await;
-        let (topic_val, _) = doc.get(automerge::ROOT, format!("topic:{channel}")).ok()??;
+        let (topic_val, _) = doc
+            .get(automerge::ROOT, format!("topic:{channel}"))
+            .ok()??;
         let raw = value_to_string(&topic_val)?;
         serde_json::from_str(&raw).ok()
     }
@@ -265,7 +282,14 @@ impl ClusterDoc {
     // ── Ban operations ──────────────────────────────────────────────
 
     /// Add a ban with provenance.
-    pub async fn add_ban(&self, channel: &str, mask: &str, set_by: &str, set_by_did: Option<&str>, origin_peer: &str) {
+    pub async fn add_ban(
+        &self,
+        channel: &str,
+        mask: &str,
+        set_by: &str,
+        set_by_did: Option<&str>,
+        origin_peer: &str,
+    ) {
         let mut doc = self.doc.lock().await;
         let value = serde_json::json!({
             "set_by": set_by,
@@ -315,7 +339,9 @@ impl ClusterDoc {
     /// Get the DID that owns a nick.
     pub async fn nick_owner(&self, nick: &str) -> Option<String> {
         let doc = self.doc.lock().await;
-        let (val, _) = doc.get(automerge::ROOT, format!("nick_owner:{nick}")).ok()??;
+        let (val, _) = doc
+            .get(automerge::ROOT, format!("nick_owner:{nick}"))
+            .ok()??;
         value_to_string(&val)
     }
 
@@ -341,15 +367,17 @@ impl ClusterDoc {
         // (min-actor-wins for deterministic convergence)
         if let Ok(Some((existing_val, _))) = doc.get(automerge::ROOT, &key)
             && let Some(existing_str) = value_to_string(&existing_val)
-                && let Ok(existing) = serde_json::from_str::<serde_json::Value>(&existing_str) {
-                    let existing_actor = existing.get("actor_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    // Only overwrite if our actor_id is strictly smaller
-                    if current_actor_id.as_str() >= existing_actor {
-                        return; // Keep existing — they win
-                    }
-                }
+            && let Ok(existing) = serde_json::from_str::<serde_json::Value>(&existing_str)
+        {
+            let existing_actor = existing
+                .get("actor_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            // Only overwrite if our actor_id is strictly smaller
+            if current_actor_id.as_str() >= existing_actor {
+                return; // Keep existing — they win
+            }
+        }
 
         let _ = doc.put(automerge::ROOT, &key, value.to_string());
         self.metrics.lock().await.change_count += 1;
@@ -358,7 +386,9 @@ impl ClusterDoc {
     /// Get the channel founder's DID.
     pub async fn founder(&self, channel: &str) -> Option<String> {
         let doc = self.doc.lock().await;
-        let (val, _) = doc.get(automerge::ROOT, format!("founder:{channel}")).ok()??;
+        let (val, _) = doc
+            .get(automerge::ROOT, format!("founder:{channel}"))
+            .ok()??;
         let raw = value_to_string(&val)?;
         // Try new JSON format first
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) {
@@ -370,7 +400,13 @@ impl ClusterDoc {
     }
 
     /// Grant persistent operator status to a DID with provenance.
-    pub async fn grant_op(&self, channel: &str, did: &str, granted_by_did: Option<&str>, origin_peer: &str) {
+    pub async fn grant_op(
+        &self,
+        channel: &str,
+        did: &str,
+        granted_by_did: Option<&str>,
+        origin_peer: &str,
+    ) {
         let mut doc = self.doc.lock().await;
         let key = format!("did_op:{channel}:{did}");
         let value = serde_json::json!({
@@ -426,16 +462,22 @@ impl ClusterDoc {
     /// If `require_did` is true (from `--require-did-for-ops`), rejects
     /// writes without DID provenance. Otherwise, allows them for backward
     /// compatibility with legacy peers.
-    pub async fn validate_topic_authority(&self, channel: &str, setter_did: Option<&str>, require_did: bool) -> bool {
+    pub async fn validate_topic_authority(
+        &self,
+        channel: &str,
+        setter_did: Option<&str>,
+        require_did: bool,
+    ) -> bool {
         let did = match setter_did {
             Some(d) => d,
             None => return !require_did, // No DID: reject if strict, allow if compat
         };
         // Founder always has authority
         if let Some(founder) = self.founder(channel).await
-            && founder == did {
-                return true;
-            }
+            && founder == did
+        {
+            return true;
+        }
         // DID-ops have authority
         let ops = self.channel_did_ops(channel).await;
         ops.contains(&did.to_string())
@@ -445,15 +487,21 @@ impl ClusterDoc {
     /// Only founder or existing DID-ops can grant ops.
     ///
     /// If `require_did` is true, rejects grants without DID provenance.
-    pub async fn validate_op_grant_authority(&self, channel: &str, granter_did: Option<&str>, require_did: bool) -> bool {
+    pub async fn validate_op_grant_authority(
+        &self,
+        channel: &str,
+        granter_did: Option<&str>,
+        require_did: bool,
+    ) -> bool {
         let did = match granter_did {
             Some(d) => d,
             None => return !require_did,
         };
         if let Some(founder) = self.founder(channel).await
-            && founder == did {
-                return true;
-            }
+            && founder == did
+        {
+            return true;
+        }
         let ops = self.channel_did_ops(channel).await;
         ops.contains(&did.to_string())
     }
@@ -469,8 +517,13 @@ impl ClusterDoc {
     pub async fn generate_sync_message(&self, peer_id: &str) -> Option<Vec<u8>> {
         let mut doc = self.doc.lock().await;
         let mut sync_states = self.sync_states.lock().await;
-        let state = sync_states.entry(peer_id.to_string()).or_insert_with(sync::State::new);
-        let result = doc.sync().generate_sync_message(state).map(|msg| msg.encode());
+        let state = sync_states
+            .entry(peer_id.to_string())
+            .or_insert_with(sync::State::new);
+        let result = doc
+            .sync()
+            .generate_sync_message(state)
+            .map(|msg| msg.encode());
         if let Some(ref bytes) = result {
             let mut m = self.metrics.lock().await;
             m.sync_messages_sent += 1;
@@ -487,12 +540,15 @@ impl ClusterDoc {
             m.sync_messages_received += 1;
             m.sync_bytes_received += message.len() as u64;
         }
-        let msg = sync::Message::decode(message)
-            .map_err(|e| format!("Invalid sync message: {e}"))?;
+        let msg =
+            sync::Message::decode(message).map_err(|e| format!("Invalid sync message: {e}"))?;
         let mut doc = self.doc.lock().await;
         let mut sync_states = self.sync_states.lock().await;
-        let state = sync_states.entry(peer_id.to_string()).or_insert_with(sync::State::new);
-        doc.sync().receive_sync_message(state, msg)
+        let state = sync_states
+            .entry(peer_id.to_string())
+            .or_insert_with(sync::State::new);
+        doc.sync()
+            .receive_sync_message(state, msg)
             .map_err(|e| format!("Sync error: {e}"))
     }
 
@@ -520,16 +576,27 @@ mod tests {
     #[tokio::test]
     async fn topic_set_and_read() {
         let doc = ClusterDoc::new("server-1");
-        doc.set_topic("#test", "Hello world", "alice", Some("did:plc:alice"), "peer-1").await;
+        doc.set_topic(
+            "#test",
+            "Hello world",
+            "alice",
+            Some("did:plc:alice"),
+            "peer-1",
+        )
+        .await;
 
         let topic = doc.channel_topic("#test").await;
-        assert_eq!(topic, Some(("Hello world".to_string(), "alice".to_string())));
+        assert_eq!(
+            topic,
+            Some(("Hello world".to_string(), "alice".to_string()))
+        );
     }
 
     #[tokio::test]
     async fn topic_provenance() {
         let doc = ClusterDoc::new("server-1");
-        doc.set_topic("#test", "Hello", "alice", Some("did:plc:alice"), "peer-abc").await;
+        doc.set_topic("#test", "Hello", "alice", Some("did:plc:alice"), "peer-abc")
+            .await;
 
         let prov = doc.channel_topic_provenance("#test").await.unwrap();
         assert_eq!(prov["origin_peer"], "peer-abc");
@@ -541,7 +608,10 @@ mod tests {
         let doc = ClusterDoc::new("server-1");
         doc.set_nick_owner("alice", "did:plc:abc123").await;
 
-        assert_eq!(doc.nick_owner("alice").await, Some("did:plc:abc123".to_string()));
+        assert_eq!(
+            doc.nick_owner("alice").await,
+            Some("did:plc:abc123".to_string())
+        );
         assert_eq!(doc.nick_owner("bob").await, None);
     }
 
@@ -550,7 +620,8 @@ mod tests {
         let doc1 = ClusterDoc::new("server-1");
         let doc2 = ClusterDoc::new("server-2");
 
-        doc1.set_topic("#test", "Hello from server 1", "alice", None, "peer-1").await;
+        doc1.set_topic("#test", "Hello from server 1", "alice", None, "peer-1")
+            .await;
         doc1.set_nick_owner("alice", "did:plc:abc").await;
 
         // Sync using the wrapper API (keyed by consistent peer IDs)
@@ -564,27 +635,44 @@ mod tests {
         }
 
         let topic = doc2.channel_topic("#test").await;
-        assert_eq!(topic, Some(("Hello from server 1".to_string(), "alice".to_string())));
-        assert_eq!(doc2.nick_owner("alice").await, Some("did:plc:abc".to_string()));
+        assert_eq!(
+            topic,
+            Some(("Hello from server 1".to_string(), "alice".to_string()))
+        );
+        assert_eq!(
+            doc2.nick_owner("alice").await,
+            Some("did:plc:abc".to_string())
+        );
     }
 
     #[tokio::test]
     async fn save_and_load() {
         let doc = ClusterDoc::new("server-1");
-        doc.set_topic("#test", "Persistent topic", "alice", None, "peer-1").await;
+        doc.set_topic("#test", "Persistent topic", "alice", None, "peer-1")
+            .await;
         doc.set_nick_owner("alice", "did:plc:abc").await;
 
         let bytes = doc.save().await;
         let doc2 = ClusterDoc::load(&bytes, "server-1").unwrap();
 
-        assert_eq!(doc2.channel_topic("#test").await.unwrap().0, "Persistent topic");
+        assert_eq!(
+            doc2.channel_topic("#test").await.unwrap().0,
+            "Persistent topic"
+        );
         assert_eq!(doc2.nick_owner("alice").await.unwrap(), "did:plc:abc");
     }
 
     #[tokio::test]
     async fn bans_with_provenance() {
         let doc = ClusterDoc::new("server-1");
-        doc.add_ban("#test", "evil!*@*", "alice", Some("did:plc:alice"), "peer-1").await;
+        doc.add_ban(
+            "#test",
+            "evil!*@*",
+            "alice",
+            Some("did:plc:alice"),
+            "peer-1",
+        )
+        .await;
         doc.add_ban("#test", "bad!*@*", "bob", None, "peer-2").await;
         doc.remove_ban("#test", "evil!*@*").await;
 
@@ -636,11 +724,17 @@ mod tests {
             }
         }
 
-        assert_eq!(doc2.founder("#test").await, Some("did:plc:alice".to_string()));
+        assert_eq!(
+            doc2.founder("#test").await,
+            Some("did:plc:alice".to_string())
+        );
 
         // Server-2 tries to overwrite — should be rejected (server-2 > server-1)
         doc2.set_founder("#test", "did:plc:evil").await;
-        assert_eq!(doc2.founder("#test").await, Some("did:plc:alice".to_string()));
+        assert_eq!(
+            doc2.founder("#test").await,
+            Some("did:plc:alice".to_string())
+        );
     }
 
     #[tokio::test]
@@ -649,8 +743,10 @@ mod tests {
         let doc2 = ClusterDoc::new("server-2");
 
         doc1.set_founder("#test", "did:plc:alice").await;
-        doc1.grant_op("#test", "did:plc:bob", Some("did:plc:alice"), "peer-1").await;
-        doc2.grant_op("#test", "did:plc:charlie", None, "peer-2").await;
+        doc1.grant_op("#test", "did:plc:bob", Some("did:plc:alice"), "peer-1")
+            .await;
+        doc2.grant_op("#test", "did:plc:charlie", None, "peer-2")
+            .await;
 
         // Sync
         for _ in 0..10 {
@@ -689,7 +785,8 @@ mod tests {
     #[tokio::test]
     async fn compaction_preserves_state() {
         let doc = ClusterDoc::new("server-1");
-        doc.set_topic("#test", "Hello", "alice", None, "peer-1").await;
+        doc.set_topic("#test", "Hello", "alice", None, "peer-1")
+            .await;
         doc.set_founder("#test", "did:plc:alice").await;
         doc.set_nick_owner("alice", "did:plc:alice").await;
 
@@ -698,8 +795,14 @@ mod tests {
         let key_count_after = doc.key_count().await;
 
         assert_eq!(key_count_before, key_count_after);
-        assert_eq!(doc.founder("#test").await, Some("did:plc:alice".to_string()));
-        assert_eq!(doc.nick_owner("alice").await, Some("did:plc:alice".to_string()));
+        assert_eq!(
+            doc.founder("#test").await,
+            Some("did:plc:alice".to_string())
+        );
+        assert_eq!(
+            doc.nick_owner("alice").await,
+            Some("did:plc:alice".to_string())
+        );
     }
 
     #[tokio::test]
@@ -707,7 +810,8 @@ mod tests {
         let doc1 = ClusterDoc::new("server-1");
         let doc2 = ClusterDoc::new("server-2");
 
-        doc1.set_topic("#test", "Hello", "alice", None, "peer-1").await;
+        doc1.set_topic("#test", "Hello", "alice", None, "peer-1")
+            .await;
 
         for _ in 0..5 {
             if let Some(msg) = doc1.generate_sync_message("server-2").await {
@@ -728,23 +832,42 @@ mod tests {
     async fn authority_validation() {
         let doc = ClusterDoc::new("server-1");
         doc.set_founder("#test", "did:plc:alice").await;
-        doc.grant_op("#test", "did:plc:bob", Some("did:plc:alice"), "peer-1").await;
+        doc.grant_op("#test", "did:plc:bob", Some("did:plc:alice"), "peer-1")
+            .await;
 
         // Founder has authority
-        assert!(doc.validate_topic_authority("#test", Some("did:plc:alice"), false).await);
+        assert!(
+            doc.validate_topic_authority("#test", Some("did:plc:alice"), false)
+                .await
+        );
         // DID-op has authority
-        assert!(doc.validate_topic_authority("#test", Some("did:plc:bob"), false).await);
+        assert!(
+            doc.validate_topic_authority("#test", Some("did:plc:bob"), false)
+                .await
+        );
         // Random DID does not
-        assert!(!doc.validate_topic_authority("#test", Some("did:plc:evil"), false).await);
+        assert!(
+            !doc.validate_topic_authority("#test", Some("did:plc:evil"), false)
+                .await
+        );
         // No DID = allow in compat mode
         assert!(doc.validate_topic_authority("#test", None, false).await);
         // No DID = reject in strict mode
         assert!(!doc.validate_topic_authority("#test", None, true).await);
 
         // Op grant authority
-        assert!(doc.validate_op_grant_authority("#test", Some("did:plc:alice"), false).await);
-        assert!(doc.validate_op_grant_authority("#test", Some("did:plc:bob"), false).await);
-        assert!(!doc.validate_op_grant_authority("#test", Some("did:plc:nobody"), false).await);
+        assert!(
+            doc.validate_op_grant_authority("#test", Some("did:plc:alice"), false)
+                .await
+        );
+        assert!(
+            doc.validate_op_grant_authority("#test", Some("did:plc:bob"), false)
+                .await
+        );
+        assert!(
+            !doc.validate_op_grant_authority("#test", Some("did:plc:nobody"), false)
+                .await
+        );
         // Strict mode: no DID = reject
         assert!(!doc.validate_op_grant_authority("#test", None, true).await);
     }

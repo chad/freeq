@@ -34,8 +34,8 @@
 //! local-only lookups or remote_members routing gates in action paths.
 //! Run it in CI.
 
-use std::sync::Arc;
 use crate::server::SharedState;
+use std::sync::Arc;
 
 /// The result of trying to route a message to a nick.
 pub(crate) enum RouteResult {

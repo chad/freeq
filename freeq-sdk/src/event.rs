@@ -7,17 +7,29 @@ pub enum Event {
     Connected,
 
     /// IRC registration complete. `nick` is our confirmed nick.
-    Registered { nick: String },
+    Registered {
+        nick: String,
+    },
 
     /// SASL authentication result.
-    Authenticated { did: String },
-    AuthFailed { reason: String },
+    Authenticated {
+        did: String,
+    },
+    AuthFailed {
+        reason: String,
+    },
 
     /// Joined a channel.
-    Joined { channel: String, nick: String },
+    Joined {
+        channel: String,
+        nick: String,
+    },
 
     /// Someone left a channel.
-    Parted { channel: String, nick: String },
+    Parted {
+        channel: String,
+        nick: String,
+    },
 
     /// A message in a channel or private message.
     Message {
@@ -101,10 +113,15 @@ pub enum Event {
     },
 
     /// WHOIS response line (numeric code + text).
-    WhoisReply { nick: String, info: String },
+    WhoisReply {
+        nick: String,
+        info: String,
+    },
 
     /// Server sent an error or notice.
-    ServerNotice { text: String },
+    ServerNotice {
+        text: String,
+    },
 
     /// Someone quit the server.
     UserQuit {
@@ -113,7 +130,9 @@ pub enum Event {
     },
 
     /// Connection was closed.
-    Disconnected { reason: String },
+    Disconnected {
+        reason: String,
+    },
 
     /// Raw server line (for debugging).
     RawLine(String),

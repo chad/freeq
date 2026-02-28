@@ -2,18 +2,18 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use axum::{
+    Json, Router,
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
-    Json, Router,
 };
-use tower_http::cors::CorsLayer;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
+use tower_http::cors::CorsLayer;
 
-use p256::ecdsa::SigningKey;
 use base64::Engine;
+use p256::ecdsa::SigningKey;
 
 #[derive(Clone)]
 struct BrokerConfig {
@@ -64,8 +64,8 @@ impl DpopKey {
     fn from_base64url(s: &str) -> Result<Self, anyhow::Error> {
         use base64::Engine;
         let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(s)?;
-        let signing_key = SigningKey::from_slice(&bytes)
-            .map_err(|e| anyhow::anyhow!("Invalid DPoP key: {e}"))?;
+        let signing_key =
+            SigningKey::from_slice(&bytes).map_err(|e| anyhow::anyhow!("Invalid DPoP key: {e}"))?;
         Ok(Self { signing_key })
     }
 
@@ -82,10 +82,16 @@ impl DpopKey {
         })
     }
 
-    fn proof(&self, method: &str, url: &str, nonce: Option<&str>, access_token: Option<&str>) -> Result<String, anyhow::Error> {
+    fn proof(
+        &self,
+        method: &str,
+        url: &str,
+        nonce: Option<&str>,
+        access_token: Option<&str>,
+    ) -> Result<String, anyhow::Error> {
+        use base64::Engine;
         use p256::ecdsa::{Signature, signature::Signer};
         use sha2::{Digest, Sha256};
-        use base64::Engine;
 
         let header = serde_json::json!({
             "typ": "dpop+jwt",
@@ -104,11 +110,15 @@ impl DpopKey {
         }
         if let Some(token) = access_token {
             let hash = Sha256::digest(token.as_bytes());
-            payload["ath"] = serde_json::Value::String(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash));
+            payload["ath"] = serde_json::Value::String(
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash),
+            );
         }
 
-        let header_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header)?);
-        let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload)?);
+        let header_b64 =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header)?);
+        let payload_b64 =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload)?);
         let signing_input = format!("{header_b64}.{payload_b64}");
 
         let sig: Signature = self.signing_key.sign(signing_input.as_bytes());
@@ -136,12 +146,13 @@ async fn resolve_handle(handle: &str) -> Result<String, anyhow::Error> {
     // Try HTTPS well-known first
     let url = format!("https://{handle}/.well-known/atproto-did");
     if let Ok(resp) = reqwest::get(&url).await
-        && resp.status().is_success() {
-            let did = resp.text().await?.trim().to_string();
-            if did.starts_with("did:") {
-                return Ok(did);
-            }
+        && resp.status().is_success()
+    {
+        let did = resp.text().await?.trim().to_string();
+        if did.starts_with("did:") {
+            return Ok(did);
         }
+    }
 
     // Fallback to public API (DNS TXT)
     let api_url = format!(
@@ -149,7 +160,9 @@ async fn resolve_handle(handle: &str) -> Result<String, anyhow::Error> {
         handle
     );
     let json: serde_json::Value = reqwest::get(&api_url).await?.json().await?;
-    let did = json["did"].as_str().ok_or_else(|| anyhow::anyhow!("No DID in response"))?;
+    let did = json["did"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("No DID in response"))?;
     Ok(did.to_string())
 }
 
@@ -228,12 +241,12 @@ struct BrokerSessionRecord {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .init();
+    tracing_subscriber::fmt().with_env_filter("info").init();
 
-    let public_url = std::env::var("BROKER_PUBLIC_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".to_string());
-    let freeq_server_url = std::env::var("FREEQ_SERVER_URL").unwrap_or_else(|_| "https://irc.freeq.at".to_string());
+    let public_url =
+        std::env::var("BROKER_PUBLIC_URL").unwrap_or_else(|_| "http://127.0.0.1:8081".to_string());
+    let freeq_server_url =
+        std::env::var("FREEQ_SERVER_URL").unwrap_or_else(|_| "https://irc.freeq.at".to_string());
     let shared_secret = std::env::var("BROKER_SHARED_SECRET").unwrap_or_else(|_| "".to_string());
     let db_path = std::env::var("BROKER_DB_PATH").unwrap_or_else(|_| "broker.db".to_string());
 
@@ -245,7 +258,12 @@ async fn main() {
     init_db(&db).expect("Failed to init db");
 
     let state = Arc::new(BrokerState {
-        config: BrokerConfig { public_url, freeq_server_url, shared_secret, _db_path: db_path },
+        config: BrokerConfig {
+            public_url,
+            freeq_server_url,
+            shared_secret,
+            _db_path: db_path,
+        },
         pending: Mutex::new(std::collections::HashMap::new()),
         db: Mutex::new(db),
     });
@@ -281,7 +299,10 @@ async fn health_v3() -> &'static str {
 }
 
 async fn client_metadata(State(state): State<Arc<BrokerState>>) -> Json<serde_json::Value> {
-    let redirect_uri = format!("{}/auth/callback", state.config.public_url.trim_end_matches('/'));
+    let redirect_uri = format!(
+        "{}/auth/callback",
+        state.config.public_url.trim_end_matches('/')
+    );
     let client_id = build_client_id(&state.config.public_url, &redirect_uri);
     Json(serde_json::json!({
         "client_id": client_id,
@@ -306,36 +327,96 @@ async fn auth_login(
     headers: HeaderMap,
 ) -> Result<Redirect, (StatusCode, String)> {
     let handle = q.handle.trim().to_string();
-    let did = resolve_handle(&handle).await
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Cannot resolve handle: {e}")))?;
-    let did_doc = resolve_did(&did).await
+    let did = resolve_handle(&handle).await.map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Cannot resolve handle: {e}"),
+        )
+    })?;
+    let did_doc = resolve_did(&did)
+        .await
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Cannot resolve DID: {e}")))?;
-    let pds_url = pds_endpoint(&did_doc)
-        .ok_or_else(|| (StatusCode::BAD_REQUEST, "No PDS in DID document".to_string()))?;
+    let pds_url = pds_endpoint(&did_doc).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "No PDS in DID document".to_string(),
+        )
+    })?;
 
     let client = reqwest::Client::new();
-    let pr_url = format!("{}/.well-known/oauth-protected-resource", pds_url.trim_end_matches('/'));
-    let pr_meta: serde_json::Value = client.get(&pr_url).send().await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PDS metadata fetch failed: {e}")))?
-        .json().await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PDS metadata parse failed: {e}")))?;
-    let auth_server = pr_meta["authorization_servers"][0].as_str()
-        .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No authorization server".to_string()))?;
+    let pr_url = format!(
+        "{}/.well-known/oauth-protected-resource",
+        pds_url.trim_end_matches('/')
+    );
+    let pr_meta: serde_json::Value = client
+        .get(&pr_url)
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("PDS metadata fetch failed: {e}"),
+            )
+        })?
+        .json()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("PDS metadata parse failed: {e}"),
+            )
+        })?;
+    let auth_server = pr_meta["authorization_servers"][0]
+        .as_str()
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_GATEWAY,
+                "No authorization server".to_string(),
+            )
+        })?;
 
-    let as_url = format!("{}/.well-known/oauth-authorization-server", auth_server.trim_end_matches('/'));
-    let auth_meta: serde_json::Value = client.get(&as_url).send().await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Auth server metadata failed: {e}")))?
-        .json().await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Auth server metadata parse failed: {e}")))?;
+    let as_url = format!(
+        "{}/.well-known/oauth-authorization-server",
+        auth_server.trim_end_matches('/')
+    );
+    let auth_meta: serde_json::Value = client
+        .get(&as_url)
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Auth server metadata failed: {e}"),
+            )
+        })?
+        .json()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Auth server metadata parse failed: {e}"),
+            )
+        })?;
 
-    let authorization_endpoint = auth_meta["authorization_endpoint"].as_str()
-        .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No authorization_endpoint".to_string()))?;
-    let token_endpoint = auth_meta["token_endpoint"].as_str()
+    let authorization_endpoint = auth_meta["authorization_endpoint"]
+        .as_str()
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_GATEWAY,
+                "No authorization_endpoint".to_string(),
+            )
+        })?;
+    let token_endpoint = auth_meta["token_endpoint"]
+        .as_str()
         .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No token_endpoint".to_string()))?;
-    let par_endpoint = auth_meta["pushed_authorization_request_endpoint"].as_str()
+    let par_endpoint = auth_meta["pushed_authorization_request_endpoint"]
+        .as_str()
         .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No PAR endpoint".to_string()))?;
 
-    let redirect_uri = format!("{}/auth/callback", state.config.public_url.trim_end_matches('/'));
+    let redirect_uri = format!(
+        "{}/auth/callback",
+        state.config.public_url.trim_end_matches('/')
+    );
     let scope = "atproto transition:generic";
     let client_id = build_client_id(&state.config.public_url, &redirect_uri);
 
@@ -354,70 +435,116 @@ async fn auth_login(
         ("login_hint", &handle),
     ];
 
-    let dpop_proof = dpop_key.proof("POST", par_endpoint, None, None)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DPoP proof failed: {e}")))?;
-    let resp = client.post(par_endpoint).header("DPoP", &dpop_proof).form(&params).send().await
+    let dpop_proof = dpop_key
+        .proof("POST", par_endpoint, None, None)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DPoP proof failed: {e}"),
+            )
+        })?;
+    let resp = client
+        .post(par_endpoint)
+        .header("DPoP", &dpop_proof)
+        .form(&params)
+        .send()
+        .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR failed: {e}")))?;
 
     let status = resp.status();
-    let dpop_nonce = resp.headers().get("dpop-nonce")
-        .and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+    let dpop_nonce = resp
+        .headers()
+        .get("dpop-nonce")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
 
     let par_resp: serde_json::Value = if status.as_u16() == 400 && dpop_nonce.is_some() {
         let nonce = dpop_nonce.as_deref().unwrap();
-        let dpop_proof2 = dpop_key.proof("POST", par_endpoint, Some(nonce), None)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DPoP retry failed: {e}")))?;
-        let resp2 = client.post(par_endpoint).header("DPoP", &dpop_proof2).form(&params).send().await
+        let dpop_proof2 = dpop_key
+            .proof("POST", par_endpoint, Some(nonce), None)
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("DPoP retry failed: {e}"),
+                )
+            })?;
+        let resp2 = client
+            .post(par_endpoint)
+            .header("DPoP", &dpop_proof2)
+            .form(&params)
+            .send()
+            .await
             .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR retry failed: {e}")))?;
         if !resp2.status().is_success() {
             let text = resp2.text().await.unwrap_or_default();
             return Err((StatusCode::BAD_GATEWAY, format!("PAR failed: {text}")));
         }
-        resp2.json().await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR parse failed: {e}")))?
+        resp2
+            .json()
+            .await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR parse failed: {e}")))?
     } else if status.is_success() {
-        resp.json().await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR parse failed: {e}")))?
+        resp.json()
+            .await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR parse failed: {e}")))?
     } else {
         let text = resp.text().await.unwrap_or_default();
-        return Err((StatusCode::BAD_GATEWAY, format!("PAR failed ({status}): {text}")));
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            format!("PAR failed ({status}): {text}"),
+        ));
     };
 
-    let request_uri = par_resp["request_uri"].as_str()
-        .ok_or_else(|| (StatusCode::BAD_GATEWAY, "No request_uri in PAR response".to_string()))?;
+    let request_uri = par_resp["request_uri"].as_str().ok_or_else(|| {
+        (
+            StatusCode::BAD_GATEWAY,
+            "No request_uri in PAR response".to_string(),
+        )
+    })?;
 
-    let _now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs();
+    let _now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     let mut return_to = q.return_to.clone();
     let is_popup = is_truthy(q.popup.as_deref());
     let is_mobile = is_truthy(q.mobile.as_deref());
 
     if return_to.is_none()
         && let Some(referer) = headers.get("referer").and_then(|v| v.to_str().ok())
-            && let Ok(url) = url::Url::parse(referer) {
-                return_to = Some(url.origin().ascii_serialization());
-            }
+        && let Ok(url) = url::Url::parse(referer)
+    {
+        return_to = Some(url.origin().ascii_serialization());
+    }
     if return_to.is_none() && !is_mobile {
         return_to = Some("https://irc.freeq.at".to_string());
     }
 
     tracing::info!(handle = %handle, did = %did, popup = %is_popup, return_to = ?return_to, "BROKER_LOGIN_PARAMS_V3");
 
-    state.pending.lock().await.insert(oauth_state.clone(), PendingAuth {
-        handle: handle.clone(),
-        did: did.clone(),
-        pds_url: pds_url.clone(),
-        code_verifier,
-        redirect_uri: redirect_uri.clone(),
-        client_id: client_id.clone(),
-        token_endpoint: token_endpoint.to_string(),
-        dpop_key_b64: dpop_key.to_base64url(),
-        dpop_nonce: dpop_nonce.clone(),
-        mobile: is_mobile,
-        return_to,
-        popup: is_popup,
-    });
+    state.pending.lock().await.insert(
+        oauth_state.clone(),
+        PendingAuth {
+            handle: handle.clone(),
+            did: did.clone(),
+            pds_url: pds_url.clone(),
+            code_verifier,
+            redirect_uri: redirect_uri.clone(),
+            client_id: client_id.clone(),
+            token_endpoint: token_endpoint.to_string(),
+            dpop_key_b64: dpop_key.to_base64url(),
+            dpop_nonce: dpop_nonce.clone(),
+            mobile: is_mobile,
+            return_to,
+            popup: is_popup,
+        },
+    );
 
     let auth_url = format!(
         "{}?client_id={}&request_uri={}",
-        authorization_endpoint, urlencod(&client_id), urlencod(request_uri)
+        authorization_endpoint,
+        urlencod(&client_id),
+        urlencod(request_uri)
     );
 
     Ok(Redirect::temporary(&auth_url))
@@ -429,16 +556,24 @@ async fn auth_callback(
 ) -> Result<Response, (StatusCode, String)> {
     if let Some(err) = q.error.as_deref() {
         let detail = q.error_description.as_deref().unwrap_or(err);
-        return Ok(Html(oauth_result_page(&format!("OAuth error: {detail}"), None)).into_response());
+        return Ok(
+            Html(oauth_result_page(&format!("OAuth error: {detail}"), None)).into_response(),
+        );
     }
 
     let state_value = match q.state.as_deref() {
         Some(s) => s,
-        None => return Ok(Html(oauth_result_page("OAuth callback missing state", None)).into_response()),
+        None => {
+            return Ok(
+                Html(oauth_result_page("OAuth callback missing state", None)).into_response(),
+            );
+        }
     };
     let code = match q.code.as_deref() {
         Some(c) => c,
-        None => return Ok(Html(oauth_result_page("OAuth callback missing code", None)).into_response()),
+        None => {
+            return Ok(Html(oauth_result_page("OAuth callback missing code", None)).into_response());
+        }
     };
 
     let pending = {
@@ -450,10 +585,17 @@ async fn auth_callback(
         None => return Ok(Html(oauth_result_page("Invalid OAuth state", None)).into_response()),
     };
     tracing::info!(popup = %pending.popup, return_to = ?pending.return_to, "BROKER_CALLBACK_PARAMS_V3");
-    let return_to = pending.return_to.clone().unwrap_or_else(|| "https://irc.freeq.at".to_string());
+    let return_to = pending
+        .return_to
+        .clone()
+        .unwrap_or_else(|| "https://irc.freeq.at".to_string());
 
-    let dpop_key = DpopKey::from_base64url(&pending.dpop_key_b64)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Invalid DPoP key: {e}")))?;
+    let dpop_key = DpopKey::from_base64url(&pending.dpop_key_b64).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Invalid DPoP key: {e}"),
+        )
+    })?;
 
     let params = [
         ("grant_type", "authorization_code"),
@@ -464,22 +606,54 @@ async fn auth_callback(
     ];
 
     let client = reqwest::Client::new();
-    let dpop_proof = dpop_key.proof("POST", &pending.token_endpoint, None, None)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DPoP proof failed: {e}")))?;
-    let resp = client.post(&pending.token_endpoint).header("DPoP", &dpop_proof).form(&params).send().await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token exchange failed: {e}")))?;
+    let dpop_proof = dpop_key
+        .proof("POST", &pending.token_endpoint, None, None)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DPoP proof failed: {e}"),
+            )
+        })?;
+    let resp = client
+        .post(&pending.token_endpoint)
+        .header("DPoP", &dpop_proof)
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Token exchange failed: {e}"),
+            )
+        })?;
 
     let status = resp.status();
-    let dpop_nonce = resp.headers().get("dpop-nonce")
-        .and_then(|v| v.to_str().ok()).map(|s| s.to_string())
+    let dpop_nonce = resp
+        .headers()
+        .get("dpop-nonce")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
         .or(pending.dpop_nonce.clone());
 
-    let token_resp: serde_json::Value = if (status.as_u16() == 400 || status.as_u16() == 401) && dpop_nonce.is_some() {
+    let token_resp: serde_json::Value = if (status.as_u16() == 400 || status.as_u16() == 401)
+        && dpop_nonce.is_some()
+    {
         let nonce = dpop_nonce.as_deref().unwrap();
         tracing::info!(nonce = %nonce, "DPoP nonce retry for token exchange");
-        let dpop_proof2 = dpop_key.proof("POST", &pending.token_endpoint, Some(nonce), None)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DPoP retry failed: {e}")))?;
-        let resp2 = client.post(&pending.token_endpoint).header("DPoP", &dpop_proof2).form(&params).send().await
+        let dpop_proof2 = dpop_key
+            .proof("POST", &pending.token_endpoint, Some(nonce), None)
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("DPoP retry failed: {e}"),
+                )
+            })?;
+        let resp2 = client
+            .post(&pending.token_endpoint)
+            .header("DPoP", &dpop_proof2)
+            .form(&params)
+            .send()
+            .await
             .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token retry failed: {e}")))?;
         let resp2_status = resp2.status();
         if !resp2_status.is_success() {
@@ -492,9 +666,14 @@ async fn auth_callback(
             }
             return Ok(Html(oauth_result_page(&err_msg, None)).into_response());
         }
-        resp2.json().await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token parse failed: {e}")))?
+        resp2
+            .json()
+            .await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token parse failed: {e}")))?
     } else if status.is_success() {
-        resp.json().await.map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token parse failed: {e}")))?
+        resp.json()
+            .await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token parse failed: {e}")))?
     } else {
         let text = resp.text().await.unwrap_or_default();
         tracing::error!(status = %status, body = %text, "Token exchange failed");
@@ -506,7 +685,8 @@ async fn auth_callback(
         return Ok(Html(oauth_result_page(&err_msg, None)).into_response());
     };
 
-    let refresh_token = token_resp["refresh_token"].as_str()
+    let refresh_token = token_resp["refresh_token"]
+        .as_str()
         .ok_or((StatusCode::BAD_GATEWAY, "No refresh_token".to_string()))?;
 
     let broker_token = generate_random_string(32);
@@ -533,10 +713,17 @@ async fn auth_callback(
     }
 
     // Mint a one-time web-token + web session on the freeq server
-    let (web_token, nick) = mint_web_token(&state.config, &pending.did, &pending.handle).await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Broker token mint failed: {e}")))?;
+    let (web_token, nick) = mint_web_token(&state.config, &pending.did, &pending.handle)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Broker token mint failed: {e}"),
+            )
+        })?;
 
-    if let Err(e) = push_web_session(&state.config, &pending, &token_resp, dpop_nonce.clone()).await {
+    if let Err(e) = push_web_session(&state.config, &pending, &token_resp, dpop_nonce.clone()).await
+    {
         tracing::warn!(error = %e, "Failed to push web session to server");
     }
 
@@ -563,7 +750,8 @@ async fn auth_callback(
         "pds_url": pending.pds_url,
     });
 
-    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&result).unwrap_or_default());
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&result).unwrap_or_default());
     let redirect = format!("{return_to}#oauth={payload}");
     tracing::info!(redirect = %redirect, "OAuth callback redirecting to app");
     Ok(Redirect::temporary(&redirect).into_response())
@@ -573,10 +761,12 @@ async fn session(
     State(state): State<Arc<BrokerState>>,
     Json(req): Json<BrokerSessionRequest>,
 ) -> Result<Json<BrokerSessionResponse>, (StatusCode, String)> {
-    let record = get_session(&state, &req.broker_token).await
+    let record = get_session(&state, &req.broker_token)
+        .await
         .ok_or((StatusCode::UNAUTHORIZED, "Invalid broker token".to_string()))?;
 
-    let (access_token, refresh_token, dpop_nonce) = refresh_access_token(&state.config, &record).await
+    let (access_token, refresh_token, dpop_nonce) = refresh_access_token(&state.config, &record)
+        .await
         .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Refresh failed: {e}")))?;
 
     // Update stored refresh token + nonce
@@ -589,8 +779,14 @@ async fn session(
         ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}")))?;
     }
 
-    let (web_token, nick) = mint_web_token(&state.config, &record.did, &record.handle).await
-        .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Broker token mint failed: {e}")))?;
+    let (web_token, nick) = mint_web_token(&state.config, &record.did, &record.handle)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Broker token mint failed: {e}"),
+            )
+        })?;
 
     let pending = PendingAuth {
         handle: record.handle.clone(),
@@ -606,7 +802,10 @@ async fn session(
         return_to: None,
         popup: false,
     };
-    if let Err(e) = push_web_session_with_token(&state.config, &pending, &access_token, dpop_nonce.clone()).await {
+    if let Err(e) =
+        push_web_session_with_token(&state.config, &pending, &access_token, dpop_nonce.clone())
+            .await
+    {
         tracing::warn!(error = %e, "Failed to refresh web session on server");
     }
 
@@ -642,7 +841,10 @@ async fn get_session(state: &Arc<BrokerState>, broker_token: &str) -> Option<Bro
     }
 }
 
-async fn refresh_access_token(config: &BrokerConfig, record: &BrokerSessionRecord) -> Result<(String, String, Option<String>), anyhow::Error> {
+async fn refresh_access_token(
+    config: &BrokerConfig,
+    record: &BrokerSessionRecord,
+) -> Result<(String, String, Option<String>), anyhow::Error> {
     let dpop_key = DpopKey::from_base64url(&record.dpop_key_b64)?;
     let redirect_uri = format!("{}/auth/callback", config.public_url.trim_end_matches('/'));
     let client_id = build_client_id(&config.public_url, &redirect_uri);
@@ -654,44 +856,83 @@ async fn refresh_access_token(config: &BrokerConfig, record: &BrokerSessionRecor
 
     let client = reqwest::Client::new();
     let dpop_proof = dpop_key.proof("POST", &record.token_endpoint, None, None)?;
-    let resp = client.post(&record.token_endpoint).header("DPoP", &dpop_proof).form(&params).send().await?;
+    let resp = client
+        .post(&record.token_endpoint)
+        .header("DPoP", &dpop_proof)
+        .form(&params)
+        .send()
+        .await?;
     let status = resp.status();
-    let mut dpop_nonce = resp.headers().get("dpop-nonce")
-        .and_then(|v| v.to_str().ok()).map(|s| s.to_string())
+    let mut dpop_nonce = resp
+        .headers()
+        .get("dpop-nonce")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
         .or(record.dpop_nonce.clone());
 
-    let token_resp: serde_json::Value = if (status.as_u16() == 400 || status.as_u16() == 401) && dpop_nonce.is_some() {
-        let nonce = dpop_nonce.as_deref().unwrap();
-        let dpop_proof2 = dpop_key.proof("POST", &record.token_endpoint, Some(nonce), None)?;
-        let resp2 = client.post(&record.token_endpoint).header("DPoP", &dpop_proof2).form(&params).send().await?;
-        if !resp2.status().is_success() {
-            return Err(anyhow::anyhow!("Refresh failed: {}", resp2.text().await.unwrap_or_default()));
-        }
-        resp2.json().await?
-    } else if status.is_success() {
-        resp.json().await?
-    } else {
-        return Err(anyhow::anyhow!("Refresh failed ({status})"));
-    };
+    let token_resp: serde_json::Value =
+        if (status.as_u16() == 400 || status.as_u16() == 401) && dpop_nonce.is_some() {
+            let nonce = dpop_nonce.as_deref().unwrap();
+            let dpop_proof2 = dpop_key.proof("POST", &record.token_endpoint, Some(nonce), None)?;
+            let resp2 = client
+                .post(&record.token_endpoint)
+                .header("DPoP", &dpop_proof2)
+                .form(&params)
+                .send()
+                .await?;
+            if !resp2.status().is_success() {
+                return Err(anyhow::anyhow!(
+                    "Refresh failed: {}",
+                    resp2.text().await.unwrap_or_default()
+                ));
+            }
+            resp2.json().await?
+        } else if status.is_success() {
+            resp.json().await?
+        } else {
+            return Err(anyhow::anyhow!("Refresh failed ({status})"));
+        };
 
-    let access_token = token_resp["access_token"].as_str().ok_or_else(|| anyhow::anyhow!("No access_token"))?.to_string();
-    let refresh_token = token_resp["refresh_token"].as_str().unwrap_or(&record.refresh_token).to_string();
-    dpop_nonce = token_resp.get("dpop_nonce").and_then(|v| v.as_str()).map(|s| s.to_string()).or(dpop_nonce);
+    let access_token = token_resp["access_token"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("No access_token"))?
+        .to_string();
+    let refresh_token = token_resp["refresh_token"]
+        .as_str()
+        .unwrap_or(&record.refresh_token)
+        .to_string();
+    dpop_nonce = token_resp
+        .get("dpop_nonce")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or(dpop_nonce);
 
     Ok((access_token, refresh_token, dpop_nonce))
 }
 
-async fn mint_web_token(config: &BrokerConfig, did: &str, handle: &str) -> Result<(String, String), anyhow::Error> {
+async fn mint_web_token(
+    config: &BrokerConfig,
+    did: &str,
+    handle: &str,
+) -> Result<(String, String), anyhow::Error> {
     let body = serde_json::json!({"did": did, "handle": handle});
     let sig = sign_body(&config.shared_secret, &body)?;
-    let url = format!("{}/auth/broker/web-token", config.freeq_server_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/auth/broker/web-token",
+        config.freeq_server_url.trim_end_matches('/')
+    );
     let client = reqwest::Client::new();
-    let resp = client.post(&url)
+    let resp = client
+        .post(&url)
         .header("X-Broker-Signature", sig)
         .json(&body)
-        .send().await?;
+        .send()
+        .await?;
     if !resp.status().is_success() {
-        return Err(anyhow::anyhow!("web-token failed: {}", resp.text().await.unwrap_or_default()));
+        return Err(anyhow::anyhow!(
+            "web-token failed: {}",
+            resp.text().await.unwrap_or_default()
+        ));
     }
     let json: serde_json::Value = resp.json().await?;
     let token = json["token"].as_str().unwrap_or_default().to_string();
@@ -699,12 +940,24 @@ async fn mint_web_token(config: &BrokerConfig, did: &str, handle: &str) -> Resul
     Ok((token, nick))
 }
 
-async fn push_web_session(config: &BrokerConfig, pending: &PendingAuth, token_resp: &serde_json::Value, dpop_nonce: Option<String>) -> Result<(), anyhow::Error> {
-    let access_token = token_resp["access_token"].as_str().ok_or_else(|| anyhow::anyhow!("No access_token"))?;
+async fn push_web_session(
+    config: &BrokerConfig,
+    pending: &PendingAuth,
+    token_resp: &serde_json::Value,
+    dpop_nonce: Option<String>,
+) -> Result<(), anyhow::Error> {
+    let access_token = token_resp["access_token"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("No access_token"))?;
     push_web_session_with_token(config, pending, access_token, dpop_nonce).await
 }
 
-async fn push_web_session_with_token(config: &BrokerConfig, pending: &PendingAuth, access_token: &str, dpop_nonce: Option<String>) -> Result<(), anyhow::Error> {
+async fn push_web_session_with_token(
+    config: &BrokerConfig,
+    pending: &PendingAuth,
+    access_token: &str,
+    dpop_nonce: Option<String>,
+) -> Result<(), anyhow::Error> {
     let body = serde_json::json!({
         "did": pending.did,
         "handle": pending.handle,
@@ -714,22 +967,30 @@ async fn push_web_session_with_token(config: &BrokerConfig, pending: &PendingAut
         "dpop_nonce": dpop_nonce,
     });
     let sig = sign_body(&config.shared_secret, &body)?;
-    let url = format!("{}/auth/broker/session", config.freeq_server_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/auth/broker/session",
+        config.freeq_server_url.trim_end_matches('/')
+    );
     let client = reqwest::Client::new();
-    let resp = client.post(&url)
+    let resp = client
+        .post(&url)
         .header("X-Broker-Signature", sig)
         .json(&body)
-        .send().await?;
+        .send()
+        .await?;
     if !resp.status().is_success() {
-        return Err(anyhow::anyhow!("session push failed: {}", resp.text().await.unwrap_or_default()));
+        return Err(anyhow::anyhow!(
+            "session push failed: {}",
+            resp.text().await.unwrap_or_default()
+        ));
     }
     Ok(())
 }
 
 fn sign_body(secret: &str, body: &serde_json::Value) -> Result<String, anyhow::Error> {
+    use base64::Engine;
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
-    use base64::Engine;
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())?;
     let bytes = serde_json::to_vec(body)?;
     mac.update(&bytes);
@@ -749,7 +1010,7 @@ fn init_db(db: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
             dpop_nonce TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
-        );"
+        );",
     )?;
     Ok(())
 }
@@ -785,16 +1046,20 @@ fn generate_random_string(len: usize) -> String {
 }
 
 fn urlencod(s: &str) -> String {
-    use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
     utf8_percent_encode(s, NON_ALPHANUMERIC).to_string()
 }
 
 fn build_client_id(web_origin: &str, redirect_uri: &str) -> String {
-    if web_origin.starts_with("http://127.") || web_origin.starts_with("http://192.168.") || web_origin.starts_with("http://10.") {
+    if web_origin.starts_with("http://127.")
+        || web_origin.starts_with("http://192.168.")
+        || web_origin.starts_with("http://10.")
+    {
         let scope = "atproto transition:generic";
         format!(
             "http://localhost?redirect_uri={}&scope={}",
-            urlencod(redirect_uri), urlencod(scope),
+            urlencod(redirect_uri),
+            urlencod(scope),
         )
     } else {
         format!("{web_origin}/client-metadata.json")

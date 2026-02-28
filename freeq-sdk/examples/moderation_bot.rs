@@ -83,12 +83,14 @@ async fn main() -> Result<()> {
 
     bot.command("history", "Fetch recent history (default: 10)", |ctx| {
         Box::pin(async move {
-            let count: usize = ctx.arg(0)
+            let count: usize = ctx
+                .arg(0)
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(10)
                 .min(50);
             ctx.handle.history_latest(ctx.reply_target(), count).await?;
-            ctx.reply(&format!("Requested {count} messages of history.")).await
+            ctx.reply(&format!("Requested {count} messages of history."))
+                .await
         })
     });
 
@@ -101,7 +103,8 @@ async fn main() -> Result<()> {
             tokio::time::sleep(Duration::from_millis(500)).await;
             ctx.typing_done().await?;
             let did = ctx.sender_did.as_deref().unwrap_or("unknown");
-            ctx.reply_to(&format!("Welcome, verified user! Your DID: `{did}`")).await
+            ctx.reply_to(&format!("Welcome, verified user! Your DID: `{did}`"))
+                .await
         })
     });
 
@@ -118,7 +121,9 @@ async fn main() -> Result<()> {
             } else {
                 "Kicked by modbot".to_string()
             };
-            ctx.handle.raw(&format!("KICK {} {} :{}", ctx.target, nick, reason)).await?;
+            ctx.handle
+                .raw(&format!("KICK {} {} :{}", ctx.target, nick, reason))
+                .await?;
             ctx.react("👢").await
         })
     });
@@ -198,20 +203,26 @@ async fn main() -> Result<()> {
     }
 
     let bot = std::sync::Arc::new(bot);
-    client::run_with_reconnect(config, None, reconnect, move |handle: ClientHandle, event: Event| {
-        let bot = bot.clone();
-        Box::pin(async move {
-            match &event {
-                Event::Registered { nick } => {
-                    tracing::info!(nick, "Registered");
+    client::run_with_reconnect(
+        config,
+        None,
+        reconnect,
+        move |handle: ClientHandle, event: Event| {
+            let bot = bot.clone();
+            Box::pin(async move {
+                match &event {
+                    Event::Registered { nick } => {
+                        tracing::info!(nick, "Registered");
+                    }
+                    Event::Disconnected { reason } => {
+                        tracing::warn!(reason, "Disconnected");
+                    }
+                    _ => {}
                 }
-                Event::Disconnected { reason } => {
-                    tracing::warn!(reason, "Disconnected");
-                }
-                _ => {}
-            }
-            bot.handle_event(&handle, &event).await;
-            Ok(())
-        })
-    }).await
+                bot.handle_event(&handle, &event).await;
+                Ok(())
+            })
+        },
+    )
+    .await
 }

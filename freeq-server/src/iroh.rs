@@ -97,7 +97,10 @@ pub async fn handle_connection(conn: Connection, state: Arc<SharedState>) {
 
     // The IRC handler sees a normal AsyncRead + AsyncWrite stream.
     // This blocks until the client disconnects (EOF, error, or ping timeout).
-    let stream = crate::web::WsBridge { reader: irc_read, writer: irc_write };
+    let stream = crate::web::WsBridge {
+        reader: irc_read,
+        writer: irc_write,
+    };
     let iroh_id = remote_id.to_string();
     match crate::connection::handle_generic_with_meta(stream, state, Some(iroh_id)).await {
         Ok(()) => tracing::info!(%remote_id, "Iroh client disconnected (clean)"),
@@ -119,7 +122,9 @@ pub async fn handle_connection(conn: Connection, state: Arc<SharedState>) {
 fn load_or_create_secret_key(path: &std::path::Path) -> Result<iroh::SecretKey> {
     if path.exists() {
         let hex = std::fs::read_to_string(path)?;
-        let key: iroh::SecretKey = hex.trim().parse()
+        let key: iroh::SecretKey = hex
+            .trim()
+            .parse()
             .map_err(|e| anyhow::anyhow!("Invalid iroh secret key in {}: {e}", path.display()))?;
         Ok(key)
     } else {
@@ -139,10 +144,7 @@ fn load_or_create_secret_key(path: &std::path::Path) -> Result<iroh::SecretKey> 
 /// Start the iroh endpoint and accept connections.
 ///
 /// Returns the endpoint (for getting the address/node ID to share with clients).
-pub async fn start(
-    state: Arc<SharedState>,
-    bind_port: Option<u16>,
-) -> Result<iroh::Endpoint> {
+pub async fn start(state: Arc<SharedState>, bind_port: Option<u16>) -> Result<iroh::Endpoint> {
     // Use a persistent secret key so the endpoint ID is stable across restarts.
     // Store in data_dir (respects --data-dir / --db-path parent).
     let key_path = state.config.data_dir().join("iroh-key.secret");
@@ -153,11 +155,10 @@ pub async fn start(
         .alpns(vec![ALPN.to_vec(), crate::s2s::S2S_ALPN.to_vec()]);
 
     if let Some(port) = bind_port {
-        builder = builder
-            .bind_addr(std::net::SocketAddrV4::new(
-                std::net::Ipv4Addr::UNSPECIFIED,
-                port,
-            ))?;
+        builder = builder.bind_addr(std::net::SocketAddrV4::new(
+            std::net::Ipv4Addr::UNSPECIFIED,
+            port,
+        ))?;
     }
 
     let endpoint = builder.bind().await?;

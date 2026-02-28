@@ -43,9 +43,7 @@ impl Memory {
             CREATE INDEX IF NOT EXISTS idx_memory_project_key
                 ON memory(project, key);",
         )?;
-        Ok(Self {
-            db: Mutex::new(db),
-        })
+        Ok(Self { db: Mutex::new(db) })
     }
 
     /// Open an in-memory database (for testing).

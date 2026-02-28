@@ -353,9 +353,10 @@ impl DedupSet {
 
         // Evict oldest if at capacity — O(1) with VecDeque
         if peer_seen.len() >= DEDUP_CAPACITY
-            && let Some(oldest) = peer_order.pop_front() {
-                peer_seen.remove(&oldest);
-            }
+            && let Some(oldest) = peer_order.pop_front()
+        {
+            peer_seen.remove(&oldest);
+        }
 
         peer_seen.insert(event_id.to_string());
         peer_order.push_back(event_id.to_string());
@@ -439,7 +440,9 @@ impl S2sManager {
 
     /// Look up the human-readable name for a peer (from Hello handshake).
     pub async fn peer_display_name(&self, peer_id: &str) -> String {
-        self.peer_names.lock().await
+        self.peer_names
+            .lock()
+            .await
             .get(peer_id)
             .cloned()
             .unwrap_or_else(|| peer_id[..8.min(peer_id.len())].to_string())
@@ -483,7 +486,7 @@ pub async fn start(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
-                .as_micros() as u64
+                .as_micros() as u64,
         ),
         dedup: Arc::new(DedupSet::new()),
         broadcast_tx,
@@ -504,10 +507,7 @@ pub async fn start(
 }
 
 /// Handle an incoming S2S connection (called from iroh accept loop).
-pub async fn handle_incoming_s2s(
-    conn: iroh::endpoint::Connection,
-    state: Arc<SharedState>,
-) {
+pub async fn handle_incoming_s2s(conn: iroh::endpoint::Connection, state: Arc<SharedState>) {
     let manager = state.s2s_manager.lock().clone();
     let manager = match manager {
         Some(m) => m,
@@ -539,7 +539,8 @@ pub async fn connect_peer(
     peer_id: &str,
     manager: &Arc<S2sManager>,
 ) -> Result<()> {
-    let endpoint_id: iroh::EndpointId = peer_id.parse()
+    let endpoint_id: iroh::EndpointId = peer_id
+        .parse()
         .map_err(|e| anyhow::anyhow!("Invalid peer endpoint ID: {e}"))?;
     let addr = iroh::EndpointAddr::new(endpoint_id);
 
@@ -618,7 +619,18 @@ async fn handle_s2s_connection_from_manager(
     let server_name = manager.server_name.clone();
     let conn_gen = Arc::clone(&manager.conn_gen);
     let dedup = Arc::clone(&manager.dedup);
-    handle_s2s_connection(conn, peers, peer_names, event_tx, server_id, server_name, conn_gen, dedup, incoming).await;
+    handle_s2s_connection(
+        conn,
+        peers,
+        peer_names,
+        event_tx,
+        server_id,
+        server_name,
+        conn_gen,
+        dedup,
+        incoming,
+    )
+    .await;
 }
 
 /// Handle an S2S connection (both incoming and outgoing).
@@ -670,7 +682,13 @@ async fn handle_s2s_connection(
                 "S2S duplicate connection — replacing existing (generation-safe cleanup)"
             );
         }
-        peers_guard.insert(peer_id.clone(), PeerEntry { tx: write_tx, conn_gen: my_gen });
+        peers_guard.insert(
+            peer_id.clone(),
+            PeerEntry {
+                tx: write_tx,
+                conn_gen: my_gen,
+            },
+        );
     }
 
     tracing::info!(peer = %peer_id, incoming, "S2S link established");
@@ -719,25 +737,23 @@ async fn handle_s2s_connection(
         let mut msg_count: u64 = 0;
         loop {
             match lines.next_line().await {
-                Ok(Some(line)) => {
-                    match serde_json::from_str::<S2sMessage>(&line) {
-                        Ok(msg) => {
-                            msg_count += 1;
-                            tracing::debug!(peer = %read_peer, msg_count, "S2S received: {}", line.chars().take(120).collect::<String>());
-                            let event = AuthenticatedS2sEvent {
-                                authenticated_peer_id: authenticated_peer_id.clone(),
-                                msg,
-                            };
-                            if read_event_tx.send(event).await.is_err() {
-                                tracing::warn!(peer = %read_peer, "S2S event_tx closed after {msg_count} messages");
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(peer = %read_peer, "S2S invalid JSON: {e} — line: {}", line.chars().take(200).collect::<String>());
+                Ok(Some(line)) => match serde_json::from_str::<S2sMessage>(&line) {
+                    Ok(msg) => {
+                        msg_count += 1;
+                        tracing::debug!(peer = %read_peer, msg_count, "S2S received: {}", line.chars().take(120).collect::<String>());
+                        let event = AuthenticatedS2sEvent {
+                            authenticated_peer_id: authenticated_peer_id.clone(),
+                            msg,
+                        };
+                        if read_event_tx.send(event).await.is_err() {
+                            tracing::warn!(peer = %read_peer, "S2S event_tx closed after {msg_count} messages");
+                            break;
                         }
                     }
-                }
+                    Err(e) => {
+                        tracing::warn!(peer = %read_peer, "S2S invalid JSON: {e} — line: {}", line.chars().take(200).collect::<String>());
+                    }
+                },
                 Ok(None) => {
                     tracing::info!(peer = %read_peer, "S2S read EOF after {msg_count} messages");
                     break;
@@ -822,10 +838,14 @@ async fn handle_s2s_connection(
                 // Emit PeerDisconnected so the event processor can clean up
                 // remote_members for this peer's origin. This prevents ghost
                 // users lingering in channel rosters after a link drop.
-                let _ = event_tx.send(AuthenticatedS2sEvent {
-                    authenticated_peer_id: peer_id.clone(),
-                    msg: S2sMessage::PeerDisconnected { peer_id: peer_id.clone() },
-                }).await;
+                let _ = event_tx
+                    .send(AuthenticatedS2sEvent {
+                        authenticated_peer_id: peer_id.clone(),
+                        msg: S2sMessage::PeerDisconnected {
+                            peer_id: peer_id.clone(),
+                        },
+                    })
+                    .await;
             } else {
                 tracing::info!(
                     peer = %peer_id, my_gen, current_gen = entry.conn_gen,

@@ -117,7 +117,10 @@ pub struct LinkPreview {
 impl LinkPreview {
     pub fn to_tags(&self) -> HashMap<String, String> {
         let mut tags = HashMap::new();
-        tags.insert("content-type".to_string(), "text/x-link-preview".to_string());
+        tags.insert(
+            "content-type".to_string(),
+            "text/x-link-preview".to_string(),
+        );
         tags.insert("media-url".to_string(), self.url.clone());
         if let Some(ref t) = self.title {
             tags.insert("link-title".to_string(), t.clone());
@@ -179,13 +182,16 @@ pub async fn fetch_link_preview(url: &str) -> Result<LinkPreview> {
         .redirect(reqwest::redirect::Policy::limited(5))
         .build()?;
 
-    let resp = client.get(url)
+    let resp = client
+        .get(url)
         .header("User-Agent", "irc-at-bot/0.1 (link preview)")
         .header("Accept", "text/html")
-        .send().await?
+        .send()
+        .await?
         .error_for_status()?;
 
-    let content_type = resp.headers()
+    let content_type = resp
+        .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
@@ -196,7 +202,11 @@ pub async fn fetch_link_preview(url: &str) -> Result<LinkPreview> {
 
     // Only read first 64KB to avoid downloading huge pages
     let body = resp.text().await?;
-    let body = if body.len() > 65536 { &body[..65536] } else { &body };
+    let body = if body.len() > 65536 {
+        &body[..65536]
+    } else {
+        &body
+    };
 
     let mut title = None;
     let mut description = None;
@@ -240,20 +250,31 @@ pub async fn fetch_link_preview(url: &str) -> Result<LinkPreview> {
 /// Extract a meta property="og:..." content="..." pair from a <meta> tag fragment.
 fn extract_meta_property(seg_lower: &str, seg_original: &str) -> Option<(String, String)> {
     // Find property="og:..."
-    let prop_start = seg_lower.find("property=\"og:")
+    let prop_start = seg_lower
+        .find("property=\"og:")
         .or_else(|| seg_lower.find("property='og:"))?;
-    let quote_char = if seg_lower.as_bytes().get(prop_start + 10) == Some(&b'\'') { '\'' } else { '"' };
+    let quote_char = if seg_lower.as_bytes().get(prop_start + 10) == Some(&b'\'') {
+        '\''
+    } else {
+        '"'
+    };
     let prop_val_start = prop_start + 10; // length of 'property="'
     let prop_val_end = seg_lower[prop_val_start..].find(quote_char)?;
     let prop_name = seg_original[prop_val_start..prop_val_start + prop_val_end].to_string();
 
     // Find content="..."
-    let content_start = seg_lower.find("content=\"")
+    let content_start = seg_lower
+        .find("content=\"")
         .or_else(|| seg_lower.find("content='"))?;
-    let cq = if seg_lower.as_bytes().get(content_start + 8) == Some(&b'\'') { '\'' } else { '"' };
+    let cq = if seg_lower.as_bytes().get(content_start + 8) == Some(&b'\'') {
+        '\''
+    } else {
+        '"'
+    };
     let content_val_start = content_start + 9;
     let content_val_end = seg_lower[content_val_start..].find(cq)?;
-    let content_val = html_decode(&seg_original[content_val_start..content_val_start + content_val_end]);
+    let content_val =
+        html_decode(&seg_original[content_val_start..content_val_start + content_val_end]);
 
     Some((prop_name, content_val))
 }
@@ -295,10 +316,17 @@ pub async fn upload_media_to_pds(
 
     // Step 1: Upload the blob
     let blob_json = dpop_post(
-        &client, base, "com.atproto.repo.uploadBlob",
-        dpop_key, access_token, &mut current_nonce,
-        Some(content_type), data.to_vec(),
-    ).await.context("Blob upload failed")?;
+        &client,
+        base,
+        "com.atproto.repo.uploadBlob",
+        dpop_key,
+        access_token,
+        &mut current_nonce,
+        Some(content_type),
+        data.to_vec(),
+    )
+    .await
+    .context("Blob upload failed")?;
 
     let blob = &blob_json["blob"];
     let cid = blob["ref"]["$link"]
@@ -306,7 +334,10 @@ pub async fn upload_media_to_pds(
         .ok_or_else(|| anyhow::anyhow!("No CID in upload response"))?
         .to_string();
     let size = blob["size"].as_u64().unwrap_or(data.len() as u64);
-    let mime = blob["mimeType"].as_str().unwrap_or(content_type).to_string();
+    let mime = blob["mimeType"]
+        .as_str()
+        .unwrap_or(content_type)
+        .to_string();
 
     // Step 2: Create a record that references the blob to prevent GC.
     //
@@ -333,10 +364,17 @@ pub async fn upload_media_to_pds(
     });
 
     let _record_result = dpop_post(
-        &client, base, "com.atproto.repo.createRecord",
-        dpop_key, access_token, &mut current_nonce,
-        None, serde_json::to_vec(&irc_record)?,
-    ).await.context("Record creation failed (blue.irc.media)")?;
+        &client,
+        base,
+        "com.atproto.repo.createRecord",
+        dpop_key,
+        access_token,
+        &mut current_nonce,
+        None,
+        serde_json::to_vec(&irc_record)?,
+    )
+    .await
+    .context("Record creation failed (blue.irc.media)")?;
 
     // Optional cross-post to Bluesky feed
     if cross_post {
@@ -362,10 +400,16 @@ pub async fn upload_media_to_pds(
             }
         });
         let _ = dpop_post(
-            &client, base, "com.atproto.repo.createRecord",
-            dpop_key, access_token, &mut current_nonce,
-            None, serde_json::to_vec(&feed_record)?,
-        ).await; // Best-effort; don't fail the upload if cross-post fails
+            &client,
+            base,
+            "com.atproto.repo.createRecord",
+            dpop_key,
+            access_token,
+            &mut current_nonce,
+            None,
+            serde_json::to_vec(&feed_record)?,
+        )
+        .await; // Best-effort; don't fail the upload if cross-post fails
     }
 
     // Step 3: Build URL
@@ -377,14 +421,10 @@ pub async fn upload_media_to_pds(
             "image/gif" => "gif",
             _ => "jpeg",
         };
-        format!(
-            "https://cdn.bsky.app/img/feed_fullsize/plain/{did}/{cid}@{ext}",
-        )
+        format!("https://cdn.bsky.app/img/feed_fullsize/plain/{did}/{cid}@{ext}",)
     } else {
         // For audio/video, use the raw blob endpoint on the PDS
-        format!(
-            "{pds_url}/xrpc/com.atproto.sync.getBlob?did={did}&cid={cid}",
-        )
+        format!("{pds_url}/xrpc/com.atproto.sync.getBlob?did={did}&cid={cid}",)
     };
 
     Ok(MediaUploadResult {
@@ -412,14 +452,16 @@ async fn dpop_post(
     let ct = content_type_override.unwrap_or("application/json");
 
     for attempt in 0..3 {
-        let mut req = client.post(&url)
+        let mut req = client
+            .post(&url)
             .header(header::CONTENT_TYPE, ct)
             .body(body.clone());
 
         if let Some(key) = dpop_key {
             let proof = key.proof("POST", &url, current_nonce.as_deref(), Some(access_token))?;
-            req = req.header("Authorization", format!("DPoP {access_token}"))
-                     .header("DPoP", proof);
+            req = req
+                .header("Authorization", format!("DPoP {access_token}"))
+                .header("DPoP", proof);
         } else {
             req = req.header("Authorization", format!("Bearer {access_token}"));
         }
@@ -440,7 +482,9 @@ async fn dpop_post(
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             if status.as_u16() == 401 {
-                anyhow::bail!("Authentication expired ({status}). Please re-authenticate. PDS response: {body}");
+                anyhow::bail!(
+                    "Authentication expired ({status}). Please re-authenticate. PDS response: {body}"
+                );
             }
             anyhow::bail!("{status}: {body}");
         }
@@ -502,14 +546,18 @@ mod tests {
             content_type: "image/jpeg".to_string(),
             url: "https://example.com/img.jpg".to_string(),
             alt: Some("My photo".to_string()),
-            width: None, height: None, blurhash: None, size: None, filename: None,
+            width: None,
+            height: None,
+            blurhash: None,
+            size: None,
+            filename: None,
         };
-        assert_eq!(media.fallback_text(), "My photo https://example.com/img.jpg");
+        assert_eq!(
+            media.fallback_text(),
+            "My photo https://example.com/img.jpg"
+        );
 
-        let no_alt = MediaAttachment {
-            alt: None,
-            ..media
-        };
+        let no_alt = MediaAttachment { alt: None, ..media };
         assert_eq!(no_alt.fallback_text(), "https://example.com/img.jpg");
     }
 
@@ -572,8 +620,13 @@ mod tests {
     fn type_checks() {
         let img = MediaAttachment {
             content_type: "image/png".to_string(),
-            url: String::new(), alt: None, width: None, height: None,
-            blurhash: None, size: None, filename: None,
+            url: String::new(),
+            alt: None,
+            width: None,
+            height: None,
+            blurhash: None,
+            size: None,
+            filename: None,
         };
         assert!(img.is_image());
         assert!(!img.is_video());

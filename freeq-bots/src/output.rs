@@ -56,7 +56,14 @@ pub async fn code(
     let truncated = lines.len() > max_lines;
     let show_lines = if truncated { max_lines } else { lines.len() };
 
-    status(handle, channel, agent, "📄", &format!("{filename} ({} lines)", lines.len())).await?;
+    status(
+        handle,
+        channel,
+        agent,
+        "📄",
+        &format!("{filename} ({} lines)", lines.len()),
+    )
+    .await?;
 
     for line in &lines[..show_lines] {
         handle.privmsg(channel, &format!("  {line}")).await?;
@@ -65,7 +72,10 @@ pub async fn code(
 
     if truncated {
         handle
-            .privmsg(channel, &format!("  ... ({} more lines)", lines.len() - max_lines))
+            .privmsg(
+                channel,
+                &format!("  ... ({} more lines)", lines.len() - max_lines),
+            )
             .await?;
     }
 
@@ -79,7 +89,14 @@ pub async fn file_tree(
     agent: &AgentId,
     files: &[String],
 ) -> anyhow::Result<()> {
-    status(handle, channel, agent, "📁", &format!("Project files ({})", files.len())).await?;
+    status(
+        handle,
+        channel,
+        agent,
+        "📁",
+        &format!("Project files ({})", files.len()),
+    )
+    .await?;
     for f in files.iter().take(20) {
         handle.privmsg(channel, &format!("  {f}")).await?;
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;

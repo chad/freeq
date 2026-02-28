@@ -31,8 +31,8 @@ use anyhow::Result;
 use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use tokio_rustls::rustls;
 use tokio_rustls::TlsConnector;
+use tokio_rustls::rustls;
 
 use crate::auth::{self, ChallengeSigner};
 use crate::event::Event;
@@ -137,7 +137,8 @@ impl ClientHandle {
         target: &str,
         media: &crate::media::MediaAttachment,
     ) -> Result<()> {
-        self.send_tagged(target, &media.fallback_text(), media.to_tags()).await
+        self.send_tagged(target, &media.fallback_text(), media.to_tags())
+            .await
     }
 
     /// Send a TAGMSG (tags-only, no body) to a target.
@@ -190,7 +191,12 @@ impl ClientHandle {
     }
 
     /// Send a reply in a thread (same as reply — thread parent is the msgid).
-    pub async fn reply_in_thread(&self, target: &str, parent_msgid: &str, text: &str) -> Result<()> {
+    pub async fn reply_in_thread(
+        &self,
+        target: &str,
+        parent_msgid: &str,
+        text: &str,
+    ) -> Result<()> {
         self.reply(target, parent_msgid, text).await
     }
 
@@ -210,7 +216,9 @@ impl ClientHandle {
 
     /// Join multiple channels at once.
     pub async fn join_many(&self, channels: &[&str]) -> Result<()> {
-        if channels.is_empty() { return Ok(()); }
+        if channels.is_empty() {
+            return Ok(());
+        }
         // IRC allows comma-separated JOIN
         let joined = channels.join(",");
         self.raw(&format!("JOIN {joined}")).await
@@ -226,17 +234,22 @@ impl ClientHandle {
 
     /// Request latest N messages of history (CHATHISTORY LATEST).
     pub async fn history_latest(&self, target: &str, count: usize) -> Result<()> {
-        self.raw(&format!("CHATHISTORY LATEST {target} * {count}")).await
+        self.raw(&format!("CHATHISTORY LATEST {target} * {count}"))
+            .await
     }
 
     /// Request N messages before a given msgid (CHATHISTORY BEFORE).
     pub async fn history_before(&self, target: &str, msgid: &str, count: usize) -> Result<()> {
-        self.raw(&format!("CHATHISTORY BEFORE {target} msgid={msgid} {count}")).await
+        self.raw(&format!(
+            "CHATHISTORY BEFORE {target} msgid={msgid} {count}"
+        ))
+        .await
     }
 
     /// Request N messages after a given msgid (CHATHISTORY AFTER).
     pub async fn history_after(&self, target: &str, msgid: &str, count: usize) -> Result<()> {
-        self.raw(&format!("CHATHISTORY AFTER {target} msgid={msgid} {count}")).await
+        self.raw(&format!("CHATHISTORY AFTER {target} msgid={msgid} {count}"))
+            .await
     }
 
     /// Send a reaction emoji to a specific message.
@@ -248,7 +261,12 @@ impl ClientHandle {
     }
 
     /// Edit a previously sent message.
-    pub async fn edit_message(&self, target: &str, original_msgid: &str, new_text: &str) -> Result<()> {
+    pub async fn edit_message(
+        &self,
+        target: &str,
+        original_msgid: &str,
+        new_text: &str,
+    ) -> Result<()> {
         let mut tags = std::collections::HashMap::new();
         tags.insert("+draft/edit".to_string(), original_msgid.to_string());
         self.send_tagged(target, new_text, tags).await
@@ -282,15 +300,14 @@ impl ClientHandle {
 /// This is done **before** the TUI starts so that connection errors
 /// are visible on stderr. Returns the established connection for
 /// `connect_with_stream` to use.
-pub async fn establish_connection(
-    config: &ConnectConfig,
-) -> Result<EstablishedConnection> {
+pub async fn establish_connection(config: &ConnectConfig) -> Result<EstablishedConnection> {
     // Auto-detect TLS from port if not explicitly set
     let use_tls = config.tls || config.server_addr.ends_with(":6697");
     let mode = if use_tls { "TLS" } else { "plain" };
 
     tracing::debug!("Resolving {}...", config.server_addr);
-    let tcp = TcpStream::connect(&config.server_addr).await
+    let tcp = TcpStream::connect(&config.server_addr)
+        .await
         .map_err(|e| anyhow::anyhow!("TCP connect to {} failed: {e}", config.server_addr))?;
     tracing::debug!("TCP connected to {} ({mode})", config.server_addr);
 
@@ -303,14 +320,11 @@ pub async fn establish_connection(
             rustls_default_config()
         };
         let connector = TlsConnector::from(Arc::new(tls_config));
-        let server_name = config
-            .server_addr
-            .split(':')
-            .next()
-            .unwrap_or("localhost");
+        let server_name = config.server_addr.split(':').next().unwrap_or("localhost");
         let dns_name = rustls::pki_types::ServerName::try_from(server_name.to_string())?;
-        let tls_stream = connector.connect(dns_name, tcp).await
-            .map_err(|e| anyhow::anyhow!("TLS handshake with {} failed: {e}", config.server_addr))?;
+        let tls_stream = connector.connect(dns_name, tcp).await.map_err(|e| {
+            anyhow::anyhow!("TLS handshake with {} failed: {e}", config.server_addr)
+        })?;
         tracing::debug!("TLS handshake complete");
         Ok(EstablishedConnection::Tls(tls_stream))
     } else {
@@ -345,13 +359,16 @@ pub async fn establish_iroh_connection(addr: &str) -> Result<EstablishedConnecti
     tracing::debug!("Connecting to iroh peer {addr}...");
     // Parse the endpoint ID (public key) and create an address.
     // Iroh's relay/discovery system handles finding the actual network path.
-    let endpoint_id: iroh::EndpointId = addr.parse()
+    let endpoint_id: iroh::EndpointId = addr
+        .parse()
         .map_err(|e| anyhow::anyhow!("Invalid iroh endpoint ID '{addr}': {e}"))?;
     let endpoint_addr = iroh::EndpointAddr::new(endpoint_id);
     let conn = endpoint.connect(endpoint_addr, IROH_ALPN).await?;
     tracing::debug!("Iroh QUIC connection established (encrypted)");
 
-    let (send, recv) = conn.open_bi().await
+    let (send, recv) = conn
+        .open_bi()
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to open bidirectional stream: {e}"))?;
     tracing::debug!("Bidirectional stream open, ready for IRC");
 
@@ -366,7 +383,9 @@ pub async fn establish_iroh_connection(addr: &str) -> Result<EstablishedConnecti
         let mut recv = recv;
         let mut buf = vec![0u8; 4096];
         while let Ok(Some(n)) = recv.read(&mut buf).await {
-            if bridge_write.write_all(&buf[..n]).await.is_err() { break; }
+            if bridge_write.write_all(&buf[..n]).await.is_err() {
+                break;
+            }
         }
         let _ = bridge_write.shutdown().await;
     });
@@ -379,7 +398,9 @@ pub async fn establish_iroh_connection(addr: &str) -> Result<EstablishedConnecti
             match bridge_read.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => {
-                    if send.write_all(&buf[..n]).await.is_err() { break; }
+                    if send.write_all(&buf[..n]).await.is_err() {
+                        break;
+                    }
                 }
                 Err(_) => break,
             }
@@ -391,7 +412,9 @@ pub async fn establish_iroh_connection(addr: &str) -> Result<EstablishedConnecti
     tokio::spawn(async move {
         let _endpoint = endpoint;
         let _conn = conn;
-        loop { tokio::time::sleep(std::time::Duration::from_secs(3600)).await; }
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        }
     });
 
     Ok(EstablishedConnection::Iroh(irc_side))
@@ -407,8 +430,8 @@ pub async fn establish_iroh_connection(addr: &str) -> Result<EstablishedConnecti
 /// discover capabilities, reconnect optimal (iroh QUIC).
 #[cfg(feature = "iroh-transport")]
 pub async fn discover_iroh_id(server_addr: &str, tls: bool, tls_insecure: bool) -> Option<String> {
-    use tokio::time::timeout;
     use std::time::Duration;
+    use tokio::time::timeout;
 
     let use_tls = tls || server_addr.ends_with(":6697");
 
@@ -430,24 +453,32 @@ pub async fn discover_iroh_id(server_addr: &str, tls: bool, tls_insecure: bool) 
         } else {
             probe_cap_ls(tcp).await
         }
-    }).await;
+    })
+    .await;
 
     result.ok().flatten()
 }
 
 /// Send CAP LS and parse iroh endpoint ID from response.
-async fn probe_cap_ls<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(stream: S) -> Option<String> {
+async fn probe_cap_ls<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
+    stream: S,
+) -> Option<String> {
     let (reader, mut writer) = tokio::io::split(stream);
     let mut reader = BufReader::new(reader);
 
     // Send CAP LS and a throwaway NICK/USER so the server doesn't time us out
-    writer.write_all(b"CAP LS 302\r\nNICK _probe\r\nUSER _probe 0 * :probe\r\n").await.ok()?;
+    writer
+        .write_all(b"CAP LS 302\r\nNICK _probe\r\nUSER _probe 0 * :probe\r\n")
+        .await
+        .ok()?;
 
     let mut line = String::new();
     loop {
         line.clear();
         let n = reader.read_line(&mut line).await.ok()?;
-        if n == 0 { return None; }
+        if n == 0 {
+            return None;
+        }
 
         // Look for CAP * LS :...
         if line.contains("CAP") && line.contains("LS") {
@@ -489,16 +520,40 @@ pub fn connect_with_stream(
         let result = match conn {
             EstablishedConnection::Plain(tcp) => {
                 let (reader, writer) = tokio::io::split(tcp);
-                run_irc(BufReader::new(reader), writer, &config, signer, event_tx.clone(), cmd_rx).await
+                run_irc(
+                    BufReader::new(reader),
+                    writer,
+                    &config,
+                    signer,
+                    event_tx.clone(),
+                    cmd_rx,
+                )
+                .await
             }
             EstablishedConnection::Tls(tls) => {
                 let (reader, writer) = tokio::io::split(tls);
-                run_irc(BufReader::new(reader), writer, &config, signer, event_tx.clone(), cmd_rx).await
+                run_irc(
+                    BufReader::new(reader),
+                    writer,
+                    &config,
+                    signer,
+                    event_tx.clone(),
+                    cmd_rx,
+                )
+                .await
             }
             #[cfg(feature = "iroh-transport")]
             EstablishedConnection::Iroh(duplex) => {
                 let (reader, writer) = tokio::io::split(duplex);
-                run_irc(BufReader::new(reader), writer, &config, signer, event_tx.clone(), cmd_rx).await
+                run_irc(
+                    BufReader::new(reader),
+                    writer,
+                    &config,
+                    signer,
+                    event_tx.clone(),
+                    cmd_rx,
+                )
+                .await
             }
         };
         if let Err(e) = result {
@@ -555,16 +610,40 @@ async fn run_client(
     match conn {
         EstablishedConnection::Plain(tcp) => {
             let (reader, writer) = tokio::io::split(tcp);
-            run_irc(BufReader::new(reader), writer, &config, signer, event_tx, cmd_rx).await
+            run_irc(
+                BufReader::new(reader),
+                writer,
+                &config,
+                signer,
+                event_tx,
+                cmd_rx,
+            )
+            .await
         }
         EstablishedConnection::Tls(tls) => {
             let (reader, writer) = tokio::io::split(tls);
-            run_irc(BufReader::new(reader), writer, &config, signer, event_tx, cmd_rx).await
+            run_irc(
+                BufReader::new(reader),
+                writer,
+                &config,
+                signer,
+                event_tx,
+                cmd_rx,
+            )
+            .await
         }
         #[cfg(feature = "iroh-transport")]
         EstablishedConnection::Iroh(duplex) => {
             let (reader, writer) = tokio::io::split(duplex);
-            run_irc(BufReader::new(reader), writer, &config, signer, event_tx, cmd_rx).await
+            run_irc(
+                BufReader::new(reader),
+                writer,
+                &config,
+                signer,
+                event_tx,
+                cmd_rx,
+            )
+            .await
         }
     }
 }
@@ -573,9 +652,13 @@ fn install_crypto_provider() {
     // Install a crypto provider for rustls.
     // ring is preferred (works on iOS); aws-lc-rs is the default on desktop.
     #[cfg(feature = "ring")]
-    { let _ = rustls::crypto::ring::default_provider().install_default(); }
+    {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
     #[cfg(all(feature = "aws-lc-rs", not(feature = "ring")))]
-    { let _ = rustls::crypto::aws_lc_rs::default_provider().install_default(); }
+    {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    }
 }
 
 fn rustls_default_config() -> rustls::ClientConfig {
@@ -1108,7 +1191,9 @@ async fn execute_command<W: AsyncWrite + Unpin>(
 ) -> Result<()> {
     match cmd {
         Command::Join(channel) => {
-            writer.write_all(format!("JOIN {channel}\r\n").as_bytes()).await?;
+            writer
+                .write_all(format!("JOIN {channel}\r\n").as_bytes())
+                .await?;
         }
         Command::Privmsg { target, text } => {
             if let (Some(key), Some(did)) = (signing_key, signing_did) {
@@ -1120,13 +1205,18 @@ async fn execute_command<W: AsyncWrite + Unpin>(
                 use ed25519_dalek::Signer;
                 let sig = key.sign(canonical.as_bytes());
                 use base64::Engine;
-                let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes());
+                let sig_b64 =
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes());
                 // Send with IRCv3 message tag
-                writer.write_all(
-                    format!("@+freeq.at/sig={sig_b64} PRIVMSG {target} :{text}\r\n").as_bytes()
-                ).await?;
+                writer
+                    .write_all(
+                        format!("@+freeq.at/sig={sig_b64} PRIVMSG {target} :{text}\r\n").as_bytes(),
+                    )
+                    .await?;
             } else {
-                writer.write_all(format!("PRIVMSG {target} :{text}\r\n").as_bytes()).await?;
+                writer
+                    .write_all(format!("PRIVMSG {target} :{text}\r\n").as_bytes())
+                    .await?;
             }
         }
         Command::Raw(line) => {
@@ -1158,14 +1248,22 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
             if caps_str.contains("message-tags") {
                 req_caps.push("message-tags");
             }
-            for cap in &["server-time", "batch", "echo-message", "away-notify", "account-notify", "extended-join", "draft/chathistory"] {
+            for cap in &[
+                "server-time",
+                "batch",
+                "echo-message",
+                "away-notify",
+                "account-notify",
+                "extended-join",
+                "draft/chathistory",
+            ] {
                 if caps_str.contains(cap) {
                     req_caps.push(cap);
                 }
             }
             if caps_str.contains("sasl") && (signer.is_some() || web_token.is_some()) {
                 req_caps.push("sasl");
-            } 
+            }
             if req_caps.is_empty() {
                 // eprintln!("  No caps to request, sending CAP END");
                 writer.write_all(b"CAP END\r\n").await?;
@@ -1181,7 +1279,9 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
                 *sasl_in_progress = true;
                 // Both web-token and ATPROTO-CHALLENGE use the same SASL mechanism;
                 // the method field in the JSON payload distinguishes them.
-                writer.write_all(b"AUTHENTICATE ATPROTO-CHALLENGE\r\n").await?;
+                writer
+                    .write_all(b"AUTHENTICATE ATPROTO-CHALLENGE\r\n")
+                    .await?;
             } else {
                 writer.write_all(b"CAP END\r\n").await?;
             }
@@ -1279,7 +1379,12 @@ pub async fn run_with_reconnect<F>(
     handler: F,
 ) -> Result<()>
 where
-    F: Fn(ClientHandle, Event) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> + Send + Sync,
+    F: Fn(
+            ClientHandle,
+            Event,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>>
+        + Send
+        + Sync,
 {
     let mut delay = reconnect_config.initial_delay;
     let mut consecutive_failures = 0u32;
@@ -1347,7 +1452,9 @@ where
 
 /// Simple jitter: random value 0..max using thread_rng.
 fn rand_jitter(max: u64) -> u64 {
-    if max == 0 { return 0; }
+    if max == 0 {
+        return 0;
+    }
     // Simple pseudo-random using current time
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

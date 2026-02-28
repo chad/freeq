@@ -1,11 +1,11 @@
 #![allow(clippy::too_many_arguments)]
 //! Query commands: WHOIS, WHO, LUSERS, AWAY.
 
-use std::sync::Arc;
-use crate::irc::{self, Message};
-use crate::server::SharedState;
 use super::Connection;
 use super::helpers::normalize_channel;
+use crate::irc::{self, Message};
+use crate::server::SharedState;
+use std::sync::Arc;
 
 pub(super) fn handle_whois(
     conn: &Connection,
@@ -28,7 +28,8 @@ pub(super) fn handle_whois(
         // Check if this is a remote user (from S2S)
         let remote_info: Option<crate::server::RemoteMember> = {
             let channels = state.channels.lock();
-            channels.values()
+            channels
+                .values()
                 .find_map(|ch| ch.remote_members.get(target_nick).cloned())
         };
 
@@ -49,7 +50,15 @@ pub(super) fn handle_whois(
             let whoisserver = Message::from_server(
                 server_name,
                 irc::RPL_WHOISSERVER,
-                vec![my_nick, target_nick, "s2s", &format!("Connected via S2S ({}…)", &rm.origin[..16.min(rm.origin.len())])],
+                vec![
+                    my_nick,
+                    target_nick,
+                    "s2s",
+                    &format!(
+                        "Connected via S2S ({}…)",
+                        &rm.origin[..16.min(rm.origin.len())]
+                    ),
+                ],
             );
             send(state, session_id, format!("{whoisserver}\r\n"));
 
@@ -58,7 +67,11 @@ pub(super) fn handle_whois(
                 let handle_line = Message::from_server(
                     server_name,
                     "671",
-                    vec![my_nick, target_nick, &format!("AT Protocol handle: {handle}")],
+                    vec![
+                        my_nick,
+                        target_nick,
+                        &format!("AT Protocol handle: {handle}"),
+                    ],
                 );
                 send(state, session_id, format!("{handle_line}\r\n"));
             }
@@ -76,20 +89,25 @@ pub(super) fn handle_whois(
             // Show channels they're in
             let user_channels: Vec<String> = {
                 let channels = state.channels.lock();
-                channels.iter()
+                channels
+                    .iter()
                     .filter(|(_, ch)| ch.remote_members.contains_key(target_nick))
                     .map(|(name, ch)| {
                         let is_op = rm.did.as_ref().is_some_and(|d| {
                             ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
                         });
-                        if is_op { format!("@{name}") } else { name.clone() }
+                        if is_op {
+                            format!("@{name}")
+                        } else {
+                            name.clone()
+                        }
                     })
                     .collect()
             };
             if !user_channels.is_empty() {
                 let channels_line = Message::from_server(
                     server_name,
-                    "319",  // RPL_WHOISCHANNELS
+                    "319", // RPL_WHOISCHANNELS
                     vec![my_nick, target_nick, &user_channels.join(" ")],
                 );
                 send(state, session_id, format!("{channels_line}\r\n"));
@@ -135,11 +153,7 @@ pub(super) fn handle_whois(
     send(state, session_id, format!("{whoisserver}\r\n"));
 
     // 330 RPL_WHOISACCOUNT — show DID if authenticated
-    let did = state
-        .session_dids
-        .lock()
-        .get(&target_session)
-        .cloned();
+    let did = state.session_dids.lock().get(&target_session).cloned();
 
     if let Some(ref did) = did {
         let whoisaccount = Message::from_server(
@@ -152,32 +166,28 @@ pub(super) fn handle_whois(
 
     // Show Bluesky handle if resolved
     if did.is_some() {
-        let handle = state
-            .session_handles
-            .lock()
-            .get(&target_session)
-            .cloned();
+        let handle = state.session_handles.lock().get(&target_session).cloned();
         if let Some(handle) = handle {
             // Use a server notice (not a standard numeric, but informational)
             let notice = Message::from_server(
                 server_name,
-                "671",  // RPL_WHOISSECURE (repurposed for extra info)
-                vec![my_nick, target_nick, &format!("AT Protocol handle: {handle}")],
+                "671", // RPL_WHOISSECURE (repurposed for extra info)
+                vec![
+                    my_nick,
+                    target_nick,
+                    &format!("AT Protocol handle: {handle}"),
+                ],
             );
             send(state, session_id, format!("{notice}\r\n"));
         }
     }
 
     // Show iroh endpoint ID if connected via iroh
-    let iroh_id = state
-        .session_iroh_ids
-        .lock()
-        .get(&target_session)
-        .cloned();
+    let iroh_id = state.session_iroh_ids.lock().get(&target_session).cloned();
     if let Some(iroh_id) = iroh_id {
         let iroh_notice = Message::from_server(
             server_name,
-            "672",  // Custom numeric for iroh info
+            "672", // Custom numeric for iroh info
             vec![my_nick, target_nick, &format!("iroh endpoint: {iroh_id}")],
         );
         send(state, session_id, format!("{iroh_notice}\r\n"));
@@ -190,7 +200,7 @@ pub(super) fn handle_whois(
     if let Some(ref client) = state.session_client_info.lock().get(&target_session) {
         let client_line = Message::from_server(
             server_name,
-            "671",  // RPL_WHOISSECURE (informational)
+            "671", // RPL_WHOISSECURE (informational)
             vec![my_nick, target_nick, &format!("client: {client}")],
         );
         send(state, session_id, format!("{client_line}\r\n"));
@@ -204,7 +214,6 @@ pub(super) fn handle_whois(
     );
     send(state, session_id, format!("{end}\r\n"));
 }
-
 
 pub(super) fn handle_who(
     conn: &Connection,
@@ -228,13 +237,16 @@ pub(super) fn handle_who(
                     let user = "~u";
                     let host = "host";
                     let away_flag = if away.contains_key(session) { "G" } else { "H" };
-                    let op_flag = if ch.ops.contains(session) { "@" }
-                        else if ch.voiced.contains(session) { "+" }
-                        else { "" };
+                    let op_flag = if ch.ops.contains(session) {
+                        "@"
+                    } else if ch.voiced.contains(session) {
+                        "+"
+                    } else {
+                        ""
+                    };
                     let flags = format!("{away_flag}{op_flag}");
                     // Include DID in realname if authenticated
-                    let did_info = state.session_dids.lock()
-                        .get(session).cloned();
+                    let did_info = state.session_dids.lock().get(session).cloned();
                     let realname = match did_info {
                         Some(did) => format!("0 {did}"),
                         None => "0 IRC User".to_string(),
@@ -242,7 +254,16 @@ pub(super) fn handle_who(
                     let reply = Message::from_server(
                         server_name,
                         irc::RPL_WHOREPLY,
-                        vec![nick, &channel, user, host, server_name, member_nick, &flags, &realname],
+                        vec![
+                            nick,
+                            &channel,
+                            user,
+                            host,
+                            server_name,
+                            member_nick,
+                            &flags,
+                            &realname,
+                        ],
                     );
                     send(state, session_id, format!("{reply}\r\n"));
                 }
@@ -256,12 +277,15 @@ pub(super) fn handle_who(
         send(state, session_id, format!("{end}\r\n"));
     } else {
         // WHO for a nick
-        let target_session = state.nick_to_session.lock().get_session(target).map(|s| s.to_string());
+        let target_session = state
+            .nick_to_session
+            .lock()
+            .get_session(target)
+            .map(|s| s.to_string());
         if let Some(ref session) = target_session {
             let away = state.session_away.lock();
             let away_flag = if away.contains_key(session) { "G" } else { "H" };
-            let did_info = state.session_dids.lock()
-                .get(session).cloned();
+            let did_info = state.session_dids.lock().get(session).cloned();
             let realname = match did_info {
                 Some(did) => format!("0 {did}"),
                 None => "0 IRC User".to_string(),
@@ -269,7 +293,16 @@ pub(super) fn handle_who(
             let reply = Message::from_server(
                 server_name,
                 irc::RPL_WHOREPLY,
-                vec![nick, "*", "~u", "host", server_name, target, away_flag, &realname],
+                vec![
+                    nick,
+                    "*",
+                    "~u",
+                    "host",
+                    server_name,
+                    target,
+                    away_flag,
+                    &realname,
+                ],
             );
             send(state, session_id, format!("{reply}\r\n"));
         }
@@ -283,7 +316,6 @@ pub(super) fn handle_who(
 }
 
 // ── AWAY command ────────────────────────────────────────────────────
-
 
 pub(super) fn handle_lusers(
     conn: &Connection,
@@ -312,7 +344,10 @@ pub(super) fn handle_lusers(
     let r1 = Message::from_server(
         server_name,
         irc::RPL_LUSERCLIENT,
-        vec![nick, &format!("There are {total} users on 1 server ({remote_count} remote)")],
+        vec![
+            nick,
+            &format!("There are {total} users on 1 server ({remote_count} remote)"),
+        ],
     );
     let r2 = Message::from_server(
         server_name,
@@ -334,7 +369,6 @@ pub(super) fn handle_lusers(
     }
 }
 
-
 pub(super) fn handle_away(
     conn: &Connection,
     away_msg: Option<&str>,
@@ -348,7 +382,9 @@ pub(super) fn handle_away(
 
     match away_msg {
         Some(msg) if !msg.is_empty() => {
-            state.session_away.lock()
+            state
+                .session_away
+                .lock()
                 .insert(session_id.to_string(), msg.to_string());
             let reply = Message::from_server(
                 server_name,
@@ -414,4 +450,3 @@ fn broadcast_away(
         }
     }
 }
-

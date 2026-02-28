@@ -12,11 +12,11 @@
 //!
 //! Requires ANTHROPIC_API_KEY environment variable.
 
-use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 use freeq_sdk::client::{self, ClientHandle, ConnectConfig};
 use freeq_sdk::event::Event;
+use std::path::PathBuf;
 
 use freeq_bots::factory::{Factory, FactoryConfig};
 use freeq_bots::llm::LlmClient;
@@ -102,7 +102,8 @@ async fn main() -> Result<()> {
         user: args.nick.clone(),
         realname: "freeq AI factory bot".to_string(),
         tls: args.tls,
-        tls_insecure: false, web_token: None,
+        tls_insecure: false,
+        web_token: None,
     })
     .await?;
 
@@ -112,7 +113,8 @@ async fn main() -> Result<()> {
         user: args.nick.clone(),
         realname: "freeq AI factory bot".to_string(),
         tls: args.tls,
-        tls_insecure: false, web_token: None,
+        tls_insecure: false,
+        web_token: None,
     };
 
     let (handle, mut events) = client::connect_with_stream(conn, config, None);
@@ -134,16 +136,8 @@ async fn main() -> Result<()> {
     loop {
         match events.recv().await {
             Some(event) => {
-                if let Err(e) = handle_event(
-                    &handle,
-                    &bot_nick,
-                    &args,
-                    &event,
-                    &llm,
-                    &memory,
-                    &factory,
-                )
-                .await
+                if let Err(e) =
+                    handle_event(&handle, &bot_nick, &args, &event, &llm, &memory, &factory).await
                 {
                     tracing::error!(error = %e, "Event handler error");
                 }
@@ -159,7 +153,10 @@ async fn main() -> Result<()> {
 }
 
 fn system_agent() -> AgentId {
-    AgentId { role: "system".to_string(), color: None }
+    AgentId {
+        role: "system".to_string(),
+        color: None,
+    }
 }
 
 async fn handle_event(
@@ -215,12 +212,20 @@ async fn handle_event(
                         let sub_parts: Vec<&str> = cmd_args.splitn(2, ' ').collect();
                         let sub_cmd = sub_parts.first().unwrap_or(&"status");
                         let sub_args = sub_parts.get(1).unwrap_or(&"");
-                        factory.handle_command(handle, channel, from, sub_cmd, sub_args, llm, memory).await?;
+                        factory
+                            .handle_command(handle, channel, from, sub_cmd, sub_args, llm, memory)
+                            .await?;
                     }
 
                     "audit" => {
                         if cmd_args.is_empty() {
-                            output::say(handle, channel, &system_agent(), "Usage: /audit <github-url or repo-path>").await?;
+                            output::say(
+                                handle,
+                                channel,
+                                &system_agent(),
+                                "Usage: /audit <github-url or repo-path>",
+                            )
+                            .await?;
                         } else {
                             let h = handle.clone();
                             let ch = channel.to_string();
@@ -230,9 +235,20 @@ async fn handle_event(
                             let ws = args.workspace.clone();
                             tokio::spawn(async move {
                                 let llm = LlmClient::new(llm_key).with_model(&model);
-                                if let Err(e) = freeq_bots::auditor::audit(&h, &ch, &target, &llm, &ws).await {
+                                if let Err(e) =
+                                    freeq_bots::auditor::audit(&h, &ch, &target, &llm, &ws).await
+                                {
                                     tracing::error!(error = %e, "Audit failed");
-                                    let _ = output::error(&h, &ch, &AgentId { role: "auditor".to_string(), color: None }, &format!("Audit failed: {e}")).await;
+                                    let _ = output::error(
+                                        &h,
+                                        &ch,
+                                        &AgentId {
+                                            role: "auditor".to_string(),
+                                            color: None,
+                                        },
+                                        &format!("Audit failed: {e}"),
+                                    )
+                                    .await;
                                 }
                             });
                         }
@@ -240,7 +256,13 @@ async fn handle_event(
 
                     "prototype" | "proto" => {
                         if cmd_args.is_empty() {
-                            output::say(handle, channel, &system_agent(), "Usage: /prototype <describe what to build>").await?;
+                            output::say(
+                                handle,
+                                channel,
+                                &system_agent(),
+                                "Usage: /prototype <describe what to build>",
+                            )
+                            .await?;
                         } else {
                             let h = handle.clone();
                             let ch = channel.to_string();
@@ -258,9 +280,21 @@ async fn handle_event(
                                         return;
                                     }
                                 };
-                                if let Err(e) = freeq_bots::prototype::build(&h, &ch, &spec, &llm, &mem, &ws).await {
+                                if let Err(e) =
+                                    freeq_bots::prototype::build(&h, &ch, &spec, &llm, &mem, &ws)
+                                        .await
+                                {
                                     tracing::error!(error = %e, "Prototype build failed");
-                                    let _ = output::error(&h, &ch, &AgentId { role: "builder".to_string(), color: None }, &format!("Build failed: {e}")).await;
+                                    let _ = output::error(
+                                        &h,
+                                        &ch,
+                                        &AgentId {
+                                            role: "builder".to_string(),
+                                            color: None,
+                                        },
+                                        &format!("Build failed: {e}"),
+                                    )
+                                    .await;
                                 }
                             });
                         }
@@ -284,7 +318,7 @@ async fn handle_event(
                         }
                     }
 
-                    _ => {}  // Ignore unknown commands silently
+                    _ => {} // Ignore unknown commands silently
                 }
             }
         }

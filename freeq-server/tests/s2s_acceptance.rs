@@ -104,7 +104,11 @@ async fn maybe_wait<F: Fn(&Event) -> bool>(
             match rx.recv().await {
                 Some(evt) if predicate(&evt) => return evt,
                 Some(_) => continue,
-                None => return Event::Disconnected { reason: "closed".into() },
+                None => {
+                    return Event::Disconnected {
+                        reason: "closed".into(),
+                    };
+                }
             }
         }
     })
@@ -186,16 +190,15 @@ async fn wait_message_containing(
     )
     .await
     {
-        Event::Message { from, target, text, .. } => (from, target, text),
+        Event::Message {
+            from, target, text, ..
+        } => (from, target, text),
         _ => unreachable!(),
     }
 }
 
 /// Wait for a Message containing specific text and return the full event (including tags).
-async fn wait_message_event_containing(
-    rx: &mut mpsc::Receiver<Event>,
-    substr: &str,
-) -> Event {
+async fn wait_message_event_containing(rx: &mut mpsc::Receiver<Event>, substr: &str) -> Event {
     let s = substr.to_string();
     wait_for(
         rx,
@@ -215,9 +218,11 @@ async fn wait_names_containing(
     let n = nick.to_string();
     match wait_for_timeout(
         rx,
-        |e| matches!(e, Event::Names { channel: c, nicks }
+        |e| {
+            matches!(e, Event::Names { channel: c, nicks }
             if c.to_lowercase() == ch
-            && nicks.iter().any(|x| x.trim_start_matches(&['@', '+'][..]) == n)),
+            && nicks.iter().any(|x| x.trim_start_matches(&['@', '+'][..]) == n))
+        },
         &format!("Names in {channel} containing {nick}"),
         S2S_TIMEOUT,
     )
@@ -239,9 +244,11 @@ async fn wait_names_not_containing(
     let n = nick.to_string();
     match wait_for_timeout(
         rx,
-        |e| matches!(e, Event::Names { channel: c, nicks }
+        |e| {
+            matches!(e, Event::Names { channel: c, nicks }
             if c.to_lowercase() == ch
-            && !nicks.iter().any(|x| x.trim_start_matches(&['@', '+'][..]) == n)),
+            && !nicks.iter().any(|x| x.trim_start_matches(&['@', '+'][..]) == n))
+        },
         &format!("Names in {channel} NOT containing {nick}"),
         S2S_TIMEOUT,
     )
@@ -355,7 +362,9 @@ async fn single_server_connect_and_register() {
 
 #[tokio::test]
 async fn single_server_join_part_cycle() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick = test_nick("jp", "");
     let channel = test_channel("jp");
 
@@ -380,7 +389,9 @@ async fn single_server_join_part_cycle() {
 
 #[tokio::test]
 async fn single_server_topic_set_and_read() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick = test_nick("top", "");
     let channel = test_channel("top");
 
@@ -402,7 +413,9 @@ async fn single_server_topic_set_and_read() {
 
 #[tokio::test]
 async fn single_server_privmsg_between_users() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick_a = test_nick("pm", "a");
     let nick_b = test_nick("pm", "b");
     let channel = test_channel("pm");
@@ -431,7 +444,9 @@ async fn single_server_privmsg_between_users() {
 
 #[tokio::test]
 async fn single_server_list_command() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick = test_nick("lst", "");
     let channel = test_channel("lst");
 
@@ -448,7 +463,8 @@ async fn single_server_list_command() {
         &mut e,
         |e| matches!(e, Event::RawLine(line) if line.to_lowercase().contains(&ch_lower)),
         "LIST output containing our channel",
-    ).await;
+    )
+    .await;
     eprintln!("  ✓ LIST shows {channel}");
 
     let _ = h.quit(Some("done")).await;
@@ -456,7 +472,9 @@ async fn single_server_list_command() {
 
 #[tokio::test]
 async fn single_server_who_command() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick = test_nick("who", "");
     let channel = test_channel("who");
 
@@ -472,7 +490,8 @@ async fn single_server_who_command() {
         &mut e,
         |e| matches!(e, Event::RawLine(line) if line.contains(&nick)),
         "WHO output containing our nick",
-    ).await;
+    )
+    .await;
     eprintln!("  ✓ WHO shows {nick}");
 
     let _ = h.quit(Some("done")).await;
@@ -480,7 +499,9 @@ async fn single_server_who_command() {
 
 #[tokio::test]
 async fn single_server_away_status() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick_a = test_nick("aw", "a");
     let nick_b = test_nick("aw", "b");
     let channel = test_channel("aw");
@@ -505,7 +526,8 @@ async fn single_server_away_status() {
         &mut ea,
         |e| matches!(e, Event::RawLine(line) if line.contains("306")),
         "RPL_NOWAWAY",
-    ).await;
+    )
+    .await;
     eprintln!("  ✓ AWAY set");
 
     // Small delay to let the away state register
@@ -526,7 +548,8 @@ async fn single_server_away_status() {
         &mut ea,
         |e| matches!(e, Event::RawLine(line) if line.contains("305")),
         "RPL_UNAWAY",
-    ).await;
+    )
+    .await;
     eprintln!("  ✓ AWAY cleared");
 
     let _ = ha.quit(Some("done")).await;
@@ -535,7 +558,9 @@ async fn single_server_away_status() {
 
 #[tokio::test]
 async fn single_server_mode_n_no_external() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick_in = test_nick("mn", "in");
     let nick_out = test_nick("mn", "out");
     let channel = test_channel("mn");
@@ -562,7 +587,8 @@ async fn single_server_mode_n_no_external() {
         &mut e_out,
         |e| matches!(e, Event::RawLine(line) if line.contains("404")),
         "ERR_CANNOTSENDTOCHAN for +n",
-    ).await;
+    )
+    .await;
     eprintln!("  ✓ +n blocks external messages");
 
     let _ = h_in.quit(Some("done")).await;
@@ -571,7 +597,9 @@ async fn single_server_mode_n_no_external() {
 
 #[tokio::test]
 async fn single_server_mode_m_moderated() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick_op = test_nick("mm", "op");
     let nick_reg = test_nick("mm", "reg");
     let channel = test_channel("mm");
@@ -599,7 +627,8 @@ async fn single_server_mode_m_moderated() {
         &mut e_reg,
         |e| matches!(e, Event::RawLine(line) if line.contains("404")),
         "ERR_CANNOTSENDTOCHAN for +m",
-    ).await;
+    )
+    .await;
     eprintln!("  ✓ +m blocks unvoiced users");
 
     // Op should succeed
@@ -610,7 +639,9 @@ async fn single_server_mode_m_moderated() {
     eprintln!("  ✓ +m allows ops");
 
     // Voice the user, they should succeed
-    h_op.raw(&format!("MODE {channel} +v {nick_reg}")).await.unwrap();
+    h_op.raw(&format!("MODE {channel} +v {nick_reg}"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
     drain(&mut e_reg).await;
 
@@ -626,7 +657,9 @@ async fn single_server_mode_m_moderated() {
 
 #[tokio::test]
 async fn single_server_channel_case_normalization() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick_a = test_nick("cn", "a");
     let nick_b = test_nick("cn", "b");
     let channel_upper = test_channel("CN");
@@ -658,7 +691,9 @@ async fn single_server_channel_case_normalization() {
 
 #[tokio::test]
 async fn single_server_motd() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick = test_nick("motd", "");
 
     let (h, mut e) = connect_guest(&server, &nick).await;
@@ -671,7 +706,8 @@ async fn single_server_motd() {
         &mut e,
         |e| matches!(e, Event::RawLine(line) if line.contains("375") || line.contains("422")),
         "MOTD response (375 or 422)",
-    ).await;
+    )
+    .await;
     eprintln!("  ✓ MOTD command works");
 
     let _ = h.quit(Some("done")).await;
@@ -679,7 +715,9 @@ async fn single_server_motd() {
 
 #[tokio::test]
 async fn single_server_nick_change() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick = test_nick("nk", "a");
     let new_nick = test_nick("nk", "b");
     let channel = test_channel("nk");
@@ -700,7 +738,8 @@ async fn single_server_nick_change() {
         &mut e,
         |e| matches!(e, Event::RawLine(line) if line.contains("NICK") && line.contains(&nn)),
         "NICK change confirmation",
-    ).await;
+    )
+    .await;
     if let Event::RawLine(line) = &got {
         eprintln!("  ✓ Nick changed: {line}");
     }
@@ -708,7 +747,9 @@ async fn single_server_nick_change() {
     // Verify via NAMES that our new nick appears
     h.raw(&format!("NAMES {channel}")).await.unwrap();
     let nicks = wait_names_containing(&mut e, &channel, &new_nick).await;
-    let has_old = nicks.iter().any(|n| n.trim_start_matches(&['@', '+'][..]) == nick);
+    let has_old = nicks
+        .iter()
+        .any(|n| n.trim_start_matches(&['@', '+'][..]) == nick);
     assert!(!has_old, "Old nick should not be in NAMES: {nicks:?}");
     eprintln!("  ✓ NAMES shows new nick: {nicks:?}");
 
@@ -717,7 +758,9 @@ async fn single_server_nick_change() {
 
 #[tokio::test]
 async fn single_server_kick() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick_op = test_nick("kick", "op");
     let nick_target = test_nick("kick", "tgt");
     let channel = test_channel("kick");
@@ -734,13 +777,16 @@ async fn single_server_kick() {
     wait_joined(&mut e_tgt, &channel).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    h_op.raw(&format!("KICK {channel} {nick_target} :test kick")).await.unwrap();
+    h_op.raw(&format!("KICK {channel} {nick_target} :test kick"))
+        .await
+        .unwrap();
 
     wait_for(
         &mut e_tgt,
         |e| matches!(e, Event::Kicked { nick, .. } if nick == &nick_target),
         "Kicked event",
-    ).await;
+    )
+    .await;
     eprintln!("  ✓ KICK works");
 
     let _ = h_op.quit(Some("done")).await;
@@ -749,7 +795,9 @@ async fn single_server_kick() {
 
 #[tokio::test]
 async fn single_server_invite() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick_op = test_nick("inv", "op");
     let nick_guest = test_nick("inv", "g");
     let channel = test_channel("inv");
@@ -772,16 +820,20 @@ async fn single_server_invite() {
         &mut e_g,
         |e| matches!(e, Event::RawLine(line) if line.contains("473")),
         "ERR_INVITEONLYCHAN",
-    ).await;
+    )
+    .await;
     eprintln!("  ✓ +i blocks uninvited users");
 
     // Invite the guest
-    h_op.raw(&format!("INVITE {nick_guest} {channel}")).await.unwrap();
+    h_op.raw(&format!("INVITE {nick_guest} {channel}"))
+        .await
+        .unwrap();
     wait_for(
         &mut e_g,
         |e| matches!(e, Event::Invited { .. }),
         "Invite received",
-    ).await;
+    )
+    .await;
     eprintln!("  ✓ INVITE sent");
 
     // Now guest should be able to join
@@ -795,7 +847,9 @@ async fn single_server_invite() {
 
 #[tokio::test]
 async fn single_server_ban() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick_op = test_nick("ban", "op");
     let nick_target = test_nick("ban", "tgt");
     let channel = test_channel("ban");
@@ -809,7 +863,9 @@ async fn single_server_ban() {
     wait_joined(&mut e_op, &channel).await;
 
     // Ban the target's mask
-    h_op.raw(&format!("MODE {channel} +b {nick_target}!*@*")).await.unwrap();
+    h_op.raw(&format!("MODE {channel} +b {nick_target}!*@*"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Target tries to join — should be banned
@@ -818,7 +874,8 @@ async fn single_server_ban() {
         &mut e_tgt,
         |e| matches!(e, Event::RawLine(line) if line.contains("474")),
         "ERR_BANNEDFROMCHAN",
-    ).await;
+    )
+    .await;
     eprintln!("  ✓ +b blocks banned users");
 
     let _ = h_op.quit(Some("done")).await;
@@ -827,7 +884,9 @@ async fn single_server_ban() {
 
 #[tokio::test]
 async fn single_server_key_channel() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick_op = test_nick("key", "op");
     let nick_guest = test_nick("key", "g");
     let channel = test_channel("key");
@@ -841,7 +900,9 @@ async fn single_server_key_channel() {
     wait_joined(&mut e_op, &channel).await;
 
     // Set key
-    h_op.raw(&format!("MODE {channel} +k secretpass")).await.unwrap();
+    h_op.raw(&format!("MODE {channel} +k secretpass"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Guest tries without key — should fail
@@ -850,11 +911,14 @@ async fn single_server_key_channel() {
         &mut e_g,
         |e| matches!(e, Event::RawLine(line) if line.contains("475")),
         "ERR_BADCHANNELKEY",
-    ).await;
+    )
+    .await;
     eprintln!("  ✓ +k blocks without key");
 
     // Guest joins with key
-    h_g.raw(&format!("JOIN {channel} secretpass")).await.unwrap();
+    h_g.raw(&format!("JOIN {channel} secretpass"))
+        .await
+        .unwrap();
     wait_joined(&mut e_g, &channel).await;
     eprintln!("  ✓ +k allows with correct key");
 
@@ -868,7 +932,9 @@ async fn single_server_key_channel() {
 
 #[tokio::test]
 async fn s2s_both_servers_accept_connections() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
 
     let nick_a = test_nick("conn", "a");
     let nick_b = test_nick("conn", "b");
@@ -887,7 +953,9 @@ async fn s2s_both_servers_accept_connections() {
 
 #[tokio::test]
 async fn s2s_messages_local_to_remote() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("l2r");
     let nick_a = test_nick("l2r", "a");
     let nick_b = test_nick("l2r", "b");
@@ -919,7 +987,9 @@ async fn s2s_messages_local_to_remote() {
 
 #[tokio::test]
 async fn s2s_messages_remote_to_local() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("r2l");
     let nick_a = test_nick("r2l", "a");
     let nick_b = test_nick("r2l", "b");
@@ -951,7 +1021,9 @@ async fn s2s_messages_remote_to_local() {
 
 #[tokio::test]
 async fn s2s_bidirectional_messages() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("bidi");
     let nick_a = test_nick("bidi", "a");
     let nick_b = test_nick("bidi", "b");
@@ -987,7 +1059,9 @@ async fn s2s_bidirectional_messages() {
 
 #[tokio::test]
 async fn s2s_remote_user_in_names() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("nm");
     let nick_a = test_nick("nm", "a");
     let nick_b = test_nick("nm", "b");
@@ -1005,7 +1079,9 @@ async fn s2s_remote_user_in_names() {
     wait_joined(&mut e2, &channel).await;
 
     let nicks = wait_names_containing(&mut e1, &channel, &nick_b).await;
-    let has_local = nicks.iter().any(|n| n.trim_start_matches(&['@', '+'][..]) == nick_a);
+    let has_local = nicks
+        .iter()
+        .any(|n| n.trim_start_matches(&['@', '+'][..]) == nick_a);
     assert!(has_local, "Local user should be in NAMES: {nicks:?}");
     eprintln!("  ✓ Remote user visible in NAMES: {nicks:?}");
 
@@ -1015,7 +1091,9 @@ async fn s2s_remote_user_in_names() {
 
 #[tokio::test]
 async fn s2s_topic_syncs() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("tsync");
     let nick_a = test_nick("tsync", "a");
     let nick_b = test_nick("tsync", "b");
@@ -1046,7 +1124,9 @@ async fn s2s_topic_syncs() {
 
 #[tokio::test]
 async fn s2s_part_removes_remote_user() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("part");
     let nick_a = test_nick("part", "a");
     let nick_b = test_nick("part", "b");
@@ -1079,7 +1159,9 @@ async fn s2s_part_removes_remote_user() {
 
 #[tokio::test]
 async fn s2s_quit_removes_remote_user() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("quit");
     let nick_a = test_nick("quit", "a");
     let nick_b = test_nick("quit", "b");
@@ -1103,7 +1185,8 @@ async fn s2s_quit_removes_remote_user() {
         &mut e1,
         |e| matches!(e, Event::UserQuit { nick, .. } if nick == &nick_b),
         &format!("Quit from {nick_b}"),
-    ).await;
+    )
+    .await;
     eprintln!("  ✓ Remote QUIT propagated");
 
     let _ = h1.quit(Some("done")).await;
@@ -1111,7 +1194,9 @@ async fn s2s_quit_removes_remote_user() {
 
 #[tokio::test]
 async fn s2s_late_joiner_sees_remote_user() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("late");
     let nick_a = test_nick("late", "a");
     let nick_b = test_nick("late", "b");
@@ -1140,7 +1225,9 @@ async fn s2s_late_joiner_sees_remote_user() {
 
 #[tokio::test]
 async fn s2s_nick_change_propagates() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("nkch");
     let nick_a = test_nick("nkch", "a");
     let nick_b = test_nick("nkch", "b");
@@ -1172,21 +1259,28 @@ async fn s2s_nick_change_propagates() {
     h1.raw(&format!("NAMES {channel}")).await.unwrap();
     let result = maybe_wait(
         &mut e1,
-        |e| matches!(e, Event::Names { channel: c, nicks }
+        |e| {
+            matches!(e, Event::Names { channel: c, nicks }
             if c.to_lowercase() == channel.to_lowercase()
-            && nicks.iter().any(|x| x.trim_start_matches(&['@', '+'][..]) == nick_b_new)),
+            && nicks.iter().any(|x| x.trim_start_matches(&['@', '+'][..]) == nick_b_new))
+        },
         Duration::from_secs(10),
-    ).await;
+    )
+    .await;
 
     match result {
         Some(Event::Names { nicks, .. }) => {
-            let has_old = nicks.iter().any(|n| n.trim_start_matches(&['@', '+'][..]) == nick_b);
+            let has_old = nicks
+                .iter()
+                .any(|n| n.trim_start_matches(&['@', '+'][..]) == nick_b);
             assert!(!has_old, "Old nick should be gone from NAMES: {nicks:?}");
             eprintln!("  ✓ Nick change propagated: {nick_b} → {nick_b_new} — NAMES: {nicks:?}");
         }
         _ => {
             eprintln!("  ⚠ Nick change not propagated via S2S (remote may need updated code)");
-            eprintln!("    This is expected if irc.freeq.at is running old code without NickChange S2S broadcast");
+            eprintln!(
+                "    This is expected if irc.freeq.at is running old code without NickChange S2S broadcast"
+            );
         }
     }
 
@@ -1196,7 +1290,9 @@ async fn s2s_nick_change_propagates() {
 
 #[tokio::test]
 async fn s2s_multiple_channels() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let ch1 = test_channel("mc1");
     let ch2 = test_channel("mc2");
     let nick_a = test_nick("mc", "a");
@@ -1241,7 +1337,9 @@ async fn s2s_multiple_channels() {
 
 #[tokio::test]
 async fn s2s_rapid_messages() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("rapid");
     let nick_a = test_nick("rapid", "a");
     let nick_b = test_nick("rapid", "b");
@@ -1280,7 +1378,11 @@ async fn s2s_rapid_messages() {
     }
 
     eprintln!("  ✓ Rapid messages: {received}/{count} received");
-    assert!(received >= count - 1, "Should receive at least {}/{count} messages, got {received}", count - 1);
+    assert!(
+        received >= count - 1,
+        "Should receive at least {}/{count} messages, got {received}",
+        count - 1
+    );
 
     let _ = ha.quit(Some("done")).await;
     let _ = hb.quit(Some("done")).await;
@@ -1297,7 +1399,9 @@ async fn s2s_rapid_messages() {
 async fn s2s_remote_user_disconnect_cleanup() {
     // When a remote user disconnects, their nick should disappear from
     // NAMES on the local server. This tests that QUIT propagates.
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("dc");
     let nick_a = test_nick("dc", "a");
     let nick_b = test_nick("dc", "b");
@@ -1332,8 +1436,13 @@ async fn s2s_remote_user_disconnect_cleanup() {
         "NAMES response",
     ).await;
     if let Event::Names { nicks, .. } = nicks {
-        let has_b = nicks.iter().any(|n| n.trim_start_matches(&['@', '+'][..]) == nick_b);
-        assert!(!has_b, "Disconnected remote user should not be in NAMES: {nicks:?}");
+        let has_b = nicks
+            .iter()
+            .any(|n| n.trim_start_matches(&['@', '+'][..]) == nick_b);
+        assert!(
+            !has_b,
+            "Disconnected remote user should not be in NAMES: {nicks:?}"
+        );
     }
     eprintln!("  ✓ Remote disconnect cleaned up from NAMES");
 
@@ -1344,7 +1453,9 @@ async fn s2s_remote_user_disconnect_cleanup() {
 async fn s2s_reconnect_after_disconnect() {
     // After a remote user disconnects and reconnects, they should
     // reappear in NAMES when they rejoin the channel.
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("recon");
     let nick_a = test_nick("recon", "a");
     let nick_b = test_nick("recon", "b");
@@ -1398,7 +1509,9 @@ async fn s2s_channel_persists_through_empty() {
     // If all local users leave a channel but remote users remain,
     // the channel should still exist. When a local user rejoins,
     // they should see the remote users.
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("persist");
     let nick_a = test_nick("pers", "a");
     let nick_b = test_nick("pers", "b");
@@ -1442,7 +1555,9 @@ async fn s2s_channel_persists_through_empty() {
 #[tokio::test]
 async fn s2s_topic_persists_across_reconnect() {
     // Topic set on one server should survive user reconnections.
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("toppers");
     let nick_a = test_nick("tp", "a");
     let nick_b = test_nick("tp", "b");
@@ -1484,7 +1599,9 @@ async fn s2s_topic_persists_across_reconnect() {
 async fn s2s_multiple_users_same_channel() {
     // Multiple users on each server in the same channel. Messages from
     // any user should reach all users on the other server.
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("multi");
     let nick_a1 = test_nick("mul", "a1");
     let nick_a2 = test_nick("mul", "a2");
@@ -1537,7 +1654,9 @@ async fn s2s_staggered_join_order() {
     // Test that join ordering doesn't matter: user on server A joins,
     // then user on server B joins, then another on A. All should see
     // each other.
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("stag");
     let nick_a1 = test_nick("stag", "a1");
     let nick_b = test_nick("stag", "b");
@@ -1567,7 +1686,9 @@ async fn s2s_staggered_join_order() {
 
     // A2 should see B (via NAMES on join or subsequent S2S update)
     let nicks = wait_names_containing(&mut ea2, &channel, &nick_b).await;
-    let has_a1 = nicks.iter().any(|n| n.trim_start_matches(&['@', '+'][..]) == nick_a1);
+    let has_a1 = nicks
+        .iter()
+        .any(|n| n.trim_start_matches(&['@', '+'][..]) == nick_a1);
     assert!(has_a1, "A2 should see A1 in NAMES: {nicks:?}");
     eprintln!("  ✓ Staggered join: all 3 users see each other: {nicks:?}");
 
@@ -1575,7 +1696,9 @@ async fn s2s_staggered_join_order() {
     drain(&mut eb).await;
     hb.raw(&format!("NAMES {channel}")).await.unwrap();
     let b_nicks = wait_names_containing(&mut eb, &channel, &nick_a2).await;
-    let has_a1_on_b = b_nicks.iter().any(|n| n.trim_start_matches(&['@', '+'][..]) == nick_a1);
+    let has_a1_on_b = b_nicks
+        .iter()
+        .any(|n| n.trim_start_matches(&['@', '+'][..]) == nick_a1);
     assert!(has_a1_on_b, "B should see A1: {b_nicks:?}");
     eprintln!("  ✓ Remote sees all local users: {b_nicks:?}");
 
@@ -1587,7 +1710,9 @@ async fn s2s_staggered_join_order() {
 #[tokio::test]
 async fn s2s_topic_set_from_remote() {
     // Topic set from the remote server should be visible on the local server.
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("rtop");
     let nick_a = test_nick("rtop", "a");
     let nick_b = test_nick("rtop", "b");
@@ -1618,7 +1743,9 @@ async fn s2s_topic_set_from_remote() {
 #[tokio::test]
 async fn s2s_concurrent_messages_both_directions() {
     // Send messages simultaneously from both sides and verify all arrive.
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("conc");
     let nick_a = test_nick("conc", "a");
     let nick_b = test_nick("conc", "b");
@@ -1683,8 +1810,14 @@ async fn s2s_concurrent_messages_both_directions() {
     }
 
     eprintln!("  A received {a_received}/{count} from B, B received {b_received}/{count} from A");
-    assert!(a_received >= count - 1, "A should receive most messages from B");
-    assert!(b_received >= count - 1, "B should receive most messages from A");
+    assert!(
+        a_received >= count - 1,
+        "A should receive most messages from B"
+    );
+    assert!(
+        b_received >= count - 1,
+        "B should receive most messages from A"
+    );
     eprintln!("  ✓ Concurrent bidirectional messages delivered");
 
     let _ = ha.quit(Some("done")).await;
@@ -1708,7 +1841,9 @@ async fn s2s_netsplit_simulation_rejoin() {
     // remote server until ping timeout (~120s). We use a DIFFERENT nick for
     // the reconnection to avoid the "nick in use" problem — this is realistic
     // since real netsplit recovery often involves nick collisions.
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("split");
     let nick_a = test_nick("split", "a");
     let nick_b = test_nick("split", "b");
@@ -1744,7 +1879,8 @@ async fn s2s_netsplit_simulation_rejoin() {
         &mut ea,
         |e| matches!(e, Event::UserQuit { nick, .. } if nick == &nick_b),
         Duration::from_secs(20),
-    ).await;
+    )
+    .await;
 
     if quit_result.is_some() {
         eprintln!("  Phase 2: Remote user cleaned up after drop ✓");
@@ -1778,7 +1914,9 @@ async fn s2s_netsplit_simulation_rejoin() {
 #[tokio::test]
 async fn s2s_both_sides_disconnect_reconnect() {
     // Both sides drop and reconnect. Channel should be usable again.
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("both");
     let nick_a = test_nick("both", "a");
     let nick_b = test_nick("both", "b");
@@ -1836,7 +1974,9 @@ async fn s2s_both_sides_disconnect_reconnect() {
 async fn s2s_message_during_partial_channel() {
     // Send a message when only one side has joined. The other side
     // joins later — the message shouldn't crash anything.
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("partial");
     let nick_a = test_nick("part", "a");
     let nick_b = test_nick("part", "b");
@@ -1904,7 +2044,9 @@ async fn request_names(
         |e| matches!(e, Event::Names { channel: c, .. } if c.to_lowercase() == ch),
         &format!("NAMES response for {channel}"),
         TIMEOUT,
-    ).await {
+    )
+    .await
+    {
         Event::Names { nicks, .. } => nicks,
         _ => unreachable!(),
     }
@@ -1917,7 +2059,9 @@ fn nick_is_op(nicks: &[String], nick: &str) -> bool {
 
 /// Helper: check if a nick is present (with or without prefix) in a NAMES list.
 fn nick_is_present(nicks: &[String], nick: &str) -> bool {
-    nicks.iter().any(|n| n.trim_start_matches(&['@', '+'][..]) == nick)
+    nicks
+        .iter()
+        .any(|n| n.trim_start_matches(&['@', '+'][..]) == nick)
 }
 
 /// Helper: count how many nicks have op prefix.
@@ -1929,7 +2073,9 @@ fn count_ops(nicks: &[String]) -> usize {
 
 #[tokio::test]
 async fn single_server_inv1_one_op_on_create() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let channel = test_channel("inv1");
     let nick_a = test_nick("inv1", "a");
     let nick_b = test_nick("inv1", "b");
@@ -1941,7 +2087,10 @@ async fn single_server_inv1_one_op_on_create() {
     wait_joined(&mut ea, &channel).await;
 
     let nicks = request_names(&ha, &mut ea, &channel).await;
-    assert!(nick_is_op(&nicks, &nick_a), "Creator should be op: {nicks:?}");
+    assert!(
+        nick_is_op(&nicks, &nick_a),
+        "Creator should be op: {nicks:?}"
+    );
     assert_eq!(count_ops(&nicks), 1, "Exactly one op on create: {nicks:?}");
 
     // B joins same channel — should NOT get op
@@ -1952,7 +2101,10 @@ async fn single_server_inv1_one_op_on_create() {
 
     let nicks = request_names(&ha, &mut ea, &channel).await;
     assert!(nick_is_op(&nicks, &nick_a), "Creator still op: {nicks:?}");
-    assert!(!nick_is_op(&nicks, &nick_b), "Second joiner NOT op: {nicks:?}");
+    assert!(
+        !nick_is_op(&nicks, &nick_b),
+        "Second joiner NOT op: {nicks:?}"
+    );
     assert_eq!(count_ops(&nicks), 1, "Still exactly one op: {nicks:?}");
     eprintln!("  ✓ INV-1: Exactly one op on channel creation (single server)");
 
@@ -1964,7 +2116,9 @@ async fn single_server_inv1_one_op_on_create() {
 
 #[tokio::test]
 async fn s2s_inv2_remote_joiner_not_op() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("inv2");
     let nick_a = test_nick("inv2", "a");
     let nick_b = test_nick("inv2", "b");
@@ -1988,14 +2142,26 @@ async fn s2s_inv2_remote_joiner_not_op() {
 
     // Check from B's perspective
     let nicks_b = request_names(&hb, &mut eb, &channel).await;
-    assert!(nick_is_present(&nicks_b, &nick_a), "A visible on remote: {nicks_b:?}");
-    assert!(!nick_is_op(&nicks_b, &nick_b), "B should NOT be op on remote: {nicks_b:?}");
+    assert!(
+        nick_is_present(&nicks_b, &nick_a),
+        "A visible on remote: {nicks_b:?}"
+    );
+    assert!(
+        !nick_is_op(&nicks_b, &nick_b),
+        "B should NOT be op on remote: {nicks_b:?}"
+    );
     eprintln!("  Remote NAMES: {nicks_b:?}");
 
     // Check from A's perspective
     let nicks_a = request_names(&ha, &mut ea, &channel).await;
-    assert!(nick_is_op(&nicks_a, &nick_a), "A should be op on local: {nicks_a:?}");
-    assert!(!nick_is_op(&nicks_a, &nick_b), "B should NOT be op on local: {nicks_a:?}");
+    assert!(
+        nick_is_op(&nicks_a, &nick_a),
+        "A should be op on local: {nicks_a:?}"
+    );
+    assert!(
+        !nick_is_op(&nicks_a, &nick_b),
+        "B should NOT be op on local: {nicks_a:?}"
+    );
     eprintln!("  Local NAMES: {nicks_a:?}");
 
     // Count total ops across both views — should be exactly 1
@@ -2015,7 +2181,9 @@ async fn s2s_inv2_remote_joiner_not_op() {
 
 #[tokio::test]
 async fn s2s_inv3_creator_is_op_everywhere() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("inv3");
     let nick_a = test_nick("inv3", "a");
     let nick_b = test_nick("inv3", "b");
@@ -2038,11 +2206,17 @@ async fn s2s_inv3_creator_is_op_everywhere() {
 
     // A should be op on local
     let nicks_a = request_names(&ha, &mut ea, &channel).await;
-    assert!(nick_is_op(&nicks_a, &nick_a), "Creator is op on local: {nicks_a:?}");
+    assert!(
+        nick_is_op(&nicks_a, &nick_a),
+        "Creator is op on local: {nicks_a:?}"
+    );
 
     // A should be op on remote too (via is_op in S2S Join)
     let nicks_b = request_names(&hb, &mut eb, &channel).await;
-    assert!(nick_is_op(&nicks_b, &nick_a), "Creator is op on remote: {nicks_b:?}");
+    assert!(
+        nick_is_op(&nicks_b, &nick_a),
+        "Creator is op on remote: {nicks_b:?}"
+    );
     eprintln!("  ✓ INV-3: Creator shows as @op on both servers");
 
     let _ = ha.quit(Some("done")).await;
@@ -2053,7 +2227,9 @@ async fn s2s_inv3_creator_is_op_everywhere() {
 
 #[tokio::test]
 async fn s2s_inv4_topic_lock_enforced_cross_server() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("inv4");
     let nick_a = test_nick("inv4", "a");
     let nick_b = test_nick("inv4", "b");
@@ -2064,7 +2240,9 @@ async fn s2s_inv4_topic_lock_enforced_cross_server() {
     ha.join(&channel).await.unwrap();
     wait_joined(&mut ea, &channel).await;
 
-    ha.raw(&format!("TOPIC {channel} :original topic")).await.unwrap();
+    ha.raw(&format!("TOPIC {channel} :original topic"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     ha.raw(&format!("MODE {channel} +t")).await.unwrap();
@@ -2081,7 +2259,9 @@ async fn s2s_inv4_topic_lock_enforced_cross_server() {
     tokio::time::sleep(S2S_SETTLE).await;
 
     // B tries to set topic — should fail (B is not op, channel is +t)
-    hb.raw(&format!("TOPIC {channel} :hacked topic")).await.unwrap();
+    hb.raw(&format!("TOPIC {channel} :hacked topic"))
+        .await
+        .unwrap();
 
     // B should get ERR_CHANOPRIVSNEEDED (482) or the topic should not change
     // Wait a moment, then check the topic from A's perspective
@@ -2089,8 +2269,10 @@ async fn s2s_inv4_topic_lock_enforced_cross_server() {
 
     ha.raw(&format!("TOPIC {channel}")).await.unwrap();
     let got = wait_topic(&mut ea, &channel).await;
-    assert_eq!(got, "original topic",
-        "Topic should NOT have changed (B is not op, +t is set): got '{got}'");
+    assert_eq!(
+        got, "original topic",
+        "Topic should NOT have changed (B is not op, +t is set): got '{got}'"
+    );
     eprintln!("  ✓ INV-4: +t prevents non-op from changing topic across servers");
 
     let _ = ha.quit(Some("done")).await;
@@ -2101,7 +2283,9 @@ async fn s2s_inv4_topic_lock_enforced_cross_server() {
 
 #[tokio::test]
 async fn single_server_inv5_no_external_messages() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let channel = test_channel("inv5");
     let nick_a = test_nick("inv5", "a");
     let nick_b = test_nick("inv5", "b");
@@ -2119,15 +2303,21 @@ async fn single_server_inv5_no_external_messages() {
     wait_registered(&mut eb).await;
 
     // B tries to send to channel — should get ERR_CANNOTSENDTOCHAN (404)
-    hb.raw(&format!("PRIVMSG {channel} :external message")).await.unwrap();
+    hb.raw(&format!("PRIVMSG {channel} :external message"))
+        .await
+        .unwrap();
 
     // A should NOT receive the message
     let got = maybe_wait(
         &mut ea,
         |e| matches!(e, Event::Message { from, .. } if from == &nick_b),
         Duration::from_secs(3),
-    ).await;
-    assert!(got.is_none(), "A should NOT receive external message with +n");
+    )
+    .await;
+    assert!(
+        got.is_none(),
+        "A should NOT receive external message with +n"
+    );
     eprintln!("  ✓ INV-5: +n blocks external messages");
 
     let _ = ha.quit(Some("done")).await;
@@ -2138,7 +2328,9 @@ async fn single_server_inv5_no_external_messages() {
 
 #[tokio::test]
 async fn single_server_inv6_moderated_channel() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let channel = test_channel("inv6");
     let nick_a = test_nick("inv6", "a");
     let nick_b = test_nick("inv6", "b");
@@ -2159,20 +2351,30 @@ async fn single_server_inv6_moderated_channel() {
     drain(&mut ea).await;
 
     // B (not voiced) tries to send — should be blocked
-    hb.raw(&format!("PRIVMSG {channel} :silenced")).await.unwrap();
+    hb.raw(&format!("PRIVMSG {channel} :silenced"))
+        .await
+        .unwrap();
 
     let got = maybe_wait(
         &mut ea,
         |e| matches!(e, Event::Message { from, .. } if from == &nick_b),
         Duration::from_secs(3),
-    ).await;
-    assert!(got.is_none(), "A should NOT receive message from unvoiced user with +m");
+    )
+    .await;
+    assert!(
+        got.is_none(),
+        "A should NOT receive message from unvoiced user with +m"
+    );
 
     // Voice B, then B should be able to send
-    ha.raw(&format!("MODE {channel} +v {nick_b}")).await.unwrap();
+    ha.raw(&format!("MODE {channel} +v {nick_b}"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    hb.raw(&format!("PRIVMSG {channel} :now I can speak")).await.unwrap();
+    hb.raw(&format!("PRIVMSG {channel} :now I can speak"))
+        .await
+        .unwrap();
     let (from, text) = wait_message_from(&mut ea, &nick_b).await;
     assert_eq!(text, "now I can speak");
     eprintln!("  ✓ INV-6: +m blocks unvoiced, allows voiced (from={from})");
@@ -2185,7 +2387,9 @@ async fn single_server_inv6_moderated_channel() {
 
 #[tokio::test]
 async fn s2s_inv7_mode_propagates() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("inv7");
     let nick_a = test_nick("inv7", "a");
     let nick_b = test_nick("inv7", "b");
@@ -2222,7 +2426,9 @@ async fn s2s_inv7_mode_propagates() {
 
 #[tokio::test]
 async fn s2s_inv8_third_joiner_no_ops() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("inv8");
     let nick_a = test_nick("inv8", "a");
     let nick_b = test_nick("inv8", "b");
@@ -2252,8 +2458,14 @@ async fn s2s_inv8_third_joiner_no_ops() {
 
     let nicks = request_names(&hc, &mut ec, &channel).await;
     assert!(nick_is_op(&nicks, &nick_a), "A should be op: {nicks:?}");
-    assert!(!nick_is_op(&nicks, &nick_b), "B should NOT be op: {nicks:?}");
-    assert!(!nick_is_op(&nicks, &nick_c), "C should NOT be op: {nicks:?}");
+    assert!(
+        !nick_is_op(&nicks, &nick_b),
+        "B should NOT be op: {nicks:?}"
+    );
+    assert!(
+        !nick_is_op(&nicks, &nick_c),
+        "C should NOT be op: {nicks:?}"
+    );
     assert_eq!(count_ops(&nicks), 1, "Exactly 1 op total: {nicks:?}");
     eprintln!("  ✓ INV-8: Third joiner is not op: {nicks:?}");
 
@@ -2266,7 +2478,9 @@ async fn s2s_inv8_third_joiner_no_ops() {
 
 #[tokio::test]
 async fn s2s_inv9_quit_cleans_op_state() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("inv9");
     let nick_a = test_nick("inv9", "a");
     let nick_b = test_nick("inv9", "b");
@@ -2302,7 +2516,10 @@ async fn s2s_inv9_quit_cleans_op_state() {
     wait_joined(&mut ec, &channel).await;
 
     let nicks = request_names(&hc, &mut ec, &channel).await;
-    assert!(!nick_is_op(&nicks, &nick_c), "C should NOT be op (B is still remote member): {nicks:?}");
+    assert!(
+        !nick_is_op(&nicks, &nick_c),
+        "C should NOT be op (B is still remote member): {nicks:?}"
+    );
     eprintln!("  ✓ INV-9: After creator quit, new joiner not auto-opped: {nicks:?}");
 
     let _ = hb.quit(Some("done")).await;
@@ -2315,7 +2532,9 @@ async fn s2s_inv9_quit_cleans_op_state() {
 
 #[tokio::test]
 async fn s2s_inv10_remote_creator_sole_op_local_joiner_no_ops() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("inv10");
     let nick_a = test_nick("inv10", "a");
     let nick_b = test_nick("inv10", "b");
@@ -2328,7 +2547,10 @@ async fn s2s_inv10_remote_creator_sole_op_local_joiner_no_ops() {
 
     // Verify A is op on remote
     let nicks_a = request_names(&ha, &mut ea, &channel).await;
-    assert!(nick_is_op(&nicks_a, &nick_a), "A should be op on remote: {nicks_a:?}");
+    assert!(
+        nick_is_op(&nicks_a, &nick_a),
+        "A should be op on remote: {nicks_a:?}"
+    );
 
     // Wait for S2S to propagate channel + member info to local
     tokio::time::sleep(S2S_SETTLE).await;
@@ -2344,17 +2566,36 @@ async fn s2s_inv10_remote_creator_sole_op_local_joiner_no_ops() {
     // Check from B's (local) perspective
     let nicks_b = request_names(&hb, &mut eb, &channel).await;
     eprintln!("  Local NAMES: {nicks_b:?}");
-    assert!(nick_is_present(&nicks_b, &nick_a), "A visible on local: {nicks_b:?}");
-    assert!(nick_is_op(&nicks_b, &nick_a), "A should be op on local: {nicks_b:?}");
-    assert!(!nick_is_op(&nicks_b, &nick_b), "B should NOT be op on local: {nicks_b:?}");
+    assert!(
+        nick_is_present(&nicks_b, &nick_a),
+        "A visible on local: {nicks_b:?}"
+    );
+    assert!(
+        nick_is_op(&nicks_b, &nick_a),
+        "A should be op on local: {nicks_b:?}"
+    );
+    assert!(
+        !nick_is_op(&nicks_b, &nick_b),
+        "B should NOT be op on local: {nicks_b:?}"
+    );
     assert_eq!(count_ops(&nicks_b), 1, "Exactly 1 op on local: {nicks_b:?}");
 
     // Check from A's (remote) perspective
     let nicks_a2 = request_names(&ha, &mut ea, &channel).await;
     eprintln!("  Remote NAMES: {nicks_a2:?}");
-    assert!(nick_is_op(&nicks_a2, &nick_a), "A still op on remote: {nicks_a2:?}");
-    assert!(!nick_is_op(&nicks_a2, &nick_b), "B not op on remote: {nicks_a2:?}");
-    assert_eq!(count_ops(&nicks_a2), 1, "Exactly 1 op on remote: {nicks_a2:?}");
+    assert!(
+        nick_is_op(&nicks_a2, &nick_a),
+        "A still op on remote: {nicks_a2:?}"
+    );
+    assert!(
+        !nick_is_op(&nicks_a2, &nick_b),
+        "B not op on remote: {nicks_a2:?}"
+    );
+    assert_eq!(
+        count_ops(&nicks_a2),
+        1,
+        "Exactly 1 op on remote: {nicks_a2:?}"
+    );
 
     eprintln!("  ✓ INV-10: Remote creator is sole op, local joiner not auto-opped");
 
@@ -2371,7 +2612,9 @@ async fn s2s_inv10_remote_creator_sole_op_local_joiner_no_ops() {
 
 #[tokio::test]
 async fn single_server_inv11_guest_no_autoops_on_did_founded_channel() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let channel = test_channel("inv11");
     let nick_a = test_nick("inv11", "a");
     let nick_b = test_nick("inv11", "b");
@@ -2415,7 +2658,9 @@ async fn single_server_inv11_guest_no_autoops_on_did_founded_channel() {
 
 #[tokio::test]
 async fn s2s_inv12_sync_revokes_guest_autoops_when_founder_known() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("inv12");
     let nick_a = test_nick("inv12", "a");
     let nick_b = test_nick("inv12", "b");
@@ -2427,7 +2672,10 @@ async fn s2s_inv12_sync_revokes_guest_autoops_when_founder_known() {
     wait_joined(&mut eb, &channel).await;
 
     let nicks = request_names(&hb, &mut eb, &channel).await;
-    assert!(nick_is_op(&nicks, &nick_b), "B should initially be op (first joiner): {nicks:?}");
+    assert!(
+        nick_is_op(&nicks, &nick_b),
+        "B should initially be op (first joiner): {nicks:?}"
+    );
 
     // A joins on remote — A also becomes creator/op there
     let (ha, mut ea) = connect_guest(&remote, &nick_a).await;
@@ -2447,19 +2695,39 @@ async fn s2s_inv12_sync_revokes_guest_autoops_when_founder_known() {
     eprintln!("  Remote NAMES: {nicks_remote:?}");
 
     // Both should be visible on each side
-    assert!(nick_is_present(&nicks_local, &nick_a), "A visible on local: {nicks_local:?}");
-    assert!(nick_is_present(&nicks_local, &nick_b), "B visible on local: {nicks_local:?}");
-    assert!(nick_is_present(&nicks_remote, &nick_a), "A visible on remote: {nicks_remote:?}");
-    assert!(nick_is_present(&nicks_remote, &nick_b), "B visible on remote: {nicks_remote:?}");
+    assert!(
+        nick_is_present(&nicks_local, &nick_a),
+        "A visible on local: {nicks_local:?}"
+    );
+    assert!(
+        nick_is_present(&nicks_local, &nick_b),
+        "B visible on local: {nicks_local:?}"
+    );
+    assert!(
+        nick_is_present(&nicks_remote, &nick_a),
+        "A visible on remote: {nicks_remote:?}"
+    );
+    assert!(
+        nick_is_present(&nicks_remote, &nick_b),
+        "B visible on remote: {nicks_remote:?}"
+    );
 
     // For guest-only channels: both being op is acceptable (split-brain create)
     // The important invariant is that ops count doesn't grow unbounded
     let ops_local = count_ops(&nicks_local);
     let ops_remote = count_ops(&nicks_remote);
-    assert!(ops_local <= 2, "At most 2 ops (both creators) on local: {nicks_local:?}");
-    assert!(ops_remote <= 2, "At most 2 ops (both creators) on remote: {nicks_remote:?}");
+    assert!(
+        ops_local <= 2,
+        "At most 2 ops (both creators) on local: {nicks_local:?}"
+    );
+    assert!(
+        ops_remote <= 2,
+        "At most 2 ops (both creators) on remote: {nicks_remote:?}"
+    );
 
-    eprintln!("  ✓ INV-12: Split-brain guest create — ops_local={ops_local}, ops_remote={ops_remote}");
+    eprintln!(
+        "  ✓ INV-12: Split-brain guest create — ops_local={ops_local}, ops_remote={ops_remote}"
+    );
 
     let _ = ha.quit(Some("done")).await;
     let _ = hb.quit(Some("done")).await;
@@ -2474,7 +2742,9 @@ async fn s2s_inv12_sync_revokes_guest_autoops_when_founder_known() {
 
 #[tokio::test]
 async fn s2s_pm1_cross_server_private_message() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("pm1");
     let nick_a = test_nick("pm1", "a");
     let nick_b = test_nick("pm1", "b");
@@ -2495,11 +2765,20 @@ async fn s2s_pm1_cross_server_private_message() {
 
     // Verify both see each other
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(nick_is_present(&names, &nick_b), "B should be visible to A: {names:?}");
+    assert!(
+        nick_is_present(&names, &nick_b),
+        "B should be visible to A: {names:?}"
+    );
 
     // A sends PM to B
-    let pm_text = format!("hello-pm1-{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 100000);
+    let pm_text = format!(
+        "hello-pm1-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 100000
+    );
     ha.privmsg(&nick_b, &pm_text).await.unwrap();
 
     // B should receive it
@@ -2509,8 +2788,14 @@ async fn s2s_pm1_cross_server_private_message() {
     eprintln!("  ✓ PM-1: A→B cross-server PM delivered");
 
     // B sends PM back to A
-    let pm_text2 = format!("reply-pm1-{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 100000);
+    let pm_text2 = format!(
+        "reply-pm1-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 100000
+    );
     hb.privmsg(&nick_a, &pm_text2).await.unwrap();
 
     let (from2, _target2, text2) = wait_message_containing(&mut ea, &pm_text2).await;
@@ -2526,14 +2811,18 @@ async fn s2s_pm1_cross_server_private_message() {
 
 #[tokio::test]
 async fn single_server_pm2_nosuchnick_for_unknown_target() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick = test_nick("pm2", "a");
 
     let (h, mut e) = connect_guest(&server, &nick).await;
     wait_registered(&mut e).await;
 
     // Send PM to a nick that definitely doesn't exist
-    h.privmsg("_zq_nonexistent_user_99999", "hello?").await.unwrap();
+    h.privmsg("_zq_nonexistent_user_99999", "hello?")
+        .await
+        .unwrap();
 
     // Behavior depends on whether server has S2S peers:
     // - With S2S peers: PM is relayed to peers (no error — can't know if nick exists there)
@@ -2566,7 +2855,9 @@ async fn single_server_pm2_nosuchnick_for_unknown_target() {
 
 #[tokio::test]
 async fn s2s_ghost1_quit_removes_remote_from_names() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("gh1");
     let nick_a = test_nick("gh1", "a");
     let nick_b = test_nick("gh1", "b");
@@ -2585,7 +2876,10 @@ async fn s2s_ghost1_quit_removes_remote_from_names() {
 
     // Verify B is visible
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(nick_is_present(&names, &nick_b), "B should be in NAMES: {names:?}");
+    assert!(
+        nick_is_present(&names, &nick_b),
+        "B should be in NAMES: {names:?}"
+    );
 
     // B quits
     let _ = hb.quit(Some("ghost test")).await;
@@ -2597,7 +2891,10 @@ async fn s2s_ghost1_quit_removes_remote_from_names() {
 
     // B should no longer be in NAMES
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(!nick_is_present(&names, &nick_b), "B should NOT be in NAMES after quit: {names:?}");
+    assert!(
+        !nick_is_present(&names, &nick_b),
+        "B should NOT be in NAMES after quit: {names:?}"
+    );
     eprintln!("  ✓ GHOST-1: Remote user removed from NAMES after QUIT");
 
     let _ = ha.quit(Some("done")).await;
@@ -2607,7 +2904,9 @@ async fn s2s_ghost1_quit_removes_remote_from_names() {
 
 #[tokio::test]
 async fn s2s_ghost2_part_removes_remote_from_channel() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("gh2");
     let nick_a = test_nick("gh2", "a");
     let nick_b = test_nick("gh2", "b");
@@ -2625,7 +2924,10 @@ async fn s2s_ghost2_part_removes_remote_from_channel() {
     tokio::time::sleep(S2S_SETTLE).await;
 
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(nick_is_present(&names, &nick_b), "B should be in NAMES: {names:?}");
+    assert!(
+        nick_is_present(&names, &nick_b),
+        "B should be in NAMES: {names:?}"
+    );
 
     // B parts the channel (but stays connected)
     hb.raw(&format!("PART {channel}")).await.unwrap();
@@ -2633,7 +2935,10 @@ async fn s2s_ghost2_part_removes_remote_from_channel() {
     tokio::time::sleep(S2S_SETTLE).await;
 
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(!nick_is_present(&names, &nick_b), "B should NOT be in NAMES after part: {names:?}");
+    assert!(
+        !nick_is_present(&names, &nick_b),
+        "B should NOT be in NAMES after part: {names:?}"
+    );
     eprintln!("  ✓ GHOST-2: Remote user removed from NAMES after PART");
 
     let _ = ha.quit(Some("done")).await;
@@ -2644,7 +2949,9 @@ async fn s2s_ghost2_part_removes_remote_from_channel() {
 
 #[tokio::test]
 async fn s2s_ghost3_nick_change_updates_remote_roster() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("gh3");
     let nick_a = test_nick("gh3", "a");
     let nick_b = test_nick("gh3", "b");
@@ -2663,7 +2970,10 @@ async fn s2s_ghost3_nick_change_updates_remote_roster() {
     tokio::time::sleep(S2S_SETTLE).await;
 
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(nick_is_present(&names, &nick_b), "B should be in NAMES: {names:?}");
+    assert!(
+        nick_is_present(&names, &nick_b),
+        "B should be in NAMES: {names:?}"
+    );
 
     // B changes nick
     hb.raw(&format!("NICK {nick_b2}")).await.unwrap();
@@ -2671,8 +2981,14 @@ async fn s2s_ghost3_nick_change_updates_remote_roster() {
 
     // A should see the new nick, not the old one
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(nick_is_present(&names, &nick_b2), "New nick should be in NAMES: {names:?}");
-    assert!(!nick_is_present(&names, &nick_b), "Old nick should NOT be in NAMES: {names:?}");
+    assert!(
+        nick_is_present(&names, &nick_b2),
+        "New nick should be in NAMES: {names:?}"
+    );
+    assert!(
+        !nick_is_present(&names, &nick_b),
+        "Old nick should NOT be in NAMES: {names:?}"
+    );
     eprintln!("  ✓ GHOST-3: Remote nick change reflected in NAMES");
 
     let _ = ha.quit(Some("done")).await;
@@ -2687,7 +3003,9 @@ async fn s2s_ghost3_nick_change_updates_remote_roster() {
 
 #[tokio::test]
 async fn s2s_fed1_kick_remote_user() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("fed1");
     let nick_a = test_nick("fed1", "a");
     let nick_b = test_nick("fed1", "b");
@@ -2709,16 +3027,24 @@ async fn s2s_fed1_kick_remote_user() {
     // Verify A is op and B is visible
     let names = request_names(&ha, &mut ea, &channel).await;
     assert!(nick_is_op(&names, &nick_a), "A should be op: {names:?}");
-    assert!(nick_is_present(&names, &nick_b), "B should be present: {names:?}");
+    assert!(
+        nick_is_present(&names, &nick_b),
+        "B should be present: {names:?}"
+    );
 
     // A kicks B (remote user)
-    ha.raw(&format!("KICK {channel} {nick_b} :test kick")).await.unwrap();
+    ha.raw(&format!("KICK {channel} {nick_b} :test kick"))
+        .await
+        .unwrap();
 
     tokio::time::sleep(S2S_SETTLE).await;
 
     // B should no longer be in NAMES on the local server
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(!nick_is_present(&names, &nick_b), "B should NOT be in NAMES after kick: {names:?}");
+    assert!(
+        !nick_is_present(&names, &nick_b),
+        "B should NOT be in NAMES after kick: {names:?}"
+    );
     eprintln!("  ✓ FED-1: KICK on remote user removes from roster");
 
     let _ = ha.quit(Some("done")).await;
@@ -2729,7 +3055,9 @@ async fn s2s_fed1_kick_remote_user() {
 
 #[tokio::test]
 async fn s2s_fed2_mode_op_remote_guest_works() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("fed2");
     let nick_a = test_nick("fed2", "a");
     let nick_b = test_nick("fed2", "b");
@@ -2750,15 +3078,21 @@ async fn s2s_fed2_mode_op_remote_guest_works() {
 
     // A +o B (remote guest — no DID but ephemeral ops work)
     drain(&mut ea).await;
-    ha.raw(&format!("MODE {channel} +o {nick_b}")).await.unwrap();
+    ha.raw(&format!("MODE {channel} +o {nick_b}"))
+        .await
+        .unwrap();
 
     // Should see the MODE echoed back (not a 696 error)
     let got = maybe_wait(
         &mut ea,
         |evt| matches!(evt, Event::RawLine(line) if line.contains("MODE") && line.contains("+o")),
         Duration::from_secs(5),
-    ).await;
-    assert!(got.is_some(), "Should see MODE +o echoed (ephemeral op on remote guest)");
+    )
+    .await;
+    assert!(
+        got.is_some(),
+        "Should see MODE +o echoed (ephemeral op on remote guest)"
+    );
     eprintln!("  ✓ FED-2: MODE +o on remote guest works (ephemeral)");
 
     let _ = ha.quit(Some("done")).await;
@@ -2769,7 +3103,9 @@ async fn s2s_fed2_mode_op_remote_guest_works() {
 
 #[tokio::test]
 async fn s2s_fed3_mode_voice_remote_user_works() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("fed3");
     let nick_a = test_nick("fed3", "a");
     let nick_b = test_nick("fed3", "b");
@@ -2787,14 +3123,17 @@ async fn s2s_fed3_mode_voice_remote_user_works() {
     tokio::time::sleep(S2S_SETTLE).await;
 
     drain(&mut ea).await;
-    ha.raw(&format!("MODE {channel} +v {nick_b}")).await.unwrap();
+    ha.raw(&format!("MODE {channel} +v {nick_b}"))
+        .await
+        .unwrap();
 
     // Should see the MODE echoed back (relayed to remote server)
     let got = maybe_wait(
         &mut ea,
         |evt| matches!(evt, Event::RawLine(line) if line.contains("MODE") && line.contains("+v")),
         Duration::from_secs(5),
-    ).await;
+    )
+    .await;
     assert!(got.is_some(), "Should see MODE +v echoed (relayed via S2S)");
     eprintln!("  ✓ FED-3: MODE +v on remote user works (relayed via S2S)");
 
@@ -2806,7 +3145,9 @@ async fn s2s_fed3_mode_voice_remote_user_works() {
 
 #[tokio::test]
 async fn single_server_fed4_kick_nonexistent_nick() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let channel = test_channel("fed4");
     let nick_a = test_nick("fed4", "a");
 
@@ -2816,7 +3157,9 @@ async fn single_server_fed4_kick_nonexistent_nick() {
     wait_joined(&mut ea, &channel).await;
 
     drain(&mut ea).await;
-    ha.raw(&format!("KICK {channel} _zq_nobody_99999 :bye")).await.unwrap();
+    ha.raw(&format!("KICK {channel} _zq_nobody_99999 :bye"))
+        .await
+        .unwrap();
 
     // Should get ERR_USERNOTINCHANNEL (441)
     let got = maybe_wait(
@@ -2825,7 +3168,10 @@ async fn single_server_fed4_kick_nonexistent_nick() {
             || matches!(evt, Event::RawLine(line) if line.contains("441")),
         Duration::from_secs(5),
     ).await;
-    assert!(got.is_some(), "Should get ERR_USERNOTINCHANNEL for nonexistent kick target");
+    assert!(
+        got.is_some(),
+        "Should get ERR_USERNOTINCHANNEL for nonexistent kick target"
+    );
     eprintln!("  ✓ FED-4: KICK nonexistent nick returns 441");
 
     let _ = ha.quit(Some("done")).await;
@@ -2835,7 +3181,9 @@ async fn single_server_fed4_kick_nonexistent_nick() {
 
 #[tokio::test]
 async fn single_server_fed5_mode_op_nonexistent_nick() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let channel = test_channel("fed5");
     let nick_a = test_nick("fed5", "a");
 
@@ -2845,7 +3193,9 @@ async fn single_server_fed5_mode_op_nonexistent_nick() {
     wait_joined(&mut ea, &channel).await;
 
     drain(&mut ea).await;
-    ha.raw(&format!("MODE {channel} +o _zq_nobody_99999")).await.unwrap();
+    ha.raw(&format!("MODE {channel} +o _zq_nobody_99999"))
+        .await
+        .unwrap();
 
     // Should get ERR_USERNOTINCHANNEL (441)
     let got = maybe_wait(
@@ -2854,7 +3204,10 @@ async fn single_server_fed5_mode_op_nonexistent_nick() {
             || matches!(evt, Event::RawLine(line) if line.contains("441")),
         Duration::from_secs(5),
     ).await;
-    assert!(got.is_some(), "Should get ERR_USERNOTINCHANNEL for nonexistent +o target");
+    assert!(
+        got.is_some(),
+        "Should get ERR_USERNOTINCHANNEL for nonexistent +o target"
+    );
     eprintln!("  ✓ FED-5: MODE +o nonexistent nick returns 441");
 
     let _ = ha.quit(Some("done")).await;
@@ -2868,7 +3221,9 @@ async fn single_server_fed5_mode_op_nonexistent_nick() {
 
 #[tokio::test]
 async fn s2s_route1_channel_msg_from_remote() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("rt1");
     let nick_a = test_nick("rt1", "a");
     let nick_b = test_nick("rt1", "b");
@@ -2886,8 +3241,14 @@ async fn s2s_route1_channel_msg_from_remote() {
     tokio::time::sleep(S2S_SETTLE).await;
 
     // B sends channel message
-    let msg_text = format!("route1-{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 100000);
+    let msg_text = format!(
+        "route1-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 100000
+    );
     hb.privmsg(&channel, &msg_text).await.unwrap();
 
     // A should receive it
@@ -2905,7 +3266,9 @@ async fn s2s_route1_channel_msg_from_remote() {
 
 #[tokio::test]
 async fn s2s_route2_pm_after_remote_leaves() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("rt2");
     let nick_a = test_nick("rt2", "a");
     let nick_b = test_nick("rt2", "b");
@@ -2949,7 +3312,9 @@ async fn s2s_route2_pm_after_remote_leaves() {
     if got.is_some() {
         eprintln!("  ✓ ROUTE-2: PM to departed remote user returns 401");
     } else {
-        eprintln!("  ✓ ROUTE-2: PM to departed remote user silently relayed (no error in federation)");
+        eprintln!(
+            "  ✓ ROUTE-2: PM to departed remote user silently relayed (no error in federation)"
+        );
     }
 
     let _ = ha.quit(Some("done")).await;
@@ -2959,7 +3324,9 @@ async fn s2s_route2_pm_after_remote_leaves() {
 
 #[tokio::test]
 async fn s2s_route3_pm_after_remote_nick_change() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("rt3");
     let nick_a = test_nick("rt3", "a");
     let nick_b = test_nick("rt3", "b");
@@ -2982,8 +3349,14 @@ async fn s2s_route3_pm_after_remote_nick_change() {
     tokio::time::sleep(S2S_SETTLE).await;
 
     // A sends PM to B's NEW nick — should arrive
-    let pm_text = format!("rt3-new-{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 100000);
+    let pm_text = format!(
+        "rt3-new-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 100000
+    );
     ha.privmsg(&nick_b2, &pm_text).await.unwrap();
 
     let (from, _target, text) = wait_message_containing(&mut eb, &pm_text).await;
@@ -3003,7 +3376,9 @@ async fn s2s_route3_pm_after_remote_nick_change() {
 
 #[tokio::test]
 async fn s2s_sync1_late_joiner_sees_all_members() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("sy1");
     let nick_a = test_nick("sy1", "a");
     let nick_b = test_nick("sy1", "b");
@@ -3032,10 +3407,22 @@ async fn s2s_sync1_late_joiner_sees_all_members() {
     tokio::time::sleep(S2S_SETTLE).await;
 
     let names = request_names(&hc, &mut ec, &channel).await;
-    assert!(nick_is_present(&names, &nick_a), "A visible to late joiner: {names:?}");
-    assert!(nick_is_present(&names, &nick_b), "B (remote) visible to late joiner: {names:?}");
-    assert!(nick_is_present(&names, &nick_c), "C (self) visible: {names:?}");
-    eprintln!("  ✓ SYNC-1: Late joiner sees all members ({} total)", names.len());
+    assert!(
+        nick_is_present(&names, &nick_a),
+        "A visible to late joiner: {names:?}"
+    );
+    assert!(
+        nick_is_present(&names, &nick_b),
+        "B (remote) visible to late joiner: {names:?}"
+    );
+    assert!(
+        nick_is_present(&names, &nick_c),
+        "C (self) visible: {names:?}"
+    );
+    eprintln!(
+        "  ✓ SYNC-1: Late joiner sees all members ({} total)",
+        names.len()
+    );
 
     let _ = ha.quit(Some("done")).await;
     let _ = hb.quit(Some("done")).await;
@@ -3052,7 +3439,9 @@ async fn s2s_sync2_remote_topic_visible_locally() {
     //
     // Note: B must be an op to set topic (channels default to +t).
     // We make B the creator so B is op on their home server.
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("sy2");
     let nick_a = test_nick("sy2", "a");
     let nick_b = test_nick("sy2", "b");
@@ -3074,9 +3463,17 @@ async fn s2s_sync2_remote_topic_visible_locally() {
     tokio::time::sleep(S2S_SETTLE).await;
 
     // B sets topic on remote (B is op, allowed on +t)
-    let topic_text = format!("sync2-topic-{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 100000);
-    hb.raw(&format!("TOPIC {channel} :{topic_text}")).await.unwrap();
+    let topic_text = format!(
+        "sync2-topic-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 100000
+    );
+    hb.raw(&format!("TOPIC {channel} :{topic_text}"))
+        .await
+        .unwrap();
 
     // A should see topic change
     let got = wait_topic(&mut ea, &channel).await;
@@ -3091,7 +3488,9 @@ async fn s2s_sync2_remote_topic_visible_locally() {
 
 #[tokio::test]
 async fn s2s_sync3_remote_mode_propagates() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("sy3");
     let nick_a = test_nick("sy3", "a");
     let nick_b = test_nick("sy3", "b");
@@ -3131,7 +3530,9 @@ async fn s2s_sync3_remote_mode_propagates() {
 
 #[tokio::test]
 async fn single_server_reg1_mode_op_local_user() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let channel = test_channel("reg1");
     let nick_a = test_nick("reg1", "a");
     let nick_b = test_nick("reg1", "b");
@@ -3151,10 +3552,15 @@ async fn single_server_reg1_mode_op_local_user() {
     // Verify A is op, B is not
     let names = request_names(&ha, &mut ea, &channel).await;
     assert!(nick_is_op(&names, &nick_a), "A should be op: {names:?}");
-    assert!(!nick_is_op(&names, &nick_b), "B should NOT be op: {names:?}");
+    assert!(
+        !nick_is_op(&names, &nick_b),
+        "B should NOT be op: {names:?}"
+    );
 
     // A ops B
-    ha.raw(&format!("MODE {channel} +o {nick_b}")).await.unwrap();
+    ha.raw(&format!("MODE {channel} +o {nick_b}"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     let names = request_names(&ha, &mut ea, &channel).await;
@@ -3162,11 +3568,16 @@ async fn single_server_reg1_mode_op_local_user() {
     eprintln!("  ✓ REG-1: MODE +o on local user works");
 
     // A deops B
-    ha.raw(&format!("MODE {channel} -o {nick_b}")).await.unwrap();
+    ha.raw(&format!("MODE {channel} -o {nick_b}"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(!nick_is_op(&names, &nick_b), "B should no longer be op: {names:?}");
+    assert!(
+        !nick_is_op(&names, &nick_b),
+        "B should no longer be op: {names:?}"
+    );
     eprintln!("  ✓ REG-1: MODE -o on local user works");
 
     let _ = ha.quit(Some("done")).await;
@@ -3177,7 +3588,9 @@ async fn single_server_reg1_mode_op_local_user() {
 
 #[tokio::test]
 async fn single_server_reg2_mode_voice_local_user() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let channel = test_channel("reg2");
     let nick_a = test_nick("reg2", "a");
     let nick_b = test_nick("reg2", "b");
@@ -3193,7 +3606,9 @@ async fn single_server_reg2_mode_voice_local_user() {
     wait_joined(&mut eb, &channel).await;
 
     // A voices B
-    ha.raw(&format!("MODE {channel} +v {nick_b}")).await.unwrap();
+    ha.raw(&format!("MODE {channel} +v {nick_b}"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     let names = request_names(&ha, &mut ea, &channel).await;
@@ -3209,7 +3624,9 @@ async fn single_server_reg2_mode_voice_local_user() {
 
 #[tokio::test]
 async fn single_server_reg3_kick_local_user() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let channel = test_channel("reg3");
     let nick_a = test_nick("reg3", "a");
     let nick_b = test_nick("reg3", "b");
@@ -3225,19 +3642,25 @@ async fn single_server_reg3_kick_local_user() {
     wait_joined(&mut eb, &channel).await;
 
     // A kicks B
-    ha.raw(&format!("KICK {channel} {nick_b} :test kick")).await.unwrap();
+    ha.raw(&format!("KICK {channel} {nick_b} :test kick"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // B should be gone
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(!nick_is_present(&names, &nick_b), "B should NOT be in NAMES after kick: {names:?}");
+    assert!(
+        !nick_is_present(&names, &nick_b),
+        "B should NOT be in NAMES after kick: {names:?}"
+    );
 
     // B should have received a Kicked event
     let got = maybe_wait(
         &mut eb,
         |evt| matches!(evt, Event::Kicked { nick, .. } if nick == &nick_b),
         Duration::from_secs(5),
-    ).await;
+    )
+    .await;
     assert!(got.is_some(), "B should receive Kicked event");
     eprintln!("  ✓ REG-3: KICK on local user works");
 
@@ -3253,7 +3676,9 @@ async fn single_server_reg3_kick_local_user() {
 
 #[tokio::test]
 async fn s2s_kick1_kicked_remote_stays_gone() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("kick1");
     let nick_a = test_nick("kick1", "a");
     let nick_b = test_nick("kick1", "b");
@@ -3274,21 +3699,32 @@ async fn s2s_kick1_kicked_remote_stays_gone() {
 
     // Verify B is present
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(nick_is_present(&names, &nick_b), "B should be present before kick: {names:?}");
+    assert!(
+        nick_is_present(&names, &nick_b),
+        "B should be present before kick: {names:?}"
+    );
 
     // A kicks B
-    ha.raw(&format!("KICK {channel} {nick_b} :kicked")).await.unwrap();
+    ha.raw(&format!("KICK {channel} {nick_b} :kicked"))
+        .await
+        .unwrap();
     tokio::time::sleep(S2S_SETTLE).await;
 
     // Verify B is gone
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(!nick_is_present(&names, &nick_b), "B should be gone after kick: {names:?}");
+    assert!(
+        !nick_is_present(&names, &nick_b),
+        "B should be gone after kick: {names:?}"
+    );
 
     // Wait another full resync interval to make sure B doesn't snap back
     tokio::time::sleep(S2S_SETTLE * 2).await;
 
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(!nick_is_present(&names, &nick_b), "B should STILL be gone after resync: {names:?}");
+    assert!(
+        !nick_is_present(&names, &nick_b),
+        "B should STILL be gone after resync: {names:?}"
+    );
     eprintln!("  ✓ KICK-1: Kicked remote user stays gone after resync interval");
 
     let _ = ha.quit(Some("done")).await;
@@ -3303,7 +3739,9 @@ async fn s2s_kick1_kicked_remote_stays_gone() {
 
 #[tokio::test]
 async fn s2s_multi1_kick_one_remote_other_stays() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("multi1");
     let nick_a = test_nick("multi1", "a");
     let nick_b = test_nick("multi1", "b");
@@ -3330,17 +3768,31 @@ async fn s2s_multi1_kick_one_remote_other_stays() {
 
     // Verify both remote users visible
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(nick_is_present(&names, &nick_b), "B should be present: {names:?}");
-    assert!(nick_is_present(&names, &nick_c), "C should be present: {names:?}");
+    assert!(
+        nick_is_present(&names, &nick_b),
+        "B should be present: {names:?}"
+    );
+    assert!(
+        nick_is_present(&names, &nick_c),
+        "C should be present: {names:?}"
+    );
 
     // A kicks B only
-    ha.raw(&format!("KICK {channel} {nick_b} :bye b")).await.unwrap();
+    ha.raw(&format!("KICK {channel} {nick_b} :bye b"))
+        .await
+        .unwrap();
     tokio::time::sleep(S2S_SETTLE).await;
 
     // B gone, C still there
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(!nick_is_present(&names, &nick_b), "B should be gone after kick: {names:?}");
-    assert!(nick_is_present(&names, &nick_c), "C should STILL be present: {names:?}");
+    assert!(
+        !nick_is_present(&names, &nick_b),
+        "B should be gone after kick: {names:?}"
+    );
+    assert!(
+        nick_is_present(&names, &nick_c),
+        "C should STILL be present: {names:?}"
+    );
     eprintln!("  ✓ MULTI-1: Kick one remote user, other stays");
 
     let _ = ha.quit(Some("done")).await;
@@ -3356,7 +3808,9 @@ async fn s2s_multi1_kick_one_remote_other_stays() {
 
 #[tokio::test]
 async fn s2s_opvis1_local_op_visible_on_remote() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("opvis1");
     let nick_a = test_nick("opvis1", "a");
     let nick_b = test_nick("opvis1", "b");
@@ -3384,10 +3838,15 @@ async fn s2s_opvis1_local_op_visible_on_remote() {
 
     // Verify B is NOT op on remote side
     let names = request_names(&hc, &mut ec, &channel).await;
-    assert!(!nick_is_op(&names, &nick_b), "B should NOT be op initially on remote: {names:?}");
+    assert!(
+        !nick_is_op(&names, &nick_b),
+        "B should NOT be op initially on remote: {names:?}"
+    );
 
     // A ops B on local
-    ha.raw(&format!("MODE {channel} +o {nick_b}")).await.unwrap();
+    ha.raw(&format!("MODE {channel} +o {nick_b}"))
+        .await
+        .unwrap();
     tokio::time::sleep(S2S_SETTLE).await;
 
     // C (remote) should see B as op
@@ -3411,7 +3870,9 @@ async fn s2s_opvis1_local_op_visible_on_remote() {
 
 #[tokio::test]
 async fn single_server_perm1_nonop_cannot_op() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let channel = test_channel("perm1");
     let nick_a = test_nick("perm1", "a");
     let nick_b = test_nick("perm1", "b");
@@ -3437,18 +3898,24 @@ async fn single_server_perm1_nonop_cannot_op() {
 
     // B (non-op) tries to +o C — should fail with 482 ERR_CHANOPRIVSNEEDED
     drain(&mut eb).await;
-    hb.raw(&format!("MODE {channel} +o {nick_c}")).await.unwrap();
+    hb.raw(&format!("MODE {channel} +o {nick_c}"))
+        .await
+        .unwrap();
 
     let got = maybe_wait(
         &mut eb,
         |evt| matches!(evt, Event::RawLine(line) if line.contains("482")),
         Duration::from_secs(5),
-    ).await;
+    )
+    .await;
     assert!(got.is_some(), "Non-op should get 482 when trying to +o");
 
     // Verify C is NOT op
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(!nick_is_op(&names, &nick_c), "C should NOT be op: {names:?}");
+    assert!(
+        !nick_is_op(&names, &nick_c),
+        "C should NOT be op: {names:?}"
+    );
     eprintln!("  ✓ PERM-1: Non-op cannot +o another user (482)");
 
     let _ = ha.quit(Some("done")).await;
@@ -3460,7 +3927,9 @@ async fn single_server_perm1_nonop_cannot_op() {
 
 #[tokio::test]
 async fn single_server_perm2_nonop_cannot_kick() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let channel = test_channel("perm2");
     let nick_a = test_nick("perm2", "a");
     let nick_b = test_nick("perm2", "b");
@@ -3483,18 +3952,24 @@ async fn single_server_perm2_nonop_cannot_kick() {
 
     // B (non-op) tries to kick C — should fail with 482
     drain(&mut eb).await;
-    hb.raw(&format!("KICK {channel} {nick_c} :nope")).await.unwrap();
+    hb.raw(&format!("KICK {channel} {nick_c} :nope"))
+        .await
+        .unwrap();
 
     let got = maybe_wait(
         &mut eb,
         |evt| matches!(evt, Event::RawLine(line) if line.contains("482")),
         Duration::from_secs(5),
-    ).await;
+    )
+    .await;
     assert!(got.is_some(), "Non-op should get 482 when trying to kick");
 
     // Verify C is still present
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(nick_is_present(&names, &nick_c), "C should still be present: {names:?}");
+    assert!(
+        nick_is_present(&names, &nick_c),
+        "C should still be present: {names:?}"
+    );
     eprintln!("  ✓ PERM-2: Non-op cannot KICK (482)");
 
     let _ = ha.quit(Some("done")).await;
@@ -3513,7 +3988,9 @@ async fn single_server_perm2_nonop_cannot_kick() {
 
 #[tokio::test]
 async fn s2s_pmedge1_pm_no_shared_channel() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel_a = test_channel("pe1a");
     let channel_b = test_channel("pe1b");
     let nick_a = test_nick("pe1", "a");
@@ -3534,8 +4011,14 @@ async fn s2s_pmedge1_pm_no_shared_channel() {
     tokio::time::sleep(S2S_SETTLE).await;
 
     // A PMs B — they share no channel, but B is visible via S2S remote_members
-    let pm_text = format!("pe1-{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 100000);
+    let pm_text = format!(
+        "pe1-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 100000
+    );
     ha.privmsg(&nick_b, &pm_text).await.unwrap();
 
     // B should receive it — the PM is routed via S2S because B exists
@@ -3544,8 +4027,12 @@ async fn s2s_pmedge1_pm_no_shared_channel() {
         &mut eb,
         |evt| matches!(evt, Event::Message { text, .. } if text.contains(&pm_text)),
         Duration::from_secs(10),
-    ).await;
-    assert!(got.is_some(), "PM should be delivered even without shared channel");
+    )
+    .await;
+    assert!(
+        got.is_some(),
+        "PM should be delivered even without shared channel"
+    );
     eprintln!("  ✓ PMEDGE-1: PM delivered across servers without shared channel");
 
     let _ = ha.quit(Some("done")).await;
@@ -3560,7 +4047,9 @@ async fn s2s_pmedge1_pm_no_shared_channel() {
 /// S2S peers without gating on remote_members.
 #[tokio::test]
 async fn s2s_pmedge2_bidirectional_pm() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("pe2");
     let nick_a = test_nick("pe2", "a");
     let nick_b = test_nick("pe2", "b");
@@ -3581,30 +4070,47 @@ async fn s2s_pmedge2_bidirectional_pm() {
     drain(&mut eb).await;
 
     // A → B: PM from local to remote
-    let msg_ab = format!("ab-{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 100000);
+    let msg_ab = format!(
+        "ab-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 100000
+    );
     ha.privmsg(&nick_b, &msg_ab).await.unwrap();
 
     let got_ab = maybe_wait(
         &mut eb,
         |evt| matches!(evt, Event::Message { text, .. } if text.contains(&msg_ab)),
         Duration::from_secs(10),
-    ).await;
+    )
+    .await;
     assert!(got_ab.is_some(), "A→B PM should be delivered");
     drain(&mut ea).await;
     drain(&mut eb).await;
 
     // B → A: PM from remote to local (THIS IS THE DIRECTION THAT WAS BROKEN)
-    let msg_ba = format!("ba-{}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() % 100000);
+    let msg_ba = format!(
+        "ba-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            % 100000
+    );
     hb.privmsg(&nick_a, &msg_ba).await.unwrap();
 
     let got_ba = maybe_wait(
         &mut ea,
         |evt| matches!(evt, Event::Message { text, .. } if text.contains(&msg_ba)),
         Duration::from_secs(10),
-    ).await;
-    assert!(got_ba.is_some(), "B→A PM should be delivered (was broken: asymmetric relay)");
+    )
+    .await;
+    assert!(
+        got_ba.is_some(),
+        "B→A PM should be delivered (was broken: asymmetric relay)"
+    );
 
     // Also verify no ERR_NOSUCHNICK on either side
     drain(&mut ea).await;
@@ -3612,7 +4118,8 @@ async fn s2s_pmedge2_bidirectional_pm() {
         &mut ea,
         |evt| matches!(evt, Event::RawLine(line) if line.contains("401")),
         Duration::from_millis(500),
-    ).await;
+    )
+    .await;
     assert!(err_a.is_none(), "A should not have received ERR_NOSUCHNICK");
 
     drain(&mut eb).await;
@@ -3620,7 +4127,8 @@ async fn s2s_pmedge2_bidirectional_pm() {
         &mut eb,
         |evt| matches!(evt, Event::RawLine(line) if line.contains("401")),
         Duration::from_millis(500),
-    ).await;
+    )
+    .await;
     assert!(err_b.is_none(), "B should not have received ERR_NOSUCHNICK");
 
     eprintln!("  ✓ PMEDGE-2: Bidirectional PMs work (A→B and B→A)");
@@ -3637,7 +4145,9 @@ async fn s2s_pmedge2_bidirectional_pm() {
 
 #[tokio::test]
 async fn s2s_bidir1_names_agree_on_both_sides() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("bidir1");
     let nick_a = test_nick("bidir1", "a");
     let nick_b = test_nick("bidir1", "b");
@@ -3672,9 +4182,18 @@ async fn s2s_bidir1_names_agree_on_both_sides() {
 
     // All three should see all three nicks (regardless of prefix)
     for (label, names) in [("A", &names_a), ("B", &names_b), ("C", &names_c)] {
-        assert!(nick_is_present(names, &nick_a), "{label} should see A: {names:?}");
-        assert!(nick_is_present(names, &nick_b), "{label} should see B: {names:?}");
-        assert!(nick_is_present(names, &nick_c), "{label} should see C: {names:?}");
+        assert!(
+            nick_is_present(names, &nick_a),
+            "{label} should see A: {names:?}"
+        );
+        assert!(
+            nick_is_present(names, &nick_b),
+            "{label} should see B: {names:?}"
+        );
+        assert!(
+            nick_is_present(names, &nick_c),
+            "{label} should see C: {names:?}"
+        );
     }
 
     // All should agree on total member count
@@ -3693,7 +4212,9 @@ async fn s2s_bidir1_names_agree_on_both_sides() {
 
 #[tokio::test]
 async fn s2s_bidir2_names_agree_after_part() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("bidir2");
     let nick_a = test_nick("bidir2", "a");
     let nick_b = test_nick("bidir2", "b");
@@ -3729,8 +4250,14 @@ async fn s2s_bidir2_names_agree_after_part() {
 
     assert_eq!(names_a.len(), 2, "A should see 2 members: {names_a:?}");
     assert_eq!(names_b.len(), 2, "B should see 2 members: {names_b:?}");
-    assert!(!nick_is_present(&names_a, &nick_c), "A should NOT see C: {names_a:?}");
-    assert!(!nick_is_present(&names_b, &nick_c), "B should NOT see C: {names_b:?}");
+    assert!(
+        !nick_is_present(&names_a, &nick_c),
+        "A should NOT see C: {names_a:?}"
+    );
+    assert!(
+        !nick_is_present(&names_b, &nick_c),
+        "B should NOT see C: {names_b:?}"
+    );
 
     eprintln!("  ✓ BIDIR-2: Both sides agree after PART (2 members each)");
 
@@ -3756,7 +4283,9 @@ async fn s2s_inv1_invite_remote_guest_to_invite_only_channel() {
     // (where the invite was stored) → succeeds. B joining on REMOTE would
     // fail because remote's invite list is empty.
     use std::time::SystemTime;
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let ts = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
@@ -3782,10 +4311,20 @@ async fn s2s_inv1_invite_remote_guest_to_invite_only_channel() {
     wait_registered(&mut eb).await;
     let shared = format!("#inv1shared{ts}");
     ha.join(&shared).await.unwrap();
-    wait_for(&mut ea, |evt| matches!(evt, Event::Joined { .. }), "A join shared").await;
+    wait_for(
+        &mut ea,
+        |evt| matches!(evt, Event::Joined { .. }),
+        "A join shared",
+    )
+    .await;
     drain(&mut ea).await;
     hb.join(&shared).await.unwrap();
-    wait_for(&mut eb, |evt| matches!(evt, Event::Joined { .. }), "B join shared").await;
+    wait_for(
+        &mut eb,
+        |evt| matches!(evt, Event::Joined { .. }),
+        "B join shared",
+    )
+    .await;
     tokio::time::sleep(Duration::from_secs(3)).await;
     drain(&mut ea).await;
     drain(&mut eb).await;
@@ -3796,7 +4335,8 @@ async fn s2s_inv1_invite_remote_guest_to_invite_only_channel() {
         &mut ea,
         |evt| matches!(evt, Event::RawLine(line) if line.contains("341")),
         Duration::from_secs(5),
-    ).await;
+    )
+    .await;
     assert!(invite_reply.is_some(), "A should get RPL_INVITING (341)");
 
     // B connects to the LOCAL server (where the invite is stored) to join
@@ -3806,15 +4346,21 @@ async fn s2s_inv1_invite_remote_guest_to_invite_only_channel() {
     hb_local.join(&channel).await.unwrap();
     let join_result = maybe_wait(
         &mut eb_local,
-        |evt| matches!(evt, Event::Joined { .. }) || matches!(evt, Event::RawLine(line) if line.contains("473")),
+        |evt| {
+            matches!(evt, Event::Joined { .. })
+                || matches!(evt, Event::RawLine(line) if line.contains("473"))
+        },
         Duration::from_secs(5),
-    ).await;
+    )
+    .await;
     assert!(
         matches!(join_result, Some(Event::Joined { .. })),
         "B should be able to join +i channel on inviter's server, got: {join_result:?}"
     );
 
-    eprintln!("  ✓ INV-1: Invited guest can join +i channel on inviter's server (nick: fallback works)");
+    eprintln!(
+        "  ✓ INV-1: Invited guest can join +i channel on inviter's server (nick: fallback works)"
+    );
 
     let _ = ha.quit(Some("done")).await;
     let _ = hb.quit(Some("done")).await;
@@ -3833,7 +4379,9 @@ async fn s2s_inv1_invite_remote_guest_to_invite_only_channel() {
 /// reject the message.
 #[tokio::test]
 async fn s2s_case1_message_delivery_with_nick_case_mismatch() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("case1");
     let nick_a = test_nick("case1", "a");
     let nick_b = test_nick("case1", "B"); // Note: capital B in suffix
@@ -3859,8 +4407,12 @@ async fn s2s_case1_message_delivery_with_nick_case_mismatch() {
         &mut ea,
         |evt| matches!(evt, Event::Message { text, .. } if text == &msg),
         Duration::from_secs(10),
-    ).await;
-    assert!(got.is_some(), "Message from remote user should arrive despite nick case");
+    )
+    .await;
+    assert!(
+        got.is_some(),
+        "Message from remote user should arrive despite nick case"
+    );
     eprintln!("  ✓ CASE-1: Message delivery works with different nick case");
 
     let _ = ha.quit(Some("done")).await;
@@ -3873,7 +4425,9 @@ async fn s2s_case1_message_delivery_with_nick_case_mismatch() {
 /// the kick must still find and remove the user.
 #[tokio::test]
 async fn s2s_case2_kick_with_nick_case_mismatch() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("case2");
     let nick_a = test_nick("case2", "a");
     let nick_b = test_nick("case2", "B");
@@ -3891,15 +4445,23 @@ async fn s2s_case2_kick_with_nick_case_mismatch() {
     tokio::time::sleep(S2S_SETTLE).await;
 
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(nick_is_present(&names, &nick_b), "B should be present: {names:?}");
+    assert!(
+        nick_is_present(&names, &nick_b),
+        "B should be present: {names:?}"
+    );
 
     // Kick using lowercase version of B's nick
     let nick_b_lower = nick_b.to_lowercase();
-    ha.raw(&format!("KICK {channel} {nick_b_lower} :case test")).await.unwrap();
+    ha.raw(&format!("KICK {channel} {nick_b_lower} :case test"))
+        .await
+        .unwrap();
     tokio::time::sleep(S2S_SETTLE).await;
 
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(!nick_is_present(&names, &nick_b), "B should be gone after case-insensitive kick: {names:?}");
+    assert!(
+        !nick_is_present(&names, &nick_b),
+        "B should be gone after case-insensitive kick: {names:?}"
+    );
     eprintln!("  ✓ CASE-2: KICK with different nick case removes remote user");
 
     let _ = ha.quit(Some("done")).await;
@@ -3912,7 +4474,9 @@ async fn s2s_case2_kick_with_nick_case_mismatch() {
 /// the same channel and able to message each other.
 #[tokio::test]
 async fn s2s_case3_channel_case_insensitive_cross_server() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let base = test_channel("CASE3");
     let channel_upper = base.clone();
     let channel_lower = base.to_lowercase();
@@ -3939,8 +4503,12 @@ async fn s2s_case3_channel_case_insensitive_cross_server() {
         &mut eb,
         |evt| matches!(evt, Event::Message { text, .. } if text == &msg),
         Duration::from_secs(10),
-    ).await;
-    assert!(got.is_some(), "Users in same channel (different case) should see messages");
+    )
+    .await;
+    assert!(
+        got.is_some(),
+        "Users in same channel (different case) should see messages"
+    );
     eprintln!("  ✓ CASE-3: Channel case normalization works across S2S");
 
     let _ = ha.quit(Some("done")).await;
@@ -3959,7 +4527,9 @@ async fn s2s_case3_channel_case_insensitive_cross_server() {
 /// lookup and rejected legitimate remote topic changes.
 #[tokio::test]
 async fn s2s_topic1_remote_op_sets_topic_on_plus_t() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("top1");
     let nick_a = test_nick("top1", "a");
     let nick_b = test_nick("top1", "b");
@@ -3985,7 +4555,10 @@ async fn s2s_topic1_remote_op_sets_topic_on_plus_t() {
     ha.raw(&format!("TOPIC {channel} :{topic}")).await.unwrap();
 
     let got = wait_topic(&mut eb, &channel).await;
-    assert_eq!(got, topic, "Topic from remote op should be accepted on +t channel");
+    assert_eq!(
+        got, topic,
+        "Topic from remote op should be accepted on +t channel"
+    );
     eprintln!("  ✓ TOPIC-1: Remote op can set topic on +t channel");
 
     let _ = ha.quit(Some("done")).await;
@@ -3999,7 +4572,9 @@ async fn s2s_topic1_remote_op_sets_topic_on_plus_t() {
 /// it even reaches the S2S layer.
 #[tokio::test]
 async fn s2s_topic2_remote_nonop_cannot_set_topic_plus_t() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("top2");
     let nick_a = test_nick("top2", "a");
     let nick_b = test_nick("top2", "b");
@@ -4038,8 +4613,12 @@ async fn s2s_topic2_remote_nonop_cannot_set_topic_plus_t() {
         &mut eb,
         |evt| matches!(evt, Event::RawLine(line) if line.contains("482")),
         Duration::from_secs(5),
-    ).await;
-    assert!(err.is_some(), "Non-op should get 482 when setting topic on +t channel");
+    )
+    .await;
+    assert!(
+        err.is_some(),
+        "Non-op should get 482 when setting topic on +t channel"
+    );
 
     // Verify topic didn't change on local
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -4059,7 +4638,9 @@ async fn s2s_topic2_remote_nonop_cannot_set_topic_plus_t() {
 /// B should see the topic on join (via 332 numeric or SyncResponse).
 #[tokio::test]
 async fn s2s_topic3_topic_visible_to_late_joiner() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("top3");
     let nick_a = test_nick("top3", "a");
     let nick_b = test_nick("top3", "b");
@@ -4083,8 +4664,12 @@ async fn s2s_topic3_topic_visible_to_late_joiner() {
         &mut eb,
         |evt| matches!(evt, Event::TopicChanged { topic: t, .. } if t == &topic),
         Duration::from_secs(10),
-    ).await;
-    assert!(got.is_some(), "Late joiner should see topic set before they joined");
+    )
+    .await;
+    assert!(
+        got.is_some(),
+        "Late joiner should see topic set before they joined"
+    );
     eprintln!("  ✓ TOPIC-3: Topic visible to late remote joiner");
 
     let _ = ha.quit(Some("done")).await;
@@ -4103,7 +4688,9 @@ async fn s2s_topic3_topic_visible_to_late_joiner() {
 /// overwrote channel modes.
 #[tokio::test]
 async fn s2s_sync4_local_plus_i_survives_sync() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("sy4");
     let nick_a = test_nick("sy4", "a");
     let nick_b = test_nick("sy4", "b");
@@ -4138,9 +4725,13 @@ async fn s2s_sync4_local_plus_i_survives_sync() {
 
     let result = maybe_wait(
         &mut ec,
-        |evt| matches!(evt, Event::Joined { .. }) || matches!(evt, Event::RawLine(line) if line.contains("473")),
+        |evt| {
+            matches!(evt, Event::Joined { .. })
+                || matches!(evt, Event::RawLine(line) if line.contains("473"))
+        },
         Duration::from_secs(5),
-    ).await;
+    )
+    .await;
     assert!(
         matches!(result, Some(Event::RawLine(ref line)) if line.contains("473")),
         "+i should survive SyncResponse — uninvited user should be blocked, got: {result:?}"
@@ -4158,7 +4749,9 @@ async fn s2s_sync4_local_plus_i_survives_sync() {
 /// these modes should still be set.
 #[tokio::test]
 async fn s2s_sync5_default_modes_survive_sync() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("sy5");
     let nick_a = test_nick("sy5", "a");
     let nick_b = test_nick("sy5", "b");
@@ -4188,8 +4781,12 @@ async fn s2s_sync5_default_modes_survive_sync() {
         &mut ec,
         |evt| matches!(evt, Event::RawLine(line) if line.contains("404")),
         Duration::from_secs(5),
-    ).await;
-    assert!(err.is_some(), "+n should still be active after sync (ERR_CANNOTSENDTOCHAN)");
+    )
+    .await;
+    assert!(
+        err.is_some(),
+        "+n should still be active after sync (ERR_CANNOTSENDTOCHAN)"
+    );
     eprintln!("  ✓ SYNC-5: Default +nt modes survive SyncResponse");
 
     let _ = ha.quit(Some("done")).await;
@@ -4208,7 +4805,9 @@ async fn s2s_sync5_default_modes_survive_sync() {
 /// to send without rejoining.
 #[tokio::test]
 async fn single_server_kick2_kicked_user_cannot_send() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let channel = test_channel("kick2");
     let nick_a = test_nick("kick2", "a");
     let nick_b = test_nick("kick2", "b");
@@ -4224,27 +4823,39 @@ async fn single_server_kick2_kicked_user_cannot_send() {
     wait_joined(&mut eb, &channel).await;
 
     // A kicks B
-    ha.raw(&format!("KICK {channel} {nick_b} :go away")).await.unwrap();
+    ha.raw(&format!("KICK {channel} {nick_b} :go away"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_secs(1)).await;
     drain(&mut eb).await;
 
     // B tries to send to channel — should fail (not a member, +n active)
-    hb.privmsg(&channel, "I was kicked but still talking").await.unwrap();
+    hb.privmsg(&channel, "I was kicked but still talking")
+        .await
+        .unwrap();
 
     let err = maybe_wait(
         &mut eb,
         |evt| matches!(evt, Event::RawLine(line) if line.contains("404")),
         Duration::from_secs(5),
-    ).await;
-    assert!(err.is_some(), "Kicked user should get 404 when trying to send to +n channel");
+    )
+    .await;
+    assert!(
+        err.is_some(),
+        "Kicked user should get 404 when trying to send to +n channel"
+    );
 
     // A should NOT receive the message
     let msg = maybe_wait(
         &mut ea,
         |evt| matches!(evt, Event::Message { from, .. } if from == &nick_b),
         Duration::from_secs(2),
-    ).await;
-    assert!(msg.is_none(), "Kicked user's message should not arrive at channel");
+    )
+    .await;
+    assert!(
+        msg.is_none(),
+        "Kicked user's message should not arrive at channel"
+    );
     eprintln!("  ✓ KICK-2: Kicked user cannot send to channel (+n enforcement)");
 
     let _ = ha.quit(Some("done")).await;
@@ -4258,7 +4869,9 @@ async fn single_server_kick2_kicked_user_cannot_send() {
 /// no longer arrive at the kicking server.
 #[tokio::test]
 async fn s2s_kick3_kicked_remote_user_cannot_send() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("kick3");
     let nick_a = test_nick("kick3", "a");
     let nick_b = test_nick("kick3", "b");
@@ -4282,12 +4895,15 @@ async fn s2s_kick3_kicked_remote_user_cannot_send() {
         &mut ea,
         |evt| matches!(evt, Event::Message { text, .. } if text == &msg1),
         Duration::from_secs(10),
-    ).await;
+    )
+    .await;
     assert!(got.is_some(), "B should be able to send before kick");
     drain(&mut ea).await;
 
     // A kicks B
-    ha.raw(&format!("KICK {channel} {nick_b} :kicked")).await.unwrap();
+    ha.raw(&format!("KICK {channel} {nick_b} :kicked"))
+        .await
+        .unwrap();
     tokio::time::sleep(S2S_SETTLE).await;
     drain(&mut ea).await;
 
@@ -4298,8 +4914,12 @@ async fn s2s_kick3_kicked_remote_user_cannot_send() {
         &mut ea,
         |evt| matches!(evt, Event::Message { from, .. } if from == &nick_b),
         Duration::from_secs(5),
-    ).await;
-    assert!(msg2.is_none(), "Kicked remote user's message should not arrive after kick");
+    )
+    .await;
+    assert!(
+        msg2.is_none(),
+        "Kicked remote user's message should not arrive after kick"
+    );
     eprintln!("  ✓ KICK-3: Kicked remote user cannot send via S2S");
 
     let _ = ha.quit(Some("done")).await;
@@ -4316,7 +4936,9 @@ async fn s2s_kick3_kicked_remote_user_cannot_send() {
 /// A ops B. B should be able to send (ops can send on +m).
 #[tokio::test]
 async fn s2s_modop1_remote_opped_user_can_send_on_plus_m() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("modop1");
     let nick_a = test_nick("modop1", "a");
     let nick_b = test_nick("modop1", "b");
@@ -4344,12 +4966,15 @@ async fn s2s_modop1_remote_opped_user_can_send_on_plus_m() {
         &mut ea,
         |evt| matches!(evt, Event::Message { from, .. } if from == &nick_b),
         Duration::from_secs(3),
-    ).await;
+    )
+    .await;
     assert!(blocked.is_none(), "Non-op B should be blocked on +m");
     eprintln!("  Phase 1: B blocked on +m ✓");
 
     // A ops B via S2S
-    ha.raw(&format!("MODE {channel} +o {nick_b}")).await.unwrap();
+    ha.raw(&format!("MODE {channel} +o {nick_b}"))
+        .await
+        .unwrap();
     tokio::time::sleep(S2S_SETTLE).await;
     drain(&mut ea).await;
 
@@ -4361,8 +4986,12 @@ async fn s2s_modop1_remote_opped_user_can_send_on_plus_m() {
         &mut ea,
         |evt| matches!(evt, Event::Message { text, .. } if text == &msg),
         Duration::from_secs(10),
-    ).await;
-    assert!(got.is_some(), "Opped remote user should be able to send on +m channel");
+    )
+    .await;
+    assert!(
+        got.is_some(),
+        "Opped remote user should be able to send on +m channel"
+    );
     eprintln!("  ✓ MODOP-1: Remote opped user can send on +m channel");
 
     let _ = ha.quit(Some("done")).await;
@@ -4380,7 +5009,9 @@ async fn s2s_modop1_remote_opped_user_can_send_on_plus_m() {
 /// (present or absent), with no duplicate entries.
 #[tokio::test]
 async fn s2s_ghost4_rapid_join_part_no_ghosts() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("gh4");
     let nick_a = test_nick("gh4", "a");
     let nick_b = test_nick("gh4", "b");
@@ -4411,8 +5042,14 @@ async fn s2s_ghost4_rapid_join_part_no_ghosts() {
 
     // A should see B exactly once in NAMES (no duplicates, no ghosts)
     let names = request_names(&ha, &mut ea, &channel).await;
-    let b_count = names.iter().filter(|n| n.trim_start_matches(&['@', '+'][..]) == nick_b).count();
-    assert_eq!(b_count, 1, "B should appear exactly once in NAMES: {names:?}");
+    let b_count = names
+        .iter()
+        .filter(|n| n.trim_start_matches(&['@', '+'][..]) == nick_b)
+        .count();
+    assert_eq!(
+        b_count, 1,
+        "B should appear exactly once in NAMES: {names:?}"
+    );
     eprintln!("  ✓ GHOST-4: No ghost entries after rapid join/part cycle");
 
     let _ = ha.quit(Some("done")).await;
@@ -4426,7 +5063,9 @@ async fn s2s_ghost4_rapid_join_part_no_ghosts() {
 /// should not appear in NAMES.
 #[tokio::test]
 async fn s2s_ghost5_reconnect_no_ghosts() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("gh5");
     let nick_a = test_nick("gh5", "a");
     let nick_b1 = test_nick("gh5", "b1");
@@ -4445,7 +5084,10 @@ async fn s2s_ghost5_reconnect_no_ghosts() {
     tokio::time::sleep(S2S_SETTLE).await;
 
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(nick_is_present(&names, &nick_b1), "B1 should be present: {names:?}");
+    assert!(
+        nick_is_present(&names, &nick_b1),
+        "B1 should be present: {names:?}"
+    );
 
     let _ = hb1.quit(Some("leaving")).await;
     drop(hb1);
@@ -4461,8 +5103,14 @@ async fn s2s_ghost5_reconnect_no_ghosts() {
     tokio::time::sleep(S2S_SETTLE).await;
 
     let names = request_names(&ha, &mut ea, &channel).await;
-    assert!(nick_is_present(&names, &nick_b2), "B2 should be present: {names:?}");
-    assert!(!nick_is_present(&names, &nick_b1), "B1 (old nick) should NOT be present: {names:?}");
+    assert!(
+        nick_is_present(&names, &nick_b2),
+        "B2 should be present: {names:?}"
+    );
+    assert!(
+        !nick_is_present(&names, &nick_b1),
+        "B1 (old nick) should NOT be present: {names:?}"
+    );
     eprintln!("  ✓ GHOST-5: No ghost after disconnect/reconnect with new nick");
 
     let _ = ha.quit(Some("done")).await;
@@ -4479,7 +5127,9 @@ async fn s2s_ghost5_reconnect_no_ghosts() {
 /// exactly once, not duplicated by resync or re-relay.
 #[tokio::test]
 async fn s2s_dedup1_no_duplicate_messages() {
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let channel = test_channel("dup1");
     let nick_a = test_nick("dup1", "a");
     let nick_b = test_nick("dup1", "b");
@@ -4505,7 +5155,8 @@ async fn s2s_dedup1_no_duplicate_messages() {
         &mut eb,
         |evt| matches!(evt, Event::Message { text, .. } if text == &unique),
         Duration::from_secs(10),
-    ).await;
+    )
+    .await;
     assert!(first.is_some(), "Should receive the message");
 
     // Check that NO second copy arrives within 5 seconds
@@ -4513,7 +5164,8 @@ async fn s2s_dedup1_no_duplicate_messages() {
         &mut eb,
         |evt| matches!(evt, Event::Message { text, .. } if text == &unique),
         Duration::from_secs(5),
-    ).await;
+    )
+    .await;
     assert!(second.is_none(), "Should NOT receive duplicate message");
     eprintln!("  ✓ DEDUP-1: No duplicate messages across S2S");
 
@@ -4531,7 +5183,9 @@ async fn s2s_dedup1_no_duplicate_messages() {
 /// (Single server, but tests the foundation for S2S ban sync.)
 #[tokio::test]
 async fn single_server_ban1_banned_user_cant_join() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let channel = test_channel("ban1");
     let nick_a = test_nick("ban1", "a");
     let nick_b = test_nick("ban1", "b");
@@ -4542,7 +5196,9 @@ async fn single_server_ban1_banned_user_cant_join() {
     wait_joined(&mut ea, &channel).await;
 
     // Ban B's mask
-    ha.raw(&format!("MODE {channel} +b {nick_b}!*@*")).await.unwrap();
+    ha.raw(&format!("MODE {channel} +b {nick_b}!*@*"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // B tries to join
@@ -4552,9 +5208,13 @@ async fn single_server_ban1_banned_user_cant_join() {
 
     let result = maybe_wait(
         &mut eb,
-        |evt| matches!(evt, Event::Joined { .. }) || matches!(evt, Event::RawLine(line) if line.contains("474")),
+        |evt| {
+            matches!(evt, Event::Joined { .. })
+                || matches!(evt, Event::RawLine(line) if line.contains("474"))
+        },
         Duration::from_secs(5),
-    ).await;
+    )
+    .await;
     assert!(
         matches!(result, Some(Event::RawLine(ref line)) if line.contains("474")),
         "Banned user should get 474, got: {result:?}"
@@ -4562,7 +5222,9 @@ async fn single_server_ban1_banned_user_cant_join() {
     eprintln!("  ✓ BAN-1: Banned user can't join channel");
 
     // Unban and verify B can now join
-    ha.raw(&format!("MODE {channel} -b {nick_b}!*@*")).await.unwrap();
+    ha.raw(&format!("MODE {channel} -b {nick_b}!*@*"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     hb.join(&channel).await.unwrap();
@@ -4570,7 +5232,8 @@ async fn single_server_ban1_banned_user_cant_join() {
         &mut eb,
         |evt| matches!(evt, Event::Joined { .. }),
         Duration::from_secs(5),
-    ).await;
+    )
+    .await;
     assert!(joined.is_some(), "Unbanned user should be able to join");
     eprintln!("  ✓ BAN-1: Unbanned user can join");
 
@@ -4582,7 +5245,9 @@ async fn single_server_ban1_banned_user_cant_join() {
 #[tokio::test]
 async fn s2s_inv2_remote_guest_blocked_from_invite_only_without_invite() {
     use std::time::SystemTime;
-    let Some((local, remote)) = get_servers() else { return };
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
     let ts = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
@@ -4607,9 +5272,13 @@ async fn s2s_inv2_remote_guest_blocked_from_invite_only_without_invite() {
     hb.join(&channel).await.unwrap();
     let result = maybe_wait(
         &mut eb,
-        |evt| matches!(evt, Event::Joined { .. }) || matches!(evt, Event::RawLine(line) if line.contains("473")),
+        |evt| {
+            matches!(evt, Event::Joined { .. })
+                || matches!(evt, Event::RawLine(line) if line.contains("473"))
+        },
         Duration::from_secs(5),
-    ).await;
+    )
+    .await;
     // Should get 473 ERR_INVITEONLYCHAN, NOT a successful join
     assert!(
         matches!(result, Some(Event::RawLine(ref line)) if line.contains("473")),
@@ -4627,7 +5296,9 @@ async fn s2s_inv2_remote_guest_blocked_from_invite_only_without_invite() {
 /// MSGID-1: Messages include a unique msgid tag
 #[tokio::test]
 async fn single_server_msgid1_messages_have_msgid() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick_a = test_nick("mid1", "a");
     let nick_b = test_nick("mid1", "b");
     let channel = test_channel("mid1");
@@ -4650,7 +5321,10 @@ async fn single_server_msgid1_messages_have_msgid() {
     match msg {
         Event::Message { tags, .. } => {
             let msgid = tags.get("msgid");
-            assert!(msgid.is_some(), "Message should have msgid tag, got tags: {tags:?}");
+            assert!(
+                msgid.is_some(),
+                "Message should have msgid tag, got tags: {tags:?}"
+            );
             let id = msgid.unwrap();
             assert_eq!(id.len(), 26, "msgid should be a 26-char ULID, got: {id}");
             eprintln!("  ✓ MSGID-1: Message has msgid={id}");
@@ -4665,7 +5339,9 @@ async fn single_server_msgid1_messages_have_msgid() {
 /// MSGID-2: Each message gets a unique msgid
 #[tokio::test]
 async fn single_server_msgid2_unique_ids() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let nick_a = test_nick("mid2", "a");
     let nick_b = test_nick("mid2", "b");
     let channel = test_channel("mid2");
@@ -4688,16 +5364,23 @@ async fn single_server_msgid2_unique_ids() {
     let evt2 = wait_message_event_containing(&mut ea, "mid2msg2").await;
 
     let id1 = match evt1 {
-        Event::Message { ref tags, .. } => tags.get("msgid").cloned().expect("msg1 should have msgid"),
+        Event::Message { ref tags, .. } => {
+            tags.get("msgid").cloned().expect("msg1 should have msgid")
+        }
         _ => panic!("Expected Message"),
     };
     let id2 = match evt2 {
-        Event::Message { ref tags, .. } => tags.get("msgid").cloned().expect("msg2 should have msgid"),
+        Event::Message { ref tags, .. } => {
+            tags.get("msgid").cloned().expect("msg2 should have msgid")
+        }
         _ => panic!("Expected Message"),
     };
 
     assert_ne!(id1, id2, "Each message should have a unique msgid");
-    assert!(id1 < id2, "msgids should be chronologically ordered: {id1} < {id2}");
+    assert!(
+        id1 < id2,
+        "msgids should be chronologically ordered: {id1} < {id2}"
+    );
     eprintln!("  ✓ MSGID-2: Messages have unique, ordered msgids: {id1}, {id2}");
 
     let _ = ha.quit(Some("done")).await;
@@ -4707,7 +5390,9 @@ async fn single_server_msgid2_unique_ids() {
 /// MSGID-3: Cross-server messages include msgid
 #[tokio::test]
 async fn s2s_msgid3_cross_server_messages_have_msgid() {
-    let Some((server_a, server_b)) = get_servers() else { return };
+    let Some((server_a, server_b)) = get_servers() else {
+        return;
+    };
     let nick_a = test_nick("mid3", "a");
     let nick_b = test_nick("mid3", "b");
     let channel = test_channel("mid3");
@@ -4730,7 +5415,10 @@ async fn s2s_msgid3_cross_server_messages_have_msgid() {
     match msg {
         Event::Message { tags, .. } => {
             let msgid = tags.get("msgid");
-            assert!(msgid.is_some(), "S2S message should have msgid tag, got tags: {tags:?}");
+            assert!(
+                msgid.is_some(),
+                "S2S message should have msgid tag, got tags: {tags:?}"
+            );
             let id = msgid.unwrap();
             assert_eq!(id.len(), 26, "msgid should be a 26-char ULID, got: {id}");
             eprintln!("  ✓ MSGID-3: S2S message has msgid={id}");
@@ -4748,7 +5436,9 @@ async fn s2s_msgid3_cross_server_messages_have_msgid() {
 /// their client's in-memory state stays consistent with NAMES.
 #[tokio::test]
 async fn single_server_autoop_visible_to_others() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let op_nick = test_nick("aop", "op");
     let obs_nick = test_nick("aop", "obs");
     let channel = test_channel("aop");
@@ -4760,8 +5450,10 @@ async fn single_server_autoop_visible_to_others() {
     wait_joined(&mut e_op, &channel).await;
     // Check NAMES shows founder as op
     let names = wait_names_containing(&mut e_op, &channel, &op_nick).await;
-    assert!(names.iter().any(|n| n == &format!("@{op_nick}")),
-        "Founder should see self as op in NAMES, got: {names:?}");
+    assert!(
+        names.iter().any(|n| n == &format!("@{op_nick}")),
+        "Founder should see self as op in NAMES, got: {names:?}"
+    );
     eprintln!("  ✓ First joiner is op in own NAMES");
 
     // Second user joins — should see first user as op in NAMES
@@ -4770,16 +5462,23 @@ async fn single_server_autoop_visible_to_others() {
     h_obs.join(&channel).await.unwrap();
     wait_joined(&mut e_obs, &channel).await;
     let names2 = wait_names_containing(&mut e_obs, &channel, &op_nick).await;
-    assert!(names2.iter().any(|n| n == &format!("@{op_nick}")),
-        "Observer should see first joiner as op in NAMES, got: {names2:?}");
+    assert!(
+        names2.iter().any(|n| n == &format!("@{op_nick}")),
+        "Observer should see first joiner as op in NAMES, got: {names2:?}"
+    );
     eprintln!("  ✓ Second joiner sees first user as op in NAMES");
 
     // Verify: op manually ops observer, observer gets MODE +o broadcast
-    h_op.raw(&format!("MODE {channel} +o {obs_nick}")).await.unwrap();
+    h_op.raw(&format!("MODE {channel} +o {obs_nick}"))
+        .await
+        .unwrap();
     let (mode, arg) = wait_mode(&mut e_obs, &channel).await;
     assert_eq!(mode, "+o", "Observer should receive MODE +o, got: {mode}");
-    assert_eq!(arg.as_deref(), Some(obs_nick.as_str()),
-        "MODE +o should target observer, got: {arg:?}");
+    assert_eq!(
+        arg.as_deref(),
+        Some(obs_nick.as_str()),
+        "MODE +o should target observer, got: {arg:?}"
+    );
     eprintln!("  ✓ Observer received MODE +o broadcast");
 
     let _ = h_op.quit(Some("done")).await;
@@ -4794,7 +5493,9 @@ async fn single_server_autoop_visible_to_others() {
 /// op rejoins empty channel (gets auto-opped), observer rejoins and should see op.
 #[tokio::test]
 async fn single_server_autoop_on_empty_rejoin() {
-    let Some(server) = get_single_server() else { return };
+    let Some(server) = get_single_server() else {
+        return;
+    };
     let op_nick = test_nick("aor", "op");
     let obs_nick = test_nick("aor", "obs");
     let channel = test_channel("aor");
@@ -4822,16 +5523,20 @@ async fn single_server_autoop_on_empty_rejoin() {
     h_op.join(&channel).await.unwrap();
     wait_joined(&mut e_op, &channel).await;
     let names = wait_names_containing(&mut e_op, &channel, &op_nick).await;
-    assert!(names.iter().any(|n| n == &format!("@{op_nick}")),
-        "Rejoining empty channel should auto-op, got: {names:?}");
+    assert!(
+        names.iter().any(|n| n == &format!("@{op_nick}")),
+        "Rejoining empty channel should auto-op, got: {names:?}"
+    );
     eprintln!("  ✓ First rejoiner of empty channel is auto-opped");
 
     // Observer rejoins — should see op in NAMES and get MODE +o broadcast
     h_obs.join(&channel).await.unwrap();
     wait_joined(&mut e_obs, &channel).await;
     let names2 = wait_names_containing(&mut e_obs, &channel, &op_nick).await;
-    assert!(names2.iter().any(|n| n == &format!("@{op_nick}")),
-        "Observer should see auto-opped user in NAMES, got: {names2:?}");
+    assert!(
+        names2.iter().any(|n| n == &format!("@{op_nick}")),
+        "Observer should see auto-opped user in NAMES, got: {names2:?}"
+    );
     eprintln!("  ✓ Second joiner sees auto-opped user in NAMES");
 
     let _ = h_op.quit(Some("done")).await;
@@ -4845,7 +5550,9 @@ async fn single_server_autoop_on_empty_rejoin() {
 /// EDGE1: PRIVMSG to channel with +n mode from non-member should fail
 #[tokio::test]
 async fn single_server_edge1_no_external_messages_enforced() {
-    let Some(addr) = get_single_server() else { return };
+    let Some(addr) = get_single_server() else {
+        return;
+    };
     let ch = test_channel("edge1");
     let nick_in = test_nick("in", "edge1");
     let nick_out = test_nick("out", "edge1");
@@ -4861,7 +5568,10 @@ async fn single_server_edge1_no_external_messages_enforced() {
     wait_registered(&mut rx_out).await;
 
     // OUT tries to send to channel — should get ERR_CANNOTSENDTOCHAN
-    h_out.raw(&format!("PRIVMSG {} :sneaky message", ch)).await.unwrap();
+    h_out
+        .raw(&format!("PRIVMSG {} :sneaky message", ch))
+        .await
+        .unwrap();
 
     // OUT should receive an error notice
     wait_notice_containing(&mut rx_out, "Cannot send to channel").await;
@@ -4872,7 +5582,8 @@ async fn single_server_edge1_no_external_messages_enforced() {
         &mut rx_in,
         |e| matches!(e, Event::Message { text, .. } if text.contains("sneaky")),
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
     assert!(got.is_none(), "Message from non-member leaked through +n");
     eprintln!("  ✓ No message leaked through +n");
 
@@ -4883,7 +5594,9 @@ async fn single_server_edge1_no_external_messages_enforced() {
 /// EDGE2: NICK change to a registered nick should be blocked
 #[tokio::test]
 async fn single_server_edge2_nick_change_to_registered_nick_blocked() {
-    let Some(addr) = get_single_server() else { return };
+    let Some(addr) = get_single_server() else {
+        return;
+    };
     let _ch = test_channel("edge2");
     let owner_nick = test_nick("owner", "edge2");
     let intruder_nick = test_nick("intruder", "edge2");
@@ -4897,7 +5610,10 @@ async fn single_server_edge2_nick_change_to_registered_nick_blocked() {
     wait_registered(&mut rx_intruder).await;
 
     // Intruder tries to change nick to owner's nick
-    h_intruder.raw(&format!("NICK {}", owner_nick)).await.unwrap();
+    h_intruder
+        .raw(&format!("NICK {}", owner_nick))
+        .await
+        .unwrap();
 
     // Should get ERR_NICKNAMEINUSE (433)
     wait_notice_containing(&mut rx_intruder, "already in use").await;
@@ -4910,7 +5626,9 @@ async fn single_server_edge2_nick_change_to_registered_nick_blocked() {
 /// EDGE3: CHATHISTORY for channel you're not in should be rejected
 #[tokio::test]
 async fn single_server_edge3_chathistory_unauthorized() {
-    let Some(addr) = get_single_server() else { return };
+    let Some(addr) = get_single_server() else {
+        return;
+    };
     let ch = test_channel("edge3");
     let nick_in = test_nick("in", "edge3");
     let nick_out = test_nick("spy", "edge3");
@@ -4928,7 +5646,10 @@ async fn single_server_edge3_chathistory_unauthorized() {
     wait_registered(&mut rx_out).await;
 
     // OUT requests chathistory — should fail
-    h_out.raw(&format!("CHATHISTORY LATEST {} * 50", ch)).await.unwrap();
+    h_out
+        .raw(&format!("CHATHISTORY LATEST {} * 50", ch))
+        .await
+        .unwrap();
 
     // Should receive an error (INVALID_TARGET or similar), NOT the secret message
     wait_notice_containing(&mut rx_out, "not in that channel").await;
@@ -4938,7 +5659,8 @@ async fn single_server_edge3_chathistory_unauthorized() {
         &mut rx_out,
         |e| matches!(e, Event::Message { text, .. } if text.contains("secret")),
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
     assert!(got.is_none(), "CHATHISTORY leaked messages to non-member!");
     eprintln!("  ✓ CHATHISTORY rejected for non-member");
 
@@ -4949,7 +5671,9 @@ async fn single_server_edge3_chathistory_unauthorized() {
 /// EDGE4: Double JOIN to same channel should be harmless
 #[tokio::test]
 async fn single_server_edge4_double_join_harmless() {
-    let Some(addr) = get_single_server() else { return };
+    let Some(addr) = get_single_server() else {
+        return;
+    };
     let ch = test_channel("edge4");
     let nick = test_nick("dblj", "edge4");
 
@@ -4966,7 +5690,9 @@ async fn single_server_edge4_double_join_harmless() {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Send a message to verify we're still in the channel
-    h.privmsg(&ch, "still here after double join").await.unwrap();
+    h.privmsg(&ch, "still here after double join")
+        .await
+        .unwrap();
     wait_message_containing(&mut rx, "still here after double join").await;
     eprintln!("  ✓ Double JOIN is harmless, user still functional");
 
@@ -4976,7 +5702,9 @@ async fn single_server_edge4_double_join_harmless() {
 /// EDGE5: KICK yourself from your own channel
 #[tokio::test]
 async fn single_server_edge5_kick_self() {
-    let Some(addr) = get_single_server() else { return };
+    let Some(addr) = get_single_server() else {
+        return;
+    };
     let ch = test_channel("edge5");
     let nick = test_nick("selfkick", "edge5");
 
@@ -4987,18 +5715,18 @@ async fn single_server_edge5_kick_self() {
     wait_joined(&mut rx, &ch).await;
 
     // Kick yourself
-    h.raw(&format!("KICK {} {} :self-kick", ch, actual_nick)).await.unwrap();
+    h.raw(&format!("KICK {} {} :self-kick", ch, actual_nick))
+        .await
+        .unwrap();
 
     // Should be kicked from the channel
-    wait_for(
-        &mut rx,
-        |e| matches!(e, Event::Kicked { .. }),
-        "self-kick",
-    ).await;
+    wait_for(&mut rx, |e| matches!(e, Event::Kicked { .. }), "self-kick").await;
     eprintln!("  ✓ Self-kick works");
 
     // Try to send after kick — should fail
-    h.raw(&format!("PRIVMSG {} :ghost message", ch)).await.unwrap();
+    h.raw(&format!("PRIVMSG {} :ghost message", ch))
+        .await
+        .unwrap();
     wait_notice_containing(&mut rx, "Cannot send to channel").await;
     eprintln!("  ✓ Cannot send after being kicked");
 
@@ -5008,7 +5736,9 @@ async fn single_server_edge5_kick_self() {
 /// EDGE6: MODE change on non-existent channel
 #[tokio::test]
 async fn single_server_edge6_mode_nonexistent_channel() {
-    let Some(addr) = get_single_server() else { return };
+    let Some(addr) = get_single_server() else {
+        return;
+    };
     let ch = test_channel("edge6noexist");
     let nick = test_nick("moder", "edge6");
 
@@ -5028,7 +5758,9 @@ async fn single_server_edge6_mode_nonexistent_channel() {
 /// EDGE7: Very long message doesn't crash server
 #[tokio::test]
 async fn single_server_edge7_long_message() {
-    let Some(addr) = get_single_server() else { return };
+    let Some(addr) = get_single_server() else {
+        return;
+    };
     let ch = test_channel("edge7");
     let nick1 = test_nick("long1", "edge7");
     let nick2 = test_nick("long2", "edge7");
@@ -5054,7 +5786,9 @@ async fn single_server_edge7_long_message() {
     eprintln!("  ✓ Long message delivered ({} chars received)", text.len());
 
     // Send a normal message after to verify server isn't broken
-    h1.privmsg(&ch, "still working after long msg").await.unwrap();
+    h1.privmsg(&ch, "still working after long msg")
+        .await
+        .unwrap();
     wait_message_containing(&mut rx2, "still working").await;
     eprintln!("  ✓ Server still functional after long message");
 
@@ -5065,7 +5799,9 @@ async fn single_server_edge7_long_message() {
 /// EDGE8: Non-op cannot set MODE +o
 #[tokio::test]
 async fn single_server_edge8_nonop_mode_change_rejected() {
-    let Some(addr) = get_single_server() else { return };
+    let Some(addr) = get_single_server() else {
+        return;
+    };
     let ch = test_channel("edge8");
     let nick_op = test_nick("theop", "edge8");
     let nick_user = test_nick("norml", "edge8");
@@ -5091,7 +5827,10 @@ async fn single_server_edge8_nonop_mode_change_rejected() {
     drain(&mut rx_user).await;
 
     // Normal user tries to +o target — should fail
-    h_user.raw(&format!("MODE {} +o {}", ch, actual_target)).await.unwrap();
+    h_user
+        .raw(&format!("MODE {} +o {}", ch, actual_target))
+        .await
+        .unwrap();
     wait_notice_containing(&mut rx_user, "not channel operator").await;
     eprintln!("  ✓ Non-op cannot set +o");
 
@@ -5103,7 +5842,9 @@ async fn single_server_edge8_nonop_mode_change_rejected() {
 /// EDGE9: Edit someone else's message is rejected
 #[tokio::test]
 async fn single_server_edge9_edit_others_message_rejected() {
-    let Some(addr) = get_single_server() else { return };
+    let Some(addr) = get_single_server() else {
+        return;
+    };
     let ch = test_channel("edge9");
     let nick1 = test_nick("auth1", "edge9");
     let nick2 = test_nick("edit2", "edge9");
@@ -5121,7 +5862,9 @@ async fn single_server_edge9_edit_others_message_rejected() {
     drain(&mut rx2).await;
 
     // User 1 sends a message
-    h1.privmsg(&ch, "original message from user1").await.unwrap();
+    h1.privmsg(&ch, "original message from user1")
+        .await
+        .unwrap();
     // Get the msgid from user 2's perspective
     let evt = wait_message_event_containing(&mut rx2, "original message from user1").await;
     let msgid = match &evt {
@@ -5135,7 +5878,9 @@ async fn single_server_edge9_edit_others_message_rejected() {
     h2.raw(&format!(
         "@+draft/edit={} PRIVMSG {} :hacked content",
         msgid, ch
-    )).await.unwrap();
+    ))
+    .await
+    .unwrap();
 
     // The edit should be rejected — either with FAIL AUTHOR_MISMATCH (if DB enabled)
     // or silently dropped (if no DB). Either way, user 1 must NOT see the edit.
@@ -5143,7 +5888,8 @@ async fn single_server_edge9_edit_others_message_rejected() {
         &mut rx1,
         |e| matches!(e, Event::Message { text, .. } if text.contains("hacked")),
         Duration::from_secs(3),
-    ).await;
+    )
+    .await;
     assert!(got.is_none(), "Unauthorized edit was delivered!");
     eprintln!("  ✓ Unauthorized edit not delivered to other users");
 
@@ -5154,7 +5900,9 @@ async fn single_server_edge9_edit_others_message_rejected() {
 /// EDGE10: Delete someone else's message without ops is rejected
 #[tokio::test]
 async fn single_server_edge10_delete_others_message_rejected() {
-    let Some(addr) = get_single_server() else { return };
+    let Some(addr) = get_single_server() else {
+        return;
+    };
     let ch = test_channel("edge10");
     let nick1 = test_nick("auth1", "edge10");
     let nick2 = test_nick("del2", "edge10");
@@ -5184,10 +5932,9 @@ async fn single_server_edge10_delete_others_message_rejected() {
     assert!(!msgid.is_empty(), "Message should have msgid");
 
     // User 2 (not op, not author) tries to delete
-    h2.raw(&format!(
-        "@+draft/delete={} TAGMSG {}",
-        msgid, ch
-    )).await.unwrap();
+    h2.raw(&format!("@+draft/delete={} TAGMSG {}", msgid, ch))
+        .await
+        .unwrap();
 
     // The delete should be rejected — either with FAIL DELETE AUTHOR_MISMATCH (if DB)
     // or silently dropped. Either way, check user 1 doesn't see a deletion broadcast.
@@ -5195,7 +5942,8 @@ async fn single_server_edge10_delete_others_message_rejected() {
         &mut rx1,
         |e| matches!(e, Event::Message { text, .. } if text.contains("deleted")),
         Duration::from_secs(3),
-    ).await;
+    )
+    .await;
     assert!(got.is_none(), "Unauthorized delete was broadcast!");
     eprintln!("  ✓ Unauthorized delete not broadcast");
 
@@ -5206,7 +5954,9 @@ async fn single_server_edge10_delete_others_message_rejected() {
 /// EDGE11: Rapid NICK changes don't cause state corruption
 #[tokio::test]
 async fn single_server_edge11_rapid_nick_changes() {
-    let Some(addr) = get_single_server() else { return };
+    let Some(addr) = get_single_server() else {
+        return;
+    };
     let ch = test_channel("edge11");
     let nick_base = test_nick("rapid", "edge11");
 
@@ -5239,7 +5989,9 @@ async fn single_server_edge11_rapid_nick_changes() {
 /// EDGE12: Moderated channel (+m) blocks non-voiced users
 #[tokio::test]
 async fn single_server_edge12_moderated_blocks_unvoiced() {
-    let Some(addr) = get_single_server() else { return };
+    let Some(addr) = get_single_server() else {
+        return;
+    };
     let ch = test_channel("edge12");
     let nick_op = test_nick("mop", "edge12");
     let nick_user = test_nick("muted", "edge12");
@@ -5260,7 +6012,10 @@ async fn single_server_edge12_moderated_blocks_unvoiced() {
     drain(&mut rx_op).await;
 
     // Unvoiced user tries to send — should fail
-    h_user.raw(&format!("PRIVMSG {} :muted message", ch)).await.unwrap();
+    h_user
+        .raw(&format!("PRIVMSG {} :muted message", ch))
+        .await
+        .unwrap();
     wait_notice_containing(&mut rx_user, "Cannot send to channel").await;
     eprintln!("  ✓ Unvoiced user blocked in +m channel");
 
@@ -5269,13 +6024,16 @@ async fn single_server_edge12_moderated_blocks_unvoiced() {
         &mut rx_op,
         |e| matches!(e, Event::Message { text, .. } if text.contains("muted")),
         Duration::from_secs(2),
-    ).await;
+    )
+    .await;
     assert!(got.is_none(), "Muted message leaked through +m");
     eprintln!("  ✓ No message leaked through +m");
 
     // Voice the user
     let actual_user = nick_user.clone(); // might differ if collision
-    h_op.raw(&format!("MODE {} +v {}", ch, actual_user)).await.unwrap();
+    h_op.raw(&format!("MODE {} +v {}", ch, actual_user))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
     drain(&mut rx_op).await;
     drain(&mut rx_user).await;
@@ -5294,9 +6052,15 @@ async fn single_server_edge12_moderated_blocks_unvoiced() {
 async fn single_server_edge13_halfop_behavior() {
     let addr = match std::env::var("SERVER") {
         Ok(a) => a,
-        _ => { eprintln!("SKIP: no SERVER set"); return; }
+        _ => {
+            eprintln!("SKIP: no SERVER set");
+            return;
+        }
     };
-    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
     let ch = format!("#_zqhalf_{}", ts % 100000);
     let nick_op = format!("_zqhop_{}", ts % 100000);
     let nick_halfop = format!("_zqhho_{}", ts % 100000);
@@ -5324,25 +6088,32 @@ async fn single_server_edge13_halfop_behavior() {
     drain(&mut rx_half).await;
 
     // Op grants halfop
-    h_op.raw(&format!("MODE {} +h {}", ch, nick_halfop)).await.unwrap();
+    h_op.raw(&format!("MODE {} +h {}", ch, nick_halfop))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
     // Halfop should see MODE change
     let _mode_event = wait_for(
         &mut rx_half,
         |e| matches!(e, Event::ModeChanged { .. }),
         "halfop MODE +h",
-    ).await;
+    )
+    .await;
     eprintln!("  ✓ Halfop received +h mode change");
     drain(&mut rx_op).await;
     drain(&mut rx_user).await;
 
     // Halfop CAN kick regular user
-    h_half.raw(&format!("KICK {} {} :halfop kick", ch, nick_user)).await.unwrap();
+    h_half
+        .raw(&format!("KICK {} {} :halfop kick", ch, nick_user))
+        .await
+        .unwrap();
     let _kick_event = wait_for(
         &mut rx_user,
         |e| matches!(e, Event::Kicked { .. }),
         "user kicked by halfop",
-    ).await;
+    )
+    .await;
     eprintln!("  ✓ Halfop can kick regular user");
     drain(&mut rx_half).await;
     drain(&mut rx_op).await;
@@ -5355,23 +6126,33 @@ async fn single_server_edge13_halfop_behavior() {
     drain(&mut rx_half).await;
 
     // Halfop CANNOT kick the op
-    h_half.raw(&format!("KICK {} {} :halfop vs op", ch, nick_op)).await.unwrap();
+    h_half
+        .raw(&format!("KICK {} {} :halfop vs op", ch, nick_op))
+        .await
+        .unwrap();
     wait_notice_containing(&mut rx_half, "operator").await;
     eprintln!("  ✓ Halfop cannot kick op");
 
     // Halfop CAN voice a user (+v)
-    h_half.raw(&format!("MODE {} +v {}", ch, nick_user)).await.unwrap();
+    h_half
+        .raw(&format!("MODE {} +v {}", ch, nick_user))
+        .await
+        .unwrap();
     let _voice_event = wait_for(
         &mut rx_user,
         |e| matches!(e, Event::ModeChanged { .. }),
         "voice set by halfop",
-    ).await;
+    )
+    .await;
     eprintln!("  ✓ Halfop can set +v");
     drain(&mut rx_half).await;
     drain(&mut rx_op).await;
 
     // Halfop CANNOT set +o
-    h_half.raw(&format!("MODE {} +o {}", ch, nick_user)).await.unwrap();
+    h_half
+        .raw(&format!("MODE {} +o {}", ch, nick_user))
+        .await
+        .unwrap();
     wait_notice_containing(&mut rx_half, "Moderators can only set").await;
     eprintln!("  ✓ Halfop cannot set +o");
 
@@ -5387,7 +6168,10 @@ async fn single_server_edge13_halfop_behavior() {
     drain(&mut rx_half).await;
     drain(&mut rx_user).await;
 
-    h_half.privmsg(&ch, "halfop speaks in moderated").await.unwrap();
+    h_half
+        .privmsg(&ch, "halfop speaks in moderated")
+        .await
+        .unwrap();
     wait_message_containing(&mut rx_op, "halfop speaks in moderated").await;
     eprintln!("  ✓ Halfop can speak in +m channel");
 
