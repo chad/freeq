@@ -54,7 +54,7 @@ fun ComposeBar(
         // Top border
         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
 
-        // Nick autocomplete suggestions
+        // Autocomplete suggestions (nicks and emoji)
         if (completions.isNotEmpty()) {
             LazyRow(
                 modifier = Modifier
@@ -63,24 +63,38 @@ fun ComposeBar(
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                items(completions) { nick ->
+                items(completions) { item ->
+                    val isEmoji = item.contains(" :") && !item.startsWith("@")
                     Surface(
                         shape = RoundedCornerShape(16.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.clickable { applyCompletion(nick, text) { text = it; completions = emptyList() } }
+                        modifier = Modifier.clickable { applyCompletion(item, text) { text = it; completions = emptyList() } }
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            UserAvatar(nick = nick, size = 20.dp)
-                            Text(
-                                nick,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onBackground
-                            )
+                            if (isEmoji) {
+                                Text(
+                                    item.split(" ")[0],
+                                    fontSize = 18.sp
+                                )
+                                Text(
+                                    item.split(" :").last().trimEnd(':'),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+                            } else {
+                                UserAvatar(nick = item, size = 20.dp)
+                                Text(
+                                    item,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+                            }
                         }
                     }
                 }
@@ -125,6 +139,11 @@ fun ComposeBar(
             OutlinedTextField(
                 value = text,
                 onValueChange = { newText ->
+                    // Intercept Enter when completions are showing
+                    if (completions.isNotEmpty() && newText.contains("\n")) {
+                        applyCompletion(completions.first(), text) { text = it; completions = emptyList() }
+                        return@OutlinedTextField
+                    }
                     text = replaceEmojiShortcodes(newText)
                     completions = updateCompletions(text, appState)
                     if (newText.isNotEmpty()) {
@@ -264,21 +283,41 @@ private fun ContextBar(
 
 private fun updateCompletions(text: String, appState: AppState): List<String> {
     val lastWord = text.split(" ").lastOrNull() ?: return emptyList()
-    if (!lastWord.startsWith("@") || lastWord.length <= 1) return emptyList()
 
-    val prefix = lastWord.drop(1).lowercase()
-    val members = appState.activeChannelState?.members ?: return emptyList()
-    return members
-        .map { it.nick }
-        .filter { it.lowercase().startsWith(prefix) && !it.equals(appState.nick.value, ignoreCase = true) }
-        .sorted()
-        .take(5)
+    // @mention autocomplete
+    if (lastWord.startsWith("@") && lastWord.length > 1) {
+        val prefix = lastWord.drop(1).lowercase()
+        val members = appState.activeChannelState?.members ?: return emptyList()
+        return members
+            .map { it.nick }
+            .filter { it.lowercase().startsWith(prefix) && !it.equals(appState.nick.value, ignoreCase = true) }
+            .sorted()
+            .take(5)
+    }
+
+    // :emoji autocomplete
+    if (lastWord.startsWith(":") && lastWord.length > 1 && !lastWord.drop(1).contains(":")) {
+        val partial = lastWord.drop(1).lowercase()
+        return EMOJI_MAP.entries
+            .filter { it.key.startsWith(partial) || it.key.contains(partial) }
+            .sortedBy { if (it.key.startsWith(partial)) 0 else 1 }
+            .take(8)
+            .map { "${it.value} :${it.key}:" }
+    }
+
+    return emptyList()
 }
 
-private fun applyCompletion(nick: String, currentText: String, setText: (String) -> Unit) {
+private fun applyCompletion(item: String, currentText: String, setText: (String) -> Unit) {
     val words = currentText.split(" ").toMutableList()
-    if (words.isNotEmpty() && words.last().startsWith("@")) {
-        words[words.lastIndex] = "@$nick"
+    if (words.isEmpty()) return
+    val lastWord = words.last()
+    if (lastWord.startsWith("@")) {
+        words[words.lastIndex] = "@$item"
+    } else if (lastWord.startsWith(":") && item.contains(" :")) {
+        // Emoji completion: item is "🔥 :fire:", extract just the emoji
+        val emoji = item.split(" ")[0]
+        words[words.lastIndex] = emoji
     }
     setText(words.joinToString(" ") + " ")
 }
