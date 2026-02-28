@@ -2,19 +2,18 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
-    @State private var hasAttemptedReconnect = false
-    @State private var reconnectTimedOut = false
     @State private var reconnectSeconds = 0
     @State private var reconnectTimer: Timer? = nil
+    @State private var userCancelledReconnect = false
 
     var body: some View {
         Group {
             switch appState.connectionState {
             case .disconnected:
-                if appState.hasSavedSession && !hasAttemptedReconnect && !reconnectTimedOut {
+                if appState.hasSavedSession && !userCancelledReconnect {
+                    // Auto-reconnect: keep trying until user explicitly cancels
                     reconnectingView
                         .onAppear {
-                            hasAttemptedReconnect = true
                             startReconnectTimer()
                             appState.reconnectSavedSession()
                         }
@@ -25,19 +24,13 @@ struct ContentView: View {
                         .transition(.opacity.combined(with: .scale(scale: 1.02)))
                 }
             case .connecting:
-                if appState.hasSavedSession || hasAttemptedReconnect {
-                    reconnectingView
-                        .onAppear { if reconnectTimer == nil { startReconnectTimer() } }
-                        .transition(.opacity)
-                } else {
-                    ConnectView()
-                        .transition(.opacity)
-                }
+                reconnectingView
+                    .onAppear { if reconnectTimer == nil { startReconnectTimer() } }
+                    .transition(.opacity)
             case .connected, .registered:
                 MainTabView()
                     .onAppear {
-                        hasAttemptedReconnect = false
-                        reconnectTimedOut = false
+                        userCancelledReconnect = false
                         stopReconnectTimer()
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                     }
@@ -53,12 +46,9 @@ struct ContentView: View {
 
     private func startReconnectTimer() {
         reconnectSeconds = 0
+        reconnectTimer?.invalidate()
         reconnectTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
             reconnectSeconds += 1
-            if reconnectSeconds >= 10 {
-                reconnectTimedOut = true
-                stopReconnectTimer()
-            }
         }
     }
 
@@ -75,24 +65,24 @@ struct ContentView: View {
                 ProgressView()
                     .tint(Theme.accent)
                     .scaleEffect(1.2)
-                Text("Connecting...")
+                Text(reconnectSeconds < 5 ? "Connecting..." : "Still connecting...")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundColor(Theme.textMuted)
 
-                if reconnectSeconds >= 5 {
+                if reconnectSeconds >= 8 {
                     Button(action: {
-                        reconnectTimedOut = true
+                        userCancelledReconnect = true
                         stopReconnectTimer()
                         appState.disconnect()
                     }) {
-                        Text("Cancel")
+                        Text("Sign in manually")
                             .font(.system(size: 14, weight: .medium))
                             .foregroundColor(Theme.accent)
                     }
                     .transition(.opacity)
                 }
             }
-            .animation(.easeInOut, value: reconnectSeconds >= 5)
+            .animation(.easeInOut, value: reconnectSeconds >= 8)
         }
     }
 }

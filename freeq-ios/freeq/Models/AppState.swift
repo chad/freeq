@@ -180,8 +180,12 @@ class AppState: ObservableObject {
         return nil
     }
 
-    /// Whether we have a saved session that should auto-reconnect
+    /// Whether we have a saved session that should auto-reconnect.
+    /// True if we have a broker token (the durable credential) OR a recent login.
     var hasSavedSession: Bool {
+        // Broker token is the primary signal — it's the long-lived credential
+        if brokerToken != nil && !nick.isEmpty { return true }
+        // Fallback: recent login timestamp (covers edge cases during migration)
         let lastLogin = UserDefaults.standard.double(forKey: "freeq.lastLogin")
         let twoWeeks: TimeInterval = 14 * 24 * 60 * 60
         return lastLogin > 0
@@ -225,7 +229,9 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Reconnect with saved session (requires SASL web-token)
+    /// Reconnect with saved session (requires SASL web-token).
+    /// Retries broker fetch with backoff on failure.
+    private var brokerRetryCount = 0
     func reconnectSavedSession() {
         guard hasSavedSession, connectionState == .disconnected else { return }
         if pendingWebToken != nil {
@@ -234,13 +240,14 @@ class AppState: ObservableObject {
         }
         // Fetch a fresh web-token from broker
         guard let brokerToken else {
-            errorMessage = "Session expired. Please log in again."
+            // No broker token at all — must log in fresh
             return
         }
         Task {
             do {
                 let session = try await fetchBrokerSession(brokerToken: brokerToken)
                 await MainActor.run {
+                    self.brokerRetryCount = 0
                     self.pendingWebToken = session.token
                     self.authenticatedDID = session.did
                     KeychainHelper.save(key: "did", value: session.did)
@@ -248,7 +255,17 @@ class AppState: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
-                    self.errorMessage = "Session expired. Please log in again."
+                    self.brokerRetryCount += 1
+                    if self.brokerRetryCount <= 4 {
+                        // Retry with backoff: 3, 6, 12, 24 seconds
+                        let delay = 3.0 * Double(1 << (self.brokerRetryCount - 1))
+                        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                            if self.connectionState == .disconnected {
+                                self.reconnectSavedSession()
+                            }
+                        }
+                    }
+                    // Don't set errorMessage — let it keep trying silently
                 }
             }
         }
@@ -566,10 +583,17 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
             state.connectionState = .registered
             state.reconnectAttempts = 0
             UINotificationFeedbackGenerator().notificationOccurred(.success)
-            // If we expected an authenticated session but got Guest, disconnect
+            // If we expected an authenticated session but got Guest, retry
+            // instead of showing login screen. Token may have been stale.
             if state.authenticatedDID != nil && nick.lowercased().hasPrefix("guest") {
-                state.errorMessage = "Session expired. Please log in again."
                 state.disconnect()
+                // Retry via broker — will get a fresh token
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    if state.connectionState == .disconnected && state.hasSavedSession {
+                        state.pendingWebToken = nil  // Force broker refresh
+                        state.reconnectSavedSession()
+                    }
+                }
                 return
             }
             state.nick = nick
@@ -581,6 +605,8 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
         case .authenticated(let did):
             state.authenticatedDID = did
             KeychainHelper.save(key: "did", value: did)
+            // Refresh login timestamp so hasSavedSession stays valid
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "freeq.lastLogin")
 
         case .authFailed(let reason):
             state.errorMessage = "Auth failed: \(reason)"
