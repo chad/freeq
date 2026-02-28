@@ -3,6 +3,8 @@ package com.freeq.model
 import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +51,7 @@ class ChannelState(val name: String) {
     val members = mutableStateListOf<MemberInfo>()
     var topic = mutableStateOf("")
     val typingUsers = mutableStateMapOf<String, Date>()
+    var lastActivityTime: Long = System.currentTimeMillis()
 
     private val messageIds = mutableSetOf<String>()
 
@@ -70,6 +73,9 @@ class ChannelState(val name: String) {
             if (idx >= 0) messages.add(idx, msg) else messages.add(msg)
         } else {
             messages.add(msg)
+        }
+        if (msg.timestamp.time > lastActivityTime) {
+            lastActivityTime = msg.timestamp.time
         }
     }
 
@@ -138,6 +144,13 @@ class AppState(application: Application) : AndroidViewModel(application) {
 
     var pendingWebToken: String? = null
     var pendingNavigation = mutableStateOf<String?>(null)
+    var brokerToken: String? = null
+    var authBrokerBase: String = "https://irc.freeq.at/auth/broker"
+    private var brokerRetryCount = 0
+    internal var intentionalDisconnect = false
+
+    val hasSavedSession: Boolean
+        get() = brokerToken != null && nick.value.isNotEmpty()
     val lastReadMessageIds = mutableStateMapOf<String, String>()
     val lastReadTimestamps = mutableStateMapOf<String, Long>()
     var isDarkTheme = mutableStateOf(true)
@@ -160,6 +173,19 @@ class AppState(application: Application) : AndroidViewModel(application) {
     internal val prefs: SharedPreferences
         get() = getApplication<Application>().getSharedPreferences("freeq", Context.MODE_PRIVATE)
 
+    internal val securePrefs: SharedPreferences by lazy {
+        val masterKey = MasterKey.Builder(getApplication<Application>())
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+        EncryptedSharedPreferences.create(
+            getApplication(),
+            "freeq_secure",
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    }
+
     val activeChannelState: ChannelState?
         get() {
             val name = activeChannel.value ?: return null
@@ -168,6 +194,17 @@ class AppState(application: Application) : AndroidViewModel(application) {
         }
 
     init {
+        // Migrate secrets from plain prefs to encrypted prefs (one-time)
+        if (prefs.contains("brokerToken") || prefs.contains("did")) {
+            prefs.getString("brokerToken", null)?.let { securePrefs.edit().putString("brokerToken", it).apply() }
+            prefs.getString("did", null)?.let { securePrefs.edit().putString("did", it).apply() }
+            prefs.edit().remove("brokerToken").remove("did").apply()
+        }
+
+        // Load secrets from encrypted storage
+        brokerToken = securePrefs.getString("brokerToken", null)
+        authenticatedDID.value = securePrefs.getString("did", null)
+
         // Restore persisted state
         nick.value = prefs.getString("nick", "") ?: ""
         serverAddress.value = prefs.getString("server", "irc.freeq.at:6667") ?: "irc.freeq.at:6667"
@@ -203,6 +240,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     // ── Connection ──
 
     fun connect(nickName: String) {
+        intentionalDisconnect = false
         nick.value = nickName
         connectionState.value = ConnectionState.Connecting
         errorMessage.value = null
@@ -212,6 +250,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
         try {
             val handler = AndroidEventHandler(this)
             client = FreeqClient(serverAddress.value, nickName, handler)
+            client?.setPlatform("freeq android")
 
             pendingWebToken?.let { token ->
                 client?.setWebToken(token)
@@ -226,6 +265,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     }
 
     fun disconnect() {
+        intentionalDisconnect = true
         client?.disconnect()
         connectionState.value = ConnectionState.Disconnected
         channels.clear()
@@ -234,6 +274,86 @@ class AppState(application: Application) : AndroidViewModel(application) {
         replyingTo.value = null
         editingMessage.value = null
         authenticatedDID.value = null
+    }
+
+    fun logout() {
+        intentionalDisconnect = true
+        brokerToken = null
+        pendingWebToken = null
+        securePrefs.edit().remove("brokerToken").remove("did").apply()
+        prefs.edit().remove("nick").apply()
+        nick.value = ""
+        disconnect()
+    }
+
+    fun reconnectSavedSession() {
+
+        if (!hasSavedSession || connectionState.value != ConnectionState.Disconnected) return
+        if (pendingWebToken != null) { connect(nick.value); return }
+
+        val token = brokerToken ?: return
+
+        connectionState.value = ConnectionState.Connecting
+
+        scope.launch {
+            try {
+                val session = withContext(Dispatchers.IO) { fetchBrokerSession(token) }
+
+                brokerRetryCount = 0
+                pendingWebToken = session.token
+                authenticatedDID.value = session.did
+                securePrefs.edit().putString("did", session.did).apply()
+                connect(session.nick)
+            } catch (e: Exception) {
+
+                brokerRetryCount++
+                if (brokerRetryCount <= 4) {
+                    val delayMs = 3000L * (1L shl (brokerRetryCount - 1)) // 3, 6, 12, 24s
+                    connectionState.value = ConnectionState.Disconnected
+                    delay(delayMs)
+                    if (connectionState.value == ConnectionState.Disconnected) {
+                        reconnectSavedSession()
+                    }
+                } else {
+                    connectionState.value = ConnectionState.Disconnected
+                }
+            }
+        }
+    }
+
+    private data class BrokerSessionResponse(val token: String, val nick: String, val did: String)
+
+    private fun fetchBrokerSession(brokerToken: String): BrokerSessionResponse {
+        // Retry once on 502 (DPoP nonce rotation)
+        for (attempt in 0..1) {
+            val url = java.net.URL("$authBrokerBase/session")
+            val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = 10_000
+                readTimeout = 10_000
+                setRequestProperty("Content-Type", "application/json")
+            }
+            conn.outputStream.use { out ->
+                out.write("""{"broker_token":"$brokerToken"}""".toByteArray())
+            }
+            val status = conn.responseCode
+            if (status == 502 && attempt == 0) {
+                Thread.sleep(300)
+                continue
+            }
+            if (status != 200) {
+                throw Exception("Broker returned $status")
+            }
+            val body = conn.inputStream.bufferedReader().readText()
+            val json = org.json.JSONObject(body)
+            return BrokerSessionResponse(
+                token = json.getString("token"),
+                nick = json.getString("nick"),
+                did = json.getString("did")
+            )
+        }
+        throw Exception("Broker failed after retries")
     }
 
     // ── Channel operations ──
@@ -447,8 +567,22 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
             }
 
             is FreeqEvent.Registered -> {
-                state.connectionState.value = ConnectionState.Registered
                 state.reconnectAttempts = 0
+                // If authenticated user got Guest nick, token was stale — retry broker
+                if (state.authenticatedDID.value != null
+                    && event.nick.startsWith("Guest", ignoreCase = true)) {
+                    state.disconnect()
+                    state.scope.launch {
+                        delay(2000)
+                        if (state.connectionState.value == ConnectionState.Disconnected
+                            && state.hasSavedSession) {
+                            state.pendingWebToken = null
+                            state.reconnectSavedSession()
+                        }
+                    }
+                    return
+                }
+                state.connectionState.value = ConnectionState.Registered
                 state.nick.value = event.nick
                 state.autoJoinChannels.toList().forEach { state.joinChannel(it) }
             }
@@ -463,6 +597,7 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
 
             is FreeqEvent.Joined -> {
                 val ch = state.getOrCreateChannel(event.channel)
+                ch.lastActivityTime = System.currentTimeMillis()
                 if (event.nick.equals(state.nick.value, ignoreCase = true)) {
                     if (state.activeChannel.value == null) {
                         state.activeChannel.value = event.channel
@@ -586,6 +721,7 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
             is FreeqEvent.TopicChanged -> {
                 val ch = state.getOrCreateChannel(event.channel)
                 ch.topic.value = event.topic.text
+                ch.lastActivityTime = System.currentTimeMillis()
             }
 
             is FreeqEvent.ModeChanged -> {
@@ -663,15 +799,19 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                 if (event.reason.isNotEmpty()) {
                     state.errorMessage.value = "Disconnected: ${event.reason}"
                 }
-                // Auto-reconnect with exponential backoff (2s, 4s, 8s, 16s, 30s cap)
-                if (state.nick.value.isNotEmpty()) {
+                // Auto-reconnect: prefer broker session restore, fall back to plain reconnect
+                if (state.nick.value.isNotEmpty() && !state.intentionalDisconnect) {
                     state.reconnectAttempts++
                     val delay = minOf(1L shl minOf(state.reconnectAttempts, 5), 30L)
                     state.scope.launch {
                         kotlinx.coroutines.delay(delay * 1000)
                         if (state.connectionState.value == ConnectionState.Disconnected
                             && state.nick.value.isNotEmpty()) {
-                            state.connect(state.nick.value)
+                            if (state.hasSavedSession) {
+                                state.reconnectSavedSession()
+                            } else {
+                                state.connect(state.nick.value)
+                            }
                         }
                     }
                 }

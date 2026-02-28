@@ -71,6 +71,9 @@ dependencies {
     // Browser (Chrome Custom Tabs for OAuth)
     implementation("androidx.browser:browser:1.7.0")
 
+    // Security (EncryptedSharedPreferences)
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
     // Emoji picker
     implementation("androidx.emoji2:emoji2-emojipicker:1.5.0")
 

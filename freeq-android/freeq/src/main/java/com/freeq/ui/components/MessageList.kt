@@ -119,8 +119,12 @@ fun MessageList(
             }
             listState.scrollToItem(targetIdx)
             initialScrollDone = true
-        } else if (initialScrollDone && messages.isNotEmpty() && scrollToMessageId == null && isNearBottom && !listState.isScrollInProgress) {
-            listState.animateScrollToItem(messages.size - 1)
+        } else if (initialScrollDone && messages.isNotEmpty() && scrollToMessageId == null) {
+            val lastMsg = messages.lastOrNull()
+            val isOwnMessage = lastMsg?.from?.equals(appState.nick.value, ignoreCase = true) == true
+            if (isOwnMessage || (isNearBottom && !listState.isScrollInProgress)) {
+                listState.animateScrollToItem(messages.size - 1)
+            }
         }
     }
 
