@@ -8,11 +8,11 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
+use crossterm::ExecutableCommand;
 use crossterm::event::{self, Event as CrosstermEvent};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use crossterm::ExecutableCommand;
 use editor::EditAction;
 use freeq_sdk::auth::{ChallengeSigner, KeySigner, PdsSessionSigner};
 use freeq_sdk::client::{self, ConnectConfig};
@@ -21,8 +21,8 @@ use freeq_sdk::did::DidResolver;
 use freeq_sdk::event::Event;
 use freeq_sdk::oauth;
 use freeq_sdk::pds;
-use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 
 use crate::app::App;
 
@@ -111,18 +111,40 @@ async fn main() -> Result<()> {
     // --save-config: persist current CLI args and exit
     if cli.save_config {
         let mut new_cfg = cfg.clone();
-        if let Some(ref s) = cli.server { new_cfg.server = Some(s.clone()); }
-        if let Some(ref n) = cli.nick { new_cfg.nick = Some(n.clone()); }
-        if let Some(ref h) = cli.handle { new_cfg.handle = Some(h.clone()); }
-        if cli.tls { new_cfg.tls = Some(true); }
-        if cli.tls_insecure { new_cfg.tls_insecure = Some(true); }
-        if cli.vi { new_cfg.vi = Some(true); }
-        if let Some(ref ch) = cli.channels {
-            new_cfg.channels = Some(ch.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect());
+        if let Some(ref s) = cli.server {
+            new_cfg.server = Some(s.clone());
         }
-        if let Some(ref a) = cli.iroh_addr { new_cfg.iroh_addr = Some(a.clone()); }
+        if let Some(ref n) = cli.nick {
+            new_cfg.nick = Some(n.clone());
+        }
+        if let Some(ref h) = cli.handle {
+            new_cfg.handle = Some(h.clone());
+        }
+        if cli.tls {
+            new_cfg.tls = Some(true);
+        }
+        if cli.tls_insecure {
+            new_cfg.tls_insecure = Some(true);
+        }
+        if cli.vi {
+            new_cfg.vi = Some(true);
+        }
+        if let Some(ref ch) = cli.channels {
+            new_cfg.channels = Some(
+                ch.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect(),
+            );
+        }
+        if let Some(ref a) = cli.iroh_addr {
+            new_cfg.iroh_addr = Some(a.clone());
+        }
         new_cfg.save();
-        let path = dirs::config_dir().unwrap_or_default().join("freeq").join("tui.toml");
+        let path = dirs::config_dir()
+            .unwrap_or_default()
+            .join("freeq")
+            .join("tui.toml");
         eprintln!("Config saved to {}", path.display());
         return Ok(());
     }
@@ -130,37 +152,49 @@ async fn main() -> Result<()> {
     // Decide: interactive form vs. auto-connect
     // Show form when: no CLI args AND no saved handle (first run or guest-only history)
     // Auto-connect when: CLI args given OR saved session has a handle
-    let resolved = if !config::has_explicit_cli_args(&cli) && !config::has_saved_session(&cfg, &session) {
-        // First run or no saved identity → interactive setup
-        match config::interactive_setup(&cfg, &session) {
-            Some(r) => r,
-            None => return Ok(()), // user cancelled
-        }
-    } else if config::has_explicit_cli_args(&cli) {
-        // Explicit CLI args → merge normally, no form
-        let r = config::Resolved::merge(&cli, &cfg, &session);
-        eprintln!("freeq-tui — server: {}, nick: {}, channels: {}",
-            r.server, r.nick,
-            if r.channels.is_empty() { "(none)".to_string() } else { r.channels.join(", ") },
-        );
-        if let Some(ref h) = r.handle {
-            eprintln!("  handle: {h}");
-        }
-        r
-    } else {
-        // Saved session with handle → auto-reconnect
-        let r = config::Resolved::merge(&cli, &cfg, &session);
-        if let Some(ref h) = r.handle {
-            eprintln!("freeq-tui — reconnecting as 🦋 {h} to {}", r.server);
+    let resolved =
+        if !config::has_explicit_cli_args(&cli) && !config::has_saved_session(&cfg, &session) {
+            // First run or no saved identity → interactive setup
+            match config::interactive_setup(&cfg, &session) {
+                Some(r) => r,
+                None => return Ok(()), // user cancelled
+            }
+        } else if config::has_explicit_cli_args(&cli) {
+            // Explicit CLI args → merge normally, no form
+            let r = config::Resolved::merge(&cli, &cfg, &session);
+            eprintln!(
+                "freeq-tui — server: {}, nick: {}, channels: {}",
+                r.server,
+                r.nick,
+                if r.channels.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    r.channels.join(", ")
+                },
+            );
+            if let Some(ref h) = r.handle {
+                eprintln!("  handle: {h}");
+            }
+            r
         } else {
-            eprintln!("freeq-tui — reconnecting to {}", r.server);
-        }
-        eprintln!("  nick: {}, channels: {}",
-            r.nick,
-            if r.channels.is_empty() { "(none)".to_string() } else { r.channels.join(", ") },
-        );
-        r
-    };
+            // Saved session with handle → auto-reconnect
+            let r = config::Resolved::merge(&cli, &cfg, &session);
+            if let Some(ref h) = r.handle {
+                eprintln!("freeq-tui — reconnecting as 🦋 {h} to {}", r.server);
+            } else {
+                eprintln!("freeq-tui — reconnecting to {}", r.server);
+            }
+            eprintln!(
+                "  nick: {}, channels: {}",
+                r.nick,
+                if r.channels.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    r.channels.join(", ")
+                },
+            );
+            r
+        };
 
     // Build a CLI-like struct with resolved values for build_signer
     let effective_cli = Cli {
@@ -170,7 +204,11 @@ async fn main() -> Result<()> {
         tls: resolved.tls,
         tls_insecure: resolved.tls_insecure,
         vi: resolved.vi,
-        channels: if resolved.channels.is_empty() { None } else { Some(resolved.channels.join(",")) },
+        channels: if resolved.channels.is_empty() {
+            None
+        } else {
+            Some(resolved.channels.join(","))
+        },
         iroh_addr: resolved.iroh_addr.clone(),
         app_password: cli.app_password.clone(),
         did: cli.did.clone(),
@@ -183,30 +221,45 @@ async fn main() -> Result<()> {
 
     let (signer, media_uploader) = build_signer(&effective_cli).await?;
 
-    let auth_status = if signer.is_some() { "authenticating" } else { "guest" };
+    let auth_status = if signer.is_some() {
+        "authenticating"
+    } else {
+        "guest"
+    };
 
     // Transport priority: iroh > TCP/TLS
     let iroh_addr = if let Some(ref addr) = resolved.iroh_addr {
         Some(addr.clone())
     } else {
         eprintln!("Probing {} for iroh transport...", resolved.server);
-        match client::discover_iroh_id(&resolved.server, resolved.tls, resolved.tls_insecure).await {
+        match client::discover_iroh_id(&resolved.server, resolved.tls, resolved.tls_insecure).await
+        {
             Some(id) => {
                 eprintln!("  Server advertises iroh: {}", &id[..16.min(id.len())]);
                 Some(id)
             }
             None => {
-                eprintln!("  No iroh available, using {}", if resolved.tls { "TLS" } else { "TCP" });
+                eprintln!(
+                    "  No iroh available, using {}",
+                    if resolved.tls { "TLS" } else { "TCP" }
+                );
                 None
             }
         }
     };
 
     let conn = if let Some(ref iroh_addr) = iroh_addr {
-        eprintln!("Connecting via iroh to {} as {} ({auth_status})...", &iroh_addr[..16.min(iroh_addr.len())], resolved.nick);
+        eprintln!(
+            "Connecting via iroh to {} as {} ({auth_status})...",
+            &iroh_addr[..16.min(iroh_addr.len())],
+            resolved.nick
+        );
         client::establish_iroh_connection(iroh_addr).await?
     } else {
-        eprintln!("Connecting to {} as {} ({auth_status})...", resolved.server, resolved.nick);
+        eprintln!(
+            "Connecting to {} as {} ({auth_status})...",
+            resolved.server, resolved.nick
+        );
         if resolved.tls {
             eprintln!("  (TLS enabled)");
         }
@@ -219,7 +272,8 @@ async fn main() -> Result<()> {
             tls: resolved.tls,
             tls_insecure: resolved.tls_insecure,
             web_token: None,
-        }).await?
+        })
+        .await?
     };
 
     let connect_config = ConnectConfig {
@@ -232,7 +286,8 @@ async fn main() -> Result<()> {
         web_token: None,
     };
 
-    let (mut handle, mut events) = client::connect_with_stream(conn, connect_config.clone(), signer.clone());
+    let (mut handle, mut events) =
+        client::connect_with_stream(conn, connect_config.clone(), signer.clone());
 
     // Auto-join channels
     for ch in &resolved.channels {
@@ -271,7 +326,9 @@ async fn main() -> Result<()> {
     app.connected_at = Some(std::time::Instant::now());
     app.media_uploader = media_uploader;
     #[cfg(feature = "inline-images")]
-    { app.picker = picker; }
+    {
+        app.picker = picker;
+    }
 
     let mut reconnect_info = Some(ReconnectInfo {
         config: connect_config,
@@ -280,10 +337,19 @@ async fn main() -> Result<()> {
         _iroh_addr: iroh_addr.clone(),
     });
 
-    let result = run_app(&mut terminal, &mut app, &mut handle, &mut events, &mut reconnect_info).await;
+    let result = run_app(
+        &mut terminal,
+        &mut app,
+        &mut handle,
+        &mut events,
+        &mut reconnect_info,
+    )
+    .await;
 
     // Save session state on exit (channels, server, nick, handle)
-    let open_channels: Vec<String> = app.buffers.keys()
+    let open_channels: Vec<String> = app
+        .buffers
+        .keys()
         .filter(|k| k.starts_with('#') || k.starts_with('&'))
         .cloned()
         .collect();
@@ -292,7 +358,8 @@ async fn main() -> Result<()> {
         nick: Some(app.nick.clone()),
         handle: resolved.handle,
         channels: open_channels,
-    }.save();
+    }
+    .save();
 
     // Restore terminal
     disable_raw_mode()?;
@@ -333,7 +400,10 @@ async fn build_signer(cli: &Cli) -> Result<SignerResult> {
             };
             return Ok((
                 Some(Arc::new(PdsSessionSigner::new_with_refresh(
-                    session.did, session.access_jwt, session.refresh_jwt, pds_url,
+                    session.did,
+                    session.access_jwt,
+                    session.refresh_jwt,
+                    pds_url,
                 ))),
                 Some(uploader),
             ));
@@ -354,8 +424,11 @@ async fn build_signer(cli: &Cli) -> Result<SignerResult> {
                             let uploader = make_oauth_uploader(&session);
                             return Ok((
                                 Some(Arc::new(PdsSessionSigner::new_oauth(
-                                    session.did, session.access_token, session.pds_url,
-                                    session.dpop_key, session.dpop_nonce,
+                                    session.did,
+                                    session.access_token,
+                                    session.pds_url,
+                                    session.dpop_key,
+                                    session.dpop_nonce,
                                 ))),
                                 Some(uploader),
                             ));
@@ -388,8 +461,11 @@ async fn build_signer(cli: &Cli) -> Result<SignerResult> {
             let uploader = make_oauth_uploader(&session);
             return Ok((
                 Some(Arc::new(PdsSessionSigner::new_oauth(
-                    session.did, session.access_token, session.pds_url,
-                    session.dpop_key, session.dpop_nonce,
+                    session.did,
+                    session.access_token,
+                    session.pds_url,
+                    session.dpop_key,
+                    session.dpop_nonce,
                 ))),
                 Some(uploader),
             ));
@@ -430,7 +506,10 @@ async fn build_signer(cli: &Cli) -> Result<SignerResult> {
                 _ => PrivateKey::generate_secp256k1(),
             }
         };
-        return Ok((Some(Arc::new(KeySigner::new(did.clone(), private_key))), None));
+        return Ok((
+            Some(Arc::new(KeySigner::new(did.clone(), private_key))),
+            None,
+        ));
     }
 
     // No auth — guest mode
@@ -588,52 +667,61 @@ async fn run_app(
             }
 
             if let Some(at) = app.reconnect_at
-                && std::time::Instant::now() >= at {
-                    app.reconnect_at = None;
-                    app.reconnect_pending = false;
+                && std::time::Instant::now() >= at
+            {
+                app.reconnect_at = None;
+                app.reconnect_pending = false;
 
-                    if let Some(ri) = reconnect_info.as_ref() {
-                        app.status_msg("Reconnecting...");
-                        app.connection_state = "connecting".to_string();
+                if let Some(ri) = reconnect_info.as_ref() {
+                    app.status_msg("Reconnecting...");
+                    app.connection_state = "connecting".to_string();
 
-                        match client::establish_connection(&ri.config).await {
-                            Ok(conn) => {
-                                let (new_handle, new_events) =
-                                    client::connect_with_stream(conn, ri.config.clone(), ri.signer.clone());
-                                *handle = new_handle;
-                                *events = new_events;
+                    match client::establish_connection(&ri.config).await {
+                        Ok(conn) => {
+                            let (new_handle, new_events) = client::connect_with_stream(
+                                conn,
+                                ri.config.clone(),
+                                ri.signer.clone(),
+                            );
+                            *handle = new_handle;
+                            *events = new_events;
 
-                                // Re-join channels
-                                for ch in &ri.channels {
-                                    let _ = handle.join(ch).await;
-                                }
-                                // Also rejoin any channels we were in (from buffers)
-                                for buf_name in app.buffers.keys() {
-                                    if (buf_name.starts_with('#') || buf_name.starts_with('&'))
-                                        && !ri.channels.iter().any(|c| c.eq_ignore_ascii_case(buf_name)) {
-                                            let _ = handle.join(buf_name).await;
-                                        }
-                                }
-
-                                app.reconnect_delay = Duration::from_secs(1);
-                                app.connected_at = Some(std::time::Instant::now());
-                                app.status_msg("Reconnected!");
+                            // Re-join channels
+                            for ch in &ri.channels {
+                                let _ = handle.join(ch).await;
                             }
-                            Err(e) => {
-                                // Exponential backoff: 1s, 2s, 4s, 8s, ... capped at 60s
-                                app.reconnect_delay = (app.reconnect_delay * 2).min(Duration::from_secs(60));
-                                let secs = app.reconnect_delay.as_secs();
-                                app.connection_state = format!("reconnecting in {secs}s");
-                                app.status_msg(&format!("Reconnect failed: {e}. Retrying in {secs}s..."));
-                                app.reconnect_pending = true;
-                                app.reconnect_at = Some(std::time::Instant::now() + app.reconnect_delay);
+                            // Also rejoin any channels we were in (from buffers)
+                            for buf_name in app.buffers.keys() {
+                                if (buf_name.starts_with('#') || buf_name.starts_with('&'))
+                                    && !ri.channels.iter().any(|c| c.eq_ignore_ascii_case(buf_name))
+                                {
+                                    let _ = handle.join(buf_name).await;
+                                }
                             }
+
+                            app.reconnect_delay = Duration::from_secs(1);
+                            app.connected_at = Some(std::time::Instant::now());
+                            app.status_msg("Reconnected!");
                         }
-                    } else {
-                        app.status_msg("Cannot reconnect: no connection info available");
-                        app.should_quit = true;
+                        Err(e) => {
+                            // Exponential backoff: 1s, 2s, 4s, 8s, ... capped at 60s
+                            app.reconnect_delay =
+                                (app.reconnect_delay * 2).min(Duration::from_secs(60));
+                            let secs = app.reconnect_delay.as_secs();
+                            app.connection_state = format!("reconnecting in {secs}s");
+                            app.status_msg(&format!(
+                                "Reconnect failed: {e}. Retrying in {secs}s..."
+                            ));
+                            app.reconnect_pending = true;
+                            app.reconnect_at =
+                                Some(std::time::Instant::now() + app.reconnect_delay);
+                        }
                     }
+                } else {
+                    app.status_msg("Cannot reconnect: no connection info available");
+                    app.should_quit = true;
                 }
+            }
         }
 
         if app.should_quit {
@@ -653,17 +741,15 @@ fn process_p2p_event(app: &mut App, event: freeq_sdk::p2p::P2pEvent) {
         P2pEvent::PeerConnected { peer_id } => {
             let short = &peer_id[..8.min(peer_id.len())];
             let buffer_key = format!("p2p:{short}");
-            app.buffer_mut(&buffer_key).push_system(
-                &format!("🔗 Peer connected: {peer_id}"),
-            );
+            app.buffer_mut(&buffer_key)
+                .push_system(&format!("🔗 Peer connected: {peer_id}"));
             app.status_msg(&format!("P2P peer connected: {short}…"));
         }
         P2pEvent::PeerDisconnected { peer_id } => {
             let short = &peer_id[..8.min(peer_id.len())];
             let buffer_key = format!("p2p:{short}");
-            app.buffer_mut(&buffer_key).push_system(
-                &format!("🔌 Peer disconnected: {peer_id}"),
-            );
+            app.buffer_mut(&buffer_key)
+                .push_system(&format!("🔌 Peer disconnected: {peer_id}"));
         }
         P2pEvent::DirectMessage { peer_id, text } => {
             let short = &peer_id[..8.min(peer_id.len())];
@@ -680,7 +766,10 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
     match event {
         Event::Connected => {
             app.connection_state = "connected".to_string();
-            app.status_msg(&format!("Connected to server via {}", app.transport.description()));
+            app.status_msg(&format!(
+                "Connected to server via {}",
+                app.transport.description()
+            ));
         }
         Event::Registered { nick } => {
             app.connection_state = "registered".to_string();
@@ -715,21 +804,30 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
             });
             buf.push_system(&format!("{nick} has left"));
         }
-        Event::Message { from, target, text, tags } => {
+        Event::Message {
+            from,
+            target,
+            text,
+            tags,
+        } => {
             // Try E2EE decryption if we have a key for this channel
             let (text, was_encrypted) = {
-                let buf_key = if target.starts_with('#') || target.starts_with('&') || from == app.nick {
-                    target.to_lowercase()
-                } else {
-                    from.to_lowercase()
-                };
+                let buf_key =
+                    if target.starts_with('#') || target.starts_with('&') || from == app.nick {
+                        target.to_lowercase()
+                    } else {
+                        from.to_lowercase()
+                    };
                 if let Some(key) = app.channel_keys.get(&buf_key) {
                     if freeq_sdk::e2ee::is_encrypted(&text) {
                         match freeq_sdk::e2ee::decrypt(key, &text) {
                             Ok(plaintext) => (plaintext, true),
                             Err(_) => {
                                 // Wrong key or tampered — show error inline
-                                ("🔒 [encrypted message — wrong key or corrupted]".to_string(), false)
+                                (
+                                    "🔒 [encrypted message — wrong key or corrupted]".to_string(),
+                                    false,
+                                )
                             }
                         }
                     } else {
@@ -739,7 +837,10 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                     }
                 } else if freeq_sdk::e2ee::is_encrypted(&text) {
                     // Encrypted but we don't have the key
-                    ("🔒 [encrypted message — use /encrypt <passphrase> to decrypt]".to_string(), false)
+                    (
+                        "🔒 [encrypted message — use /encrypt <passphrase> to decrypt]".to_string(),
+                        false,
+                    )
                 } else {
                     (text.clone(), false)
                 }
@@ -755,25 +856,39 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
 
             // Detect CTCP ACTION (/me)
             if text.starts_with('\x01') && text.ends_with('\x01') {
-                let inner = &text[1..text.len()-1];
+                let inner = &text[1..text.len() - 1];
                 if let Some(action) = inner.strip_prefix("ACTION ") {
                     let buf_name = if !target.starts_with('#') && !target.starts_with('&') {
-                        if from == app.nick { target.clone() } else { from.clone() }
+                        if from == app.nick {
+                            target.clone()
+                        } else {
+                            from.clone()
+                        }
                     } else {
                         target.clone()
                     };
-                    push_line_to_buffer(app, batch_id, &buf_name, timestamp_ms, crate::app::BufferLine {
-                        timestamp: timestamp.clone(),
-                        from: String::new(),
-                        text: format!("* {from} {action}"),
-                        is_system: true,
-                        image_url: None,
-                    });
+                    push_line_to_buffer(
+                        app,
+                        batch_id,
+                        &buf_name,
+                        timestamp_ms,
+                        crate::app::BufferLine {
+                            timestamp: timestamp.clone(),
+                            from: String::new(),
+                            text: format!("* {from} {action}"),
+                            is_system: true,
+                            image_url: None,
+                        },
+                    );
                 }
             } else if let Some(ref media) = media {
                 // Rich media message
                 let buf_name = if !target.starts_with('#') && !target.starts_with('&') {
-                    if from == app.nick { target.clone() } else { from.clone() }
+                    if from == app.nick {
+                        target.clone()
+                    } else {
+                        from.clone()
+                    }
                 } else {
                     target.clone()
                 };
@@ -787,43 +902,69 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                 if let Some(ref url) = img_url {
                     fetch_image_if_needed(&app.image_cache, url);
                 }
-                push_line_to_buffer(app, batch_id, &buf_name, timestamp_ms, crate::app::BufferLine {
-                    timestamp: timestamp.clone(),
-                    from: from.clone(),
-                    text: display,
-                    is_system: false,
-                    image_url: img_url,
-                });
+                push_line_to_buffer(
+                    app,
+                    batch_id,
+                    &buf_name,
+                    timestamp_ms,
+                    crate::app::BufferLine {
+                        timestamp: timestamp.clone(),
+                        from: from.clone(),
+                        text: display,
+                        is_system: false,
+                        image_url: img_url,
+                    },
+                );
             } else {
                 // Check for link preview in tags
                 let link_preview = freeq_sdk::media::LinkPreview::from_tags(&tags);
                 if let Some(preview) = link_preview {
                     let buf_name = if !target.starts_with('#') && !target.starts_with('&') {
-                        if from == app.nick { target.clone() } else { from.clone() }
+                        if from == app.nick {
+                            target.clone()
+                        } else {
+                            from.clone()
+                        }
                     } else {
                         target.clone()
                     };
                     let display = format_link_preview(&preview);
-                    push_line_to_buffer(app, batch_id, &buf_name, timestamp_ms, crate::app::BufferLine {
-                        timestamp: timestamp.clone(),
-                        from: from.clone(),
-                        text: display,
-                        is_system: false,
-                        image_url: None,
-                    });
+                    push_line_to_buffer(
+                        app,
+                        batch_id,
+                        &buf_name,
+                        timestamp_ms,
+                        crate::app::BufferLine {
+                            timestamp: timestamp.clone(),
+                            from: from.clone(),
+                            text: display,
+                            is_system: false,
+                            image_url: None,
+                        },
+                    );
                 } else {
                     let buf_name = if !target.starts_with('#') && !target.starts_with('&') {
-                        if from == app.nick { target.clone() } else { from.clone() }
+                        if from == app.nick {
+                            target.clone()
+                        } else {
+                            from.clone()
+                        }
                     } else {
                         target.clone()
                     };
-                    push_line_to_buffer(app, batch_id, &buf_name, timestamp_ms, crate::app::BufferLine {
-                        timestamp: timestamp.clone(),
-                        from: from.clone(),
-                        text: text.clone(),
-                        is_system: false,
-                        image_url: None,
-                    });
+                    push_line_to_buffer(
+                        app,
+                        batch_id,
+                        &buf_name,
+                        timestamp_ms,
+                        crate::app::BufferLine {
+                            timestamp: timestamp.clone(),
+                            from: from.clone(),
+                            text: text.clone(),
+                            is_system: false,
+                            image_url: None,
+                        },
+                    );
 
                     // Note: auto-fetch of link previews disabled.
                     // Use /preview <url> to manually fetch + share a preview.
@@ -832,7 +973,11 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                 }
             }
         }
-        Event::BatchStart { id, batch_type: _, target } => {
+        Event::BatchStart {
+            id,
+            batch_type: _,
+            target,
+        } => {
             app.start_batch(&id, &target);
         }
         Event::BatchEnd { id } => {
@@ -842,7 +987,11 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
             // Handle reactions
             if let Some(reaction) = freeq_sdk::media::Reaction::from_tags(&tags) {
                 let buf_name = if !target.starts_with('#') && !target.starts_with('&') {
-                    if from == app.nick { target.clone() } else { from.clone() }
+                    if from == app.nick {
+                        target.clone()
+                    } else {
+                        from.clone()
+                    }
                 } else {
                     target.clone()
                 };
@@ -855,7 +1004,12 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                 });
             }
         }
-        Event::ModeChanged { channel, mode, arg, set_by } => {
+        Event::ModeChanged {
+            channel,
+            mode,
+            arg,
+            set_by,
+        } => {
             let msg = match &arg {
                 Some(a) => format!("{set_by} sets mode {mode} {a}"),
                 None => format!("{set_by} sets mode {mode}"),
@@ -869,25 +1023,29 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                 match mode.as_str() {
                     "+o" => {
                         // Remove any existing entry, add with @
-                        buf.nicks.retain(|n| n.trim_start_matches(['@', '+']) != bare);
+                        buf.nicks
+                            .retain(|n| n.trim_start_matches(['@', '+']) != bare);
                         buf.nicks.push(format!("@{bare}"));
                     }
                     "-o" => {
-                        buf.nicks.retain(|n| n.trim_start_matches(['@', '+']) != bare);
+                        buf.nicks
+                            .retain(|n| n.trim_start_matches(['@', '+']) != bare);
                         buf.nicks.push(bare.to_string());
                     }
                     "+v" => {
                         // Only add + if not already an op
                         let was_op = buf.nicks.iter().any(|n| n == &format!("@{bare}"));
                         if !was_op {
-                            buf.nicks.retain(|n| n.trim_start_matches(['@', '+']) != bare);
+                            buf.nicks
+                                .retain(|n| n.trim_start_matches(['@', '+']) != bare);
                             buf.nicks.push(format!("+{bare}"));
                         }
                     }
                     "-v" => {
                         let was_op = buf.nicks.iter().any(|n| n == &format!("@{bare}"));
                         if !was_op {
-                            buf.nicks.retain(|n| n.trim_start_matches(['@', '+']) != bare);
+                            buf.nicks
+                                .retain(|n| n.trim_start_matches(['@', '+']) != bare);
                             buf.nicks.push(bare.to_string());
                         }
                     }
@@ -895,13 +1053,17 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                 }
             }
         }
-        Event::Kicked { channel, nick, by, reason } => {
+        Event::Kicked {
+            channel,
+            nick,
+            by,
+            reason,
+        } => {
             // Case-insensitive nick comparison (IRC nicks are case-insensitive)
             if nick.to_lowercase() == app.nick.to_lowercase() {
                 // WE were kicked — show message and leave the channel
-                app.buffer_mut(&channel).push_system(
-                    &format!("You were kicked by {by} ({reason})")
-                );
+                app.buffer_mut(&channel)
+                    .push_system(&format!("You were kicked by {by} ({reason})"));
                 app.status_msg(&format!("Kicked from {channel} by {by} ({reason})"));
                 // Remove the channel buffer so we stop showing it
                 app.remove_buffer(&channel);
@@ -917,7 +1079,9 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
             }
         }
         Event::Invited { channel, by } => {
-            app.status_msg(&format!("{by} invited you to {channel}. Type /join {channel}"));
+            app.status_msg(&format!(
+                "{by} invited you to {channel}. Type /join {channel}"
+            ));
         }
         Event::TopicChanged {
             channel,
@@ -994,7 +1158,11 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                             fetch_image_if_needed_direct(&avatar_cache, url);
                         }
                         let lines = profile.format_lines();
-                        let _ = bg_tx.send(crate::app::BgResult::ProfileLines(buf_clone, lines, avatar_url)).await;
+                        let _ = bg_tx
+                            .send(crate::app::BgResult::ProfileLines(
+                                buf_clone, lines, avatar_url,
+                            ))
+                            .await;
                     }
                 });
             }
@@ -1005,11 +1173,18 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                 None => format!("{nick} is no longer away"),
             };
             // Show in all shared buffers (channels where this nick might be)
-            let buf_names: Vec<String> = app.buffers.keys()
+            let buf_names: Vec<String> = app
+                .buffers
+                .keys()
                 .filter(|name| *name != "status")
                 .filter(|name| {
-                    app.buffers.get(*name)
-                        .map(|b| b.nicks.iter().any(|m| m.trim_start_matches(&['@', '+', '%'][..]) == nick))
+                    app.buffers
+                        .get(*name)
+                        .map(|b| {
+                            b.nicks
+                                .iter()
+                                .any(|m| m.trim_start_matches(&['@', '+', '%'][..]) == nick)
+                        })
                         .unwrap_or(false)
                 })
                 .cloned()
@@ -1021,12 +1196,19 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
         Event::NickChanged { old_nick, new_nick } => {
             let msg = format!("{old_nick} is now known as {new_nick}");
             for (name, buf) in app.buffers.iter_mut() {
-                if name == "status" { continue; }
+                if name == "status" {
+                    continue;
+                }
                 let mut updated = false;
                 for n in &mut buf.nicks {
                     let bare = n.trim_start_matches(&['@', '+', '%'][..]);
                     if bare.eq_ignore_ascii_case(&old_nick) {
-                        let prefix = n.chars().next().filter(|c| *c == '@' || *c == '+' || *c == '%').map(|c| c.to_string()).unwrap_or_default();
+                        let prefix = n
+                            .chars()
+                            .next()
+                            .filter(|c| *c == '@' || *c == '+' || *c == '%')
+                            .map(|c| c.to_string())
+                            .unwrap_or_default();
                         *n = format!("{prefix}{new_nick}");
                         updated = true;
                     }
@@ -1044,11 +1226,7 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
     }
 }
 
-async fn process_input(
-    app: &mut App,
-    handle: &client::ClientHandle,
-    input: &str,
-) -> Result<()> {
+async fn process_input(app: &mut App, handle: &client::ClientHandle, input: &str) -> Result<()> {
     if input.starts_with('/') {
         let parts: Vec<&str> = input.splitn(2, ' ').collect();
         let cmd = parts[0].to_lowercase();
@@ -1097,7 +1275,8 @@ async fn process_input(
                     let url = arg.trim().to_string();
                     let handle_clone = handle.clone();
                     let buf = target.clone();
-                    app.buffer_mut(&buf).push_system(&format!("Fetching preview for {url}..."));
+                    app.buffer_mut(&buf)
+                        .push_system(&format!("Fetching preview for {url}..."));
                     tokio::spawn(async move {
                         match freeq_sdk::media::fetch_link_preview(&url).await {
                             Ok(preview) => {
@@ -1221,7 +1400,9 @@ async fn process_input(
                         let parts: Vec<&str> = arg.splitn(2, ' ').collect();
                         let target = parts[0];
                         let reason = parts.get(1).unwrap_or(&"Kicked");
-                        handle.raw(&format!("KICK {channel} {target} :{reason}")).await?;
+                        handle
+                            .raw(&format!("KICK {channel} {target} :{reason}"))
+                            .await?;
                     }
                 } else {
                     app.status_msg("Usage: /kick <nick> [reason]");
@@ -1268,16 +1449,25 @@ async fn process_input(
                         // Parse: /media [--post] path [alt text]
                         // --post flag cross-posts to Bluesky feed
                         // Path can be quoted: /media "my file.jpg" alt text here
-                        let (effective_arg, cross_post) = if let Some(rest) = arg.strip_prefix("--post ") {
-                            (rest, true)
-                        } else {
-                            (arg, cross_post)
-                        };
-                        let (path, alt) = if let Some(after_quote) = effective_arg.strip_prefix('"') {
+                        let (effective_arg, cross_post) =
+                            if let Some(rest) = arg.strip_prefix("--post ") {
+                                (rest, true)
+                            } else {
+                                (arg, cross_post)
+                            };
+                        let (path, alt) = if let Some(after_quote) = effective_arg.strip_prefix('"')
+                        {
                             if let Some(end) = after_quote.find('"') {
                                 let p = &after_quote[..end];
                                 let rest = after_quote[end + 1..].trim();
-                                (p.to_string(), if rest.is_empty() { None } else { Some(rest.to_string()) })
+                                (
+                                    p.to_string(),
+                                    if rest.is_empty() {
+                                        None
+                                    } else {
+                                        Some(rest.to_string())
+                                    },
+                                )
                             } else {
                                 (effective_arg.to_string(), None)
                             }
@@ -1286,7 +1476,15 @@ async fn process_input(
                             (parts[0].to_string(), parts.get(1).map(|s| s.to_string()))
                         };
 
-                        upload_and_send_media(app, handle, &target, &path, alt.as_deref(), cross_post).await?;
+                        upload_and_send_media(
+                            app,
+                            handle,
+                            &target,
+                            &path,
+                            alt.as_deref(),
+                            cross_post,
+                        )
+                        .await?;
                     }
                 }
             }
@@ -1331,7 +1529,9 @@ async fn process_input(
                 } else if arg.is_empty() {
                     // Check if already encrypted
                     if app.channel_keys.contains_key(&channel) {
-                        app.status_msg(&format!("🔒 Encryption is ON for {channel}. Use /decrypt to disable."));
+                        app.status_msg(&format!(
+                            "🔒 Encryption is ON for {channel}. Use /decrypt to disable."
+                        ));
                     } else {
                         app.status_msg("Usage: /encrypt <passphrase>");
                         app.status_msg("  Enables E2EE for this channel. All members need the same passphrase.");
@@ -1344,11 +1544,10 @@ async fn process_input(
                         "🔒 End-to-end encryption enabled. Messages in this channel are now encrypted."
                     );
                     app.buffer_mut(&channel).push_system(
-                        "   All members must use the same passphrase to read messages."
+                        "   All members must use the same passphrase to read messages.",
                     );
-                    app.buffer_mut(&channel).push_system(
-                        "   The server cannot read encrypted messages."
-                    );
+                    app.buffer_mut(&channel)
+                        .push_system("   The server cannot read encrypted messages.");
                 }
             }
             "/decrypt" | "/noencrypt" => {
@@ -1372,7 +1571,10 @@ async fn process_input(
                             app.status_msg("Starting P2P endpoint...");
                             match freeq_sdk::p2p::start().await {
                                 Ok((p2p_handle, rx)) => {
-                                    app.status_msg(&format!("✓ P2P ready! Your endpoint ID: {}", p2p_handle.endpoint_id));
+                                    app.status_msg(&format!(
+                                        "✓ P2P ready! Your endpoint ID: {}",
+                                        p2p_handle.endpoint_id
+                                    ));
                                     app.p2p_handle = Some(p2p_handle);
                                     app.p2p_event_rx = Some(rx);
                                 }
@@ -1436,7 +1638,9 @@ async fn process_input(
             "/debug" => {
                 app.debug_raw = !app.debug_raw;
                 let state = if app.debug_raw { "ON" } else { "OFF" };
-                app.status_msg(&format!("Debug mode {state} — raw IRC lines will be shown in status buffer"));
+                app.status_msg(&format!(
+                    "Debug mode {state} — raw IRC lines will be shown in status buffer"
+                ));
             }
             "/help" | "/h" | "/commands" => {
                 app.status_msg("── Channel commands ─────────────────────");
@@ -1552,24 +1756,54 @@ async fn process_input(
                     app.status_msg("Switch to a channel first.");
                 } else {
                     let limit = if arg.is_empty() { "50" } else { arg };
-                    handle.raw(&format!("CHATHISTORY LATEST {channel} * {limit}")).await?;
+                    handle
+                        .raw(&format!("CHATHISTORY LATEST {channel} * {limit}"))
+                        .await?;
                 }
             }
             "/config" | "/settings" => {
                 let cfg = config::Config::load();
                 let session = config::Session::load();
                 app.status_msg("── Config (~/.config/freeq/tui.toml) ────");
-                app.status_msg(&format!("  server:  {}", cfg.server.as_deref().unwrap_or("(default: irc.freeq.at:6697)")));
-                app.status_msg(&format!("  nick:    {}", cfg.nick.as_deref().unwrap_or("(auto)")));
-                app.status_msg(&format!("  handle:  {}", cfg.handle.as_deref().unwrap_or("(none)")));
-                app.status_msg(&format!("  tls:     {}", cfg.tls.map(|b| b.to_string()).unwrap_or("(auto)".into())));
+                app.status_msg(&format!(
+                    "  server:  {}",
+                    cfg.server
+                        .as_deref()
+                        .unwrap_or("(default: irc.freeq.at:6697)")
+                ));
+                app.status_msg(&format!(
+                    "  nick:    {}",
+                    cfg.nick.as_deref().unwrap_or("(auto)")
+                ));
+                app.status_msg(&format!(
+                    "  handle:  {}",
+                    cfg.handle.as_deref().unwrap_or("(none)")
+                ));
+                app.status_msg(&format!(
+                    "  tls:     {}",
+                    cfg.tls.map(|b| b.to_string()).unwrap_or("(auto)".into())
+                ));
                 app.status_msg(&format!("  vi:      {}", cfg.vi.unwrap_or(false)));
-                let cfg_ch = cfg.channels.as_ref().map(|v| v.join(", ")).unwrap_or("(none)".into());
+                let cfg_ch = cfg
+                    .channels
+                    .as_ref()
+                    .map(|v| v.join(", "))
+                    .unwrap_or("(none)".into());
                 app.status_msg(&format!("  channels: {cfg_ch}"));
                 app.status_msg("── Session (~/.config/freeq/session.toml) ─");
-                app.status_msg(&format!("  last server:  {}", session.server.as_deref().unwrap_or("(none)")));
-                app.status_msg(&format!("  last nick:    {}", session.nick.as_deref().unwrap_or("(none)")));
-                let ses_ch = if session.channels.is_empty() { "(none)".into() } else { session.channels.join(", ") };
+                app.status_msg(&format!(
+                    "  last server:  {}",
+                    session.server.as_deref().unwrap_or("(none)")
+                ));
+                app.status_msg(&format!(
+                    "  last nick:    {}",
+                    session.nick.as_deref().unwrap_or("(none)")
+                ));
+                let ses_ch = if session.channels.is_empty() {
+                    "(none)".into()
+                } else {
+                    session.channels.join(", ")
+                };
                 app.status_msg(&format!("  channels:     {ses_ch}"));
                 app.status_msg("  Tip: use --save-config to persist current CLI args");
                 app.status_msg("  Tip: channels are auto-saved on quit");
@@ -1583,10 +1817,15 @@ async fn process_input(
                         let buf = app.buffers.get(name);
                         let unread = buf.map(|b| b.unread).unwrap_or(0);
                         let mention = buf.map(|b| b.has_mention).unwrap_or(false);
-                        let marker = if name == &app.active_buffer { " ← active" }
-                            else if mention { " ← MENTION" }
-                            else if unread > 0 { &format!(" ({unread} unread)") }
-                            else { "" };
+                        let marker = if name == &app.active_buffer {
+                            " ← active"
+                        } else if mention {
+                            " ← MENTION"
+                        } else if unread > 0 {
+                            &format!(" ({unread} unread)")
+                        } else {
+                            ""
+                        };
                         app.status_msg(&format!("  {name}{marker}"));
                     }
                     app.status_msg("  /switch <name> to switch");
@@ -1676,12 +1915,14 @@ async fn upload_and_send_media(
     }
 
     let data = std::fs::read(&path)?;
-    let filename = path.file_name()
+    let filename = path
+        .file_name()
         .and_then(|n: &std::ffi::OsStr| n.to_str())
         .unwrap_or("file");
 
     // Guess content type from extension
-    let content_type = match path.extension()
+    let content_type = match path
+        .extension()
         .and_then(|e: &std::ffi::OsStr| e.to_str())
         .unwrap_or("")
     {
@@ -1698,12 +1939,17 @@ async fn upload_and_send_media(
     };
 
     let buf_name = app.active_buffer.clone();
-    app.buffer_mut(&buf_name).push_system(
-        &format!("Uploading {filename} ({})...", format_file_size(data.len() as u64))
-    );
+    app.buffer_mut(&buf_name).push_system(&format!(
+        "Uploading {filename} ({})...",
+        format_file_size(data.len() as u64)
+    ));
 
     // Channel name for the record (if target is a channel)
-    let channel = if target.starts_with('#') { Some(target) } else { None };
+    let channel = if target.starts_with('#') {
+        Some(target)
+    } else {
+        None
+    };
 
     match freeq_sdk::media::upload_media_to_pds(
         &uploader.pds_url,
@@ -1716,7 +1962,9 @@ async fn upload_and_send_media(
         alt,
         channel,
         cross_post,
-    ).await {
+    )
+    .await
+    {
         Ok(result) => {
             let media = freeq_sdk::media::MediaAttachment {
                 content_type: content_type.to_string(),
@@ -1750,13 +1998,17 @@ async fn upload_and_send_media(
                 image_url: img_url,
             });
 
-            let suffix = if cross_post { " (also posted to Bluesky)" } else { "" };
-            app.buffer_mut(&buf_name).push_system(
-                &format!("Shared {filename}{suffix}")
-            );
+            let suffix = if cross_post {
+                " (also posted to Bluesky)"
+            } else {
+                ""
+            };
+            app.buffer_mut(&buf_name)
+                .push_system(&format!("Shared {filename}{suffix}"));
         }
         Err(e) => {
-            app.buffer_mut(&buf_name).push_system(&format!("Upload failed: {e}"));
+            app.buffer_mut(&buf_name)
+                .push_system(&format!("Upload failed: {e}"));
         }
     }
 
@@ -1775,12 +2027,15 @@ fn fetch_image_if_needed(cache: &crate::app::ImageCache, url: &str) {
         return;
     }
     // Extract host from URL for allowlist check
-    let host = url.strip_prefix("https://")
+    let host = url
+        .strip_prefix("https://")
         .and_then(|s| s.split('/').next())
         .and_then(|s| s.split(':').next())
         .unwrap_or("");
-    let allowed = host.ends_with(".bsky.network") || host == "cdn.bsky.app"
-        || host.ends_with(".bsky.app") || host.ends_with("freeq.at");
+    let allowed = host.ends_with(".bsky.network")
+        || host == "cdn.bsky.app"
+        || host.ends_with(".bsky.app")
+        || host.ends_with("freeq.at");
     if !allowed {
         return;
     }
@@ -1807,10 +2062,14 @@ fn fetch_image_if_needed(cache: &crate::app::ImageCache, url: &str) {
             Ok(resp) => {
                 // Check content-length before downloading
                 if let Some(len) = resp.content_length()
-                    && len > crate::app::MAX_IMAGE_BYTES as u64 {
-                        cache.lock().unwrap().insert(url, crate::app::ImageState::Failed("Too large".into()));
-                        return;
-                    }
+                    && len > crate::app::MAX_IMAGE_BYTES as u64
+                {
+                    cache
+                        .lock()
+                        .unwrap()
+                        .insert(url, crate::app::ImageState::Failed("Too large".into()));
+                    return;
+                }
                 match resp.bytes().await {
                     Ok(bytes) if bytes.len() <= crate::app::MAX_IMAGE_BYTES => {
                         match image::load_from_memory(&bytes) {
@@ -1821,23 +2080,38 @@ fn fetch_image_if_needed(cache: &crate::app::ImageCache, url: &str) {
                                 } else {
                                     img
                                 };
-                                cache.lock().unwrap().insert(url, crate::app::ImageState::Ready(img));
+                                cache
+                                    .lock()
+                                    .unwrap()
+                                    .insert(url, crate::app::ImageState::Ready(img));
                             }
                             Err(e) => {
-                                cache.lock().unwrap().insert(url, crate::app::ImageState::Failed(e.to_string()));
+                                cache
+                                    .lock()
+                                    .unwrap()
+                                    .insert(url, crate::app::ImageState::Failed(e.to_string()));
                             }
                         }
                     }
                     Ok(_) => {
-                        cache.lock().unwrap().insert(url, crate::app::ImageState::Failed("Too large".into()));
+                        cache
+                            .lock()
+                            .unwrap()
+                            .insert(url, crate::app::ImageState::Failed("Too large".into()));
                     }
                     Err(e) => {
-                        cache.lock().unwrap().insert(url, crate::app::ImageState::Failed(e.to_string()));
+                        cache
+                            .lock()
+                            .unwrap()
+                            .insert(url, crate::app::ImageState::Failed(e.to_string()));
                     }
                 }
             }
             Err(e) => {
-                cache.lock().unwrap().insert(url, crate::app::ImageState::Failed(e.to_string()));
+                cache
+                    .lock()
+                    .unwrap()
+                    .insert(url, crate::app::ImageState::Failed(e.to_string()));
             }
         }
     });
@@ -1846,17 +2120,22 @@ fn fetch_image_if_needed(cache: &crate::app::ImageCache, url: &str) {
 /// Format a media attachment for display in the TUI.
 fn format_timestamp(tags: &std::collections::HashMap<String, String>) -> String {
     if let Some(ts) = tags.get("time")
-        && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
-            return dt.with_timezone(&chrono::Local).format("%H:%M:%S").to_string();
-        }
+        && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts)
+    {
+        return dt
+            .with_timezone(&chrono::Local)
+            .format("%H:%M:%S")
+            .to_string();
+    }
     chrono::Local::now().format("%H:%M:%S").to_string()
 }
 
 fn parse_timestamp_ms(tags: &std::collections::HashMap<String, String>) -> i64 {
     if let Some(ts) = tags.get("time")
-        && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts) {
-            return dt.timestamp_millis();
-        }
+        && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts)
+    {
+        return dt.timestamp_millis();
+    }
     chrono::Local::now().timestamp_millis()
 }
 
@@ -1868,10 +2147,11 @@ fn push_line_to_buffer(
     line: crate::app::BufferLine,
 ) {
     if let Some(id) = batch_id
-        && app.batches.contains_key(id) {
-            app.add_batch_line(id, timestamp_ms, line);
-            return;
-        }
+        && app.batches.contains_key(id)
+    {
+        app.add_batch_line(id, timestamp_ms, line);
+        return;
+    }
     app.buffer_mut(buf_name).push(line);
 }
 
@@ -1982,13 +2262,7 @@ fn try_nick_complete(app: &mut App) {
     if let Some(completion) = matching {
         let suffix = if word_start == 0 { ": " } else { " " };
         let after = &text[cursor..];
-        let new_text = format!(
-            "{}{}{}{}",
-            &text[..word_start],
-            completion,
-            suffix,
-            after,
-        );
+        let new_text = format!("{}{}{}{}", &text[..word_start], completion, suffix, after,);
         let new_cursor = word_start + completion.len() + suffix.len();
         app.editor.text = new_text;
         app.editor.cursor = new_cursor;

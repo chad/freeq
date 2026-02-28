@@ -51,18 +51,25 @@ pub struct PendingVerification {
 fn load_or_generate_signing_key(path: &std::path::Path) -> SigningKey {
     if path.exists() {
         if let Ok(data) = std::fs::read(path)
-            && let Ok(bytes) = <[u8; 32]>::try_from(data.as_slice()) {
-                let key = SigningKey::from_bytes(&bytes);
-                tracing::info!("Loaded existing verifier signing key from {}", path.display());
-                return key;
-            }
+            && let Ok(bytes) = <[u8; 32]>::try_from(data.as_slice())
+        {
+            let key = SigningKey::from_bytes(&bytes);
+            tracing::info!(
+                "Loaded existing verifier signing key from {}",
+                path.display()
+            );
+            return key;
+        }
         tracing::warn!("Corrupt signing key at {}, regenerating", path.display());
     }
     let key = SigningKey::generate(&mut rand::rngs::OsRng);
     if let Err(e) = std::fs::write(path, key.to_bytes()) {
         tracing::error!("Failed to persist signing key to {}: {}", path.display(), e);
     } else {
-        tracing::info!("Generated and persisted new verifier signing key to {}", path.display());
+        tracing::info!(
+            "Generated and persisted new verifier signing key to {}",
+            path.display()
+        );
     }
     key
 }
@@ -104,10 +111,7 @@ pub fn router(
             "/verify/.well-known/did.json",
             axum::routing::get(did_document),
         )
-        .route(
-            "/verify/did.json",
-            axum::routing::get(did_document),
-        );
+        .route("/verify/did.json", axum::routing::get(did_document));
 
     // Bluesky follower verifier — always available (uses public API, no config needed)
     app = app.merge(bluesky::routes());

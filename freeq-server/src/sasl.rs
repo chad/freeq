@@ -11,15 +11,15 @@
 //! 4. Server verifies via crypto or PDS session
 //! 5. Server sends 903 (success) or 904 (failure)
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Utc;
 use freeq_sdk::did::DidResolver;
 use freeq_sdk::pds;
+use parking_lot::Mutex;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use parking_lot::Mutex;
 
 /// A challenge issued by the server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -212,8 +212,7 @@ async fn verify_pds_session(
     }
 
     // Verify PDS URL matches DID document
-    let doc_pds = pds::pds_endpoint(&did_doc)
-        .ok_or("No PDS service endpoint in DID document")?;
+    let doc_pds = pds::pds_endpoint(&did_doc).ok_or("No PDS service endpoint in DID document")?;
 
     // Normalize URLs for comparison (strip trailing slash)
     let normalize = |s: &str| s.trim_end_matches('/').to_string();
@@ -278,8 +277,7 @@ async fn verify_pds_oauth(
         ));
     }
 
-    let doc_pds = pds::pds_endpoint(&did_doc)
-        .ok_or("No PDS service endpoint in DID document")?;
+    let doc_pds = pds::pds_endpoint(&did_doc).ok_or("No PDS service endpoint in DID document")?;
 
     let normalize = |s: &str| s.trim_end_matches('/').to_string();
     if normalize(claimed_pds) != normalize(&doc_pds) {
@@ -308,17 +306,20 @@ async fn verify_pds_oauth(
 
         // DPoP nonce rotation: PDS requires a nonce we didn't have (or ours expired).
         // Extract the fresh nonce and return it so the client can retry SASL.
-        let new_nonce = resp.headers().get("dpop-nonce")
+        let new_nonce = resp
+            .headers()
+            .get("dpop-nonce")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
         let text = resp.text().await.unwrap_or_default();
 
         if (status.as_u16() == 400 || status.as_u16() == 401)
             && text.contains("use_dpop_nonce")
-            && let Some(nonce) = new_nonce {
-                tracing::info!(did = %response.did, "DPoP nonce required by PDS, signaling client to retry");
-                return Err(format!("DPOP_NONCE:{nonce}"));
-            }
+            && let Some(nonce) = new_nonce
+        {
+            tracing::info!(did = %response.did, "DPoP nonce required by PDS, signaling client to retry");
+            return Err(format!("DPOP_NONCE:{nonce}"));
+        }
 
         return Err(format!("PDS OAuth verification failed ({status}): {text}"));
     }

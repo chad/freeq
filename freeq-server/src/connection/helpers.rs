@@ -1,8 +1,8 @@
 #![allow(clippy::too_many_arguments)]
 //! Helper functions for broadcasting, S2S relay, and utilities.
 
-use std::sync::Arc;
 use crate::server::{RemoteMember, SharedState};
+use std::sync::Arc;
 
 /// Generate a cloaked hostname from an optional DID.
 pub fn cloaked_host_for_did(did: Option<&str>) -> String {
@@ -55,23 +55,26 @@ pub(super) fn resolve_channel_target(
         n2s.get_session(target_nick).map(|s| s.to_string())
     };
     if let Some(ref sid) = local_session {
-        let in_channel = state.channels.lock()
+        let in_channel = state
+            .channels
+            .lock()
             .get(channel)
             .map(|ch| ch.members.contains(sid))
             .unwrap_or(false);
         if in_channel {
-            return ChannelTarget::Local { session_id: sid.clone() };
+            return ChannelTarget::Local {
+                session_id: sid.clone(),
+            };
         }
     }
 
     // Check remote: case-insensitive nick ∈ channel.remote_members
-    let remote = state.channels.lock()
-        .get(channel)
-        .and_then(|ch| {
-            ch.remote_members.iter()
-                .find(|(n, _)| n.to_lowercase() == nick_lower)
-                .map(|(_, rm)| rm.clone())
-        });
+    let remote = state.channels.lock().get(channel).and_then(|ch| {
+        ch.remote_members
+            .iter()
+            .find(|(n, _)| n.to_lowercase() == nick_lower)
+            .map(|(_, rm)| rm.clone())
+    });
     if let Some(rm) = remote {
         return ChannelTarget::Remote(rm);
     }
@@ -96,10 +99,7 @@ pub(super) enum NetworkTarget {
 /// Resolve a nick across the entire network: local sessions + all
 /// channels' remote_members. Used for operations like INVITE where
 /// the target doesn't need to be in a specific channel.
-pub(super) fn resolve_network_target(
-    state: &SharedState,
-    target_nick: &str,
-) -> NetworkTarget {
+pub(super) fn resolve_network_target(state: &SharedState, target_nick: &str) -> NetworkTarget {
     let nick_lower = target_nick.to_lowercase();
 
     // Check local first (case-insensitive — NickMap handles it)
@@ -114,7 +114,9 @@ pub(super) fn resolve_network_target(
     // Check all channels' remote_members (case-insensitive)
     let channels = state.channels.lock();
     for ch in channels.values() {
-        let rm = ch.remote_members.iter()
+        let rm = ch
+            .remote_members
+            .iter()
             .find(|(n, _)| n.to_lowercase() == nick_lower)
             .map(|(_, rm)| rm.clone());
         if let Some(rm) = rm {
@@ -128,7 +130,6 @@ pub(super) fn resolve_network_target(
 pub(super) fn normalize_channel(name: &str) -> String {
     name.to_lowercase()
 }
-
 
 pub(super) fn s2s_broadcast(state: &Arc<SharedState>, msg: crate::s2s::S2sMessage) {
     let manager = state.s2s_manager.lock().clone();
@@ -156,14 +157,17 @@ pub(super) fn s2s_broadcast_mode(
 ) {
     let event_id = s2s_next_event_id(state);
     let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
-    s2s_broadcast(state, crate::s2s::S2sMessage::Mode {
-        event_id,
-        channel: channel.to_string(),
-        mode: mode.to_string(),
-        arg: arg.map(|s| s.to_string()),
-        set_by: conn.nick.as_deref().unwrap_or("*").to_string(),
-        origin,
-    });
+    s2s_broadcast(
+        state,
+        crate::s2s::S2sMessage::Mode {
+            event_id,
+            channel: channel.to_string(),
+            mode: mode.to_string(),
+            arg: arg.map(|s| s.to_string()),
+            set_by: conn.nick.as_deref().unwrap_or("*").to_string(),
+            origin,
+        },
+    );
 }
 
 pub(super) fn broadcast_to_channel(state: &Arc<SharedState>, channel: &str, msg: &str) {
@@ -181,7 +185,6 @@ pub(super) fn broadcast_to_channel(state: &Arc<SharedState>, channel: &str, msg:
         }
     }
 }
-
 
 pub(crate) fn broadcast_account_notify(
     state: &SharedState,
@@ -203,9 +206,10 @@ pub(crate) fn broadcast_account_notify(
             for member_sid in &ch.members {
                 if member_sid != session_id && !notified.contains(member_sid) {
                     if cap_set.contains(member_sid)
-                        && let Some(tx) = conns.get(member_sid) {
-                            let _ = tx.try_send(line.clone());
-                        }
+                        && let Some(tx) = conns.get(member_sid)
+                    {
+                        let _ = tx.try_send(line.clone());
+                    }
                     notified.insert(member_sid.clone());
                 }
             }
@@ -215,7 +219,12 @@ pub(crate) fn broadcast_account_notify(
 
 /// Build a JOIN line for extended-join capable clients.
 /// Format: `:nick!user@host JOIN #channel account :realname`
-pub(crate) fn make_extended_join(hostmask: &str, channel: &str, did: Option<&str>, realname: &str) -> String {
+pub(crate) fn make_extended_join(
+    hostmask: &str,
+    channel: &str,
+    did: Option<&str>,
+    realname: &str,
+) -> String {
     let account = did.unwrap_or("*");
     format!(":{hostmask} JOIN {channel} {account} :{realname}\r\n")
 }

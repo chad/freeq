@@ -137,9 +137,7 @@ fn default_mmd() -> i64 {
 #[serde(tag = "type", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Requirement {
     /// User must accept a rules document (identified by hash).
-    Accept {
-        hash: String,
-    },
+    Accept { hash: String },
 
     /// User must present a credential of the given type.
     Present {
@@ -149,24 +147,16 @@ pub enum Requirement {
     },
 
     /// User must prove a capability.
-    Prove {
-        proof_type: String,
-    },
+    Prove { proof_type: String },
 
     /// All sub-requirements must be satisfied.
-    All {
-        requirements: Vec<Requirement>,
-    },
+    All { requirements: Vec<Requirement> },
 
     /// At least one sub-requirement must be satisfied.
-    Any {
-        requirements: Vec<Requirement>,
-    },
+    Any { requirements: Vec<Requirement> },
 
     /// The sub-requirement must NOT be satisfied.
-    Not {
-        requirement: Box<Requirement>,
-    },
+    Not { requirement: Box<Requirement> },
 }
 
 // ─── Authority Set ───────────────────────────────────────────────────────────
@@ -387,9 +377,10 @@ impl VerifiableCredential {
     /// Check if the credential has expired.
     pub fn is_expired(&self) -> bool {
         if let Some(ref exp) = self.expires_at
-            && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(exp) {
-                return dt < chrono::Utc::now();
-            }
+            && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(exp)
+        {
+            return dt < chrono::Utc::now();
+        }
         false
     }
 }

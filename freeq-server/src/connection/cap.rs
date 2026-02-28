@@ -1,13 +1,13 @@
 #![allow(clippy::too_many_arguments)]
 //! CAP capability negotiation and SASL authentication.
 
-use std::sync::Arc;
-use crate::irc::{self, Message};
-use crate::sasl;
-use crate::server::SharedState;
 use super::Connection;
 use super::helpers::broadcast_account_notify;
 use super::registration::try_complete_registration;
+use crate::irc::{self, Message};
+use crate::sasl;
+use crate::server::SharedState;
+use std::sync::Arc;
 
 pub(super) fn handle_cap(
     conn: &mut Connection,
@@ -22,15 +22,14 @@ pub(super) fn handle_cap(
         Some("LS") => {
             conn.cap_negotiating = true;
             // Build capability list, including iroh endpoint ID if available
-            let mut caps = String::from("sasl message-tags multi-prefix echo-message server-time batch draft/chathistory account-notify extended-join away-notify");
+            let mut caps = String::from(
+                "sasl message-tags multi-prefix echo-message server-time batch draft/chathistory account-notify extended-join away-notify",
+            );
             if let Some(ref iroh_id) = *state.server_iroh_id.lock() {
                 caps.push_str(&format!(" iroh={iroh_id}"));
             }
-            let reply = Message::from_server(
-                server_name,
-                "CAP",
-                vec![conn.nick_or_star(), "LS", &caps],
-            );
+            let reply =
+                Message::from_server(server_name, "CAP", vec![conn.nick_or_star(), "LS", &caps]);
             send(state, session_id, format!("{reply}\r\n"));
         }
         Some("REQ") => {
@@ -76,12 +75,18 @@ pub(super) fn handle_cap(
                         }
                         "account-notify" => {
                             conn.cap_account_notify = true;
-                            state.cap_account_notify.lock().insert(session_id.to_string());
+                            state
+                                .cap_account_notify
+                                .lock()
+                                .insert(session_id.to_string());
                             acked.push("account-notify");
                         }
                         "extended-join" => {
                             conn.cap_extended_join = true;
-                            state.cap_extended_join.lock().insert(session_id.to_string());
+                            state
+                                .cap_extended_join
+                                .lock()
+                                .insert(session_id.to_string());
                             acked.push("extended-join");
                         }
                         "away-notify" => {
@@ -89,7 +94,9 @@ pub(super) fn handle_cap(
                             state.cap_away_notify.lock().insert(session_id.to_string());
                             acked.push("away-notify");
                         }
-                        _ => { all_ok = false; }
+                        _ => {
+                            all_ok = false;
+                        }
                     }
                 }
 
@@ -118,7 +125,6 @@ pub(super) fn handle_cap(
         _ => {}
     }
 }
-
 
 pub(super) async fn handle_authenticate(
     conn: &mut Connection,
@@ -178,7 +184,8 @@ pub(super) async fn handle_authenticate(
                             &challenge_bytes,
                             &response,
                             &state.did_resolver,
-                        ).await
+                        )
+                        .await
                     };
                     match verify_result {
                         Ok(did) => {
@@ -196,8 +203,14 @@ pub(super) async fn handle_authenticate(
                             // Bind nick to DID (persistent identity-nick)
                             if let Some(ref nick) = conn.nick {
                                 let nick_lower = nick.to_lowercase();
-                                state.did_nicks.lock().insert(did.clone(), nick_lower.clone());
-                                state.nick_owners.lock().insert(nick_lower.clone(), did.clone());
+                                state
+                                    .did_nicks
+                                    .lock()
+                                    .insert(did.clone(), nick_lower.clone());
+                                state
+                                    .nick_owners
+                                    .lock()
+                                    .insert(nick_lower.clone(), did.clone());
                                 let nick_l = nick_lower.clone();
                                 let did_c = did.clone();
                                 let state_c = Arc::clone(state);
@@ -216,11 +229,15 @@ pub(super) async fn handle_authenticate(
                                 let nick_for_plugin = conn.nick.clone().unwrap_or_default();
                                 tokio::spawn(async move {
                                     let mut resolved_handle: Option<String> = None;
-                                    if let Ok(doc) = state_clone.did_resolver.resolve(&did_clone).await {
+                                    if let Ok(doc) =
+                                        state_clone.did_resolver.resolve(&did_clone).await
+                                    {
                                         for aka in &doc.also_known_as {
                                             if let Some(handle) = aka.strip_prefix("at://") {
                                                 resolved_handle = Some(handle.to_string());
-                                                state_clone.session_handles.lock()
+                                                state_clone
+                                                    .session_handles
+                                                    .lock()
                                                     .insert(sid.clone(), handle.to_string());
                                                 break;
                                             }
@@ -236,11 +253,15 @@ pub(super) async fn handle_authenticate(
                                     };
                                     let result = state_clone.plugin_manager.on_auth(&auth_event);
                                     if let Some(override_did) = result.override_did {
-                                        state_clone.session_dids.lock()
+                                        state_clone
+                                            .session_dids
+                                            .lock()
                                             .insert(sid.clone(), override_did);
                                     }
                                     if let Some(override_handle) = result.override_handle {
-                                        state_clone.session_handles.lock()
+                                        state_clone
+                                            .session_handles
+                                            .lock()
                                             .insert(sid.clone(), override_handle);
                                     }
                                 });
@@ -252,10 +273,8 @@ pub(super) async fn handle_authenticate(
                             if state.config.oper_dids.iter().any(|d| d == &did) {
                                 conn.is_oper = true;
                                 state.server_opers.lock().insert(session_id.to_string());
-                                let oper_notice = Message::from_server(
-                                    server_name, "MODE",
-                                    vec![&nick, "+o"],
-                                );
+                                let oper_notice =
+                                    Message::from_server(server_name, "MODE", vec![&nick, "+o"]);
                                 send(state, session_id, format!("{oper_notice}\r\n"));
                                 tracing::info!(%did, nick = %nick, "Auto-OPER granted via oper_dids config");
                             }
@@ -290,10 +309,14 @@ pub(super) async fn handle_authenticate(
                             let nonce = &reason["DPOP_NONCE:".len()..];
                             tracing::info!(%session_id, %nonce, "DPoP nonce required, re-issuing challenge");
 
-                            send(state, session_id, format!(
-                                ":{server_name} NOTICE {} :DPOP_NONCE {nonce}\r\n",
-                                conn.nick_or_star()
-                            ));
+                            send(
+                                state,
+                                session_id,
+                                format!(
+                                    ":{server_name} NOTICE {} :DPOP_NONCE {nonce}\r\n",
+                                    conn.nick_or_star()
+                                ),
+                            );
 
                             // Issue a new challenge for retry
                             let encoded = state.challenge_store.create(session_id);
@@ -310,7 +333,11 @@ pub(super) async fn handle_authenticate(
                             );
                             send(state, session_id, format!("{fail}\r\n"));
                             if conn.sasl_failures >= 3 {
-                                send(state, session_id, "ERROR :Too many SASL failures\r\n".to_string());
+                                send(
+                                    state,
+                                    session_id,
+                                    "ERROR :Too many SASL failures\r\n".to_string(),
+                                );
                             }
                         }
                     }
@@ -349,4 +376,3 @@ pub(super) async fn handle_authenticate(
         send(state, session_id, format!("{fail}\r\n"));
     }
 }
-

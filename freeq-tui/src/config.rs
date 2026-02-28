@@ -136,7 +136,9 @@ pub struct Resolved {
 impl Resolved {
     /// Merge: CLI overrides > config file > session state > defaults.
     pub fn merge(cli: &super::Cli, config: &Config, session: &Session) -> Self {
-        let server = cli.server.clone()
+        let server = cli
+            .server
+            .clone()
             .or_else(|| config.server.clone())
             .or_else(|| session.server.clone())
             .unwrap_or_else(|| DEFAULT_SERVER.to_string());
@@ -148,18 +150,25 @@ impl Resolved {
             format!("{server}:6697")
         };
 
-        let handle = cli.handle.clone()
+        let handle = cli
+            .handle
+            .clone()
             .or_else(|| config.handle.clone())
             .or_else(|| session.handle.clone());
 
-        let nick = cli.nick.clone()
+        let nick = cli
+            .nick
+            .clone()
             .or_else(|| config.nick.clone())
             .or_else(|| session.nick.clone())
             .unwrap_or_else(|| {
                 // Derive from handle or system username
-                handle.as_ref()
+                handle
+                    .as_ref()
                     .map(|h| h.split('.').next().unwrap_or("guest").to_string())
-                    .unwrap_or_else(|| whoami::fallible::username().unwrap_or_else(|_| "guest".to_string()))
+                    .unwrap_or_else(|| {
+                        whoami::fallible::username().unwrap_or_else(|_| "guest".to_string())
+                    })
             });
 
         let tls_explicit = cli.tls || config.tls.unwrap_or(false);
@@ -170,7 +179,10 @@ impl Resolved {
 
         // Channels: CLI > config > session > default
         let channels = if let Some(ref ch) = cli.channels {
-            ch.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+            ch.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
         } else if let Some(ref ch) = config.channels {
             ch.clone()
         } else if !session.channels.is_empty() {
@@ -179,10 +191,18 @@ impl Resolved {
             vec![DEFAULT_CHANNEL.to_string()]
         };
 
-        let iroh_addr = cli.iroh_addr.clone()
-            .or_else(|| config.iroh_addr.clone());
+        let iroh_addr = cli.iroh_addr.clone().or_else(|| config.iroh_addr.clone());
 
-        Self { server, nick, handle, tls, tls_insecure, vi, channels, iroh_addr }
+        Self {
+            server,
+            nick,
+            handle,
+            tls,
+            tls_insecure,
+            vi,
+            channels,
+            iroh_addr,
+        }
     }
 }
 
@@ -215,20 +235,38 @@ pub fn interactive_setup(config: &Config, session: &Session) -> Option<Resolved>
     // Banner
     writeln!(stdout).ok();
     writeln!(stdout, "  ╭─────────────────────────────────────────╮").ok();
-    writeln!(stdout, "  │           \x1b[1;36mfreeq\x1b[0m — decentralized chat       │").ok();
+    writeln!(
+        stdout,
+        "  │           \x1b[1;36mfreeq\x1b[0m — decentralized chat       │"
+    )
+    .ok();
     writeln!(stdout, "  │     with cryptographic identity          │").ok();
     writeln!(stdout, "  ╰─────────────────────────────────────────╯").ok();
     writeln!(stdout).ok();
-    writeln!(stdout, "  \x1b[90mSign in with Bluesky for verified identity,\x1b[0m").ok();
-    writeln!(stdout, "  \x1b[90mor press Enter to connect as a guest.\x1b[0m").ok();
+    writeln!(
+        stdout,
+        "  \x1b[90mSign in with Bluesky for verified identity,\x1b[0m"
+    )
+    .ok();
+    writeln!(
+        stdout,
+        "  \x1b[90mor press Enter to connect as a guest.\x1b[0m"
+    )
+    .ok();
     writeln!(stdout).ok();
 
     // Bluesky handle
-    let saved_handle = config.handle.as_deref()
+    let saved_handle = config
+        .handle
+        .as_deref()
         .or(session.handle.as_deref())
         .unwrap_or("");
     if saved_handle.is_empty() {
-        write!(stdout, "  \x1b[1mBluesky handle\x1b[0m (e.g. alice.bsky.social): ").ok();
+        write!(
+            stdout,
+            "  \x1b[1mBluesky handle\x1b[0m (e.g. alice.bsky.social): "
+        )
+        .ok();
     } else {
         write!(stdout, "  \x1b[1mBluesky handle\x1b[0m [{saved_handle}]: ").ok();
     }
@@ -237,13 +275,18 @@ pub fn interactive_setup(config: &Config, session: &Session) -> Option<Resolved>
     stdin.lock().read_line(&mut handle_input).ok();
     let handle_input = handle_input.trim().to_string();
     let handle = if handle_input.is_empty() {
-        if saved_handle.is_empty() { None } else { Some(saved_handle.to_string()) }
+        if saved_handle.is_empty() {
+            None
+        } else {
+            Some(saved_handle.to_string())
+        }
     } else {
         Some(handle_input)
     };
 
     // Nick (derive from handle)
-    let default_nick = handle.as_ref()
+    let default_nick = handle
+        .as_ref()
         .map(|h| h.split('.').next().unwrap_or("guest").to_string())
         .or_else(|| config.nick.clone())
         .or_else(|| session.nick.clone())
@@ -253,10 +296,16 @@ pub fn interactive_setup(config: &Config, session: &Session) -> Option<Resolved>
     let mut nick_input = String::new();
     stdin.lock().read_line(&mut nick_input).ok();
     let nick_input = nick_input.trim().to_string();
-    let nick = if nick_input.is_empty() { default_nick } else { nick_input };
+    let nick = if nick_input.is_empty() {
+        default_nick
+    } else {
+        nick_input
+    };
 
     // Server
-    let default_server = config.server.as_deref()
+    let default_server = config
+        .server
+        .as_deref()
         .or(session.server.as_deref())
         .unwrap_or(DEFAULT_SERVER);
     write!(stdout, "  \x1b[1mServer\x1b[0m [{default_server}]: ").ok();
@@ -264,12 +313,24 @@ pub fn interactive_setup(config: &Config, session: &Session) -> Option<Resolved>
     let mut server_input = String::new();
     stdin.lock().read_line(&mut server_input).ok();
     let server_input = server_input.trim().to_string();
-    let server = if server_input.is_empty() { default_server.to_string() } else { server_input };
+    let server = if server_input.is_empty() {
+        default_server.to_string()
+    } else {
+        server_input
+    };
 
     // Channel
-    let default_channels = config.channels.as_ref()
+    let default_channels = config
+        .channels
+        .as_ref()
         .map(|v| v.join(", "))
-        .or_else(|| if session.channels.is_empty() { None } else { Some(session.channels.join(", ")) })
+        .or_else(|| {
+            if session.channels.is_empty() {
+                None
+            } else {
+                Some(session.channels.join(", "))
+            }
+        })
         .unwrap_or_else(|| DEFAULT_CHANNEL.to_string());
     write!(stdout, "  \x1b[1mChannel\x1b[0m [{default_channels}]: ").ok();
     stdout.flush().ok();
@@ -277,9 +338,17 @@ pub fn interactive_setup(config: &Config, session: &Session) -> Option<Resolved>
     stdin.lock().read_line(&mut channel_input).ok();
     let channel_input = channel_input.trim().to_string();
     let channels: Vec<String> = if channel_input.is_empty() {
-        default_channels.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+        default_channels
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
     } else {
-        channel_input.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+        channel_input
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
     };
 
     // Save to config for next time

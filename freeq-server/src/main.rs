@@ -16,9 +16,7 @@ async fn main() -> Result<()> {
             .json()
             .init();
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .init();
+        tracing_subscriber::fmt().with_env_filter(filter).init();
     }
 
     let mut config = freeq_server::config::ServerConfig::parse();

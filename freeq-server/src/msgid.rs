@@ -58,7 +58,8 @@ mod tests {
         let id = generate();
         for c in id.chars() {
             assert!(
-                c.is_ascii_digit() || (c.is_ascii_uppercase() && c != 'I' && c != 'L' && c != 'O' && c != 'U'),
+                c.is_ascii_digit()
+                    || (c.is_ascii_uppercase() && c != 'I' && c != 'L' && c != 'O' && c != 'U'),
                 "Invalid Crockford char: {c}"
             );
         }

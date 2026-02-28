@@ -7,8 +7,8 @@
 //! Key formats: multibase (z = base58btc) + multicodec prefix
 
 use anyhow::{Context, Result, bail};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
 /// Multicodec varint prefixes for public key types.
 const MULTICODEC_SECP256K1_PUB: [u8; 2] = [0xe7, 0x01];
@@ -112,8 +112,8 @@ impl PrivateKey {
 
     /// Load a secp256k1 private key from raw bytes (32 bytes).
     pub fn secp256k1_from_bytes(bytes: &[u8]) -> Result<Self> {
-        let key = k256::ecdsa::SigningKey::from_slice(bytes)
-            .context("Invalid secp256k1 private key")?;
+        let key =
+            k256::ecdsa::SigningKey::from_slice(bytes).context("Invalid secp256k1 private key")?;
         Ok(PrivateKey::Secp256k1(key))
     }
 
@@ -146,12 +146,8 @@ impl PrivateKey {
     /// Get the corresponding public key.
     pub fn public_key(&self) -> PublicKey {
         match self {
-            PrivateKey::Secp256k1(key) => {
-                PublicKey::Secp256k1(*key.verifying_key())
-            }
-            PrivateKey::Ed25519(key) => {
-                PublicKey::Ed25519(key.verifying_key())
-            }
+            PrivateKey::Secp256k1(key) => PublicKey::Secp256k1(*key.verifying_key()),
+            PrivateKey::Ed25519(key) => PublicKey::Ed25519(key.verifying_key()),
         }
     }
 

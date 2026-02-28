@@ -1,11 +1,11 @@
 #![allow(clippy::too_many_arguments)]
 //! Message handling: PRIVMSG, NOTICE, TAGMSG, CHATHISTORY.
 
-use std::sync::Arc;
+use super::Connection;
+use super::helpers::{normalize_channel, s2s_broadcast, s2s_next_event_id};
 use crate::irc::{self, Message};
 use crate::server::SharedState;
-use super::Connection;
-use super::helpers::{s2s_broadcast, s2s_next_event_id, normalize_channel};
+use std::sync::Arc;
 
 /// Verify a client-provided signature, or server-sign as fallback.
 ///
@@ -28,25 +28,27 @@ fn resolve_signature(
 
     // If client provided a signature, verify it against their registered key
     if let Some(sig_b64) = client_sig
-        && let Some(vk) = state.session_msg_keys.lock().get(&conn.id).cloned() {
-            use base64::Engine;
-            if let Ok(sig_bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(sig_b64)
-                && sig_bytes.len() == 64 {
-                    let sig_array: [u8; 64] = sig_bytes.try_into().unwrap();
-                    let sig = ed25519_dalek::Signature::from_bytes(&sig_array);
-                    use ed25519_dalek::Verifier;
-                    if vk.verify(canonical.as_bytes(), &sig).is_ok() {
-                        // Client signature valid — use it (true non-repudiation)
-                        return Some(sig_b64.to_string());
-                    } else {
-                        tracing::warn!(
-                            session = %conn.id,
-                            did = %did,
-                            "Client message signature verification failed — falling back to server signing"
-                        );
-                    }
-                }
+        && let Some(vk) = state.session_msg_keys.lock().get(&conn.id).cloned()
+    {
+        use base64::Engine;
+        if let Ok(sig_bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(sig_b64)
+            && sig_bytes.len() == 64
+        {
+            let sig_array: [u8; 64] = sig_bytes.try_into().unwrap();
+            let sig = ed25519_dalek::Signature::from_bytes(&sig_array);
+            use ed25519_dalek::Verifier;
+            if vk.verify(canonical.as_bytes(), &sig).is_ok() {
+                // Client signature valid — use it (true non-repudiation)
+                return Some(sig_b64.to_string());
+            } else {
+                tracing::warn!(
+                    session = %conn.id,
+                    did = %did,
+                    "Client message signature verification failed — falling back to server signing"
+                );
+            }
         }
+    }
 
     // Fallback: server signs on behalf of authenticated user
     use ed25519_dalek::Signer;
@@ -109,7 +111,8 @@ pub(super) fn handle_tagmsg(
     // Rich clients get TAGMSG, plain clients get fallback PRIVMSG (if any)
     if target.starts_with('#') || target.starts_with('&') {
         let members: Vec<String> = state
-            .channels.lock()
+            .channels
+            .lock()
             .get(target)
             .map(|ch| ch.members.iter().cloned().collect())
             .unwrap_or_default();
@@ -138,18 +141,28 @@ pub(super) fn handle_tagmsg(
         }
     } else {
         // TAGMSG to a nick — route through federation layer.
-        use super::routing::{relay_to_nick, RouteResult};
+        use super::routing::{RouteResult, relay_to_nick};
         // TAGMSG uses the same relay path as PRIVMSG.
         // The text payload is empty for TAGMSG; tags ride in the from-line.
         let from_nick = conn.nick.as_deref().unwrap_or("*").to_string();
         let tag_text = plain_fallback.as_deref().unwrap_or("").to_string();
-        match relay_to_nick(state, &from_nick, target, &tag_text, super::helpers::s2s_next_event_id(state)) {
+        match relay_to_nick(
+            state,
+            &from_nick,
+            target,
+            &tag_text,
+            super::helpers::s2s_next_event_id(state),
+        ) {
             RouteResult::Local(ref session) => {
                 if let Some(tx) = state.connections.lock().get(session) {
                     let has_tags = state.cap_message_tags.lock().contains(session);
                     let has_time = state.cap_server_time.lock().contains(session);
                     if has_tags {
-                        let line = if has_time { &tagged_line_with_time } else { &tagged_line };
+                        let line = if has_time {
+                            &tagged_line_with_time
+                        } else {
+                            &tagged_line
+                        };
                         let _ = tx.try_send(line.clone());
                     } else if let Some(ref fallback) = plain_fallback {
                         let _ = tx.try_send(fallback.clone());
@@ -163,7 +176,6 @@ pub(super) fn handle_tagmsg(
         }
     }
 }
-
 
 pub(super) fn handle_privmsg(
     conn: &Connection,
@@ -256,7 +268,11 @@ pub(super) fn handle_privmsg(
                     let reply = Message::from_server(
                         &state.server_name,
                         irc::ERR_CANNOTSENDTOCHAN,
-                        vec![nick, target, "Cannot send to channel (+E) — messages must be encrypted"],
+                        vec![
+                            nick,
+                            target,
+                            "Cannot send to channel (+E) — messages must be encrypted",
+                        ],
                     );
                     if let Some(tx) = state.connections.lock().get(&conn.id) {
                         let _ = tx.try_send(format!("{reply}\r\n"));
@@ -337,7 +353,9 @@ pub(super) fn handle_privmsg(
                 }
             }
             drop(channels);
-            state.with_db(|db| db.insert_message(target, &hostmask, text, timestamp, tags, Some(&msgid)));
+            state.with_db(|db| {
+                db.insert_message(target, &hostmask, text, timestamp, tags, Some(&msgid))
+            });
 
             // Prune old messages if configured
             let max = state.config.max_messages_per_channel;
@@ -380,15 +398,18 @@ pub(super) fn handle_privmsg(
         if command == "PRIVMSG" {
             let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
             let sig = full_tags.get("+freeq.at/sig").cloned();
-            s2s_broadcast(state, crate::s2s::S2sMessage::Privmsg {
-                event_id: s2s_next_event_id(state),
-                from: conn.nick.as_deref().unwrap_or("*").to_string(),
-                target: target.to_string(),
-                text: text.to_string(),
-                origin,
-                msgid: Some(msgid.clone()),
-                sig,
-            });
+            s2s_broadcast(
+                state,
+                crate::s2s::S2sMessage::Privmsg {
+                    event_id: s2s_next_event_id(state),
+                    from: conn.nick.as_deref().unwrap_or("*").to_string(),
+                    target: target.to_string(),
+                    text: text.to_string(),
+                    origin,
+                    msgid: Some(msgid.clone()),
+                    sig,
+                },
+            );
         }
     } else {
         // Private message — check RPL_AWAY and deliver
@@ -427,7 +448,7 @@ pub(super) fn handle_privmsg(
 
         // Route through the federation routing layer.
         // See routing.rs for why we NEVER gate on remote_members here.
-        use super::routing::{relay_to_nick, RouteResult};
+        use super::routing::{RouteResult, relay_to_nick};
         let from_nick = conn.nick.as_deref().unwrap_or("*").to_string();
         match relay_to_nick(state, &from_nick, target, text, s2s_next_event_id(state)) {
             RouteResult::Local(ref session) => {
@@ -449,7 +470,10 @@ pub(super) fn handle_privmsg(
                 let target_sessions: Vec<String> = {
                     let target_did = state.session_dids.lock().get(session).cloned();
                     if let Some(ref did) = target_did {
-                        state.did_sessions.lock().get(did)
+                        state
+                            .did_sessions
+                            .lock()
+                            .get(did)
                             .map(|s| s.iter().cloned().collect())
                             .unwrap_or_else(|| vec![session.clone()])
                     } else {
@@ -463,8 +487,14 @@ pub(super) fn handle_privmsg(
                     let has_tags = state.cap_message_tags.lock().contains(target_session);
                     let has_time = state.cap_server_time.lock().contains(target_session);
                     let line = if has_tags {
-                        if has_time { &tagged_line_with_time } else { &tagged_line }
-                    } else { &plain_line };
+                        if has_time {
+                            &tagged_line_with_time
+                        } else {
+                            &tagged_line
+                        }
+                    } else {
+                        &plain_line
+                    };
                     if let Some(tx) = conns.get(target_session) {
                         let _ = tx.try_send(line.clone());
                     }
@@ -473,7 +503,10 @@ pub(super) fn handle_privmsg(
                 // echo-message: echo DM back to ALL sender's sessions
                 let sender_sessions: Vec<String> = {
                     if let Some(ref did) = conn.authenticated_did {
-                        state.did_sessions.lock().get(did)
+                        state
+                            .did_sessions
+                            .lock()
+                            .get(did)
                             .map(|s| s.iter().cloned().collect())
                             .unwrap_or_else(|| vec![conn.id.clone()])
                     } else {
@@ -488,8 +521,14 @@ pub(super) fn handle_privmsg(
                             let has_tags = state.cap_message_tags.lock().contains(&conn.id);
                             let has_time = state.cap_server_time.lock().contains(&conn.id);
                             let echo_line = if has_tags {
-                                if has_time { &tagged_line_with_time } else { &tagged_line }
-                            } else { &plain_line };
+                                if has_time {
+                                    &tagged_line_with_time
+                                } else {
+                                    &tagged_line
+                                }
+                            } else {
+                                &plain_line
+                            };
                             if let Some(tx) = conns.get(&conn.id) {
                                 let _ = tx.try_send(echo_line.clone());
                             }
@@ -499,8 +538,14 @@ pub(super) fn handle_privmsg(
                         let has_tags = state.cap_message_tags.lock().contains(sender_session);
                         let has_time = state.cap_server_time.lock().contains(sender_session);
                         let line = if has_tags {
-                            if has_time { &tagged_line_with_time } else { &tagged_line }
-                        } else { &plain_line };
+                            if has_time {
+                                &tagged_line_with_time
+                            } else {
+                                &tagged_line
+                            }
+                        } else {
+                            &plain_line
+                        };
                         if let Some(tx) = conns.get(sender_session) {
                             let _ = tx.try_send(line.clone());
                         }
@@ -516,8 +561,14 @@ pub(super) fn handle_privmsg(
                     let sender_has_tags = state.cap_message_tags.lock().contains(&conn.id);
                     let sender_has_time = state.cap_server_time.lock().contains(&conn.id);
                     let echo_line = if sender_has_tags {
-                        if sender_has_time { &tagged_line_with_time } else { &tagged_line }
-                    } else { &plain_line };
+                        if sender_has_time {
+                            &tagged_line_with_time
+                        } else {
+                            &tagged_line
+                        }
+                    } else {
+                        &plain_line
+                    };
                     if let Some(tx) = state.connections.lock().get(&conn.id) {
                         let _ = tx.try_send(echo_line.clone());
                     }
@@ -541,14 +592,12 @@ pub(super) fn handle_privmsg(
 
 // ── LIST command ────────────────────────────────────────────────────
 
-
 fn parse_chathistory_ts(s: &str) -> Option<u64> {
     let s = s.strip_prefix("timestamp=").unwrap_or(s);
     chrono::DateTime::parse_from_rfc3339(s)
         .ok()
         .map(|dt| dt.timestamp() as u64)
 }
-
 
 pub(super) fn handle_chathistory(
     conn: &Connection,
@@ -582,7 +631,12 @@ pub(super) fn handle_chathistory(
                 let reply = Message::from_server(
                     server_name,
                     "FAIL",
-                    vec!["CHATHISTORY", "INVALID_TARGET", &target, "You are not in that channel"],
+                    vec![
+                        "CHATHISTORY",
+                        "INVALID_TARGET",
+                        &target,
+                        "You are not in that channel",
+                    ],
                 );
                 send(state, session_id, format!("{reply}\r\n"));
                 return;
@@ -605,45 +659,53 @@ pub(super) fn handle_chathistory(
     // Fetch messages from DB based on subcommand
     let messages: Vec<crate::db::MessageRow> = match subcmd.as_str() {
         "BEFORE" => {
-            if msg.params.len() < 4 { vec![] } else {
+            if msg.params.len() < 4 {
+                vec![]
+            } else {
                 let ts = parse_chathistory_ts(&msg.params[2]).unwrap_or(u64::MAX);
                 let limit = msg.params[3].parse::<usize>().unwrap_or(50).min(500);
-                state.with_db(|db| db.get_messages(&target, limit, Some(ts)))
-                    
+                state
+                    .with_db(|db| db.get_messages(&target, limit, Some(ts)))
                     .unwrap_or_default()
             }
         }
         "AFTER" => {
-            if msg.params.len() < 4 { vec![] } else {
+            if msg.params.len() < 4 {
+                vec![]
+            } else {
                 let ts = parse_chathistory_ts(&msg.params[2]).unwrap_or(0);
                 let limit = msg.params[3].parse::<usize>().unwrap_or(50).min(500);
-                state.with_db(|db| db.get_messages_after(&target, ts, limit))
-                    
+                state
+                    .with_db(|db| db.get_messages_after(&target, ts, limit))
                     .unwrap_or_default()
             }
         }
         "LATEST" => {
-            if msg.params.len() < 4 { vec![] } else {
+            if msg.params.len() < 4 {
+                vec![]
+            } else {
                 let limit = msg.params[3].parse::<usize>().unwrap_or(50).min(500);
                 if msg.params[2] == "*" {
-                    state.with_db(|db| db.get_messages(&target, limit, None))
-                        
+                    state
+                        .with_db(|db| db.get_messages(&target, limit, None))
                         .unwrap_or_default()
                 } else {
                     let ts = parse_chathistory_ts(&msg.params[2]).unwrap_or(0);
-                    state.with_db(|db| db.get_messages_after(&target, ts, limit))
-                        
+                    state
+                        .with_db(|db| db.get_messages_after(&target, ts, limit))
                         .unwrap_or_default()
                 }
             }
         }
         "BETWEEN" => {
-            if msg.params.len() < 5 { vec![] } else {
+            if msg.params.len() < 5 {
+                vec![]
+            } else {
                 let start = parse_chathistory_ts(&msg.params[2]).unwrap_or(0);
                 let end = parse_chathistory_ts(&msg.params[3]).unwrap_or(u64::MAX);
                 let limit = msg.params[4].parse::<usize>().unwrap_or(50).min(500);
-                state.with_db(|db| db.get_messages_between(&target, start, end, limit))
-                    
+                state
+                    .with_db(|db| db.get_messages_between(&target, start, end, limit))
                     .unwrap_or_default()
             }
         }
@@ -653,20 +715,27 @@ pub(super) fn handle_chathistory(
     // Send as a batch (unique ID per request)
     let batch_id = format!("ch{}", crate::msgid::generate());
     if has_batch {
-        send(state, session_id, format!(
-            ":{server_name} BATCH +{batch_id} chathistory {target}\r\n"
-        ));
+        send(
+            state,
+            session_id,
+            format!(":{server_name} BATCH +{batch_id} chathistory {target}\r\n"),
+        );
     }
 
     for row in &messages {
-        let mut tags = if has_tags { row.tags.clone() } else { std::collections::HashMap::new() };
+        let mut tags = if has_tags {
+            row.tags.clone()
+        } else {
+            std::collections::HashMap::new()
+        };
         // Include msgid if available
         if has_tags {
             if let Some(ref mid) = row.msgid {
                 tags.insert("msgid".to_string(), mid.clone());
             }
             if let Some(ref replaces) = row.replaces_msgid {
-                tags.entry("+draft/edit".to_string()).or_insert_with(|| replaces.clone());
+                tags.entry("+draft/edit".to_string())
+                    .or_insert_with(|| replaces.clone());
             }
         }
         if has_time {
@@ -689,19 +758,22 @@ pub(super) fn handle_chathistory(
             };
             send(state, session_id, format!("{tag_msg}\r\n"));
         } else {
-            send(state, session_id, format!(
-                ":{} PRIVMSG {} :{}\r\n", row.sender, target, row.text
-            ));
+            send(
+                state,
+                session_id,
+                format!(":{} PRIVMSG {} :{}\r\n", row.sender, target, row.text),
+            );
         }
     }
 
     if has_batch {
-        send(state, session_id, format!(
-            ":{server_name} BATCH -{batch_id}\r\n"
-        ));
+        send(
+            state,
+            session_id,
+            format!(":{server_name} BATCH -{batch_id}\r\n"),
+        );
     }
 }
-
 
 // ── Message editing ─────────────────────────────────────────────────
 
@@ -734,7 +806,11 @@ fn handle_edit(
                 let reply = Message::from_server(
                     &state.server_name,
                     "FAIL",
-                    vec!["EDIT", "AUTHOR_MISMATCH", "You can only edit your own messages"],
+                    vec![
+                        "EDIT",
+                        "AUTHOR_MISMATCH",
+                        "You can only edit your own messages",
+                    ],
                 );
                 if let Some(tx) = state.connections.lock().get(&conn.id) {
                     let _ = tx.try_send(format!("{reply}\r\n"));
@@ -773,7 +849,8 @@ fn handle_edit(
         .unwrap_or_default()
         .as_secs();
     let client_sig = tags.get("+freeq.at/sig").map(|s| s.as_str());
-    if let Some(sig) = resolve_signature(conn, target, new_text, edit_timestamp, client_sig, state) {
+    if let Some(sig) = resolve_signature(conn, target, new_text, edit_timestamp, client_sig, state)
+    {
         full_tags.insert("+freeq.at/sig".to_string(), sig);
     }
 
@@ -811,11 +888,22 @@ fn handle_edit(
     };
 
     // Store in DB
-    let store_tags: std::collections::HashMap<String, String> = tags.iter()
+    let store_tags: std::collections::HashMap<String, String> = tags
+        .iter()
         .filter(|(k, _)| *k != "msgid")
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    state.with_db(|db| db.insert_edit(target, &hostmask, new_text, timestamp, &store_tags, &edit_msgid, original_msgid));
+    state.with_db(|db| {
+        db.insert_edit(
+            target,
+            &hostmask,
+            new_text,
+            timestamp,
+            &store_tags,
+            &edit_msgid,
+            original_msgid,
+        )
+    });
 
     // Update in-memory history: replace the original message text
     {
@@ -834,7 +922,8 @@ fn handle_edit(
 
     // Deliver to channel members
     let members: Vec<String> = state
-        .channels.lock()
+        .channels
+        .lock()
         .get(target)
         .map(|ch| ch.members.iter().cloned().collect())
         .unwrap_or_default();
@@ -849,8 +938,14 @@ fn handle_edit(
         }
         if let Some(tx) = conns.get(sid) {
             let line = if tag_caps.contains(sid) {
-                if time_caps.contains(sid) { &tagged_line_with_time } else { &tagged_line }
-            } else { &plain_line };
+                if time_caps.contains(sid) {
+                    &tagged_line_with_time
+                } else {
+                    &tagged_line
+                }
+            } else {
+                &plain_line
+            };
             let _ = tx.try_send(line.clone());
         }
     }
@@ -858,27 +953,25 @@ fn handle_edit(
     // Broadcast to S2S peers
     let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
     let sig = full_tags.get("+freeq.at/sig").cloned();
-    s2s_broadcast(state, crate::s2s::S2sMessage::Privmsg {
-        event_id: s2s_next_event_id(state),
-        from: nick.to_string(),
-        target: target.to_string(),
-        text: new_text.to_string(),
-        origin,
-        msgid: Some(edit_msgid),
-        sig,
-    });
+    s2s_broadcast(
+        state,
+        crate::s2s::S2sMessage::Privmsg {
+            event_id: s2s_next_event_id(state),
+            from: nick.to_string(),
+            target: target.to_string(),
+            text: new_text.to_string(),
+            origin,
+            msgid: Some(edit_msgid),
+            sig,
+        },
+    );
 }
 
 // ── Message deletion ────────────────────────────────────────────────
 
 /// Handle a TAGMSG with +draft/delete=<msgid> tag.
 /// Verifies authorship, soft-deletes the message, broadcasts to channel.
-fn handle_delete(
-    conn: &Connection,
-    target: &str,
-    original_msgid: &str,
-    state: &Arc<SharedState>,
-) {
+fn handle_delete(conn: &Connection, target: &str, original_msgid: &str, state: &Arc<SharedState>) {
     let hostmask = conn.hostmask();
     let nick = conn.nick_or_star();
 
@@ -895,7 +988,9 @@ fn handle_delete(
             let current_nick = nick;
             if !original_nick.eq_ignore_ascii_case(current_nick) {
                 // Also allow ops to delete messages
-                let is_op = state.channels.lock()
+                let is_op = state
+                    .channels
+                    .lock()
                     .get(target)
                     .map(|ch| ch.ops.contains(&conn.id))
                     .unwrap_or(false);
@@ -903,7 +998,11 @@ fn handle_delete(
                     let reply = Message::from_server(
                         &state.server_name,
                         "FAIL",
-                        vec!["DELETE", "AUTHOR_MISMATCH", "You can only delete your own messages"],
+                        vec![
+                            "DELETE",
+                            "AUTHOR_MISMATCH",
+                            "You can only delete your own messages",
+                        ],
                     );
                     if let Some(tx) = state.connections.lock().get(&conn.id) {
                         let _ = tx.try_send(format!("{reply}\r\n"));
@@ -936,7 +1035,8 @@ fn handle_delete(
     {
         let mut channels = state.channels.lock();
         if let Some(ch) = channels.get_mut(target) {
-            ch.history.retain(|h| h.msgid.as_deref() != Some(original_msgid));
+            ch.history
+                .retain(|h| h.msgid.as_deref() != Some(original_msgid));
         }
     }
 
@@ -955,7 +1055,8 @@ fn handle_delete(
 
     // Deliver to tag-capable channel members only (plain clients can't see deletes)
     let members: Vec<String> = state
-        .channels.lock()
+        .channels
+        .lock()
         .get(target)
         .map(|ch| ch.members.iter().cloned().collect())
         .unwrap_or_default();
@@ -967,8 +1068,9 @@ fn handle_delete(
             continue; // Don't echo delete back to sender
         }
         if tag_caps.contains(sid)
-            && let Some(tx) = conns.get(sid) {
-                let _ = tx.try_send(tagged_line.clone());
-            }
+            && let Some(tx) = conns.get(sid)
+        {
+            let _ = tx.try_send(tagged_line.clone());
+        }
     }
 }

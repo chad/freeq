@@ -4,7 +4,7 @@
 //! Tools return structured results that get fed back to the LLM.
 
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
@@ -21,7 +21,13 @@ impl Workspace {
     pub async fn create(base: &Path, project_name: &str) -> Result<Self> {
         let safe_name: String = project_name
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '-'
+                }
+            })
             .collect();
         let root = base.join(&safe_name);
         tokio::fs::create_dir_all(&root).await?;
@@ -71,7 +77,11 @@ fn list_files_sync(root: &Path) -> Vec<String> {
                 let path = entry.path();
                 if path.is_dir() {
                     let name = path.file_name().unwrap_or_default().to_string_lossy();
-                    if name.starts_with('.') || name == "node_modules" || name == "target" || name == "__pycache__" {
+                    if name.starts_with('.')
+                        || name == "node_modules"
+                        || name == "target"
+                        || name == "__pycache__"
+                    {
                         continue;
                     }
                     walk(&path, root, result);
@@ -133,7 +143,12 @@ pub async fn miren_deploy(workspace: &Workspace) -> Result<String> {
     let miren_toml = workspace.root.join(".miren/app.toml");
     if !miren_toml.exists() {
         // Initialize
-        let init_output = shell(workspace, &format!("miren init -n {}", workspace.project_name), 30).await?;
+        let init_output = shell(
+            workspace,
+            &format!("miren init -n {}", workspace.project_name),
+            30,
+        )
+        .await?;
         tracing::info!("miren init: {init_output}");
     }
 
@@ -143,11 +158,7 @@ pub async fn miren_deploy(workspace: &Workspace) -> Result<String> {
 }
 
 /// Execute a tool call from the LLM and return the result.
-pub async fn execute_tool(
-    workspace: &Workspace,
-    tool_name: &str,
-    input: &Value,
-) -> Result<String> {
+pub async fn execute_tool(workspace: &Workspace, tool_name: &str, input: &Value) -> Result<String> {
     match tool_name {
         "write_file" => {
             let path = input["path"].as_str().unwrap_or("unnamed.txt");

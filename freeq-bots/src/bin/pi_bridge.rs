@@ -54,17 +54,23 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter("info").init();
 
     let cfg = Config {
-        server_addr: std::env::var("PI_SERVER_ADDR").unwrap_or_else(|_| "irc.freeq.at:6667".to_string()),
-        broker_url: std::env::var("PI_BROKER_URL").unwrap_or_else(|_| "https://auth.freeq.at".to_string()),
+        server_addr: std::env::var("PI_SERVER_ADDR")
+            .unwrap_or_else(|_| "irc.freeq.at:6667".to_string()),
+        broker_url: std::env::var("PI_BROKER_URL")
+            .unwrap_or_else(|_| "https://auth.freeq.at".to_string()),
         broker_token: std::env::var("PI_BROKER_TOKEN").expect("PI_BROKER_TOKEN required"),
         allowed_did: std::env::var("PI_ALLOWED_DID").expect("PI_ALLOWED_DID required"),
         channel: std::env::var("PI_CHANNEL").ok(),
         prefix: std::env::var("PI_PREFIX").unwrap_or_else(|_| "!pi".to_string()),
-        outbox_path: std::env::var("PI_OUTBOX").unwrap_or_else(|_| "/tmp/freeq-pi-queue.jsonl".to_string()),
+        outbox_path: std::env::var("PI_OUTBOX")
+            .unwrap_or_else(|_| "/tmp/freeq-pi-queue.jsonl".to_string()),
         reply_inbox_path: std::env::var("PI_REPLY_INBOX")
             .unwrap_or_else(|_| "/tmp/freeq-pi-replies.jsonl".to_string()),
         bot_nick: std::env::var("PI_BOT_NICK").ok(),
-        guest_mode: matches!(std::env::var("PI_BOT_GUEST").as_deref(), Ok("1") | Ok("true") | Ok("yes")),
+        guest_mode: matches!(
+            std::env::var("PI_BOT_GUEST").as_deref(),
+            Ok("1") | Ok("true") | Ok("yes")
+        ),
         fifo_path: std::env::var("PI_FIFO").ok(),
     };
 
@@ -78,7 +84,10 @@ async fn main() -> anyhow::Result<()> {
 
 async fn run_once(cfg: Config) -> anyhow::Result<()> {
     let (nick, web_token) = if cfg.guest_mode {
-        let nick = cfg.bot_nick.clone().unwrap_or_else(|| "pi-bridge".to_string());
+        let nick = cfg
+            .bot_nick
+            .clone()
+            .unwrap_or_else(|| "pi-bridge".to_string());
         tracing::info!(nick = %nick, "pi-bridge guest mode");
         (nick, None)
     } else {
@@ -143,7 +152,10 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
                     current_nick = new_nick;
                 }
             }
-            Event::Joined { channel, nick: joined_nick } => {
+            Event::Joined {
+                channel,
+                nick: joined_nick,
+            } => {
                 if joined_nick.eq_ignore_ascii_case(&current_nick) {
                     tracing::info!(channel = %channel, "pi-bridge joined channel");
                 }
@@ -166,13 +178,16 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
                     if let Some(cmd) = pending.remove(&key) {
                         if did == cfg.allowed_did {
                             tracing::info!(from = %nick, did = %did, "pi command authorized after WHOIS");
-                            dispatch_command(&cfg, &OutboxEntry {
-                                ts: chrono::Utc::now().timestamp(),
-                                from: nick.clone(),
-                                did: did.clone(),
-                                target: cmd.target.clone(),
-                                text: cmd.text.clone(),
-                            })?;
+                            dispatch_command(
+                                &cfg,
+                                &OutboxEntry {
+                                    ts: chrono::Utc::now().timestamp(),
+                                    from: nick.clone(),
+                                    did: did.clone(),
+                                    target: cmd.target.clone(),
+                                    text: cmd.text.clone(),
+                                },
+                            )?;
                             tracing::info!(from = %nick, "pi command queued after WHOIS");
                             let _ = handle.privmsg(&cmd.target, "✅ queued").await;
                         } else {
@@ -182,14 +197,23 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
                     }
                 }
             }
-            Event::Message { from, target, text, tags } => {
-                if tags.contains_key("batch") { continue; }
+            Event::Message {
+                from,
+                target,
+                text,
+                tags,
+            } => {
+                if tags.contains_key("batch") {
+                    continue;
+                }
 
                 // Only accept DM or control channel
                 if let Some(ch) = &channel
-                    && !target.eq_ignore_ascii_case(ch) && !target.eq_ignore_ascii_case(&current_nick) {
-                        continue;
-                    }
+                    && !target.eq_ignore_ascii_case(ch)
+                    && !target.eq_ignore_ascii_case(&current_nick)
+                {
+                    continue;
+                }
 
                 // Require prefix
                 let trimmed = text.trim();
@@ -207,12 +231,17 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
                     Some(d) => d.clone(),
                     None => {
                         tracing::info!(from = %from, "resolving DID via WHOIS");
-                        pending.insert(from.to_lowercase(), PendingCommand {
-                            target: target.clone(),
-                            text: payload.clone(),
-                        });
+                        pending.insert(
+                            from.to_lowercase(),
+                            PendingCommand {
+                                target: target.clone(),
+                                text: payload.clone(),
+                            },
+                        );
                         let _ = handle.raw(&format!("WHOIS {from}")).await;
-                        let _ = handle.privmsg(&target, "Auth pending — resolving DID…").await;
+                        let _ = handle
+                            .privmsg(&target, "Auth pending — resolving DID…")
+                            .await;
                         continue;
                     }
                 };
@@ -224,13 +253,16 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
                 }
 
                 tracing::info!(from = %from, did = %did, "pi command authorized");
-                dispatch_command(&cfg, &OutboxEntry {
-                    ts: chrono::Utc::now().timestamp(),
-                    from: from.clone(),
-                    did,
-                    target: target.clone(),
-                    text: payload.clone(),
-                })?;
+                dispatch_command(
+                    &cfg,
+                    &OutboxEntry {
+                        ts: chrono::Utc::now().timestamp(),
+                        from: from.clone(),
+                        did,
+                        target: target.clone(),
+                        text: payload.clone(),
+                    },
+                )?;
 
                 tracing::info!(from = %from, "pi command queued");
                 let _ = handle.privmsg(&target, "✅ queued").await;
@@ -253,9 +285,11 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
 async fn fetch_broker_session(cfg: &Config) -> anyhow::Result<BrokerSessionResponse> {
     let url = format!("{}/session", cfg.broker_url.trim_end_matches('/'));
     let client = reqwest::Client::new();
-    let resp = client.post(&url)
+    let resp = client
+        .post(&url)
         .json(&serde_json::json!({"broker_token": cfg.broker_token}))
-        .send().await?;
+        .send()
+        .await?;
     if !resp.status().is_success() {
         let text = resp.text().await.unwrap_or_default();
         return Err(anyhow::anyhow!("broker session failed: {text}"));
@@ -313,7 +347,11 @@ fn parse_whois_did(info: &str) -> Option<String> {
     None
 }
 
-async fn run_reply_loop(handle: client::ClientHandle, path: String, default_target: Option<String>) {
+async fn run_reply_loop(
+    handle: client::ClientHandle,
+    path: String,
+    default_target: Option<String>,
+) {
     let mut offset: u64 = 0;
     loop {
         tokio::time::sleep(Duration::from_millis(500)).await;

@@ -44,7 +44,10 @@ pub(super) fn handle_policy(
         let reply = Message::from_server(
             server_name,
             "NOTICE",
-            vec![nick, "Usage: POLICY <channel> SET|SET-ROLE|VERIFY|INFO|ACCEPT|CLEAR"],
+            vec![
+                nick,
+                "Usage: POLICY <channel> SET|SET-ROLE|VERIFY|INFO|ACCEPT|CLEAR",
+            ],
         );
         send_fn(state, session_id, format!("{reply}\r\n"));
         return;
@@ -66,7 +69,12 @@ pub(super) fn handle_policy(
     match subcommand.as_str() {
         "SET" => {
             // Require ops
-            if !is_channel_op(state, channel, session_id, conn.authenticated_did.as_deref()) {
+            if !is_channel_op(
+                state,
+                channel,
+                session_id,
+                conn.authenticated_did.as_deref(),
+            ) {
                 let reply = Message::from_server(
                     server_name,
                     "482", // ERR_CHANOPRIVSNEEDED
@@ -135,8 +143,7 @@ pub(super) fn handle_policy(
                         &rules_hash[..12],
                         &pid[..12.min(pid.len())]
                     );
-                    let reply =
-                        Message::from_server(server_name, "NOTICE", vec![nick, &notice]);
+                    let reply = Message::from_server(server_name, "NOTICE", vec![nick, &notice]);
                     send_fn(state, session_id, format!("{reply}\r\n"));
 
                     // Auto-attest the op who set the policy
@@ -151,18 +158,22 @@ pub(super) fn handle_policy(
 
                     // Broadcast policy to S2S peers
                     let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
-                    let auth_set_json = engine.store()
+                    let auth_set_json = engine
+                        .store()
                         .get_authority_set(&policy.authority_set_hash)
                         .ok()
                         .flatten()
                         .and_then(|a| serde_json::to_string(&a).ok());
-                    s2s_broadcast(state, crate::s2s::S2sMessage::PolicySync {
-                        event_id: s2s_next_event_id(state),
-                        channel: channel.to_string(),
-                        policy_json: serde_json::to_string(&policy).ok(),
-                        authority_set_json: auth_set_json,
-                        origin,
-                    });
+                    s2s_broadcast(
+                        state,
+                        crate::s2s::S2sMessage::PolicySync {
+                            event_id: s2s_next_event_id(state),
+                            channel: channel.to_string(),
+                            policy_json: serde_json::to_string(&policy).ok(),
+                            authority_set_json: auth_set_json,
+                            origin,
+                        },
+                    );
                 }
                 Err(e) => {
                     let reply = Message::from_server(
@@ -178,7 +189,12 @@ pub(super) fn handle_policy(
         "SET-ROLE" => {
             // POLICY #channel SET-ROLE <role> <requirement_json>
             // e.g. POLICY #channel SET-ROLE op {"type":"ALL","requirements":[{"type":"ACCEPT","hash":"abc"},{"type":"PRESENT","credential_type":"github_membership","issuer":"github"}]}
-            if !is_channel_op(state, channel, session_id, conn.authenticated_did.as_deref()) {
+            if !is_channel_op(
+                state,
+                channel,
+                session_id,
+                conn.authenticated_did.as_deref(),
+            ) {
                 let reply = Message::from_server(
                     server_name,
                     "482",
@@ -192,7 +208,10 @@ pub(super) fn handle_policy(
                 let reply = Message::from_server(
                     server_name,
                     "NOTICE",
-                    vec![nick, "Usage: POLICY <channel> SET-ROLE <role_name> <requirement_json>"],
+                    vec![
+                        nick,
+                        "Usage: POLICY <channel> SET-ROLE <role_name> <requirement_json>",
+                    ],
                 );
                 send_fn(state, session_id, format!("{reply}\r\n"));
                 return;
@@ -221,7 +240,10 @@ pub(super) fn handle_policy(
                     let reply = Message::from_server(
                         server_name,
                         "NOTICE",
-                        vec![nick, "Set a base policy first with POLICY <channel> SET <rules>"],
+                        vec![
+                            nick,
+                            "Set a base policy first with POLICY <channel> SET <rules>",
+                        ],
                     );
                     send_fn(state, session_id, format!("{reply}\r\n"));
                     return;
@@ -255,18 +277,22 @@ pub(super) fn handle_policy(
 
                     // Broadcast to S2S
                     let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
-                    let auth_set_json = engine.store()
+                    let auth_set_json = engine
+                        .store()
                         .get_authority_set(&policy.authority_set_hash)
                         .ok()
                         .flatten()
                         .and_then(|a| serde_json::to_string(&a).ok());
-                    s2s_broadcast(state, crate::s2s::S2sMessage::PolicySync {
-                        event_id: s2s_next_event_id(state),
-                        channel: channel.to_string(),
-                        policy_json: serde_json::to_string(&policy).ok(),
-                        authority_set_json: auth_set_json,
-                        origin,
-                    });
+                    s2s_broadcast(
+                        state,
+                        crate::s2s::S2sMessage::PolicySync {
+                            event_id: s2s_next_event_id(state),
+                            channel: channel.to_string(),
+                            policy_json: serde_json::to_string(&policy).ok(),
+                            authority_set_json: auth_set_json,
+                            origin,
+                        },
+                    );
                 }
                 Err(e) => {
                     let reply = Message::from_server(
@@ -300,7 +326,10 @@ pub(super) fn handle_policy(
                 let reply = Message::from_server(
                     server_name,
                     "NOTICE",
-                    vec![nick, "Usage: POLICY <channel> VERIFY <github|bluesky> <target>"],
+                    vec![
+                        nick,
+                        "Usage: POLICY <channel> VERIFY <github|bluesky> <target>",
+                    ],
                 );
                 send_fn(state, session_id, format!("{reply}\r\n"));
                 return;
@@ -333,7 +362,12 @@ pub(super) fn handle_policy(
                 let reply = Message::from_server(
                     server_name,
                     "NOTICE",
-                    vec![nick, &format!("Open this URL to verify you follow @{target_handle} on Bluesky: {verify_url}")],
+                    vec![
+                        nick,
+                        &format!(
+                            "Open this URL to verify you follow @{target_handle} on Bluesky: {verify_url}"
+                        ),
+                    ],
                 );
                 send_fn(state, session_id, format!("{reply}\r\n"));
                 return;
@@ -360,7 +394,10 @@ pub(super) fn handle_policy(
                 let reply = Message::from_server(
                     server_name,
                     "NOTICE",
-                    vec![nick, &format!("Open this URL to verify your GitHub identity: {verify_url}")],
+                    vec![
+                        nick,
+                        &format!("Open this URL to verify your GitHub identity: {verify_url}"),
+                    ],
                 );
                 send_fn(state, session_id, format!("{reply}\r\n"));
             } else {
@@ -370,13 +407,19 @@ pub(super) fn handle_policy(
                     let reply = Message::from_server(
                         server_name,
                         "NOTICE",
-                        vec![nick, "No GitHub OAuth configured. Usage: POLICY <channel> VERIFY github <org> <github-username>"],
+                        vec![
+                            nick,
+                            "No GitHub OAuth configured. Usage: POLICY <channel> VERIFY github <org> <github-username>",
+                        ],
                     );
                     send_fn(state, session_id, format!("{reply}\r\n"));
                     let reply2 = Message::from_server(
                         server_name,
                         "NOTICE",
-                        vec![nick, "⚠ Note: public API check cannot prove you own this GitHub account"],
+                        vec![
+                            nick,
+                            "⚠ Note: public API check cannot prove you own this GitHub account",
+                        ],
                     );
                     send_fn(state, session_id, format!("{reply2}\r\n"));
                     return;
@@ -395,7 +438,13 @@ pub(super) fn handle_policy(
                 let reply = Message::from_server(
                     server_name,
                     "NOTICE",
-                    vec![nick, &format!("Checking GitHub: is {} a public member of {}? (unverified — no OAuth)", username, target)],
+                    vec![
+                        nick,
+                        &format!(
+                            "Checking GitHub: is {} a public member of {}? (unverified — no OAuth)",
+                            username, target
+                        ),
+                    ],
                 );
                 send_fn(state, session_id, format!("{reply}\r\n"));
 
@@ -420,13 +469,24 @@ pub(super) fn handle_policy(
                                 "verified_at": chrono::Utc::now().to_rfc3339(),
                                 "method": "public_api",
                             });
-                            match engine_ref.store_credential(&did_c, "github_membership", "github", &metadata) {
-                                Ok(()) => format!("✓ {} is a public member of {}. Credential stored (⚠ not OAuth-verified).", username_c, org_c),
+                            match engine_ref.store_credential(
+                                &did_c,
+                                "github_membership",
+                                "github",
+                                &metadata,
+                            ) {
+                                Ok(()) => format!(
+                                    "✓ {} is a public member of {}. Credential stored (⚠ not OAuth-verified).",
+                                    username_c, org_c
+                                ),
                                 Err(e) => format!("Verified but failed to store: {e}"),
                             }
                         }
                         Ok(resp) if resp.status().as_u16() == 404 => {
-                            format!("✗ {} is NOT a public member of {}. Make your membership public at https://github.com/orgs/{}/people", username_c, org_c, org_c)
+                            format!(
+                                "✗ {} is NOT a public member of {}. Make your membership public at https://github.com/orgs/{}/people",
+                                username_c, org_c, org_c
+                            )
                         }
                         Ok(resp) => {
                             format!("GitHub API returned {}", resp.status())
@@ -436,11 +496,7 @@ pub(super) fn handle_policy(
                         }
                     };
 
-                    let reply = Message::from_server(
-                        &server_c,
-                        "NOTICE",
-                        vec![&nick_c, &msg_text],
-                    );
+                    let reply = Message::from_server(&server_c, "NOTICE", vec![&nick_c, &msg_text]);
                     let conns = state_c.connections.lock();
                     if let Some(tx) = conns.get(&session_c) {
                         let _ = tx.try_send(format!("{reply}\r\n"));
@@ -449,54 +505,49 @@ pub(super) fn handle_policy(
             }
         }
 
-        "INFO" => {
-            match engine.get_policy(channel) {
-                Ok(Some(policy)) => {
-                    let pid = policy.policy_id.as_deref().unwrap_or("unknown");
-                    let lines = [
-                        format!("Policy for {channel}:"),
-                        format!("  Version: {}", policy.version),
-                        format!("  Policy ID: {pid}"),
-                        format!("  Effective: {}", policy.effective_at),
-                        format!("  Validity: {:?}", policy.validity_model),
-                        format!("  Requirement: {}", describe_requirement(&policy.requirements)),
-                    ];
-                    for line in &lines {
-                        let reply =
-                            Message::from_server(server_name, "NOTICE", vec![nick, line]);
+        "INFO" => match engine.get_policy(channel) {
+            Ok(Some(policy)) => {
+                let pid = policy.policy_id.as_deref().unwrap_or("unknown");
+                let lines = [
+                    format!("Policy for {channel}:"),
+                    format!("  Version: {}", policy.version),
+                    format!("  Policy ID: {pid}"),
+                    format!("  Effective: {}", policy.effective_at),
+                    format!("  Validity: {:?}", policy.validity_model),
+                    format!(
+                        "  Requirement: {}",
+                        describe_requirement(&policy.requirements)
+                    ),
+                ];
+                for line in &lines {
+                    let reply = Message::from_server(server_name, "NOTICE", vec![nick, line]);
+                    send_fn(state, session_id, format!("{reply}\r\n"));
+                }
+                if !policy.role_requirements.is_empty() {
+                    for (role, req) in &policy.role_requirements {
+                        let desc = format!("  Role '{}': {}", role, describe_requirement(req));
+                        let reply = Message::from_server(server_name, "NOTICE", vec![nick, &desc]);
                         send_fn(state, session_id, format!("{reply}\r\n"));
                     }
-                    if !policy.role_requirements.is_empty() {
-                        for (role, req) in &policy.role_requirements {
-                            let desc = format!(
-                                "  Role '{}': {}",
-                                role,
-                                describe_requirement(req)
-                            );
-                            let reply =
-                                Message::from_server(server_name, "NOTICE", vec![nick, &desc]);
-                            send_fn(state, session_id, format!("{reply}\r\n"));
-                        }
-                    }
-                }
-                Ok(None) => {
-                    let reply = Message::from_server(
-                        server_name,
-                        "NOTICE",
-                        vec![nick, &format!("{channel} has no policy (open join)")],
-                    );
-                    send_fn(state, session_id, format!("{reply}\r\n"));
-                }
-                Err(e) => {
-                    let reply = Message::from_server(
-                        server_name,
-                        "NOTICE",
-                        vec![nick, &format!("Policy error: {e}")],
-                    );
-                    send_fn(state, session_id, format!("{reply}\r\n"));
                 }
             }
-        }
+            Ok(None) => {
+                let reply = Message::from_server(
+                    server_name,
+                    "NOTICE",
+                    vec![nick, &format!("{channel} has no policy (open join)")],
+                );
+                send_fn(state, session_id, format!("{reply}\r\n"));
+            }
+            Err(e) => {
+                let reply = Message::from_server(
+                    server_name,
+                    "NOTICE",
+                    vec![nick, &format!("Policy error: {e}")],
+                );
+                send_fn(state, session_id, format!("{reply}\r\n"));
+            }
+        },
 
         "ACCEPT" => {
             let did = match &conn.authenticated_did {
@@ -591,7 +642,12 @@ pub(super) fn handle_policy(
 
         "CLEAR" => {
             // Require ops
-            if !is_channel_op(state, channel, session_id, conn.authenticated_did.as_deref()) {
+            if !is_channel_op(
+                state,
+                channel,
+                session_id,
+                conn.authenticated_did.as_deref(),
+            ) {
                 let reply = Message::from_server(
                     server_name,
                     "482",
@@ -606,19 +662,25 @@ pub(super) fn handle_policy(
                     let reply = Message::from_server(
                         server_name,
                         "NOTICE",
-                        vec![nick, &format!("Policy removed from {channel} — channel is now open join")],
+                        vec![
+                            nick,
+                            &format!("Policy removed from {channel} — channel is now open join"),
+                        ],
                     );
                     send_fn(state, session_id, format!("{reply}\r\n"));
 
                     // Broadcast clear to S2S peers
                     let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
-                    s2s_broadcast(state, crate::s2s::S2sMessage::PolicySync {
-                        event_id: s2s_next_event_id(state),
-                        channel: channel.to_string(),
-                        policy_json: None,
-                        authority_set_json: None,
-                        origin,
-                    });
+                    s2s_broadcast(
+                        state,
+                        crate::s2s::S2sMessage::PolicySync {
+                            event_id: s2s_next_event_id(state),
+                            channel: channel.to_string(),
+                            policy_json: None,
+                            authority_set_json: None,
+                            origin,
+                        },
+                    );
                 }
                 Ok(false) => {
                     let reply = Message::from_server(
@@ -642,7 +704,12 @@ pub(super) fn handle_policy(
         "REQUIRE" => {
             // POLICY #channel REQUIRE <credential_type> issuer=<did> url=<verify_url> label=<Button Text>
             // Adds a credential endpoint to the policy (UX metadata).
-            if !is_channel_op(state, channel, session_id, conn.authenticated_did.as_deref()) {
+            if !is_channel_op(
+                state,
+                channel,
+                session_id,
+                conn.authenticated_did.as_deref(),
+            ) {
                 let reply = Message::from_server(
                     server_name,
                     "482",
@@ -656,7 +723,10 @@ pub(super) fn handle_policy(
                 let reply = Message::from_server(
                     server_name,
                     "NOTICE",
-                    vec![nick, "Usage: POLICY <channel> REQUIRE <credential_type> issuer=<did> url=<url> label=<text>"],
+                    vec![
+                        nick,
+                        "Usage: POLICY <channel> REQUIRE <credential_type> issuer=<did> url=<url> label=<text>",
+                    ],
                 );
                 send_fn(state, session_id, format!("{reply}\r\n"));
                 return;
@@ -692,7 +762,11 @@ pub(super) fn handle_policy(
 
             // Validate URL: must be a path or https URL, no HTML/script injection
             let decoded_url = urlencoding::decode(&url).unwrap_or(std::borrow::Cow::Borrowed(&url));
-            if decoded_url.contains('<') || decoded_url.contains('>') || decoded_url.contains('"') || decoded_url.contains("javascript:") {
+            if decoded_url.contains('<')
+                || decoded_url.contains('>')
+                || decoded_url.contains('"')
+                || decoded_url.contains("javascript:")
+            {
                 let reply = Message::from_server(
                     server_name,
                     "NOTICE",
@@ -718,7 +792,10 @@ pub(super) fn handle_policy(
                     let reply = Message::from_server(
                         server_name,
                         "NOTICE",
-                        vec![nick, "Set a base policy first with POLICY <channel> SET <rules>"],
+                        vec![
+                            nick,
+                            "Set a base policy first with POLICY <channel> SET <rules>",
+                        ],
                     );
                     send_fn(state, session_id, format!("{reply}\r\n"));
                     return;
@@ -753,22 +830,21 @@ pub(super) fn handle_policy(
                 issuer: Some(issuer.clone()),
             };
 
-            let new_requirements = if already_requires_credential(&current.requirements, &credential_type) {
-                current.requirements.clone()
-            } else {
-                match &current.requirements {
-                    crate::policy::types::Requirement::All { requirements } => {
-                        let mut reqs = requirements.clone();
-                        reqs.push(present_req);
-                        crate::policy::types::Requirement::All { requirements: reqs }
-                    }
-                    other => {
-                        crate::policy::types::Requirement::All {
-                            requirements: vec![other.clone(), present_req],
+            let new_requirements =
+                if already_requires_credential(&current.requirements, &credential_type) {
+                    current.requirements.clone()
+                } else {
+                    match &current.requirements {
+                        crate::policy::types::Requirement::All { requirements } => {
+                            let mut reqs = requirements.clone();
+                            reqs.push(present_req);
+                            crate::policy::types::Requirement::All { requirements: reqs }
                         }
+                        other => crate::policy::types::Requirement::All {
+                            requirements: vec![other.clone(), present_req],
+                        },
                     }
-                }
-            };
+                };
 
             match engine.update_channel_policy_with_endpoints(
                 channel,
@@ -786,13 +862,16 @@ pub(super) fn handle_policy(
 
                     // Broadcast to S2S
                     let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
-                    s2s_broadcast(state, crate::s2s::S2sMessage::PolicySync {
-                        event_id: s2s_next_event_id(state),
-                        channel: channel.to_string(),
-                        policy_json: serde_json::to_string(&policy).ok(),
-                        authority_set_json: None,
-                        origin,
-                    });
+                    s2s_broadcast(
+                        state,
+                        crate::s2s::S2sMessage::PolicySync {
+                            event_id: s2s_next_event_id(state),
+                            channel: channel.to_string(),
+                            policy_json: serde_json::to_string(&policy).ok(),
+                            authority_set_json: None,
+                            origin,
+                        },
+                    );
                 }
                 Err(e) => {
                     let reply = Message::from_server(
@@ -809,7 +888,10 @@ pub(super) fn handle_policy(
             let reply = Message::from_server(
                 server_name,
                 "NOTICE",
-                vec![nick, "Usage: POLICY <channel> SET|SET-ROLE|REQUIRE|VERIFY|INFO|ACCEPT|CLEAR"],
+                vec![
+                    nick,
+                    "Usage: POLICY <channel> SET|SET-ROLE|REQUIRE|VERIFY|INFO|ACCEPT|CLEAR",
+                ],
             );
             send_fn(state, session_id, format!("{reply}\r\n"));
         }
@@ -817,21 +899,17 @@ pub(super) fn handle_policy(
 }
 
 /// Check if session is a channel op.
-fn is_channel_op(
-    state: &SharedState,
-    channel: &str,
-    session_id: &str,
-    did: Option<&str>,
-) -> bool {
+fn is_channel_op(state: &SharedState, channel: &str, session_id: &str, did: Option<&str>) -> bool {
     let channels = state.channels.lock();
     if let Some(ch) = channels.get(channel) {
         if ch.ops.contains(session_id) {
             return true;
         }
         if let Some(d) = did
-            && (ch.did_ops.contains(d) || ch.founder_did.as_deref() == Some(d)) {
-                return true;
-            }
+            && (ch.did_ops.contains(d) || ch.founder_did.as_deref() == Some(d))
+        {
+            return true;
+        }
     }
     false
 }
@@ -849,11 +927,16 @@ fn extract_accept_hash_from_roles(roles: &BTreeMap<String, Requirement>) -> Hash
 /// Check if a requirement tree already contains a PRESENT for a given credential type.
 fn already_requires_credential(req: &Requirement, credential_type: &str) -> bool {
     match req {
-        Requirement::Present { credential_type: ct, .. } => ct == credential_type,
-        Requirement::All { requirements } | Requirement::Any { requirements } => {
-            requirements.iter().any(|r| already_requires_credential(r, credential_type))
+        Requirement::Present {
+            credential_type: ct,
+            ..
+        } => ct == credential_type,
+        Requirement::All { requirements } | Requirement::Any { requirements } => requirements
+            .iter()
+            .any(|r| already_requires_credential(r, credential_type)),
+        Requirement::Not { requirement } => {
+            already_requires_credential(requirement, credential_type)
         }
-        Requirement::Not { requirement } => already_requires_credential(requirement, credential_type),
         _ => false,
     }
 }

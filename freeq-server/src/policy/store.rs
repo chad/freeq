@@ -4,8 +4,8 @@
 
 use super::canonical;
 use super::types::*;
-use rusqlite::{params, Connection, OptionalExtension};
 use parking_lot::Mutex;
+use rusqlite::{Connection, OptionalExtension, params};
 
 pub struct PolicyStore {
     db: Mutex<Connection>,
@@ -210,13 +210,12 @@ impl PolicyStore {
     }
 
     /// Get all policy versions for a channel, oldest first.
-    pub fn get_policy_chain(
-        &self,
-        channel_id: &str,
-    ) -> Result<Vec<PolicyDocument>, PolicyError> {
+    pub fn get_policy_chain(&self, channel_id: &str) -> Result<Vec<PolicyDocument>, PolicyError> {
         let db = self.db.lock();
         let mut stmt = db
-            .prepare("SELECT document_json FROM policies WHERE channel_id = ?1 ORDER BY version ASC")
+            .prepare(
+                "SELECT document_json FROM policies WHERE channel_id = ?1 ORDER BY version ASC",
+            )
             .map_err(|e| PolicyError::Database(e.to_string()))?;
 
         let docs = stmt
@@ -264,10 +263,7 @@ impl PolicyStore {
     }
 
     /// Get an authority set by its hash.
-    pub fn get_authority_set(
-        &self,
-        hash: &str,
-    ) -> Result<Option<AuthoritySet>, PolicyError> {
+    pub fn get_authority_set(&self, hash: &str) -> Result<Option<AuthoritySet>, PolicyError> {
         let db = self.db.lock();
         let json: Option<String> = db
             .query_row(
@@ -313,11 +309,7 @@ impl PolicyStore {
     }
 
     /// Update join state.
-    pub fn update_join_state(
-        &self,
-        join_id: &str,
-        state: JoinState,
-    ) -> Result<(), PolicyError> {
+    pub fn update_join_state(&self, join_id: &str, state: JoinState) -> Result<(), PolicyError> {
         let state_str = serde_json::to_value(state)
             .map_err(|e| PolicyError::Serialization(e.to_string()))?
             .as_str()
@@ -494,7 +486,8 @@ impl PolicyStore {
         db.execute(
             "UPDATE membership_attestations SET state = 'INVALID' WHERE attestation_id = ?1",
             params![attestation_id],
-        ).map_err(|e| PolicyError::Database(e.to_string()))?;
+        )
+        .map_err(|e| PolicyError::Database(e.to_string()))?;
         Ok(())
     }
 
@@ -504,15 +497,21 @@ impl PolicyStore {
     /// Returns true if anything was removed.
     pub fn remove_channel_policy(&self, channel_id: &str) -> Result<bool, PolicyError> {
         let db = self.db.lock();
-        let total: usize = ["policies", "membership_attestations", "join_receipts", "transparency_log"]
-            .iter()
-            .map(|table| {
-                db.execute(
-                    &format!("DELETE FROM {} WHERE channel_id = ?1", table),
-                    params![channel_id],
-                ).unwrap_or(0)
-            })
-            .sum();
+        let total: usize = [
+            "policies",
+            "membership_attestations",
+            "join_receipts",
+            "transparency_log",
+        ]
+        .iter()
+        .map(|table| {
+            db.execute(
+                &format!("DELETE FROM {} WHERE channel_id = ?1", table),
+                params![channel_id],
+            )
+            .unwrap_or(0)
+        })
+        .sum();
         Ok(total > 0)
     }
 
@@ -580,10 +579,7 @@ impl PolicyStore {
     }
 
     /// Get all valid (non-revoked) credentials for a user.
-    pub fn get_credentials(
-        &self,
-        subject_did: &str,
-    ) -> Result<Vec<StoredCredential>, PolicyError> {
+    pub fn get_credentials(&self, subject_did: &str) -> Result<Vec<StoredCredential>, PolicyError> {
         let db = self.db.lock();
         let mut stmt = db
             .prepare(

@@ -53,22 +53,40 @@ impl std::fmt::Display for Phase {
 
 /// Agent identities.
 fn product() -> AgentId {
-    AgentId { role: "product".to_string(), color: None }
+    AgentId {
+        role: "product".to_string(),
+        color: None,
+    }
 }
 fn architect() -> AgentId {
-    AgentId { role: "architect".to_string(), color: None }
+    AgentId {
+        role: "architect".to_string(),
+        color: None,
+    }
 }
 fn builder() -> AgentId {
-    AgentId { role: "builder".to_string(), color: None }
+    AgentId {
+        role: "builder".to_string(),
+        color: None,
+    }
 }
 fn reviewer() -> AgentId {
-    AgentId { role: "reviewer".to_string(), color: None }
+    AgentId {
+        role: "reviewer".to_string(),
+        color: None,
+    }
 }
 fn qa() -> AgentId {
-    AgentId { role: "qa".to_string(), color: None }
+    AgentId {
+        role: "qa".to_string(),
+        color: None,
+    }
 }
 fn deployer() -> AgentId {
-    AgentId { role: "deploy".to_string(), color: None }
+    AgentId {
+        role: "deploy".to_string(),
+        color: None,
+    }
 }
 
 /// The software factory.
@@ -108,7 +126,14 @@ impl Factory {
                 let phase = self.phase.lock().await;
                 let project = self.project_name.lock().await;
                 let name = project.as_deref().unwrap_or("none");
-                output::status(handle, channel, &product(), "📊", &format!("Phase: {phase} | Project: {name}")).await?;
+                output::status(
+                    handle,
+                    channel,
+                    &product(),
+                    "📊",
+                    &format!("Phase: {phase} | Project: {name}"),
+                )
+                .await?;
             }
             "pause" => {
                 *self.phase.lock().await = Phase::Paused;
@@ -131,12 +156,19 @@ impl Factory {
                     let root = ws.root.clone();
                     let files = tokio::task::spawn_blocking(move || {
                         crate::tools::list_files_sync_pub(&root)
-                    }).await?;
+                    })
+                    .await?;
                     output::file_tree(handle, channel, &builder(), &files).await?;
                 }
             }
             _ => {
-                output::say(handle, channel, &product(), "Unknown command. Try: build <spec>, status, pause, resume, spec, files").await?;
+                output::say(
+                    handle,
+                    channel,
+                    &product(),
+                    "Unknown command. Try: build <spec>, status, pause, resume, spec, files",
+                )
+                .await?;
             }
         }
         Ok(())
@@ -152,13 +184,26 @@ impl Factory {
         memory: &Memory,
     ) -> Result<()> {
         if spec.trim().is_empty() {
-            output::say(handle, channel, &product(), "I need a spec! Tell me what to build.").await?;
+            output::say(
+                handle,
+                channel,
+                &product(),
+                "I need a spec! Tell me what to build.",
+            )
+            .await?;
             return Ok(());
         }
 
         // Phase 1: Product — clarify and write spec
         *self.phase.lock().await = Phase::Specifying;
-        output::status(handle, channel, &product(), "📋", "Analyzing requirements...").await?;
+        output::status(
+            handle,
+            channel,
+            &product(),
+            "📋",
+            "Analyzing requirements...",
+        )
+        .await?;
 
         let refined_spec = llm.complete(
             "You are a product lead. Take the user's rough idea and produce a clear, concise product spec. Include: purpose, core features (bulleted), tech constraints (if any), and success criteria. Be specific but brief. Output ONLY the spec, no preamble.",
@@ -169,12 +214,25 @@ impl Factory {
         *self.project_name.lock().await = Some(project_name.clone());
 
         memory.set(&project_name, "spec", "current", &refined_spec)?;
-        output::say(handle, channel, &product(), &format!("Project: {project_name}")).await?;
+        output::say(
+            handle,
+            channel,
+            &product(),
+            &format!("Project: {project_name}"),
+        )
+        .await?;
         output::say(handle, channel, &product(), &refined_spec).await?;
 
         // Phase 2: Architect — propose design
         *self.phase.lock().await = Phase::Designing;
-        output::status(handle, channel, &architect(), "🏗️", "Designing architecture...").await?;
+        output::status(
+            handle,
+            channel,
+            &architect(),
+            "🏗️",
+            "Designing architecture...",
+        )
+        .await?;
 
         let design = llm.complete(
             "You are a software architect. Given a product spec, propose a minimal, deployable architecture. Include: stack choice (prefer Python/Flask for speed), file structure, key abstractions. Be terse. Output ONLY the design, no preamble.",
@@ -204,14 +262,19 @@ impl Factory {
         for _iteration in 0..25 {
             let phase = { self.phase.lock().await.clone() };
             if phase == Phase::Paused {
-                output::status(handle, channel, &builder(), "⏸️", "Paused — waiting for /factory resume").await?;
+                output::status(
+                    handle,
+                    channel,
+                    &builder(),
+                    "⏸️",
+                    "Paused — waiting for /factory resume",
+                )
+                .await?;
                 // In a real impl, we'd wait on a signal. For now, break.
                 break;
             }
 
-            let resp = llm
-                .chat(BUILDER_SYSTEM, &messages, &tools, 4096)
-                .await?;
+            let resp = llm.chat(BUILDER_SYSTEM, &messages, &tools, 4096).await?;
 
             let mut text_parts = Vec::new();
             let mut tool_uses = Vec::new();
@@ -268,12 +331,14 @@ impl Factory {
                 match tu.name.as_str() {
                     "write_file" => {
                         let path = tu.input["path"].as_str().unwrap_or("?");
-                        output::status(handle, channel, &agent, "✏️", &format!("Writing {path}")).await?;
+                        output::status(handle, channel, &agent, "✏️", &format!("Writing {path}"))
+                            .await?;
                     }
                     "shell" => {
                         let cmd = tu.input["command"].as_str().unwrap_or("?");
                         let short = if cmd.len() > 60 { &cmd[..57] } else { cmd };
-                        output::status(handle, channel, &agent, "⚙️", &format!("$ {short}")).await?;
+                        output::status(handle, channel, &agent, "⚙️", &format!("$ {short}"))
+                            .await?;
                     }
                     "deploy" => {
                         output::status(handle, channel, &agent, "🚀", "Deploying...").await?;
@@ -284,21 +349,23 @@ impl Factory {
                 let result = match tools::execute_tool(&workspace, &tu.name, &tu.input).await {
                     Ok(out) => {
                         if tu.name == "deploy"
-                            && let Some(url) = extract_url(&out) {
-                                deployed_url = Some(url.clone());
-                                output::deploy_result(handle, channel, &deployer(), &url).await?;
-                                memory.set(&project_name, "deploy", "url", &url)?;
-                            }
+                            && let Some(url) = extract_url(&out)
+                        {
+                            deployed_url = Some(url.clone());
+                            output::deploy_result(handle, channel, &deployer(), &url).await?;
+                            memory.set(&project_name, "deploy", "url", &url)?;
+                        }
                         if tu.name == "write_file"
                             && let (Some(path), Some(content)) =
                                 (tu.input["path"].as_str(), tu.input["content"].as_str())
-                            {
-                                memory.set(&project_name, "file", path, content)?;
-                            }
+                        {
+                            memory.set(&project_name, "file", path, content)?;
+                        }
                         out
                     }
                     Err(e) => {
-                        output::error(handle, channel, &agent, &format!("{}: {e}", tu.name)).await?;
+                        output::error(handle, channel, &agent, &format!("{}: {e}", tu.name))
+                            .await?;
                         format!("Error: {e}")
                     }
                 };
@@ -330,7 +397,14 @@ impl Factory {
         // Done
         *self.phase.lock().await = Phase::Complete;
         if let Some(ref url) = deployed_url {
-            output::status(handle, channel, &product(), "✅", &format!("Factory complete! Live at: {url}")).await?;
+            output::status(
+                handle,
+                channel,
+                &product(),
+                "✅",
+                &format!("Factory complete! Live at: {url}"),
+            )
+            .await?;
         } else {
             output::status(handle, channel, &product(), "✅", "Factory complete!").await?;
         }

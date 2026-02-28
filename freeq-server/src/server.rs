@@ -1,9 +1,9 @@
 //! Server state and TCP listener.
 
+use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use parking_lot::Mutex;
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
@@ -11,8 +11,8 @@ use freeq_sdk::did::DidResolver;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tokio_rustls::rustls;
 use tokio_rustls::TlsAcceptor;
+use tokio_rustls::rustls;
 
 use crate::config::ServerConfig;
 use crate::connection;
@@ -88,7 +88,8 @@ impl ChannelState {
     /// IRC nicks are case-insensitive, but HashMap keys preserve original case.
     pub fn remote_member(&self, nick: &str) -> Option<&RemoteMember> {
         let lower = nick.to_lowercase();
-        self.remote_members.iter()
+        self.remote_members
+            .iter()
             .find(|(k, _)| k.to_lowercase() == lower)
             .map(|(_, v)| v)
     }
@@ -96,7 +97,8 @@ impl ChannelState {
     /// Case-insensitive mutable lookup in remote_members.
     pub fn remote_member_mut(&mut self, nick: &str) -> Option<&mut RemoteMember> {
         let lower = nick.to_lowercase();
-        self.remote_members.iter_mut()
+        self.remote_members
+            .iter_mut()
             .find(|(k, _)| k.to_lowercase() == lower)
             .map(|(_, v)| v)
     }
@@ -104,13 +106,17 @@ impl ChannelState {
     /// Case-insensitive check if nick is in remote_members.
     pub fn has_remote_member(&self, nick: &str) -> bool {
         let lower = nick.to_lowercase();
-        self.remote_members.keys().any(|k| k.to_lowercase() == lower)
+        self.remote_members
+            .keys()
+            .any(|k| k.to_lowercase() == lower)
     }
 
     /// Case-insensitive removal from remote_members. Returns the removed entry.
     pub fn remove_remote_member(&mut self, nick: &str) -> Option<RemoteMember> {
         let lower = nick.to_lowercase();
-        let key = self.remote_members.keys()
+        let key = self
+            .remote_members
+            .keys()
             .find(|k| k.to_lowercase() == lower)
             .cloned();
         key.and_then(|k| self.remote_members.remove(&k))
@@ -200,7 +206,11 @@ impl BanEntry {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        Self { mask, set_by, set_at }
+        Self {
+            mask,
+            set_by,
+            set_at,
+        }
     }
 
     /// Check if this ban matches a user.
@@ -285,7 +295,9 @@ pub struct NickMap {
 }
 
 impl NickMap {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     /// Insert a nick→session mapping. Nick is stored case-insensitively.
     pub fn insert(&mut self, display_nick: &str, session_id: &str) {
@@ -299,12 +311,15 @@ impl NickMap {
             self.sid_to_nick.remove(&old_sid);
         }
         self.nick_to_sid.insert(lower, session_id.to_string());
-        self.sid_to_nick.insert(session_id.to_string(), display_nick.to_string());
+        self.sid_to_nick
+            .insert(session_id.to_string(), display_nick.to_string());
     }
 
     /// Look up session_id by nick (case-insensitive). O(1).
     pub fn get_session(&self, nick: &str) -> Option<&str> {
-        self.nick_to_sid.get(&nick.to_lowercase()).map(|s| s.as_str())
+        self.nick_to_sid
+            .get(&nick.to_lowercase())
+            .map(|s| s.as_str())
     }
 
     /// Look up display nick by session_id. O(1).
@@ -340,7 +355,9 @@ impl NickMap {
 
     /// Iterate all (display_nick, session_id) pairs.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.sid_to_nick.iter().map(|(sid, nick)| (nick.as_str(), sid.as_str()))
+        self.sid_to_nick
+            .iter()
+            .map(|(sid, nick)| (nick.as_str(), sid.as_str()))
     }
 
     /// Number of entries.
@@ -355,7 +372,8 @@ impl NickMap {
 
     /// Check if a nick is held by a specific session.
     pub fn nick_belongs_to(&self, nick: &str, session_id: &str) -> bool {
-        self.nick_to_sid.get(&nick.to_lowercase())
+        self.nick_to_sid
+            .get(&nick.to_lowercase())
             .is_some_and(|sid| sid == session_id)
     }
 }
@@ -496,14 +514,24 @@ impl SharedState {
 
     /// Get our iroh endpoint ID (used as CRDT peer identity).
     fn crdt_origin_peer(&self) -> String {
-        self.server_iroh_id.lock().clone()
+        self.server_iroh_id
+            .lock()
+            .clone()
             .unwrap_or_else(|| self.server_name.clone())
     }
 
     /// Record a topic change in the CRDT with provenance.
-    pub async fn crdt_set_topic(&self, channel: &str, topic: &str, set_by: &str, set_by_did: Option<&str>) {
+    pub async fn crdt_set_topic(
+        &self,
+        channel: &str,
+        topic: &str,
+        set_by: &str,
+        set_by_did: Option<&str>,
+    ) {
         let origin = self.crdt_origin_peer();
-        self.cluster_doc.set_topic(channel, topic, set_by, set_by_did, &origin).await;
+        self.cluster_doc
+            .set_topic(channel, topic, set_by, set_by_did, &origin)
+            .await;
     }
 
     /// Record a nick-DID binding in the CRDT.
@@ -519,7 +547,9 @@ impl SharedState {
     /// Record a DID op grant in the CRDT with provenance.
     pub async fn crdt_grant_op(&self, channel: &str, did: &str, granted_by_did: Option<&str>) {
         let origin = self.crdt_origin_peer();
-        self.cluster_doc.grant_op(channel, did, granted_by_did, &origin).await;
+        self.cluster_doc
+            .grant_op(channel, did, granted_by_did, &origin)
+            .await;
     }
 
     /// Record a DID op revoke in the CRDT.
@@ -528,9 +558,17 @@ impl SharedState {
     }
 
     /// Record a ban in the CRDT with provenance.
-    pub async fn crdt_add_ban(&self, channel: &str, mask: &str, set_by: &str, set_by_did: Option<&str>) {
+    pub async fn crdt_add_ban(
+        &self,
+        channel: &str,
+        mask: &str,
+        set_by: &str,
+        set_by_did: Option<&str>,
+    ) {
         let origin = self.crdt_origin_peer();
-        self.cluster_doc.add_ban(channel, mask, set_by, set_by_did, &origin).await;
+        self.cluster_doc
+            .add_ban(channel, mask, set_by, set_by_did, &origin)
+            .await;
     }
 
     /// Record a ban removal in the CRDT.
@@ -609,8 +647,8 @@ impl SharedState {
 fn derive_key_from_signing(signing_key: &ed25519_dalek::SigningKey) -> [u8; 32] {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
-    let mut mac = Hmac::<Sha256>::new_from_slice(signing_key.to_bytes().as_slice())
-        .expect("HMAC key");
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(signing_key.to_bytes().as_slice()).expect("HMAC key");
     mac.update(b"freeq-db-encryption-v1");
     let result = mac.finalize();
     let mut key = [0u8; 32];
@@ -623,11 +661,15 @@ fn load_msg_signing_key(data_dir: &str) -> ed25519_dalek::SigningKey {
     let key_path = std::path::Path::new(data_dir).join("msg-signing-key.secret");
     if key_path.exists() {
         if let Ok(data) = std::fs::read(&key_path)
-            && let Ok(bytes) = <[u8; 32]>::try_from(data.as_slice()) {
-                tracing::info!("Loaded message signing key from {}", key_path.display());
-                return ed25519_dalek::SigningKey::from_bytes(&bytes);
-            }
-        tracing::warn!("Corrupt msg signing key at {}, regenerating", key_path.display());
+            && let Ok(bytes) = <[u8; 32]>::try_from(data.as_slice())
+        {
+            tracing::info!("Loaded message signing key from {}", key_path.display());
+            return ed25519_dalek::SigningKey::from_bytes(&bytes);
+        }
+        tracing::warn!(
+            "Corrupt msg signing key at {}, regenerating",
+            key_path.display()
+        );
     }
     let key = ed25519_dalek::SigningKey::generate(&mut rand::rngs::OsRng);
     if let Err(e) = std::fs::write(&key_path, key.to_bytes()) {
@@ -659,16 +701,13 @@ impl Server {
     /// Build SharedState, opening the database and loading persisted data.
     fn build_state(&self) -> Result<Arc<SharedState>> {
         // Load message signing key early — it's used to derive DB encryption key
-        let msg_signing_key = load_msg_signing_key(
-            self.config.data_dir.as_deref().unwrap_or(".")
-        );
+        let msg_signing_key = load_msg_signing_key(self.config.data_dir.as_deref().unwrap_or("."));
 
         // Load or generate a separate DB encryption key (independent of signing key).
         // This ensures a signing key compromise doesn't also compromise encrypted data.
         let db_encryption_key: [u8; 32] = {
-            let key_path = std::path::Path::new(
-                self.config.data_dir.as_deref().unwrap_or(".")
-            ).join("db-encryption-key.secret");
+            let key_path = std::path::Path::new(self.config.data_dir.as_deref().unwrap_or("."))
+                .join("db-encryption-key.secret");
             if key_path.exists() {
                 if let Ok(data) = std::fs::read(&key_path) {
                     if let Ok(bytes) = <[u8; 32]>::try_from(data.as_slice()) {
@@ -698,8 +737,10 @@ impl Server {
         let db = match &self.config.db_path {
             Some(path) => {
                 tracing::info!("Opening database: {path} (encryption at rest: enabled)");
-                Some(Db::open_encrypted(path, db_encryption_key)
-                    .map_err(|e| anyhow::anyhow!("Failed to open database: {e}"))?)
+                Some(
+                    Db::open_encrypted(path, db_encryption_key)
+                        .map_err(|e| anyhow::anyhow!("Failed to open database: {e}"))?,
+                )
             }
             None => None,
         };
@@ -711,13 +752,15 @@ impl Server {
 
         if let Some(ref db) = db {
             // Load channels (metadata + bans)
-            channels = db.load_channels()
+            channels = db
+                .load_channels()
                 .map_err(|e| anyhow::anyhow!("Failed to load channels: {e}"))?;
             tracing::info!("Loaded {} channels from database", channels.len());
 
             // Load message history into each channel
             for (name, ch) in channels.iter_mut() {
-                let messages = db.get_messages(name, crate::server::MAX_HISTORY, None)
+                let messages = db
+                    .get_messages(name, crate::server::MAX_HISTORY, None)
                     .map_err(|e| anyhow::anyhow!("Failed to load messages for {name}: {e}"))?;
                 for msg in messages {
                     ch.history.push_back(HistoryMessage {
@@ -749,23 +792,28 @@ impl Server {
             });
             let pruned = before - channels.len();
             if pruned > 0 {
-                tracing::info!("Pruned {pruned} empty channels ({} remaining)", channels.len());
+                tracing::info!(
+                    "Pruned {pruned} empty channels ({} remaining)",
+                    channels.len()
+                );
             }
 
             // Load DID-nick bindings
-            let identities = db.load_identities()
+            let identities = db
+                .load_identities()
                 .map_err(|e| anyhow::anyhow!("Failed to load identities: {e}"))?;
-            tracing::info!("Loaded {} identity bindings from database", identities.len());
+            tracing::info!(
+                "Loaded {} identity bindings from database",
+                identities.len()
+            );
             for id in identities {
                 nick_owners.insert(id.nick.clone(), id.did.clone());
                 did_nicks.insert(id.did, id.nick);
             }
         }
 
-        let plugin_manager = PluginManager::load(
-            &self.config.plugins,
-            self.config.plugin_dir.as_deref(),
-        );
+        let plugin_manager =
+            PluginManager::load(&self.config.plugins, self.config.plugin_dir.as_deref());
 
         // msg_signing_key already loaded above (needed for DB encryption key derivation)
 
@@ -773,12 +821,13 @@ impl Server {
         let prekey_bundles = {
             let mut bundles = HashMap::new();
             if let Some(ref db) = db
-                && let Ok(saved) = db.load_all_prekey_bundles() {
-                    tracing::info!("Loaded {} pre-key bundles from DB", saved.len());
-                    for (did, bundle) in saved {
-                        bundles.insert(did, bundle);
-                    }
+                && let Ok(saved) = db.load_all_prekey_bundles()
+            {
+                tracing::info!("Loaded {} pre-key bundles from DB", saved.len());
+                for (did, bundle) in saved {
+                    bundles.insert(did, bundle);
                 }
+            }
             bundles
         };
 
@@ -818,13 +867,19 @@ impl Server {
             plugin_manager,
             policy_engine: {
                 // Initialize policy engine alongside the main DB
-                let policy_db_path = self.config.db_path.as_ref()
+                let policy_db_path = self
+                    .config
+                    .db_path
+                    .as_ref()
                     .map(|p| p.replace(".db", "-policy.db"))
                     .unwrap_or_else(|| ":memory:".to_string());
                 match crate::policy::PolicyStore::open(&policy_db_path) {
                     Ok(store) => {
                         let authority_did = format!("did:web:{}", self.config.server_name);
-                        Some(Arc::new(crate::policy::PolicyEngine::new(store, authority_did)))
+                        Some(Arc::new(crate::policy::PolicyEngine::new(
+                            store,
+                            authority_did,
+                        )))
                     }
                     Err(e) => {
                         tracing::warn!("Failed to initialize policy engine: {e}");
@@ -944,7 +999,8 @@ impl Server {
                                 &s2s_manager,
                                 &event.authenticated_peer_id,
                                 event.msg,
-                            ).await;
+                            )
+                            .await;
                         }
                     });
 
@@ -1010,8 +1066,12 @@ impl Server {
                     interval.tick().await;
                     reconcile_crdt_to_local(&reconcile_state).await;
                     // Prune expired web auth tokens (TTL 5 min)
-                    reconcile_state.web_auth_tokens.lock()
-                        .retain(|_, (_, _, created)| created.elapsed() < std::time::Duration::from_secs(300));
+                    reconcile_state
+                        .web_auth_tokens
+                        .lock()
+                        .retain(|_, (_, _, created)| {
+                            created.elapsed() < std::time::Duration::from_secs(300)
+                        });
                 }
             });
         }
@@ -1043,7 +1103,12 @@ impl Server {
             let listener = tokio::net::TcpListener::bind(addr).await?;
             tracing::info!("HTTP/WebSocket listener on {addr}");
             tokio::spawn(async move {
-                if let Err(e) = axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await {
+                if let Err(e) = axum::serve(
+                    listener,
+                    router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                )
+                .await
+                {
                     tracing::error!("HTTP server error: {e}");
                 }
             });
@@ -1062,7 +1127,9 @@ impl Server {
                         let before = tokens.len();
                         tokens.retain(|_, (_, _, created)| created.elapsed().as_secs() < 300);
                         let pruned = before - tokens.len();
-                        if pruned > 0 { tracing::info!("Pruned {pruned} expired web-auth tokens"); }
+                        if pruned > 0 {
+                            tracing::info!("Pruned {pruned} expired web-auth tokens");
+                        }
                     }
                     // Prune expired upload tokens (300s TTL)
                     {
@@ -1070,7 +1137,9 @@ impl Server {
                         let before = tokens.len();
                         tokens.retain(|_, (_, created)| created.elapsed().as_secs() < 300);
                         let pruned = before - tokens.len();
-                        if pruned > 0 { tracing::info!("Pruned {pruned} expired upload tokens"); }
+                        if pruned > 0 {
+                            tracing::info!("Pruned {pruned} expired upload tokens");
+                        }
                     }
                     // Prune stale web sessions (24h TTL — PDS tokens expire anyway)
                     {
@@ -1078,7 +1147,9 @@ impl Server {
                         let before = sessions.len();
                         sessions.retain(|_, s| s.created_at.elapsed().as_secs() < 86400);
                         let pruned = before - sessions.len();
-                        if pruned > 0 { tracing::info!("Pruned {pruned} stale web sessions"); }
+                        if pruned > 0 {
+                            tracing::info!("Pruned {pruned} stale web sessions");
+                        }
                     }
                 }
             });
@@ -1087,9 +1158,9 @@ impl Server {
         // Graceful shutdown on SIGTERM/SIGINT
         let shutdown_state = Arc::clone(&state);
         let shutdown = async move {
-            let mut sigterm = tokio::signal::unix::signal(
-                tokio::signal::unix::SignalKind::terminate(),
-            ).expect("failed to install SIGTERM handler");
+            let mut sigterm =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                    .expect("failed to install SIGTERM handler");
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => tracing::info!("Received SIGINT, shutting down..."),
                 _ = sigterm.recv() => tracing::info!("Received SIGTERM, shutting down..."),
@@ -1102,7 +1173,10 @@ impl Server {
             drop(conns);
             // Give clients a moment to receive the ERROR
             tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
-            tracing::info!("Shutdown complete ({} connections closed)", shutdown_state.connections.lock().len());
+            tracing::info!(
+                "Shutdown complete ({} connections closed)",
+                shutdown_state.connections.lock().len()
+            );
         };
 
         // Accept plain connections
@@ -1185,7 +1259,12 @@ impl Server {
         let web_state = Arc::clone(&state);
         let router = crate::web::router(web_state);
         tokio::spawn(async move {
-            if let Err(e) = axum::serve(web_listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await {
+            if let Err(e) = axum::serve(
+                web_listener,
+                router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            {
                 tracing::error!("HTTP server error: {e}");
             }
         });
@@ -1208,7 +1287,8 @@ impl Server {
     /// Start the server with both plain and TLS listeners for testing.
     /// Returns (plain_addr, tls_addr, handle).
     pub async fn start_tls(self) -> Result<(SocketAddr, SocketAddr, JoinHandle<Result<()>>)> {
-        let tls_acceptor = self.build_tls_acceptor()?
+        let tls_acceptor = self
+            .build_tls_acceptor()?
             .expect("TLS must be configured for start_tls()");
 
         let plain_listener = TcpListener::bind(&self.config.listen_addr).await?;
@@ -1233,7 +1313,9 @@ impl Server {
                             tokio::spawn(async move {
                                 match acceptor.accept(stream).await {
                                     Ok(tls_stream) => {
-                                        if let Err(e) = connection::handle_generic(tls_stream, state).await {
+                                        if let Err(e) =
+                                            connection::handle_generic(tls_stream, state).await
+                                        {
                                             tracing::error!("TLS connection error: {e}");
                                         }
                                     }
@@ -1316,7 +1398,9 @@ async fn process_s2s_message(
             .unwrap_or_default()
             .as_secs();
         let mut limits = S2S_RATE_LIMITS.lock();
-        let entry = limits.entry(authenticated_peer_id.to_string()).or_insert((now, 0));
+        let entry = limits
+            .entry(authenticated_peer_id.to_string())
+            .or_insert((now, 0));
         if entry.0 == now {
             entry.1 += 1;
             if entry.1 > S2S_MAX_EVENTS_PER_SEC {
@@ -1357,21 +1441,29 @@ async fn process_s2s_message(
 
         // Build nick list (local + remote)
         let n2s = state.nick_to_session.lock();
-        let mut nick_list: Vec<String> = ch.members.iter()
+        let mut nick_list: Vec<String> = ch
+            .members
+            .iter()
             .filter_map(|s| {
                 n2s.get_nick(s).map(|n| {
-                    let prefix = if ch.ops.contains(s) { "@" }
-                        else if ch.halfops.contains(s) { "%" }
-                        else if ch.voiced.contains(s) { "+" }
-                        else { "" };
+                    let prefix = if ch.ops.contains(s) {
+                        "@"
+                    } else if ch.halfops.contains(s) {
+                        "%"
+                    } else if ch.voiced.contains(s) {
+                        "+"
+                    } else {
+                        ""
+                    };
                     format!("{prefix}{n}")
                 })
             })
             .collect();
         for (nick, rm) in &ch.remote_members {
-            let is_op = rm.is_op || rm.did.as_ref().is_some_and(|d| {
-                ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
-            });
+            let is_op = rm.is_op
+                || rm.did.as_ref().is_some_and(|d| {
+                    ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
+                });
             let prefix = if is_op { "@" } else { "" };
             nick_list.push(format!("{prefix}{nick}"));
         }
@@ -1387,8 +1479,13 @@ async fn process_s2s_message(
             let member_nick = n2s.get_nick(session_id).unwrap_or("*");
             let names_line = format!(
                 ":{} 353 {} = {} :{}\r\n:{} 366 {} {} :End of /NAMES list\r\n",
-                state.server_name, member_nick, channel, nick_str,
-                state.server_name, member_nick, channel,
+                state.server_name,
+                member_nick,
+                channel,
+                nick_str,
+                state.server_name,
+                member_nick,
+                channel,
             );
             if let Some(tx) = conns.get(session_id) {
                 let _ = tx.try_send(names_line);
@@ -1400,17 +1497,39 @@ async fn process_s2s_message(
     // Extract event_id and origin from message for dedup check.
     // Messages with empty event_id (legacy peers) skip dedup.
     let (event_id, origin) = match &msg {
-        S2sMessage::Privmsg { event_id, origin, .. } => (event_id.clone(), origin.clone()),
-        S2sMessage::Join { event_id, origin, .. } => (event_id.clone(), origin.clone()),
-        S2sMessage::Part { event_id, origin, .. } => (event_id.clone(), origin.clone()),
-        S2sMessage::Quit { event_id, origin, .. } => (event_id.clone(), origin.clone()),
-        S2sMessage::NickChange { event_id, origin, .. } => (event_id.clone(), origin.clone()),
-        S2sMessage::Topic { event_id, origin, .. } => (event_id.clone(), origin.clone()),
-        S2sMessage::Mode { event_id, origin, .. } => (event_id.clone(), origin.clone()),
-        S2sMessage::ChannelCreated { event_id, origin, .. } => (event_id.clone(), origin.clone()),
-        S2sMessage::Kick { event_id, origin, .. } => (event_id.clone(), origin.clone()),
-        S2sMessage::Ban { event_id, origin, .. } => (event_id.clone(), origin.clone()),
-        S2sMessage::PolicySync { event_id, origin, .. } => (event_id.clone(), origin.clone()),
+        S2sMessage::Privmsg {
+            event_id, origin, ..
+        } => (event_id.clone(), origin.clone()),
+        S2sMessage::Join {
+            event_id, origin, ..
+        } => (event_id.clone(), origin.clone()),
+        S2sMessage::Part {
+            event_id, origin, ..
+        } => (event_id.clone(), origin.clone()),
+        S2sMessage::Quit {
+            event_id, origin, ..
+        } => (event_id.clone(), origin.clone()),
+        S2sMessage::NickChange {
+            event_id, origin, ..
+        } => (event_id.clone(), origin.clone()),
+        S2sMessage::Topic {
+            event_id, origin, ..
+        } => (event_id.clone(), origin.clone()),
+        S2sMessage::Mode {
+            event_id, origin, ..
+        } => (event_id.clone(), origin.clone()),
+        S2sMessage::ChannelCreated {
+            event_id, origin, ..
+        } => (event_id.clone(), origin.clone()),
+        S2sMessage::Kick {
+            event_id, origin, ..
+        } => (event_id.clone(), origin.clone()),
+        S2sMessage::Ban {
+            event_id, origin, ..
+        } => (event_id.clone(), origin.clone()),
+        S2sMessage::PolicySync {
+            event_id, origin, ..
+        } => (event_id.clone(), origin.clone()),
         S2sMessage::CrdtSync { origin, .. } => (String::new(), origin.clone()),
         S2sMessage::PeerDisconnected { .. } => (String::new(), String::new()),
         S2sMessage::Hello { .. } | S2sMessage::SyncRequest | S2sMessage::SyncResponse { .. } => {
@@ -1430,7 +1549,10 @@ async fn process_s2s_message(
     }
 
     match msg {
-        S2sMessage::Hello { peer_id, server_name } => {
+        S2sMessage::Hello {
+            peer_id,
+            server_name,
+        } => {
             // Verify the claimed peer_id matches the transport-authenticated identity.
             // The iroh QUIC connection provides cryptographic identity via remote_id().
             if peer_id != authenticated_peer_id {
@@ -1447,10 +1569,22 @@ async fn process_s2s_message(
                 "S2S Hello received — binding transport identity to server name"
             );
             // Always key by the authenticated peer ID, not the claimed one.
-            manager.peer_names.lock().await.insert(authenticated_peer_id.to_string(), server_name);
+            manager
+                .peer_names
+                .lock()
+                .await
+                .insert(authenticated_peer_id.to_string(), server_name);
         }
 
-        S2sMessage::Privmsg { from, target, text, origin: _, msgid, sig, .. } => {
+        S2sMessage::Privmsg {
+            from,
+            target,
+            text,
+            origin: _,
+            msgid,
+            sig,
+            ..
+        } => {
             // Generate a local msgid if the remote didn't send one
             let msgid = msgid.unwrap_or_else(crate::msgid::generate);
 
@@ -1479,7 +1613,9 @@ async fn process_s2s_message(
                     if ch.no_ext_msg {
                         let nick = from.split('!').next().unwrap_or(&from);
                         let is_member = ch.has_remote_member(nick)
-                            || state.nick_to_session.lock()
+                            || state
+                                .nick_to_session
+                                .lock()
                                 .get_session(nick)
                                 .is_some_and(|sid| ch.members.contains(sid));
                         if !is_member {
@@ -1489,8 +1625,7 @@ async fn process_s2s_message(
                     }
                     if ch.moderated {
                         let nick = from.split('!').next().unwrap_or(&from);
-                        let is_privileged = ch.remote_member(nick)
-                            .is_some_and(|rm| rm.is_op);
+                        let is_privileged = ch.remote_member(nick).is_some_and(|rm| rm.is_op);
                         if !is_privileged {
                             tracing::debug!(channel = %target, from = %from, "S2S PRIVMSG blocked by +m");
                             return;
@@ -1525,12 +1660,22 @@ async fn process_s2s_message(
                     }
                     drop(channels);
                     let empty_tags = HashMap::new();
-                    state.with_db(|db| db.insert_message(&target, &from, &text, timestamp, &empty_tags, Some(&msgid)));
+                    state.with_db(|db| {
+                        db.insert_message(
+                            &target,
+                            &from,
+                            &text,
+                            timestamp,
+                            &empty_tags,
+                            Some(&msgid),
+                        )
+                    });
                 }
 
                 // Deliver to local members with tag-awareness
                 let members: Vec<String> = state
-                    .channels.lock()
+                    .channels
+                    .lock()
                     .get(&channel_key)
                     .map(|ch| ch.members.iter().cloned().collect())
                     .unwrap_or_default();
@@ -1538,14 +1683,21 @@ async fn process_s2s_message(
                 let conns = state.connections.lock();
                 for sid in &members {
                     if let Some(tx) = conns.get(sid) {
-                        let line = if tag_caps.contains(sid) { &tagged_line } else { &plain_line };
+                        let line = if tag_caps.contains(sid) {
+                            &tagged_line
+                        } else {
+                            &plain_line
+                        };
                         let _ = tx.try_send(line.clone());
                     }
                 }
             } else {
                 // Case-insensitive nick lookup for PM delivery
-                let sid = state.nick_to_session.lock()
-                    .get_session(&target).map(|s| s.to_string());
+                let sid = state
+                    .nick_to_session
+                    .lock()
+                    .get_session(&target)
+                    .map(|s| s.to_string());
                 if let Some(sid) = sid {
                     let has_tags = state.cap_message_tags.lock().contains(&sid);
                     let line = if has_tags { &tagged_line } else { &plain_line };
@@ -1557,7 +1709,15 @@ async fn process_s2s_message(
             }
         }
 
-        S2sMessage::Join { nick, channel, did, handle, is_op, origin, .. } => {
+        S2sMessage::Join {
+            nick,
+            channel,
+            did,
+            handle,
+            is_op,
+            origin,
+            ..
+        } => {
             // Normalize channel name — IRC channels are case-insensitive
             let channel = channel.to_lowercase();
 
@@ -1590,12 +1750,15 @@ async fn process_s2s_message(
             {
                 let mut channels = state.channels.lock();
                 let ch = channels.entry(channel.clone()).or_default();
-                ch.remote_members.insert(nick.clone(), RemoteMember {
-                    origin: origin.clone(),
-                    did: did.clone(),
-                    handle: handle.clone(),
-                    is_op,
-                });
+                ch.remote_members.insert(
+                    nick.clone(),
+                    RemoteMember {
+                        origin: origin.clone(),
+                        did: did.clone(),
+                        handle: handle.clone(),
+                        is_op,
+                    },
+                );
             }
 
             let line = format!(":{nick}!{nick}@s2s JOIN {channel}\r\n");
@@ -1637,7 +1800,12 @@ async fn process_s2s_message(
             }
         }
 
-        S2sMessage::Topic { channel, topic, set_by, .. } => {
+        S2sMessage::Topic {
+            channel,
+            topic,
+            set_by,
+            ..
+        } => {
             let channel = channel.to_lowercase();
             // CRDT is the single source of truth for topic convergence.
             // The S2S Topic event is a notification for immediate display —
@@ -1648,29 +1816,34 @@ async fn process_s2s_message(
             {
                 let channels = state.channels.lock();
                 if let Some(ch) = channels.get(&channel)
-                    && ch.topic_locked {
-                        let is_authorized = ch.remote_member(&set_by)
-                            .is_some_and(|rm| rm.is_op || rm.did.as_ref().is_some_and(|d| {
+                    && ch.topic_locked
+                {
+                    let is_authorized = ch.remote_member(&set_by).is_some_and(|rm| {
+                        rm.is_op
+                            || rm.did.as_ref().is_some_and(|d| {
                                 ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
-                            }));
-                        if !is_authorized {
-                            tracing::warn!(
-                                channel = %channel, set_by = %set_by,
-                                "S2S Topic rejected: channel is +t and setter is not an authorized op"
-                            );
-                            return;
-                        }
+                            })
+                    });
+                    if !is_authorized {
+                        tracing::warn!(
+                            channel = %channel, set_by = %set_by,
+                            "S2S Topic rejected: channel is +t and setter is not an authorized op"
+                        );
+                        return;
                     }
+                }
             }
 
             // Write to CRDT (source of truth)
             let setter_did = {
                 let channels = state.channels.lock();
-                channels.get(&channel).and_then(|ch| {
-                    ch.remote_member(&set_by).and_then(|rm| rm.did.clone())
-                })
+                channels
+                    .get(&channel)
+                    .and_then(|ch| ch.remote_member(&set_by).and_then(|rm| rm.did.clone()))
             };
-            state.crdt_set_topic(&channel, &topic, &set_by, setter_did.as_deref()).await;
+            state
+                .crdt_set_topic(&channel, &topic, &set_by, setter_did.as_deref())
+                .await;
 
             // Apply locally for immediate UX (CRDT is authoritative if they diverge)
             {
@@ -1683,7 +1856,13 @@ async fn process_s2s_message(
             deliver_to_channel(state, &channel, &line);
         }
 
-        S2sMessage::ChannelCreated { channel, founder_did, did_ops, origin, .. } => {
+        S2sMessage::ChannelCreated {
+            channel,
+            founder_did,
+            did_ops,
+            origin,
+            ..
+        } => {
             let channel = channel.to_lowercase();
             let has_local_members;
             {
@@ -1736,9 +1915,8 @@ async fn process_s2s_message(
                     }
                     // Authority check: ops should be granted by founder or existing op
                     let granter = founder_did.as_deref();
-                    let has_authority = granter.is_some()
-                        || ch.founder_did.is_some()
-                        || !ch.did_ops.is_empty();
+                    let has_authority =
+                        granter.is_some() || ch.founder_did.is_some() || !ch.did_ops.is_empty();
                     if !has_authority {
                         if require_did {
                             tracing::warn!(
@@ -1761,20 +1939,24 @@ async fn process_s2s_message(
                 let dids = state.session_dids.lock();
                 for session_id in &members {
                     if let Some(did) = dids.get(session_id)
-                        && (ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did)) {
-                            ch.ops.insert(session_id.clone());
-                        }
+                        && (ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did))
+                    {
+                        ch.ops.insert(session_id.clone());
+                    }
                 }
             } // All MutexGuards dropped
 
             // Update CRDT with provenance
             if let Some(ref did) = founder_did
-                && did.starts_with("did:") {
-                    state.crdt_set_founder(&channel, did).await;
-                }
+                && did.starts_with("did:")
+            {
+                state.crdt_set_founder(&channel, did).await;
+            }
             for did in &did_ops {
                 if did.starts_with("did:") {
-                    state.crdt_grant_op(&channel, did, founder_did.as_deref()).await;
+                    state
+                        .crdt_grant_op(&channel, did, founder_did.as_deref())
+                        .await;
                 }
             }
 
@@ -1789,35 +1971,42 @@ async fn process_s2s_message(
                 let n2s = state.nick_to_session.lock();
 
                 let dids = state.session_dids.lock();
-                let channel_info: Vec<crate::s2s::ChannelInfo> = channels.iter().map(|(name, ch)| {
-                    let nicks: Vec<String> = ch.members.iter()
-                        .filter_map(|sid| n2s.get_nick(sid).map(|n| n.to_string()))
-                        .collect();
-                    let nick_info: Vec<crate::s2s::SyncNick> = ch.members.iter()
-                        .filter_map(|sid| {
-                            n2s.get_nick(sid).map(|n| crate::s2s::SyncNick {
-                                nick: n.to_string(),
-                                is_op: ch.ops.contains(sid),
-                                did: dids.get(sid).cloned(),
+                let channel_info: Vec<crate::s2s::ChannelInfo> = channels
+                    .iter()
+                    .map(|(name, ch)| {
+                        let nicks: Vec<String> = ch
+                            .members
+                            .iter()
+                            .filter_map(|sid| n2s.get_nick(sid).map(|n| n.to_string()))
+                            .collect();
+                        let nick_info: Vec<crate::s2s::SyncNick> = ch
+                            .members
+                            .iter()
+                            .filter_map(|sid| {
+                                n2s.get_nick(sid).map(|n| crate::s2s::SyncNick {
+                                    nick: n.to_string(),
+                                    is_op: ch.ops.contains(sid),
+                                    did: dids.get(sid).cloned(),
+                                })
                             })
-                        })
-                        .collect();
-                    crate::s2s::ChannelInfo {
-                        name: name.clone(),
-                        topic: ch.topic.as_ref().map(|t| t.text.clone()),
-                        nicks,
-                        nick_info,
-                        founder_did: ch.founder_did.clone(),
-                        did_ops: ch.did_ops.iter().cloned().collect(),
-                        created_at: ch.created_at,
-                        topic_locked: ch.topic_locked,
-                        invite_only: ch.invite_only,
-                        no_ext_msg: ch.no_ext_msg,
-                        moderated: ch.moderated,
-                        key: ch.key.clone(),
-                        bans: ch.bans.iter().map(|b| b.mask.clone()).collect(),
-                    }
-                }).collect();
+                            .collect();
+                        crate::s2s::ChannelInfo {
+                            name: name.clone(),
+                            topic: ch.topic.as_ref().map(|t| t.text.clone()),
+                            nicks,
+                            nick_info,
+                            founder_did: ch.founder_did.clone(),
+                            did_ops: ch.did_ops.iter().cloned().collect(),
+                            created_at: ch.created_at,
+                            topic_locked: ch.topic_locked,
+                            invite_only: ch.invite_only,
+                            no_ext_msg: ch.no_ext_msg,
+                            moderated: ch.moderated,
+                            key: ch.key.clone(),
+                            bans: ch.bans.iter().map(|b| b.mask.clone()).collect(),
+                        }
+                    })
+                    .collect();
 
                 S2sMessage::SyncResponse {
                     server_id: manager.server_id.clone(),
@@ -1828,7 +2017,10 @@ async fn process_s2s_message(
             state.crdt_broadcast_sync().await;
         }
 
-        S2sMessage::SyncResponse { server_id: peer_id, channels: remote_channels } => {
+        S2sMessage::SyncResponse {
+            server_id: peer_id,
+            channels: remote_channels,
+        } => {
             // Cap channel creation from sync to prevent flooding
             const MAX_SYNC_CHANNELS: usize = 500;
             if remote_channels.len() > MAX_SYNC_CHANNELS {
@@ -1838,7 +2030,8 @@ async fn process_s2s_message(
                     remote_channels.len()
                 );
             }
-            let remote_channels: Vec<_> = remote_channels.into_iter()
+            let remote_channels: Vec<_> = remote_channels
+                .into_iter()
                 .take(MAX_SYNC_CHANNELS)
                 .collect();
             tracing::info!(
@@ -1877,16 +2070,17 @@ async fn process_s2s_message(
                     // ── Authority gating on sync ──────────────────────
                     // Merge founder: only adopt if we don't have one AND it's a valid DID
                     if ch.founder_did.is_none()
-                        && let Some(ref did) = info.founder_did {
-                            if did.starts_with("did:") {
-                                ch.founder_did = Some(did.clone());
-                            } else {
-                                tracing::warn!(
-                                    channel = %info.name, peer = %peer_id,
-                                    "Rejecting invalid founder DID in sync: {did}"
-                                );
-                            }
+                        && let Some(ref did) = info.founder_did
+                    {
+                        if did.starts_with("did:") {
+                            ch.founder_did = Some(did.clone());
+                        } else {
+                            tracing::warn!(
+                                channel = %info.name, peer = %peer_id,
+                                "Rejecting invalid founder DID in sync: {did}"
+                            );
                         }
+                    }
 
                     // DID ops: validate format before accepting.
                     // If --require-did-for-ops and no founder context, reject.
@@ -1915,31 +2109,38 @@ async fn process_s2s_message(
                     // Presence: S2S-event-based (idempotent set-based merge)
                     if !info.nick_info.is_empty() {
                         for ni in &info.nick_info {
-                            ch.remote_members.insert(ni.nick.clone(), RemoteMember {
-                                origin: peer_id.clone(),
-                                did: ni.did.clone(),
-                                handle: None,
-                                is_op: ni.is_op,
-                            });
+                            ch.remote_members.insert(
+                                ni.nick.clone(),
+                                RemoteMember {
+                                    origin: peer_id.clone(),
+                                    did: ni.did.clone(),
+                                    handle: None,
+                                    is_op: ni.is_op,
+                                },
+                            );
                         }
                     } else {
                         for nick in &info.nicks {
-                            ch.remote_members.insert(nick.clone(), RemoteMember {
-                                origin: peer_id.clone(),
-                                did: None,
-                                handle: None,
-                                is_op: false,
-                            });
+                            ch.remote_members.insert(
+                                nick.clone(),
+                                RemoteMember {
+                                    origin: peer_id.clone(),
+                                    did: None,
+                                    handle: None,
+                                    is_op: false,
+                                },
+                            );
                         }
                     }
 
                     if ch.topic.is_none()
-                        && let Some(ref topic) = info.topic {
-                            ch.topic = Some(TopicInfo::new(
-                                topic.clone(),
-                                info.founder_did.as_deref().unwrap_or("unknown").to_string(),
-                            ));
-                        }
+                        && let Some(ref topic) = info.topic
+                    {
+                        ch.topic = Some(TopicInfo::new(
+                            topic.clone(),
+                            info.founder_did.as_deref().unwrap_or("unknown").to_string(),
+                        ));
+                    }
 
                     // Only adopt remote channel modes if channel has no local
                     // members. If locals are present, they set modes authoritatively
@@ -1957,10 +2158,18 @@ async fn process_s2s_message(
                         // Merge: only adopt modes that are MORE restrictive
                         // (remote turns ON a protection the local doesn't have).
                         // Never weaken local protections from a sync.
-                        if info.topic_locked { ch.topic_locked = true; }
-                        if info.invite_only { ch.invite_only = true; }
-                        if info.no_ext_msg { ch.no_ext_msg = true; }
-                        if info.moderated { ch.moderated = true; }
+                        if info.topic_locked {
+                            ch.topic_locked = true;
+                        }
+                        if info.invite_only {
+                            ch.invite_only = true;
+                        }
+                        if info.no_ext_msg {
+                            ch.no_ext_msg = true;
+                        }
+                        if info.moderated {
+                            ch.moderated = true;
+                        }
                         if info.key.is_some() && ch.key.is_none() {
                             ch.key = info.key.clone();
                         }
@@ -1987,17 +2196,18 @@ async fn process_s2s_message(
                     let mut did_ops_granted = false;
                     for session_id in &members {
                         if let Some(did) = dids.get(session_id)
-                            && (ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did)) {
-                                ch.ops.insert(session_id.clone());
-                                did_ops_granted = true;
-                            }
+                            && (ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did))
+                        {
+                            ch.ops.insert(session_id.clone());
+                            did_ops_granted = true;
+                        }
                     }
 
                     // Second pass: revoke guest/non-authority auto-ops, but ONLY if
                     // someone with real authority now has ops (locally or remotely).
                     // Don't orphan the channel by revoking everyone's ops.
-                    let has_authority_ops = did_ops_granted
-                        || ch.remote_members.values().any(|rm| rm.is_op);
+                    let has_authority_ops =
+                        did_ops_granted || ch.remote_members.values().any(|rm| rm.is_op);
                     if has_authority_ops {
                         for session_id in &members {
                             let has_did_auth = dids.get(session_id).is_some_and(|did| {
@@ -2015,7 +2225,10 @@ async fn process_s2s_message(
 
                     tracing::info!(
                         "  Channel {}: {} remote user(s), founder: {:?}, {} DID ops, topic: {:?}",
-                        info.name, ch.remote_members.len(), ch.founder_did, ch.did_ops.len(),
+                        info.name,
+                        ch.remote_members.len(),
+                        ch.founder_did,
+                        ch.did_ops.len(),
                         ch.topic.as_ref().map(|t| &t.text),
                     );
                 }
@@ -2023,15 +2236,16 @@ async fn process_s2s_message(
 
             for channel in &updated_channels {
                 send_names_update(state, channel);
-                let topic_info = state.channels.lock()
-                    .get(channel)
-                    .and_then(|ch| ch.topic.as_ref().map(|t| (t.text.clone(), t.set_by.clone())));
+                let topic_info = state.channels.lock().get(channel).and_then(|ch| {
+                    ch.topic
+                        .as_ref()
+                        .map(|t| (t.text.clone(), t.set_by.clone()))
+                });
                 if let Some((topic, _set_by)) = topic_info {
-                    let line = format!(
-                        ":{} 332 * {} :{}\r\n",
-                        state.server_name, channel, topic,
-                    );
-                    let members: Vec<String> = state.channels.lock()
+                    let line = format!(":{} 332 * {} :{}\r\n", state.server_name, channel, topic,);
+                    let members: Vec<String> = state
+                        .channels
+                        .lock()
                         .get(channel)
                         .map(|ch| ch.members.iter().cloned().collect())
                         .unwrap_or_default();
@@ -2045,17 +2259,25 @@ async fn process_s2s_message(
             }
         }
 
-        S2sMessage::Mode { channel, mode, arg, set_by, .. } => {
+        S2sMessage::Mode {
+            channel,
+            mode,
+            arg,
+            set_by,
+            ..
+        } => {
             let channel = channel.to_lowercase();
 
             // ── S2S authorization: verify the setter is an op ──
             {
                 let channels = state.channels.lock();
                 if let Some(ch) = channels.get(&channel) {
-                    let is_authorized = ch.remote_member(&set_by)
-                        .is_some_and(|rm| rm.is_op || rm.did.as_ref().is_some_and(|d| {
-                            ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
-                        }));
+                    let is_authorized = ch.remote_member(&set_by).is_some_and(|rm| {
+                        rm.is_op
+                            || rm.did.as_ref().is_some_and(|d| {
+                                ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
+                            })
+                    });
                     if !is_authorized {
                         tracing::warn!(
                             channel = %channel, set_by = %set_by, mode = %mode,
@@ -2088,8 +2310,11 @@ async fn process_s2s_message(
                             // Find the target by nick and apply the mode.
                             if let Some(ref target_nick) = arg {
                                 // Case-insensitive local nick lookup
-                                let target_sid = state.nick_to_session.lock()
-                                    .get_session(target_nick).map(|s| s.to_string());
+                                let target_sid = state
+                                    .nick_to_session
+                                    .lock()
+                                    .get_session(target_nick)
+                                    .map(|s| s.to_string());
                                 if let Some(ref sid) = target_sid {
                                     let set = if mode_char == 'o' {
                                         &mut ch.ops
@@ -2104,30 +2329,33 @@ async fn process_s2s_message(
 
                                     // +o/-o with DID: also update did_ops for persistence
                                     if mode_char == 'o'
-                                        && let Some(did) = state.session_dids.lock()
-                                            .get(sid).cloned()
-                                        {
-                                            if !adding && ch.founder_did.as_deref() == Some(&did) {
-                                                // Founder can't be de-opped
-                                            } else if adding {
-                                                ch.did_ops.insert(did);
-                                            } else {
-                                                ch.did_ops.remove(&did);
-                                            }
+                                        && let Some(did) =
+                                            state.session_dids.lock().get(sid).cloned()
+                                    {
+                                        if !adding && ch.founder_did.as_deref() == Some(&did) {
+                                            // Founder can't be de-opped
+                                        } else if adding {
+                                            ch.did_ops.insert(did);
+                                        } else {
+                                            ch.did_ops.remove(&did);
                                         }
+                                    }
                                 } else {
                                     // Target is a remote member from another peer
                                     // (3-server scenario) — update remote member's is_op flag
                                     if mode_char == 'o' {
                                         // Extract DID before mutating, to avoid borrow conflict
-                                        let remote_did = ch.remote_member(target_nick)
+                                        let remote_did = ch
+                                            .remote_member(target_nick)
                                             .and_then(|rm| rm.did.clone());
                                         if let Some(rm) = ch.remote_member_mut(target_nick) {
                                             rm.is_op = adding;
                                         }
                                         // Also update did_ops if we know their DID
                                         if let Some(did) = remote_did {
-                                            if !adding && ch.founder_did.as_deref() == Some(did.as_str()) {
+                                            if !adding
+                                                && ch.founder_did.as_deref() == Some(did.as_str())
+                                            {
                                                 // Founder can't be de-opped
                                             } else if adding {
                                                 ch.did_ops.insert(did);
@@ -2151,7 +2379,13 @@ async fn process_s2s_message(
             deliver_to_channel(state, &channel, &mode_line);
         }
 
-        S2sMessage::Kick { nick, channel, by, reason, .. } => {
+        S2sMessage::Kick {
+            nick,
+            channel,
+            by,
+            reason,
+            ..
+        } => {
             // A remote op kicked a user — if the user is local, remove them
             // from the channel and notify them. If the user is a remote member
             // from yet another server, remove from remote_members.
@@ -2161,10 +2395,12 @@ async fn process_s2s_message(
             {
                 let channels = state.channels.lock();
                 if let Some(ch) = channels.get(&channel_key) {
-                    let is_authorized = ch.remote_member(&by)
-                        .is_some_and(|rm| rm.is_op || rm.did.as_ref().is_some_and(|d| {
-                            ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
-                        }));
+                    let is_authorized = ch.remote_member(&by).is_some_and(|rm| {
+                        rm.is_op
+                            || rm.did.as_ref().is_some_and(|d| {
+                                ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
+                            })
+                    });
                     if !is_authorized {
                         tracing::warn!(
                             channel = %channel_key, by = %by, target = %nick,
@@ -2178,8 +2414,11 @@ async fn process_s2s_message(
             let kick_line = format!(":{by}!remote@s2s KICK {channel} {nick} :{reason}\r\n");
 
             // Case-insensitive nick lookup (NickMap handles this in O(1))
-            let target_session = state.nick_to_session.lock()
-                .get_session(&nick).map(|s| s.to_string());
+            let target_session = state
+                .nick_to_session
+                .lock()
+                .get_session(&nick)
+                .map(|s| s.to_string());
 
             if let Some(ref sid) = target_session {
                 // Target is local — broadcast KICK to channel, remove member
@@ -2204,7 +2443,8 @@ async fn process_s2s_message(
                 // Target is a remote member from another peer — remove and notify locals
                 let removed = {
                     let mut channels = state.channels.lock();
-                    channels.get_mut(&channel_key)
+                    channels
+                        .get_mut(&channel_key)
                         .and_then(|ch| ch.remove_remote_member(&nick))
                         .is_some()
                 };
@@ -2214,17 +2454,25 @@ async fn process_s2s_message(
             }
         }
 
-        S2sMessage::Ban { channel, mask, set_by, adding, .. } => {
+        S2sMessage::Ban {
+            channel,
+            mask,
+            set_by,
+            adding,
+            ..
+        } => {
             let channel_key = channel.to_lowercase();
 
             // Authorization: verify set_by is an op
             {
                 let channels = state.channels.lock();
                 if let Some(ch) = channels.get(&channel_key) {
-                    let is_authorized = ch.remote_member(&set_by)
-                        .is_some_and(|rm| rm.is_op || rm.did.as_ref().is_some_and(|d| {
-                            ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
-                        }));
+                    let is_authorized = ch.remote_member(&set_by).is_some_and(|rm| {
+                        rm.is_op
+                            || rm.did.as_ref().is_some_and(|d| {
+                                ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
+                            })
+                    });
                     if !is_authorized {
                         tracing::warn!(
                             channel = %channel_key, set_by = %set_by,
@@ -2284,7 +2532,12 @@ async fn process_s2s_message(
             }
         }
 
-        S2sMessage::PolicySync { channel, policy_json, authority_set_json, .. } => {
+        S2sMessage::PolicySync {
+            channel,
+            policy_json,
+            authority_set_json,
+            ..
+        } => {
             // A peer has created/updated/cleared a policy — apply locally
             if let Some(ref engine) = state.policy_engine {
                 let channel_key = channel.to_lowercase();
@@ -2293,9 +2546,11 @@ async fn process_s2s_message(
                     if let Ok(policy) = serde_json::from_str::<crate::policy::PolicyDocument>(pj) {
                         // Store the authority set if provided
                         if let Some(ref asj) = authority_set_json
-                            && let Ok(auth_set) = serde_json::from_str::<crate::policy::AuthoritySet>(asj) {
-                                let _ = engine.store().store_authority_set(auth_set);
-                            }
+                            && let Ok(auth_set) =
+                                serde_json::from_str::<crate::policy::AuthoritySet>(asj)
+                        {
+                            let _ = engine.store().store_authority_set(auth_set);
+                        }
                         // Store the policy
                         let _ = engine.store().store_policy(policy);
                         tracing::info!(channel = %channel_key, "S2S PolicySync: policy updated from peer");
@@ -2383,20 +2638,21 @@ async fn process_s2s_message(
 /// truth — even when S2S events and CRDT diverge due to timing or partitions.
 async fn reconcile_crdt_to_local(state: &Arc<SharedState>) {
     // Get list of channels
-    let channel_names: Vec<String> = {
-        state.channels.lock().keys().cloned().collect()
-    };
+    let channel_names: Vec<String> = { state.channels.lock().keys().cloned().collect() };
 
     let mut reconciled = 0u32;
 
     for channel_name in &channel_names {
         // Reconcile topic: if CRDT has a topic and it differs from local, adopt CRDT's
-        if let Some((crdt_topic, crdt_setter)) = state.cluster_doc.channel_topic(channel_name).await {
+        if let Some((crdt_topic, crdt_setter)) = state.cluster_doc.channel_topic(channel_name).await
+        {
             let needs_update = {
                 let channels = state.channels.lock();
-                channels.get(channel_name)
+                channels
+                    .get(channel_name)
                     .map(|ch| {
-                        ch.topic.as_ref()
+                        ch.topic
+                            .as_ref()
                             .map(|t| t.text != crdt_topic)
                             .unwrap_or(true) // no local topic, CRDT has one → adopt
                     })
@@ -2415,7 +2671,8 @@ async fn reconcile_crdt_to_local(state: &Arc<SharedState>) {
         if let Some(crdt_founder) = state.cluster_doc.founder(channel_name).await {
             let needs_update = {
                 let channels = state.channels.lock();
-                channels.get(channel_name)
+                channels
+                    .get(channel_name)
                     .map(|ch| ch.founder_did.as_deref() != Some(&crdt_founder))
                     .unwrap_or(false)
             };
@@ -2437,13 +2694,14 @@ async fn reconcile_crdt_to_local(state: &Arc<SharedState>) {
                     let mut did_ops_granted = false;
                     for session_id in &members {
                         if let Some(did) = dids.get(session_id)
-                            && (ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did)) {
-                                ch.ops.insert(session_id.clone());
-                                did_ops_granted = true;
-                            }
+                            && (ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did))
+                        {
+                            ch.ops.insert(session_id.clone());
+                            did_ops_granted = true;
+                        }
                     }
-                    let has_authority_ops = did_ops_granted
-                        || ch.remote_members.values().any(|rm| rm.is_op);
+                    let has_authority_ops =
+                        did_ops_granted || ch.remote_members.values().any(|rm| rm.is_op);
                     if has_authority_ops {
                         for session_id in &members {
                             let has_did_auth = dids.get(session_id).is_some_and(|did| {
@@ -2476,13 +2734,14 @@ async fn reconcile_crdt_to_local(state: &Arc<SharedState>) {
                 let mut did_ops_granted = false;
                 for session_id in &members {
                     if let Some(did) = dids.get(session_id)
-                        && (ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did)) {
-                            ch.ops.insert(session_id.clone());
-                            did_ops_granted = true;
-                        }
+                        && (ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did))
+                    {
+                        ch.ops.insert(session_id.clone());
+                        did_ops_granted = true;
+                    }
                 }
-                let has_authority_ops = did_ops_granted
-                    || ch.remote_members.values().any(|rm| rm.is_op);
+                let has_authority_ops =
+                    did_ops_granted || ch.remote_members.values().any(|rm| rm.is_op);
                 if has_authority_ops {
                     for session_id in &members {
                         let has_did_auth = dids.get(session_id).is_some_and(|did| {
@@ -2498,6 +2757,9 @@ async fn reconcile_crdt_to_local(state: &Arc<SharedState>) {
     }
 
     if reconciled > 0 {
-        tracing::info!("CRDT→local reconciliation: {reconciled} updates applied across {} channels", channel_names.len());
+        tracing::info!(
+            "CRDT→local reconciliation: {reconciled} updates applied across {} channels",
+            channel_names.len()
+        );
     }
 }

@@ -71,8 +71,8 @@ pub async fn create_session(
         .await
         .context("Failed to resolve DID document")?;
 
-    let pds_url = pds_endpoint(&did_doc)
-        .context("No PDS service endpoint found in DID document")?;
+    let pds_url =
+        pds_endpoint(&did_doc).context("No PDS service endpoint found in DID document")?;
 
     tracing::info!(did = %did, pds = %pds_url, "Authenticating to PDS");
 
@@ -193,12 +193,16 @@ pub async fn fetch_profile(actor: &str) -> Result<BlueskyProfile> {
         percent_encode(actor),
     );
 
-    let resp = client.get(&url)
-        .send().await?
+    let resp = client
+        .get(&url)
+        .send()
+        .await?
         .error_for_status()
         .context("Failed to fetch Bluesky profile")?;
 
-    let profile: BlueskyProfile = resp.json().await
+    let profile: BlueskyProfile = resp
+        .json()
+        .await
         .context("Failed to parse Bluesky profile")?;
 
     Ok(profile)

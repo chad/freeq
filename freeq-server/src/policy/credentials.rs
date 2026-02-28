@@ -10,7 +10,7 @@
 
 use super::canonical;
 use super::types::VerifiableCredential;
-use ed25519_dalek::{Signature, VerifyingKey, Verifier};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
 /// Verify a credential's signature against the issuer's public key.
 ///
@@ -25,16 +25,18 @@ pub fn verify_credential_signature(
     // Canonicalize with empty signature (as it was signed)
     let mut unsigned = credential.clone();
     unsigned.signature = String::new();
-    let canonical = canonical::canonicalize(&unsigned)
-        .map_err(|e| format!("Canonicalization failed: {e}"))?;
+    let canonical =
+        canonical::canonicalize(&unsigned).map_err(|e| format!("Canonicalization failed: {e}"))?;
 
     // Decode signature from base64url
     let sig_bytes = base64_url_decode(&credential.signature)
         .map_err(|e| format!("Invalid signature encoding: {e}"))?;
-    let signature = Signature::from_slice(&sig_bytes)
-        .map_err(|e| format!("Invalid signature format: {e}"))?;
+    let signature =
+        Signature::from_slice(&sig_bytes).map_err(|e| format!("Invalid signature format: {e}"))?;
 
-    Ok(verifying_key.verify(canonical.as_bytes(), &signature).is_ok())
+    Ok(verifying_key
+        .verify(canonical.as_bytes(), &signature)
+        .is_ok())
 }
 
 /// Verify a credential end-to-end:
@@ -49,7 +51,10 @@ pub fn verify_credential(
 ) -> Result<(), String> {
     // Check type tag
     if credential.credential_type_tag != "FreeqCredential/v1" {
-        return Err(format!("Unknown credential type: {}", credential.credential_type_tag));
+        return Err(format!(
+            "Unknown credential type: {}",
+            credential.credential_type_tag
+        ));
     }
 
     // Check expiry
@@ -82,8 +87,8 @@ pub fn sign_credential(
     use ed25519_dalek::Signer;
 
     credential.signature = String::new();
-    let canonical = canonical::canonicalize(credential)
-        .map_err(|e| format!("Canonicalization failed: {e}"))?;
+    let canonical =
+        canonical::canonicalize(credential).map_err(|e| format!("Canonicalization failed: {e}"))?;
     let signature = signing_key.sign(canonical.as_bytes());
     credential.signature = base64_url_encode(&signature.to_bytes());
     Ok(())

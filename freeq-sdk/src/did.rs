@@ -81,17 +81,19 @@ impl DidDocument {
         // Collect from authentication
         for entry in &self.authentication {
             if let Some((id, key)) = self.resolve_key_reference(entry)
-                && seen_ids.insert(id.clone()) {
-                    keys.push((id, key));
-                }
+                && seen_ids.insert(id.clone())
+            {
+                keys.push((id, key));
+            }
         }
 
         // Fallback: also check assertionMethod
         for entry in &self.assertion_method {
             if let Some((id, key)) = self.resolve_key_reference(entry)
-                && seen_ids.insert(id.clone()) {
-                    keys.push((id, key));
-                }
+                && seen_ids.insert(id.clone())
+            {
+                keys.push((id, key));
+            }
         }
 
         keys
