@@ -179,7 +179,7 @@ export function UserPopover({ nick, did, position, onClose }: UserPopoverProps) 
               <a
                 href={`https://bsky.app/profile/${handle}`}
                 target="_blank"
-                rel="noopener"
+                rel="noopener noreferrer"
                 className="flex-1 bg-bg-tertiary hover:bg-surface text-fg-muted hover:text-fg text-xs py-1.5 rounded-lg text-center"
               >
                 Bluesky ↗

@@ -127,17 +127,40 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Resolve effective settings: CLI > config > session > defaults
-    let resolved = config::Resolved::merge(&cli, &cfg, &session);
-
-    eprintln!("freeq-tui — server: {}, nick: {}, channels: {}",
-        resolved.server,
-        resolved.nick,
-        if resolved.channels.is_empty() { "(none)".to_string() } else { resolved.channels.join(", ") },
-    );
-    if let Some(ref h) = resolved.handle {
-        eprintln!("  handle: {h}");
-    }
+    // Decide: interactive form vs. auto-connect
+    // Show form when: no CLI args AND no saved handle (first run or guest-only history)
+    // Auto-connect when: CLI args given OR saved session has a handle
+    let resolved = if !config::has_explicit_cli_args(&cli) && !config::has_saved_session(&cfg, &session) {
+        // First run or no saved identity → interactive setup
+        match config::interactive_setup(&cfg, &session) {
+            Some(r) => r,
+            None => return Ok(()), // user cancelled
+        }
+    } else if config::has_explicit_cli_args(&cli) {
+        // Explicit CLI args → merge normally, no form
+        let r = config::Resolved::merge(&cli, &cfg, &session);
+        eprintln!("freeq-tui — server: {}, nick: {}, channels: {}",
+            r.server, r.nick,
+            if r.channels.is_empty() { "(none)".to_string() } else { r.channels.join(", ") },
+        );
+        if let Some(ref h) = r.handle {
+            eprintln!("  handle: {h}");
+        }
+        r
+    } else {
+        // Saved session with handle → auto-reconnect
+        let r = config::Resolved::merge(&cli, &cfg, &session);
+        if let Some(ref h) = r.handle {
+            eprintln!("freeq-tui — reconnecting as 🦋 {h} to {}", r.server);
+        } else {
+            eprintln!("freeq-tui — reconnecting to {}", r.server);
+        }
+        eprintln!("  nick: {}, channels: {}",
+            r.nick,
+            if r.channels.is_empty() { "(none)".to_string() } else { r.channels.join(", ") },
+        );
+        r
+    };
 
     // Build a CLI-like struct with resolved values for build_signer
     let effective_cli = Cli {

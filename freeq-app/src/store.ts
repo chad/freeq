@@ -118,6 +118,7 @@ export interface Store {
   editingMsg: EditContext | null;
   theme: 'dark' | 'light';
   messageDensity: 'default' | 'compact' | 'cozy';
+  loadExternalMedia: boolean;
   favorites: Set<string>; // lowercase channel names
   mutedChannels: Set<string>; // lowercase channel names
   bookmarks: { channel: string; msgId: string; from: string; text: string; timestamp: Date }[];
@@ -181,6 +182,7 @@ export interface Store {
   setEditingMsg: (ctx: EditContext | null) => void;
   setTheme: (theme: 'dark' | 'light') => void;
   setMessageDensity: (d: 'default' | 'compact' | 'cozy') => void;
+  setLoadExternalMedia: (v: boolean) => void;
   toggleFavorite: (channel: string) => void;
   toggleMuted: (channel: string) => void;
   isFavorite: (channel: string) => boolean;
@@ -248,6 +250,7 @@ export const useStore = create<Store>((set, get) => ({
   editingMsg: null,
   theme: (localStorage.getItem('freeq-theme') as 'dark' | 'light') || 'dark',
   messageDensity: (localStorage.getItem('freeq-density') as 'default' | 'compact' | 'cozy') || 'default',
+  loadExternalMedia: localStorage.getItem('freeq-load-media') !== 'false',
   favorites: new Set(JSON.parse(localStorage.getItem('freeq-favorites') || '[]')),
   mutedChannels: new Set(JSON.parse(localStorage.getItem('freeq-muted') || '[]')),
   bookmarks: JSON.parse(localStorage.getItem('freeq-bookmarks') || '[]').map((b: any) => ({ ...b, timestamp: new Date(b.timestamp) })),
@@ -304,7 +307,7 @@ export const useStore = create<Store>((set, get) => ({
     threadChannel: null,
     joinGateChannel: null,
     channelSettingsOpen: null,
-    theme: s.theme, messageDensity: s.messageDensity, favorites: s.favorites, mutedChannels: s.mutedChannels, bookmarks: s.bookmarks, bookmarksPanelOpen: false, // preserve across reconnects
+    theme: s.theme, messageDensity: s.messageDensity, loadExternalMedia: s.loadExternalMedia, favorites: s.favorites, mutedChannels: s.mutedChannels, bookmarks: s.bookmarks, bookmarksPanelOpen: false, // preserve across reconnects
   })),
 
   // Channels
@@ -661,6 +664,10 @@ export const useStore = create<Store>((set, get) => ({
   setMessageDensity: (d) => {
     localStorage.setItem('freeq-density', d);
     set({ messageDensity: d });
+  },
+  setLoadExternalMedia: (v) => {
+    localStorage.setItem('freeq-load-media', v ? 'true' : 'false');
+    set({ loadExternalMedia: v });
   },
   toggleFavorite: (channel) => set((s) => {
     const favs = new Set(s.favorites);

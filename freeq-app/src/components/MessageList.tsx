@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useCallback, useState, useMemo, memo } from 'react';
 import { useStore, type Message, type PinnedMessage } from '../store';
 import { getNick, requestHistory, sendReaction } from '../irc/client';
 import { fetchProfile, getCachedProfile, type ATProfile } from '../lib/profiles';
@@ -153,9 +153,27 @@ function parseTextSegments(text: string): TextSegment[] {
   return segments;
 }
 
+// ── Segment parse cache (avoids re-parsing on every render) ──
+
+const _segmentCache = new Map<string, TextSegment[]>();
+const SEGMENT_CACHE_MAX = 2000;
+
+function parseTextSegmentsCached(text: string): TextSegment[] {
+  const cached = _segmentCache.get(text);
+  if (cached) return cached;
+  const segments = parseTextSegments(text);
+  if (_segmentCache.size >= SEGMENT_CACHE_MAX) {
+    // Evict oldest half
+    const keys = [..._segmentCache.keys()];
+    for (let i = 0; i < keys.length / 2; i++) _segmentCache.delete(keys[i]);
+  }
+  _segmentCache.set(text, segments);
+  return segments;
+}
+
 /** Render text segments as React elements (XSS-safe — no innerHTML). */
 function renderTextSafe(text: string): React.ReactElement {
-  const segments = parseTextSegments(text);
+  const segments = parseTextSegmentsCached(text);
   return (
     <>
       {segments.map((seg, i) => {
@@ -181,6 +199,52 @@ function renderTextSafe(text: string): React.ReactElement {
 }
 
 
+
+// ── External image gating ──
+
+/** Trusted domains that always load inline (our own infrastructure). */
+function isTrustedImageUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    const h = u.hostname;
+    return h === 'cdn.bsky.app' || h.endsWith('.bsky.app') || h.endsWith('.bsky.network')
+      || h === 'freeq.at' || h.endsWith('.freeq.at') || h === 'localhost';
+  } catch {
+    return false;
+  }
+}
+
+/** Image that respects the "Load external media" setting. */
+function GatedImage({ url, onOpen }: { url: string; onOpen: () => void }) {
+  const loadMedia = useStore((s) => s.loadExternalMedia);
+  const [revealed, setRevealed] = useState(false);
+  const trusted = isTrustedImageUrl(url);
+
+  if (trusted || loadMedia || revealed) {
+    return (
+      <button onClick={onOpen} className="block cursor-zoom-in">
+        <img
+          src={url}
+          alt=""
+          className="max-w-sm max-h-80 rounded-lg border border-border object-contain bg-bg-tertiary hover:opacity-90 transition-opacity"
+          loading="lazy"
+          onError={(e) => { e.currentTarget.style.display = 'none'; }}
+        />
+      </button>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setRevealed(true)}
+      className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-bg-tertiary text-fg-dim text-sm hover:bg-surface hover:text-fg-muted transition-colors"
+      title={url}
+    >
+      <span className="text-lg">🖼</span>
+      <span>Click to load external image</span>
+    </button>
+  );
+}
 
 // ── Message content (text + inline images) ──
 
@@ -367,18 +431,7 @@ function MessageContent({ msg }: { msg: Message }) {
       {imageUrls.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-2">
           {imageUrls.map((url) => (
-            <button key={url} onClick={() => setLightbox(url)} className="block cursor-zoom-in">
-              <img
-                src={url}
-                alt=""
-                className="max-w-sm max-h-80 rounded-lg border border-border object-contain bg-bg-tertiary hover:opacity-90 transition-opacity"
-                loading="lazy"
-                onError={(e) => {
-                  const el = e.currentTarget;
-                  el.style.display = 'none';
-                }}
-              />
-            </button>
+            <GatedImage key={url} url={url} onOpen={() => setLightbox(url)} />
           ))}
         </div>
       )}
@@ -391,7 +444,7 @@ function MessageContent({ msg }: { msg: Message }) {
         <a
           href={`https://youtube.com/watch?v=${ytMatch[1]}`}
           target="_blank"
-          rel="noopener"
+          rel="noopener noreferrer"
           className="mt-2 block max-w-sm rounded-lg overflow-hidden border border-border hover:border-accent/50 transition-colors"
         >
           <img

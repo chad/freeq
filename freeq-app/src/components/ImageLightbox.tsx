@@ -36,7 +36,7 @@ export function ImageLightbox() {
       <a
         href={url}
         target="_blank"
-        rel="noopener"
+        rel="noopener noreferrer"
         className="absolute bottom-4 right-4 text-white/50 hover:text-white text-xs bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg"
         onClick={(e) => e.stopPropagation()}
       >

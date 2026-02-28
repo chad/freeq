@@ -46,6 +46,7 @@ export function ComposeBox() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const emojiRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
   const activeChannel = useStore((s) => s.activeChannel);
   const channels = useStore((s) => s.channels);
   const authDid = useStore((s) => s.authDid);
@@ -638,6 +639,29 @@ export function ComposeBox() {
               type="file"
               className="hidden"
               accept="image/*,video/mp4,video/webm,audio/mpeg,audio/ogg,application/pdf"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleFileSelect(file);
+                e.target.value = '';
+              }}
+            />
+            {/* Camera capture (mobile) */}
+            <button
+              onClick={() => cameraInputRef.current?.click()}
+              className="w-9 h-9 rounded-lg items-center justify-center text-fg-dim hover:text-fg-muted hover:bg-bg-tertiary shrink-0 hidden max-sm:flex"
+              title="Take photo"
+            >
+              <svg className="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M10.5 8.5a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z"/>
+                <path d="M2 4a2 2 0 00-2 2v6a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-1.172a2 2 0 01-1.414-.586l-.828-.828A2 2 0 009.172 2H6.828a2 2 0 00-1.414.586l-.828.828A2 2 0 013.172 4H2zm.5 2a.5.5 0 110-1 .5.5 0 010 1zm9 2.5a3.5 3.5 0 11-7 0 3.5 3.5 0 017 0z"/>
+              </svg>
+            </button>
+            <input
+              ref={cameraInputRef}
+              type="file"
+              className="hidden"
+              accept="image/*"
+              capture="environment"
               onChange={(e) => {
                 const file = e.target.files?.[0];
                 if (file) handleFileSelect(file);

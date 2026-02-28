@@ -64,7 +64,7 @@ export function BlueskyEmbed({ handle, rkey }: { handle: string; rkey: string })
     <a
       href={`https://bsky.app/profile/${handle}/post/${rkey}`}
       target="_blank"
-      rel="noopener"
+      rel="noopener noreferrer"
       className="mt-2 block max-w-sm rounded-xl border border-border bg-bg-tertiary hover:border-accent/30 transition-colors overflow-hidden"
     >
       {/* Author */}

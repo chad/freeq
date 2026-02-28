@@ -16,6 +16,8 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const setTheme = useStore((s) => s.setTheme);
   const density = useStore((s) => s.messageDensity);
   const setDensity = useStore((s) => s.setMessageDensity);
+  const loadMedia = useStore((s) => s.loadExternalMedia);
+  const setLoadMedia = useStore((s) => s.setLoadExternalMedia);
 
   const [notifs, setNotifs] = useState(true);
   const [sounds, setSounds] = useState(true);
@@ -108,6 +110,18 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 await setPreferences({ sounds: v });
               }}
             />
+          </Section>
+
+          {/* Privacy */}
+          <Section title="Privacy">
+            <Toggle
+              label="Load external media"
+              checked={loadMedia}
+              onChange={setLoadMedia}
+            />
+            <p className="text-[11px] text-fg-dim leading-relaxed mt-1">
+              When off, images from external URLs require a click to load. Prevents IP leakage via tracking pixels.
+            </p>
           </Section>
 
           {/* Keyboard shortcuts */}

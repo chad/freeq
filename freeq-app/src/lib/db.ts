@@ -51,6 +51,8 @@ export interface Preferences {
   notifications: boolean;
   sounds: boolean;
   fontSize: number;
+  /** Load external images/media inline (false = click-to-load). */
+  loadExternalMedia: boolean;
 }
 
 const DEFAULT_PREFS: Preferences = {
@@ -59,6 +61,7 @@ const DEFAULT_PREFS: Preferences = {
   notifications: true,
   sounds: true,
   fontSize: 15,
+  loadExternalMedia: true,
 };
 
 export async function getPreferences(): Promise<Preferences> {
