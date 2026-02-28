@@ -1325,14 +1325,14 @@ struct AuthCallbackQuery {
 async fn auth_callback(
     Query(q): Query<AuthCallbackQuery>,
     State(state): State<Arc<SharedState>>,
-) -> Result<Html<String>, (StatusCode, String)> {
+) -> Result<impl axum::response::IntoResponse, (StatusCode, String)> {
     // Check for error
     if let Some(error) = &q.error {
         let desc = q.error_description.as_deref().unwrap_or("Unknown error");
-        return Ok(Html(oauth_result_page(
+        return Ok(oauth_result_page(
             &format!("Error: {error}: {desc}"),
             None,
-        )));
+        ));
     }
 
     let code = q
@@ -1432,10 +1432,10 @@ async fn auth_callback(
                 .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token retry failed: {e}")))?;
             if !resp2.status().is_success() {
                 let text = resp2.text().await.unwrap_or_default();
-                return Ok(Html(oauth_result_page(
+                return Ok(oauth_result_page(
                     &format!("Token exchange failed: {text}"),
                     None,
-                )));
+                ));
             }
             resp2
                 .json()
@@ -1447,10 +1447,10 @@ async fn auth_callback(
                 .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Token parse failed: {e}")))?
         } else {
             let text = resp.text().await.unwrap_or_default();
-            return Ok(Html(oauth_result_page(
+            return Ok(oauth_result_page(
                 &format!("Token exchange failed ({status}): {text}"),
                 None,
-            )));
+            ));
         };
 
     let access_token = token_resp["access_token"]
@@ -1502,21 +1502,50 @@ async fn auth_callback(
             urlencod(&result.did),
             urlencod(&result.handle),
         );
-        return Ok(Html(format!(
+        let html = format!(
             r#"<!DOCTYPE html><html><head><meta http-equiv="refresh" content="0;url={redirect}"></head><body><script>window.location.href = "{redirect}";</script><p>Redirecting to freeq app...</p></body></html>"#
-        )));
+        );
+        return Ok((
+            [
+                ("content-type", "text/html; charset=utf-8"),
+                (
+                    "content-security-policy",
+                    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
+                ),
+            ],
+            html,
+        ));
     }
 
     // Return HTML page that posts result to parent window
-    Ok(Html(oauth_result_page(
+    Ok(oauth_result_page(
         "Authentication successful!",
         Some(&result),
-    )))
+    ))
 }
 
 /// Generate the HTML page returned by the OAuth callback.
 /// If result is Some, it posts the credentials to the parent window via postMessage.
-fn oauth_result_page(message: &str, result: Option<&crate::server::OAuthResult>) -> String {
+/// Returns (headers, html) tuple so the CSP allows inline scripts (the global middleware
+/// skips setting CSP when the handler already provides one).
+fn oauth_result_page(
+    message: &str,
+    result: Option<&crate::server::OAuthResult>,
+) -> ([(&'static str, &'static str); 2], String) {
+    let html = oauth_result_html(message, result);
+    (
+        [
+            ("content-type", "text/html; charset=utf-8"),
+            (
+                "content-security-policy",
+                "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
+            ),
+        ],
+        html,
+    )
+}
+
+fn oauth_result_html(message: &str, result: Option<&crate::server::OAuthResult>) -> String {
     let script = if let Some(r) = result {
         let json = serde_json::to_string(r).unwrap_or_default();
         format!(
