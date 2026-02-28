@@ -581,10 +581,10 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
   const currentNick = getNick();
   const isMention = !msg.isSelf && msg.text.toLowerCase().includes(currentNick.toLowerCase());
 
-  // Find DID for this user from channel members
-  const channels = useStore.getState().channels;
-  const ch = channels.get(channel.toLowerCase());
-  const member = ch?.members.get(msg.from.toLowerCase());
+  // Find DID for this user — check channel members reactively, fall back to authDid for self
+  const member = useStore((s) => s.channels.get(channel.toLowerCase())?.members.get(msg.from.toLowerCase()));
+  const selfDid = useStore((s) => msg.isSelf ? s.authDid : null);
+  const did = member?.did || selfDid || undefined;
 
   const openEmojiPicker = (e: React.MouseEvent) => {
     setPickerPos({ x: e.clientX, y: e.clientY });
@@ -600,9 +600,9 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
     >
       <div
         className="cursor-pointer mt-0.5"
-        onClick={(e) => onNickClick(msg.from, member?.did, e)}
+        onClick={(e) => onNickClick(msg.from, did, e)}
       >
-        <Avatar nick={msg.from} did={member?.did} />
+        <Avatar nick={msg.from} did={did} />
       </div>
 
       <div className="min-w-0 flex-1">
