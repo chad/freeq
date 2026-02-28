@@ -385,6 +385,13 @@ async fn build_signer(cli: &Cli) -> Result<SignerResult> {
                 eprintln!("  Session cached to {}", cache_path.display());
             }
 
+            // Save handle to config so future `freeq-tui` (no args) auto-reconnects
+            let mut cfg = config::Config::load();
+            if cfg.handle.as_deref() != Some(handle) {
+                cfg.handle = Some(handle.to_string());
+                cfg.save();
+            }
+
             let uploader = make_oauth_uploader(&session);
             return Ok((
                 Some(Arc::new(PdsSessionSigner::new_oauth(

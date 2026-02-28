@@ -150,7 +150,8 @@ impl Resolved {
 
         let handle = cli.handle.clone()
             .or_else(|| config.handle.clone())
-            .or_else(|| session.handle.clone());
+            .or_else(|| session.handle.clone())
+            .or_else(cached_oauth_handle);
 
         let nick = cli.nick.clone()
             .or_else(|| config.nick.clone())
@@ -201,7 +202,35 @@ pub fn has_explicit_cli_args(cli: &super::Cli) -> bool {
 
 /// Returns true if we have a saved session with a handle (can auto-reconnect).
 pub fn has_saved_session(config: &Config, session: &Session) -> bool {
-    config.handle.is_some() || session.handle.is_some()
+    config.handle.is_some() || session.handle.is_some() || cached_oauth_handle().is_some()
+}
+
+/// Check for a cached OAuth session file (e.g. `chadfowler.com.session.json`)
+/// and return the handle if found.
+pub fn cached_oauth_handle() -> Option<String> {
+    let dir = dirs::config_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("freeq-tui");
+    if !dir.exists() {
+        return None;
+    }
+    let mut entries: Vec<_> = std::fs::read_dir(&dir).ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".session.json"))
+        .collect();
+    // Sort by modification time (most recent first) so we pick the latest session
+    entries.sort_by(|a, b| {
+        let t_a = a.metadata().and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let t_b = b.metadata().and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        t_b.cmp(&t_a)
+    });
+    entries.first().map(|e| {
+        e.file_name()
+            .to_string_lossy()
+            .strip_suffix(".session.json")
+            .unwrap_or("")
+            .to_string()
+    }).filter(|s| !s.is_empty())
 }
 
 /// Show interactive setup form on stderr. Returns a Resolved.
