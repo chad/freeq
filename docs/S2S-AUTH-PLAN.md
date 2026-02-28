@@ -90,15 +90,23 @@ Peers not listed default to `full` (backward compatible). Trust is enforced serv
 
 ### Key Rotation
 
-A server can rotate its iroh keypair without breaking peering:
+Key rotation uses two complementary mechanisms for safety:
 
-1. Server generates a new keypair
-2. Sends `KeyRotation { old_id, new_id, timestamp, signature }` to all peers
-3. The signature is by the **old** key over `rotate:{old_id}:{new_id}:{timestamp}`
-4. Peers verify the signature, record the pending rotation
-5. When the server reconnects with the new ID, peers accept it
+**In-band (continuity proof):**
+1. Server sends `KeyRotation { old_id, new_id, timestamp, signature }` to all peers
+2. Signature is by the **old** key over `rotate:{old_id}:{new_id}:{timestamp}`
+3. Peers verify, record the pending rotation, accept new ID on reconnect
+4. Rotation signatures must be within 5 minutes of current time (replay protection)
 
-Rotation signatures must be within 5 minutes of current time (replay protection).
+**Out-of-band (authoritative):**
+1. Update the DID document (`/.well-known/did.json`) with the new public key
+2. Peers re-resolve the DID on signature mismatch
+
+**Acceptance rule:** Peers accept a new key if either:
+- The DID document says so (authoritative — domain controls identity), **OR**
+- The old key signed the rotation AND the DID document eventually matches (24h grace period)
+
+This protects against both "peer missed the in-band message" and "domain was temporarily compromised but the in-band rotation was legitimate."
 
 ### Peer Revocation
 
@@ -117,19 +125,28 @@ This:
 
 To permanently block a peer, remove them from `--s2s-allowed-peers` and restart.
 
-## Layer 6: DID-Based Server Identity (Phase 5)
+## Layer 6: DID-Based Server Identity
 
 Servers can optionally identify via DID:
 
 ```bash
---server-did did:web:irc.example.com
+--server-did did:web:irc.example.com   # default: easy, DNS-based
+--server-did did:plc:abc123...          # advanced: registry-backed, DNS-independent
 ```
 
-This DID is included in the Hello handshake. Future work:
-- Peers can allowlist by DID instead of endpoint ID
-- DID document publishes the endpoint ID as a service endpoint
-- Key rotation = DID document update
-- Opens the door to AT Protocol integration for server discovery
+The DID is included in Hello handshakes. The DID document publishes:
+- **Identity key** (`#id-1`): stable server identity
+- **S2S signing key** (`#s2s-sig-1`): used for message envelope signatures
+- **Service endpoints**: iroh transport address, IRC connection info
+
+Today both keys are the same (the iroh keypair). The DID document is structured with separate key IDs so they can be split later without changing the document shape.
+
+**`did:web` vs `did:plc`:**
+- `did:web` is simpler (just serve a JSON file over HTTPS) but depends on DNS + TLS security
+- `did:plc` is registry-backed, survives domain changes and CA compromise, but requires the PLC directory
+- Hybrid approach: start with `did:web`, add `did:plc` later, link via `alsoKnownAs`
+
+See [Server DID Setup](server-did.md) for full setup instructions.
 
 ---
 
