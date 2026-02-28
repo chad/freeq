@@ -185,10 +185,14 @@ struct MessageListView: View {
                 }
             }
             .onChange(of: channel.messages.count) {
-                // Auto-scroll on new messages if already near bottom
-                if !showScrollButton, let last = channel.messages.last {
-                    withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(last.id, anchor: .bottom)
+                if let last = channel.messages.last {
+                    // Always scroll if the new message is from us
+                    let isOwnMessage = last.from == appState.nick
+                    if isOwnMessage || !showScrollButton {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            proxy.scrollTo(last.id, anchor: .bottom)
+                        }
+                        showScrollButton = false
                     }
                 }
                 // Mark read if this is the active channel
