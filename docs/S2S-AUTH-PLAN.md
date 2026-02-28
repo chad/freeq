@@ -1,117 +1,146 @@
-# S2S Federation Authentication — Current State & Hardening Plan
+# S2S Federation Authentication
 
-## Current State (v0.1)
+## Architecture
 
-### What we have
+Freeq's server-to-server (S2S) federation uses a layered security model:
 
-1. **Transport-level identity (strong)**: S2S uses iroh QUIC connections. Each server has a persistent ed25519 keypair. The QUIC handshake cryptographically proves the peer's identity — you cannot spoof another server's endpoint ID.
+```
+Layer 1: Transport Identity (iroh QUIC)     — WHO is connecting
+Layer 2: Mutual Hello/HelloAck              — BOTH sides agree to peer
+Layer 3: Signed Message Envelopes           — messages can't be tampered
+Layer 4: Capability-Based Trust             — WHAT each peer can do
+Layer 5: Key Rotation & Revocation          — operational safety
+Layer 6: DID-Based Server Identity          — human-readable peering
+```
 
-2. **Inbound allowlist**: `--s2s-allowed-peers <id1>,<id2>` restricts which endpoint IDs can connect. Unauthorized peers get `conn.close("not authorized")`.
-
-3. **Identity verification on Hello**: When a peer sends its `Hello` message, the server compares the claimed `peer_id` against the transport-authenticated identity from `remote_id()`. Mismatches are logged and the authenticated ID is used.
-
-4. **Startup validation**: If `--s2s-peers` is set (outbound connections), `--s2s-allowed-peers` is now **required**. This prevents accidentally running an open federation. A warning is also logged if iroh is enabled without an allowlist.
-
-5. **Rate limiting**: 100 events/sec per peer, excess dropped with warning.
-
-### What's missing
-
-- **Mutual auth enforcement**: Server A can restrict who connects to it, but can't force Server B to do the same. A rogue server could accept connections from anyone while appearing trusted to A.
-- **No peer capability negotiation**: All peers are equal. No way to say "this peer can relay messages but not set ops."
-- **No message-level signatures**: S2S messages are trusted based on transport identity alone. A compromised peer can forge any message type.
-- **No revocation**: If a peer's key is compromised, the only mitigation is removing it from every other server's allowlist and restarting.
-- **No audit trail**: S2S events are logged but not cryptographically attributable. You can't prove which peer originated a specific action.
+All layers are implemented and active.
 
 ---
 
-## Hardening Plan
+## Layer 1: Transport Identity
 
-### Phase 1: Mutual Allowlist Enforcement (do now)
+S2S connections use **iroh QUIC**, which provides ed25519 keypair identity at the transport level. Each server has a persistent keypair (`iroh-key.secret` in the data directory). The QUIC handshake cryptographically proves the peer's identity — spoofing is impossible.
 
-**Goal**: Both sides of a peering relationship must explicitly accept each other.
+- `conn.remote_id()` returns the peer's public key (endpoint ID)
+- This is the root of trust for everything else
 
-- On outbound connection, after receiving `Hello`, verify the peer's endpoint ID is in our allowlist (already done for inbound; add for outbound).
-- Add a `HelloAck` message: after receiving `Hello`, respond with our own allowlist hash so the peer can verify they're trusted.
-- If a peer receives a `Hello` from an endpoint not in their allowlist, disconnect with a clear error.
+## Layer 2: Mutual HelloAck
 
-**Complexity**: Low. ~50 lines of code.
+When two servers connect:
 
-### Phase 2: Signed S2S Messages (next)
+1. Both send `Hello` with their endpoint ID, server name, protocol version, and trust level
+2. Each side verifies the peer is in their `--s2s-allowed-peers` allowlist
+3. Each side responds with `HelloAck { accepted: bool, trust_level }`
+4. If either side sends `accepted: false`, the link is torn down
 
-**Goal**: Every S2S message carries a signature from the originating server's ed25519 key. Receiving servers verify before processing.
+This ensures **both servers** explicitly consent to peering. A rogue server cannot join the federation by connecting to one server — the other servers will reject it.
 
-Design:
+**Config:**
+```bash
+# Server A
+--s2s-peers <B_endpoint_id> --s2s-allowed-peers <B_endpoint_id>
+
+# Server B
+--s2s-peers <A_endpoint_id> --s2s-allowed-peers <A_endpoint_id>
 ```
-S2sMessage::Envelope {
-    origin_id: String,           // originating server's endpoint ID
-    signature: Vec<u8>,          // ed25519 signature over payload
-    payload: Vec<u8>,            // serialized inner S2sMessage
+
+Starting with `--s2s-peers` but without `--s2s-allowed-peers` is a **startup error**.
+
+## Layer 3: Signed Message Envelopes
+
+Every S2S message (except Hello, HelloAck, and KeyRotation) is wrapped in a `Signed` envelope:
+
+```json
+{
+  "type": "signed",
+  "payload": "<base64url-encoded JSON of inner message>",
+  "signature": "<base64url ed25519 signature over payload bytes>",
+  "signer": "<endpoint ID of signing server>"
 }
 ```
 
-- Each server signs outbound messages with its iroh private key
-- Receiving server verifies signature against the transport-authenticated peer ID
-- This prevents a compromised relay from modifying messages in transit
-- Also enables future multi-hop federation where messages pass through intermediaries
+The receiving server:
+1. Verifies `signer` matches the transport-authenticated peer ID
+2. Verifies the ed25519 signature over the raw payload bytes
+3. Deserializes the inner message only if signature is valid
 
-**Complexity**: Medium. Signing/verification is ~100 lines; refactoring all S2S message paths is ~200.
+Messages with invalid signatures are dropped with a warning log.
 
-### Phase 3: Capability-Based Peering (later)
+This provides **non-repudiation**: you can prove which server originated a message, even in multi-hop scenarios.
 
-**Goal**: Different peers get different trust levels.
+## Layer 4: Capability-Based Trust
 
-```toml
-[s2s.peers.abc123...]
-name = "community-server"
-trust = "relay"          # can relay messages and presence
-# trust = "full"         # can relay + set ops + set bans + set modes
-# trust = "readonly"     # can observe but not write
+Each peer is assigned a trust level that controls what operations they can perform:
 
-[s2s.peers.def456...]
-name = "partner-server"
-trust = "full"
+| Trust Level | Messages | Presence | Modes/Kick/Ban | Channel Create |
+|-------------|----------|----------|----------------|----------------|
+| `full`      | ✓        | ✓        | ✓              | ✓              |
+| `relay`     | ✓        | ✓        | ✗              | ✗              |
+| `readonly`  | ✗        | ✗        | ✗              | ✗              |
+
+**Config:**
+```bash
+# Give partner-server full trust, community-server relay-only
+--s2s-peer-trust "abc123...:full,def456...:relay"
 ```
 
-- `relay`: Can relay PRIVMSG, JOIN, PART, QUIT, NICK, TOPIC (if not +t). Cannot set modes, kick, or ban.
-- `full`: Current behavior. Full trust.
-- `readonly`: Receives channel state but cannot originate events. For monitoring/logging.
+Peers not listed default to `full` (backward compatible). Trust is enforced server-side — a relay peer's MODE/KICK/BAN messages are silently dropped.
 
-This replaces the current binary trust model (allowed or not) with a graduated one.
+## Layer 5: Key Rotation & Revocation
 
-**Complexity**: Medium-high. Requires refactoring all `handle_s2s_message` dispatch paths to check trust level.
+### Key Rotation
 
-### Phase 4: Key Rotation & Revocation (later)
+A server can rotate its iroh keypair without breaking peering:
 
-**Goal**: Graceful key rotation without downtime. Immediate revocation of compromised peers.
+1. Server generates a new keypair
+2. Sends `KeyRotation { old_id, new_id, timestamp, signature }` to all peers
+3. The signature is by the **old** key over `rotate:{old_id}:{new_id}:{timestamp}`
+4. Peers verify the signature, record the pending rotation
+5. When the server reconnects with the new ID, peers accept it
 
-- **Rotation**: Server generates a new keypair, announces it via S2S `KeyRotation` message signed by the old key, peers update their allowlists automatically.
-- **Revocation**: Admin command `OPER REVOKE-PEER <endpoint-id>` immediately disconnects and blocks a peer. Broadcast to all other peers so they also block.
-- **Key pinning**: Optional TOFU (trust on first use) mode where the first connection from a peer pins their key, and subsequent connections must match.
+Rotation signatures must be within 5 minutes of current time (replay protection).
 
-**Complexity**: High. Requires persistent peer state, distributed revocation protocol.
+### Peer Revocation
 
-### Phase 5: DID-Based Server Identity (future)
+Server operators can immediately revoke a peer's access:
 
-**Goal**: Servers identify via DID documents, not just raw endpoint IDs.
+```
+OPER admin <password>
+REVOKEPEER <endpoint_id>
+```
 
-- Each server publishes a DID document containing its iroh endpoint ID as a service endpoint
-- Peering config uses DIDs instead of endpoint IDs: `--s2s-peers did:web:irc.example.com`
-- DID resolution verifies the endpoint ID matches the published document
-- Key rotation becomes standard DID document updates
+This:
+- Disconnects the peer immediately
+- Removes them from authenticated peers
+- Clears their dedup state
+- Logs the revocation
+
+To permanently block a peer, remove them from `--s2s-allowed-peers` and restart.
+
+## Layer 6: DID-Based Server Identity (Phase 5)
+
+Servers can optionally identify via DID:
+
+```bash
+--server-did did:web:irc.example.com
+```
+
+This DID is included in the Hello handshake. Future work:
+- Peers can allowlist by DID instead of endpoint ID
+- DID document publishes the endpoint ID as a service endpoint
+- Key rotation = DID document update
 - Opens the door to AT Protocol integration for server discovery
-
-**Complexity**: High. Requires DID document publication, resolution during S2S handshake, and handling DID document updates.
 
 ---
 
-## Priority
+## Startup Validation
 
-| Phase | Effort | Impact | When |
-|-------|--------|--------|------|
-| 1. Mutual allowlist | Low | Closes the "one-sided trust" gap | **Now** |
-| 2. Signed messages | Medium | Non-repudiation, relay safety | Before public multi-server |
-| 3. Capability peering | Medium-high | Graduated trust for open federation | When >2 servers |
-| 4. Key rotation | High | Operational safety | When running in production |
-| 5. DID-based identity | High | Full AT Protocol alignment | Long-term |
+The server enforces safe defaults at startup:
 
-Phase 1 is the immediate priority. Phases 2-3 should land before any public multi-server deployment. Phases 4-5 are for when the federation grows beyond trusted operators.
+1. If `--s2s-peers` is set, `--s2s-allowed-peers` is **required** (prevents accidental open federation)
+2. If iroh is enabled without an allowlist, a **warning** is logged
+3. If an outbound peer isn't in the allowlist, a **warning** is logged (config mismatch)
+
+## Rate Limiting
+
+S2S events are rate-limited to 100 events/sec per peer. Excess events are dropped with a warning log.

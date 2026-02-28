@@ -1166,6 +1166,55 @@ where
                     tracing::warn!(nick = %nick, session = %session_id, "OPER failed: bad password");
                 }
             }
+            // Phase 4: Revoke a peer's S2S access (oper-only).
+            // Usage: REVOKEPEER <endpoint_id>
+            "REVOKEPEER" => {
+                if !conn.registered { continue; }
+                let nick = conn.nick_or_star().to_string();
+                if !conn.is_oper {
+                    let reply = Message::from_server(
+                        &server_name, "481",
+                        vec![&nick, "Permission Denied - You're not an IRC operator"],
+                    );
+                    send(&state, &session_id, format!("{reply}\r\n"));
+                    continue;
+                }
+                if msg.params.is_empty() {
+                    let reply = Message::from_server(
+                        &server_name, irc::ERR_NEEDMOREPARAMS,
+                        vec![&nick, "REVOKEPEER", "Not enough parameters"],
+                    );
+                    send(&state, &session_id, format!("{reply}\r\n"));
+                    continue;
+                }
+                let target_peer = &msg.params[0];
+                let manager = state.s2s_manager.lock().clone();
+                if let Some(manager) = manager {
+                    // Disconnect the peer
+                    let removed = manager.peers.lock().await.remove(target_peer);
+                    if removed.is_some() {
+                        manager.peer_names.lock().await.remove(target_peer);
+                        manager.authenticated_peers.lock().await.remove(target_peer);
+                        manager.dedup.remove_peer(target_peer).await;
+                        let notice = format!(":{} NOTICE {} :S2S peer {} revoked and disconnected\r\n",
+                            server_name, nick, target_peer);
+                        send(&state, &session_id, notice);
+                        tracing::warn!(
+                            oper = %nick,
+                            peer = %target_peer,
+                            "S2S peer revoked via REVOKEPEER"
+                        );
+                    } else {
+                        let notice = format!(":{} NOTICE {} :S2S peer {} not found in active connections\r\n",
+                            server_name, nick, target_peer);
+                        send(&state, &session_id, notice);
+                    }
+                } else {
+                    let notice = format!(":{} NOTICE {} :S2S not active\r\n",
+                        server_name, nick);
+                    send(&state, &session_id, notice);
+                }
+            }
             "QUIT" => {
                 break;
             }

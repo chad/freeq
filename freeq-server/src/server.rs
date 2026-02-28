@@ -1562,7 +1562,12 @@ async fn process_s2s_message(
         } => (event_id.clone(), origin.clone()),
         S2sMessage::CrdtSync { origin, .. } => (String::new(), origin.clone()),
         S2sMessage::PeerDisconnected { .. } => (String::new(), String::new()),
-        S2sMessage::Hello { .. } | S2sMessage::SyncRequest | S2sMessage::SyncResponse { .. } => {
+        S2sMessage::Hello { .. }
+        | S2sMessage::HelloAck { .. }
+        | S2sMessage::Signed { .. }
+        | S2sMessage::KeyRotation { .. }
+        | S2sMessage::SyncRequest
+        | S2sMessage::SyncResponse { .. } => {
             (String::new(), String::new())
         }
     };
@@ -1578,13 +1583,50 @@ async fn process_s2s_message(
         return;
     }
 
+    // Phase 3: Trust-level enforcement
+    let peer_trust = manager.get_trust(authenticated_peer_id).await;
+    match (&msg, peer_trust) {
+        // Readonly peers cannot originate any events
+        (S2sMessage::Privmsg { .. }
+        | S2sMessage::Join { .. }
+        | S2sMessage::Part { .. }
+        | S2sMessage::Quit { .. }
+        | S2sMessage::NickChange { .. }
+        | S2sMessage::Topic { .. }
+        | S2sMessage::Mode { .. }
+        | S2sMessage::Kick { .. }
+        | S2sMessage::Ban { .. }
+        | S2sMessage::ChannelCreated { .. }, crate::s2s::TrustLevel::Readonly) => {
+            tracing::warn!(
+                peer = %authenticated_peer_id,
+                trust = "readonly",
+                "S2S: dropping event from readonly peer"
+            );
+            return;
+        }
+        // Relay peers cannot perform admin operations
+        (S2sMessage::Mode { .. }
+        | S2sMessage::Kick { .. }
+        | S2sMessage::Ban { .. }
+        | S2sMessage::ChannelCreated { .. }, crate::s2s::TrustLevel::Relay) => {
+            tracing::warn!(
+                peer = %authenticated_peer_id,
+                trust = "relay",
+                "S2S: dropping admin event from relay-only peer"
+            );
+            return;
+        }
+        _ => {} // Full trust or handshake messages — proceed
+    }
+
     match msg {
         S2sMessage::Hello {
             peer_id,
             server_name,
+            protocol_version,
+            trust_level,
         } => {
             // Verify the claimed peer_id matches the transport-authenticated identity.
-            // The iroh QUIC connection provides cryptographic identity via remote_id().
             if peer_id != authenticated_peer_id {
                 tracing::warn!(
                     authenticated = %authenticated_peer_id,
@@ -1593,17 +1635,94 @@ async fn process_s2s_message(
                     "S2S Hello: claimed peer_id doesn't match transport identity — using authenticated ID"
                 );
             }
+
+            let peer_trust_str = trust_level.as_deref().unwrap_or("full");
             tracing::info!(
                 peer = %authenticated_peer_id,
                 server_name = %server_name,
+                protocol_version,
+                peer_trust = %peer_trust_str,
                 "S2S Hello received — binding transport identity to server name"
             );
-            // Always key by the authenticated peer ID, not the claimed one.
+
             manager
                 .peer_names
                 .lock()
                 .await
                 .insert(authenticated_peer_id.to_string(), server_name);
+
+            // Phase 1: Send HelloAck — mutual auth confirmation.
+            let our_trust = manager.get_trust(authenticated_peer_id).await;
+            let allowed = &state.config.s2s_allowed_peers;
+            let accepted = allowed.is_empty() || allowed.iter().any(|a| a == authenticated_peer_id);
+            let ack = crate::s2s::S2sMessage::HelloAck {
+                peer_id: manager.server_id.clone(),
+                accepted,
+                trust_level: Some(our_trust.to_string()),
+            };
+            if let Some(entry) = manager.peers.lock().await.get(authenticated_peer_id) {
+                let _ = entry.tx.send(ack).await;
+            }
+
+            // Phase 3: Record the trust level the peer offers us (informational)
+            if let Some(ref lvl) = trust_level {
+                let level = crate::s2s::TrustLevel::parse_level(lvl);
+                manager.set_trust(authenticated_peer_id, level).await;
+            }
+
+            // Phase 1: Mark peer as authenticated
+            manager.authenticated_peers.lock().await.insert(authenticated_peer_id.to_string());
+        }
+
+        S2sMessage::HelloAck {
+            peer_id,
+            accepted,
+            trust_level,
+        } => {
+            if !accepted {
+                tracing::warn!(
+                    peer = %authenticated_peer_id,
+                    "S2S HelloAck: peer rejected us — disconnecting"
+                );
+                // Remove peer so the link drops
+                manager.peers.lock().await.remove(authenticated_peer_id);
+                return;
+            }
+            tracing::info!(
+                peer = %authenticated_peer_id,
+                claimed = %peer_id,
+                trust = ?trust_level,
+                "S2S HelloAck: mutual authentication confirmed"
+            );
+            manager.authenticated_peers.lock().await.insert(authenticated_peer_id.to_string());
+        }
+
+        S2sMessage::KeyRotation {
+            old_id,
+            new_id,
+            timestamp,
+            signature,
+        } => {
+            if manager.verify_rotation(&old_id, &new_id, timestamp, &signature, authenticated_peer_id) {
+                tracing::info!(
+                    old = %old_id,
+                    new = %new_id,
+                    "S2S key rotation verified — recording pending rotation"
+                );
+                manager.pending_rotations.lock().await.insert(old_id, new_id);
+            } else {
+                tracing::warn!(
+                    old = %old_id,
+                    new = %new_id,
+                    "S2S key rotation verification FAILED — ignoring"
+                );
+            }
+        }
+
+        S2sMessage::Signed { .. } => {
+            // Should have been unwrapped in the read loop — if we get here,
+            // it means the signature was invalid and the message was passed through.
+            tracing::warn!(peer = %authenticated_peer_id, "Received raw Signed envelope (should have been unwrapped)");
         }
 
         S2sMessage::Privmsg {

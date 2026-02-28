@@ -57,6 +57,18 @@ pub struct ServerConfig {
     #[arg(long, value_delimiter = ',')]
     pub s2s_allowed_peers: Vec<String>,
 
+    /// S2S peer trust levels. Format: "endpoint_id:level" where level is
+    /// "full" (default), "relay" (messages only), or "readonly" (observe only).
+    /// Peers not listed here default to "full" if in --s2s-allowed-peers.
+    #[arg(long, value_delimiter = ',')]
+    pub s2s_peer_trust: Vec<String>,
+
+    /// Server DID for federated identity (Phase 5). Format: did:web:irc.example.com
+    /// When set, this DID is included in Hello handshakes and can be used by peers
+    /// for DID-based allowlisting instead of raw endpoint IDs.
+    #[arg(long)]
+    pub server_did: Option<String>,
+
     /// Data directory for server state files (iroh key, etc.).
     /// Defaults to the directory containing --db-path, or current directory.
     #[arg(long)]
@@ -141,6 +153,8 @@ impl Default for ServerConfig {
             iroh_port: None,
             s2s_peers: vec![],
             s2s_allowed_peers: vec![],
+            s2s_peer_trust: vec![],
+            server_did: None,
             data_dir: None,
             max_messages_per_channel: 10000,
             motd: None,

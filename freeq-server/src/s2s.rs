@@ -35,6 +35,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::Result;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
@@ -46,6 +47,64 @@ pub const S2S_ALPN: &[u8] = b"freeq/s2s/1";
 
 /// Maximum number of event IDs to remember per peer for dedup.
 const DEDUP_CAPACITY: usize = 10_000;
+
+// ── Phase 3: Capability-based trust levels ──────────────────────
+
+/// Trust level for an S2S peer. Controls what operations they can perform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TrustLevel {
+    /// Full trust: can relay messages, set ops, kick, ban, set modes, change topics.
+    Full,
+    /// Relay trust: can relay messages (PRIVMSG, JOIN, PART, QUIT, NICK, TOPIC on non-+t).
+    /// Cannot set modes, kick, or ban.
+    Relay,
+    /// Read-only: receives channel state but cannot originate events.
+    /// For monitoring, logging, or archive servers.
+    Readonly,
+}
+
+impl TrustLevel {
+    /// Parse from config string (e.g. "full", "relay", "readonly").
+    pub fn parse_level(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "relay" => Self::Relay,
+            "readonly" | "read-only" | "ro" => Self::Readonly,
+            _ => Self::Full,
+        }
+    }
+
+    /// Can this peer relay chat messages (PRIVMSG, JOIN, PART, QUIT, NICK)?
+    pub fn can_relay(&self) -> bool {
+        matches!(self, Self::Full | Self::Relay)
+    }
+
+    /// Can this peer perform authority operations (MODE, KICK, BAN, channel creation)?
+    pub fn can_admin(&self) -> bool {
+        matches!(self, Self::Full)
+    }
+}
+
+impl std::fmt::Display for TrustLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Full => write!(f, "full"),
+            Self::Relay => write!(f, "relay"),
+            Self::Readonly => write!(f, "readonly"),
+        }
+    }
+}
+
+/// Parse --s2s-peer-trust config into a map of endpoint_id → TrustLevel.
+pub fn parse_trust_config(entries: &[String]) -> HashMap<String, TrustLevel> {
+    let mut map = HashMap::new();
+    for entry in entries {
+        if let Some((id, level)) = entry.split_once(':') {
+            map.insert(id.to_string(), TrustLevel::parse_level(level));
+        }
+    }
+    map
+}
 
 /// Messages exchanged between servers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +120,51 @@ pub enum S2sMessage {
         peer_id: String,
         /// Human-readable server name (untrusted display metadata).
         server_name: String,
+        /// Protocol version for capability negotiation.
+        #[serde(default)]
+        protocol_version: u32,
+        /// Trust level this server offers to the peer (informational).
+        #[serde(default)]
+        trust_level: Option<String>,
+    },
+
+    /// Phase 1: Mutual auth acknowledgment — sent after receiving Hello.
+    /// Confirms the peer is in our allowlist and we accept them.
+    #[serde(rename = "hello_ack")]
+    HelloAck {
+        /// Our endpoint ID (for verification).
+        peer_id: String,
+        /// Whether we accept this peer (in our allowlist).
+        accepted: bool,
+        /// Our trust level for this peer.
+        #[serde(default)]
+        trust_level: Option<String>,
+    },
+
+    /// Phase 2: Signed message envelope. All messages after Hello/HelloAck
+    /// are wrapped in this envelope for non-repudiation.
+    #[serde(rename = "signed")]
+    Signed {
+        /// Base64url-encoded serialized inner S2sMessage.
+        payload: String,
+        /// Base64url-encoded ed25519 signature over the payload bytes.
+        signature: String,
+        /// Signing server's endpoint ID (for key lookup).
+        signer: String,
+    },
+
+    /// Phase 4: Key rotation announcement. Signed by the OLD key to prove
+    /// continuity. Peers update their allowlists to accept the new ID.
+    #[serde(rename = "key_rotation")]
+    KeyRotation {
+        /// The old endpoint ID (must match current transport identity).
+        old_id: String,
+        /// The new endpoint ID that will replace it.
+        new_id: String,
+        /// Unix timestamp of the rotation.
+        timestamp: u64,
+        /// Signature by the old key over "rotate:{old_id}:{new_id}:{timestamp}".
+        signature: String,
     },
 
     /// A PRIVMSG or NOTICE relayed between servers.
@@ -408,6 +512,16 @@ pub struct S2sManager {
     /// Monotonic counter for connection generations — used to ensure cleanup
     /// only removes its own peer entry, not a replacement's.
     pub conn_gen: Arc<AtomicU64>,
+    /// Phase 2: Signing key for message envelopes.
+    pub signing_key: Arc<iroh::SecretKey>,
+    /// Phase 3: Trust levels per peer (from --s2s-peer-trust config).
+    pub trust_config: HashMap<String, TrustLevel>,
+    /// Phase 3: Runtime trust levels (includes Hello-negotiated levels).
+    pub peer_trust: Arc<tokio::sync::Mutex<HashMap<String, TrustLevel>>>,
+    /// Phase 4: Pending key rotations announced by peers (old_id → new_id).
+    pub pending_rotations: Arc<tokio::sync::Mutex<HashMap<String, String>>>,
+    /// Phase 1: Peers that have completed mutual HelloAck handshake.
+    pub authenticated_peers: Arc<tokio::sync::Mutex<HashSet<String>>>,
 }
 
 impl S2sManager {
@@ -447,6 +561,142 @@ impl S2sManager {
             .cloned()
             .unwrap_or_else(|| peer_id[..8.min(peer_id.len())].to_string())
     }
+
+    // ── Phase 2: Message signing ────────────────────────────────
+
+    /// Sign an S2S message and wrap it in a Signed envelope.
+    pub fn sign_message(&self, msg: &S2sMessage) -> S2sMessage {
+        let payload_json = serde_json::to_string(msg).unwrap_or_default();
+        let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(payload_json.as_bytes());
+        let sig = self.signing_key.sign(payload_json.as_bytes());
+        let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(sig.to_bytes());
+        S2sMessage::Signed {
+            payload: payload_b64,
+            signature: sig_b64,
+            signer: self.server_id.clone(),
+        }
+    }
+
+    /// Verify and unwrap a Signed envelope. Returns the inner message if valid.
+    pub fn verify_signed(
+        &self,
+        payload_b64: &str,
+        signature_b64: &str,
+        signer_id: &str,
+        authenticated_peer_id: &str,
+    ) -> Option<S2sMessage> {
+        // The signer must match the transport-authenticated peer
+        if signer_id != authenticated_peer_id {
+            tracing::warn!(
+                signer = %signer_id,
+                transport = %authenticated_peer_id,
+                "Signed message: signer doesn't match transport identity"
+            );
+            return None;
+        }
+
+        let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(payload_b64).ok()?;
+        let sig_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(signature_b64).ok()?;
+
+        if sig_bytes.len() != 64 {
+            tracing::warn!("Signed message: invalid signature length");
+            return None;
+        }
+
+        // Parse the peer's public key from their endpoint ID
+        let pub_key: iroh::PublicKey = signer_id.parse().ok()?;
+        let sig = iroh::Signature::from_bytes(sig_bytes[..64].try_into().ok()?);
+
+        if pub_key.verify(&payload_bytes, &sig).is_err() {
+            tracing::warn!(
+                signer = %signer_id,
+                "Signed message: signature verification FAILED"
+            );
+            return None;
+        }
+
+        serde_json::from_slice(&payload_bytes).ok()
+    }
+
+    // ── Phase 3: Trust level management ─────────────────────────
+
+    /// Get the trust level for a peer. Checks runtime state first,
+    /// then config, defaults to Full for allowed peers.
+    pub async fn get_trust(&self, peer_id: &str) -> TrustLevel {
+        if let Some(level) = self.peer_trust.lock().await.get(peer_id) {
+            return *level;
+        }
+        self.trust_config.get(peer_id).copied().unwrap_or(TrustLevel::Full)
+    }
+
+    /// Set the runtime trust level for a peer (from HelloAck negotiation).
+    pub async fn set_trust(&self, peer_id: &str, level: TrustLevel) {
+        self.peer_trust.lock().await.insert(peer_id.to_string(), level);
+    }
+
+    // ── Phase 4: Key rotation ───────────────────────────────────
+
+    /// Create a key rotation announcement signed by our current key.
+    pub fn announce_rotation(&self, new_id: &str) -> S2sMessage {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let msg = format!("rotate:{}:{}:{}", self.server_id, new_id, timestamp);
+        let sig = self.signing_key.sign(msg.as_bytes());
+        let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(sig.to_bytes());
+        S2sMessage::KeyRotation {
+            old_id: self.server_id.clone(),
+            new_id: new_id.to_string(),
+            timestamp,
+            signature: sig_b64,
+        }
+    }
+
+    /// Verify a key rotation announcement from a peer.
+    pub fn verify_rotation(
+        &self,
+        old_id: &str,
+        new_id: &str,
+        timestamp: u64,
+        signature_b64: &str,
+        authenticated_peer_id: &str,
+    ) -> bool {
+        // Old ID must match transport identity
+        if old_id != authenticated_peer_id {
+            tracing::warn!("Key rotation: old_id doesn't match transport");
+            return false;
+        }
+        // Timestamp must be recent (within 5 minutes)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        if now.abs_diff(timestamp) > 300 {
+            tracing::warn!("Key rotation: timestamp too old/future");
+            return false;
+        }
+
+        let msg = format!("rotate:{old_id}:{new_id}:{timestamp}");
+        let sig_bytes = match base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(signature_b64) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        if sig_bytes.len() != 64 { return false; }
+
+        let pub_key: iroh::PublicKey = match old_id.parse() {
+            Ok(k) => k,
+            Err(_) => return false,
+        };
+        let sig = iroh::Signature::from_bytes(sig_bytes[..64].try_into().unwrap());
+        pub_key.verify(msg.as_bytes(), &sig).is_ok()
+    }
 }
 
 /// An S2S message annotated with the transport-authenticated peer identity.
@@ -470,6 +720,8 @@ pub async fn start(
 ) -> Result<(Arc<S2sManager>, mpsc::Receiver<AuthenticatedS2sEvent>)> {
     let (event_tx, event_rx) = mpsc::channel(1024);
     let server_id = endpoint.id().to_string();
+    let signing_key = endpoint.secret_key().clone();
+    let trust_config = parse_trust_config(&state.config.s2s_peer_trust);
 
     let (broadcast_tx, mut broadcast_rx) = mpsc::channel::<S2sMessage>(1024);
 
@@ -491,6 +743,11 @@ pub async fn start(
         dedup: Arc::new(DedupSet::new()),
         broadcast_tx,
         conn_gen: Arc::new(AtomicU64::new(0)),
+        signing_key: Arc::new(signing_key),
+        trust_config,
+        peer_trust: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        pending_rotations: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+        authenticated_peers: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
     });
 
     // Spawn the ordered broadcast worker.  All outbound S2S messages flow
@@ -619,6 +876,7 @@ async fn handle_s2s_connection_from_manager(
     let server_name = manager.server_name.clone();
     let conn_gen = Arc::clone(&manager.conn_gen);
     let dedup = Arc::clone(&manager.dedup);
+    let mgr = Arc::clone(manager);
     handle_s2s_connection(
         conn,
         peers,
@@ -629,6 +887,7 @@ async fn handle_s2s_connection_from_manager(
         conn_gen,
         dedup,
         incoming,
+        mgr,
     )
     .await;
 }
@@ -644,6 +903,7 @@ async fn handle_s2s_connection(
     conn_gen: Arc<AtomicU64>,
     dedup: Arc<DedupSet>,
     incoming: bool,
+    manager: Arc<S2sManager>,
 ) {
     let peer_id = conn.remote_id().to_string();
 
@@ -731,6 +991,7 @@ async fn handle_s2s_connection(
     let read_peer = peer_id.clone();
     let authenticated_peer_id = peer_id.clone(); // from conn.remote_id() — cryptographic
     let read_event_tx = event_tx.clone();
+    let read_manager = Arc::clone(&manager);
     let read_handle = tokio::spawn(async move {
         let reader = BufReader::new(irc_side);
         let mut lines = reader.lines();
@@ -741,6 +1002,21 @@ async fn handle_s2s_connection(
                     Ok(msg) => {
                         msg_count += 1;
                         tracing::debug!(peer = %read_peer, msg_count, "S2S received: {}", line.chars().take(120).collect::<String>());
+
+                        // Phase 2: Unwrap signed envelopes
+                        let msg = match msg {
+                            S2sMessage::Signed { ref payload, ref signature, ref signer } => {
+                                match read_manager.verify_signed(payload, signature, signer, &authenticated_peer_id) {
+                                    Some(inner) => inner,
+                                    None => {
+                                        tracing::warn!(peer = %read_peer, "S2S: dropped message with invalid signature");
+                                        continue;
+                                    }
+                                }
+                            }
+                            other => other,
+                        };
+
                         let event = AuthenticatedS2sEvent {
                             authenticated_peer_id: authenticated_peer_id.clone(),
                             msg,
@@ -767,12 +1043,22 @@ async fn handle_s2s_connection(
     });
 
     // Write JSON lines to the peer
+    // Phase 2: Sign all non-handshake messages before sending.
     let write_peer = peer_id.clone();
+    let write_manager = Arc::clone(&manager);
     let write_handle = tokio::spawn(async move {
         let mut send = send;
         let mut msg_count: u64 = 0;
         while let Some(msg) = write_rx.recv().await {
-            match serde_json::to_string(&msg) {
+            // Sign non-handshake messages for non-repudiation
+            let msg_to_send = match &msg {
+                S2sMessage::Hello { .. }
+                | S2sMessage::HelloAck { .. }
+                | S2sMessage::Signed { .. }
+                | S2sMessage::KeyRotation { .. } => msg,
+                _ => write_manager.sign_message(&msg),
+            };
+            match serde_json::to_string(&msg_to_send) {
                 Ok(json) => {
                     msg_count += 1;
                     let line = format!("{json}\n");
@@ -797,10 +1083,14 @@ async fn handle_s2s_connection(
 
     // Send Hello handshake — binds transport identity to logical name.
     // The receiver verifies peer_id matches connection's remote_id().
+    // Phase 3: Include trust level offered to this peer.
     {
+        let trust = manager.get_trust(&peer_id).await;
         let hello = S2sMessage::Hello {
             peer_id: server_id.clone(),
             server_name: server_name.clone(),
+            protocol_version: 2, // v2 = signed envelopes + HelloAck
+            trust_level: Some(trust.to_string()),
         };
         if let Some(entry) = peers.lock().await.get(&peer_id) {
             let _ = entry.tx.send(hello).await;
