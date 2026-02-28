@@ -33,3 +33,4 @@ freeq-ios/build/
 freeq-ios/FreeqSDK.xcframework/
 freeq-ios/Generated/
 freeq-ios/freeq.xcodeproj/
+.DS_Store
