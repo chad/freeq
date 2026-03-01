@@ -254,8 +254,7 @@ impl ClientHandle {
 
     /// Request DM conversation list (CHATHISTORY TARGETS).
     pub async fn chathistory_targets(&self, limit: usize) -> Result<()> {
-        self.raw(&format!("CHATHISTORY TARGETS * * {limit}"))
-            .await
+        self.raw(&format!("CHATHISTORY TARGETS * * {limit}")).await
     }
 
     /// Send a reaction emoji to a specific message.
@@ -1123,13 +1122,16 @@ where
                         }
                         "CHATHISTORY" => {
                             // CHATHISTORY TARGETS <nick> — DM conversation list
+                            #[allow(clippy::collapsible_if)]
                             if msg.params.first().map(|s| s.as_str()) == Some("TARGETS") {
                                 if let Some(nick) = msg.params.get(1) {
                                     let timestamp = msg.tags.get("time").cloned();
-                                    let _ = event_tx.send(Event::ChatHistoryTarget {
-                                        nick: nick.clone(),
-                                        timestamp,
-                                    }).await;
+                                    let _ = event_tx
+                                        .send(Event::ChatHistoryTarget {
+                                            nick: nick.clone(),
+                                            timestamp,
+                                        })
+                                        .await;
                                 }
                             }
                         }
