@@ -56,6 +56,7 @@ interface FreeqEvent {
     UserQuit(string nick, string reason);
     BatchStart(string id, string batch_type, string target);
     BatchEnd(string id);
+    ChatHistoryTarget(string nick, string? timestamp);
     Notice(string text);
     Disconnected(string reason);
 };
