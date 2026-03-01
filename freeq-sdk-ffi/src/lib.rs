@@ -117,6 +117,10 @@ pub enum FreeqEvent {
     BatchEnd {
         id: String,
     },
+    ChatHistoryTarget {
+        nick: String,
+        timestamp: Option<String>,
+    },
     Notice {
         text: String,
     },
@@ -493,6 +497,10 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
             target: target.clone(),
         },
         Event::BatchEnd { id } => FreeqEvent::BatchEnd { id: id.clone() },
+        Event::ChatHistoryTarget { nick, timestamp } => FreeqEvent::ChatHistoryTarget {
+            nick: nick.clone(),
+            timestamp: timestamp.clone(),
+        },
         Event::Disconnected { reason } => FreeqEvent::Disconnected {
             reason: reason.clone(),
         },

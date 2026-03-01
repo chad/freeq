@@ -587,6 +587,16 @@ pub(super) fn handle_privmsg(
                 }
             }
         }
+
+        // Persist DM if both sender and recipient have DIDs
+        let sender_did = conn.authenticated_did.as_deref();
+        let recipient_did = state.nick_owners.lock().get(target).cloned();
+        if let (Some(s_did), Some(r_did)) = (sender_did, recipient_did.as_deref()) {
+            let dm_key = crate::db::canonical_dm_key(s_did, r_did);
+            state.with_db(|db| {
+                db.insert_message(&dm_key, &hostmask, text, timestamp, &pm_tags, Some(&pm_msgid))
+            });
+        }
     }
 }
 
@@ -621,36 +631,101 @@ pub(super) fn handle_chathistory(
     }
 
     let subcmd = msg.params[0].to_uppercase();
-    let target = normalize_channel(&msg.params[1]);
 
-    // Verify user is a member of the channel
-    {
-        let channels = state.channels.lock();
-        if let Some(ch) = channels.get(&target) {
-            if !ch.members.contains(session_id) {
+    // Handle TARGETS subcommand separately — different parameter format.
+    // CHATHISTORY TARGETS <from_ts> <to_ts> <limit>
+    if subcmd == "TARGETS" {
+        handle_chathistory_targets(conn, msg, state, server_name, session_id, send);
+        return;
+    }
+
+    let raw_target = &msg.params[1];
+    let is_channel = raw_target.starts_with('#') || raw_target.starts_with('&');
+
+    // Resolve target and authorize access.
+    // For channels: membership check. For DMs: auth check + canonical key.
+    // db_key = key used for DB queries, target = display name for IRC messages.
+    let (db_key, target) = if is_channel {
+        let target = normalize_channel(raw_target);
+        {
+            let channels = state.channels.lock();
+            if let Some(ch) = channels.get(&target) {
+                if !ch.members.contains(session_id) {
+                    let reply = Message::from_server(
+                        server_name,
+                        "FAIL",
+                        vec![
+                            "CHATHISTORY",
+                            "INVALID_TARGET",
+                            &target,
+                            "You are not in that channel",
+                        ],
+                    );
+                    send(state, session_id, format!("{reply}\r\n"));
+                    return;
+                }
+            } else {
+                let reply = Message::from_server(
+                    server_name,
+                    "FAIL",
+                    vec!["CHATHISTORY", "INVALID_TARGET", &target, "No such channel"],
+                );
+                send(state, session_id, format!("{reply}\r\n"));
+                return;
+            }
+        }
+        (target.clone(), target)
+    } else {
+        // DM target — require DID authentication
+        let requester_did = match conn.authenticated_did.as_deref() {
+            Some(did) => did.to_string(),
+            None => {
                 let reply = Message::from_server(
                     server_name,
                     "FAIL",
                     vec![
                         "CHATHISTORY",
-                        "INVALID_TARGET",
-                        &target,
-                        "You are not in that channel",
+                        "ACCOUNT_REQUIRED",
+                        raw_target,
+                        "You must be authenticated to access DM history",
                     ],
                 );
                 send(state, session_id, format!("{reply}\r\n"));
                 return;
             }
+        };
+
+        // Resolve target to DID — accept DID directly or resolve nick
+        let target_did = if raw_target.starts_with("did:") {
+            raw_target.to_string()
         } else {
-            let reply = Message::from_server(
-                server_name,
-                "FAIL",
-                vec!["CHATHISTORY", "INVALID_TARGET", &target, "No such channel"],
-            );
-            send(state, session_id, format!("{reply}\r\n"));
-            return;
-        }
-    }
+            match state
+                .nick_owners
+                .lock()
+                .get(&raw_target.to_lowercase())
+                .cloned()
+            {
+                Some(did) => did,
+                None => {
+                    let reply = Message::from_server(
+                        server_name,
+                        "FAIL",
+                        vec![
+                            "CHATHISTORY",
+                            "INVALID_TARGET",
+                            raw_target,
+                            "Unknown target",
+                        ],
+                    );
+                    send(state, session_id, format!("{reply}\r\n"));
+                    return;
+                }
+            }
+        };
+
+        let dm_key = crate::db::canonical_dm_key(&requester_did, &target_did);
+        (dm_key, raw_target.to_string())
+    };
 
     let has_tags = state.cap_message_tags.lock().contains(session_id);
     let has_time = state.cap_server_time.lock().contains(session_id);
@@ -665,7 +740,7 @@ pub(super) fn handle_chathistory(
                 let ts = parse_chathistory_ts(&msg.params[2]).unwrap_or(u64::MAX);
                 let limit = msg.params[3].parse::<usize>().unwrap_or(50).min(500);
                 state
-                    .with_db(|db| db.get_messages(&target, limit, Some(ts)))
+                    .with_db(|db| db.get_messages(&db_key, limit, Some(ts)))
                     .unwrap_or_default()
             }
         }
@@ -676,7 +751,7 @@ pub(super) fn handle_chathistory(
                 let ts = parse_chathistory_ts(&msg.params[2]).unwrap_or(0);
                 let limit = msg.params[3].parse::<usize>().unwrap_or(50).min(500);
                 state
-                    .with_db(|db| db.get_messages_after(&target, ts, limit))
+                    .with_db(|db| db.get_messages_after(&db_key, ts, limit))
                     .unwrap_or_default()
             }
         }
@@ -687,12 +762,12 @@ pub(super) fn handle_chathistory(
                 let limit = msg.params[3].parse::<usize>().unwrap_or(50).min(500);
                 if msg.params[2] == "*" {
                     state
-                        .with_db(|db| db.get_messages(&target, limit, None))
+                        .with_db(|db| db.get_messages(&db_key, limit, None))
                         .unwrap_or_default()
                 } else {
                     let ts = parse_chathistory_ts(&msg.params[2]).unwrap_or(0);
                     state
-                        .with_db(|db| db.get_messages_after(&target, ts, limit))
+                        .with_db(|db| db.get_messages_after(&db_key, ts, limit))
                         .unwrap_or_default()
                 }
             }
@@ -705,7 +780,7 @@ pub(super) fn handle_chathistory(
                 let end = parse_chathistory_ts(&msg.params[3]).unwrap_or(u64::MAX);
                 let limit = msg.params[4].parse::<usize>().unwrap_or(50).min(500);
                 state
-                    .with_db(|db| db.get_messages_between(&target, start, end, limit))
+                    .with_db(|db| db.get_messages_between(&db_key, start, end, limit))
                     .unwrap_or_default()
             }
         }
@@ -763,6 +838,135 @@ pub(super) fn handle_chathistory(
                 session_id,
                 format!(":{} PRIVMSG {} :{}\r\n", row.sender, target, row.text),
             );
+        }
+    }
+
+    if has_batch {
+        send(
+            state,
+            session_id,
+            format!(":{server_name} BATCH -{batch_id}\r\n"),
+        );
+    }
+}
+
+/// Handle CHATHISTORY TARGETS — list DM conversations for the authenticated user.
+/// CHATHISTORY TARGETS <from_ts> <to_ts> <limit>
+fn handle_chathistory_targets(
+    conn: &Connection,
+    msg: &irc::Message,
+    state: &Arc<SharedState>,
+    server_name: &str,
+    session_id: &str,
+    send: &dyn Fn(&Arc<SharedState>, &str, String),
+) {
+    // Require DID authentication
+    let requester_did = match conn.authenticated_did.as_deref() {
+        Some(did) => did,
+        None => {
+            let reply = Message::from_server(
+                server_name,
+                "FAIL",
+                vec![
+                    "CHATHISTORY",
+                    "ACCOUNT_REQUIRED",
+                    "*",
+                    "You must be authenticated to list DM targets",
+                ],
+            );
+            send(state, session_id, format!("{reply}\r\n"));
+            return;
+        }
+    };
+
+    let from_ts = if msg.params.len() > 1 {
+        parse_chathistory_ts(&msg.params[1]).unwrap_or(0)
+    } else {
+        0
+    };
+    let to_ts = if msg.params.len() > 2 {
+        parse_chathistory_ts(&msg.params[2]).unwrap_or(u64::MAX)
+    } else {
+        u64::MAX
+    };
+    let limit = if msg.params.len() > 3 {
+        msg.params[3].parse::<usize>().unwrap_or(50).min(500)
+    } else {
+        50
+    };
+
+    let has_batch = state.cap_batch.lock().contains(session_id);
+    let has_time = state.cap_server_time.lock().contains(session_id);
+
+    let dm_conversations = state
+        .with_db(|db| db.dm_conversations(requester_did, limit))
+        .unwrap_or_default();
+
+    let batch_id = format!("cht{}", crate::msgid::generate());
+    if has_batch {
+        send(
+            state,
+            session_id,
+            format!(":{server_name} BATCH +{batch_id} draft/chathistory-targets\r\n"),
+        );
+    }
+
+    for (dm_key, last_ts) in &dm_conversations {
+        // Filter by timestamp range
+        if *last_ts < from_ts || *last_ts > to_ts {
+            continue;
+        }
+
+        // Extract partner DID from canonical key (dm:<did_a>,<did_b>)
+        let partner_did = dm_key.strip_prefix("dm:").and_then(|rest| {
+            let parts: Vec<&str> = rest.splitn(2, ',').collect();
+            if parts.len() == 2 {
+                if parts[0] == requester_did {
+                    Some(parts[1])
+                } else {
+                    Some(parts[0])
+                }
+            } else {
+                None
+            }
+        });
+
+        if let Some(partner) = partner_did {
+            // Resolve DID to current nick for display
+            let display_nick = state
+                .did_nicks
+                .lock()
+                .get(partner)
+                .cloned()
+                .unwrap_or_else(|| partner.to_string());
+
+            let mut tags = std::collections::HashMap::new();
+            if has_batch {
+                tags.insert("batch".to_string(), batch_id.clone());
+            }
+            if has_time {
+                let ts_str = chrono::DateTime::from_timestamp(*last_ts as i64, 0)
+                    .unwrap_or_default()
+                    .format("%Y-%m-%dT%H:%M:%S.000Z")
+                    .to_string();
+                tags.insert("time".to_string(), ts_str);
+            }
+
+            if !tags.is_empty() {
+                let tag_msg = irc::Message {
+                    tags,
+                    prefix: Some(server_name.to_string()),
+                    command: "CHATHISTORY".to_string(),
+                    params: vec!["TARGETS".to_string(), display_nick],
+                };
+                send(state, session_id, format!("{tag_msg}\r\n"));
+            } else {
+                send(
+                    state,
+                    session_id,
+                    format!(":{server_name} CHATHISTORY TARGETS {display_nick}\r\n"),
+                );
+            }
         }
     }
 

@@ -495,6 +495,7 @@ class AppState: ObservableObject {
         }
         let dm = ChannelState(name: nick)
         dmBuffers.append(dm)
+        requestHistory(channel: nick)
         return dm
     }
 
@@ -606,6 +607,10 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
             // Auto-join saved channels
             for channel in state.autoJoinChannels {
                 state.joinChannel(channel)
+            }
+            // Fetch DM conversation list if authenticated
+            if state.authenticatedDID != nil {
+                state.sendRaw("CHATHISTORY TARGETS * * 50")
             }
 
         case .authenticated(let did):
@@ -798,6 +803,10 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 let dm = state.getOrCreateDM(batch.target)
                 for msg in sorted { dm.appendIfNew(msg) }
             }
+
+        case .chatHistoryTarget(let nick, _):
+            // Create DM buffer for each conversation partner
+            let _ = state.getOrCreateDM(nick)
 
         case .tagMsg(let tagMsg):
             let tags = Dictionary(uniqueKeysWithValues: tagMsg.tags.map { ($0.key, $0.value) })

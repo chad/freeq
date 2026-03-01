@@ -1240,6 +1240,11 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                 }
             }
         }
+        Event::ChatHistoryTarget { nick, timestamp } => {
+            let ts_display = timestamp.as_deref().unwrap_or("?");
+            app.buffer_mut("status")
+                .push_system(&format!("  DM: {nick}  (last: {ts_display})"));
+        }
         Event::RawLine(ref line) => {
             if app.debug_raw {
                 app.buffer_mut("status").push_system(&format!("← {line}"));
@@ -1675,6 +1680,7 @@ async fn process_input(app: &mut App, handle: &client::ClientHandle, input: &str
                 app.status_msg("  /history [N]        Fetch N messages of history (default 50)");
                 app.status_msg("── Messaging ────────────────────────────");
                 app.status_msg("  /msg target text    Private message");
+                app.status_msg("  /msgs [N]           List DM conversations (default 50)");
                 app.status_msg("  /me action          Action message (* nick does something)");
                 app.status_msg("  /react emoji        React to the channel (/r)");
                 app.status_msg("  /preview url        Fetch and share a link preview");
@@ -1782,6 +1788,11 @@ async fn process_input(app: &mut App, handle: &client::ClientHandle, input: &str
                         .raw(&format!("CHATHISTORY LATEST {channel} * {limit}"))
                         .await?;
                 }
+            }
+            "/msgs" => {
+                let limit = if arg.is_empty() { "50" } else { arg };
+                app.status_msg("── DM conversations ────────────────────");
+                handle.chathistory_targets(limit.parse().unwrap_or(50)).await?;
             }
             "/config" | "/settings" => {
                 let cfg = config::Config::load();

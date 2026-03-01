@@ -252,6 +252,11 @@ impl ClientHandle {
             .await
     }
 
+    /// Request DM conversation list (CHATHISTORY TARGETS).
+    pub async fn chathistory_targets(&self, limit: usize) -> Result<()> {
+        self.raw(&format!("CHATHISTORY TARGETS * * {limit}")).await
+    }
+
     /// Send a reaction emoji to a specific message.
     pub async fn react(&self, target: &str, emoji: &str, msgid: &str) -> Result<()> {
         let mut tags = std::collections::HashMap::new();
@@ -1113,6 +1118,21 @@ where
                                     .to_string();
                                 let target = msg.params[0].clone();
                                 let _ = event_tx.send(Event::TagMsg { from, target, tags: msg.tags.clone() }).await;
+                            }
+                        }
+                        "CHATHISTORY" => {
+                            // CHATHISTORY TARGETS <nick> — DM conversation list
+                            #[allow(clippy::collapsible_if)]
+                            if msg.params.first().map(|s| s.as_str()) == Some("TARGETS") {
+                                if let Some(nick) = msg.params.get(1) {
+                                    let timestamp = msg.tags.get("time").cloned();
+                                    let _ = event_tx
+                                        .send(Event::ChatHistoryTarget {
+                                            nick: nick.clone(),
+                                            timestamp,
+                                        })
+                                        .await;
+                                }
                             }
                         }
                         "FAIL" => {

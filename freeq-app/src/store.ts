@@ -169,6 +169,9 @@ export interface Store {
   incrementMentions: (channel: string) => void;
   clearUnread: (channel: string) => void;
 
+  // Actions — DM targets
+  addDmTarget: (nick: string) => void;
+
   // Actions — batches
   startBatch: (id: string, type: string, target: string) => void;
   addBatchMessage: (id: string, msg: Message) => void;
@@ -316,6 +319,17 @@ export const useStore = create<Store>((set, get) => ({
     const ch = getOrCreateChannel(channels, name);
     ch.isJoined = true;
     channels.set(name.toLowerCase(), ch);
+    return { channels };
+  }),
+
+  addDmTarget: (nick) => set((s) => {
+    const channels = new Map(s.channels);
+    const key = nick.toLowerCase();
+    if (!channels.has(key)) {
+      const ch = getOrCreateChannel(channels, nick);
+      ch.isJoined = true;
+      channels.set(key, ch);
+    }
     return { channels };
   }),
 

@@ -2964,3 +2964,211 @@ async fn client_signature_verification() {
     handle_guest.quit(None).await.unwrap();
     server_handle.abort();
 }
+
+// ── Test: DM history for authenticated users ────────────────────────
+
+#[tokio::test]
+async fn dm_history_authenticated() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("dm_hist.db");
+    let db_str = db_path.to_str().unwrap();
+
+    // Set up two authenticated users
+    let key_alice = PrivateKey::generate_secp256k1();
+    let did_alice = "did:plc:dmhistalice";
+    let doc_alice = did::make_test_did_document(did_alice, &key_alice.public_key_multibase());
+
+    let key_bob = PrivateKey::generate_secp256k1();
+    let did_bob = "did:plc:dmhistbob";
+    let doc_bob = did::make_test_did_document(did_bob, &key_bob.public_key_multibase());
+
+    let mut docs = HashMap::new();
+    docs.insert(did_alice.to_string(), doc_alice);
+    docs.insert(did_bob.to_string(), doc_bob);
+    let resolver = DidResolver::static_map(docs);
+
+    let (addr, server_handle) = start_test_server_with_db(resolver, db_str).await;
+
+    // Alice connects and authenticates
+    let signer_alice: Arc<dyn ChallengeSigner> =
+        Arc::new(KeySigner::new(did_alice.to_string(), key_alice));
+    let config_alice = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "dmalice".to_string(),
+        user: "dmalice".to_string(),
+        realname: "Alice".to_string(),
+        ..Default::default()
+    };
+    let (handle_alice, mut events_alice) = client::connect(config_alice, Some(signer_alice));
+    expect_event(
+        &mut events_alice,
+        3000,
+        |e| matches!(e, Event::Authenticated { .. }),
+        "Alice authed",
+    )
+    .await;
+    expect_event(
+        &mut events_alice,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
+
+    // Bob connects and authenticates
+    let signer_bob: Arc<dyn ChallengeSigner> =
+        Arc::new(KeySigner::new(did_bob.to_string(), key_bob));
+    let config_bob = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "dmbob".to_string(),
+        user: "dmbob".to_string(),
+        realname: "Bob".to_string(),
+        ..Default::default()
+    };
+    let (handle_bob, mut events_bob) = client::connect(config_bob, Some(signer_bob));
+    expect_event(
+        &mut events_bob,
+        3000,
+        |e| matches!(e, Event::Authenticated { .. }),
+        "Bob authed",
+    )
+    .await;
+    expect_event(
+        &mut events_bob,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Bob registered",
+    )
+    .await;
+
+    // Alice sends a DM to Bob
+    handle_alice.privmsg("dmbob", "hey bob!").await.unwrap();
+
+    // Bob receives the DM
+    let dm = expect_event(
+        &mut events_bob,
+        2000,
+        |e| matches!(e, Event::Message { from, text, .. } if from == "dmalice" && text == "hey bob!"),
+        "Bob receives DM",
+    )
+    .await;
+    assert!(matches!(dm, Event::Message { .. }));
+
+    // Small delay to ensure persistence
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Alice requests DM history with Bob
+    handle_alice
+        .history_latest("dmbob", 50)
+        .await
+        .unwrap();
+
+    // Alice should receive a batch with the DM
+    expect_event(
+        &mut events_alice,
+        2000,
+        |e| matches!(e, Event::BatchStart { batch_type, .. } if batch_type == "chathistory"),
+        "Alice gets chathistory batch start",
+    )
+    .await;
+
+    let hist_msg = expect_event(
+        &mut events_alice,
+        2000,
+        |e| matches!(e, Event::Message { text, .. } if text == "hey bob!"),
+        "Alice sees DM in history",
+    )
+    .await;
+    if let Event::Message { tags, .. } = &hist_msg {
+        assert!(tags.contains_key("batch"), "History message should have batch tag");
+    }
+
+    expect_event(
+        &mut events_alice,
+        2000,
+        |e| matches!(e, Event::BatchEnd { .. }),
+        "Alice gets batch end",
+    )
+    .await;
+
+    handle_alice.quit(None).await.unwrap();
+    handle_bob.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+// ── Test: Guest cannot access DM history ─────────────────────────────
+
+#[tokio::test]
+async fn dm_history_rejected_for_guest() {
+    let key_alice = PrivateKey::generate_secp256k1();
+    let did_alice = "did:plc:dmguest";
+    let doc_alice = did::make_test_did_document(did_alice, &key_alice.public_key_multibase());
+
+    let mut docs = HashMap::new();
+    docs.insert(did_alice.to_string(), doc_alice);
+    let resolver = DidResolver::static_map(docs);
+
+    let (addr, server_handle) = start_test_server(resolver).await;
+
+    // Alice authenticates
+    let signer: Arc<dyn ChallengeSigner> =
+        Arc::new(KeySigner::new(did_alice.to_string(), key_alice));
+    let config_alice = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "dmauth".to_string(),
+        user: "dmauth".to_string(),
+        realname: "Auth".to_string(),
+        ..Default::default()
+    };
+    let (handle_alice, mut events_alice) = client::connect(config_alice, Some(signer));
+    expect_event(
+        &mut events_alice,
+        3000,
+        |e| matches!(e, Event::Authenticated { .. }),
+        "Alice authed",
+    )
+    .await;
+    expect_event(
+        &mut events_alice,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
+
+    // Guest connects
+    let config_guest = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "dmguest".to_string(),
+        user: "dmguest".to_string(),
+        realname: "Guest".to_string(),
+        ..Default::default()
+    };
+    let (handle_guest, mut events_guest) = client::connect(config_guest, None);
+    expect_event(
+        &mut events_guest,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Guest registered",
+    )
+    .await;
+
+    // Guest requests DM history — should fail with ACCOUNT_REQUIRED
+    handle_guest
+        .raw("CHATHISTORY LATEST dmauth * 50")
+        .await
+        .unwrap();
+
+    // Should get a FAIL notice about authentication
+    expect_event(
+        &mut events_guest,
+        2000,
+        |e| matches!(e, Event::ServerNotice { text } if text.contains("authenticated")),
+        "Guest gets auth error",
+    )
+    .await;
+
+    handle_alice.quit(None).await.unwrap();
+    handle_guest.quit(None).await.unwrap();
+    server_handle.abort();
+}
