@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>Freeq</AssemblyName>
+    <RootNamespace>Freeq.Windows</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+  </ItemGroup>
+
+  <!-- Copy the Rust DLL to output -->
+  <ItemGroup>
+    <None Include="..\target\release\freeq_windows_core.dll" Condition="Exists('..\target\release\freeq_windows_core.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>freeq_windows_core.dll</Link>
+    </None>
+    <None Include="..\target\debug\freeq_windows_core.dll" Condition="!Exists('..\target\release\freeq_windows_core.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>freeq_windows_core.dll</Link>
+    </None>
+  </ItemGroup>
+
+</Project>

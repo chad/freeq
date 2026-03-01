@@ -1,0 +1,677 @@
+<Window x:Class="Freeq.Windows.Views.ShellWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:Freeq.Windows.ViewModels"
+        Title="Freeq" Width="1200" Height="800" MinWidth="800" MinHeight="500"
+        Background="{StaticResource BgDark}"
+        WindowStartupLocation="CenterScreen">
+
+    <Window.DataContext>
+        <vm:ShellViewModel />
+    </Window.DataContext>
+
+    <Window.InputBindings>
+        <KeyBinding Key="Return" Command="{Binding SendMessageCommand}" />
+        <KeyBinding Gesture="Ctrl+1" Command="{Binding SwitchToChannelByIndexCommand}" CommandParameter="0" />
+        <KeyBinding Gesture="Ctrl+2" Command="{Binding SwitchToChannelByIndexCommand}" CommandParameter="1" />
+        <KeyBinding Gesture="Ctrl+3" Command="{Binding SwitchToChannelByIndexCommand}" CommandParameter="2" />
+        <KeyBinding Gesture="Ctrl+4" Command="{Binding SwitchToChannelByIndexCommand}" CommandParameter="3" />
+        <KeyBinding Gesture="Ctrl+5" Command="{Binding SwitchToChannelByIndexCommand}" CommandParameter="4" />
+        <KeyBinding Gesture="Ctrl+6" Command="{Binding SwitchToChannelByIndexCommand}" CommandParameter="5" />
+        <KeyBinding Gesture="Ctrl+7" Command="{Binding SwitchToChannelByIndexCommand}" CommandParameter="6" />
+        <KeyBinding Gesture="Ctrl+8" Command="{Binding SwitchToChannelByIndexCommand}" CommandParameter="7" />
+        <KeyBinding Gesture="Ctrl+9" Command="{Binding SwitchToChannelByIndexCommand}" CommandParameter="8" />
+        <KeyBinding Gesture="Alt+Up" Command="{Binding PreviousChannelCommand}" />
+        <KeyBinding Gesture="Alt+Down" Command="{Binding NextChannelCommand}" />
+        <KeyBinding Key="Escape" Command="{Binding CancelComposeModeCommand}" />
+    </Window.InputBindings>
+
+    <Grid>
+        <!-- Connect Panel (overlay when not connected) -->
+        <Border x:Name="ConnectPanel"
+                Visibility="{Binding ShowConnectPanel, Converter={StaticResource BoolToVis}}"
+                Background="{StaticResource BgDark}" Panel.ZIndex="10">
+            <Border Background="{StaticResource BgSurface}" CornerRadius="12"
+                    Padding="40" MaxWidth="480" MaxHeight="620"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel>
+                    <TextBlock Text="freeq" FontSize="28" FontWeight="Bold"
+                               Foreground="{StaticResource AccentBlue}"
+                               HorizontalAlignment="Center" Margin="0,0,0,8"/>
+                    <TextBlock Text="Connect to IRC" FontSize="14"
+                               Foreground="{StaticResource FgSubtext}"
+                               HorizontalAlignment="Center" Margin="0,0,0,16"/>
+
+                    <!-- Login mode tabs -->
+                    <Grid Margin="0,0,0,16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Button Grid.Column="0" Cursor="Hand" Click="LoginModeTab_Click" Tag="atproto">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="TabBd" Padding="10,8" CornerRadius="6,0,0,6"
+                                            BorderThickness="1" BorderBrush="{StaticResource FgDim}">
+                                        <TextBlock Text="AT Protocol" FontSize="13" HorizontalAlignment="Center"
+                                                   Foreground="{StaticResource FgText}" FontWeight="SemiBold"/>
+                                    </Border>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <Button Grid.Column="1" Cursor="Hand" Click="LoginModeTab_Click" Tag="guest">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="TabBd" Padding="10,8" CornerRadius="0,6,6,0"
+                                            BorderThickness="1,1,1,1" BorderBrush="{StaticResource FgDim}">
+                                        <TextBlock Text="Guest" FontSize="13" HorizontalAlignment="Center"
+                                                   Foreground="{StaticResource FgSubtext}"/>
+                                    </Border>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                    </Grid>
+
+                    <!-- AT Proto handle (shown when LoginMode=atproto) -->
+                    <StackPanel x:Name="AtProtoFields">
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding LoginMode}" Value="atproto">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
+                        <TextBlock Text="AT Protocol Handle" Foreground="{StaticResource FgSubtext}"
+                                   FontSize="12" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding AtHandle, UpdateSourceTrigger=PropertyChanged}"
+                                 Background="{StaticResource BgInput}" Foreground="{StaticResource FgText}"
+                                 BorderBrush="{StaticResource FgDim}" BorderThickness="1"
+                                 Padding="10,8" FontSize="14" Margin="0,0,0,16">
+                            <TextBox.Style>
+                                <Style TargetType="TextBox">
+                                    <Style.Triggers>
+                                        <Trigger Property="Text" Value="">
+                                            <Setter Property="Background">
+                                                <Setter.Value>
+                                                    <VisualBrush Stretch="None" AlignmentX="Left">
+                                                        <VisualBrush.Visual>
+                                                            <TextBlock Text="e.g. chad.bsky.social" Foreground="#6c7086"
+                                                                       FontSize="14" Margin="12,0,0,0"/>
+                                                        </VisualBrush.Visual>
+                                                    </VisualBrush>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBox.Style>
+                        </TextBox>
+                    </StackPanel>
+
+                    <!-- Guest fields (shown when LoginMode=guest) -->
+                    <StackPanel x:Name="GuestFields">
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding LoginMode}" Value="guest">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
+                        <TextBlock Text="Nickname" Foreground="{StaticResource FgSubtext}"
+                                   FontSize="12" Margin="0,0,0,4"/>
+                        <TextBox Text="{Binding ConnectNick, UpdateSourceTrigger=PropertyChanged}"
+                                 Background="{StaticResource BgInput}" Foreground="{StaticResource FgText}"
+                                 BorderBrush="{StaticResource FgDim}" BorderThickness="1"
+                                 Padding="10,8" FontSize="14" Margin="0,0,0,16"/>
+                    </StackPanel>
+
+                    <!-- Server (common) -->
+                    <TextBlock Text="Server" Foreground="{StaticResource FgSubtext}"
+                               FontSize="12" Margin="0,0,0,4"/>
+                    <TextBox Text="{Binding ServerAddress, UpdateSourceTrigger=PropertyChanged}"
+                             Background="{StaticResource BgInput}" Foreground="{StaticResource FgText}"
+                             BorderBrush="{StaticResource FgDim}" BorderThickness="1"
+                             Padding="10,8" FontSize="14" Margin="0,0,0,16"/>
+
+                    <!-- Auto-join -->
+                    <TextBlock Text="Channels (comma separated)" Foreground="{StaticResource FgSubtext}"
+                               FontSize="12" Margin="0,0,0,4"/>
+                    <TextBox Text="{Binding AutoJoinChannels, UpdateSourceTrigger=PropertyChanged}"
+                             Background="{StaticResource BgInput}" Foreground="{StaticResource FgText}"
+                             BorderBrush="{StaticResource FgDim}" BorderThickness="1"
+                             Padding="10,8" FontSize="14" Margin="0,0,0,8"/>
+
+                    <!-- TLS -->
+                    <CheckBox IsChecked="{Binding UseTls}" Margin="0,0,0,16">
+                        <TextBlock Text="Use TLS" Foreground="{StaticResource FgSubtext}" FontSize="13"/>
+                    </CheckBox>
+
+                    <!-- Auth step indicator -->
+                    <TextBlock Text="{Binding AuthStep}"
+                               Foreground="{StaticResource AccentBlue}" FontSize="12"
+                               TextWrapping="Wrap" Margin="0,0,0,8"
+                               Visibility="{Binding AuthStep, Converter={StaticResource NullToVis}}"/>
+
+                    <!-- Error -->
+                    <TextBlock Text="{Binding AuthError}"
+                               Foreground="{StaticResource AccentRed}" FontSize="12"
+                               TextWrapping="Wrap" Margin="0,0,0,12"
+                               Visibility="{Binding AuthError, Converter={StaticResource NullToVis}}"/>
+
+                    <!-- Connect buttons -->
+                    <Grid>
+                        <!-- AT Proto login button -->
+                        <Button Command="{Binding LoginWithAtProtoCommand}" Padding="12,10" Cursor="Hand"
+                                HorizontalAlignment="Stretch" Margin="0,4,0,0">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding LoginMode}" Value="atproto">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border Background="{StaticResource AccentBlue}" CornerRadius="6"
+                                            Padding="{TemplateBinding Padding}">
+                                        <TextBlock Text="Login with AT Protocol" FontWeight="SemiBold" FontSize="14"
+                                                   Foreground="{StaticResource BgDark}"
+                                                   HorizontalAlignment="Center"/>
+                                    </Border>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+
+                        <!-- Guest connect button -->
+                        <Button Command="{Binding ConnectCommand}" Padding="12,10" Cursor="Hand"
+                                HorizontalAlignment="Stretch" Margin="0,4,0,0">
+                            <Button.Style>
+                                <Style TargetType="Button">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding LoginMode}" Value="guest">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border Background="{StaticResource AccentBlue}" CornerRadius="6"
+                                            Padding="{TemplateBinding Padding}">
+                                        <TextBlock Text="Connect as Guest" FontWeight="SemiBold" FontSize="14"
+                                                   Foreground="{StaticResource BgDark}"
+                                                   HorizontalAlignment="Center"/>
+                                    </Border>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                    </Grid>
+
+                    <!-- Cancel auth button -->
+                    <Button Command="{Binding CancelAuthCommand}" Padding="8,6" Cursor="Hand"
+                            HorizontalAlignment="Center" Margin="0,8,0,0"
+                            Visibility="{Binding IsAuthenticating, Converter={StaticResource BoolToVis}}">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <TextBlock Text="Cancel" FontSize="12" Foreground="{StaticResource FgDim}"
+                                           TextDecorations="Underline"/>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                </StackPanel>
+            </Border>
+        </Border>
+
+        <!-- Main 3-pane layout -->
+        <Grid Visibility="{Binding ShowConnectPanel, Converter={StaticResource InvBoolToVis}}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="240"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="200"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- LEFT SIDEBAR -->
+            <Border Grid.Column="0" Background="{StaticResource BgSidebar}">
+                <DockPanel>
+                    <!-- Status bar at top -->
+                    <Border DockPanel.Dock="Top" Padding="12,10" Background="{StaticResource BgSurface}">
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Command="{Binding DisconnectCommand}"
+                                    ToolTip="Disconnect" Cursor="Hand" Margin="8,0,0,0">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <TextBlock Text="&#x2716;" FontSize="14"
+                                                   Foreground="{StaticResource FgDim}"/>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                            <StackPanel>
+                                <TextBlock Text="{Binding StatusText}" FontWeight="SemiBold"
+                                           FontSize="13" Foreground="{StaticResource FgText}"
+                                           TextTrimming="CharacterEllipsis"/>
+                                <TextBlock FontSize="11" Foreground="{StaticResource FgDim}">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="Guest"/>
+                                            <Setter Property="Foreground" Value="{StaticResource FgDim}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding AuthDid, Converter={StaticResource NullToVis}}" Value="Visible">
+                                                    <Setter Property="Text" Value="{Binding AuthDid}"/>
+                                                    <Setter Property="Foreground" Value="{StaticResource AccentGreen}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- Reconnect bar (when reconnecting) -->
+                    <Border DockPanel.Dock="Top" Padding="8,6" Background="#2a1a1a">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding ConnectionState}" Value="reconnecting">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Command="{Binding CancelReconnectCommand}"
+                                    Cursor="Hand" Margin="4,0,0,0">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <TextBlock Text="&#x2716;" FontSize="10" Foreground="{StaticResource AccentRed}"/>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                            <TextBlock Text="{Binding StatusText}" FontSize="11"
+                                       Foreground="{StaticResource AccentYellow}" TextTrimming="CharacterEllipsis"/>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- Join channel bar -->
+                    <Border DockPanel.Dock="Bottom" Padding="8" Background="{StaticResource BgSidebar}">
+                        <TextBox x:Name="JoinBox" Tag="Join channel..."
+                                 Background="{StaticResource BgInput}" Foreground="{StaticResource FgText}"
+                                 BorderBrush="{StaticResource FgDim}" BorderThickness="1"
+                                 Padding="8,6" FontSize="12" KeyDown="JoinBox_KeyDown">
+                            <TextBox.Style>
+                                <Style TargetType="TextBox">
+                                    <Style.Triggers>
+                                        <Trigger Property="Text" Value="">
+                                            <Setter Property="Background">
+                                                <Setter.Value>
+                                                    <VisualBrush Stretch="None" AlignmentX="Left">
+                                                        <VisualBrush.Visual>
+                                                            <TextBlock Text="Join channel..." Foreground="#6c7086"
+                                                                       FontSize="12" Margin="10,0,0,0"/>
+                                                        </VisualBrush.Visual>
+                                                    </VisualBrush>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBox.Style>
+                        </TextBox>
+                    </Border>
+
+                    <!-- Channel list -->
+                    <ListBox ItemsSource="{Binding Channels}"
+                             SelectedItem="{Binding ActiveChannel}"
+                             Background="Transparent" BorderThickness="0"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="12,8"/>
+                                <Setter Property="Cursor" Value="Hand"/>
+                                <Setter Property="Foreground" Value="{StaticResource FgSubtext}"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border x:Name="Bd" Padding="{TemplateBinding Padding}"
+                                                    Background="Transparent" Margin="4,1">
+                                                <ContentPresenter/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter TargetName="Bd" Property="Background"
+                                                            Value="{StaticResource BgSurface}"/>
+                                                </Trigger>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Bd" Property="Background"
+                                                            Value="#2a2a3e"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <DockPanel>
+                                    <!-- Unread badge -->
+                                    <Border DockPanel.Dock="Right"
+                                            Background="{StaticResource UnreadBadge}"
+                                            CornerRadius="8" MinWidth="20" Padding="4,1"
+                                            Visibility="{Binding UnreadCount, Converter={StaticResource IntToVis}}"
+                                            VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding UnreadCount}" FontSize="11"
+                                                   Foreground="White" HorizontalAlignment="Center"
+                                                   FontWeight="Bold"/>
+                                    </Border>
+                                    <TextBlock Text="{Binding DisplayName}" FontSize="13"
+                                               TextTrimming="CharacterEllipsis"
+                                               VerticalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{StaticResource FgSubtext}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding UnreadCount, Converter={StaticResource IntToVis}}" Value="Visible">
+                                                        <Setter Property="Foreground" Value="{StaticResource FgText}"/>
+                                                        <Setter Property="FontWeight" Value="SemiBold"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </DockPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </Border>
+
+            <!-- CENTER: MESSAGES + COMPOSE -->
+            <DockPanel Grid.Column="1" Background="{StaticResource BgDark}">
+                <!-- Top bar: channel info + pinned -->
+                <Border DockPanel.Dock="Top" Padding="16,10" Background="{StaticResource BgDark}"
+                        BorderBrush="{StaticResource BgSurface}" BorderThickness="0,0,0,1"
+                        Visibility="{Binding HasActiveChannel, Converter={StaticResource BoolToVis}}">
+                    <DockPanel>
+                        <TextBlock DockPanel.Dock="Right" FontSize="12"
+                                   Foreground="{StaticResource FgDim}"
+                                   VerticalAlignment="Center"
+                                   Text="{Binding ActiveChannel.MemberCount, StringFormat='{}{0} members'}"/>
+                        <StackPanel>
+                            <TextBlock Text="{Binding ActiveChannel.Name}" FontSize="15"
+                                       FontWeight="SemiBold" Foreground="{StaticResource FgText}"/>
+                            <TextBlock Text="{Binding ActiveChannel.Topic}" FontSize="12"
+                                       Foreground="{StaticResource FgDim}" TextTrimming="CharacterEllipsis"
+                                       Visibility="{Binding ActiveChannel.Topic, Converter={StaticResource NullToVis}}"
+                                       MaxWidth="500"/>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+
+                <!-- Compose area at bottom -->
+                <StackPanel DockPanel.Dock="Bottom">
+                    <!-- Typing indicator -->
+                    <Border Padding="12,2" Background="{StaticResource BgDark}"
+                            Visibility="{Binding ActiveChannel.TypingIndicator, Converter={StaticResource NullToVis}}">
+                        <TextBlock Text="{Binding ActiveChannel.TypingIndicator}" FontSize="11"
+                                   Foreground="{StaticResource FgDim}" FontStyle="Italic"/>
+                    </Border>
+
+                    <!-- Reply/Edit banner -->
+                    <Border Padding="12,6" Background="#2a2a3e"
+                            Visibility="{Binding IsInReplyMode, Converter={StaticResource BoolToVis}}">
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Command="{Binding ClearReplyModeCommand}" Cursor="Hand">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <TextBlock Text="&#x2716;" FontSize="12" Foreground="{StaticResource FgDim}"/>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                            <TextBlock FontSize="12">
+                                <Run Text="Replying to " Foreground="{StaticResource FgDim}"/>
+                                <Run Text="{Binding ReplyToPreview, Mode=OneWay}" Foreground="{StaticResource FgSubtext}"/>
+                            </TextBlock>
+                        </DockPanel>
+                    </Border>
+                    <Border Padding="12,6" Background="#2a2a3e"
+                            Visibility="{Binding IsInEditMode, Converter={StaticResource BoolToVis}}">
+                        <DockPanel>
+                            <Button DockPanel.Dock="Right" Command="{Binding ClearEditModeCommand}" Cursor="Hand">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <TextBlock Text="&#x2716;" FontSize="12" Foreground="{StaticResource FgDim}"/>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                            <TextBlock FontSize="12">
+                                <Run Text="Editing: " Foreground="{StaticResource AccentYellow}"/>
+                                <Run Text="{Binding EditingPreview, Mode=OneWay}" Foreground="{StaticResource FgSubtext}"/>
+                            </TextBlock>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- Compose bar -->
+                    <Border Padding="12,8" Background="{StaticResource BgDark}"
+                            BorderBrush="{StaticResource BgSurface}" BorderThickness="0,1,0,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="ComposeBox" Grid.Column="0"
+                                     Text="{Binding ComposeText, UpdateSourceTrigger=PropertyChanged}"
+                                     Background="{StaticResource BgInput}" Foreground="{StaticResource FgText}"
+                                     CaretBrush="{StaticResource FgText}"
+                                     BorderBrush="{StaticResource FgDim}" BorderThickness="1"
+                                     Padding="12,10" FontSize="14" VerticalContentAlignment="Center"
+                                     AcceptsReturn="False" KeyDown="ComposeBox_KeyDown"
+                                     TextChanged="ComposeBox_TextChanged">
+                                <TextBox.Style>
+                                    <Style TargetType="TextBox">
+                                        <Style.Triggers>
+                                            <MultiDataTrigger>
+                                                <MultiDataTrigger.Conditions>
+                                                    <Condition Binding="{Binding Text, RelativeSource={RelativeSource Self}}" Value=""/>
+                                                </MultiDataTrigger.Conditions>
+                                                <Setter Property="Background">
+                                                    <Setter.Value>
+                                                        <VisualBrush Stretch="None" AlignmentX="Left">
+                                                            <VisualBrush.Visual>
+                                                                <TextBlock Text="Type a message..." Foreground="#6c7086"
+                                                                           FontSize="14" Margin="14,0,0,0"/>
+                                                            </VisualBrush.Visual>
+                                                        </VisualBrush>
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </MultiDataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBox.Style>
+                            </TextBox>
+                            <Button Grid.Column="1" Command="{Binding SendMessageCommand}"
+                                    Margin="8,0,0,0" Padding="14,10" Cursor="Hand">
+                                <Button.Template>
+                                    <ControlTemplate TargetType="Button">
+                                        <Border Background="{StaticResource AccentBlue}" CornerRadius="6"
+                                                Padding="{TemplateBinding Padding}">
+                                            <TextBlock Text="Send" FontWeight="SemiBold" FontSize="13"
+                                                       Foreground="{StaticResource BgDark}"/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </Button.Template>
+                            </Button>
+                        </Grid>
+                    </Border>
+                </StackPanel>
+
+                <!-- Message list -->
+                <ListBox x:Name="MessageList"
+                         ItemsSource="{Binding ActiveChannel.Messages}"
+                         Background="Transparent" BorderThickness="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         VirtualizingPanel.ScrollUnit="Pixel"
+                         VirtualizingPanel.IsVirtualizing="True">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Padding" Value="16,4"/>
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            <Setter Property="Focusable" Value="False"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <Border Padding="{TemplateBinding Padding}" Background="Transparent"
+                                                x:Name="Bd">
+                                            <ContentPresenter/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Bd" Property="Background" Value="#1a1a2e"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel MouseRightButtonUp="MessageItem_MouseRightButtonUp">
+                                <!-- Reply preview (if replying to a message) -->
+                                <TextBlock Margin="50,0,0,2" FontSize="11" Foreground="{StaticResource FgDim}"
+                                           Visibility="{Binding ReplyPreview, Converter={StaticResource NullToVis}}">
+                                    <Run Text="&#x21B3; "/>
+                                    <Run Text="{Binding ReplyPreview, Mode=OneWay}"/>
+                                </TextBlock>
+                                <DockPanel>
+                                    <!-- Timestamp -->
+                                    <TextBlock DockPanel.Dock="Left" Width="42" Margin="0,0,8,0"
+                                               Text="{Binding Timestamp, Converter={StaticResource TimestampConv}}"
+                                               Foreground="{StaticResource FgDim}" FontSize="11"
+                                               VerticalAlignment="Top"/>
+                                    <StackPanel>
+                                        <!-- Sender + text -->
+                                        <TextBlock TextWrapping="Wrap">
+                                            <TextBlock.Inlines>
+                                                <Run FontWeight="SemiBold"
+                                                     Foreground="{StaticResource AccentBlue}"
+                                                     Text="{Binding From, Mode=OneWay}"/>
+                                                <Run Text="  "/>
+                                                <Run Text="{Binding Text, Mode=OneWay}">
+                                                    <Run.Style>
+                                                        <Style TargetType="Run">
+                                                            <Setter Property="Foreground" Value="{StaticResource FgText}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsSystem}" Value="True">
+                                                                    <Setter Property="Foreground" Value="{StaticResource FgDim}"/>
+                                                                    <Setter Property="FontStyle" Value="Italic"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding IsAction}" Value="True">
+                                                                    <Setter Property="FontStyle" Value="Italic"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding Deleted}" Value="True">
+                                                                    <Setter Property="Foreground" Value="{StaticResource FgDim}"/>
+                                                                    <Setter Property="FontStyle" Value="Italic"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Run.Style>
+                                                </Run>
+                                            </TextBlock.Inlines>
+                                        </TextBlock>
+                                        <!-- Edited indicator -->
+                                        <TextBlock Text="(edited)" FontSize="10" Foreground="{StaticResource FgDim}"
+                                                   Margin="0,1,0,0"
+                                                   Visibility="{Binding IsEdited, Converter={StaticResource BoolToVis}}"/>
+                                        <!-- Reactions -->
+                                        <TextBlock Text="{Binding ReactionsDisplay}" FontSize="12"
+                                                   Foreground="{StaticResource AccentYellow}" Margin="0,2,0,0"
+                                                   Visibility="{Binding HasReactions, Converter={StaticResource BoolToVis}}"/>
+                                    </StackPanel>
+                                </DockPanel>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+
+            <!-- RIGHT: MEMBER LIST -->
+            <Border Grid.Column="2" Background="{StaticResource BgSidebar}"
+                    BorderBrush="{StaticResource BgSurface}" BorderThickness="1,0,0,0"
+                    Visibility="{Binding HasActiveChannel, Converter={StaticResource BoolToVis}}">
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" Padding="12,10">
+                        <TextBlock Text="Members" FontSize="12" FontWeight="SemiBold"
+                                   Foreground="{StaticResource FgDim}"/>
+                    </Border>
+                    <ListBox ItemsSource="{Binding ActiveChannel.Members}"
+                             Background="Transparent" BorderThickness="0"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="12,4"/>
+                                <Setter Property="Focusable" Value="False"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border Padding="{TemplateBinding Padding}" Background="Transparent">
+                                                <ContentPresenter/>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <DockPanel>
+                                    <!-- Online/away indicator -->
+                                    <Ellipse DockPanel.Dock="Left" Width="8" Height="8"
+                                             Margin="0,0,8,0" VerticalAlignment="Center">
+                                        <Ellipse.Style>
+                                            <Style TargetType="Ellipse">
+                                                <Setter Property="Fill" Value="{StaticResource AccentGreen}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding AwayMsg, Converter={StaticResource NullToVis}}" Value="Visible">
+                                                        <Setter Property="Fill" Value="{StaticResource AccentYellow}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Ellipse.Style>
+                                    </Ellipse>
+                                    <TextBlock Text="{Binding PrefixedNick}" FontSize="12"
+                                               TextTrimming="CharacterEllipsis">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="{StaticResource FgSubtext}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsOp}" Value="True">
+                                                        <Setter Property="Foreground" Value="{StaticResource AccentPeach}"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding IsVoiced}" Value="True">
+                                                        <Setter Property="Foreground" Value="{StaticResource AccentGreen}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </DockPanel>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

@@ -1,0 +1,25 @@
+[package]
+name = "freeq-windows-core"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+description = "C ABI bridge around freeq-sdk for Windows native clients (WinUI 3 / P/Invoke)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "freeq_windows_core"
+
+[dependencies]
+freeq-sdk = { path = "../freeq-sdk", default-features = false, features = ["ring", "rustls-tls"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+parking_lot = "0.12"
+dashmap = "6"
+once_cell = "1"
+
+[lints]
+workspace = true
