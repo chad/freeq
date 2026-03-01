@@ -1088,6 +1088,17 @@ export function MessageList() {
     const t2 = setTimeout(scrollBottom, 300);
     const t3 = setTimeout(scrollBottom, 600); // after CHATHISTORY arrives
     const t4 = setTimeout(scrollBottom, 1200); // slow networks
+
+    // DM buffers don't get NAMES/366 so history isn't auto-fetched.
+    // Request it on first activation if the buffer has no messages.
+    const isDM = activeChannel !== 'server' && !activeChannel.startsWith('#') && !activeChannel.startsWith('&');
+    if (isDM) {
+      const ch = useStore.getState().channels.get(activeChannel.toLowerCase());
+      if (!ch || ch.messages.length === 0) {
+        requestHistory(activeChannel);
+      }
+    }
+
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
   }, [activeChannel]);
 
