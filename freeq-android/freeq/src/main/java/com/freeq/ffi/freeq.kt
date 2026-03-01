@@ -2695,6 +2695,12 @@ sealed class FreeqEvent {
         companion object
     }
     
+    data class ChatHistoryTarget(
+        val `nick`: kotlin.String, 
+        val `timestamp`: kotlin.String?) : FreeqEvent() {
+        companion object
+    }
+    
     data class Notice(
         val `text`: kotlin.String) : FreeqEvent() {
         companion object
@@ -2780,10 +2786,14 @@ public object FfiConverterTypeFreeqEvent : FfiConverterRustBuffer<FreeqEvent>{
             17 -> FreeqEvent.BatchEnd(
                 FfiConverterString.read(buf),
                 )
-            18 -> FreeqEvent.Notice(
+            18 -> FreeqEvent.ChatHistoryTarget(
+                FfiConverterString.read(buf),
+                FfiConverterOptionalString.read(buf),
+                )
+            19 -> FreeqEvent.Notice(
                 FfiConverterString.read(buf),
                 )
-            19 -> FreeqEvent.Disconnected(
+            20 -> FreeqEvent.Disconnected(
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
@@ -2924,6 +2934,14 @@ public object FfiConverterTypeFreeqEvent : FfiConverterRustBuffer<FreeqEvent>{
                 + FfiConverterString.allocationSize(value.`id`)
             )
         }
+        is FreeqEvent.ChatHistoryTarget -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`nick`)
+                + FfiConverterOptionalString.allocationSize(value.`timestamp`)
+            )
+        }
         is FreeqEvent.Notice -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
@@ -3041,13 +3059,19 @@ public object FfiConverterTypeFreeqEvent : FfiConverterRustBuffer<FreeqEvent>{
                 FfiConverterString.write(value.`id`, buf)
                 Unit
             }
-            is FreeqEvent.Notice -> {
+            is FreeqEvent.ChatHistoryTarget -> {
                 buf.putInt(18)
+                FfiConverterString.write(value.`nick`, buf)
+                FfiConverterOptionalString.write(value.`timestamp`, buf)
+                Unit
+            }
+            is FreeqEvent.Notice -> {
+                buf.putInt(19)
                 FfiConverterString.write(value.`text`, buf)
                 Unit
             }
             is FreeqEvent.Disconnected -> {
-                buf.putInt(19)
+                buf.putInt(20)
                 FfiConverterString.write(value.`reason`, buf)
                 Unit
             }

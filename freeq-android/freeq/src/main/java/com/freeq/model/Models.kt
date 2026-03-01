@@ -591,6 +591,10 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                 state.connectionState.value = ConnectionState.Registered
                 state.nick.value = event.nick
                 state.autoJoinChannels.toList().forEach { state.joinChannel(it) }
+                // Fetch DM conversation list if authenticated
+                if (state.authenticatedDID.value != null) {
+                    state.sendRaw("CHATHISTORY TARGETS * * 50")
+                }
             }
 
             is FreeqEvent.Authenticated -> {
@@ -887,6 +891,11 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                 else
                     state.getOrCreateDM(batch.target)
                 sorted.forEach { ch.appendIfNew(it) }
+            }
+
+            is FreeqEvent.ChatHistoryTarget -> {
+                // Create DM buffer for each conversation partner
+                state.getOrCreateDM(event.nick)
             }
         }
     }
