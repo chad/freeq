@@ -56,6 +56,17 @@ fn decrypt_at_rest(key: &[u8; 32], stored: &str) -> String {
     }
 }
 
+/// Compute a canonical DM channel key from two DIDs.
+/// The key is `dm:<did_a>,<did_b>` where the DIDs are alphabetically sorted.
+/// This ensures both participants produce the same key regardless of who sends.
+pub fn canonical_dm_key(did_a: &str, did_b: &str) -> String {
+    if did_a <= did_b {
+        format!("dm:{did_a},{did_b}")
+    } else {
+        format!("dm:{did_b},{did_a}")
+    }
+}
+
 /// Database handle wrapping a SQLite connection.
 pub struct Db {
     conn: Connection,
@@ -577,64 +588,29 @@ impl Db {
         )
     }
 
-    /// Get DM history between two users.
-    pub fn dm_history(
+    /// List DM conversations for a given DID, ordered by most recent message.
+    /// Returns (canonical_dm_key, last_message_timestamp) pairs.
+    pub fn dm_conversations(
         &self,
-        user_a: &str,
-        user_b: &str,
+        did: &str,
         limit: usize,
-        before_ts: Option<u64>,
-    ) -> SqlResult<Vec<MessageRow>> {
-        let sql = if before_ts.is_some() {
-            "SELECT id, channel, sender, text, timestamp, tags_json, msgid, replaces_msgid, deleted_at
+    ) -> SqlResult<Vec<(String, u64)>> {
+        let pattern = format!("%{did}%");
+        let mut stmt = self.conn.prepare(
+            "SELECT channel, MAX(timestamp) AS last_ts
              FROM messages
-             WHERE ((channel = ?1 AND sender LIKE ?2) OR (channel = ?2 AND sender LIKE ?1))
-               AND (deleted_at IS NULL)
-               AND timestamp < ?4
-             ORDER BY timestamp ASC LIMIT ?3"
-        } else {
-            "SELECT id, channel, sender, text, timestamp, tags_json, msgid, replaces_msgid, deleted_at
-             FROM messages
-             WHERE ((channel = ?1 AND sender LIKE ?2) OR (channel = ?2 AND sender LIKE ?1))
-               AND (deleted_at IS NULL)
-             ORDER BY timestamp ASC LIMIT ?3"
-        };
-        let mut stmt = self.conn.prepare(sql)?;
-        let parse_row = |row: &rusqlite::Row| -> SqlResult<MessageRow> {
-            let tags_json: String = row.get(5)?;
-            let tags: HashMap<String, String> =
-                serde_json::from_str(&tags_json).unwrap_or_default();
-            Ok(MessageRow {
-                id: row.get(0)?,
-                channel: row.get(1)?,
-                sender: row.get(2)?,
-                text: row.get(3)?,
-                timestamp: row.get::<_, i64>(4)? as u64,
-                tags,
-                msgid: row.get(6)?,
-                replaces_msgid: row.get(7)?,
-                deleted_at: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
-            })
-        };
-        let mut result: Vec<MessageRow> = if let Some(ts) = before_ts {
-            stmt.query_map(
-                params![user_a, format!("%{user_b}%"), limit as i64, ts as i64],
-                parse_row,
-            )?
-            .collect::<SqlResult<_>>()?
-        } else {
-            stmt.query_map(
-                params![user_a, format!("%{user_b}%"), limit as i64],
-                parse_row,
-            )?
-            .collect::<SqlResult<_>>()?
-        };
-        if let Some(ref key) = self.encryption_key {
-            for row in &mut result {
-                row.text = decrypt_at_rest(key, &row.text);
-            }
-        }
-        Ok(result)
+             WHERE channel LIKE 'dm:%' AND channel LIKE ?1
+               AND deleted_at IS NULL
+             GROUP BY channel
+             ORDER BY last_ts DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![pattern, limit as i64], |row| {
+            let channel: String = row.get(0)?;
+            let ts: i64 = row.get(1)?;
+            Ok((channel, ts as u64))
+        })?;
+        rows.collect()
     }
 
     /// Edit a message (update text by msgid).

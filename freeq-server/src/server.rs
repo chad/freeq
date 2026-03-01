@@ -1855,6 +1855,26 @@ async fn process_s2s_message(
                         let _ = tx.try_send(line.clone());
                     }
                 }
+
+                // Persist DM if both sender and recipient have DIDs
+                let sender_nick = from.split('!').next().unwrap_or(&from);
+                let sender_did = state.nick_owners.lock().get(sender_nick).cloned();
+                let recipient_did = state.nick_owners.lock().get(&target).cloned();
+                if let (Some(s_did), Some(r_did)) = (sender_did.as_deref(), recipient_did.as_deref()) {
+                    let dm_key = crate::db::canonical_dm_key(s_did, r_did);
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let mut tags = HashMap::new();
+                    tags.insert("msgid".to_string(), msgid.clone());
+                    if let Some(ref sig) = sig {
+                        tags.insert("+freeq.at/sig".to_string(), sig.clone());
+                    }
+                    state.with_db(|db| {
+                        db.insert_message(&dm_key, &from, &text, timestamp, &tags, Some(&msgid))
+                    });
+                }
             }
         }
 
