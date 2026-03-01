@@ -170,7 +170,7 @@ export interface Store {
   clearUnread: (channel: string) => void;
 
   // Actions — DM targets
-  addDmTarget: (nick: string, lastTs: Date | null) => void;
+  addDmTarget: (nick: string) => void;
 
   // Actions — batches
   startBatch: (id: string, type: string, target: string) => void;
@@ -322,7 +322,7 @@ export const useStore = create<Store>((set, get) => ({
     return { channels };
   }),
 
-  addDmTarget: (nick, _lastTs) => set((s) => {
+  addDmTarget: (nick) => set((s) => {
     const channels = new Map(s.channels);
     const key = nick.toLowerCase();
     if (!channels.has(key)) {

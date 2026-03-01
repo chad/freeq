@@ -836,9 +836,7 @@ async function handleLine(rawLine: string) {
       const sub = msg.params[0];
       if (sub === 'TARGETS' && msg.params[1]) {
         const targetNick = msg.params[1];
-        const timeTag = msg.tags['time'];
-        const lastTs = timeTag ? new Date(timeTag) : null;
-        store.addDmTarget(targetNick, lastTs);
+        store.addDmTarget(targetNick);
       }
       break;
     }
