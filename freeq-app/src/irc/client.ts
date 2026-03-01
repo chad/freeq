@@ -358,6 +358,10 @@ export function requestHistory(channel: string, before?: string) {
   }
 }
 
+export function requestDmTargets(limit = 50) {
+  raw(`CHATHISTORY TARGETS * * ${limit}`);
+}
+
 export function rawCommand(line: string) {
   raw(line);
 }
@@ -498,6 +502,10 @@ async function handleLine(rawLine: string) {
         if (ch.trim()) raw(`JOIN ${ch.trim()}`);
       }
       autoJoinChannels = [];
+      // Fetch DM conversation list if authenticated
+      if (saslDid) {
+        requestDmTargets();
+      }
       // Restore last active channel after joins complete
       const savedActive = localStorage.getItem('freeq-active-channel');
       if (savedActive && savedActive !== 'server') {
@@ -819,6 +827,18 @@ async function handleLine(rawLine: string) {
         store.startBatch(ref.slice(1), msg.params[1] || '', msg.params[2] || '');
       } else if (ref.startsWith('-')) {
         store.endBatch(ref.slice(1));
+      }
+      break;
+    }
+
+    // ── CHATHISTORY (TARGETS response) ──
+    case 'CHATHISTORY': {
+      const sub = msg.params[0];
+      if (sub === 'TARGETS' && msg.params[1]) {
+        const targetNick = msg.params[1];
+        const timeTag = msg.tags['time'];
+        const lastTs = timeTag ? new Date(timeTag) : null;
+        store.addDmTarget(targetNick, lastTs);
       }
       break;
     }
