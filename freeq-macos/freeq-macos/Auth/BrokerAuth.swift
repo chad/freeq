@@ -56,9 +56,11 @@ enum BrokerAuth {
     /// Start OAuth flow via the auth broker.
     /// Opens a browser window for AT Protocol login, receives callback.
     @MainActor
-    static func startOAuth(brokerBase: String) async throws -> (brokerToken: String, session: BrokerSession) {
+    static func startOAuth(brokerBase: String, handle: String) async throws -> (brokerToken: String, session: BrokerSession) {
         let callbackScheme = "freeq"
-        let loginURL = URL(string: "\(brokerBase)/auth/login?callback=\(callbackScheme)://auth")!
+        let encodedHandle = handle.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? handle
+        let returnTo = "https://irc.freeq.at/auth/mobile".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let loginURL = URL(string: "\(brokerBase)/auth/login?handle=\(encodedHandle)&return_to=\(returnTo)&popup=1")!
 
         return try await withCheckedThrowingContinuation { continuation in
             let session = ASWebAuthenticationSession(

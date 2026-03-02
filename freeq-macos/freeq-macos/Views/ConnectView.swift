@@ -2,7 +2,8 @@ import SwiftUI
 
 struct ConnectView: View {
     @Environment(AppState.self) private var appState
-    @State private var nick: String = ""
+    @State private var handle: String = ""
+    @State private var guestNick: String = ""
     @State private var isLoggingIn = false
 
     var body: some View {
@@ -22,50 +23,55 @@ struct ConnectView: View {
                     .foregroundStyle(.secondary)
             }
 
-            // Login
-            VStack(spacing: 16) {
+            // AT Protocol Login
+            VStack(spacing: 12) {
+                Text("Sign in with your AT Protocol handle")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                TextField("handle (e.g. alice.bsky.social)", text: $handle)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 280)
+                    .onSubmit { startLogin() }
+
                 Button {
-                    isLoggingIn = true
-                    Task {
-                        do {
-                            let (brokerToken, session) = try await BrokerAuth.startOAuth(
-                                brokerBase: appState.authBrokerBase
-                            )
-                            appState.brokerToken = brokerToken
-                            KeychainHelper.save(key: "brokerToken", value: brokerToken)
-                            appState.pendingWebToken = session.token
-                            appState.authenticatedDID = session.did
-                            KeychainHelper.save(key: "did", value: session.did)
-                            appState.connect(nick: session.nick)
-                        } catch {
-                            appState.errorMessage = "Login failed: \(error.localizedDescription)"
-                        }
-                        isLoggingIn = false
-                    }
+                    startLogin()
                 } label: {
                     HStack {
-                        Image(systemName: "person.badge.key.fill")
-                        Text("Sign in with AT Protocol")
+                        if isLoggingIn {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                        } else {
+                            Image(systemName: "person.badge.key.fill")
+                        }
+                        Text("Sign In")
                     }
                     .frame(maxWidth: 280)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .disabled(isLoggingIn)
+                .disabled(handle.isEmpty || isLoggingIn)
+            }
 
-                // Guest connect
-                HStack(spacing: 8) {
-                    TextField("Nickname", text: $nick)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 160)
-                        .onSubmit { connectGuest() }
+            // Divider
+            HStack {
+                Rectangle().fill(.separator).frame(height: 1)
+                Text("or").font(.caption).foregroundStyle(.tertiary)
+                Rectangle().fill(.separator).frame(height: 1)
+            }
+            .frame(width: 280)
 
-                    Button("Connect as Guest") {
-                        connectGuest()
-                    }
-                    .disabled(nick.isEmpty)
+            // Guest connect
+            HStack(spacing: 8) {
+                TextField("Nickname", text: $guestNick)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 160)
+                    .onSubmit { connectGuest() }
+
+                Button("Connect as Guest") {
+                    connectGuest()
                 }
-                .foregroundStyle(.secondary)
+                .disabled(guestNick.isEmpty)
             }
 
             if let error = appState.errorMessage {
@@ -73,11 +79,7 @@ struct ConnectView: View {
                     .font(.caption)
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
-            }
-
-            if appState.connectionState == .connecting {
-                ProgressView()
-                    .scaleEffect(0.8)
+                    .frame(width: 300)
             }
 
             Spacer()
@@ -86,8 +88,32 @@ struct ConnectView: View {
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
+    private func startLogin() {
+        guard !handle.isEmpty else { return }
+        isLoggingIn = true
+        appState.errorMessage = nil
+
+        Task {
+            do {
+                let (brokerToken, session) = try await BrokerAuth.startOAuth(
+                    brokerBase: appState.authBrokerBase,
+                    handle: handle
+                )
+                appState.brokerToken = brokerToken
+                KeychainHelper.save(key: "brokerToken", value: brokerToken)
+                appState.pendingWebToken = session.token
+                appState.authenticatedDID = session.did
+                KeychainHelper.save(key: "did", value: session.did)
+                appState.connect(nick: session.nick)
+            } catch {
+                appState.errorMessage = "Login failed: \(error.localizedDescription)"
+            }
+            isLoggingIn = false
+        }
+    }
+
     private func connectGuest() {
-        guard !nick.isEmpty else { return }
-        appState.connect(nick: nick)
+        guard !guestNick.isEmpty else { return }
+        appState.connect(nick: guestNick)
     }
 }
