@@ -35,3 +35,36 @@ freeq-ios/Generated/
 freeq-ios/freeq.xcodeproj/
 .DS_Store
 .env
+
+# Windows
+# User-specific files
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+# Build results
+[Dd]ebug/
+[Rr]elease/
+[Bb]in/
+[Oo]bj/
+
+# Visual Studio cache files
+vs/
+**/DesignTimeBuild/*
+**/FileContentIndex/*
+**/CopilotIndices/*
+
+# Test results
+[Tt]est[Rr]esult*/
+*.trx
+*.VisualState.xml
+
+# NuGet Packages
+*.nupkg
+**/packages/*
+# Others
+*.log
+*.tmp
+*.pdb
+*.cache
