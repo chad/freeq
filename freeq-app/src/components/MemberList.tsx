@@ -134,14 +134,17 @@ function DMProfilePanel({ nick, channel }: { nick: string; channel: { members: M
   return (
     <aside role="complementary" aria-label="User profile" className="w-64 h-full bg-bg-secondary border-l border-border overflow-y-auto shrink-0">
       {/* Banner / gradient */}
-      <div className="h-24 relative overflow-hidden">
+      <div className="h-24 overflow-hidden">
         {profile?.banner ? (
           <img src={profile.banner} alt="" className="w-full h-full object-cover" />
         ) : (
           <div className="w-full h-full bg-gradient-to-br from-accent/30 via-purple/20 to-accent/10" />
         )}
-        {/* Avatar */}
-        <div className="absolute -bottom-8 left-1/2 -translate-x-1/2">
+      </div>
+
+      {/* Avatar — overlaps banner edge */}
+      <div className="relative -mt-8 flex justify-center">
+        <div className="relative">
           {avatarUrl ? (
             <img
               src={avatarUrl}
@@ -165,7 +168,7 @@ function DMProfilePanel({ nick, channel }: { nick: string; channel: { members: M
         </div>
       </div>
 
-      <div className="pt-10 px-4 pb-4 text-center">
+      <div className="pt-2 px-4 pb-4 text-center">
         {/* Display name */}
         <div className="font-semibold text-fg text-base">{displayName}</div>
         {displayName !== nick && (
