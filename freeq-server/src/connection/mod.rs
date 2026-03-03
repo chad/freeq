@@ -336,7 +336,13 @@ where
         };
 
         // Rate limiting (skip during registration — clients burst on connect)
-        if conn.registered {
+        // Exempt read-only and join commands — they burst legitimately on connect
+        // when auto-rejoin + client-side JOIN overlap.
+        let exempt_from_rate_limit = matches!(
+            msg.command.as_str(),
+            "JOIN" | "CHATHISTORY" | "WHOIS" | "PING" | "PONG" | "MODE" | "WHO" | "NAMES"
+        );
+        if conn.registered && !exempt_from_rate_limit {
             let now = tokio::time::Instant::now();
             let elapsed = now.duration_since(rate_last).as_secs_f64();
             rate_tokens = (rate_tokens + elapsed * rate_refill).min(rate_max);

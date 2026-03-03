@@ -67,9 +67,17 @@ export function connect(url: string, desiredNick: string, channels?: string[]) {
   const store = useStore.getState();
   store.reset();
 
+  // Serialize async line handling to prevent race conditions.
+  // Without this, BATCH end can be processed before async PRIVMSG handlers
+  // (which await E2EE decryption) have finished adding messages to the batch.
+  let lineQueue: Promise<void> = Promise.resolve();
+  const serializedHandleLine = (line: string) => {
+    lineQueue = lineQueue.then(() => handleLine(line)).catch((e) => console.error('[irc] line handler error:', e));
+  };
+
   transport = new Transport({
     url,
-    onLine: handleLine,
+    onLine: serializedHandleLine,
     onStateChange: (s: TransportState) => {
       useStore.getState().setConnectionState(s);
       if (s === 'connected') {
@@ -400,6 +408,8 @@ async function handleLine(rawLine: string) {
   const store = useStore.getState();
   const from = prefixNick(msg.prefix);
 
+
+
   switch (msg.command) {
     // ── CAP negotiation ──
     case 'CAP':
@@ -498,8 +508,13 @@ async function handleLine(rawLine: string) {
       if (!toJoin.some(ch => ch.toLowerCase().replace(/^#/, '') === 'freeq' || ch.toLowerCase() === '#freeq')) {
         toJoin.unshift('#freeq');
       }
+      // The server auto-joins saved channels for DID users (registration.rs).
+      // Only send JOIN for channels not already joined to avoid duplicate 366/CHATHISTORY.
       for (const ch of toJoin) {
-        if (ch.trim()) raw(`JOIN ${ch.trim()}`);
+        const name = ch.trim();
+        if (name && !store.channels.has(name.toLowerCase())) {
+          raw(`JOIN ${name}`);
+        }
       }
       autoJoinChannels = [];
       // Fetch DM conversation list if authenticated
