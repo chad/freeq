@@ -39,6 +39,11 @@ struct MainView: View {
                         ReconnectBanner()
                     }
 
+                    // MOTD banner
+                    if appState.showMotd && !appState.motd.isEmpty {
+                        MotdBanner()
+                    }
+
                     // Guest upgrade banner
                     if appState.connectionState == .registered && appState.authenticatedDID == nil {
                         GuestUpgradeBanner()
@@ -124,6 +129,46 @@ struct MainView: View {
         case .connecting: .orange
         case .disconnected: .red
         }
+    }
+}
+
+// MARK: - MOTD Banner
+
+struct MotdBanner: View {
+    @Environment(AppState.self) private var appState
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: "info.circle")
+                    .font(.caption)
+                Text("Message of the Day")
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Button(expanded ? "Collapse" : "Show") {
+                    withAnimation { expanded.toggle() }
+                }
+                .font(.caption)
+                .buttonStyle(.plain)
+                Button {
+                    appState.showMotd = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption2)
+                }
+                .buttonStyle(.plain)
+            }
+            if expanded {
+                Text(appState.motd.trimmingCharacters(in: .whitespacesAndNewlines))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .background(.ultraThinMaterial)
     }
 }
 

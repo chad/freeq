@@ -6,6 +6,8 @@ struct ComposeBar: View {
     @FocusState private var isFocused: Bool
     @State private var pendingUpload: PendingUpload?
     @State private var isUploading = false
+    @State private var autocompleteIndex: Int = 0
+    @AppStorage("freeq.crossPostBluesky") private var crossPostBluesky = false
 
     private var isEditing: Bool { appState.editingMessageId != nil }
     private var isReplying: Bool { appState.replyingToMessage != nil }
@@ -102,6 +104,9 @@ struct ComposeBar: View {
                 .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
             }
 
+            // Autocomplete popup
+            AutocompletePopup(text: $text, selectedIndex: $autocompleteIndex, anchor: .zero)
+
             HStack(alignment: .bottom, spacing: 6) {
                 // File picker button
                 Button { pickFile() } label: {
@@ -140,6 +145,9 @@ struct ComposeBar: View {
                         .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
                 )
 
+                // Format toolbar
+                FormatToolbar(text: $text)
+
                 // Emoji button (system picker)
                 Button {
                     NSApp.orderFrontCharacterPalette(nil)
@@ -150,6 +158,19 @@ struct ComposeBar: View {
                 }
                 .buttonStyle(.plain)
                 .help("Emoji (⌘⌃Space)")
+
+                // Cross-post toggle
+                if appState.authenticatedDID != nil {
+                    Button {
+                        crossPostBluesky.toggle()
+                    } label: {
+                        Image(systemName: crossPostBluesky ? "cloud.fill" : "cloud")
+                            .font(.caption)
+                            .foregroundStyle(crossPostBluesky ? .blue : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help(crossPostBluesky ? "Cross-posting to Bluesky (click to disable)" : "Cross-post to Bluesky")
+                }
 
                 // Send button
                 Button { send() } label: {

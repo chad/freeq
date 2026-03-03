@@ -69,7 +69,7 @@ class ProfileCache {
     }
 
     /// Fetch profile from Bluesky public API.
-    private func fetchProfile(nick: String, did: String) {
+    func fetchProfile(nick: String, did: String) {
         let lower = nick.lowercased()
         fetching.insert(lower)
 
@@ -108,13 +108,19 @@ class ProfileCache {
     }
 }
 
-/// Async image loader with disk caching.
+/// Async image loader with memory + disk caching.
 struct AvatarView: View {
     let nick: String
     let size: CGFloat
     @State private var image: NSImage?
 
-    private static var imageCache: [URL: NSImage] = [:]
+    private static var memoryCache: [URL: NSImage] = [:]
+    private static let diskCacheDir: URL = {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let dir = caches.appendingPathComponent("at.freeq.macos/avatars", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
 
     var body: some View {
         Group {
@@ -125,7 +131,6 @@ struct AvatarView: View {
                     .frame(width: size, height: size)
                     .clipShape(Circle())
             } else {
-                // Colored initial fallback
                 ZStack {
                     Circle()
                         .fill(Theme.nickColor(for: nick).opacity(0.2))
@@ -141,18 +146,33 @@ struct AvatarView: View {
 
     private func loadAvatar() {
         guard let url = ProfileCache.shared.profile(for: nick)?.avatarURL else { return }
-        if let cached = Self.imageCache[url] {
+
+        // Memory cache
+        if let cached = Self.memoryCache[url] {
             image = cached
             return
         }
+
+        // Disk cache
+        let diskFile = Self.diskCacheDir.appendingPathComponent(url.lastPathComponent)
+        if let data = try? Data(contentsOf: diskFile), let nsImage = NSImage(data: data) {
+            Self.memoryCache[url] = nsImage
+            image = nsImage
+            return
+        }
+
+        // Network fetch
         Task {
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
                 if let nsImage = NSImage(data: data) {
-                    Self.imageCache[url] = nsImage
+                    Self.memoryCache[url] = nsImage
+                    try? data.write(to: diskFile)
                     await MainActor.run { image = nsImage }
                 }
-            } catch {}
+            } catch {
+                Log.media.error("Avatar fetch failed for \(nick): \(error.localizedDescription)")
+            }
         }
     }
 }

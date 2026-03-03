@@ -37,6 +37,7 @@ struct GeneralSettings: View {
     @AppStorage("freeq.showJoinPart") private var showJoinPart = true
     @AppStorage("freeq.notificationsEnabled") private var notificationsEnabled = true
     @AppStorage("freeq.compactMode") private var compactMode = false
+    @AppStorage("freeq.soundsEnabled") private var soundsEnabled = true
 
     var body: some View {
         Form {
@@ -46,6 +47,7 @@ struct GeneralSettings: View {
             }
             Section("Notifications") {
                 Toggle("Enable notifications", isOn: $notificationsEnabled)
+                Toggle("Sound effects", isOn: $soundsEnabled)
                 Text("Notifications fire for mentions and DMs")
                     .font(.caption)
                     .foregroundStyle(.secondary)

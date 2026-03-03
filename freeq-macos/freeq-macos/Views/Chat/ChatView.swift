@@ -9,6 +9,12 @@ struct ChatView: View {
             TopBarView()
             Divider()
 
+            // Pinned messages bar
+            if let pins = appState.activeChannelState?.pinnedMessages, !pins.isEmpty {
+                PinnedMessagesBar(pins: pins)
+                Divider()
+            }
+
             // Search bar
             if appState.showSearch {
                 SearchBar(isPresented: Binding(

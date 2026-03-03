@@ -90,6 +90,7 @@ struct MemberRow: View {
     @Environment(AppState.self) private var appState
     let member: MemberInfo
     let channelName: String
+    @State private var showProfile = false
 
     private var profile: ProfileCache.Profile? {
         ProfileCache.shared.profile(for: member.nick)
@@ -180,9 +181,12 @@ struct MemberRow: View {
         .contentShape(Rectangle())
         .onTapGesture {
             if member.nick.lowercased() != appState.nick.lowercased() {
-                let dm = appState.getOrCreateDM(member.nick)
-                appState.activeChannel = dm.name
+                showProfile = true
             }
+        }
+        .sheet(isPresented: $showProfile) {
+            UserProfileSheet(nick: member.nick)
+                .environment(appState)
         }
         .contextMenu {
             Button("Send Message") {

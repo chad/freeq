@@ -9,6 +9,7 @@ class ChannelState: Identifiable {
     var members: [MemberInfo] = []
     var topic: String = ""
     var topicSetBy: String?
+    var pinnedMessages: [ChatMessage] = []
     var typingUsers: [String: Date] = [:]
     var lastActivity: Date = Date()
     var isEncrypted: Bool = false

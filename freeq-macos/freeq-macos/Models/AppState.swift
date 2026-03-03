@@ -69,6 +69,8 @@ class AppState {
     var replyingToMessage: ChatMessage?
     var scrollToMessageId: String?
     var showSearch: Bool = false
+    var motd: String = ""
+    var showMotd: Bool = false
 
     // MARK: - Auth
     var authBrokerBase: String = "https://auth.freeq.at"
@@ -142,6 +144,17 @@ class AppState {
            let saved = try? JSONDecoder().decode([Bookmark].self, from: data) {
             bookmarks = saved
         }
+
+        // Wake from sleep → reconnect
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.connectionState == .disconnected, self.hasSavedSession else { return }
+            Log.irc.info("System wake detected — reconnecting")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                self.reconnectIfSaved()
+            }
+        }
     }
 
     private func requestNotificationPermission() {
@@ -151,6 +164,7 @@ class AppState {
     // MARK: - Connection
 
     func connect(nick: String, webToken: String? = nil) {
+        Log.irc.info("Connecting as \(nick, privacy: .public)")
         self.nick = nick
         connectionState = .connecting
         UserDefaults.standard.set(nick, forKey: "freeq.nick")
@@ -429,6 +443,22 @@ class AppState {
         return nil
     }
 
+    // MARK: - Sounds
+
+    enum SoundType { case mention, dm, connect, disconnect }
+
+    func playSound(_ type: SoundType) {
+        guard UserDefaults.standard.bool(forKey: "freeq.soundsEnabled") != false else { return }
+        let name: String
+        switch type {
+        case .mention: name = "Ping"
+        case .dm: name = "Tink"
+        case .connect: name = "Pop"
+        case .disconnect: name = "Basso"
+        }
+        NSSound(named: NSSound.Name(name))?.play()
+    }
+
     func toggleFavorite(_ channel: String) {
         let key = channel.lowercased()
         if favorites.contains(key) { favorites.remove(key) } else { favorites.insert(key) }
@@ -537,8 +567,10 @@ extension AppState {
             connectionState = .connected
 
         case .registered(let registeredNick):
+            Log.irc.info("Registered as \(registeredNick, privacy: .public)")
             connectionState = .registered
             reconnectAttempts = 0
+            playSound(.connect)
             nick = registeredNick
             // Auto-join channels
             for ch in autoJoinChannels {
@@ -663,6 +695,7 @@ extension AppState {
                     mentionCounts[target.lowercased(), default: 0] += 1
                     if !mutedChannels.contains(target.lowercased()) {
                         sendNotification(title: "\(msg.fromNick) in \(target)", body: msg.text)
+                        playSound(.mention)
                     }
                 }
             } else {
@@ -674,6 +707,7 @@ extension AppState {
                 // DM notification
                 if !isSelf {
                     sendNotification(title: msg.fromNick, body: msg.text)
+                    playSound(.dm)
                 }
             }
 
@@ -842,6 +876,20 @@ extension AppState {
             }
 
         case .notice(let text):
+            // MOTD handling
+            if text == "MOTD:START" {
+                motd = ""
+                return
+            }
+            if text.hasPrefix("MOTD:") && text != "MOTD:START" && text != "MOTD:END" {
+                motd += String(text.dropFirst("MOTD:".count)) + "\n"
+                return
+            }
+            if text == "MOTD:END" {
+                if !motd.isEmpty { showMotd = true }
+                return
+            }
+
             // NamesEnd signal — flush pending members and request history
             if text.hasPrefix("__NAMES_END__") {
                 let channel = String(text.dropFirst("__NAMES_END__".count))

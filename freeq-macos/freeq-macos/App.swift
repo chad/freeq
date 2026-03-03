@@ -5,6 +5,8 @@ struct FreeqApp: App {
     @State private var appState = AppState()
     @State private var showQuickSwitcher = false
     @State private var showBookmarks = false
+    @State private var showChannelList = false
+    @State private var showOnboarding = !UserDefaults.standard.bool(forKey: "freeq.onboardingComplete")
 
     var body: some Scene {
         WindowGroup {
@@ -18,6 +20,13 @@ struct FreeqApp: App {
                 .sheet(isPresented: $showBookmarks) {
                     BookmarksPanel()
                         .environment(appState)
+                }
+                .sheet(isPresented: $showChannelList) {
+                    ChannelListBrowser()
+                        .environment(appState)
+                }
+                .sheet(isPresented: $showOnboarding) {
+                    OnboardingView()
                 }
                 .onAppear {
                     if appState.hasSavedSession && appState.connectionState == .disconnected {
@@ -54,6 +63,11 @@ struct FreeqApp: App {
                     showBookmarks = true
                 }
                 .keyboardShortcut("b", modifiers: [.command, .shift])
+
+                Button("Browse Channels") {
+                    showChannelList = true
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
 
                 Button("Join Channel…") {
                     appState.showJoinSheet = true
