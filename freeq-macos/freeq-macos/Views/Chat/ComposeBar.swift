@@ -4,6 +4,8 @@ struct ComposeBar: View {
     @Environment(AppState.self) private var appState
     @State private var text: String = ""
     @FocusState private var isFocused: Bool
+    @State private var pendingUpload: PendingUpload?
+    @State private var isUploading = false
 
     private var isEditing: Bool { appState.editingMessageId != nil }
     private var isReplying: Bool { appState.replyingToMessage != nil }
@@ -60,7 +62,57 @@ struct ComposeBar: View {
                 .background(Color.orange.opacity(0.05))
             }
 
-            HStack(alignment: .bottom, spacing: 8) {
+            // Upload preview
+            if let upload = pendingUpload {
+                HStack(spacing: 8) {
+                    if let preview = upload.preview {
+                        Image(nsImage: preview)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 60, height: 60)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    } else {
+                        Image(systemName: "doc.fill")
+                            .font(.title2)
+                            .frame(width: 60, height: 60)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(upload.filename)
+                            .font(.caption.weight(.medium))
+                            .lineLimit(1)
+                        if isUploading {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                        }
+                        if let error = upload.error {
+                            Text(error)
+                                .font(.caption2)
+                                .foregroundStyle(.red)
+                        }
+                    }
+                    Spacer()
+                    Button { pendingUpload = nil } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+            }
+
+            HStack(alignment: .bottom, spacing: 6) {
+                // File picker button
+                Button { pickFile() } label: {
+                    Image(systemName: "plus.circle")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Attach file (images)")
+                .disabled(appState.authenticatedDID == nil)
+
                 // Text editor
                 ZStack(alignment: .topLeading) {
                     if text.isEmpty {
@@ -88,20 +140,35 @@ struct ComposeBar: View {
                         .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
                 )
 
+                // Emoji button (system picker)
+                Button {
+                    NSApp.orderFrontCharacterPalette(nil)
+                } label: {
+                    Image(systemName: "face.smiling")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Emoji (⌘⌃Space)")
+
                 // Send button
                 Button { send() } label: {
                     Image(systemName: isEditing ? "checkmark.circle.fill" : "arrow.up.circle.fill")
                         .font(.title2)
                         .symbolRenderingMode(.hierarchical)
-                        .foregroundColor(text.isEmpty ? .gray : (isEditing ? .orange : .accentColor))
+                        .foregroundColor(text.isEmpty && pendingUpload == nil ? .gray : (isEditing ? .orange : .accentColor))
                 }
                 .buttonStyle(.plain)
-                .disabled(text.isEmpty)
+                .disabled(text.isEmpty && pendingUpload == nil)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
         }
         .background(.bar)
+        .onDrop(of: [.image, .fileURL], isTargeted: nil) { providers in
+            handleDrop(providers)
+            return true
+        }
         .onChange(of: text) { _, newValue in
             if !newValue.isEmpty, let target = appState.activeChannel {
                 appState.sendTyping(target: target)
@@ -119,6 +186,12 @@ struct ComposeBar: View {
     @State private var historyIndex: Int = -1
 
     private func send() {
+        // Handle pending upload
+        if pendingUpload != nil {
+            uploadAndSend()
+            return
+        }
+
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let target = appState.activeChannel else { return }
 
@@ -167,6 +240,93 @@ struct ComposeBar: View {
             appState.editingMessageId = lastMsg.id
             appState.editingText = lastMsg.text
             text = lastMsg.text
+        }
+    }
+
+    // MARK: - File Upload
+
+    private func pickFile() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image, .png, .jpeg, .gif]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        if panel.runModal() == .OK, let url = panel.url {
+            loadFile(url: url)
+        }
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) {
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier("public.file-url") {
+                provider.loadItem(forTypeIdentifier: "public.file-url") { item, _ in
+                    if let data = item as? Data, let url = URL(dataRepresentation: data, relativeTo: nil) {
+                        DispatchQueue.main.async { loadFile(url: url) }
+                    }
+                }
+            } else if provider.canLoadObject(ofClass: NSImage.self) {
+                provider.loadObject(ofClass: NSImage.self) { item, _ in
+                    if let image = item as? NSImage {
+                        DispatchQueue.main.async {
+                            if let tiff = image.tiffRepresentation,
+                               let rep = NSBitmapImageRep(data: tiff),
+                               let png = rep.representation(using: .png, properties: [:]) {
+                                pendingUpload = PendingUpload(
+                                    data: png, filename: "paste.png",
+                                    contentType: "image/png", preview: image
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func loadFile(url: URL) {
+        guard let data = try? Data(contentsOf: url) else { return }
+        let filename = url.lastPathComponent
+        let ext = url.pathExtension.lowercased()
+        let contentType: String
+        switch ext {
+        case "png": contentType = "image/png"
+        case "jpg", "jpeg": contentType = "image/jpeg"
+        case "gif": contentType = "image/gif"
+        case "webp": contentType = "image/webp"
+        default: contentType = "application/octet-stream"
+        }
+        let preview = NSImage(contentsOf: url)
+        pendingUpload = PendingUpload(data: data, filename: filename, contentType: contentType, preview: preview)
+    }
+
+    private func uploadAndSend() {
+        guard let upload = pendingUpload,
+              let did = appState.authenticatedDID,
+              let target = appState.activeChannel else { return }
+
+        isUploading = true
+        Task {
+            do {
+                let url = try await FileUploader.upload(
+                    data: upload.data,
+                    filename: upload.filename,
+                    contentType: upload.contentType,
+                    did: did,
+                    channel: target.hasPrefix("#") ? target : nil
+                )
+                let msgText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let finalText = msgText.isEmpty ? url : "\(msgText) \(url)"
+                await MainActor.run {
+                    appState.sendMessage(to: target, text: finalText)
+                    pendingUpload = nil
+                    isUploading = false
+                    text = ""
+                }
+            } catch {
+                await MainActor.run {
+                    pendingUpload?.error = error.localizedDescription
+                    isUploading = false
+                }
+            }
         }
     }
 

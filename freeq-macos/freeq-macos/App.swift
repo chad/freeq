@@ -40,6 +40,11 @@ struct FreeqApp: App {
                 }
                 .keyboardShortcut("k", modifiers: .command)
 
+                Button("Search Messages") {
+                    appState.showSearch.toggle()
+                }
+                .keyboardShortcut("f", modifiers: .command)
+
                 Button("Join Channel…") {
                     appState.showJoinSheet = true
                 }

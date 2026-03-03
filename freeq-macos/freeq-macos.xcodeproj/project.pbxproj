@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		304585E2A3DCCB55DD8467D9 /* ComposeBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDCB3DAE1E0BAC641DA22730 /* ComposeBar.swift */; };
+		3ACCE0099E0E97EC7A321EDC /* FileUpload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 878F66C1A9A17E125322D5CF /* FileUpload.swift */; };
 		40B19B4620E1FFA3196FBFAD /* DetailPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68D19F735EC72757A61B1D6C /* DetailPanel.swift */; };
 		4CE6EF71CD4C106B03BD914C /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 923CB3DCE2113F08CCB9E8F7 /* SidebarView.swift */; };
 		530E3783C385009D658962CB /* freeq.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD5D672B7A5F1D6E78162DE1 /* freeq.swift */; };
@@ -30,6 +31,7 @@
 		F13BBF3DAA2C028548D91551 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04D3AAFE430FB0DC2DA62F57 /* Theme.swift */; };
 		F221FBCD2F33FDE638027BB4 /* BrokerAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16659A05393DA59C0C3AC3C4 /* BrokerAuth.swift */; };
 		F564EDD064F706DA1FED48B0 /* QuickSwitcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B36CCCF8041100BDA937EAB /* QuickSwitcher.swift */; };
+		F804DF96FC5F782461D42394 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BFC0A0C4F585C97716A8C4B /* SearchView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -56,10 +58,12 @@
 		4BCCB41ADB5F3934945B6E85 /* FreeqSDK.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = FreeqSDK.xcframework; sourceTree = "<group>"; };
 		5B36CCCF8041100BDA937EAB /* QuickSwitcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickSwitcher.swift; sourceTree = "<group>"; };
 		5B44CE675043F28160CDE06F /* AvatarCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvatarCache.swift; sourceTree = "<group>"; };
+		5BFC0A0C4F585C97716A8C4B /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
 		61EB9E0F12CF280B8BADFA41 /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
 		68D19F735EC72757A61B1D6C /* DetailPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailPanel.swift; sourceTree = "<group>"; };
 		6D0D657E5F637E5EFD232E19 /* KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHelper.swift; sourceTree = "<group>"; };
 		7BD3C7CC942BA721E1572347 /* JoinChannelSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinChannelSheet.swift; sourceTree = "<group>"; };
+		878F66C1A9A17E125322D5CF /* FileUpload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileUpload.swift; sourceTree = "<group>"; };
 		923CB3DCE2113F08CCB9E8F7 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
 		932AFF9B3AF0BCF257A2DCE2 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		9FEA777B589463007FF478DC /* MessageListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageListView.swift; sourceTree = "<group>"; };
@@ -108,6 +112,7 @@
 			children = (
 				1B11355062BDD7B9062AC22F /* ChatView.swift */,
 				FDCB3DAE1E0BAC641DA22730 /* ComposeBar.swift */,
+				878F66C1A9A17E125322D5CF /* FileUpload.swift */,
 				D1561609D65E3676C79D46E2 /* LinkPreview.swift */,
 				DB6D944E494A3AE591F53C28 /* MediaViews.swift */,
 				9FEA777B589463007FF478DC /* MessageListView.swift */,
@@ -122,6 +127,7 @@
 				7BD3C7CC942BA721E1572347 /* JoinChannelSheet.swift */,
 				61EB9E0F12CF280B8BADFA41 /* MainView.swift */,
 				5B36CCCF8041100BDA937EAB /* QuickSwitcher.swift */,
+				5BFC0A0C4F585C97716A8C4B /* SearchView.swift */,
 				38C6F4ECE1B53363B9F87425 /* Chat */,
 				51CAE43FB2294DC44665FD6C /* Detail */,
 				63AB9A7A47CD8960A6934F22 /* Settings */,
@@ -268,6 +274,7 @@
 				304585E2A3DCCB55DD8467D9 /* ComposeBar.swift in Sources */,
 				D29F998C6DF599EA13C38C85 /* ConnectView.swift in Sources */,
 				40B19B4620E1FFA3196FBFAD /* DetailPanel.swift in Sources */,
+				3ACCE0099E0E97EC7A321EDC /* FileUpload.swift in Sources */,
 				B8AB7DBFF62520564B9DDE52 /* JoinChannelSheet.swift in Sources */,
 				ECC92464E4422B5DCFDC770B /* KeychainHelper.swift in Sources */,
 				D520A6580822EF5314066E14 /* LinkPreview.swift in Sources */,
@@ -275,6 +282,7 @@
 				E7D65B5702985BB69725442A /* MediaViews.swift in Sources */,
 				58358188E47643126CBEE786 /* MessageListView.swift in Sources */,
 				F564EDD064F706DA1FED48B0 /* QuickSwitcher.swift in Sources */,
+				F804DF96FC5F782461D42394 /* SearchView.swift in Sources */,
 				B0C4859CFAA8548B0B74CFD2 /* SettingsView.swift in Sources */,
 				4CE6EF71CD4C106B03BD914C /* SidebarView.swift in Sources */,
 				F13BBF3DAA2C028548D91551 /* Theme.swift in Sources */,

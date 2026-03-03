@@ -57,6 +57,17 @@ struct MessageListView: View {
                     proxy.scrollTo(last.id, anchor: .bottom)
                 }
             }
+            .onChange(of: appState.scrollToMessageId) { _, newId in
+                if let id = newId {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        proxy.scrollTo(id, anchor: .center)
+                    }
+                    // Flash highlight
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        appState.scrollToMessageId = nil
+                    }
+                }
+            }
         }
         .background(Color(nsColor: .textBackgroundColor))
     }
@@ -105,6 +116,7 @@ struct SystemMessageRow: View {
 
 struct MessageRow: View {
     @Environment(AppState.self) private var appState
+    @AppStorage("freeq.compactMode") private var compactMode = false
     let message: ChatMessage
 
     private var isSelf: Bool {
@@ -135,7 +147,23 @@ struct MessageRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if showHeader {
+            if compactMode {
+                // Compact: inline nick + time + text on one line
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(formatTime(message.timestamp))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.quaternary)
+                        .frame(width: 36, alignment: .trailing)
+                    Text(message.from)
+                        .font(.system(.caption, weight: .bold))
+                        .foregroundStyle(isSystem ? .secondary : Theme.nickColor(for: message.from))
+                    if hasDid {
+                        Image(systemName: "checkmark.seal.fill")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.blue)
+                    }
+                }
+            } else if showHeader {
                 HStack(alignment: .top, spacing: 8) {
                     if !isSystem {
                         AvatarView(nick: message.from, size: 24)
@@ -143,7 +171,6 @@ struct MessageRow: View {
                     }
                     VStack(alignment: .leading, spacing: 0) {
                         HStack(alignment: .firstTextBaseline, spacing: 4) {
-                            // Display name or nick
                             if let displayName = profile?.displayName, !displayName.isEmpty {
                                 Text(displayName)
                                     .font(.system(.body, weight: .semibold))
@@ -178,16 +205,27 @@ struct MessageRow: View {
                 .padding(.top, 6)
             }
 
-            // Reply indicator
+            // Reply indicator (clickable → scroll to original)
             if let replyTo = message.replyTo {
-                HStack(spacing: 4) {
-                    Image(systemName: "arrowshape.turn.up.left.fill")
-                        .font(.caption2)
-                    Text("replying to \(replyTo)")
-                        .font(.caption2)
+                Button {
+                    appState.scrollToMessageId = replyTo
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrowshape.turn.up.left.fill")
+                            .font(.caption2)
+                        if let original = appState.activeChannelState?.messages.first(where: { $0.id == replyTo }) {
+                            Text("\(original.from): \(original.text)")
+                                .font(.caption2)
+                                .lineLimit(1)
+                        } else {
+                            Text("replying to message")
+                                .font(.caption2)
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 2)
                 }
-                .foregroundStyle(.secondary)
-                .padding(.leading, 2)
+                .buttonStyle(.plain)
             }
 
             // Message text + media
@@ -254,6 +292,11 @@ struct MessageRow: View {
         .padding(.vertical, 1)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+        .background(
+            appState.scrollToMessageId == message.id
+                ? Color.accentColor.opacity(0.1)
+                : Color.clear
+        )
         .contextMenu { messageContextMenu }
     }
 

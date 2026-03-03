@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Main chat area: TopBar + MessageList + ComposeBar
+/// Main chat area: TopBar + Search + MessageList + Typing + ComposeBar
 struct ChatView: View {
     @Environment(AppState.self) private var appState
 
@@ -8,8 +8,19 @@ struct ChatView: View {
         VStack(spacing: 0) {
             TopBarView()
             Divider()
+
+            // Search bar
+            if appState.showSearch {
+                SearchBar(isPresented: Binding(
+                    get: { appState.showSearch },
+                    set: { appState.showSearch = $0 }
+                ))
+                Divider()
+            }
+
             MessageListView()
             Divider()
+
             // Typing indicator bar
             if let typers = appState.activeChannelState?.activeTypers, !typers.isEmpty {
                 HStack(spacing: 4) {
@@ -86,6 +97,16 @@ struct TopBarView: View {
             }
 
             Spacer()
+
+            // Search
+            Button {
+                appState.showSearch.toggle()
+            } label: {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(appState.showSearch ? .primary : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Search (⌘F)")
 
             // Member count (channels only)
             if isChannel {

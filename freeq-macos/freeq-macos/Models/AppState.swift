@@ -52,6 +52,8 @@ class AppState {
     var editingMessageId: String?
     var editingText: String?
     var replyingToMessage: ChatMessage?
+    var scrollToMessageId: String?
+    var showSearch: Bool = false
 
     // MARK: - Auth
     var authBrokerBase: String = "https://auth.freeq.at"
