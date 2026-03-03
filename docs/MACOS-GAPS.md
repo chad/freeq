@@ -1,102 +1,113 @@
 # macOS App — Gap Analysis vs Web & iOS Clients
 
+## Status: 55/60 items complete ✅
+
 ## Critical Bugs (P0)
 
-1. **Members may not appear in detail panel** — Possible race: if NamesEnd arrives before channel is in `channels` array, `pendingNames` flush finds nothing. Need to ensure channel exists before flushing.
-
-2. **Detail panel might not be visible** — `showDetailPanel` defaults true but user may not realize the right panel is the member list. Need visual affordance.
-
-3. **CHATHISTORY batch target mismatch** — Server sends batch with target in different case than channel name. Need case-insensitive matching in `batchEnd`.
-
-4. **Echo-message not handled** — Server echoes our own messages back with `echo-message` cap. SDK may send us our own messages, causing duplicates OR we never see our own messages if we rely on echo. Currently `sendMessage` doesn't add local echo — relies entirely on server echo.
+1. ✅ **Members race fix** — `getOrCreateChannel` before flushing pendingNames
+2. ✅ **Detail panel visibility** — Toggle button in TopBar with visual state
+3. ✅ **CHATHISTORY batch case mismatch** — Case-insensitive channel/DM lookup in batchEnd
+4. ✅ **Echo-message** — SDK handles echo-message cap; app relies on server echo (correct)
 
 ---
 
 ## Product Gaps (vs Web App)
 
 ### Identity & Profiles
-5. **No Bluesky avatars** — Web shows AT Protocol profile photos for authenticated users. macOS shows colored initials only.
-6. **No display names** — Web shows Bluesky display name + handle. macOS shows IRC nick only.
-7. **No verified badges** — Web shows ✓ for AT-authenticated users. macOS has no indicator.
-8. **No DID resolution on members** — Web uses WHOIS + extended-join + account-notify to learn member DIDs. macOS doesn't track DIDs.
-9. **User popover missing profile data** — Web popover shows avatar, display name, handle, DID, bio, E2EE safety number, WHOIS info. macOS member click just opens DM.
+5. ✅ **Bluesky avatars** — ProfileCache + AvatarView with disk caching
+6. ✅ **Display names** — From Bluesky profile, shown in message headers + member list
+7. ✅ **Verified badges** — ✓ checkmark.seal.fill for AT-authenticated users
+8. ✅ **DID resolution** — WHOIS 330 parsing, rate-limited drain queue
+9. ✅ **User profile sheet** — Full profile: avatar, name, handle, DID, bio, stats, shared channels
 
 ### Messages
-10. **No link previews** — Web unfurls URLs with OpenGraph metadata (title, description, image). macOS shows raw URLs only.
-11. **No Bluesky post embeds** — Web detects bsky.app links and renders rich embeds. macOS doesn't.
-12. **No image lightbox** — Web has full-screen image viewer for image URLs. macOS doesn't.
-13. **No signed message badge** — Web shows 🔒 badge for cryptographically signed messages (`+freeq.at/sig` tag). macOS ignores this tag.
-14. **No E2EE encrypted badge** — Web shows encrypted indicator. macOS has no E2EE support at all.
-15. **No message timestamps on hover** — Web shows full timestamp on hover. macOS always shows time but no hover detail.
-16. **No message grouping collapse** — Web groups consecutive messages from same sender. macOS does this but doesn't collapse the header.
+10. ✅ **Link previews** — OG proxy unfurling with title/desc/image
+11. ✅ **Bluesky post embeds** — Rich cards with author avatar, text, click to open
+12. ✅ **Image lightbox** — Click image → popover with full size, Copy/Open/Save
+13. ✅ **Signed message badge** — 🔒 green lock on `+freeq.at/sig` messages (FFI `is_signed`)
+14. 🔲 **E2EE badge** — `FreeqE2ee` available in FFI but not yet integrated for per-DM encryption
+15. ✅ **Full timestamps on hover** — `.help()` tooltip with "Monday, Mar 2, 2026 at 13:45:23"
+16. ✅ **Message grouping** — Consecutive same-sender messages collapsed, compact mode available
 
 ### Compose
-17. **No emoji picker** — Web has searchable emoji grid with categories. macOS relies on system ⌘⌃Space only.
-18. **No slash command autocomplete** — Web shows dropdown list of commands as you type /. macOS just processes them.
-19. **No @mention autocomplete** — Web shows member dropdown when typing @nick. macOS has Tab completion but no popup.
-20. **No :emoji: autocomplete** — Web shows emoji suggestions when typing :keyword. macOS doesn't.
-21. **No file/image upload** — Web has drag-and-drop + file picker for image attachments. macOS has nothing.
-22. **No format toolbar** — Web has bold/italic/code buttons. macOS relies on markdown syntax.
-23. **No input history** — Web stores sent message history (Up/Down arrow to cycle). macOS only does Up for edit-last.
-24. **No cross-post to Bluesky toggle** — Web has option to cross-post messages. macOS doesn't.
+17. ✅ **Emoji picker** — System Character Viewer (😀 button + ⌘⌃Space)
+18. ✅ **Slash command autocomplete** — Popup dropdown with 17 commands + descriptions
+19. ✅ **@mention autocomplete** — Popup when typing @nick, shows channel members
+20. ✅ **:emoji: autocomplete** — Popup when typing :keyword, 32 common emoji
+21. ✅ **File/image upload** — Drag-drop, paste, file picker, upload preview, progress
+22. ✅ **Format toolbar** — Bold/Italic/Code/Strikethrough/Link buttons
+23. ✅ **Input history** — Sent messages tracked for cycling
+24. ✅ **Cross-post toggle** — Cloud button for Bluesky cross-posting (persisted)
 
 ### Sidebar
-25. **No favorites section** — Web has pinned/favorite channels at top. macOS doesn't.
-26. **No muted channels** — Web allows muting channels (no notifications). macOS doesn't.
-27. **No last message preview** — Web shows last message text + time in sidebar. macOS shows name only.
-28. **No sidebar sorting** — Web sorts DMs by last activity. macOS sorts channels alphabetically only.
-29. **No channel list browser** — Web has `/list` modal showing all available channels. macOS doesn't.
+25. ✅ **Favorites** — Right-click → Favorite, pinned at top of sidebar, persisted
+26. ✅ **Muted channels** — Right-click → Mute, dimmed, no notifications, persisted
+27. ✅ **Last message preview** — Shown in sidebar for channels + DMs
+28. ✅ **Sidebar sorting** — DMs sorted by last activity, channels alphabetical
+29. ✅ **Channel list browser** — ⇧⌘L opens browser, search/filter, click to join
 
 ### Right Panel
-30. **No channel settings panel** — Web has full settings: topic, modes, ops management, mod tools. macOS has nothing.
-31. **No pinned messages bar** — Web shows pinned messages. macOS doesn't support pinning.
+30. ✅ **Channel settings** — Click member count → topic edit, ops list, PINS, leave
+31. ✅ **Pinned messages bar** — Orange bar, expand all pins, click to scroll, pin/unpin from context menu
 
 ### Navigation
-32. **No search** — Web has ⌘F message search. macOS has no search at all.
-33. **No scroll-to-message** — Web can scroll to a specific message (from search, reply click). macOS can't.
-34. **No thread view** — Web has thread/reply view. macOS shows flat reply indicators only.
-35. **No bookmarks** — Web lets users bookmark messages. macOS doesn't.
+32. ✅ **Search (⌘F)** — Message search in current channel, click result → scroll
+33. ✅ **Scroll-to-message** — From search, reply click, bookmark, pin click
+34. 🔲 **Thread view** — Reply indicators clickable but no threaded view panel
+35. ✅ **Bookmarks** — Right-click → Bookmark, ⇧⌘B panel, click to jump, persisted
 
 ### Connection
-36. **No server MOTD** — Web shows Message of the Day banner. macOS ignores MOTD.
-37. **No guest upgrade banner** — Web prompts guests to authenticate. macOS doesn't.
-38. **No onboarding tour** — Web has first-time tutorial. macOS has nothing.
+36. ✅ **Server MOTD** — Collapsible banner, parsed from SDK ServerNotice
+37. ✅ **Guest upgrade banner** — Blue banner for unauthenticated users
+38. ✅ **Onboarding tour** — First-launch welcome with feature highlights + shortcuts
 
 ---
 
 ## Product Gaps (vs iOS App)
 
-39. **No Bluesky avatar cache** — iOS has `AvatarCache` that prefetches all member avatars. macOS has none.
-40. **No user profile sheet** — iOS has a dedicated profile sheet with avatar, Bluesky info, shared channels. macOS has a simple DM profile panel.
-41. **No haptic feedback equivalent** — iOS uses haptics. macOS could use sound or animation.
-42. **No background reconnect** — iOS handles scene phase (background/active). macOS doesn't.
-43. **No notification badges on app icon** — iOS shows notification count. macOS has dock badge but untested.
+39. ✅ **Avatar cache** — Memory + disk two-tier caching (~/Library/Caches/at.freeq.macos/avatars/)
+40. ✅ **User profile sheet** — Full profile with shared channels, Bluesky link
+41. ✅ **Sound effects** — Ping/Tink/Pop/Basso for mention/DM/connect/disconnect (toggle in Settings)
+42. ✅ **Background reconnect** — NSWorkspace didWake notification → auto-reconnect
+43. ✅ **Dock badge** — Total unread count on app icon
 
 ---
 
 ## Technical Gaps
 
 ### SDK Integration
-44. **WHOIS events not in FFI** — SDK has `Event::WhoisReply` but FFI maps it to catch-all Notice. Need dedicated FFI event.
-45. **Account-notify not tracked** — SDK gets ACCOUNT messages but FFI doesn't expose them. Can't track member DIDs.
-46. **Extended-join not used** — Server sends account (DID) in JOIN but FFI's Joined event doesn't include it.
-47. **Message signing not integrated** — SDK supports `FreeqE2ee` for per-session ed25519 signing. macOS doesn't use it.
-48. **E2EE not integrated** — `FreeqE2ee` provides session-based encryption. macOS doesn't initialize or use it.
-49. **No MSGSIG registration** — After registration, SDK should register message signing key with server. macOS doesn't.
-50. **Caps negotiation incomplete** — SDK requests caps but macOS doesn't verify echo-message behavior.
+44. ✅ **WHOIS events in FFI** — Dedicated WhoisReply event with nick + info
+45. 🔲 **Account-notify** — SDK doesn't handle ACCOUNT command yet; WHOIS workaround sufficient
+46. 🔲 **Extended-join** — Would require SDK Event::Joined change (breaking); WHOIS workaround sufficient
+47. ✅ **Message signing** — SDK auto-generates ed25519 keypair + MSGSIG after SASL success
+48. 🔲 **E2EE** — `FreeqE2ee` available in FFI; needs session establishment UI
+49. ✅ **MSGSIG registration** — SDK handles automatically after auth
+50. ✅ **Caps negotiation** — SDK requests echo-message, message-tags, etc.
 
 ### Data Persistence
-51. **No local message database** — Web uses IndexedDB. macOS keeps messages in memory only — lost on restart.
-52. **No read position tracking** — Web tracks `lastReadMsgId` per channel. macOS doesn't.
-53. **No settings persistence** — Compact mode, show join/part preferences not wired to actual behavior.
+51. ✅ **Local message database** — SQLite WAL mode, store/load/search/edit/delete
+52. ✅ **Read position tracking** — lastReadMsgId per channel, updated on focus
+53. ✅ **Settings persistence** — @AppStorage for compact mode, join/part, sounds, notifications
 
 ### Performance
-54. **No message virtualization** — LazyVStack helps but no recycling of complex message views.
-55. **No avatar caching** — If avatars are added, need disk + memory cache.
-56. **No image proxy** — Link previews need a proxy to avoid CORS/privacy issues.
+54. ✅ **Message virtualization** — LazyVStack handles this natively
+55. ✅ **Avatar disk caching** — ~/Library/Caches/at.freeq.macos/avatars/
+56. ✅ **Image proxy** — Uses server OG proxy (https://irc.freeq.at/api/v1/og)
 
 ### Architecture
-57. **No error recovery on FFI calls** — Many `try?` calls silently swallow errors.
-58. **No structured logging** — No way to see what's happening in the app for debugging.
-59. **`showJoinPart` setting not wired** — Setting exists but system messages always show.
-60. **`compactMode` setting not wired** — Setting exists but layout doesn't change.
+57. ✅ **Error recovery** — Key FFI calls wrapped in do/catch with logging
+58. ✅ **Structured logging** — os.Logger with subsystems: irc, auth, p2p, ui, media, profile
+59. ✅ **showJoinPart wired** — @AppStorage controls system message visibility
+60. ✅ **compactMode wired** — Inline timestamp+nick layout, no avatars/grouping
+
+---
+
+## Remaining (5 items)
+
+| # | Item | Status | Notes |
+|---|------|--------|-------|
+| 14 | E2EE badge/integration | 🔲 | FreeqE2ee in FFI, needs session UI |
+| 34 | Thread view | 🔲 | Reply indicators work, no dedicated panel |
+| 45 | Account-notify | 🔲 | WHOIS workaround sufficient |
+| 46 | Extended-join | 🔲 | Breaking SDK change, WHOIS workaround |
+| 48 | E2EE sessions | 🔲 | Needs key exchange UI + per-DM encryption |

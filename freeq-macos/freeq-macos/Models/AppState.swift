@@ -389,6 +389,13 @@ class AppState {
             return ch
         }
         let ch = ChannelState(name: name)
+        // Pre-populate from local DB
+        Task {
+            let cached = await MessageStore.shared.loadMessages(channel: name, limit: 100)
+            await MainActor.run {
+                for msg in cached { ch.appendIfNew(msg) }
+            }
+        }
         channels.append(ch)
         channels.sort { $0.name.lowercased() < $1.name.lowercased() }
         return ch
@@ -400,6 +407,13 @@ class AppState {
             return dm
         }
         let dm = ChannelState(name: nick)
+        // Pre-populate from local DB
+        Task {
+            let cached = await MessageStore.shared.loadMessages(channel: nick, limit: 100)
+            await MainActor.run {
+                for msg in cached { dm.appendIfNew(msg) }
+            }
+        }
         dmBuffers.append(dm)
         return dm
     }
@@ -667,10 +681,12 @@ extension AppState {
                 if target.hasPrefix("#") {
                     let ch = getOrCreateChannel(target)
                     ch.applyEdit(originalId: editOf, newId: msg.msgid, newText: msg.text)
+                    Task { await MessageStore.shared.markEdited(msgId: editOf, newText: msg.text) }
                 } else {
                     let bufName = isSelf ? target : msg.fromNick
                     let dm = getOrCreateDM(bufName)
                     dm.applyEdit(originalId: editOf, newId: msg.msgid, newText: msg.text)
+                    Task { await MessageStore.shared.markEdited(msgId: editOf, newText: msg.text) }
                 }
                 return
             }
@@ -684,6 +700,9 @@ extension AppState {
 
             // Route to channel or DM
             let target = msg.target
+            // Persist to local DB
+            Task { await MessageStore.shared.store(message, channel: target) }
+
             if target.hasPrefix("#") {
                 let ch = getOrCreateChannel(target)
                 ch.appendIfNew(message)
@@ -734,6 +753,7 @@ extension AppState {
                 let bufferName = target.hasPrefix("#") ? target : from
                 let ch = bufferName.hasPrefix("#") ? getOrCreateChannel(bufferName) : getOrCreateDM(bufferName)
                 ch.applyDelete(msgId: deleteId)
+                Task { await MessageStore.shared.markDeleted(msgId: deleteId) }
             }
 
             // Reactions

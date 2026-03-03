@@ -36,6 +36,7 @@
 		DCD9E1807353418B1C9EAFEC /* FreeqSDK.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 4BCCB41ADB5F3934945B6E85 /* FreeqSDK.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		DE8F1528542FEB83C2A987CE /* ChannelListBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B238AA9ACDF3723BB74BB45 /* ChannelListBrowser.swift */; };
 		E7D65B5702985BB69725442A /* MediaViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB6D944E494A3AE591F53C28 /* MediaViews.swift */; };
+		E8ABEEDF45BB77FFA7112E96 /* MessageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41E19D6BE7C80AAE06A5EB97 /* MessageStore.swift */; };
 		ECC92464E4422B5DCFDC770B /* KeychainHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D0D657E5F637E5EFD232E19 /* KeychainHelper.swift */; };
 		F13BBF3DAA2C028548D91551 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04D3AAFE430FB0DC2DA62F57 /* Theme.swift */; };
 		F221FBCD2F33FDE638027BB4 /* BrokerAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16659A05393DA59C0C3AC3C4 /* BrokerAuth.swift */; };
@@ -66,6 +67,7 @@
 		20ABEF839D9D9D42C9D1BF08 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		2B98D35F34492C2C6B3E504F /* AutocompletePopup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutocompletePopup.swift; sourceTree = "<group>"; };
 		313F00E499C37E94C9855F4F /* ConnectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectView.swift; sourceTree = "<group>"; };
+		41E19D6BE7C80AAE06A5EB97 /* MessageStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageStore.swift; sourceTree = "<group>"; };
 		49DCC7DD970BA3640B37934D /* BookmarksPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookmarksPanel.swift; sourceTree = "<group>"; };
 		4BCCB41ADB5F3934945B6E85 /* FreeqSDK.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = FreeqSDK.xcframework; sourceTree = "<group>"; };
 		5B36CCCF8041100BDA937EAB /* QuickSwitcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickSwitcher.swift; sourceTree = "<group>"; };
@@ -208,6 +210,7 @@
 				DA3E838FFB8176761B9DAA50 /* ChatMessage.swift */,
 				6D0D657E5F637E5EFD232E19 /* KeychainHelper.swift */,
 				DB1B29BA8601FC220D46B705 /* Logger.swift */,
+				41E19D6BE7C80AAE06A5EB97 /* MessageStore.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -314,6 +317,7 @@
 				87278B03BA72D53ADC27DB97 /* MainView.swift in Sources */,
 				E7D65B5702985BB69725442A /* MediaViews.swift in Sources */,
 				58358188E47643126CBEE786 /* MessageListView.swift in Sources */,
+				E8ABEEDF45BB77FFA7112E96 /* MessageStore.swift in Sources */,
 				49E784D589512E3A936DA345 /* OnboardingView.swift in Sources */,
 				C1395A0B767D4843076ECA59 /* PinnedMessagesBar.swift in Sources */,
 				F564EDD064F706DA1FED48B0 /* QuickSwitcher.swift in Sources */,
