@@ -139,8 +139,8 @@ fun MessageList(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        // Skeleton loading while messages haven't arrived
-        if (messages.isEmpty()) {
+        // Skeleton loading while messages haven't arrived (channels only — empty DMs are valid)
+        if (messages.isEmpty() && channelState.name.startsWith("#")) {
             SkeletonLoading()
         }
 

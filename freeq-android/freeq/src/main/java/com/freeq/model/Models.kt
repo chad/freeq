@@ -485,6 +485,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
         if (nick.isEmpty()) return ChannelState("")
         dmBuffers.firstOrNull { it.name.equals(nick, ignoreCase = true) }?.let { return it }
         val dm = ChannelState(nick)
+        dm.lastActivityTime = 0L // Don't appear as recent until a message arrives
         dmBuffers.add(dm)
         requestHistory(nick)
         return dm
@@ -806,6 +807,8 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                     state.motdLines.add(text.removePrefix("MOTD:"))
                 } else if (text.startsWith("__")) {
                     // Internal SDK signal — ignore
+                } else if (text.startsWith("CHATHISTORY ")) {
+                    // FAIL CHATHISTORY responses — don't toast these
                 } else if (!state.collectingMotd && text.isNotBlank()) {
                     // Server error or notice — show to user
                     state.errorMessage.value = text
