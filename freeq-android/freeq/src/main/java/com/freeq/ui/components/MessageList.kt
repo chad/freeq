@@ -132,9 +132,12 @@ fun MessageList(
     val firstVisibleIndex by remember { derivedStateOf { listState.firstVisibleItemIndex } }
     LaunchedEffect(firstVisibleIndex) {
         if (firstVisibleIndex == 0 && messages.isNotEmpty()) {
-            val oldestId = messages.first().id
+            val oldest = messages.first()
             val target = appState.activeChannel.value ?: return@LaunchedEffect
-            appState.sendRaw("CHATHISTORY BEFORE $target msgid=$oldestId 50")
+            val iso = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+                .apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+                .format(oldest.timestamp)
+            appState.sendRaw("CHATHISTORY BEFORE $target timestamp=$iso 50")
         }
     }
 
