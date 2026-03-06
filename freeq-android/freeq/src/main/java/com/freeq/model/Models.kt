@@ -52,6 +52,7 @@ class ChannelState(val name: String) {
     var topic = mutableStateOf("")
     val typingUsers = mutableStateMapOf<String, Date>()
     var lastActivityTime: Long = System.currentTimeMillis()
+    var hasMoreHistory = mutableStateOf(true)
 
     private val messageIds = mutableSetOf<String>()
 
@@ -156,7 +157,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     var isDarkTheme = mutableStateOf(true)
 
     val batches = mutableMapOf<String, BatchBuffer>()
-    data class BatchBuffer(val target: String, val messages: MutableList<ChatMessage> = mutableListOf())
+    data class BatchBuffer(val target: String, val batchType: String = "", val messages: MutableList<ChatMessage> = mutableListOf())
 
     // MOTD
     val motdLines = mutableStateListOf<String>()
@@ -439,7 +440,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     }
 
     fun requestHistory(channel: String) {
-        sendRaw("CHATHISTORY LATEST $channel * 50")
+        sendRaw("CHATHISTORY LATEST $channel * 100")
     }
 
     // ── Read tracking ──
@@ -891,7 +892,7 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
             }
 
             is FreeqEvent.BatchStart -> {
-                state.batches[event.id] = AppState.BatchBuffer(target = event.target)
+                state.batches[event.id] = AppState.BatchBuffer(target = event.target, batchType = event.batchType)
             }
 
             is FreeqEvent.BatchEnd -> {
@@ -903,6 +904,9 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                 else
                     state.getOrCreateDM(batch.target)
                 sorted.forEach { ch.appendIfNew(it) }
+                if (batch.batchType == "chathistory" && batch.messages.isEmpty()) {
+                    ch.hasMoreHistory.value = false
+                }
             }
 
             is FreeqEvent.ChatHistoryTarget -> {
