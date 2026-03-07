@@ -328,7 +328,12 @@ pub async fn establish_connection(config: &ConnectConfig) -> Result<EstablishedC
         let server_name = config.server_addr.split(':').next().unwrap_or("localhost");
         let dns_name = rustls::pki_types::ServerName::try_from(server_name.to_string())?;
         let tls_stream = connector.connect(dns_name, tcp).await.map_err(|e| {
-            anyhow::anyhow!("TLS handshake with {} failed: {e}", config.server_addr)
+            let hint = if format!("{e}").contains("UnknownIssuer") {
+                " (the server's certificate chain may be incomplete — try --tls-insecure to skip verification, or ensure the server sends its full certificate chain including intermediates)"
+            } else {
+                ""
+            };
+            anyhow::anyhow!("TLS handshake with {} failed: {e}{hint}", config.server_addr)
         })?;
         tracing::debug!("TLS handshake complete");
         Ok(EstablishedConnection::Tls(tls_stream))
@@ -669,8 +674,24 @@ fn install_crypto_provider() {
 fn rustls_default_config() -> rustls::ClientConfig {
     install_crypto_provider();
 
-    let root_store =
+    let mut root_store =
         rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+    // Also load the system's native certificate store (covers CAs not in
+    // Mozilla's bundle, e.g. corporate/Sectigo intermediates).
+    let native = rustls_native_certs::load_native_certs();
+    if !native.errors.is_empty() {
+        tracing::warn!("Errors loading native certificates: {:?}", native.errors);
+    }
+    let before = root_store.len();
+    for cert in native.certs {
+        let _ = root_store.add(cert);
+    }
+    let added = root_store.len() - before;
+    if added > 0 {
+        tracing::debug!("Loaded {added} native root certificates");
+    }
+
     rustls::ClientConfig::builder()
         .with_root_certificates(root_store)
         .with_no_client_auth()
