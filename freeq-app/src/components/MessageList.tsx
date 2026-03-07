@@ -181,14 +181,15 @@ function renderWithBreaks(text: string): React.ReactNode {
 }
 
 /** Render text segments as React elements (XSS-safe — no innerHTML). */
-function renderTextSafe(text: string): React.ReactElement {
+function renderTextSafe(text: string, isMultiline = false): React.ReactElement {
   const segments = parseTextSegmentsCached(text);
-  // Decode literal \n sequences when message contains code blocks
+  // Decode literal \n sequences for multiline messages and code blocks
   const hasCodeBlock = segments.some(s => s.type === 'codeblock');
+  const shouldDecode = hasCodeBlock || isMultiline;
   return (
     <>
       {segments.map((seg, i) => {
-        const content = hasCodeBlock ? seg.content.replace(/\\n/g, '\n') : seg.content;
+        const content = shouldDecode ? seg.content.replace(/\\n/g, '\n') : seg.content;
         switch (seg.type) {
           case 'link':
             return <a key={i} href={seg.href} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline break-all">{content}</a>;
@@ -362,6 +363,7 @@ function InlineVideoPlayer({ url }: { url: string }) {
 
 function MessageContent({ msg }: { msg: Message }) {
   const setLightbox = useStore((s) => s.setLightboxUrl);
+  const isMultiline = '+freeq.at/multiline' in (msg.tags || {});
 
   if (msg.isAction) {
     const color = msg.isSelf ? '#b18cff' : nickColor(msg.from);
@@ -402,7 +404,7 @@ function MessageContent({ msg }: { msg: Message }) {
     return (
       <div className="mt-0.5">
         {msg.replyTo && <ReplyBadge msgId={msg.replyTo} />}
-        {cleanText && <div className="text-[15px] leading-relaxed mb-1">{renderTextSafe(cleanText)}</div>}
+        {cleanText && <div className="text-[15px] leading-relaxed mb-1">{renderTextSafe(cleanText, isMultiline)}</div>}
         <InlineVideoPlayer url={videoMatch[0]} />
       </div>
     );
@@ -415,7 +417,7 @@ function MessageContent({ msg }: { msg: Message }) {
     return (
       <div className="mt-0.5">
         {msg.replyTo && <ReplyBadge msgId={msg.replyTo} />}
-        {cleanText && <div className="text-[15px] leading-relaxed mb-1">{renderTextSafe(cleanText)}</div>}
+        {cleanText && <div className="text-[15px] leading-relaxed mb-1">{renderTextSafe(cleanText, isMultiline)}</div>}
         <InlineAudioPlayer url={audioMatch[0]} />
       </div>
     );
@@ -435,7 +437,7 @@ function MessageContent({ msg }: { msg: Message }) {
 
       {cleanText && (
         <div className="text-[15px] leading-relaxed [&_pre]:my-1 [&_a]:break-all">
-          {renderTextSafe(cleanText)}
+          {renderTextSafe(cleanText, isMultiline)}
         </div>
       )}
 

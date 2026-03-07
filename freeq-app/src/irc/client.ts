@@ -248,28 +248,35 @@ function cacheEchoPlaintext(ciphertext: string, plaintext: string) {
 }
 
 /** Send a signed PRIVMSG (async — signs then sends) */
-async function signedPrivmsg(target: string, text: string) {
+async function signedPrivmsg(target: string, text: string, extraTags?: Record<string, string>) {
   const sig = await signing.signMessage(target, text);
-  if (sig) {
-    const line = format('PRIVMSG', [target, text], { '+freeq.at/sig': sig });
+  const tags: Record<string, string> = { ...extraTags };
+  if (sig) tags['+freeq.at/sig'] = sig;
+  if (Object.keys(tags).length > 0) {
+    const line = format('PRIVMSG', [target, text], tags);
     raw(line);
   } else {
     raw(`PRIVMSG ${target} :${text}`);
   }
 }
 
-export function sendMessage(target: string, text: string) {
+export function sendMessage(target: string, text: string, multiline = false) {
   const isChannel = target.startsWith('#') || target.startsWith('&');
+
+  // Encode multi-line: replace newlines with \n for IRC wire format
+  const wireText = multiline ? text.replace(/\n/g, '\\n') : text;
+  const extraTags: Record<string, string> = multiline ? { '+freeq.at/multiline': '' } : {};
 
   // Check if channel has E2EE key — if so, encrypt before sending
   if (e2ee.hasChannelKey(target)) {
-    e2ee.encryptChannel(target, text).then((encrypted) => {
+    e2ee.encryptChannel(target, wireText).then((encrypted) => {
       if (encrypted) {
         cacheEchoPlaintext(encrypted, text);
-        const line = format('PRIVMSG', [target, encrypted], { '+encrypted': '' });
+        const tags: Record<string, string> = { '+encrypted': '', ...extraTags };
+        const line = format('PRIVMSG', [target, encrypted], tags);
         raw(line);
       } else {
-        signedPrivmsg(target, text);
+        signedPrivmsg(target, wireText, extraTags);
       }
     });
   }
@@ -278,20 +285,21 @@ export function sendMessage(target: string, text: string) {
     const remoteDid = didForNick(target);
     if (remoteDid) {
       const origin = window.location.origin;
-      e2ee.encryptMessage(remoteDid, text, origin).then((encrypted) => {
+      e2ee.encryptMessage(remoteDid, wireText, origin).then((encrypted) => {
         if (encrypted) {
           cacheEchoPlaintext(encrypted, text);
-          const line = format('PRIVMSG', [target, encrypted], { '+encrypted': '' });
+          const tags: Record<string, string> = { '+encrypted': '', ...extraTags };
+          const line = format('PRIVMSG', [target, encrypted], tags);
           raw(line);
         } else {
-          signedPrivmsg(target, text);
+          signedPrivmsg(target, wireText, extraTags);
         }
       });
     } else {
-      signedPrivmsg(target, text);
+      signedPrivmsg(target, wireText, extraTags);
     }
   } else {
-    signedPrivmsg(target, text);
+    signedPrivmsg(target, wireText, extraTags);
   }
 
   // Ensure DM buffer exists
@@ -318,8 +326,10 @@ export function sendMessage(target: string, text: string) {
   }
 }
 
-export function sendReply(target: string, replyToMsgId: string, text: string) {
-  const line = format('PRIVMSG', [target, text], { '+reply': replyToMsgId });
+export function sendReply(target: string, replyToMsgId: string, text: string, multiline = false) {
+  const tags: Record<string, string> = { '+reply': replyToMsgId };
+  if (multiline) tags['+freeq.at/multiline'] = '';
+  const line = format('PRIVMSG', [target, text], tags);
   raw(line);
 
   // Ensure DM buffer exists
@@ -332,8 +342,10 @@ export function sendReply(target: string, replyToMsgId: string, text: string) {
   }
 }
 
-export function sendEdit(target: string, originalMsgId: string, newText: string) {
-  const line = format('PRIVMSG', [target, newText], { '+draft/edit': originalMsgId });
+export function sendEdit(target: string, originalMsgId: string, newText: string, multiline = false) {
+  const tags: Record<string, string> = { '+draft/edit': originalMsgId };
+  if (multiline) tags['+freeq.at/multiline'] = '';
+  const line = format('PRIVMSG', [target, newText], tags);
   raw(line);
 }
 

@@ -330,34 +330,17 @@ export function ComposeBox() {
       handleCommand(trimmed, activeChannel);
     } else if (activeChannel !== 'server') {
       const target = ch?.name || activeChannel;
-      const hasCodeBlock = trimmed.includes('```');
-      if (hasCodeBlock) {
-        // Code block: encode newlines as literal \n and send as one message
-        const encoded = trimmed.replace(/\n/g, '\\n');
-        if (editingMsg && editingMsg.channel.toLowerCase() === activeChannel.toLowerCase()) {
-          sendEdit(target, editingMsg.msgId, encoded);
-          useStore.getState().setEditingMsg(null);
-        } else if (replyTo && replyTo.channel.toLowerCase() === activeChannel.toLowerCase()) {
-          sendReply(target, replyTo.msgId, encoded);
-          useStore.getState().setReplyTo(null);
-        } else {
-          sendMessage(target, encoded);
-        }
+      const isMultiline = trimmed.includes('\n');
+      if (editingMsg && editingMsg.channel.toLowerCase() === activeChannel.toLowerCase()) {
+        const encoded = isMultiline ? trimmed.replace(/\n/g, '\\n') : trimmed;
+        sendEdit(target, editingMsg.msgId, encoded, isMultiline);
+        useStore.getState().setEditingMsg(null);
+      } else if (replyTo && replyTo.channel.toLowerCase() === activeChannel.toLowerCase()) {
+        const encoded = isMultiline ? trimmed.replace(/\n/g, '\\n') : trimmed;
+        sendReply(target, replyTo.msgId, encoded, isMultiline);
+        useStore.getState().setReplyTo(null);
       } else {
-        // Split multi-line text into separate messages (IRC doesn't support \n)
-        const lines = trimmed.split(/\r?\n/).filter(l => l.trim());
-        if (editingMsg && editingMsg.channel.toLowerCase() === activeChannel.toLowerCase()) {
-          // Edit mode — send as single message (join lines with space)
-          sendEdit(target, editingMsg.msgId, lines.join(' '));
-          useStore.getState().setEditingMsg(null);
-        } else if (replyTo && replyTo.channel.toLowerCase() === activeChannel.toLowerCase()) {
-          // Reply mode — first line is the reply, rest are follow-up messages
-          sendReply(target, replyTo.msgId, lines[0]);
-          useStore.getState().setReplyTo(null);
-          for (let i = 1; i < lines.length; i++) sendMessage(target, lines[i]);
-        } else {
-          for (const line of lines) sendMessage(target, line);
-        }
+        sendMessage(target, trimmed, isMultiline);
       }
     }
     setText('');
