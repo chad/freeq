@@ -24,6 +24,7 @@ export function ComposeBox() {
   const [autocomplete, setAutocomplete] = useState<{ items: string[]; selected: number; startPos: number } | null>(null);
   const [slashCmd, setSlashCmd] = useState<{ filter: string; selected: number } | null>(null);
   const [showFormatBar, setShowFormatBar] = useState(false);
+  const [markdownMode, setMarkdownMode] = useState(false);
 
   const applyFormat = (prefix: string, suffix: string) => {
     const el = inputRef.current;
@@ -331,7 +332,10 @@ export function ComposeBox() {
     } else if (activeChannel !== 'server') {
       const target = ch?.name || activeChannel;
       const isMultiline = trimmed.includes('\n');
-      if (editingMsg && editingMsg.channel.toLowerCase() === activeChannel.toLowerCase()) {
+      if (markdownMode) {
+        // Markdown mode: send with mime tag (handles multiline internally)
+        sendMarkdown(target, trimmed);
+      } else if (editingMsg && editingMsg.channel.toLowerCase() === activeChannel.toLowerCase()) {
         const encoded = isMultiline ? trimmed.replace(/\n/g, '\\n') : trimmed;
         sendEdit(target, editingMsg.msgId, encoded, isMultiline);
         useStore.getState().setEditingMsg(null);
@@ -346,7 +350,7 @@ export function ComposeBox() {
     setText('');
     setAutocomplete(null);
     if (inputRef.current) inputRef.current.style.height = 'auto';
-  }, [text, activeChannel, ch, pendingUpload, doUpload, editingMsg, replyTo]);
+  }, [text, activeChannel, ch, pendingUpload, doUpload, editingMsg, replyTo, markdownMode]);
 
   const onKeyDown = (e: KeyboardEvent) => {
     // Tab completion
@@ -713,8 +717,24 @@ export function ComposeBox() {
           Aa
         </button>
 
+        {/* Markdown mode toggle */}
+        <button
+          onClick={() => setMarkdownMode(!markdownMode)}
+          className={`w-10 h-10 rounded-lg flex items-center justify-center text-xs font-bold shrink-0 ${
+            markdownMode ? 'text-accent bg-accent/10' : 'text-fg-dim hover:text-fg-muted hover:bg-bg-tertiary'
+          }`}
+          title={markdownMode ? 'Markdown mode ON — click to disable' : 'Enable markdown mode'}
+        >
+          M↓
+        </button>
+
         {/* Compose area */}
-        <div className="flex-1 bg-bg-tertiary rounded-lg border border-border focus-within:border-accent/50 flex flex-col">
+        <div className={`flex-1 bg-bg-tertiary rounded-lg border focus-within:border-accent/50 flex flex-col ${markdownMode ? 'border-accent/30' : 'border-border'}`}>
+          {markdownMode && (
+            <div className="px-3 py-1 text-[10px] text-accent font-medium border-b border-accent/20 bg-accent/[0.03]">
+              Markdown — headers, lists, tables, code blocks will render
+            </div>
+          )}
           {showFormatBar && <FormatToolbar onFormat={applyFormat} />}
           <div className="flex items-end">
           <textarea
