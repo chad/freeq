@@ -61,7 +61,11 @@ pub(super) fn attach_same_did(
         for (ch_name, was_op, was_voiced, was_halfop) in &ghost.channels {
             if let Some(ch) = channels.get_mut(&ch_name.to_lowercase()) {
                 ch.members.insert(session_id.to_string());
-                if *was_op {
+                // Restore ops from ghost state, OR grant via DID authority
+                let should_op = *was_op
+                    || ch.founder_did.as_deref() == Some(did.as_str())
+                    || ch.did_ops.contains(&did);
+                if should_op {
                     ch.ops.insert(session_id.to_string());
                 }
                 if *was_voiced {
@@ -168,8 +172,10 @@ pub(super) fn attach_same_did(
         for ch_name in &channels_to_join {
             if let Some(ch) = channels.get_mut(ch_name) {
                 ch.members.insert(session_id.to_string());
-                // Copy op/voice status from existing session
-                let is_op = existing_sessions.iter().any(|s| ch.ops.contains(s));
+                // Copy op/voice status from existing session, OR grant via DID authority
+                let is_op = existing_sessions.iter().any(|s| ch.ops.contains(s))
+                    || ch.founder_did.as_deref() == Some(did.as_str())
+                    || ch.did_ops.contains(&did);
                 let is_voiced = existing_sessions.iter().any(|s| ch.voiced.contains(s));
                 if is_op {
                     ch.ops.insert(session_id.to_string());
