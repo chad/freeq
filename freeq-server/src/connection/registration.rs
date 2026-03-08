@@ -61,7 +61,11 @@ pub(super) fn attach_same_did(
         for (ch_name, was_op, was_voiced, was_halfop) in &ghost.channels {
             if let Some(ch) = channels.get_mut(&ch_name.to_lowercase()) {
                 ch.members.insert(session_id.to_string());
-                if *was_op {
+                // Restore ops from ghost state, OR grant via DID authority
+                let should_op = *was_op
+                    || ch.founder_did.as_deref() == Some(did.as_str())
+                    || ch.did_ops.contains(&did);
+                if should_op {
                     ch.ops.insert(session_id.to_string());
                 }
                 if *was_voiced {
@@ -168,8 +172,10 @@ pub(super) fn attach_same_did(
         for ch_name in &channels_to_join {
             if let Some(ch) = channels.get_mut(ch_name) {
                 ch.members.insert(session_id.to_string());
-                // Copy op/voice status from existing session
-                let is_op = existing_sessions.iter().any(|s| ch.ops.contains(s));
+                // Copy op/voice status from existing session, OR grant via DID authority
+                let is_op = existing_sessions.iter().any(|s| ch.ops.contains(s))
+                    || ch.founder_did.as_deref() == Some(did.as_str())
+                    || ch.did_ops.contains(&did);
                 let is_voiced = existing_sessions.iter().any(|s| ch.voiced.contains(s));
                 if is_op {
                     ch.ops.insert(session_id.to_string());
@@ -330,10 +336,11 @@ pub(super) fn try_complete_registration(
             &format!("Your host is {server_name}, running freeq 0.1"),
         ],
     );
+    let boot_str = state.boot_timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string();
     let created = Message::from_server(
         server_name,
         irc::RPL_CREATED,
-        vec![nick, "This server was created just now"],
+        vec![nick, &format!("This server was started {boot_str}")],
     );
     let myinfo = Message::from_server(
         server_name,
@@ -371,6 +378,23 @@ pub(super) fn try_complete_registration(
             vec![nick, "MOTD File is missing"],
         );
         send(state, session_id, format!("{no_motd}\r\n"));
+    }
+
+    // Send server restart notice if the server booted recently (within 5 minutes)
+    {
+        let uptime = state.boot_time.elapsed();
+        if uptime.as_secs() < 300 {
+            let boot_ts = state.boot_timestamp.format("%Y-%m-%d %H:%M:%S UTC");
+            let ago = if uptime.as_secs() < 60 {
+                format!("{}s ago", uptime.as_secs())
+            } else {
+                format!("{}m {}s ago", uptime.as_secs() / 60, uptime.as_secs() % 60)
+            };
+            let notice = format!(
+                ":{server_name} NOTICE {nick} :⚡ Server restarted at {boot_ts} ({ago})\r\n"
+            );
+            send(state, session_id, notice);
+        }
     }
 
     // Send synthetic state for ghost-reclaimed channels (now that registration is complete,

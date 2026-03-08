@@ -657,6 +657,9 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 internal interface UniffiCallbackInterfaceEventHandlerMethod0 : com.sun.jna.Callback {
     fun callback(`uniffiHandle`: Long,`event`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
 }
+internal interface UniffiCallbackInterfaceP2pEventHandlerMethod0 : com.sun.jna.Callback {
+    fun callback(`uniffiHandle`: Long,`event`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,)
+}
 @Structure.FieldOrder("onEvent", "uniffiFree")
 internal open class UniffiVTableCallbackInterfaceEventHandler(
     @JvmField internal var `onEvent`: UniffiCallbackInterfaceEventHandlerMethod0? = null,
@@ -673,6 +676,38 @@ internal open class UniffiVTableCallbackInterfaceEventHandler(
     }
 
 }
+@Structure.FieldOrder("onP2pEvent", "uniffiFree")
+internal open class UniffiVTableCallbackInterfaceP2pEventHandler(
+    @JvmField internal var `onP2pEvent`: UniffiCallbackInterfaceP2pEventHandlerMethod0? = null,
+    @JvmField internal var `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+) : Structure() {
+    class UniffiByValue(
+        `onP2pEvent`: UniffiCallbackInterfaceP2pEventHandlerMethod0? = null,
+        `uniffiFree`: UniffiCallbackInterfaceFree? = null,
+    ): UniffiVTableCallbackInterfaceP2pEventHandler(`onP2pEvent`,`uniffiFree`,), Structure.ByValue
+
+   internal fun uniffiSetValue(other: UniffiVTableCallbackInterfaceP2pEventHandler) {
+        `onP2pEvent` = other.`onP2pEvent`
+        `uniffiFree` = other.`uniffiFree`
+    }
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -848,11 +883,25 @@ fun uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_is_encrypted(
 ): Short
 fun uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_restore_keys(
 ): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqp2p_connect_peer(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqp2p_connected_peers(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqp2p_endpoint_id(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqp2p_send_message(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqp2p_shutdown(
+): Short
 fun uniffi_freeq_sdk_ffi_checksum_constructor_freeqclient_new(
 ): Short
 fun uniffi_freeq_sdk_ffi_checksum_constructor_freeqe2ee_new(
 ): Short
+fun uniffi_freeq_sdk_ffi_checksum_constructor_freeqp2p_new(
+): Short
 fun uniffi_freeq_sdk_ffi_checksum_method_eventhandler_on_event(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_p2peventhandler_on_p2p_event(
 ): Short
 fun ffi_freeq_sdk_ffi_uniffi_contract_version(
 ): Int
@@ -893,6 +942,7 @@ internal interface UniffiLib : Library {
             // No need to check the contract version and checksums, since 
             // we already did that with `IntegrityCheckingUniffiLib` above.
             uniffiCallbackInterfaceEventHandler.register(lib)
+            uniffiCallbackInterfaceP2pEventHandler.register(lib)
             // Loading of library with integrity check done.
             lib
         }
@@ -962,7 +1012,25 @@ fun uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_is_encrypted(`ptr`: Pointer,`text`:
 ): Byte
 fun uniffi_freeq_sdk_ffi_fn_method_freeqe2ee_restore_keys(`ptr`: Pointer,`ikSecretB64`: RustBuffer.ByValue,`spkSecretB64`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
+fun uniffi_freeq_sdk_ffi_fn_clone_freeqp2p(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Pointer
+fun uniffi_freeq_sdk_ffi_fn_free_freeqp2p(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_freeq_sdk_ffi_fn_constructor_freeqp2p_new(`handler`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): Pointer
+fun uniffi_freeq_sdk_ffi_fn_method_freeqp2p_connect_peer(`ptr`: Pointer,`endpointId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_freeq_sdk_ffi_fn_method_freeqp2p_connected_peers(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_freeq_sdk_ffi_fn_method_freeqp2p_endpoint_id(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): RustBuffer.ByValue
+fun uniffi_freeq_sdk_ffi_fn_method_freeqp2p_send_message(`ptr`: Pointer,`peerId`: RustBuffer.ByValue,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_freeq_sdk_ffi_fn_method_freeqp2p_shutdown(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
 fun uniffi_freeq_sdk_ffi_fn_init_callback_vtable_eventhandler(`vtable`: UniffiVTableCallbackInterfaceEventHandler,
+): Unit
+fun uniffi_freeq_sdk_ffi_fn_init_callback_vtable_p2peventhandler(`vtable`: UniffiVTableCallbackInterfaceP2pEventHandler,
 ): Unit
 fun ffi_freeq_sdk_ffi_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): RustBuffer.ByValue
@@ -1159,13 +1227,34 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_restore_keys() != 54360.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqp2p_connect_peer() != 15333.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqp2p_connected_peers() != 948.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqp2p_endpoint_id() != 16300.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqp2p_send_message() != 44601.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqp2p_shutdown() != 50660.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_freeq_sdk_ffi_checksum_constructor_freeqclient_new() != 42979.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_freeq_sdk_ffi_checksum_constructor_freeqe2ee_new() != 45627.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_constructor_freeqp2p_new() != 22044.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_freeq_sdk_ffi_checksum_method_eventhandler_on_event() != 8369.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_p2peventhandler_on_p2p_event() != 37677.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -2255,6 +2344,305 @@ public object FfiConverterTypeFreeqE2ee: FfiConverter<FreeqE2ee, Pointer> {
 }
 
 
+// This template implements a class for working with a Rust struct via a Pointer/Arc<T>
+// to the live Rust struct on the other side of the FFI.
+//
+// Each instance implements core operations for working with the Rust `Arc<T>` and the
+// Kotlin Pointer to work with the live Rust struct on the other side of the FFI.
+//
+// There's some subtlety here, because we have to be careful not to operate on a Rust
+// struct after it has been dropped, and because we must expose a public API for freeing
+// theq Kotlin wrapper object in lieu of reliable finalizers. The core requirements are:
+//
+//   * Each instance holds an opaque pointer to the underlying Rust struct.
+//     Method calls need to read this pointer from the object's state and pass it in to
+//     the Rust FFI.
+//
+//   * When an instance is no longer needed, its pointer should be passed to a
+//     special destructor function provided by the Rust FFI, which will drop the
+//     underlying Rust struct.
+//
+//   * Given an instance, calling code is expected to call the special
+//     `destroy` method in order to free it after use, either by calling it explicitly
+//     or by using a higher-level helper like the `use` method. Failing to do so risks
+//     leaking the underlying Rust struct.
+//
+//   * We can't assume that calling code will do the right thing, and must be prepared
+//     to handle Kotlin method calls executing concurrently with or even after a call to
+//     `destroy`, and to handle multiple (possibly concurrent!) calls to `destroy`.
+//
+//   * We must never allow Rust code to operate on the underlying Rust struct after
+//     the destructor has been called, and must never call the destructor more than once.
+//     Doing so may trigger memory unsafety.
+//
+//   * To mitigate many of the risks of leaking memory and use-after-free unsafety, a `Cleaner`
+//     is implemented to call the destructor when the Kotlin object becomes unreachable.
+//     This is done in a background thread. This is not a panacea, and client code should be aware that
+//      1. the thread may starve if some there are objects that have poorly performing
+//     `drop` methods or do significant work in their `drop` methods.
+//      2. the thread is shared across the whole library. This can be tuned by using `android_cleaner = true`,
+//         or `android = true` in the [`kotlin` section of the `uniffi.toml` file](https://mozilla.github.io/uniffi-rs/kotlin/configuration.html).
+//
+// If we try to implement this with mutual exclusion on access to the pointer, there is the
+// possibility of a race between a method call and a concurrent call to `destroy`:
+//
+//    * Thread A starts a method call, reads the value of the pointer, but is interrupted
+//      before it can pass the pointer over the FFI to Rust.
+//    * Thread B calls `destroy` and frees the underlying Rust struct.
+//    * Thread A resumes, passing the already-read pointer value to Rust and triggering
+//      a use-after-free.
+//
+// One possible solution would be to use a `ReadWriteLock`, with each method call taking
+// a read lock (and thus allowed to run concurrently) and the special `destroy` method
+// taking a write lock (and thus blocking on live method calls). However, we aim not to
+// generate methods with any hidden blocking semantics, and a `destroy` method that might
+// block if called incorrectly seems to meet that bar.
+//
+// So, we achieve our goals by giving each instance an associated `AtomicLong` counter to track
+// the number of in-flight method calls, and an `AtomicBoolean` flag to indicate whether `destroy`
+// has been called. These are updated according to the following rules:
+//
+//    * The initial value of the counter is 1, indicating a live object with no in-flight calls.
+//      The initial value for the flag is false.
+//
+//    * At the start of each method call, we atomically check the counter.
+//      If it is 0 then the underlying Rust struct has already been destroyed and the call is aborted.
+//      If it is nonzero them we atomically increment it by 1 and proceed with the method call.
+//
+//    * At the end of each method call, we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+//    * When `destroy` is called, we atomically flip the flag from false to true.
+//      If the flag was already true we silently fail.
+//      Otherwise we atomically decrement and check the counter.
+//      If it has reached zero then we destroy the underlying Rust struct.
+//
+// Astute readers may observe that this all sounds very similar to the way that Rust's `Arc<T>` works,
+// and indeed it is, with the addition of a flag to guard against multiple calls to `destroy`.
+//
+// The overall effect is that the underlying Rust struct is destroyed only when `destroy` has been
+// called *and* all in-flight method calls have completed, avoiding violating any of the expectations
+// of the underlying Rust code.
+//
+// This makes a cleaner a better alternative to _not_ calling `destroy()` as
+// and when the object is finished with, but the abstraction is not perfect: if the Rust object's `drop`
+// method is slow, and/or there are many objects to cleanup, and it's on a low end Android device, then the cleaner
+// thread may be starved, and the app will leak memory.
+//
+// In this case, `destroy`ing manually may be a better solution.
+//
+// The cleaner can live side by side with the manual calling of `destroy`. In the order of responsiveness, uniffi objects
+// with Rust peers are reclaimed:
+//
+// 1. By calling the `destroy` method of the object, which calls `rustObject.free()`. If that doesn't happen:
+// 2. When the object becomes unreachable, AND the Cleaner thread gets to call `rustObject.free()`. If the thread is starved then:
+// 3. The memory is reclaimed when the process terminates.
+//
+// [1] https://stackoverflow.com/questions/24376768/can-java-finalize-an-object-when-it-is-still-in-scope/24380219
+//
+
+
+public interface FreeqP2pInterface {
+    
+    fun `connectPeer`(`endpointId`: kotlin.String)
+    
+    fun `connectedPeers`(): List<kotlin.String>
+    
+    fun `endpointId`(): kotlin.String
+    
+    fun `sendMessage`(`peerId`: kotlin.String, `text`: kotlin.String)
+    
+    fun `shutdown`()
+    
+    companion object
+}
+
+open class FreeqP2p: Disposable, AutoCloseable, FreeqP2pInterface
+{
+
+    constructor(pointer: Pointer) {
+        this.pointer = pointer
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+
+    /**
+     * This constructor can be used to instantiate a fake object. Only used for tests. Any
+     * attempt to actually use an object constructed this way will fail as there is no
+     * connected Rust object.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    constructor(noPointer: NoPointer) {
+        this.pointer = null
+        this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
+    }
+    constructor(`handler`: P2pEventHandler) :
+        this(
+    uniffiRustCallWithError(FreeqException) { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_constructor_freeqp2p_new(
+        FfiConverterTypeP2pEventHandler.lower(`handler`),_status)
+}
+    )
+
+    protected val pointer: Pointer?
+    protected val cleanable: UniffiCleaner.Cleanable
+
+    private val wasDestroyed = AtomicBoolean(false)
+    private val callCounter = AtomicLong(1)
+
+    override fun destroy() {
+        // Only allow a single call to this method.
+        // TODO: maybe we should log a warning if called more than once?
+        if (this.wasDestroyed.compareAndSet(false, true)) {
+            // This decrement always matches the initial count of 1 given at creation time.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    @Synchronized
+    override fun close() {
+        this.destroy()
+    }
+
+    internal inline fun <R> callWithPointer(block: (ptr: Pointer) -> R): R {
+        // Check and increment the call counter, to keep the object alive.
+        // This needs a compare-and-set retry loop in case of concurrent updates.
+        do {
+            val c = this.callCounter.get()
+            if (c == 0L) {
+                throw IllegalStateException("${this.javaClass.simpleName} object has already been destroyed")
+            }
+            if (c == Long.MAX_VALUE) {
+                throw IllegalStateException("${this.javaClass.simpleName} call counter would overflow")
+            }
+        } while (! this.callCounter.compareAndSet(c, c + 1L))
+        // Now we can safely do the method call without the pointer being freed concurrently.
+        try {
+            return block(this.uniffiClonePointer())
+        } finally {
+            // This decrement always matches the increment we performed above.
+            if (this.callCounter.decrementAndGet() == 0L) {
+                cleanable.clean()
+            }
+        }
+    }
+
+    // Use a static inner class instead of a closure so as not to accidentally
+    // capture `this` as part of the cleanable's action.
+    private class UniffiCleanAction(private val pointer: Pointer?) : Runnable {
+        override fun run() {
+            pointer?.let { ptr ->
+                uniffiRustCall { status ->
+                    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_free_freeqp2p(ptr, status)
+                }
+            }
+        }
+    }
+
+    fun uniffiClonePointer(): Pointer {
+        return uniffiRustCall() { status ->
+            UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_clone_freeqp2p(pointer!!, status)
+        }
+    }
+
+    
+    @Throws(FreeqException::class)override fun `connectPeer`(`endpointId`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FreeqException) { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqp2p_connect_peer(
+        it, FfiConverterString.lower(`endpointId`),_status)
+}
+    }
+    
+    
+
+    override fun `connectedPeers`(): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqp2p_connected_peers(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(FreeqException::class)override fun `endpointId`(): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(FreeqException) { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqp2p_endpoint_id(
+        it, _status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(FreeqException::class)override fun `sendMessage`(`peerId`: kotlin.String, `text`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FreeqException) { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqp2p_send_message(
+        it, FfiConverterString.lower(`peerId`),FfiConverterString.lower(`text`),_status)
+}
+    }
+    
+    
+
+    override fun `shutdown`()
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqp2p_shutdown(
+        it, _status)
+}
+    }
+    
+    
+
+    
+
+    
+    
+    companion object
+    
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeFreeqP2p: FfiConverter<FreeqP2p, Pointer> {
+
+    override fun lower(value: FreeqP2p): Pointer {
+        return value.uniffiClonePointer()
+    }
+
+    override fun lift(value: Pointer): FreeqP2p {
+        return FreeqP2p(value)
+    }
+
+    override fun read(buf: ByteBuffer): FreeqP2p {
+        // The Rust code always writes pointers as 8 bytes, and will
+        // fail to compile if they don't fit.
+        return lift(Pointer(buf.getLong()))
+    }
+
+    override fun allocationSize(value: FreeqP2p) = 8UL
+
+    override fun write(value: FreeqP2p, buf: ByteBuffer) {
+        // The Rust code always expects pointers written as 8 bytes,
+        // and will fail to compile if they don't fit.
+        buf.putLong(Pointer.nativeValue(lower(value)))
+    }
+}
+
+
 
 data class ChannelTopic (
     var `text`: kotlin.String, 
@@ -2342,6 +2730,7 @@ data class IrcMessage (
     var `editOf`: kotlin.String?, 
     var `batchId`: kotlin.String?, 
     var `isAction`: kotlin.Boolean, 
+    var `isSigned`: kotlin.Boolean, 
     var `timestampMs`: kotlin.Long
 ) {
     
@@ -2363,6 +2752,7 @@ public object FfiConverterTypeIrcMessage: FfiConverterRustBuffer<IrcMessage> {
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterBoolean.read(buf),
+            FfiConverterBoolean.read(buf),
             FfiConverterLong.read(buf),
         )
     }
@@ -2377,6 +2767,7 @@ public object FfiConverterTypeIrcMessage: FfiConverterRustBuffer<IrcMessage> {
             FfiConverterOptionalString.allocationSize(value.`editOf`) +
             FfiConverterOptionalString.allocationSize(value.`batchId`) +
             FfiConverterBoolean.allocationSize(value.`isAction`) +
+            FfiConverterBoolean.allocationSize(value.`isSigned`) +
             FfiConverterLong.allocationSize(value.`timestampMs`)
     )
 
@@ -2390,6 +2781,7 @@ public object FfiConverterTypeIrcMessage: FfiConverterRustBuffer<IrcMessage> {
             FfiConverterOptionalString.write(value.`editOf`, buf)
             FfiConverterOptionalString.write(value.`batchId`, buf)
             FfiConverterBoolean.write(value.`isAction`, buf)
+            FfiConverterBoolean.write(value.`isSigned`, buf)
             FfiConverterLong.write(value.`timestampMs`, buf)
     }
 }
@@ -2695,6 +3087,18 @@ sealed class FreeqEvent {
         companion object
     }
     
+    data class ChatHistoryTarget(
+        val `nick`: kotlin.String, 
+        val `timestamp`: kotlin.String?) : FreeqEvent() {
+        companion object
+    }
+    
+    data class WhoisReply(
+        val `nick`: kotlin.String, 
+        val `info`: kotlin.String) : FreeqEvent() {
+        companion object
+    }
+    
     data class Notice(
         val `text`: kotlin.String) : FreeqEvent() {
         companion object
@@ -2780,10 +3184,18 @@ public object FfiConverterTypeFreeqEvent : FfiConverterRustBuffer<FreeqEvent>{
             17 -> FreeqEvent.BatchEnd(
                 FfiConverterString.read(buf),
                 )
-            18 -> FreeqEvent.Notice(
+            18 -> FreeqEvent.ChatHistoryTarget(
+                FfiConverterString.read(buf),
+                FfiConverterOptionalString.read(buf),
+                )
+            19 -> FreeqEvent.WhoisReply(
+                FfiConverterString.read(buf),
                 FfiConverterString.read(buf),
                 )
-            19 -> FreeqEvent.Disconnected(
+            20 -> FreeqEvent.Notice(
+                FfiConverterString.read(buf),
+                )
+            21 -> FreeqEvent.Disconnected(
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
@@ -2924,6 +3336,22 @@ public object FfiConverterTypeFreeqEvent : FfiConverterRustBuffer<FreeqEvent>{
                 + FfiConverterString.allocationSize(value.`id`)
             )
         }
+        is FreeqEvent.ChatHistoryTarget -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`nick`)
+                + FfiConverterOptionalString.allocationSize(value.`timestamp`)
+            )
+        }
+        is FreeqEvent.WhoisReply -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`nick`)
+                + FfiConverterString.allocationSize(value.`info`)
+            )
+        }
         is FreeqEvent.Notice -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
@@ -3041,14 +3469,160 @@ public object FfiConverterTypeFreeqEvent : FfiConverterRustBuffer<FreeqEvent>{
                 FfiConverterString.write(value.`id`, buf)
                 Unit
             }
-            is FreeqEvent.Notice -> {
+            is FreeqEvent.ChatHistoryTarget -> {
                 buf.putInt(18)
+                FfiConverterString.write(value.`nick`, buf)
+                FfiConverterOptionalString.write(value.`timestamp`, buf)
+                Unit
+            }
+            is FreeqEvent.WhoisReply -> {
+                buf.putInt(19)
+                FfiConverterString.write(value.`nick`, buf)
+                FfiConverterString.write(value.`info`, buf)
+                Unit
+            }
+            is FreeqEvent.Notice -> {
+                buf.putInt(20)
                 FfiConverterString.write(value.`text`, buf)
                 Unit
             }
             is FreeqEvent.Disconnected -> {
-                buf.putInt(19)
+                buf.putInt(21)
                 FfiConverterString.write(value.`reason`, buf)
+                Unit
+            }
+        }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
+    }
+}
+
+
+
+
+
+sealed class P2pEvent {
+    
+    data class EndpointReady(
+        val `endpointId`: kotlin.String) : P2pEvent() {
+        companion object
+    }
+    
+    data class PeerConnected(
+        val `peerId`: kotlin.String) : P2pEvent() {
+        companion object
+    }
+    
+    data class PeerDisconnected(
+        val `peerId`: kotlin.String) : P2pEvent() {
+        companion object
+    }
+    
+    data class DirectMessage(
+        val `peerId`: kotlin.String, 
+        val `text`: kotlin.String) : P2pEvent() {
+        companion object
+    }
+    
+    data class Error(
+        val `message`: kotlin.String) : P2pEvent() {
+        companion object
+    }
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeP2pEvent : FfiConverterRustBuffer<P2pEvent>{
+    override fun read(buf: ByteBuffer): P2pEvent {
+        return when(buf.getInt()) {
+            1 -> P2pEvent.EndpointReady(
+                FfiConverterString.read(buf),
+                )
+            2 -> P2pEvent.PeerConnected(
+                FfiConverterString.read(buf),
+                )
+            3 -> P2pEvent.PeerDisconnected(
+                FfiConverterString.read(buf),
+                )
+            4 -> P2pEvent.DirectMessage(
+                FfiConverterString.read(buf),
+                FfiConverterString.read(buf),
+                )
+            5 -> P2pEvent.Error(
+                FfiConverterString.read(buf),
+                )
+            else -> throw RuntimeException("invalid enum value, something is very wrong!!")
+        }
+    }
+
+    override fun allocationSize(value: P2pEvent) = when(value) {
+        is P2pEvent.EndpointReady -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`endpointId`)
+            )
+        }
+        is P2pEvent.PeerConnected -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`peerId`)
+            )
+        }
+        is P2pEvent.PeerDisconnected -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`peerId`)
+            )
+        }
+        is P2pEvent.DirectMessage -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`peerId`)
+                + FfiConverterString.allocationSize(value.`text`)
+            )
+        }
+        is P2pEvent.Error -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`message`)
+            )
+        }
+    }
+
+    override fun write(value: P2pEvent, buf: ByteBuffer) {
+        when(value) {
+            is P2pEvent.EndpointReady -> {
+                buf.putInt(1)
+                FfiConverterString.write(value.`endpointId`, buf)
+                Unit
+            }
+            is P2pEvent.PeerConnected -> {
+                buf.putInt(2)
+                FfiConverterString.write(value.`peerId`, buf)
+                Unit
+            }
+            is P2pEvent.PeerDisconnected -> {
+                buf.putInt(3)
+                FfiConverterString.write(value.`peerId`, buf)
+                Unit
+            }
+            is P2pEvent.DirectMessage -> {
+                buf.putInt(4)
+                FfiConverterString.write(value.`peerId`, buf)
+                FfiConverterString.write(value.`text`, buf)
+                Unit
+            }
+            is P2pEvent.Error -> {
+                buf.putInt(5)
+                FfiConverterString.write(value.`message`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -3109,6 +3683,59 @@ internal object uniffiCallbackInterfaceEventHandler {
  * @suppress
  */
 public object FfiConverterTypeEventHandler: FfiConverterCallbackInterface<EventHandler>()
+
+
+
+
+
+public interface P2pEventHandler {
+    
+    fun `onP2pEvent`(`event`: P2pEvent)
+    
+    companion object
+}
+
+
+
+// Put the implementation in an object so we don't pollute the top-level namespace
+internal object uniffiCallbackInterfaceP2pEventHandler {
+    internal object `onP2pEvent`: UniffiCallbackInterfaceP2pEventHandlerMethod0 {
+        override fun callback(`uniffiHandle`: Long,`event`: RustBuffer.ByValue,`uniffiOutReturn`: Pointer,uniffiCallStatus: UniffiRustCallStatus,) {
+            val uniffiObj = FfiConverterTypeP2pEventHandler.handleMap.get(uniffiHandle)
+            val makeCall = { ->
+                uniffiObj.`onP2pEvent`(
+                    FfiConverterTypeP2pEvent.lift(`event`),
+                )
+            }
+            val writeReturn = { _: Unit -> Unit }
+            uniffiTraitInterfaceCall(uniffiCallStatus, makeCall, writeReturn)
+        }
+    }
+
+    internal object uniffiFree: UniffiCallbackInterfaceFree {
+        override fun callback(handle: Long) {
+            FfiConverterTypeP2pEventHandler.handleMap.remove(handle)
+        }
+    }
+
+    internal var vtable = UniffiVTableCallbackInterfaceP2pEventHandler.UniffiByValue(
+        `onP2pEvent`,
+        uniffiFree,
+    )
+
+    // Registers the foreign callback with the Rust side.
+    // This method is generated for each callback interface.
+    internal fun register(lib: UniffiLib) {
+        lib.uniffi_freeq_sdk_ffi_fn_init_callback_vtable_p2peventhandler(vtable)
+    }
+}
+
+/**
+ * The ffiConverter which transforms the Callbacks in to handles to pass to Rust.
+ *
+ * @suppress
+ */
+public object FfiConverterTypeP2pEventHandler: FfiConverterCallbackInterface<P2pEventHandler>()
 
 
 

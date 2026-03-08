@@ -15,13 +15,13 @@ class AvatarCache: ObservableObject {
     }
 
     /// Request avatar fetch for a nick (if not already cached/pending).
-    func prefetch(_ nick: String) {
+    func prefetch(_ nick: String, did: String? = nil) {
         let key = nick.lowercased()
         guard cache[key] == nil, !pending.contains(key), !failed.contains(key) else { return }
         pending.insert(key)
 
         Task {
-            await fetchAvatar(nick: nick, key: key)
+            await fetchAvatar(nick: nick, key: key, did: did)
         }
     }
 
@@ -32,7 +32,16 @@ class AvatarCache: ObservableObject {
         }
     }
 
-    private func fetchAvatar(nick: String, key: String) async {
+    private func fetchAvatar(nick: String, key: String, did: String? = nil) async {
+        // Try DID first — most reliable
+        if let did = did, !did.isEmpty {
+            if let url = await resolveAvatar(handle: did) {
+                cache[key] = url
+                pending.remove(key)
+                return
+            }
+        }
+
         // Try the nick as an AT handle — could be "chadfowler.com" or "alice.bsky.social"
         // Also try with .bsky.social suffix if no dots
         let handles = nick.contains(".") ? [nick] : ["\(nick).bsky.social"]

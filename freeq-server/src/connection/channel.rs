@@ -212,9 +212,20 @@ pub(super) fn handle_join(
             // This prevents orphaned channels where nobody has ops.
             // BUT: if there are remote members (from S2S), the channel isn't
             // orphaned — someone else already has ops on another server.
+            // AND: if the channel has a policy with role_requirements, the policy
+            // governs who gets ops — don't hand out ops to random first joiners.
             let has_any_ops = !ch.ops.is_empty() || ch.remote_members.values().any(|rm| rm.is_op);
-            let is_truly_empty =
-                ch.members.len() == 1 && ch.remote_members.is_empty() && !has_any_ops;
+            let has_policy_roles = state.policy_engine.as_ref().is_some_and(|engine| {
+                engine
+                    .get_policy(channel)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|p| !p.role_requirements.is_empty())
+            });
+            let is_truly_empty = ch.members.len() == 1
+                && ch.remote_members.is_empty()
+                && !has_any_ops
+                && !has_policy_roles;
             if should_op || is_truly_empty {
                 ch.ops.insert(session_id.to_string());
             }
@@ -389,7 +400,7 @@ pub(super) fn handle_join(
             && !ch.history.is_empty()
         {
             // Start batch if client supports it
-            let batch_id = format!("hist{}", session_id.len());
+            let batch_id = format!("hist{}", crate::msgid::generate());
             if has_batch_cap {
                 let batch_start =
                     format!(":{server_name} BATCH +{batch_id} chathistory {channel}\r\n");

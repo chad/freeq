@@ -20,6 +20,29 @@ struct ChatDetailView: View {
             Theme.bgPrimary.ignoresSafeArea()
 
             VStack(spacing: 0) {
+                // Connection status bar
+                if appState.connectionState != .registered {
+                    HStack(spacing: 8) {
+                        if appState.connectionState == .connecting || appState.connectionState == .connected {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(0.7)
+                        } else {
+                            Image(systemName: "wifi.slash")
+                                .font(.system(size: 12))
+                        }
+                        Text(appState.connectionState == .disconnected ? "Disconnected — pull down to reconnect" :
+                             appState.connectionState == .connecting ? "Connecting..." : "Registering...")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
+                    .background(appState.connectionState == .disconnected ? Theme.danger : Theme.warning)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .animation(.easeInOut(duration: 0.3), value: appState.connectionState)
+                }
+
                 if let channel = channelState {
                     ZStack {
                         MessageListView(channel: channel)
@@ -66,6 +89,11 @@ struct ChatDetailView: View {
                             Text(typingText(channel.activeTypers))
                                 .font(.system(size: 11))
                                 .foregroundColor(Theme.accent)
+                        } else if !channel.topic.isEmpty {
+                            Text(channel.topic)
+                                .font(.system(size: 11))
+                                .foregroundColor(Theme.textMuted)
+                                .lineLimit(1)
                         } else if isChannel {
                             Text("\(channel.members.count) members")
                                 .font(.system(size: 11))

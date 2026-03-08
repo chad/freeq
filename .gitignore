@@ -69,3 +69,5 @@ vs/
 *.pdb
 *.cache
 /freeq-windows-app/.vs
+.env.secrets
+freeq-macos/FreeqSDK.xcframework/macos-arm64/libfreeq_sdk_ffi.a

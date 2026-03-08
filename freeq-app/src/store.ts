@@ -118,6 +118,7 @@ export interface Store {
   editingMsg: EditContext | null;
   theme: 'dark' | 'light';
   messageDensity: 'default' | 'compact' | 'cozy';
+  showJoinPart: boolean;
   loadExternalMedia: boolean;
   favorites: Set<string>; // lowercase channel names
   mutedChannels: Set<string>; // lowercase channel names
@@ -169,6 +170,9 @@ export interface Store {
   incrementMentions: (channel: string) => void;
   clearUnread: (channel: string) => void;
 
+  // Actions — DM targets
+  addDmTarget: (nick: string) => void;
+
   // Actions — batches
   startBatch: (id: string, type: string, target: string) => void;
   addBatchMessage: (id: string, msg: Message) => void;
@@ -182,6 +186,7 @@ export interface Store {
   setEditingMsg: (ctx: EditContext | null) => void;
   setTheme: (theme: 'dark' | 'light') => void;
   setMessageDensity: (d: 'default' | 'compact' | 'cozy') => void;
+  setShowJoinPart: (v: boolean) => void;
   setLoadExternalMedia: (v: boolean) => void;
   toggleFavorite: (channel: string) => void;
   toggleMuted: (channel: string) => void;
@@ -250,6 +255,7 @@ export const useStore = create<Store>((set, get) => ({
   editingMsg: null,
   theme: (localStorage.getItem('freeq-theme') as 'dark' | 'light') || 'dark',
   messageDensity: (localStorage.getItem('freeq-density') as 'default' | 'compact' | 'cozy') || 'default',
+  showJoinPart: localStorage.getItem('freeq-show-join-part') === 'true',
   loadExternalMedia: localStorage.getItem('freeq-load-media') !== 'false',
   favorites: new Set(JSON.parse(localStorage.getItem('freeq-favorites') || '[]')),
   mutedChannels: new Set(JSON.parse(localStorage.getItem('freeq-muted') || '[]')),
@@ -319,6 +325,17 @@ export const useStore = create<Store>((set, get) => ({
     return { channels };
   }),
 
+  addDmTarget: (nick) => set((s) => {
+    const channels = new Map(s.channels);
+    const key = nick.toLowerCase();
+    if (!channels.has(key)) {
+      const ch = getOrCreateChannel(channels, nick);
+      ch.isJoined = true;
+      channels.set(key, ch);
+    }
+    return { channels };
+  }),
+
   removeChannel: (name) => set((s) => {
     const channels = new Map(s.channels);
     channels.delete(name.toLowerCase());
@@ -358,9 +375,12 @@ export const useStore = create<Store>((set, get) => ({
   // Members
   clearMembers: (channel) => set((s) => {
     const key = channel.toLowerCase();
-    const ch = s.channels.get(key);
-    if (ch) ch.members = new Map();
-    return {};
+    const channels = new Map(s.channels);
+    const ch = channels.get(key);
+    if (ch) {
+      channels.set(key, { ...ch, members: new Map() });
+    }
+    return { channels };
   }),
   addMember: (channel, member) => set((s) => {
     const channels = new Map(s.channels);
@@ -665,6 +685,10 @@ export const useStore = create<Store>((set, get) => ({
   setMessageDensity: (d) => {
     localStorage.setItem('freeq-density', d);
     set({ messageDensity: d });
+  },
+  setShowJoinPart: (v) => {
+    localStorage.setItem('freeq-show-join-part', v ? 'true' : 'false');
+    set({ showJoinPart: v });
   },
   setLoadExternalMedia: (v) => {
     localStorage.setItem('freeq-load-media', v ? 'true' : 'false');

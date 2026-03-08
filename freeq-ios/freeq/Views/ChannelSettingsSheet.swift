@@ -144,6 +144,33 @@ struct ChannelSettingsSheet: View {
                             .foregroundColor(Theme.textMuted)
                     }
 
+                    // Notifications
+                    Section {
+                        Toggle(isOn: Binding(
+                            get: { appState.isMuted(channel.name) },
+                            set: { _ in appState.toggleMute(channel.name) }
+                        )) {
+                            Label("Mute Notifications", systemImage: appState.isMuted(channel.name) ? "bell.slash.fill" : "bell.fill")
+                                .foregroundColor(Theme.textPrimary)
+                        }
+                        .tint(Theme.accent)
+                        .listRowBackground(Theme.bgSecondary)
+                    } header: {
+                        Text("Notifications")
+                            .foregroundColor(Theme.textMuted)
+                    }
+
+                    // Pinned Messages
+                    Section {
+                        NavigationLink {
+                            PinnedMessagesView(channelName: channel.name)
+                        } label: {
+                            Label("Pinned Messages", systemImage: "pin.fill")
+                                .foregroundColor(Theme.textPrimary)
+                        }
+                        .listRowBackground(Theme.bgSecondary)
+                    }
+
                     // Actions
                     Section {
                         Button(action: {

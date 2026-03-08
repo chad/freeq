@@ -218,6 +218,7 @@ pub fn has_explicit_cli_args(cli: &super::Cli) -> bool {
         || cli.gen_key
         || cli.iroh_addr.is_some()
         || cli.channels.is_some()
+        || cli.send.is_some()
 }
 
 /// Returns true if we have a saved session with a handle (can auto-reconnect).

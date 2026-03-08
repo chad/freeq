@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo, type KeyboardEvent, type DragEvent } from 'react';
 import { useStore } from '../store';
-import { sendMessage, sendReply, sendEdit, joinChannel, partChannel, setTopic, setMode, kickUser, inviteUser, setAway, rawCommand, sendWhois } from '../irc/client';
+import { sendMessage, sendReply, sendEdit, sendMarkdown, joinChannel, partChannel, setTopic, setMode, kickUser, inviteUser, setAway, rawCommand, sendWhois } from '../irc/client';
 import { EmojiPicker, EMOJI_DATA } from './EmojiPicker';
 import { SlashCommands, getCommandCount } from './SlashCommands';
 import { FormatToolbar } from './FormatToolbar';
@@ -24,6 +24,7 @@ export function ComposeBox() {
   const [autocomplete, setAutocomplete] = useState<{ items: string[]; selected: number; startPos: number } | null>(null);
   const [slashCmd, setSlashCmd] = useState<{ filter: string; selected: number } | null>(null);
   const [showFormatBar, setShowFormatBar] = useState(false);
+  const [markdownMode, setMarkdownMode] = useState(false);
 
   const applyFormat = (prefix: string, suffix: string) => {
     const el = inputRef.current;
@@ -330,40 +331,26 @@ export function ComposeBox() {
       handleCommand(trimmed, activeChannel);
     } else if (activeChannel !== 'server') {
       const target = ch?.name || activeChannel;
-      const hasCodeBlock = trimmed.includes('```');
-      if (hasCodeBlock) {
-        // Code block: encode newlines as literal \n and send as one message
-        const encoded = trimmed.replace(/\n/g, '\\n');
-        if (editingMsg && editingMsg.channel.toLowerCase() === activeChannel.toLowerCase()) {
-          sendEdit(target, editingMsg.msgId, encoded);
-          useStore.getState().setEditingMsg(null);
-        } else if (replyTo && replyTo.channel.toLowerCase() === activeChannel.toLowerCase()) {
-          sendReply(target, replyTo.msgId, encoded);
-          useStore.getState().setReplyTo(null);
-        } else {
-          sendMessage(target, encoded);
-        }
+      const isMultiline = trimmed.includes('\n');
+      if (markdownMode) {
+        // Markdown mode: send with mime tag (handles multiline internally)
+        sendMarkdown(target, trimmed);
+      } else if (editingMsg && editingMsg.channel.toLowerCase() === activeChannel.toLowerCase()) {
+        const encoded = isMultiline ? trimmed.replace(/\n/g, '\\n') : trimmed;
+        sendEdit(target, editingMsg.msgId, encoded, isMultiline);
+        useStore.getState().setEditingMsg(null);
+      } else if (replyTo && replyTo.channel.toLowerCase() === activeChannel.toLowerCase()) {
+        const encoded = isMultiline ? trimmed.replace(/\n/g, '\\n') : trimmed;
+        sendReply(target, replyTo.msgId, encoded, isMultiline);
+        useStore.getState().setReplyTo(null);
       } else {
-        // Split multi-line text into separate messages (IRC doesn't support \n)
-        const lines = trimmed.split(/\r?\n/).filter(l => l.trim());
-        if (editingMsg && editingMsg.channel.toLowerCase() === activeChannel.toLowerCase()) {
-          // Edit mode — send as single message (join lines with space)
-          sendEdit(target, editingMsg.msgId, lines.join(' '));
-          useStore.getState().setEditingMsg(null);
-        } else if (replyTo && replyTo.channel.toLowerCase() === activeChannel.toLowerCase()) {
-          // Reply mode — first line is the reply, rest are follow-up messages
-          sendReply(target, replyTo.msgId, lines[0]);
-          useStore.getState().setReplyTo(null);
-          for (let i = 1; i < lines.length; i++) sendMessage(target, lines[i]);
-        } else {
-          for (const line of lines) sendMessage(target, line);
-        }
+        sendMessage(target, trimmed, isMultiline);
       }
     }
     setText('');
     setAutocomplete(null);
     if (inputRef.current) inputRef.current.style.height = 'auto';
-  }, [text, activeChannel, ch, pendingUpload, doUpload, editingMsg, replyTo]);
+  }, [text, activeChannel, ch, pendingUpload, doUpload, editingMsg, replyTo, markdownMode]);
 
   const onKeyDown = (e: KeyboardEvent) => {
     // Tab completion
@@ -407,7 +394,7 @@ export function ComposeBox() {
           e.preventDefault();
           // Get the filtered list and pick the selected one
           const filter = slashCmd.filter.toLowerCase();
-          const COMMANDS = ['join','part','topic','invite','kick','op','deop','voice','mode','msg','me','whois','away','encrypt','decrypt','policy','raw','help'];
+          const COMMANDS = ['join','part','topic','invite','kick','op','deop','voice','mode','msg','me','md','whois','away','encrypt','decrypt','policy','raw','help'];
           const filtered = filter ? COMMANDS.filter(c => c.startsWith(filter)) : COMMANDS;
           if (filtered[slashCmd.selected]) {
             setText(`/${filtered[slashCmd.selected]} `);
@@ -730,8 +717,24 @@ export function ComposeBox() {
           Aa
         </button>
 
+        {/* Markdown mode toggle */}
+        <button
+          onClick={() => setMarkdownMode(!markdownMode)}
+          className={`w-10 h-10 rounded-lg flex items-center justify-center text-xs font-bold shrink-0 ${
+            markdownMode ? 'text-accent bg-accent/10' : 'text-fg-dim hover:text-fg-muted hover:bg-bg-tertiary'
+          }`}
+          title={markdownMode ? 'Markdown mode ON — click to disable' : 'Enable markdown mode'}
+        >
+          M↓
+        </button>
+
         {/* Compose area */}
-        <div className="flex-1 bg-bg-tertiary rounded-lg border border-border focus-within:border-accent/50 flex flex-col">
+        <div className={`flex-1 bg-bg-tertiary rounded-lg border focus-within:border-accent/50 flex flex-col ${markdownMode ? 'border-accent/30' : 'border-border'}`}>
+          {markdownMode && (
+            <div className="px-3 py-1 text-[10px] text-accent font-medium border-b border-accent/20 bg-accent/[0.03]">
+              Markdown — headers, lists, tables, code blocks will render
+            </div>
+          )}
           {showFormatBar && <FormatToolbar onFormat={applyFormat} />}
           <div className="flex items-end">
           <textarea
@@ -840,6 +843,9 @@ function handleCommand(text: string, activeChannel: string) {
       if (mp[0] && mp[1]) sendMessage(mp[0], mp.slice(1).join(' '));
       break;
     }
+    case 'md': case 'markdown':
+      if (args && target) sendMarkdown(target, args);
+      break;
     case 'me': case 'action':
       if (target) rawCommand(`PRIVMSG ${target} :\x01ACTION ${args}\x01`);
       break;
@@ -852,6 +858,7 @@ function handleCommand(text: string, activeChannel: string) {
       store.addSystemMessage(activeChannel, '/kick user  ·  /op user  ·  /voice user  ·  /invite user');
       store.addSystemMessage(activeChannel, '/whois user  ·  /away reason  ·  /me action');
       store.addSystemMessage(activeChannel, '/msg user text  ·  /mode +o user  ·  /raw IRC_LINE');
+      store.addSystemMessage(activeChannel, '/md **bold** text  — send as rendered markdown');
       store.addSystemMessage(activeChannel, '── Encryption ──');
       store.addSystemMessage(activeChannel, '/encrypt passphrase  ·  /decrypt  — E2EE for channels');
       store.addSystemMessage(activeChannel, '── Policy ──');

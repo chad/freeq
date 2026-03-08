@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
+import { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { useStore, type Message, type PinnedMessage } from '../store';
 import { getNick, requestHistory, sendReaction } from '../irc/client';
 import { fetchProfile, getCachedProfile, type ATProfile } from '../lib/profiles';
@@ -7,6 +7,7 @@ import { UserPopover } from './UserPopover';
 import { BlueskyEmbed } from './BlueskyEmbed';
 import { LinkPreview } from './LinkPreview';
 import { MessageContextMenu } from './MessageContextMenu';
+import { MarkdownMessage } from './MarkdownRenderer';
 
 // ── Colors ──
 
@@ -181,14 +182,15 @@ function renderWithBreaks(text: string): React.ReactNode {
 }
 
 /** Render text segments as React elements (XSS-safe — no innerHTML). */
-function renderTextSafe(text: string): React.ReactElement {
+function renderTextSafe(text: string, isMultiline = false): React.ReactElement {
   const segments = parseTextSegmentsCached(text);
-  // Decode literal \n sequences when message contains code blocks
+  // Decode literal \n sequences for multiline messages and code blocks
   const hasCodeBlock = segments.some(s => s.type === 'codeblock');
+  const shouldDecode = hasCodeBlock || isMultiline;
   return (
     <>
       {segments.map((seg, i) => {
-        const content = hasCodeBlock ? seg.content.replace(/\\n/g, '\n') : seg.content;
+        const content = shouldDecode ? seg.content.replace(/\\n/g, '\n') : seg.content;
         switch (seg.type) {
           case 'link':
             return <a key={i} href={seg.href} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline break-all">{content}</a>;
@@ -362,12 +364,26 @@ function InlineVideoPlayer({ url }: { url: string }) {
 
 function MessageContent({ msg }: { msg: Message }) {
   const setLightbox = useStore((s) => s.setLightboxUrl);
+  const isMultiline = '+freeq.at/multiline' in (msg.tags || {});
 
   if (msg.isAction) {
     const color = msg.isSelf ? '#b18cff' : nickColor(msg.from);
     return (
       <div className="text-fg-muted italic text-[15px] mt-0.5">
         <span style={{ color }} className="font-semibold not-italic">{'* '}{msg.from}</span>{' '}{msg.text}
+      </div>
+    );
+  }
+
+  // Markdown messages — render with full markdown support
+  const mimeType = msg.tags?.['+freeq.at/mime'];
+  if (mimeType === 'text/markdown') {
+    // Decode multiline encoding
+    const decoded = isMultiline ? msg.text.replace(/\\n/g, '\n') : msg.text;
+    return (
+      <div className="mt-0.5">
+        {msg.replyTo && <ReplyBadge msgId={msg.replyTo} />}
+        <MarkdownMessage text={decoded} />
       </div>
     );
   }
@@ -402,7 +418,7 @@ function MessageContent({ msg }: { msg: Message }) {
     return (
       <div className="mt-0.5">
         {msg.replyTo && <ReplyBadge msgId={msg.replyTo} />}
-        {cleanText && <div className="text-[15px] leading-relaxed mb-1">{renderTextSafe(cleanText)}</div>}
+        {cleanText && <div className="text-[15px] leading-relaxed mb-1">{renderTextSafe(cleanText, isMultiline)}</div>}
         <InlineVideoPlayer url={videoMatch[0]} />
       </div>
     );
@@ -415,7 +431,7 @@ function MessageContent({ msg }: { msg: Message }) {
     return (
       <div className="mt-0.5">
         {msg.replyTo && <ReplyBadge msgId={msg.replyTo} />}
-        {cleanText && <div className="text-[15px] leading-relaxed mb-1">{renderTextSafe(cleanText)}</div>}
+        {cleanText && <div className="text-[15px] leading-relaxed mb-1">{renderTextSafe(cleanText, isMultiline)}</div>}
         <InlineAudioPlayer url={audioMatch[0]} />
       </div>
     );
@@ -435,7 +451,7 @@ function MessageContent({ msg }: { msg: Message }) {
 
       {cleanText && (
         <div className="text-[15px] leading-relaxed [&_pre]:my-1 [&_a]:break-all">
-          {renderTextSafe(cleanText)}
+          {renderTextSafe(cleanText, isMultiline)}
         </div>
       )}
 
@@ -473,10 +489,15 @@ function MessageContent({ msg }: { msg: Message }) {
 
       {/* Link preview for other URLs (not images, Bluesky, or YouTube) */}
       {!bskyMatch && !ytMatch && imageUrls.length === 0 && (() => {
-        const urlMatch = msg.text.match(/(https?:\/\/[^\s<]+)/);
-        // Skip blob proxy URLs, audio/video URLs — they're media, not web pages
-        if (urlMatch && /\/api\/v1\/blob|\.(?:m4a|mp3|mp4|mov|webm|ogg|wav|aac)/i.test(urlMatch[1])) return null;
-        return urlMatch ? <LinkPreview url={urlMatch[1]} /> : null;
+        const urlMatch = msg.text.match(/(https?:\/\/[^\s<\])]+)/);
+        if (!urlMatch) return null;
+        // Clean trailing punctuation that's not part of the URL
+        let url = urlMatch[1].replace(/[.,;:!?)'"]+$/, '');
+        // Skip our own API URLs, blob proxy, audio/video — not web pages
+        if (/\/api\/v1\/|\.(?:m4a|mp3|mp4|mov|webm|ogg|wav|aac)/i.test(url)) return null;
+        // Skip if URL is malformed after cleanup
+        try { new URL(url); } catch { return null; }
+        return <LinkPreview url={url} />;
       })()}
     </div>
   );
@@ -1030,10 +1051,20 @@ function PinnedBar({ pins, messages }: { pins: PinnedMessage[]; messages: Messag
 
 export function MessageList() {
   const activeChannel = useStore((s) => s.activeChannel);
-  const messages = useStore((s) => {
+  const rawMessages = useStore((s) => {
     if (s.activeChannel === 'server') return s.serverMessages;
     return s.channels.get(s.activeChannel.toLowerCase())?.messages || [];
   });
+  const showJoinPart = useStore((s) => s.showJoinPart);
+
+  // Filter out join/part/quit noise unless the user opted in.
+  // Keep moderation actions (kicks, bans, mode changes) always visible.
+  const JOIN_PART_RE = /^.+ (joined|left|quit)(\s|$)/;
+  const messages = useMemo(() => {
+    if (showJoinPart) return rawMessages;
+    return rawMessages.filter((m) => !m.isSystem || !JOIN_PART_RE.test(m.text));
+  }, [rawMessages, showJoinPart]);
+
   const lastReadMsgId = useStore((s) => s.channels.get(s.activeChannel.toLowerCase())?.lastReadMsgId);
   const pins = useStore((s) => s.channels.get(s.activeChannel.toLowerCase())?.pins ?? EMPTY_PINS);
   const density = useStore((s) => s.messageDensity);
@@ -1088,6 +1119,17 @@ export function MessageList() {
     const t2 = setTimeout(scrollBottom, 300);
     const t3 = setTimeout(scrollBottom, 600); // after CHATHISTORY arrives
     const t4 = setTimeout(scrollBottom, 1200); // slow networks
+
+    // DM buffers don't get NAMES/366 so history isn't auto-fetched.
+    // Request it on first activation if the buffer has no messages.
+    const isDM = activeChannel !== 'server' && !activeChannel.startsWith('#') && !activeChannel.startsWith('&');
+    if (isDM) {
+      const ch = useStore.getState().channels.get(activeChannel.toLowerCase());
+      if (!ch || ch.messages.length === 0) {
+        requestHistory(activeChannel);
+      }
+    }
+
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); clearTimeout(t4); };
   }, [activeChannel]);
 

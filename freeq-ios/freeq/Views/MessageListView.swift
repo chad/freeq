@@ -11,6 +11,7 @@ struct MessageListView: View {
 
     @State private var showScrollButton = false
     @State private var lastReadId: String? = nil
+    @State private var isNearBottom = true
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -118,7 +119,9 @@ struct MessageListView: View {
                     // When at bottom, it's near screen height; when scrolled up, it goes large/positive
                     let screenHeight = UIScreen.main.bounds.height
                     // If the bottom anchor is more than 150pt below the screen, user has scrolled up
-                    showScrollButton = value > screenHeight + 150
+                    let nearBottom = value <= screenHeight + 150
+                    isNearBottom = nearBottom
+                    showScrollButton = !nearBottom
                 }
 
                 // Scroll to bottom FAB with message preview
@@ -185,20 +188,10 @@ struct MessageListView: View {
                 }
             }
             .onChange(of: channel.messages.count) {
-                if let last = channel.messages.last {
-                    // Always scroll if the new message is from us
-                    let isOwnMessage = last.from == appState.nick
-                    if isOwnMessage || !showScrollButton {
-                        withAnimation(.easeOut(duration: 0.15)) {
-                            proxy.scrollTo(last.id, anchor: .bottom)
-                        }
-                        showScrollButton = false
-                    }
-                }
-                // Mark read if this is the active channel
-                if appState.activeChannel == channel.name {
-                    appState.markRead(channel.name)
-                }
+                onNewMessages(proxy: proxy)
+            }
+            .onChange(of: channel.messages.last?.id) {
+                onNewMessages(proxy: proxy)
             }
             .onAppear {
                 // Capture current read position before marking read
@@ -249,6 +242,23 @@ struct MessageListView: View {
             if let last = channel.messages.last {
                 proxy.scrollTo(last.id, anchor: .bottom)
             }
+        }
+    }
+
+    private func onNewMessages(proxy: ScrollViewProxy) {
+        guard let last = channel.messages.last else { return }
+        // Always scroll if the new message is from us, or if user was near bottom
+        let isOwnMessage = last.from == appState.nick
+        if isOwnMessage || isNearBottom {
+            withAnimation(.easeOut(duration: 0.15)) {
+                proxy.scrollTo(last.id, anchor: .bottom)
+            }
+            showScrollButton = false
+            isNearBottom = true
+        }
+        // Mark read if this is the active channel
+        if appState.activeChannel == channel.name {
+            appState.markRead(channel.name)
         }
     }
 
@@ -309,6 +319,21 @@ struct MessageListView: View {
             ToastManager.shared.show("Copied!", icon: "doc.on.doc.fill")
         }) {
             Label("Copy Text", systemImage: "doc.on.doc")
+        }
+
+        Button(action: {
+            appState.sendRaw("PIN \(channel.name) \(msg.id)")
+            ToastManager.shared.show("Pinned!", icon: "pin.fill")
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        }) {
+            Label("Pin Message", systemImage: "pin")
+        }
+
+        Button(action: {
+            UIPasteboard.general.string = msg.id
+            ToastManager.shared.show("Message ID copied", icon: "number")
+        }) {
+            Label("Copy Message ID", systemImage: "number")
         }
     }
 
@@ -490,10 +515,18 @@ struct MessageListView: View {
                 .padding(.top, 6)
                 .padding(.bottom, 2)
             } else {
-                messageBody(msg)
-                    .padding(.leading, 68)
-                    .padding(.trailing, 16)
-                    .padding(.vertical, 1)
+                HStack(alignment: .top, spacing: 0) {
+                    // Subtle timestamp for continuation messages
+                    Text(shortTime(msg.timestamp))
+                        .font(.system(size: 9))
+                        .foregroundColor(Theme.textMuted.opacity(0.5))
+                        .frame(width: 56, alignment: .center)
+                        .padding(.top, 4)
+
+                    messageBody(msg)
+                        .padding(.trailing, 16)
+                }
+                .padding(.vertical, 1)
             }
 
             // Reactions
@@ -719,6 +752,11 @@ struct MessageListView: View {
         if let range = text.range(of: cdnPattern, options: .regularExpression) {
             return URL(string: String(text[range]))
         }
+        // Match blob proxy URLs with image mime hint
+        let blobPattern = #"https?://\S+/api/v1/blob\?\S*mime=image%2F\S*"#
+        if let range = text.range(of: blobPattern, options: .regularExpression) {
+            return URL(string: String(text[range]))
+        }
         return nil
     }
 
@@ -808,22 +846,72 @@ struct MessageListView: View {
 
     private func attributedMessage(_ text: String) -> AttributedString {
         var result = AttributedString(text)
+        let nsRange = NSRange(text.startIndex..., in: text)
+
+        // Code blocks: ```text``` (must be before inline code)
+        let codeBlockPattern = #"```(?:\w*\n?)?([\s\S]*?)```"#
+        if let regex = try? NSRegularExpression(pattern: codeBlockPattern) {
+            for match in regex.matches(in: text, range: nsRange).reversed() {
+                if let range = Range(match.range, in: result) {
+                    result[range].font = .system(size: 13, design: .monospaced)
+                    result[range].backgroundColor = Theme.bgTertiary
+                }
+            }
+        }
 
         // Bold: **text**
         let boldPattern = #"\*\*(.+?)\*\*"#
-        if let regex = try? NSRegularExpression(pattern: boldPattern),
-           let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-           let range = Range(match.range, in: result) {
-            result[range].font = .system(size: 15, weight: .bold)
+        if let regex = try? NSRegularExpression(pattern: boldPattern) {
+            for match in regex.matches(in: text, range: nsRange).reversed() {
+                if let range = Range(match.range, in: result) {
+                    result[range].font = .system(size: 15, weight: .bold)
+                }
+            }
         }
 
-        // Inline code: `text`
-        let codePattern = #"`([^`]+)`"#
-        if let regex = try? NSRegularExpression(pattern: codePattern),
-           let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-           let range = Range(match.range, in: result) {
-            result[range].font = .system(size: 14, design: .monospaced)
-            result[range].backgroundColor = Theme.bgTertiary
+        // Italic: *text* (but not **text**)
+        let italicPattern = #"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)"#
+        if let regex = try? NSRegularExpression(pattern: italicPattern) {
+            for match in regex.matches(in: text, range: nsRange).reversed() {
+                if let range = Range(match.range, in: result) {
+                    result[range].font = .system(size: 15).italic()
+                }
+            }
+        }
+
+        // Strikethrough: ~~text~~
+        let strikePattern = #"~~(.+?)~~"#
+        if let regex = try? NSRegularExpression(pattern: strikePattern) {
+            for match in regex.matches(in: text, range: nsRange).reversed() {
+                if let range = Range(match.range, in: result) {
+                    result[range].strikethroughStyle = .single
+                    result[range].foregroundColor = Theme.textMuted
+                }
+            }
+        }
+
+        // Inline code: `text` (skip if inside code block)
+        let codePattern = #"(?<!`)`(?!`)([^`\n]+)(?<!`)`(?!`)"#
+        if let regex = try? NSRegularExpression(pattern: codePattern) {
+            for match in regex.matches(in: text, range: nsRange).reversed() {
+                if let range = Range(match.range, in: result) {
+                    result[range].font = .system(size: 14, design: .monospaced)
+                    result[range].backgroundColor = Theme.bgTertiary
+                }
+            }
+        }
+
+        // Clickable URLs
+        let urlPattern = #"https?://[^\s<>\]\)]+"#
+        if let regex = try? NSRegularExpression(pattern: urlPattern) {
+            for match in regex.matches(in: text, range: nsRange) {
+                if let swiftRange = Range(match.range, in: text),
+                   let attrRange = Range(match.range, in: result),
+                   let url = URL(string: String(text[swiftRange])) {
+                    result[attrRange].link = url
+                    result[attrRange].foregroundColor = Theme.accent
+                }
+            }
         }
 
         return result
@@ -837,6 +925,12 @@ struct MessageListView: View {
         return f
     }()
 
+    private static let shortTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "h:mm"
+        return f
+    }()
+
     private static let dateFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "MMMM d, yyyy"
@@ -845,6 +939,10 @@ struct MessageListView: View {
 
     private func formatTime(_ date: Date) -> String {
         Self.timeFormatter.string(from: date)
+    }
+
+    private func shortTime(_ date: Date) -> String {
+        Self.shortTimeFormatter.string(from: date)
     }
 
     private func formatDate(_ date: Date) -> String {

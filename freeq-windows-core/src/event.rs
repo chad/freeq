@@ -265,6 +265,9 @@ pub fn convert_event(event: &freeq_sdk::event::Event) -> DomainEvent {
         Event::WhoisReply { nick, info } => DomainEvent::Notice {
             text: format!("WHOIS {nick}: {info}"),
         },
+        Event::ChatHistoryTarget { nick, timestamp } => DomainEvent::Notice {
+            text: format!("DM: {nick} (last: {})", timestamp.as_deref().unwrap_or("?")),
+        },
         Event::RawLine(line) => DomainEvent::Notice {
             text: line.clone(),
         },

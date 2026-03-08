@@ -144,7 +144,14 @@ class AppState: ObservableObject {
     @Published var authenticatedDID: String? = nil
     @Published var dmBuffers: [ChannelState] = []
     @Published var autoJoinChannels: [String] = ["#general"]
-    @Published var unreadCounts: [String: Int] = [:]
+    @Published var unreadCounts: [String: Int] = [:] {
+        didSet { UserDefaults.standard.set(unreadCounts, forKey: "freeq.unreadCounts") }
+    }
+
+    /// Muted channels — no notifications, no badge increment
+    @Published var mutedChannels: Set<String> = [] {
+        didSet { UserDefaults.standard.set(Array(mutedChannels), forKey: "freeq.mutedChannels") }
+    }
 
     /// MOTD lines collected from server
     @Published var motdLines: [String] = []
@@ -167,6 +174,9 @@ class AppState: ObservableObject {
     var pendingWebToken: String? = nil
     /// Persistent broker session token
     var brokerToken: String? = nil
+    /// Cached web-token + expiry (reuse across reconnects within TTL)
+    fileprivate var cachedWebToken: String? = nil
+    fileprivate var cachedWebTokenExpiry: Date = .distantPast
 
     /// Read position tracking — channel name -> last read message ID
     @Published var lastReadMessageIds: [String: String] = [:]
@@ -212,6 +222,12 @@ class AppState: ObservableObject {
         if let savedReadPositions = UserDefaults.standard.dictionary(forKey: "freeq.readPositions") as? [String: String] {
             lastReadMessageIds = savedReadPositions
         }
+        if let savedUnreads = UserDefaults.standard.dictionary(forKey: "freeq.unreadCounts") as? [String: Int] {
+            unreadCounts = savedUnreads
+        }
+        if let savedMuted = UserDefaults.standard.stringArray(forKey: "freeq.mutedChannels") {
+            mutedChannels = Set(savedMuted)
+        }
         // Migrate secrets from UserDefaults to Keychain (one-time)
         KeychainHelper.migrateFromUserDefaults(userDefaultsKey: "freeq.did", keychainKey: "did")
         KeychainHelper.migrateFromUserDefaults(userDefaultsKey: "freeq.brokerToken", keychainKey: "brokerToken")
@@ -225,6 +241,18 @@ class AppState: ObservableObject {
         if let savedBrokerBase = UserDefaults.standard.string(forKey: "freeq.brokerBase") {
             authBrokerBase = savedBrokerBase
         }
+        // Restore cached web token if still valid
+        if let savedToken = KeychainHelper.load(key: "webToken"),
+           let expiryStr = UserDefaults.standard.string(forKey: "freeq.webTokenExpiry"),
+           let expiryTs = Double(expiryStr) {
+            let expiry = Date(timeIntervalSince1970: expiryTs)
+            if Date() < expiry {
+                cachedWebToken = savedToken
+                cachedWebTokenExpiry = expiry
+            } else {
+                KeychainHelper.delete(key: "webToken")
+            }
+        }
         isDarkTheme = UserDefaults.standard.object(forKey: "freeq.darkTheme") as? Bool ?? true
 
         // Prune stale typing indicators every 3 seconds
@@ -237,14 +265,24 @@ class AppState: ObservableObject {
 
     /// Reconnect with saved session (requires SASL web-token).
     /// Retries broker fetch with backoff on failure.
-    private var brokerRetryCount = 0
+    fileprivate var brokerRetryCount = 0
     func reconnectSavedSession() {
         guard hasSavedSession, connectionState == .disconnected else { return }
+
+        // 1. Already have a pending token (e.g., from initial login)
         if pendingWebToken != nil {
             connect(nick: nick)
             return
         }
-        // Fetch a fresh web-token from broker
+
+        // 2. Reuse cached web-token if still valid (25 min window — token TTL is 30 min)
+        if let cached = cachedWebToken, Date() < cachedWebTokenExpiry {
+            pendingWebToken = cached
+            connect(nick: nick)
+            return
+        }
+
+        // 3. Fetch a fresh web-token from broker
         guard let brokerToken else {
             // No broker token at all — must log in fresh
             return
@@ -255,6 +293,12 @@ class AppState: ObservableObject {
                 await MainActor.run {
                     self.brokerRetryCount = 0
                     self.pendingWebToken = session.token
+                    // Cache for reuse (25 min — conservative vs 30 min server TTL)
+                    self.cachedWebToken = session.token
+                    let expiry = Date().addingTimeInterval(25 * 60)
+                    self.cachedWebTokenExpiry = expiry
+                    KeychainHelper.save(key: "webToken", value: session.token)
+                    UserDefaults.standard.set(String(expiry.timeIntervalSince1970), forKey: "freeq.webTokenExpiry")
                     self.authenticatedDID = session.did
                     KeychainHelper.save(key: "did", value: session.did)
                     self.connect(nick: session.nick)
@@ -262,9 +306,9 @@ class AppState: ObservableObject {
             } catch {
                 await MainActor.run {
                     self.brokerRetryCount += 1
-                    if self.brokerRetryCount <= 4 {
-                        // Retry with backoff: 3, 6, 12, 24 seconds
-                        let delay = 3.0 * Double(1 << (self.brokerRetryCount - 1))
+                    if self.brokerRetryCount <= 8 {
+                        // Retry with backoff: 2, 3, 4, 6, 8, 10, 15, 20 seconds
+                        let delay = min(2.0 + Double(self.brokerRetryCount), 20.0)
                         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                             if self.connectionState == .disconnected {
                                 self.reconnectSavedSession()
@@ -327,8 +371,12 @@ class AppState: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "freeq.lastLogin")
         KeychainHelper.delete(key: "did")
         KeychainHelper.delete(key: "brokerToken")
+        KeychainHelper.delete(key: "webToken")
+        UserDefaults.standard.removeObject(forKey: "freeq.webTokenExpiry")
         UserDefaults.standard.removeObject(forKey: "freeq.nick")
         UserDefaults.standard.removeObject(forKey: "freeq.handle")
+        cachedWebToken = nil
+        cachedWebTokenExpiry = .distantPast
         DispatchQueue.main.async {
             self.authenticatedDID = nil
             self.nick = ""
@@ -343,6 +391,13 @@ class AppState: ObservableObject {
 
     func partChannel(_ channel: String) {
         try? client?.part(channel: channel)
+        // Optimistically remove from UI — don't wait for server confirmation
+        channels.removeAll { $0.name.lowercased() == channel.lowercased() }
+        autoJoinChannels.removeAll { $0.lowercased() == channel.lowercased() }
+        UserDefaults.standard.set(autoJoinChannels, forKey: "freeq.channels")
+        if activeChannel?.lowercased() == channel.lowercased() {
+            activeChannel = channels.first?.name
+        }
     }
 
     /// Send a message. Returns true on success, false on failure (so caller can preserve text).
@@ -353,19 +408,28 @@ class AppState: ObservableObject {
         sendRaw("@+typing=done TAGMSG \(target)")
         lastTypingSent = .distantPast
 
+        let isMultiline = text.contains("\n")
+        let wireText = text.replacingOccurrences(of: "\r", with: "")
+        let encoded = isMultiline ? wireText.replacingOccurrences(of: "\n", with: "\\n") : wireText
+        let multilineTag = isMultiline ? ";+freeq.at/multiline" : ""
+
         // Check for edit mode
         if let editing = editingMessage {
-            let escaped = text.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: " ")
-            sendRaw("@+draft/edit=\(editing.id) PRIVMSG \(target) :\(escaped)")
+            sendRaw("@+draft/edit=\(editing.id)\(multilineTag) PRIVMSG \(target) :\(encoded)")
             editingMessage = nil
             return true
         }
 
         // Check for reply mode
         if let reply = replyingTo {
-            let escaped = text.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: " ")
-            sendRaw("@+reply=\(reply.id) PRIVMSG \(target) :\(escaped)")
+            sendRaw("@+reply=\(reply.id)\(multilineTag) PRIVMSG \(target) :\(encoded)")
             replyingTo = nil
+            return true
+        }
+
+        if isMultiline {
+            // Send via raw to include multiline tag
+            sendRaw("@+freeq.at/multiline PRIVMSG \(target) :\(encoded)")
             return true
         }
 
@@ -414,8 +478,8 @@ class AppState: ObservableObject {
     }
 
     private func fetchBrokerSession(brokerToken: String) async throws -> BrokerSessionResponse {
-        // Retry once on 502 — DPoP nonce rotation causes the first call to fail
-        for attempt in 0..<2 {
+        // Retry up to 3 times with backoff — DPoP nonce rotation causes the first call to fail
+        for attempt in 0..<3 {
             let url = URL(string: "\(authBrokerBase)/session")!
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
@@ -423,9 +487,21 @@ class AppState: ObservableObject {
             request.httpBody = try JSONSerialization.data(withJSONObject: ["broker_token": brokerToken])
             let (data, response) = try await URLSession.shared.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            if status == 502 && attempt == 0 {
-                try? await Task.sleep(nanoseconds: 300_000_000) // 300ms
+            if status == 502 && attempt < 2 {
+                try? await Task.sleep(nanoseconds: UInt64(500_000_000 * (attempt + 1))) // 500ms, 1s
                 continue
+            }
+            // 401 = broker token is genuinely invalid — clear it so user re-authenticates
+            if status == 401 {
+                await MainActor.run {
+                    self.brokerToken = nil
+                    self.cachedWebToken = nil
+                    self.cachedWebTokenExpiry = .distantPast
+                    KeychainHelper.delete(key: "brokerToken")
+                    KeychainHelper.delete(key: "webToken")
+                    UserDefaults.standard.removeObject(forKey: "freeq.webTokenExpiry")
+                }
+                throw NSError(domain: "Broker", code: 401, userInfo: [NSLocalizedDescriptionKey: "Session expired — please sign in again"])
             }
             guard status == 200 else { throw NSError(domain: "Broker", code: status) }
             return try JSONDecoder().decode(BrokerSessionResponse.self, from: data)
@@ -445,8 +521,20 @@ class AppState: ObservableObject {
     }
 
     func updateBadgeCount() {
-        let total = unreadCounts.values.reduce(0, +)
+        let total = unreadCounts.filter { !mutedChannels.contains($0.key) }.values.reduce(0, +)
         UNUserNotificationCenter.current().setBadgeCount(total)
+    }
+
+    func toggleMute(_ channel: String) {
+        if mutedChannels.contains(channel) {
+            mutedChannels.remove(channel)
+        } else {
+            mutedChannels.insert(channel)
+        }
+    }
+
+    func isMuted(_ channel: String) -> Bool {
+        mutedChannels.contains(channel)
     }
 
     func toggleTheme() {
@@ -461,6 +549,7 @@ class AppState: ObservableObject {
             // Returning to foreground — reconnect if needed
             NotificationManager.shared.clearBadge()
             if connectionState == .disconnected && hasSavedSession {
+                brokerRetryCount = 0  // Reset retries on foreground
                 reconnectSavedSession()
             }
         case .background:
@@ -474,10 +563,10 @@ class AppState: ObservableObject {
     }
 
     func incrementUnread(_ channel: String) {
-        if activeChannel != channel {
-            unreadCounts[channel, default: 0] += 1
-            updateBadgeCount()
-        }
+        guard activeChannel != channel else { return }
+        guard !mutedChannels.contains(channel) else { return }
+        unreadCounts[channel, default: 0] += 1
+        updateBadgeCount()
     }
 
     func getOrCreateChannel(_ name: String) -> ChannelState {
@@ -490,11 +579,17 @@ class AppState: ObservableObject {
     }
 
     func getOrCreateDM(_ nick: String) -> ChannelState {
-        if let existing = dmBuffers.first(where: { $0.name.lowercased() == nick.lowercased() }) {
+        let trimmed = nick.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else {
+            // Return a throwaway buffer — never append empty nicks to the list
+            return ChannelState(name: "_empty")
+        }
+        if let existing = dmBuffers.first(where: { $0.name.lowercased() == trimmed.lowercased() }) {
             return existing
         }
-        let dm = ChannelState(name: nick)
+        let dm = ChannelState(name: trimmed)
         dmBuffers.append(dm)
+        requestHistory(channel: trimmed)
         return dm
     }
 
@@ -593,8 +688,12 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
             // instead of showing login screen. Token may have been stale.
             if state.authenticatedDID != nil && nick.lowercased().hasPrefix("guest") {
                 state.disconnect()
+                // Invalidate cached token — it was stale
+                state.cachedWebToken = nil
+                state.cachedWebTokenExpiry = .distantPast
+                state.brokerRetryCount = 0
                 // Retry via broker — will get a fresh token
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                     if state.connectionState == .disconnected && state.hasSavedSession {
                         state.pendingWebToken = nil  // Force broker refresh
                         state.reconnectSavedSession()
@@ -606,6 +705,10 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
             // Auto-join saved channels
             for channel in state.autoJoinChannels {
                 state.joinChannel(channel)
+            }
+            // Fetch DM conversation list if authenticated
+            if state.authenticatedDID != nil {
+                state.sendRaw("CHATHISTORY TARGETS * * 50")
             }
 
         case .authenticated(let did):
@@ -664,10 +767,13 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
             let from = ircMsg.fromNick
             let isSelf = from.lowercased() == state.nick.lowercased()
 
+            // Decode multiline: \\n → newline (server encodes newlines as literal \n)
+            let decodedText = ircMsg.text.replacingOccurrences(of: "\\n", with: "\n")
+
             let msg = ChatMessage(
                 id: ircMsg.msgid ?? UUID().uuidString,
                 from: from,
-                text: ircMsg.text,
+                text: decodedText,
                 isAction: ircMsg.isAction,
                 timestamp: Date(timeIntervalSince1970: Double(ircMsg.timestampMs) / 1000.0),
                 replyTo: ircMsg.replyTo
@@ -711,11 +817,13 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 state.incrementUnread(target)
                 ch.typingUsers.removeValue(forKey: from)
 
-                // Notify on mention
-                if !isSelf && ircMsg.text.lowercased().contains(state.nick.lowercased()) {
+                // Notify on mention (skip if muted)
+                if !isSelf && ircMsg.text.lowercased().contains(state.nick.lowercased()) && !state.isMuted(target) {
                     NotificationManager.shared.sendMessageNotification(
-                        from: from, text: ircMsg.text, channel: target
+                        from: from, text: ircMsg.text, channel: target, isMention: true
                     )
+                    // Haptic when mentioned in active app
+                    UINotificationFeedbackGenerator().notificationOccurred(.warning)
                 }
             } else {
                 let bufferName = isSelf ? target : from
@@ -799,6 +907,10 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 for msg in sorted { dm.appendIfNew(msg) }
             }
 
+        case .chatHistoryTarget(let nick, _):
+            // Create DM buffer for each conversation partner
+            let _ = state.getOrCreateDM(nick)
+
         case .tagMsg(let tagMsg):
             let tags = Dictionary(uniqueKeysWithValues: tagMsg.tags.map { ($0.key, $0.value) })
             let target = tagMsg.target
@@ -867,15 +979,20 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 print("Notice: \(text)")
             }
 
+        case .whoisReply(_, _):
+            // WHOIS replies — currently unused in UI
+            break
+
         case .disconnected(let reason):
             state.connectionState = .disconnected
-            if !reason.isEmpty {
+            if !reason.isEmpty && !reason.contains("EOF") {
                 state.errorMessage = "Disconnected: \(reason)"
             }
             // Auto-reconnect with exponential backoff
             if state.hasSavedSession {
                 state.reconnectAttempts += 1
-                let delay = min(Double(1 << min(state.reconnectAttempts, 5)), 30.0) // 2, 4, 8, 16, 30, 30...
+                // Fast first retry (1s), then 2, 4, 8, 15, 15...
+                let delay = state.reconnectAttempts <= 1 ? 1.0 : min(Double(1 << min(state.reconnectAttempts - 1, 4)), 15.0)
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                     if state.connectionState == .disconnected && state.hasSavedSession {
                         state.reconnectSavedSession()

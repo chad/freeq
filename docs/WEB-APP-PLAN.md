@@ -377,7 +377,7 @@ Modal or slide-out panel:
 
 ### 4.7 Login Flow
 
-1. User lands on app (e.g. `app.freeq.at`)
+1. User lands on app (e.g. `irc.freeq.at`)
 2. Single input: "Enter your Bluesky handle" (e.g. `chadfowler.com`)
 3. Click "Sign in with Bluesky" → OAuth redirect
 4. Return → auto-connect to WebSocket → SASL auth → join default channels
@@ -484,7 +484,7 @@ Nice to have for Phase 0 but can slip:
 ### Phase 4: Production (~1 week)
 
 - PWA manifest + service worker (offline shell, push notifications)
-- Deploy to `app.freeq.at` (via Miren or static hosting)
+- Deploy to `irc.freeq.at` (via Miren or static hosting)
 - Automated E2E tests (Playwright)
 - Performance: virtualized message list (react-window), lazy image loading
 - Accessibility: ARIA labels, keyboard navigation, screen reader testing

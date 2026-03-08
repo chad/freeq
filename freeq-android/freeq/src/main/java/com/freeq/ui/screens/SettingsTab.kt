@@ -387,7 +387,7 @@ fun SettingsTab(appState: AppState) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        appState.disconnect()
+                        appState.logout()
                         showDisconnectDialog = false
                     }
                 ) {

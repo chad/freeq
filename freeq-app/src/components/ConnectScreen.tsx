@@ -45,6 +45,7 @@ function friendlyError(error: string): string {
 
 // Module-level counter survives ConnectScreen remounts
 let brokerAutoAttempts = 0;
+const MAX_BROKER_AUTO_ATTEMPTS = 3;
 
 type OAuthResultData = {
   did?: string;
@@ -183,10 +184,10 @@ export function ConnectScreen() {
     localStorage.removeItem('freeq-oauth-pending');
     try {
       const result = JSON.parse(raw) as OAuthResultData & { _ts?: number };
-      // Reject stale OAuth results (>5 minutes old) — prevents auto-connect
+      // Reject stale OAuth results (>30 minutes old) — prevents auto-connect
       // with consumed web-tokens from previous sessions
       const age = result._ts ? Date.now() - result._ts : Infinity;
-      if (age > 5 * 60 * 1000) return;
+      if (age > 30 * 60 * 1000) return;
       if (result?.did) {
         if (result.broker_token) {
           localStorage.setItem(LS_BROKER_TOKEN, result.broker_token);
@@ -209,7 +210,7 @@ export function ConnectScreen() {
   // Attempt broker session refresh on load (persistent login)
   useEffect(() => {
     if (registered || oauthPending || autoConnecting) return;
-    if (brokerAutoAttempts >= 1) return; // One shot — don't loop
+    if (brokerAutoAttempts >= MAX_BROKER_AUTO_ATTEMPTS) return;
     const brokerToken = localStorage.getItem(LS_BROKER_TOKEN);
     if (!brokerToken) return;
 
@@ -218,7 +219,7 @@ export function ConnectScreen() {
     const ch = (localStorage.getItem(LS_CHANNELS) || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const timeout = setTimeout(() => controller.abort(), 10000);
     const brokerBody = JSON.stringify({ broker_token: brokerToken });
     const doFetch = () => fetch(`${brokerOrigin}/session`, {
       method: 'POST',
@@ -235,6 +236,11 @@ export function ConnectScreen() {
           if (!r2.ok) throw new Error(await r2.text());
           return r2.json();
         }
+        // 401 = broker token is genuinely invalid/expired — only then remove it
+        if (res.status === 401) {
+          localStorage.removeItem(LS_BROKER_TOKEN);
+          throw new Error(await res.text());
+        }
         if (!res.ok) throw new Error(await res.text());
         return res.json();
       })
@@ -246,9 +252,14 @@ export function ConnectScreen() {
       })
       .catch((e) => {
         clearTimeout(timeout);
-        localStorage.removeItem(LS_BROKER_TOKEN);
+        // Don't remove broker token on transient errors (timeout, 502, network).
+        // Only removed above on explicit 401.
         setAutoConnecting(false);
-        if (e?.name === 'AbortError') {
+        if (brokerAutoAttempts < MAX_BROKER_AUTO_ATTEMPTS) {
+          // Retry with backoff
+          const delay = 2000 * brokerAutoAttempts;
+          setTimeout(() => setAutoConnecting(false), delay); // triggers re-run of this effect
+        } else if (e?.name === 'AbortError') {
           setError('Authentication service unavailable. Try again or connect as guest.');
         }
       });

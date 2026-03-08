@@ -67,9 +67,17 @@ export function connect(url: string, desiredNick: string, channels?: string[]) {
   const store = useStore.getState();
   store.reset();
 
+  // Serialize async line handling to prevent race conditions.
+  // Without this, BATCH end can be processed before async PRIVMSG handlers
+  // (which await E2EE decryption) have finished adding messages to the batch.
+  let lineQueue: Promise<void> = Promise.resolve();
+  const serializedHandleLine = (line: string) => {
+    lineQueue = lineQueue.then(() => handleLine(line)).catch((e) => console.error('[irc] line handler error:', e));
+  };
+
   transport = new Transport({
     url,
-    onLine: handleLine,
+    onLine: serializedHandleLine,
     onStateChange: (s: TransportState) => {
       useStore.getState().setConnectionState(s);
       if (s === 'connected') {
@@ -106,9 +114,9 @@ export function connect(url: string, desiredNick: string, channels?: string[]) {
           sendRegistration();
         } else if (brokerToken && brokerBase && saslDid) {
           const ctrl = new AbortController();
-          const tm = setTimeout(() => ctrl.abort(), 5000);
+          const tm = setTimeout(() => ctrl.abort(), 8000);
           // Broker /session returns 502 on first call due to DPoP nonce rotation —
-          // retry once on 502 which always succeeds after nonce is cached.
+          // retry up to 2 times on transient errors.
           const brokerBody = JSON.stringify({ broker_token: brokerToken });
           const doFetch = () => fetch(`${brokerBase}/session`, {
             method: 'POST',
@@ -116,24 +124,47 @@ export function connect(url: string, desiredNick: string, channels?: string[]) {
             body: brokerBody,
             signal: ctrl.signal,
           });
-          doFetch()
-            .then(r => {
-              clearTimeout(tm);
-              if (r.status === 502) return doFetch().then(r2 => r2.ok ? r2.json() : Promise.reject('broker 502 retry failed'));
-              return r.ok ? r.json() : Promise.reject('broker refresh failed');
-            })
+          const fetchWithRetry = async (): Promise<any> => {
+            for (let attempt = 0; attempt < 3; attempt++) {
+              try {
+                const r = await doFetch();
+                if (r.status === 502 && attempt < 2) {
+                  await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+                  continue;
+                }
+                if (r.status === 401) {
+                  // Token genuinely invalid — clear it
+                  localStorage.removeItem('freeq-broker-token');
+                  throw new Error('broker token invalid');
+                }
+                if (!r.ok) throw new Error('broker refresh failed');
+                return r.json();
+              } catch (e: any) {
+                if (e?.name === 'AbortError' || attempt >= 2) throw e;
+                await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+              }
+            }
+            throw new Error('broker fetch exhausted retries');
+          };
+          fetchWithRetry()
             .then((session: { token: string; nick: string; did: string; handle: string }) => {
+              clearTimeout(tm);
               clearTimeout(safetyTimer);
               sendRegistration(session.token);
             })
             .catch(() => {
               clearTimeout(tm);
               clearTimeout(safetyTimer);
-              // Broker refresh failed — register without SASL (guest mode)
-              saslToken = '';
-              saslDid = '';
-              saslMethod = '';
-              sendRegistration();
+              // Broker refresh failed — still try with existing saslToken if we have one.
+              // Only fall back to guest if we have no token at all.
+              if (saslToken) {
+                sendRegistration();
+              } else {
+                saslToken = '';
+                saslDid = '';
+                saslMethod = '';
+                sendRegistration();
+              }
             });
         } else {
           clearTimeout(safetyTimer);
@@ -217,28 +248,35 @@ function cacheEchoPlaintext(ciphertext: string, plaintext: string) {
 }
 
 /** Send a signed PRIVMSG (async — signs then sends) */
-async function signedPrivmsg(target: string, text: string) {
+async function signedPrivmsg(target: string, text: string, extraTags?: Record<string, string>) {
   const sig = await signing.signMessage(target, text);
-  if (sig) {
-    const line = format('PRIVMSG', [target, text], { '+freeq.at/sig': sig });
+  const tags: Record<string, string> = { ...extraTags };
+  if (sig) tags['+freeq.at/sig'] = sig;
+  if (Object.keys(tags).length > 0) {
+    const line = format('PRIVMSG', [target, text], tags);
     raw(line);
   } else {
     raw(`PRIVMSG ${target} :${text}`);
   }
 }
 
-export function sendMessage(target: string, text: string) {
+export function sendMessage(target: string, text: string, multiline = false) {
   const isChannel = target.startsWith('#') || target.startsWith('&');
+
+  // Encode multi-line: replace newlines with \n for IRC wire format
+  const wireText = multiline ? text.replace(/\n/g, '\\n') : text;
+  const extraTags: Record<string, string> = multiline ? { '+freeq.at/multiline': '' } : {};
 
   // Check if channel has E2EE key — if so, encrypt before sending
   if (e2ee.hasChannelKey(target)) {
-    e2ee.encryptChannel(target, text).then((encrypted) => {
+    e2ee.encryptChannel(target, wireText).then((encrypted) => {
       if (encrypted) {
         cacheEchoPlaintext(encrypted, text);
-        const line = format('PRIVMSG', [target, encrypted], { '+encrypted': '' });
+        const tags: Record<string, string> = { '+encrypted': '', ...extraTags };
+        const line = format('PRIVMSG', [target, encrypted], tags);
         raw(line);
       } else {
-        signedPrivmsg(target, text);
+        signedPrivmsg(target, wireText, extraTags);
       }
     });
   }
@@ -247,20 +285,21 @@ export function sendMessage(target: string, text: string) {
     const remoteDid = didForNick(target);
     if (remoteDid) {
       const origin = window.location.origin;
-      e2ee.encryptMessage(remoteDid, text, origin).then((encrypted) => {
+      e2ee.encryptMessage(remoteDid, wireText, origin).then((encrypted) => {
         if (encrypted) {
           cacheEchoPlaintext(encrypted, text);
-          const line = format('PRIVMSG', [target, encrypted], { '+encrypted': '' });
+          const tags: Record<string, string> = { '+encrypted': '', ...extraTags };
+          const line = format('PRIVMSG', [target, encrypted], tags);
           raw(line);
         } else {
-          signedPrivmsg(target, text);
+          signedPrivmsg(target, wireText, extraTags);
         }
       });
     } else {
-      signedPrivmsg(target, text);
+      signedPrivmsg(target, wireText, extraTags);
     }
   } else {
-    signedPrivmsg(target, text);
+    signedPrivmsg(target, wireText, extraTags);
   }
 
   // Ensure DM buffer exists
@@ -287,8 +326,10 @@ export function sendMessage(target: string, text: string) {
   }
 }
 
-export function sendReply(target: string, replyToMsgId: string, text: string) {
-  const line = format('PRIVMSG', [target, text], { '+reply': replyToMsgId });
+export function sendReply(target: string, replyToMsgId: string, text: string, multiline = false) {
+  const tags: Record<string, string> = { '+reply': replyToMsgId };
+  if (multiline) tags['+freeq.at/multiline'] = '';
+  const line = format('PRIVMSG', [target, text], tags);
   raw(line);
 
   // Ensure DM buffer exists
@@ -301,9 +342,31 @@ export function sendReply(target: string, replyToMsgId: string, text: string) {
   }
 }
 
-export function sendEdit(target: string, originalMsgId: string, newText: string) {
-  const line = format('PRIVMSG', [target, newText], { '+draft/edit': originalMsgId });
+export function sendEdit(target: string, originalMsgId: string, newText: string, multiline = false) {
+  const tags: Record<string, string> = { '+draft/edit': originalMsgId };
+  if (multiline) tags['+freeq.at/multiline'] = '';
+  const line = format('PRIVMSG', [target, newText], tags);
   raw(line);
+}
+
+export function sendMarkdown(target: string, text: string) {
+  const isMultiline = text.includes('\n');
+  const wireText = isMultiline ? text.replace(/\n/g, '\\n') : text;
+  const tags: Record<string, string> = { '+freeq.at/mime': 'text/markdown' };
+  if (isMultiline) tags['+freeq.at/multiline'] = '';
+  signedPrivmsg(target, wireText, tags);
+
+  // Local echo if no echo-message cap
+  if (!ackedCaps.has('echo-message')) {
+    useStore.getState().addMessage(target, {
+      id: crypto.randomUUID(),
+      from: nick,
+      text: wireText,
+      timestamp: new Date(),
+      tags,
+      isSelf: true,
+    });
+  }
 }
 
 export function sendDelete(target: string, msgId: string) {
@@ -324,6 +387,10 @@ export function joinChannel(channel: string) {
 
 export function partChannel(channel: string) {
   raw(`PART ${channel}`);
+  // Optimistic removal — don't wait for server confirmation
+  useStore.getState().removeChannel(channel);
+  joinedChannels.delete(channel.toLowerCase());
+  saveJoinedChannels();
 }
 
 export function setTopic(channel: string, topic: string) {
@@ -342,7 +409,9 @@ export function inviteUser(channel: string, userNick: string) {
   raw(`INVITE ${userNick} ${channel}`);
 }
 
+let pendingAwayReason: string | null = null;
 export function setAway(reason?: string) {
+  pendingAwayReason = reason || null;
   raw(reason ? `AWAY :${reason}` : 'AWAY');
 }
 
@@ -356,6 +425,10 @@ export function requestHistory(channel: string, before?: string) {
   } else {
     raw(`CHATHISTORY LATEST ${channel} * 50`);
   }
+}
+
+export function requestDmTargets(limit = 50) {
+  raw(`CHATHISTORY TARGETS * * ${limit}`);
 }
 
 export function rawCommand(line: string) {
@@ -395,6 +468,8 @@ async function handleLine(rawLine: string) {
   const msg = parse(rawLine);
   const store = useStore.getState();
   const from = prefixNick(msg.prefix);
+
+
 
   switch (msg.command) {
     // ── CAP negotiation ──
@@ -452,20 +527,20 @@ async function handleLine(rawLine: string) {
       const serverNick = msg.params[0] || nick;
 
       // If we were authenticated but server gave us a Guest nick,
-      // the web-token was consumed or expired. Retry once (server restart
-      // clears in-memory sessions — broker refresh re-pushes on reconnect
-      // but there may be a race).
+      // the web-token was consumed or expired. Retry with a fresh broker session.
       const wasAuthenticated = localStorage.getItem('freeq-handle');
       if (wasAuthenticated && /^Guest\d+$/i.test(serverNick)) {
         guestFallbackCount++;
-        if (guestFallbackCount <= 2) {
+        if (guestFallbackCount <= 3) {
           // Disconnect and let auto-reconnect retry with fresh broker session
           raw('QUIT :Retrying auth');
           return;
         }
-        // After 2 retries, give up and show login
+        // After 3 retries, give up — but DON'T delete the broker token.
+        // The broker token is a long-lived credential; the issue is likely
+        // transient (server restart, DPoP nonce, etc.). Let the user retry
+        // from the connect screen which will try broker again.
         guestFallbackCount = 0;
-        localStorage.removeItem('freeq-broker-token');
         raw('QUIT :Session expired');
         transport?.disconnect();
         transport = null;
@@ -494,10 +569,19 @@ async function handleLine(rawLine: string) {
       if (!toJoin.some(ch => ch.toLowerCase().replace(/^#/, '') === 'freeq' || ch.toLowerCase() === '#freeq')) {
         toJoin.unshift('#freeq');
       }
+      // The server auto-joins saved channels for DID users (registration.rs).
+      // Only send JOIN for channels not already joined to avoid duplicate 366/CHATHISTORY.
       for (const ch of toJoin) {
-        if (ch.trim()) raw(`JOIN ${ch.trim()}`);
+        const name = ch.trim();
+        if (name && !store.channels.has(name.toLowerCase())) {
+          raw(`JOIN ${name}`);
+        }
       }
       autoJoinChannels = [];
+      // Fetch DM conversation list if authenticated
+      if (saslDid) {
+        requestDmTargets();
+      }
       // Restore last active channel after joins complete
       const savedActive = localStorage.getItem('freeq-active-channel');
       if (savedActive && savedActive !== 'server') {
@@ -812,6 +896,23 @@ async function handleLine(rawLine: string) {
       break;
     }
 
+    // ── RPL_NOWAWAY (306) / RPL_UNAWAY (305) — self away status ──
+    case '306': {
+      // "You have been marked as being away"
+      const reason = pendingAwayReason || 'away';
+      pendingAwayReason = null;
+      store.setUserAway(nick, reason);
+      store.addSystemMessage('server', `You are now away: ${reason}`);
+      break;
+    }
+    case '305': {
+      // "You are no longer marked as being away"
+      pendingAwayReason = null;
+      store.setUserAway(nick, null);
+      store.addSystemMessage('server', 'You are no longer away');
+      break;
+    }
+
     // ── BATCH ──
     case 'BATCH': {
       const ref = msg.params[0];
@@ -819,6 +920,16 @@ async function handleLine(rawLine: string) {
         store.startBatch(ref.slice(1), msg.params[1] || '', msg.params[2] || '');
       } else if (ref.startsWith('-')) {
         store.endBatch(ref.slice(1));
+      }
+      break;
+    }
+
+    // ── CHATHISTORY (TARGETS response) ──
+    case 'CHATHISTORY': {
+      const sub = msg.params[0];
+      if (sub === 'TARGETS' && msg.params[1]) {
+        const targetNick = msg.params[1];
+        store.addDmTarget(targetNick);
       }
       break;
     }
@@ -833,11 +944,14 @@ async function handleLine(rawLine: string) {
     // ── Error numerics ──
     case '401': {
       const failNick = msg.params[1];
-      // Show in the DM buffer if it exists, otherwise server buffer
+      // DMs are persisted server-side for authenticated users, so the message
+      // is stored even when the recipient is offline.  Only show in the DM
+      // buffer (not the server tab) to avoid alarm.
       if (failNick && store.channels.has(failNick.toLowerCase())) {
-        store.addSystemMessage(failNick, `${failNick} is not online — message not delivered`);
+        store.addSystemMessage(failNick, `${failNick} is offline — message saved, they'll see it next time they connect`);
+      } else {
+        store.addSystemMessage('server', `No such nick: ${failNick}`);
       }
-      store.addSystemMessage('server', `No such nick: ${failNick}`);
       break;
     }
     case '404': { // ERR_CANNOTSENDTOCHAN

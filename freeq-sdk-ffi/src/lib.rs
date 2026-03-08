@@ -25,6 +25,7 @@ pub struct IrcMessage {
     pub edit_of: Option<String>,
     pub batch_id: Option<String>,
     pub is_action: bool,
+    pub is_signed: bool,
     pub timestamp_ms: i64,
 }
 
@@ -116,6 +117,14 @@ pub enum FreeqEvent {
     },
     BatchEnd {
         id: String,
+    },
+    ChatHistoryTarget {
+        nick: String,
+        timestamp: Option<String>,
+    },
+    WhoisReply {
+        nick: String,
+        info: String,
     },
     Notice {
         text: String,
@@ -383,6 +392,7 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
                     edit_of,
                     batch_id,
                     is_action,
+                    is_signed: tags.contains_key("+freeq.at/sig"),
                     timestamp_ms: ts,
                 },
             }
@@ -431,10 +441,10 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
                 members,
             }
         }
-        Event::NamesEnd { .. } => {
-            // NamesEnd is informational; map to empty notice for FFI consumers
+        Event::NamesEnd { channel } => {
+            // Signal end of NAMES list — client should flush pending members + request history
             FreeqEvent::Notice {
-                text: String::new(),
+                text: format!("__NAMES_END__{}", channel),
             }
         }
         Event::ModeChanged {
@@ -493,11 +503,19 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
             target: target.clone(),
         },
         Event::BatchEnd { id } => FreeqEvent::BatchEnd { id: id.clone() },
+        Event::ChatHistoryTarget { nick, timestamp } => FreeqEvent::ChatHistoryTarget {
+            nick: nick.clone(),
+            timestamp: timestamp.clone(),
+        },
         Event::Disconnected { reason } => FreeqEvent::Disconnected {
             reason: reason.clone(),
         },
         Event::Invited { channel, by } => FreeqEvent::Notice {
             text: format!("{by} invited you to {channel}"),
+        },
+        Event::WhoisReply { nick, info } => FreeqEvent::WhoisReply {
+            nick: nick.clone(),
+            info: info.clone(),
         },
         _ => FreeqEvent::Notice {
             text: String::new(),
@@ -773,5 +791,119 @@ impl FreeqE2ee {
             serde_json::from_str(&json).map_err(|_| FreeqError::InvalidArgument)?;
         self.sessions.lock().unwrap().insert(remote_did, session);
         Ok(())
+    }
+}
+
+// ── P2P via iroh ──────────────────────────────────────────────────
+
+pub enum P2pEvent {
+    EndpointReady { endpoint_id: String },
+    PeerConnected { peer_id: String },
+    PeerDisconnected { peer_id: String },
+    DirectMessage { peer_id: String, text: String },
+    Error { message: String },
+}
+
+pub trait P2pEventHandler: Send + Sync + 'static {
+    fn on_p2p_event(&self, event: P2pEvent);
+}
+
+pub struct FreeqP2p {
+    handle: Mutex<Option<freeq_sdk::p2p::P2pHandle>>,
+    endpoint_id: Mutex<Option<String>>,
+    _shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+impl FreeqP2p {
+    fn new(handler: Box<dyn P2pEventHandler>) -> Result<Self, FreeqError> {
+        let (p2p_handle, mut event_rx) = RUNTIME
+            .block_on(freeq_sdk::p2p::start())
+            .map_err(|_| FreeqError::ConnectionFailed)?;
+
+        let endpoint_id = p2p_handle.endpoint_id.clone();
+
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+
+        // Spawn event forwarding task
+        RUNTIME.spawn(async move {
+            loop {
+                tokio::select! {
+                    evt = event_rx.recv() => {
+                        match evt {
+                            Some(e) => {
+                                let ffi_event = match e {
+                                    freeq_sdk::p2p::P2pEvent::EndpointReady { endpoint_id } => {
+                                        P2pEvent::EndpointReady { endpoint_id }
+                                    }
+                                    freeq_sdk::p2p::P2pEvent::PeerConnected { peer_id } => {
+                                        P2pEvent::PeerConnected { peer_id }
+                                    }
+                                    freeq_sdk::p2p::P2pEvent::PeerDisconnected { peer_id } => {
+                                        P2pEvent::PeerDisconnected { peer_id }
+                                    }
+                                    freeq_sdk::p2p::P2pEvent::DirectMessage { peer_id, text } => {
+                                        P2pEvent::DirectMessage { peer_id, text }
+                                    }
+                                    freeq_sdk::p2p::P2pEvent::Error { message } => {
+                                        P2pEvent::Error { message }
+                                    }
+                                };
+                                handler.on_p2p_event(ffi_event);
+                            }
+                            None => break,
+                        }
+                    }
+                    _ = &mut shutdown_rx => break,
+                }
+            }
+        });
+
+        Ok(Self {
+            handle: Mutex::new(Some(p2p_handle)),
+            endpoint_id: Mutex::new(Some(endpoint_id)),
+            _shutdown: Mutex::new(Some(shutdown_tx)),
+        })
+    }
+
+    fn endpoint_id(&self) -> Result<String, FreeqError> {
+        self.endpoint_id
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or(FreeqError::NotConnected)
+    }
+
+    fn connect_peer(&self, endpoint_id: String) -> Result<(), FreeqError> {
+        let handle = self.handle.lock().unwrap();
+        let h = handle.as_ref().ok_or(FreeqError::NotConnected)?;
+        let h = h.clone();
+        RUNTIME.spawn(async move {
+            if let Err(e) = h.connect_peer(&endpoint_id).await {
+                tracing::error!("P2P connect error: {e}");
+            }
+        });
+        Ok(())
+    }
+
+    fn send_message(&self, peer_id: String, text: String) -> Result<(), FreeqError> {
+        let handle = self.handle.lock().unwrap();
+        let h = handle.as_ref().ok_or(FreeqError::NotConnected)?;
+        let h = h.clone();
+        RUNTIME.spawn(async move {
+            if let Err(e) = h.send_message(&peer_id, &text).await {
+                tracing::error!("P2P send error: {e}");
+            }
+        });
+        Ok(())
+    }
+
+    fn connected_peers(&self) -> Vec<String> {
+        // TODO: expose connected peers list from P2pHandle
+        Vec::new()
+    }
+
+    fn shutdown(&self) {
+        let _ = self._shutdown.lock().unwrap().take();
+        let _ = self.handle.lock().unwrap().take();
     }
 }

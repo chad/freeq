@@ -19,6 +19,7 @@ ExecStart=/home/chad/src/freeq/target/release/freeq-server \
     --server-name irc.freeq.at \
     --motd "Welcome to freeq — IRC with AT Protocol identity. https://freeq.at" \
     --iroh
+EnvironmentFile=/home/chad/src/freeq/.env.secrets
 Restart=on-failure
 RestartSec=5
 

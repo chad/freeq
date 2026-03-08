@@ -65,11 +65,11 @@ struct ContentView: View {
                 ProgressView()
                     .tint(Theme.accent)
                     .scaleEffect(1.2)
-                Text(reconnectSeconds < 5 ? "Connecting..." : "Still connecting...")
+                Text(reconnectSeconds < 8 ? "Connecting..." : "Still connecting...")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundColor(Theme.textMuted)
 
-                if reconnectSeconds >= 8 {
+                if reconnectSeconds >= 15 {
                     Button(action: {
                         userCancelledReconnect = true
                         stopReconnectTimer()
@@ -82,7 +82,7 @@ struct ContentView: View {
                     .transition(.opacity)
                 }
             }
-            .animation(.easeInOut, value: reconnectSeconds >= 8)
+            .animation(.easeInOut, value: reconnectSeconds >= 15)
         }
     }
 }

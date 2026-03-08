@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useStore } from '../store';
 import { setTopic as sendTopic } from '../irc/client';
+import { fetchProfile, type ATProfile } from '../lib/profiles';
 
 interface TopBarProps {
   onToggleSidebar?: () => void;
@@ -16,11 +17,24 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
   const [topicDraft, setTopicDraft] = useState('');
 
   const ch = channels.get(activeChannel.toLowerCase());
+  const whoisCache = useStore((s) => s.whoisCache);
   const topic = ch?.topic || '';
   const memberCount = ch?.members.size || 0;
   const isChannel = activeChannel !== 'server' && activeChannel.startsWith('#');
   const isDM = activeChannel !== 'server' && !activeChannel.startsWith('#');
   const setChannelSettings = useStore((s) => s.setChannelSettingsOpen);
+
+  // For DMs, resolve partner profile
+  const partnerWhois = isDM ? whoisCache.get(activeChannel.toLowerCase()) : undefined;
+  const partnerDid = isDM ? (ch?.members.values().next().value?.did || partnerWhois?.did) : undefined;
+  const [partnerProfile, setPartnerProfile] = useState<ATProfile | null>(null);
+  useEffect(() => {
+    if (isDM && partnerDid) {
+      fetchProfile(partnerDid).then((p) => p && setPartnerProfile(p));
+    } else {
+      setPartnerProfile(null);
+    }
+  }, [isDM, partnerDid]);
 
   const startEdit = () => {
     setTopicDraft(topic);
@@ -88,9 +102,9 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
       })()}
 
       {/* Separator */}
-      {isChannel && <div className="w-px h-5 bg-border" />}
+      {(isChannel || isDM) && <div className="w-px h-5 bg-border" />}
 
-      {/* Topic (channels only) */}
+      {/* Topic (channels) or partner info (DMs) */}
       <div className="flex-1 min-w-0 hidden sm:block">
         {isChannel ? (
           editing ? (
@@ -115,12 +129,28 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
               {topic || 'Set a topic'}
             </button>
           )
+        ) : isDM ? (
+          <div className="flex items-center gap-2 text-sm text-fg-dim">
+            {(partnerProfile?.handle || partnerWhois?.handle) && (
+              <a
+                href={`https://bsky.app/profile/${partnerProfile?.handle || partnerWhois?.handle}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-accent hover:underline truncate"
+              >
+                @{partnerProfile?.handle || partnerWhois?.handle}
+              </a>
+            )}
+            {!partnerProfile?.handle && !partnerWhois?.handle && partnerWhois?.host && (
+              <span className="text-fg-dim font-mono text-xs truncate">{partnerWhois.host}</span>
+            )}
+          </div>
         ) : (
           <span className="flex-1" />
         )}
       </div>
 
-      {/* Settings gear */}
+      {/* Settings gear (channels only) */}
       {isChannel && (
         <button
           onClick={() => setChannelSettings(ch?.name || activeChannel)}
@@ -133,7 +163,7 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
         </button>
       )}
 
-      {/* Member list toggle */}
+      {/* Member list toggle (channels only) */}
       {isChannel && (
         <button
           onClick={onToggleMembers}
@@ -146,6 +176,21 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
             <path d="M8 8a3 3 0 100-6 3 3 0 000 6zM2 14s-1 0-1-1 1-4 7-4 7 3 7 4-1 1-1 1H2z"/>
           </svg>
           {memberCount > 0 && <span>{memberCount}</span>}
+        </button>
+      )}
+
+      {/* Profile panel toggle (DMs only) */}
+      {isDM && (
+        <button
+          onClick={onToggleMembers}
+          className={`flex items-center gap-1.5 text-sm shrink-0 px-2.5 py-1.5 rounded-lg hover:bg-bg-tertiary transition-colors ${
+            membersOpen ? 'text-fg-muted' : 'text-fg-dim'
+          }`}
+          title={membersOpen ? 'Hide profile' : 'Show profile'}
+        >
+          <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 8a3 3 0 100-6 3 3 0 000 6zM2 14s-1 0-1-1 1-4 7-4 7 3 7 4-1 1-1 1H2z"/>
+          </svg>
         </button>
       )}
     </header>

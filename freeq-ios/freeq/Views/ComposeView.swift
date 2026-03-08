@@ -112,8 +112,7 @@ struct ComposeView: View {
                         .font(.system(size: 16))
                         .lineLimit(1...6)
                         .focused($isFocused)
-                        .submitLabel(.send)
-                        .onSubmit { send() }
+                        .submitLabel(.return)
                         .tint(Theme.accent)
                         .onChange(of: text) {
                             updateCompletions()

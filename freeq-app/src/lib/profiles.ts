@@ -10,6 +10,10 @@ export interface ATProfile {
   displayName?: string;
   avatar?: string;
   description?: string;
+  banner?: string;
+  followersCount?: number;
+  followsCount?: number;
+  postsCount?: number;
 }
 
 const cache = new Map<string, { profile: ATProfile; fetchedAt: number }>();
@@ -49,6 +53,10 @@ async function doFetch(didOrHandle: string): Promise<ATProfile | null> {
       displayName: data.displayName,
       avatar: data.avatar,
       description: data.description,
+      banner: data.banner,
+      followersCount: data.followersCount,
+      followsCount: data.followsCount,
+      postsCount: data.postsCount,
     };
     cache.set(didOrHandle, { profile, fetchedAt: Date.now() });
     // Also cache by DID if we looked up by handle

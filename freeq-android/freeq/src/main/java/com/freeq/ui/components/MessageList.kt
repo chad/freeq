@@ -128,19 +128,43 @@ fun MessageList(
         }
     }
 
-    // Load older history when scrolled to top
-    val firstVisibleIndex by remember { derivedStateOf { listState.firstVisibleItemIndex } }
-    LaunchedEffect(firstVisibleIndex) {
-        if (firstVisibleIndex == 0 && messages.isNotEmpty()) {
-            val oldestId = messages.first().id
-            val target = appState.activeChannel.value ?: return@LaunchedEffect
-            appState.sendRaw("CHATHISTORY BEFORE $target msgid=$oldestId 50")
+    // Pagination state — driven by hasMoreHistory on ChannelState
+    val hasMore by channelState.hasMoreHistory
+    var loadingOlder by remember { mutableStateOf(false) }
+    var countBeforeLoad by remember { mutableIntStateOf(0) }
+
+    // Clear spinner when hasMoreHistory flips (empty batch)
+    LaunchedEffect(hasMore) {
+        if (!hasMore) loadingOlder = false
+    }
+
+    // When older messages arrive, maintain scroll position
+    LaunchedEffect(messages.size) {
+        if (loadingOlder) {
+            loadingOlder = false
+            val added = messages.size - countBeforeLoad
+            if (added > 0) {
+                listState.scrollToItem(listState.firstVisibleItemIndex + added)
+            }
         }
     }
 
+    fun loadOlder() {
+        if (messages.isEmpty() || loadingOlder || !hasMore) return
+        countBeforeLoad = messages.size
+        loadingOlder = true
+        val oldest = messages.first()
+        val target = appState.activeChannel.value ?: return
+        val iso = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+            .apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+            .format(oldest.timestamp)
+        appState.sendRaw("CHATHISTORY BEFORE $target timestamp=$iso 100")
+    }
+
+
     Box(modifier = modifier.fillMaxSize()) {
-        // Skeleton loading while messages haven't arrived
-        if (messages.isEmpty()) {
+        // Skeleton loading while messages haven't arrived (channels only — empty DMs are valid)
+        if (messages.isEmpty() && channelState.name.startsWith("#")) {
             SkeletonLoading()
         }
 
@@ -149,6 +173,47 @@ fun MessageList(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(vertical = 8.dp)
         ) {
+            // Top of list: spinner, load button, or beginning-of-history marker
+            if (messages.isNotEmpty()) {
+                item(key = "__load_older__") {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (loadingOlder) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else if (hasMore) {
+                            TextButton(onClick = { loadOlder() }) {
+                                Icon(
+                                    Icons.Default.KeyboardArrowUp,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    "Load older messages",
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        } else {
+                            Text(
+                                "Beginning of conversation",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                        }
+                    }
+                }
+            }
+
             val unreadSeparatorMsgId = findUnreadBoundary(
                 messages, lastReadId, lastReadTimestamp, appState.nick.value
             )

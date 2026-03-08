@@ -48,6 +48,17 @@ struct ChatsTab: View {
                             }
                             .swipeActions(edge: .leading) {
                                 Button {
+                                    appState.toggleMute(conv.name)
+                                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                } label: {
+                                    Label(
+                                        appState.isMuted(conv.name) ? "Unmute" : "Mute",
+                                        systemImage: appState.isMuted(conv.name) ? "bell.fill" : "bell.slash.fill"
+                                    )
+                                }
+                                .tint(Theme.warning)
+
+                                Button {
                                     appState.markRead(conv.name)
                                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                                 } label: {
@@ -98,9 +109,9 @@ struct ChatsTab: View {
     }
 
     private var allConversations: [ChannelState] {
-        (appState.channels + appState.dmBuffers).sorted { a, b in
-            a.lastActivity > b.lastActivity
-        }
+        (appState.channels + appState.dmBuffers)
+            .filter { !$0.name.trimmingCharacters(in: .whitespaces).isEmpty }
+            .sorted { a, b in a.lastActivity > b.lastActivity }
     }
 
     private var filteredConversations: [ChannelState] {
@@ -212,6 +223,12 @@ struct ChatRow: View {
                         .foregroundColor(Theme.textPrimary)
                         .lineLimit(1)
 
+                    if appState.isMuted(conversation.name) {
+                        Image(systemName: "bell.slash.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(Theme.textMuted)
+                    }
+
                     // Member count for channels
                     if isChannel && conversation.members.count > 0 {
                         Text("\(conversation.members.count)")
@@ -244,7 +261,7 @@ struct ChatRow: View {
                             .foregroundColor(Theme.textMuted)
                             .lineLimit(1)
                     } else {
-                        Text(isChannel ? "No messages yet" : "Start a conversation")
+                        Text("No messages yet")
                             .font(.system(size: 14))
                             .foregroundColor(Theme.textMuted)
                             .lineLimit(1)

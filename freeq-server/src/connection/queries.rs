@@ -193,6 +193,25 @@ pub(super) fn handle_whois(
         send(state, session_id, format!("{iroh_notice}\r\n"));
     }
 
+    // Show linked identities (e.g., GitHub)
+    if let Some(ref did) = did {
+        let identities = state.linked_identities.lock();
+        if let Some(links) = identities.get(did.as_str()) {
+            for link in links {
+                let link_line = Message::from_server(
+                    server_name,
+                    "671",
+                    vec![
+                        my_nick,
+                        target_nick,
+                        &format!("linked {}: {}", link.provider, link.identity),
+                    ],
+                );
+                send(state, session_id, format!("{link_line}\r\n"));
+            }
+        }
+    }
+
     // Show client software
     // Look up the target connection to get client_info
     // We need to find the connection object — it's not in shared state directly,
@@ -204,6 +223,16 @@ pub(super) fn handle_whois(
             vec![my_nick, target_nick, &format!("client: {client}")],
         );
         send(state, session_id, format!("{client_line}\r\n"));
+    }
+
+    // 301 RPL_AWAY — show away message if target is away
+    if let Some(away_msg) = state.session_away.lock().get(&target_session) {
+        let away = Message::from_server(
+            server_name,
+            irc::RPL_AWAY,
+            vec![my_nick, target_nick, away_msg],
+        );
+        send(state, session_id, format!("{away}\r\n"));
     }
 
     // 318 RPL_ENDOFWHOIS

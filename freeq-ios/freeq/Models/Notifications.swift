@@ -20,7 +20,7 @@ class NotificationManager {
         }
     }
 
-    func sendMessageNotification(from: String, text: String, channel: String) {
+    func sendMessageNotification(from: String, text: String, channel: String, isMention: Bool = false) {
         // Request permission on first notification attempt (deferred from app launch)
         if !permissionRequested {
             requestPermissionIfNeeded()
@@ -30,10 +30,21 @@ class NotificationManager {
         guard UIApplication.shared.applicationState != .active else { return }
 
         let content = UNMutableNotificationContent()
-        content.title = channel.hasPrefix("#") ? "\(from) in \(channel)" : from
+        if channel.hasPrefix("#") {
+            content.title = channel
+            content.subtitle = from
+        } else {
+            content.title = from
+        }
         content.body = text
-        content.sound = .default
+        // Mentions get a more prominent sound
+        content.sound = isMention ? .defaultCritical : .default
+        // Group by channel/DM
         content.threadIdentifier = channel
+        content.categoryIdentifier = channel.hasPrefix("#") ? "channel_message" : "dm_message"
+        content.userInfo = ["channel": channel, "from": from]
+        // Summary for notification groups
+        content.summaryArgument = channel.hasPrefix("#") ? channel : from
 
         let request = UNNotificationRequest(
             identifier: UUID().uuidString,

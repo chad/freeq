@@ -258,9 +258,7 @@ function ChannelButton({ ch, isActive, onSelect, icon, showPreview }: {
       {/* Icon / DM avatar */}
       {showPreview ? (
         <div className="relative shrink-0">
-          <div className="w-8 h-8 rounded-full bg-surface flex items-center justify-center text-accent font-bold text-sm">
-            {(ch.name[0] || '?').toUpperCase()}
-          </div>
+          <DmAvatar nick={ch.name} />
           <OnlineDot nick={ch.name} />
         </div>
       ) : (
@@ -356,6 +354,42 @@ function SidebarContextMenu({ channel, isFav, isMuted, isChannel, position, onCl
           Leave channel
         </button>
       )}
+    </div>
+  );
+}
+
+/** DM avatar that resolves nick → DID → profile image. */
+function DmAvatar({ nick }: { nick: string }) {
+  const channels = useStore((s) => s.channels);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+
+  // Find DID for this nick across all channel member lists
+  const did = (() => {
+    const lower = nick.toLowerCase();
+    for (const ch of channels.values()) {
+      const m = ch.members.get(lower);
+      if (m?.did) return m.did;
+    }
+    return null;
+  })();
+
+  useEffect(() => {
+    if (!did) { setAvatarUrl(null); return; }
+    let cancelled = false;
+    const cached = getCachedProfile(did);
+    if (cached?.avatar) { setAvatarUrl(cached.avatar); return; }
+    fetchProfile(did).then((p) => {
+      if (p?.avatar && !cancelled) setAvatarUrl(p.avatar);
+    });
+    return () => { cancelled = true; };
+  }, [did]);
+
+  if (avatarUrl) {
+    return <img src={avatarUrl} alt="" className="w-8 h-8 rounded-full object-cover" />;
+  }
+  return (
+    <div className="w-8 h-8 rounded-full bg-surface flex items-center justify-center text-accent font-bold text-sm">
+      {(nick[0] || '?').toUpperCase()}
     </div>
   );
 }

@@ -78,6 +78,8 @@ class MainActivity : ComponentActivity() {
                 did?.let {
                     state.securePrefs.edit().putString("did", it).apply()
                 }
+                // Cache the web token for fast reconnect (25 min TTL, server expires at 30 min)
+                state.cacheWebToken(token)
                 state.serverAddress.value = "irc.freeq.at:6667"
                 state.connect(nick)
             }

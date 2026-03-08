@@ -38,7 +38,7 @@ fun ChatsTab(
     var searchText by remember { mutableStateOf("") }
     var showJoinDialog by remember { mutableStateOf(false) }
 
-    val allConversations = (appState.channels + appState.dmBuffers)
+    val allConversations = (appState.channels + appState.dmBuffers.filter { it.name.isNotEmpty() && it.messages.isNotEmpty() })
         .sortedByDescending { it.lastActivityTime }
     val filteredConversations = if (searchText.isEmpty()) {
         allConversations

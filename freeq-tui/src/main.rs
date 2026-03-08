@@ -95,6 +95,12 @@ struct Cli {
     #[arg(short = 'c', long = "channel")]
     channels: Option<String>,
 
+    /// Send a message to a channel and exit (non-interactive).
+    /// Requires -c to specify the channel.
+    /// Example: --send "hello world" -c '#freeq'
+    #[arg(long)]
+    send: Option<String>,
+
     /// Save current CLI args as defaults in config file.
     #[arg(long)]
     save_config: bool,
@@ -216,6 +222,7 @@ async fn main() -> Result<()> {
         key_type: cli.key_type.clone(),
         gen_key: cli.gen_key,
         reauth: cli.reauth,
+        send: cli.send.clone(),
         save_config: false,
     };
 
@@ -292,6 +299,65 @@ async fn main() -> Result<()> {
     // Auto-join channels
     for ch in &resolved.channels {
         let _ = handle.join(ch).await;
+    }
+
+    // ── Non-interactive send mode ──────────────────────────────────────
+    if let Some(ref msg) = cli.send {
+        let target_channel = resolved
+            .channels
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("--send requires -c <channel>"))?
+            .clone();
+
+        // Wait for registration + channel join to complete
+        let mut registered = false;
+        let mut joined = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+
+        while !joined {
+            tokio::select! {
+                event = events.recv() => {
+                    match event {
+                        Some(Event::Registered { .. }) => {
+                            registered = true;
+                            eprintln!("  registered");
+                        }
+                        Some(Event::NamesEnd { channel }) => {
+                            if channel.eq_ignore_ascii_case(&target_channel) {
+                                joined = true;
+                                eprintln!("  joined {channel}");
+                            }
+                        }
+                        Some(Event::AuthFailed { reason }) => {
+                            anyhow::bail!("Authentication failed: {reason}");
+                        }
+                        Some(Event::Disconnected { reason }) => {
+                            anyhow::bail!("Disconnected: {reason}");
+                        }
+                        None => {
+                            anyhow::bail!("Connection closed unexpectedly");
+                        }
+                        _ => {}
+                    }
+                }
+                _ = tokio::time::sleep_until(deadline) => {
+                    if registered && !joined {
+                        anyhow::bail!("Timed out waiting to join {target_channel} (registered but couldn't join — check channel policy)");
+                    }
+                    anyhow::bail!("Timed out waiting for registration");
+                }
+            }
+        }
+
+        // Send the message
+        handle.send_tagged(&target_channel, msg, std::collections::HashMap::new()).await?;
+        eprintln!("  sent to {target_channel}: {msg}");
+
+        // Brief pause to let the server process and broadcast
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        handle.quit(Some("")).await?;
+        eprintln!("done");
+        return Ok(());
     }
 
     // Detect terminal image capabilities BEFORE entering raw mode
@@ -1240,6 +1306,11 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                 }
             }
         }
+        Event::ChatHistoryTarget { nick, timestamp } => {
+            let ts_display = timestamp.as_deref().unwrap_or("?");
+            app.buffer_mut("status")
+                .push_system(&format!("  DM: {nick}  (last: {ts_display})"));
+        }
         Event::RawLine(ref line) => {
             if app.debug_raw {
                 app.buffer_mut("status").push_system(&format!("← {line}"));
@@ -1675,6 +1746,7 @@ async fn process_input(app: &mut App, handle: &client::ClientHandle, input: &str
                 app.status_msg("  /history [N]        Fetch N messages of history (default 50)");
                 app.status_msg("── Messaging ────────────────────────────");
                 app.status_msg("  /msg target text    Private message");
+                app.status_msg("  /msgs [N]           List DM conversations (default 50)");
                 app.status_msg("  /me action          Action message (* nick does something)");
                 app.status_msg("  /react emoji        React to the channel (/r)");
                 app.status_msg("  /preview url        Fetch and share a link preview");
@@ -1782,6 +1854,11 @@ async fn process_input(app: &mut App, handle: &client::ClientHandle, input: &str
                         .raw(&format!("CHATHISTORY LATEST {channel} * {limit}"))
                         .await?;
                 }
+            }
+            "/msgs" => {
+                let limit = if arg.is_empty() { "50" } else { arg };
+                app.status_msg("── DM conversations ────────────────────");
+                handle.chathistory_targets(limit.parse().unwrap_or(50)).await?;
             }
             "/config" | "/settings" => {
                 let cfg = config::Config::load();

@@ -1,10 +1,44 @@
 import SwiftUI
 
+/// Delegate to handle notification taps and navigate to the right channel.
+class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
+    weak var appState: AppState?
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        if let channel = response.notification.request.content.userInfo["channel"] as? String {
+            DispatchQueue.main.async { [weak self] in
+                guard let state = self?.appState else { return }
+                if channel.hasPrefix("#") {
+                    state.activeChannel = channel
+                } else {
+                    state.pendingDMNick = channel
+                }
+            }
+        }
+        completionHandler()
+    }
+
+    // Show notifications even when app is in foreground (for non-active channels)
+    func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        let channel = notification.request.content.userInfo["channel"] as? String
+        if channel != appState?.activeChannel {
+            completionHandler([.banner, .sound])
+        } else {
+            completionHandler([])
+        }
+    }
+}
+
 @main
 struct FreeqApp: App {
     @StateObject private var appState = AppState()
     @StateObject private var networkMonitor = NetworkMonitor()
     @Environment(\.scenePhase) private var scenePhase
+    private let notificationDelegate = NotificationDelegate()
 
     var body: some Scene {
         WindowGroup {
@@ -13,6 +47,8 @@ struct FreeqApp: App {
                 .environmentObject(networkMonitor)
                 .onAppear {
                     networkMonitor.bind(to: appState)
+                    notificationDelegate.appState = appState
+                    UNUserNotificationCenter.current().delegate = notificationDelegate
                 }
                 .onOpenURL { url in
                     handleAuthCallback(url)

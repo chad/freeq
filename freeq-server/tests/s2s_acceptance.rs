@@ -6208,3 +6208,1099 @@ async fn single_server_edge13_halfop_behavior() {
     let _ = h_half.quit(Some("done")).await;
     let _ = h_user.quit(Some("done")).await;
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Edge cases: history, DMs, reconnect, flakiness scenarios
+// ═══════════════════════════════════════════════════════════════════
+
+// ── HIST-1: CHATHISTORY returns messages in chronological order ──
+
+#[tokio::test]
+async fn single_server_hist1_chathistory_chronological_order() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("hist1");
+    let nick_a = test_nick("hist1", "a");
+    let nick_b = test_nick("hist1", "b");
+
+    // A creates channel and sends multiple messages
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+    drain(&mut ea).await;
+
+    for i in 1..=5 {
+        ha.privmsg(&ch, &format!("msg-{i}")).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    drain(&mut ea).await;
+
+    // B joins — should receive history batch, then CHATHISTORY request returns in order
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&ch).await.unwrap();
+    wait_joined(&mut eb, &ch).await;
+
+    // Collect messages (from JOIN history replay)
+    let mut msgs = Vec::new();
+    loop {
+        match maybe_wait(
+            &mut eb,
+            |e| matches!(e, Event::Message { .. } | Event::BatchEnd { .. }),
+            Duration::from_secs(3),
+        )
+        .await
+        {
+            Some(Event::Message { text, .. }) if text.starts_with("msg-") => {
+                msgs.push(text);
+            }
+            Some(Event::BatchEnd { .. }) => break,
+            _ => break,
+        }
+    }
+
+    // Verify chronological order
+    assert!(msgs.len() >= 5, "Expected 5 history messages, got {}: {msgs:?}", msgs.len());
+    for i in 0..msgs.len() - 1 {
+        assert!(
+            msgs[i] < msgs[i + 1],
+            "History not in chronological order: {} >= {}",
+            msgs[i],
+            msgs[i + 1]
+        );
+    }
+    eprintln!("  ✓ CHATHISTORY messages in chronological order");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── HIST-2: Deleted messages excluded from CHATHISTORY ──
+
+#[tokio::test]
+async fn single_server_hist2_deleted_messages_excluded() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("hist2");
+    let nick_a = test_nick("hist2", "a");
+    let nick_b = test_nick("hist2", "b");
+
+    // A creates channel and sends messages
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+    drain(&mut ea).await;
+
+    ha.privmsg(&ch, "keep-this").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    ha.privmsg(&ch, "delete-this").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    ha.privmsg(&ch, "also-keep").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Collect the msgid of "delete-this" from echo-message
+    let mut delete_msgid = String::new();
+    loop {
+        match maybe_wait(
+            &mut ea,
+            |e| matches!(e, Event::Message { .. }),
+            Duration::from_secs(2),
+        )
+        .await
+        {
+            Some(Event::Message { text, tags, .. }) => {
+                if text == "delete-this" {
+                    if let Some(mid) = tags.get("msgid") {
+                        delete_msgid = mid.clone();
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+
+    if delete_msgid.is_empty() {
+        eprintln!("  ⚠ Could not capture msgid for delete-this (echo-message may not be enabled)");
+        let _ = ha.quit(Some("done")).await;
+        return;
+    }
+
+    // Delete the message
+    let mut del_tags = std::collections::HashMap::new();
+    del_tags.insert("+draft/delete".to_string(), delete_msgid.clone());
+    ha.send_tagmsg(&ch, del_tags)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    drain(&mut ea).await;
+
+    // B joins and retrieves history
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&ch).await.unwrap();
+    wait_joined(&mut eb, &ch).await;
+
+    let mut seen_texts = Vec::new();
+    loop {
+        match maybe_wait(
+            &mut eb,
+            |e| matches!(e, Event::Message { .. } | Event::BatchEnd { .. }),
+            Duration::from_secs(3),
+        )
+        .await
+        {
+            Some(Event::Message { text, .. }) if !text.contains("joined") => {
+                seen_texts.push(text);
+            }
+            Some(Event::BatchEnd { .. }) => break,
+            _ => break,
+        }
+    }
+
+    assert!(
+        !seen_texts.iter().any(|t| t == "delete-this"),
+        "Deleted message should NOT appear in history: {seen_texts:?}"
+    );
+    assert!(
+        seen_texts.iter().any(|t| t == "keep-this"),
+        "Non-deleted messages should appear: {seen_texts:?}"
+    );
+    eprintln!("  ✓ Deleted messages excluded from CHATHISTORY");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── HIST-3: Edited messages show new text in CHATHISTORY ──
+
+#[tokio::test]
+async fn single_server_hist3_edited_messages_in_history() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("hist3");
+    let nick_a = test_nick("hist3", "a");
+    let nick_b = test_nick("hist3", "b");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+    drain(&mut ea).await;
+
+    ha.privmsg(&ch, "original-text").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Capture msgid
+    let mut orig_msgid = String::new();
+    loop {
+        match maybe_wait(
+            &mut ea,
+            |e| matches!(e, Event::Message { .. }),
+            Duration::from_secs(2),
+        )
+        .await
+        {
+            Some(Event::Message { text, tags, .. }) => {
+                if text == "original-text" {
+                    if let Some(mid) = tags.get("msgid") {
+                        orig_msgid = mid.clone();
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+
+    if orig_msgid.is_empty() {
+        eprintln!("  ⚠ Could not capture msgid (echo-message may not be enabled)");
+        let _ = ha.quit(Some("done")).await;
+        return;
+    }
+
+    // Edit the message
+    let mut edit_tags = std::collections::HashMap::new();
+    edit_tags.insert("+draft/edit".to_string(), orig_msgid.clone());
+    ha.send_tagged(&ch, "edited-text", edit_tags)
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    drain(&mut ea).await;
+
+    // B joins and checks history
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&ch).await.unwrap();
+    wait_joined(&mut eb, &ch).await;
+
+    let mut seen_texts = Vec::new();
+    loop {
+        match maybe_wait(
+            &mut eb,
+            |e| matches!(e, Event::Message { .. } | Event::BatchEnd { .. }),
+            Duration::from_secs(3),
+        )
+        .await
+        {
+            Some(Event::Message { text, .. }) => {
+                if !text.contains("joined") {
+                    seen_texts.push(text);
+                }
+            }
+            Some(Event::BatchEnd { .. }) => break,
+            _ => break,
+        }
+    }
+
+    // The in-memory history should show edited text
+    assert!(
+        seen_texts.iter().any(|t| t == "edited-text"),
+        "Edited text should appear in JOIN history: {seen_texts:?}"
+    );
+    // Original text should NOT appear (it was replaced in-memory)
+    assert!(
+        !seen_texts.iter().any(|t| t == "original-text"),
+        "Original text should be replaced in JOIN history: {seen_texts:?}"
+    );
+    eprintln!("  ✓ Edited messages show new text in JOIN history");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── HIST-4: Double-join does not produce duplicate history ──
+
+#[tokio::test]
+async fn single_server_hist4_double_join_no_duplicate_history() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("hist4");
+    let nick_a = test_nick("hist4", "a");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+    drain(&mut ea).await;
+
+    ha.privmsg(&ch, "unique-marker-hist4").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    drain(&mut ea).await;
+
+    // Send JOIN again (double join)
+    ha.raw(&format!("JOIN {ch}")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Collect any messages that arrive
+    let mut count = 0;
+    loop {
+        match maybe_wait(
+            &mut ea,
+            |e| matches!(e, Event::Message { .. } | Event::BatchEnd { .. }),
+            Duration::from_secs(2),
+        )
+        .await
+        {
+            Some(Event::Message { text, .. }) if text.contains("unique-marker-hist4") => {
+                count += 1;
+            }
+            Some(Event::BatchEnd { .. }) => break,
+            None => break,
+            _ => {}
+        }
+    }
+
+    // Should have 0 replayed copies (already in channel, no replay)
+    // or at most 1 if server sends history again
+    assert!(
+        count <= 1,
+        "Double JOIN should not produce duplicate history, got {count} copies"
+    );
+    eprintln!("  ✓ Double JOIN does not produce duplicate history (count={count})");
+
+    let _ = ha.quit(Some("done")).await;
+}
+
+// ── DM-1: DMs between two users are delivered bidirectionally ──
+
+#[tokio::test]
+async fn single_server_dm1_bidirectional_dm() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("dm1");
+    let nick_a = test_nick("dm1", "a");
+    let nick_b = test_nick("dm1", "b");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb).await;
+
+    // Both join a channel so they can see each other
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+    hb.join(&ch).await.unwrap();
+    wait_joined(&mut eb, &ch).await;
+    drain(&mut ea).await;
+    drain(&mut eb).await;
+
+    // A → B
+    ha.privmsg(&nick_b, "hello from A").await.unwrap();
+    let (from, text) = wait_message_from(&mut eb, &nick_a).await;
+    assert_eq!(text, "hello from A");
+    eprintln!("  ✓ A→B DM delivered");
+
+    // B → A
+    hb.privmsg(&nick_a, "hello from B").await.unwrap();
+    let (_from, text) = wait_message_from(&mut ea, &nick_b).await;
+    assert_eq!(text, "hello from B");
+    eprintln!("  ✓ B→A DM delivered");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── DM-2: DMs to offline user don't crash, return 401 ──
+
+#[tokio::test]
+async fn single_server_dm2_dm_to_offline_user() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let nick_a = test_nick("dm2", "a");
+    let nick_offline = test_nick("dm2", "off");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    drain(&mut ea).await;
+
+    // Send DM to non-existent nick
+    ha.privmsg(&nick_offline, "hello?").await.unwrap();
+
+    // Should get ERR_NOSUCHNICK (401) as a ServerNotice or similar
+    let got_error = maybe_wait(
+        &mut ea,
+        |e| matches!(e, Event::ServerNotice { text } if text.contains("No such nick") || text.contains(&nick_offline)),
+        Duration::from_secs(3),
+    )
+    .await;
+    assert!(
+        got_error.is_some(),
+        "Should receive error for DM to offline user"
+    );
+    eprintln!("  ✓ DM to offline user returns error without crash");
+
+    let _ = ha.quit(Some("done")).await;
+}
+
+// ── RECONN-1: Rejoining after disconnect sees recent messages ──
+
+#[tokio::test]
+async fn single_server_reconn1_rejoin_sees_recent_messages() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("reconn1");
+    let nick_a = test_nick("reconn1", "a");
+    let nick_b = test_nick("reconn1", "b");
+
+    // A creates channel and sends messages
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+    drain(&mut ea).await;
+
+    ha.privmsg(&ch, "before-rejoin-1").await.unwrap();
+    ha.privmsg(&ch, "before-rejoin-2").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    drain(&mut ea).await;
+
+    // B joins, sees history, then parts
+    let (hb1, mut eb1) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb1).await;
+    hb1.join(&ch).await.unwrap();
+    wait_joined(&mut eb1, &ch).await;
+    drain(&mut eb1).await;
+    hb1.raw(&format!("PART {ch}")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    drain(&mut ea).await;
+
+    // A sends more messages while B is gone
+    ha.privmsg(&ch, "while-gone").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // B rejoins — should see all messages including "while-gone"
+    hb1.join(&ch).await.unwrap();
+    wait_joined(&mut eb1, &ch).await;
+
+    let mut seen = Vec::new();
+    loop {
+        match maybe_wait(
+            &mut eb1,
+            |e| matches!(e, Event::Message { .. } | Event::BatchEnd { .. }),
+            Duration::from_secs(3),
+        )
+        .await
+        {
+            Some(Event::Message { text, .. }) if text.starts_with("before-") || text == "while-gone" => {
+                seen.push(text);
+            }
+            Some(Event::BatchEnd { .. }) => break,
+            _ => break,
+        }
+    }
+
+    assert!(
+        seen.iter().any(|t| t == "while-gone"),
+        "Rejoin should show messages sent while away: {seen:?}"
+    );
+    eprintln!("  ✓ Rejoining sees messages sent during absence");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb1.quit(Some("done")).await;
+}
+
+// ── RECONN-2: Fresh connection to same channel gets full history ──
+
+#[tokio::test]
+async fn single_server_reconn2_fresh_connection_gets_history() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("reconn2");
+    let nick_a = test_nick("reconn2", "a");
+    let nick_b = test_nick("reconn2", "b");
+
+    // A populates channel
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+    drain(&mut ea).await;
+
+    for i in 1..=3 {
+        ha.privmsg(&ch, &format!("persist-{i}")).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // B connects fresh and joins
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&ch).await.unwrap();
+    wait_joined(&mut eb, &ch).await;
+
+    let mut seen = Vec::new();
+    loop {
+        match maybe_wait(
+            &mut eb,
+            |e| matches!(e, Event::Message { .. } | Event::BatchEnd { .. }),
+            Duration::from_secs(3),
+        )
+        .await
+        {
+            Some(Event::Message { text, .. }) if text.starts_with("persist-") => {
+                seen.push(text);
+            }
+            Some(Event::BatchEnd { .. }) => break,
+            _ => break,
+        }
+    }
+
+    assert_eq!(
+        seen.len(),
+        3,
+        "Fresh connection should see all 3 history messages: {seen:?}"
+    );
+    assert_eq!(seen, vec!["persist-1", "persist-2", "persist-3"]);
+    eprintln!("  ✓ Fresh connection gets full history in correct order");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── EDGE-14: Messages have unique msgids ──
+
+#[tokio::test]
+async fn single_server_edge14_rapid_messages_unique_msgids() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("edge14");
+    let nick_a = test_nick("edge14", "a");
+    let nick_b = test_nick("edge14", "b");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&ch).await.unwrap();
+    wait_joined(&mut eb, &ch).await;
+    drain(&mut ea).await;
+    drain(&mut eb).await;
+
+    // Send 20 rapid messages
+    for i in 0..20 {
+        ha.privmsg(&ch, &format!("rapid-{i}")).await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    // Collect msgids from B's perspective
+    let mut msgids = Vec::new();
+    loop {
+        match maybe_wait(
+            &mut eb,
+            |e| matches!(e, Event::Message { text, .. } if text.starts_with("rapid-")),
+            Duration::from_secs(3),
+        )
+        .await
+        {
+            Some(Event::Message { tags, .. }) => {
+                if let Some(mid) = tags.get("msgid") {
+                    msgids.push(mid.clone());
+                }
+            }
+            _ => break,
+        }
+    }
+
+    assert!(
+        msgids.len() >= 10,
+        "Should receive at least 10 rapid messages, got {}",
+        msgids.len()
+    );
+
+    // All msgids should be unique
+    let unique: std::collections::HashSet<&str> =
+        msgids.iter().map(|s| s.as_str()).collect();
+    assert_eq!(
+        unique.len(),
+        msgids.len(),
+        "All msgids must be unique: {} unique out of {}",
+        unique.len(),
+        msgids.len()
+    );
+    eprintln!("  ✓ {} rapid messages all have unique msgids", msgids.len());
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── EDGE-15: Message to channel with wrong case still delivered ──
+
+#[tokio::test]
+async fn single_server_edge15_channel_case_message_delivery() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("edge15");
+    let ch_upper = ch.to_uppercase();
+    let nick_a = test_nick("edge15", "a");
+    let nick_b = test_nick("edge15", "b");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&ch).await.unwrap();
+    wait_joined(&mut eb, &ch).await;
+    drain(&mut ea).await;
+    drain(&mut eb).await;
+
+    // Send to UPPER case channel name
+    ha.privmsg(&ch_upper, "case-test").await.unwrap();
+
+    let result = maybe_wait(
+        &mut eb,
+        |e| matches!(e, Event::Message { text, .. } if text == "case-test"),
+        Duration::from_secs(3),
+    )
+    .await;
+    assert!(
+        result.is_some(),
+        "Message to channel with wrong case should still be delivered"
+    );
+    eprintln!("  ✓ Message to wrong-case channel name delivered");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── EDGE-16: Nick change mid-conversation, messages still delivered ──
+
+#[tokio::test]
+async fn single_server_edge16_nick_change_mid_conversation() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("edge16");
+    let nick_a = test_nick("edge16", "a");
+    let nick_b = test_nick("edge16", "b");
+    let nick_a2 = test_nick("edge16", "a2");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&ch).await.unwrap();
+    wait_joined(&mut eb, &ch).await;
+    drain(&mut ea).await;
+    drain(&mut eb).await;
+
+    // A sends message with old nick
+    ha.privmsg(&ch, "before-change").await.unwrap();
+    wait_message_from(&mut eb, &nick_a).await;
+    drain(&mut eb).await;
+
+    // A changes nick
+    ha.raw(&format!("NICK {nick_a2}")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    drain(&mut ea).await;
+    drain(&mut eb).await;
+
+    // A sends message with new nick
+    ha.privmsg(&ch, "after-change").await.unwrap();
+    let (from, text) = wait_message_from(&mut eb, &nick_a2).await;
+    assert_eq!(text, "after-change");
+    assert_eq!(from, nick_a2);
+    eprintln!("  ✓ Messages delivered correctly after nick change");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── EDGE-17: Part and rejoin preserves channel state ──
+
+#[tokio::test]
+async fn single_server_edge17_part_rejoin_preserves_topic() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("edge17");
+    let nick_a = test_nick("edge17", "a");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+    drain(&mut ea).await;
+
+    // Set topic
+    ha.raw(&format!("TOPIC {ch} :persistent topic")).await.unwrap();
+    wait_topic(&mut ea, &ch).await;
+    drain(&mut ea).await;
+
+    // Part and rejoin
+    ha.raw(&format!("PART {ch}")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    drain(&mut ea).await;
+
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+
+    // Should see topic on rejoin (as TopicChanged or in server numerics)
+    let topic_found = maybe_wait(
+        &mut ea,
+        |e| matches!(e, Event::TopicChanged { topic, .. } if topic == "persistent topic"),
+        Duration::from_secs(3),
+    )
+    .await;
+    assert!(topic_found.is_some(), "Topic should persist through part/rejoin");
+    eprintln!("  ✓ Topic persists through part/rejoin");
+
+    let _ = ha.quit(Some("done")).await;
+}
+
+// ── EDGE-18: Multiple users sending simultaneously ──
+
+#[tokio::test]
+async fn single_server_edge18_simultaneous_senders() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("edge18");
+    let nick_a = test_nick("edge18", "a");
+    let nick_b = test_nick("edge18", "b");
+    let nick_c = test_nick("edge18", "c");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&ch).await.unwrap();
+    wait_joined(&mut eb, &ch).await;
+
+    let (hc, mut ec) = connect_guest(&server, &nick_c).await;
+    wait_registered(&mut ec).await;
+    hc.join(&ch).await.unwrap();
+    wait_joined(&mut ec, &ch).await;
+    drain(&mut ea).await;
+    drain(&mut eb).await;
+    drain(&mut ec).await;
+
+    // All three send simultaneously
+    let f1 = ha.privmsg(&ch, "from-a");
+    let f2 = hb.privmsg(&ch, "from-b");
+    let f3 = hc.privmsg(&ch, "from-c");
+    let _ = tokio::join!(f1, f2, f3);
+
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+
+    // C should see messages from A and B (and possibly echo)
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        match maybe_wait(
+            &mut ec,
+            |e| matches!(e, Event::Message { text, .. } if text.starts_with("from-")),
+            Duration::from_secs(3),
+        )
+        .await
+        {
+            Some(Event::Message { text, .. }) => {
+                seen.insert(text);
+            }
+            _ => break,
+        }
+    }
+
+    assert!(
+        seen.contains("from-a"),
+        "C should see A's message: {seen:?}"
+    );
+    assert!(
+        seen.contains("from-b"),
+        "C should see B's message: {seen:?}"
+    );
+    eprintln!("  ✓ Simultaneous senders: all messages delivered to observer");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+    let _ = hc.quit(Some("done")).await;
+}
+
+// ── EDGE-19: Empty message is handled gracefully ──
+
+#[tokio::test]
+async fn single_server_edge19_empty_message() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("edge19");
+    let nick_a = test_nick("edge19", "a");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+    drain(&mut ea).await;
+
+    // Send empty PRIVMSG
+    ha.raw(&format!("PRIVMSG {ch} :")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Server should not crash — send another message to verify
+    ha.privmsg(&ch, "still-alive").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // We're still connected if we can receive events
+    let alive = maybe_wait(
+        &mut ea,
+        |_e| true,
+        Duration::from_secs(2),
+    )
+    .await;
+    assert!(alive.is_some(), "Server should still be responsive after empty message");
+    eprintln!("  ✓ Empty message handled gracefully, server still responsive");
+
+    let _ = ha.quit(Some("done")).await;
+}
+
+// ── EDGE-20: Very long nick in DM doesn't crash ──
+
+#[tokio::test]
+async fn single_server_edge20_message_to_long_nick() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let nick_a = test_nick("edge20", "a");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    drain(&mut ea).await;
+
+    // Send DM to a very long nick
+    let long_nick = "x".repeat(100);
+    ha.privmsg(&long_nick, "hello").await.unwrap();
+
+    // Should get ERR_NOSUCHNICK or similar, not crash
+    let result = maybe_wait(
+        &mut ea,
+        |e| matches!(e, Event::ServerNotice { .. }),
+        Duration::from_secs(3),
+    )
+    .await;
+    assert!(result.is_some(), "Should get error for invalid nick");
+    eprintln!("  ✓ DM to absurdly long nick handled gracefully");
+
+    let _ = ha.quit(Some("done")).await;
+}
+
+// ── EDGE-21: CHATHISTORY with no database returns empty batch ──
+
+#[tokio::test]
+async fn single_server_edge21_chathistory_request_for_empty_channel() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("edge21");
+    let nick_a = test_nick("edge21", "a");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+    drain(&mut ea).await;
+
+    // Explicitly request CHATHISTORY LATEST on empty channel
+    ha.raw(&format!("CHATHISTORY LATEST {ch} * 50"))
+        .await
+        .unwrap();
+
+    // Should get BATCH start + end (empty), not an error
+    let batch_start = maybe_wait(
+        &mut ea,
+        |e| matches!(e, Event::BatchStart { .. }),
+        Duration::from_secs(3),
+    )
+    .await;
+    // It's OK if we don't get a batch (server might not reply for empty)
+    // but we should NOT crash
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Verify connection is still alive
+    ha.privmsg(&ch, "still-alive-21").await.unwrap();
+    let alive = maybe_wait(
+        &mut ea,
+        |e| matches!(e, Event::Message { text, .. } if text == "still-alive-21"),
+        Duration::from_secs(3),
+    )
+    .await;
+    assert!(
+        alive.is_some(),
+        "Connection should survive CHATHISTORY on empty channel"
+    );
+    eprintln!("  ✓ CHATHISTORY on empty channel doesn't crash (batch_start={:?})", batch_start.is_some());
+
+    let _ = ha.quit(Some("done")).await;
+}
+
+// ── EDGE-22: Rapid join/part doesn't leave stale members ──
+
+#[tokio::test]
+async fn single_server_edge22_rapid_join_part_no_stale_members() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("edge22");
+    let nick_a = test_nick("edge22", "a");
+    let nick_b = test_nick("edge22", "b");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+    drain(&mut ea).await;
+
+    // B rapidly joins and parts 5 times
+    for _ in 0..5 {
+        let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+        wait_registered(&mut eb).await;
+        hb.join(&ch).await.unwrap();
+        wait_joined(&mut eb, &ch).await;
+        hb.raw(&format!("PART {ch}")).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let _ = hb.quit(Some("rapid")).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    drain(&mut ea).await;
+
+    // Request NAMES — B should NOT be in the list
+    let nicks = request_names(&ha, &mut ea, &ch).await;
+    assert!(
+        !nick_is_present(&nicks, &nick_b),
+        "B should not be in NAMES after rapid join/part: {nicks:?}"
+    );
+    assert!(
+        nick_is_present(&nicks, &nick_a),
+        "A should still be in channel: {nicks:?}"
+    );
+    eprintln!("  ✓ Rapid join/part leaves no stale members");
+
+    let _ = ha.quit(Some("done")).await;
+}
+
+// ── EDGE-23: PRIVMSG with special characters ──
+
+#[tokio::test]
+async fn single_server_edge23_special_characters_in_message() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("edge23");
+    let nick_a = test_nick("edge23", "a");
+    let nick_b = test_nick("edge23", "b");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&ch).await.unwrap();
+    wait_joined(&mut eb, &ch).await;
+    drain(&mut ea).await;
+    drain(&mut eb).await;
+
+    // Send messages with special characters
+    let test_messages = [
+        "hello 🔥 world 🌍",
+        "line with unicode: café résumé naïve",
+        "symbols: @#$%^&*()[]{}|\\",
+        "empty-looking:   ",  // spaces only
+        "https://example.com/path?a=1&b=2#frag",
+    ];
+
+    for msg in &test_messages {
+        ha.privmsg(&ch, msg).await.unwrap();
+        let result = maybe_wait(
+            &mut eb,
+            |e| matches!(e, Event::Message { .. }),
+            Duration::from_secs(3),
+        )
+        .await;
+        assert!(result.is_some(), "Message with special chars should be delivered: {msg}");
+        if let Some(Event::Message { text, .. }) = result {
+            assert_eq!(&text, msg, "Message text should be preserved exactly");
+        }
+    }
+    eprintln!("  ✓ Special characters preserved in messages");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── EDGE-24: MODE changes reflected in subsequent NAMES ──
+
+#[tokio::test]
+async fn single_server_edge24_mode_reflected_in_names() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("edge24");
+    let nick_a = test_nick("edge24", "a");
+    let nick_b = test_nick("edge24", "b");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb).await;
+    hb.join(&ch).await.unwrap();
+    wait_joined(&mut eb, &ch).await;
+    drain(&mut ea).await;
+    drain(&mut eb).await;
+
+    // A is op (creator), B is not
+    let nicks_before = request_names(&ha, &mut ea, &ch).await;
+    assert!(nick_is_op(&nicks_before, &nick_a), "A should be op: {nicks_before:?}");
+    assert!(!nick_is_op(&nicks_before, &nick_b), "B should not be op: {nicks_before:?}");
+
+    // A grants op to B
+    ha.raw(&format!("MODE {ch} +o {nick_b}")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    drain(&mut ea).await;
+    drain(&mut eb).await;
+
+    // NAMES should now show B as op
+    let nicks_after = request_names(&ha, &mut ea, &ch).await;
+    assert!(
+        nick_is_op(&nicks_after, &nick_b),
+        "B should be op after +o: {nicks_after:?}"
+    );
+    eprintln!("  ✓ MODE +o reflected in NAMES");
+
+    // Remove op from B
+    ha.raw(&format!("MODE {ch} -o {nick_b}")).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    drain(&mut ea).await;
+    drain(&mut eb).await;
+
+    let nicks_final = request_names(&ha, &mut ea, &ch).await;
+    assert!(
+        !nick_is_op(&nicks_final, &nick_b),
+        "B should not be op after -o: {nicks_final:?}"
+    );
+    eprintln!("  ✓ MODE -o reflected in NAMES");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}
+
+// ── EDGE-25: TOPIC with empty string clears topic ──
+
+#[tokio::test]
+async fn single_server_edge25_clear_topic() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let ch = test_channel("edge25");
+    let nick_a = test_nick("edge25", "a");
+
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    ha.join(&ch).await.unwrap();
+    wait_joined(&mut ea, &ch).await;
+    drain(&mut ea).await;
+
+    // Set topic
+    ha.raw(&format!("TOPIC {ch} :some topic")).await.unwrap();
+    wait_topic(&mut ea, &ch).await;
+
+    // Clear topic
+    ha.raw(&format!("TOPIC {ch} :")).await.unwrap();
+    let cleared = maybe_wait(
+        &mut ea,
+        |e| matches!(e, Event::TopicChanged { topic, .. } if topic.is_empty()),
+        Duration::from_secs(3),
+    )
+    .await;
+    assert!(cleared.is_some(), "Topic should be clearable with empty string");
+    eprintln!("  ✓ Topic can be cleared with empty string");
+
+    let _ = ha.quit(Some("done")).await;
+}

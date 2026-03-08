@@ -59,6 +59,14 @@ pub enum Event {
         id: String,
     },
 
+    /// A DM conversation target from CHATHISTORY TARGETS.
+    /// `nick` is the display nick of the conversation partner.
+    /// `timestamp` is the ISO 8601 time of the last message (from server-time tag).
+    ChatHistoryTarget {
+        nick: String,
+        timestamp: Option<String>,
+    },
+
     /// NAMES list for a channel (one 353 reply; may arrive in multiple parts).
     Names {
         channel: String,
