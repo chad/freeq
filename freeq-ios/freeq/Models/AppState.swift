@@ -391,6 +391,13 @@ class AppState: ObservableObject {
 
     func partChannel(_ channel: String) {
         try? client?.part(channel: channel)
+        // Optimistically remove from UI — don't wait for server confirmation
+        channels.removeAll { $0.name.lowercased() == channel.lowercased() }
+        autoJoinChannels.removeAll { $0.lowercased() == channel.lowercased() }
+        UserDefaults.standard.set(autoJoinChannels, forKey: "freeq.channels")
+        if activeChannel?.lowercased() == channel.lowercased() {
+            activeChannel = channels.first?.name
+        }
     }
 
     /// Send a message. Returns true on success, false on failure (so caller can preserve text).
@@ -572,12 +579,17 @@ class AppState: ObservableObject {
     }
 
     func getOrCreateDM(_ nick: String) -> ChannelState {
-        if let existing = dmBuffers.first(where: { $0.name.lowercased() == nick.lowercased() }) {
+        let trimmed = nick.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else {
+            // Return a throwaway buffer — never append empty nicks to the list
+            return ChannelState(name: "_empty")
+        }
+        if let existing = dmBuffers.first(where: { $0.name.lowercased() == trimmed.lowercased() }) {
             return existing
         }
-        let dm = ChannelState(name: nick)
+        let dm = ChannelState(name: trimmed)
         dmBuffers.append(dm)
-        requestHistory(channel: nick)
+        requestHistory(channel: trimmed)
         return dm
     }
 

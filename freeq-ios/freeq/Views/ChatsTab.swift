@@ -109,9 +109,9 @@ struct ChatsTab: View {
     }
 
     private var allConversations: [ChannelState] {
-        (appState.channels + appState.dmBuffers).sorted { a, b in
-            a.lastActivity > b.lastActivity
-        }
+        (appState.channels + appState.dmBuffers)
+            .filter { !$0.name.trimmingCharacters(in: .whitespaces).isEmpty }
+            .sorted { a, b in a.lastActivity > b.lastActivity }
     }
 
     private var filteredConversations: [ChannelState] {
