@@ -167,6 +167,9 @@ class AppState: ObservableObject {
     var pendingWebToken: String? = nil
     /// Persistent broker session token
     var brokerToken: String? = nil
+    /// Cached web-token + expiry (reuse across reconnects within TTL)
+    fileprivate var cachedWebToken: String? = nil
+    fileprivate var cachedWebTokenExpiry: Date = .distantPast
 
     /// Read position tracking — channel name -> last read message ID
     @Published var lastReadMessageIds: [String: String] = [:]
@@ -225,6 +228,18 @@ class AppState: ObservableObject {
         if let savedBrokerBase = UserDefaults.standard.string(forKey: "freeq.brokerBase") {
             authBrokerBase = savedBrokerBase
         }
+        // Restore cached web token if still valid
+        if let savedToken = KeychainHelper.load(key: "webToken"),
+           let expiryStr = UserDefaults.standard.string(forKey: "freeq.webTokenExpiry"),
+           let expiryTs = Double(expiryStr) {
+            let expiry = Date(timeIntervalSince1970: expiryTs)
+            if Date() < expiry {
+                cachedWebToken = savedToken
+                cachedWebTokenExpiry = expiry
+            } else {
+                KeychainHelper.delete(key: "webToken")
+            }
+        }
         isDarkTheme = UserDefaults.standard.object(forKey: "freeq.darkTheme") as? Bool ?? true
 
         // Prune stale typing indicators every 3 seconds
@@ -237,14 +252,24 @@ class AppState: ObservableObject {
 
     /// Reconnect with saved session (requires SASL web-token).
     /// Retries broker fetch with backoff on failure.
-    private var brokerRetryCount = 0
+    fileprivate var brokerRetryCount = 0
     func reconnectSavedSession() {
         guard hasSavedSession, connectionState == .disconnected else { return }
+
+        // 1. Already have a pending token (e.g., from initial login)
         if pendingWebToken != nil {
             connect(nick: nick)
             return
         }
-        // Fetch a fresh web-token from broker
+
+        // 2. Reuse cached web-token if still valid (25 min window — token TTL is 30 min)
+        if let cached = cachedWebToken, Date() < cachedWebTokenExpiry {
+            pendingWebToken = cached
+            connect(nick: nick)
+            return
+        }
+
+        // 3. Fetch a fresh web-token from broker
         guard let brokerToken else {
             // No broker token at all — must log in fresh
             return
@@ -255,6 +280,12 @@ class AppState: ObservableObject {
                 await MainActor.run {
                     self.brokerRetryCount = 0
                     self.pendingWebToken = session.token
+                    // Cache for reuse (25 min — conservative vs 30 min server TTL)
+                    self.cachedWebToken = session.token
+                    let expiry = Date().addingTimeInterval(25 * 60)
+                    self.cachedWebTokenExpiry = expiry
+                    KeychainHelper.save(key: "webToken", value: session.token)
+                    UserDefaults.standard.set(String(expiry.timeIntervalSince1970), forKey: "freeq.webTokenExpiry")
                     self.authenticatedDID = session.did
                     KeychainHelper.save(key: "did", value: session.did)
                     self.connect(nick: session.nick)
@@ -262,9 +293,9 @@ class AppState: ObservableObject {
             } catch {
                 await MainActor.run {
                     self.brokerRetryCount += 1
-                    if self.brokerRetryCount <= 4 {
-                        // Retry with backoff: 3, 6, 12, 24 seconds
-                        let delay = 3.0 * Double(1 << (self.brokerRetryCount - 1))
+                    if self.brokerRetryCount <= 8 {
+                        // Retry with backoff: 2, 3, 4, 6, 8, 10, 15, 20 seconds
+                        let delay = min(2.0 + Double(self.brokerRetryCount), 20.0)
                         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                             if self.connectionState == .disconnected {
                                 self.reconnectSavedSession()
@@ -327,8 +358,12 @@ class AppState: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "freeq.lastLogin")
         KeychainHelper.delete(key: "did")
         KeychainHelper.delete(key: "brokerToken")
+        KeychainHelper.delete(key: "webToken")
+        UserDefaults.standard.removeObject(forKey: "freeq.webTokenExpiry")
         UserDefaults.standard.removeObject(forKey: "freeq.nick")
         UserDefaults.standard.removeObject(forKey: "freeq.handle")
+        cachedWebToken = nil
+        cachedWebTokenExpiry = .distantPast
         DispatchQueue.main.async {
             self.authenticatedDID = nil
             self.nick = ""
@@ -440,7 +475,11 @@ class AppState: ObservableObject {
             if status == 401 {
                 await MainActor.run {
                     self.brokerToken = nil
+                    self.cachedWebToken = nil
+                    self.cachedWebTokenExpiry = .distantPast
                     KeychainHelper.delete(key: "brokerToken")
+                    KeychainHelper.delete(key: "webToken")
+                    UserDefaults.standard.removeObject(forKey: "freeq.webTokenExpiry")
                 }
                 throw NSError(domain: "Broker", code: 401, userInfo: [NSLocalizedDescriptionKey: "Session expired — please sign in again"])
             }
@@ -478,6 +517,7 @@ class AppState: ObservableObject {
             // Returning to foreground — reconnect if needed
             NotificationManager.shared.clearBadge()
             if connectionState == .disconnected && hasSavedSession {
+                brokerRetryCount = 0  // Reset retries on foreground
                 reconnectSavedSession()
             }
         case .background:
@@ -611,8 +651,12 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
             // instead of showing login screen. Token may have been stale.
             if state.authenticatedDID != nil && nick.lowercased().hasPrefix("guest") {
                 state.disconnect()
+                // Invalidate cached token — it was stale
+                state.cachedWebToken = nil
+                state.cachedWebTokenExpiry = .distantPast
+                state.brokerRetryCount = 0
                 // Retry via broker — will get a fresh token
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                     if state.connectionState == .disconnected && state.hasSavedSession {
                         state.pendingWebToken = nil  // Force broker refresh
                         state.reconnectSavedSession()
@@ -904,13 +948,14 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
 
         case .disconnected(let reason):
             state.connectionState = .disconnected
-            if !reason.isEmpty {
+            if !reason.isEmpty && !reason.contains("EOF") {
                 state.errorMessage = "Disconnected: \(reason)"
             }
             // Auto-reconnect with exponential backoff
             if state.hasSavedSession {
                 state.reconnectAttempts += 1
-                let delay = min(Double(1 << min(state.reconnectAttempts, 5)), 30.0) // 2, 4, 8, 16, 30, 30...
+                // Fast first retry (1s), then 2, 4, 8, 15, 15...
+                let delay = state.reconnectAttempts <= 1 ? 1.0 : min(Double(1 << min(state.reconnectAttempts - 1, 4)), 15.0)
                 DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                     if state.connectionState == .disconnected && state.hasSavedSession {
                         state.reconnectSavedSession()
