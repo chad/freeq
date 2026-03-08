@@ -68,3 +68,4 @@ vs/
 *.tmp
 *.pdb
 *.cache
+/freeq-windows-app/.vs
