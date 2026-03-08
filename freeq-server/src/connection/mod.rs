@@ -18,6 +18,7 @@
 
 mod cap;
 mod channel;
+pub(crate) mod login;
 pub mod helpers;
 mod messaging;
 mod policy_cmd;
@@ -340,7 +341,7 @@ where
         // when auto-rejoin + client-side JOIN overlap.
         let exempt_from_rate_limit = matches!(
             msg.command.as_str(),
-            "JOIN" | "CHATHISTORY" | "WHOIS" | "PING" | "PONG" | "MODE" | "WHO" | "NAMES"
+            "JOIN" | "CHATHISTORY" | "WHOIS" | "PING" | "PONG" | "MODE" | "WHO" | "NAMES" | "LOGIN"
         );
         if conn.registered && !exempt_from_rate_limit {
             let now = tokio::time::Instant::now();
@@ -364,6 +365,14 @@ where
         }
 
         tracing::debug!(%session_id, "<- {}", line_buf.trim());
+
+        // Check for pending LOGIN completion (from browser OAuth callback)
+        if conn.authenticated_did.is_none() {
+            if let Some(completion) = state.login_completions.lock().remove(&session_id) {
+                conn.authenticated_did = Some(completion.did.clone());
+                // Trigger auto-op etc. in channels (already handled by complete_irc_login)
+            }
+        }
 
         match msg.command.as_str() {
             "CAP" => {
@@ -1124,6 +1133,13 @@ where
                     vec![nick, "End of /INFO list"],
                 );
                 send(&state, &session_id, format!("{end}\r\n"));
+            }
+            "LOGIN" => {
+                if !conn.registered {
+                    continue;
+                }
+                let handle = msg.params.first().map(|s| s.as_str()).unwrap_or("");
+                login::handle_login(&mut conn, handle, &state, &server_name, &session_id, &send);
             }
             "POLICY" => {
                 if !conn.registered {

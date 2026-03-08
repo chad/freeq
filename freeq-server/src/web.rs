@@ -1032,6 +1032,8 @@ struct AuthLoginQuery {
     handle: String,
     /// If "1", callback redirects to freeq:// URL scheme for mobile apps.
     mobile: Option<String>,
+    /// If set, this is an IRC `/login` command — complete auth on the IRC session.
+    irc_state: Option<String>,
 }
 
 /// GET /auth/login?handle=user.bsky.social
@@ -1309,6 +1311,7 @@ async fn auth_login(
             dpop_key_b64: dpop_key.to_base64url(),
             created_at: now,
             mobile: q.mobile.as_deref() == Some("1"),
+            irc_state: q.irc_state.clone(),
         },
     );
 
@@ -1503,6 +1506,47 @@ async fn auth_callback(
 
     tracing::info!(did = %pending.did, handle = %pending.handle, mobile = pending.mobile, "OAuth callback: token obtained, session stored");
 
+    // IRC /login command — complete auth on the IRC connection
+    if let Some(ref irc_state) = pending.irc_state {
+        // Look up the IRC session that initiated this login
+        let session_id = state.login_pending.lock().remove(irc_state);
+        if let Some(session_id) = session_id {
+            crate::connection::login::complete_irc_login(
+                &state,
+                &session_id,
+                &pending.did,
+                &pending.handle,
+            );
+            // Return a simple HTML page telling the user to go back to IRC
+            let html = format!(
+                r#"<!DOCTYPE html>
+<html><head><style>
+body {{ font-family: system-ui, sans-serif; background: #1a1a2e; color: #e0e0e0; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }}
+.card {{ background: #16162a; border: 1px solid #2a2a4a; border-radius: 16px; padding: 40px; text-align: center; max-width: 400px; }}
+h1 {{ color: #6c63ff; font-size: 24px; margin: 0 0 12px 0; }}
+p {{ color: #a0a0b0; margin: 8px 0; }}
+.did {{ font-family: monospace; font-size: 12px; color: #888; word-break: break-all; }}
+</style></head><body>
+<div class="card">
+<h1>✓ Authenticated</h1>
+<p>You are now logged in as <strong>@{handle}</strong></p>
+<p class="did">{did}</p>
+<p style="margin-top: 20px; color: #6c63ff;">You can close this tab and return to your IRC client.</p>
+</div></body></html>"#,
+                handle = pending.handle,
+                did = pending.did,
+            );
+            return Ok((
+                [
+                    ("content-type", "text/html; charset=utf-8"),
+                    ("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'"),
+                ],
+                html,
+            ));
+        }
+        // If session not found (expired/disconnected), fall through to normal web flow
+    }
+
     // Mobile apps get a redirect to freeq:// custom scheme
     if pending.mobile {
         let nick = mobile_nick_from_handle(&pending.handle);
@@ -1631,7 +1675,7 @@ fn generate_pkce() -> (String, String) {
     (verifier, challenge)
 }
 
-fn generate_random_string(len: usize) -> String {
+pub fn generate_random_string(len: usize) -> String {
     use base64::Engine;
     use rand::RngCore;
     let mut bytes = vec![0u8; len];

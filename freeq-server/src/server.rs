@@ -137,6 +137,8 @@ pub struct OAuthPending {
     pub created_at: u64,
     /// If true, callback redirects to freeq:// custom scheme instead of returning HTML.
     pub mobile: bool,
+    /// If set, this login was initiated via IRC `/login` — complete auth on this IRC session.
+    pub irc_state: Option<String>,
 }
 
 /// Completed OAuth: stored after /auth/callback, consumed by the web client.
@@ -149,6 +151,14 @@ pub struct OAuthResult {
     /// One-time token for SASL web-token auth (consumed on first use).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub web_token: Option<String>,
+}
+
+/// A linked external identity attached to an AT Protocol DID.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LinkedIdentity {
+    pub provider: String,
+    pub identity: String,
+    pub linked_at: u64,
 }
 
 /// Active web session with credentials for PDS operations (e.g., media upload).
@@ -425,6 +435,15 @@ pub struct SharedState {
     /// Active web sessions with PDS credentials, keyed by DID.
     /// Used for server-proxied operations like media upload.
     pub web_sessions: Mutex<HashMap<String, WebSession>>,
+    /// Pending IRC LOGIN commands: oauth_state → session_id.
+    /// When the OAuth callback fires, the server completes auth on the IRC connection.
+    pub login_pending: Mutex<HashMap<String, String>>,
+    /// Linked external identities: DID → vec of (provider, identity, linked_at).
+    /// e.g., ("github", "chad", 1709655600)
+    pub linked_identities: Mutex<HashMap<String, Vec<LinkedIdentity>>>,
+    /// Pending LOGIN completions: session_id → LoginCompletion.
+    /// Set by OAuth callback, consumed by connection loop to update conn.authenticated_did.
+    pub login_completions: Mutex<HashMap<String, crate::connection::login::LoginCompletion>>,
     /// session_id -> iroh endpoint ID (for connections via iroh transport).
     pub session_iroh_ids: Mutex<HashMap<String, String>>,
     /// session_id -> away message (None = not away).
@@ -859,6 +878,9 @@ impl Server {
             oauth_complete: Mutex::new(HashMap::new()),
             web_auth_tokens: Mutex::new(HashMap::new()),
             web_sessions: Mutex::new(HashMap::new()),
+            login_pending: Mutex::new(HashMap::new()),
+            linked_identities: Mutex::new(HashMap::new()),
+            login_completions: Mutex::new(HashMap::new()),
             session_iroh_ids: Mutex::new(HashMap::new()),
             session_away: Mutex::new(HashMap::new()),
             server_iroh_id: Mutex::new(None),
@@ -1174,6 +1196,22 @@ impl Server {
                         let pruned = before - tokens.len();
                         if pruned > 0 {
                             tracing::info!("Pruned {pruned} expired upload tokens");
+                        }
+                    }
+                    // Prune expired login_pending (5 min TTL — matches OAuth)
+                    {
+                        // login_pending doesn't store timestamps, but they're cleaned up
+                        // when consumed or when the session disconnects.
+                        // login_completions are ephemeral — prune stale ones.
+                        let mut completions = cleanup_state.login_completions.lock();
+                        let before = completions.len();
+                        // Check if the session still exists
+                        let conns = cleanup_state.connections.lock();
+                        completions.retain(|sid, _| conns.contains_key(sid));
+                        drop(conns);
+                        let pruned = before - completions.len();
+                        if pruned > 0 {
+                            tracing::info!("Pruned {pruned} stale login completions");
                         }
                     }
                     // Prune stale web sessions (24h TTL — PDS tokens expire anyway)
