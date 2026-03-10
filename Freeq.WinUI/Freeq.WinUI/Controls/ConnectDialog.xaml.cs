@@ -1,6 +1,5 @@
 using System;
-using System.Net.Http;
-using System.Text.Json;
+using Freeq.WinUI.Services;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -12,13 +11,12 @@ namespace Freeq.WinUI.Controls;
 
 public sealed partial class ConnectDialog : UserControl
 {
-    private const string BrokerBase = "https://auth.freeq.at";
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(10) };
 
     private bool _isAtProtoMode = true;
     private bool _isConnecting;
     private bool _advancedVisible;
     private bool _nickManuallyEdited;
+    private OAuthCallbackServer? _oauthServer;
 
     public event Action<ConnectRequest>? ConnectRequested;
 
@@ -36,6 +34,11 @@ public sealed partial class ConnectDialog : UserControl
         ErrorBox.Visibility = Visibility.Visible;
     }
 
+    public void ClearError()
+    {
+        ErrorBox.Visibility = Visibility.Collapsed;
+    }
+
     public void SetConnecting(bool connecting)
     {
         _isConnecting = connecting;
@@ -51,7 +54,6 @@ public sealed partial class ConnectDialog : UserControl
     {
         _isAtProtoMode = atProto;
 
-        // Tab styling
         AtProtoTab.Background = atProto
             ? new SolidColorBrush(ColorHelper.FromArgb(25, 0, 212, 170))
             : new SolidColorBrush(Colors.Transparent);
@@ -66,14 +68,11 @@ public sealed partial class ConnectDialog : UserControl
             ? new SolidColorBrush(ColorHelper.FromArgb(255, 0, 212, 170))
             : new SolidColorBrush(ColorHelper.FromArgb(255, 85, 85, 112));
 
-        // Show/hide fields
         AtProtoFields.Visibility = atProto ? Visibility.Visible : Visibility.Collapsed;
         GuestFields.Visibility = atProto ? Visibility.Collapsed : Visibility.Visible;
 
-        // Button text
         ConnectButtonText.Text = atProto ? "Sign in with AT Protocol" : "Connect as Guest";
 
-        // Focus
         if (atProto)
             HandleInput.Focus(FocusState.Programmatic);
         else
@@ -87,7 +86,6 @@ public sealed partial class ConnectDialog : UserControl
     {
         if (_nickManuallyEdited) return;
 
-        // Derive nick from handle (strip .bsky.social, etc.)
         var handle = HandleInput.Text.Trim();
         if (string.IsNullOrEmpty(handle))
         {
@@ -96,7 +94,6 @@ public sealed partial class ConnectDialog : UserControl
         }
 
         var nick = handle;
-        // Strip common suffixes
         foreach (var suffix in new[] { ".bsky.social", ".bsky.network", ".bsky.app" })
         {
             if (nick.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
@@ -106,7 +103,6 @@ public sealed partial class ConnectDialog : UserControl
             }
         }
 
-        // Clean for IRC nick validity
         nick = nick.Replace(".", "").Replace("-", "").Replace("_", "");
         if (nick.Length > 16) nick = nick[..16];
 
@@ -133,7 +129,7 @@ public sealed partial class ConnectDialog : UserControl
     {
         if (_isConnecting) return;
 
-        ErrorBox.Visibility = Visibility.Collapsed;
+        ClearError();
         var server = ServerInput.Text.Trim();
         var channels = ChannelInput.Text.Trim();
 
@@ -155,22 +151,42 @@ public sealed partial class ConnectDialog : UserControl
             try
             {
                 // Check broker health
-                var healthResp = await Http.GetAsync($"{BrokerBase}/health");
-                if (!healthResp.IsSuccessStatusCode)
+                if (!await OAuthCallbackServer.HealthCheckAsync())
                 {
                     ShowError("Authentication service is unavailable. Try guest mode.");
                     SetConnecting(false);
                     return;
                 }
 
-                // Launch browser for OAuth
-                var returnTo = Uri.EscapeDataString("freeq-desktop://oauth-callback");
-                var loginUrl = $"{BrokerBase}/auth/login?handle={Uri.EscapeDataString(handle)}&return_to={returnTo}";
-                await Launcher.LaunchUriAsync(new Uri(loginUrl));
+                // Start local OAuth callback server and open browser
+                _oauthServer?.Dispose();
+                _oauthServer = new OAuthCallbackServer();
+                _oauthServer.StartLogin(handle);
 
-                // For now, fall back to guest connection after OAuth redirect
-                // Full OAuth callback handling requires URI protocol registration
-                // Connect as guest with the desired nick in the meantime
+                // Wait for OAuth result (5 minute timeout)
+                var oauthResult = await _oauthServer.WaitForCallbackAsync(TimeSpan.FromMinutes(5));
+                _oauthServer.Dispose();
+                _oauthServer = null;
+
+                if (oauthResult == null)
+                {
+                    ShowError("Authentication timed out. Please try again.");
+                    SetConnecting(false);
+                    return;
+                }
+
+                var token = oauthResult.EffectiveToken;
+                Services.OAuthLog.Write($"OAuth complete: Did={oauthResult.Did}, token={token?.Length ?? 0} chars, PdsUrl={oauthResult.PdsUrl}");
+
+                if (string.IsNullOrEmpty(token))
+                {
+                    ShowError("No authentication token received. Please try again.");
+                    SetConnecting(false);
+                    return;
+                }
+
+                Services.OAuthLog.Write("Invoking ConnectRequested event");
+                // Connect with SASL credentials
                 ConnectRequested?.Invoke(new ConnectRequest
                 {
                     ServerUrl = server,
@@ -178,12 +194,17 @@ public sealed partial class ConnectDialog : UserControl
                     Channels = channels,
                     IsAtProto = true,
                     Handle = handle,
+                    SaslToken = token,
+                    Did = oauthResult.Did ?? "",
+                    PdsUrl = oauthResult.PdsUrl ?? "",
                 });
             }
             catch (Exception ex)
             {
                 ShowError($"Authentication failed: {ex.Message}");
                 SetConnecting(false);
+                _oauthServer?.Dispose();
+                _oauthServer = null;
             }
         }
         else

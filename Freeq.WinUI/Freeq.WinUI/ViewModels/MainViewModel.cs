@@ -36,6 +36,8 @@ public partial class MainViewModel : ObservableObject
 
     private readonly Dictionary<string, List<MessageModel>> _messagesByChannel = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<string>> _membersByChannel = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<string> _pendingJoinChannels = [];
+    private string? _desiredNickname;
 
     public MainViewModel(DispatcherQueue dispatcher)
     {
@@ -49,6 +51,7 @@ public partial class MainViewModel : ObservableObject
         _irc.TopicReceived += OnTopicReceived;
         _irc.NamesReceived += OnNamesReceived;
         _irc.NickChanged += OnNickChanged;
+        _irc.AccountChanged += OnAccountChanged;
         _irc.ErrorReceived += OnError;
     }
 
@@ -80,7 +83,8 @@ public partial class MainViewModel : ObservableObject
         }
 
         ErrorMessage = null;
-        ShowConnectDialog = false;
+        _desiredNickname = Nickname;
+        // Don't hide dialog yet — wait for Authenticated state in OnStateChanged
         await _irc.ConnectAsync(ServerUrl, Nickname);
     }
 
@@ -97,6 +101,7 @@ public partial class MainViewModel : ObservableObject
         Members.Clear();
         _messagesByChannel.Clear();
         _membersByChannel.Clear();
+        _pendingJoinChannels.Clear();
         SelectedChannel = null;
         ShowConnectDialog = true;
         IsConnected = false;
@@ -121,12 +126,37 @@ public partial class MainViewModel : ObservableObject
         ComposeText = "";
     }
 
+    /// <summary>
+    /// Queue channels to join. They will be sent to the server once registration completes (001).
+    /// </summary>
+    public void QueueJoinChannels(IEnumerable<string> channels)
+    {
+        foreach (var raw in channels)
+        {
+            var channel = raw.Trim();
+            if (string.IsNullOrWhiteSpace(channel)) continue;
+            if (!channel.StartsWith('#')) channel = "#" + channel;
+
+            if (!_pendingJoinChannels.Contains(channel, StringComparer.OrdinalIgnoreCase))
+                _pendingJoinChannels.Add(channel);
+        }
+    }
+
     [RelayCommand]
     private void JoinChannel(string channel)
     {
         if (string.IsNullOrWhiteSpace(channel)) return;
         if (!channel.StartsWith('#')) channel = "#" + channel;
-        _irc.JoinChannel(channel);
+
+        if (_irc.State == ConnectionState.Authenticated)
+        {
+            _irc.JoinChannel(channel);
+        }
+        else
+        {
+            if (!_pendingJoinChannels.Contains(channel, StringComparer.OrdinalIgnoreCase))
+                _pendingJoinChannels.Add(channel);
+        }
     }
 
     [RelayCommand]
@@ -167,9 +197,31 @@ public partial class MainViewModel : ObservableObject
             };
             IsConnected = state is ConnectionState.Connected or ConnectionState.Authenticated;
 
-            if (state == ConnectionState.Disconnected)
+            if (state == ConnectionState.Authenticated)
+            {
+                // If the server assigned a different nick than desired, request a change
+                if (!string.IsNullOrEmpty(_desiredNickname) &&
+                    !_irc.Nick.Equals(_desiredNickname, StringComparison.OrdinalIgnoreCase))
+                {
+                    _irc.Send($"NICK {_desiredNickname}");
+                }
+
+                // Update nickname to what the server currently has
+                Nickname = _irc.Nick;
+
+                // NOW hide the connect dialog — registration is complete
+                ShowConnectDialog = false;
+
+                // Flush pending channels — snapshot and clear atomically
+                var toJoin = _pendingJoinChannels.ToList();
+                _pendingJoinChannels.Clear();
+                foreach (var ch in toJoin)
+                    _irc.JoinChannel(ch);
+            }
+            else if (state == ConnectionState.Disconnected)
             {
                 ShowConnectDialog = true;
+                _pendingJoinChannels.Clear();
             }
         });
     }
@@ -190,7 +242,7 @@ public partial class MainViewModel : ObservableObject
 
             AddMessage(channel, msg);
 
-            if (SelectedChannel?.Name != channel)
+            if (!SelectedChannel?.Name.Equals(channel, StringComparison.OrdinalIgnoreCase) == true)
             {
                 var ch = FindChannel(channel);
                 if (ch != null)
@@ -211,9 +263,13 @@ public partial class MainViewModel : ObservableObject
 
             if (nick.Equals(_irc.Nick, StringComparison.OrdinalIgnoreCase))
             {
+                // We joined — select this channel
                 var ch = FindChannel(channel);
                 if (ch != null)
                     SelectedChannel = ch;
+
+                // Also add ourselves to the member list
+                AddMemberToChannel(channel, nick);
             }
             else
             {
@@ -281,9 +337,27 @@ public partial class MainViewModel : ObservableObject
             if (!_membersByChannel.ContainsKey(channel))
                 _membersByChannel[channel] = [];
 
-            _membersByChannel[channel].AddRange(nicks);
+            var list = _membersByChannel[channel];
+            foreach (var nick in nicks)
+            {
+                var bare = nick.TrimStart('@', '%', '+');
+                // Remove any existing entry for this nick (may have different prefix)
+                list.RemoveAll(n => n.TrimStart('@', '%', '+').Equals(bare, StringComparison.OrdinalIgnoreCase));
+                list.Add(nick);
+            }
+
             if (SelectedChannel?.Name.Equals(channel, StringComparison.OrdinalIgnoreCase) == true)
                 RefreshMemberList(channel);
+        });
+    }
+
+    private void OnAccountChanged(string nick, string? account)
+    {
+        _dispatcher.TryEnqueue(() =>
+        {
+            // Refresh member list to update verified badge
+            if (SelectedChannel != null)
+                RefreshMemberList(SelectedChannel.Name);
         });
     }
 
@@ -291,6 +365,10 @@ public partial class MainViewModel : ObservableObject
     {
         _dispatcher.TryEnqueue(() =>
         {
+            // Update our displayed nick if it's us
+            if (oldNick.Equals(Nickname, StringComparison.OrdinalIgnoreCase))
+                Nickname = newNick;
+
             foreach (var kvp in _membersByChannel)
             {
                 for (int i = 0; i < kvp.Value.Count; i++)
@@ -310,7 +388,16 @@ public partial class MainViewModel : ObservableObject
 
     private void OnError(string error)
     {
-        _dispatcher.TryEnqueue(() => ErrorMessage = error);
+        _dispatcher.TryEnqueue(() =>
+        {
+            ErrorMessage = error;
+            // If we haven't transitioned to main view yet, the dialog is still visible.
+            // If we have (shouldn't happen since we wait for Authenticated), re-show it.
+            if (!ShowConnectDialog)
+            {
+                ShowConnectDialog = true;
+            }
+        });
     }
 
     private void EnsureChannel(string channel)
@@ -375,6 +462,19 @@ public partial class MainViewModel : ObservableObject
             RefreshMemberList(channel);
     }
 
+    private static (MemberRole role, string nick) ParseMemberPrefix(string raw)
+    {
+        var role = MemberRole.Regular;
+        var nick = raw.TrimStart('@', '%', '+');
+
+        // Highest prefix wins (multi-prefix: @+nick means op+voice → op)
+        if (raw.Contains('@')) role = MemberRole.Operator;
+        else if (raw.Contains('%')) role = MemberRole.HalfOp;
+        else if (raw.Contains('+') && nick != raw) role = MemberRole.Voiced;
+
+        return (role, nick);
+    }
+
     private void RefreshMemberList(string channel)
     {
         Operators.Clear();
@@ -385,14 +485,8 @@ public partial class MainViewModel : ObservableObject
 
         foreach (var raw in nicks.OrderBy(n => n.TrimStart('@', '%', '+')))
         {
-            var role = MemberRole.Regular;
-            var nick = raw;
-
-            if (raw.StartsWith('@')) { role = MemberRole.Operator; nick = raw[1..]; }
-            else if (raw.StartsWith('%')) { role = MemberRole.HalfOp; nick = raw[1..]; }
-            else if (raw.StartsWith('+')) { role = MemberRole.Voiced; nick = raw[1..]; }
-
-            var member = new MemberModel { Nick = nick, Role = role };
+            var (role, nick) = ParseMemberPrefix(raw);
+            var member = new MemberModel { Nick = nick, Role = role, Did = _irc.GetAccount(nick) };
 
             switch (role)
             {
@@ -411,4 +505,9 @@ public partial class MainViewModel : ObservableObject
     }
 
     public int TotalMemberCount => Operators.Count + Voiced.Count + Members.Count;
+
+    public void SetSaslCredentials(string token, string did, string pdsUrl, string method)
+    {
+        _irc.SetSaslCredentials(token, did, pdsUrl, method);
+    }
 }

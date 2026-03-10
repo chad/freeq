@@ -17,21 +17,18 @@ public sealed partial class MainWindow : Window
         Title = "Freeq";
         _vm = new MainViewModel(DispatcherQueue);
 
-        // Bind controls to ViewModel
         SidebarControl.Bind(_vm);
         TopBarControl.Bind(_vm);
         MessageListControl.Bind(_vm);
         ComposeBoxControl.Bind(_vm);
         MemberListControl.Bind(_vm);
 
-        // Wire events
         ConnectDialogControl.ConnectRequested += OnConnectRequested;
         SidebarControl.ChannelSelected += OnChannelSelected;
         SidebarControl.DisconnectRequested += OnDisconnectRequested;
         SidebarControl.JoinRequested += OnJoinRequested;
         TopBarControl.MemberListToggled += OnMemberListToggled;
 
-        // Show/hide views based on connection state
         _vm.PropertyChanged += (s, e) =>
         {
             if (e.PropertyName == nameof(MainViewModel.ShowConnectDialog))
@@ -61,17 +58,26 @@ public sealed partial class MainWindow : Window
     {
         _vm.ServerUrl = request.ServerUrl;
         _vm.Nickname = request.Nickname;
-        await _vm.ConnectCommand.ExecuteAsync(null);
 
-        // Auto-join channels
+        // Set SASL credentials if AT Protocol login
+        if (request.IsAtProto && !string.IsNullOrEmpty(request.SaslToken))
+        {
+            _vm.SetSaslCredentials(
+                request.SaslToken,
+                request.Did ?? "",
+                request.PdsUrl ?? "",
+                "web-token"
+            );
+        }
+
+        // Queue channels BEFORE connecting — they'll be joined when 001 arrives
         if (!string.IsNullOrWhiteSpace(request.Channels))
         {
             var channels = request.Channels.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            foreach (var channel in channels)
-            {
-                _vm.JoinChannelCommand.Execute(channel);
-            }
+            _vm.QueueJoinChannels(channels);
         }
+
+        await _vm.ConnectCommand.ExecuteAsync(null);
     }
 
     private void OnChannelSelected(ChannelModel channel)
