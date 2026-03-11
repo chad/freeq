@@ -145,6 +145,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
 
     var pendingWebToken: String? = null
     var pendingNavigation = mutableStateOf<String?>(null)
+    var pendingJoinChannel: String? = null  // Track user-initiated joins for navigation
     var brokerToken: String? = null
     var authBrokerBase: String = "https://irc.freeq.at/auth/broker"
     private var brokerRetryCount = 0
@@ -405,11 +406,14 @@ class AppState(application: Application) : AndroidViewModel(application) {
 
     // ── Channel operations ──
 
-    fun joinChannel(channel: String) {
+    fun joinChannel(channel: String, navigate: Boolean = true) {
         val ch = if (channel.startsWith("#")) channel else "#$channel"
+        // Track for navigation after JOIN confirmation (only for user-initiated joins)
+        if (navigate) pendingJoinChannel = ch
         try {
             client?.join(ch)
         } catch (_: Exception) {
+            if (navigate) pendingJoinChannel = null
             errorMessage.value = "Failed to join $ch"
         }
     }
@@ -642,9 +646,9 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                 }
                 state.connectionState.value = ConnectionState.Registered
                 state.nick.value = event.nick
-                // Auto-join saved channels (matches iOS behavior exactly)
+                // Auto-join saved channels (no navigation - don't override user's position)
                 for (channel in state.autoJoinChannels.toList()) {
-                    state.joinChannel(channel)
+                    state.joinChannel(channel, navigate = false)
                 }
                 // Fetch DM conversation list if authenticated
                 if (state.authenticatedDID.value != null) {
@@ -664,7 +668,11 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                 val ch = state.getOrCreateChannel(event.channel)
                 ch.lastActivityTime = System.currentTimeMillis()
                 if (event.nick.equals(state.nick.value, ignoreCase = true)) {
-                    if (state.activeChannel.value == null) {
+                    // Navigate if this was a user-initiated join
+                    if (state.pendingJoinChannel?.equals(event.channel, ignoreCase = true) == true) {
+                        state.pendingJoinChannel = null
+                        state.pendingNavigation.value = event.channel
+                    } else if (state.activeChannel.value == null) {
                         state.activeChannel.value = event.channel
                     }
                     if (state.autoJoinChannels.none { it.equals(event.channel, ignoreCase = true) }) {

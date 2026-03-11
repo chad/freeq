@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -37,9 +38,16 @@ fun ChatsTab(
 ) {
     var searchText by remember { mutableStateOf("") }
     var showJoinDialog by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
 
     val allConversations = (appState.channels + appState.dmBuffers.filter { it.name.isNotEmpty() && it.messages.isNotEmpty() })
         .sortedByDescending { it.lastActivityTime }
+
+    // Scroll to top when a new channel is added
+    val channelCount = appState.channels.size
+    LaunchedEffect(channelCount) {
+        if (channelCount > 0) listState.animateScrollToItem(0)
+    }
     val filteredConversations = if (searchText.isEmpty()) {
         allConversations
     } else {
@@ -158,7 +166,7 @@ fun ChatsTab(
                     }
                 }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
+                LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                     items(filteredConversations, key = { it.name }) { conversation ->
                         val isChannel = conversation.name.startsWith("#")
                         if (isChannel) {
