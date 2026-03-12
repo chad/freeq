@@ -7304,3 +7304,88 @@ async fn single_server_edge25_clear_topic() {
 
     let _ = ha.quit(Some("done")).await;
 }
+
+// ── DM-1: Edit and delete work for direct messages ──
+
+#[tokio::test]
+async fn single_server_dm1_edit_and_delete() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let nick_a = test_nick("dm1", "a");
+    let nick_b = test_nick("dm1", "b");
+
+    // Connect both users
+    let (ha, mut ea) = connect_guest(&server, &nick_a).await;
+    wait_registered(&mut ea).await;
+    let (hb, mut eb) = connect_guest(&server, &nick_b).await;
+    wait_registered(&mut eb).await;
+    drain(&mut ea).await;
+    drain(&mut eb).await;
+
+    // A sends DM to B
+    ha.privmsg(&nick_b, "dm-original").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // B should receive the DM
+    let dm_event = wait_for(
+        &mut eb,
+        |e| matches!(e, Event::Message { text, .. } if text == "dm-original"),
+        "B receives DM",
+    )
+    .await;
+
+    let msgid = match &dm_event {
+        Event::Message { tags, .. } => tags.get("msgid").cloned().unwrap_or_default(),
+        _ => String::new(),
+    };
+
+    if msgid.is_empty() {
+        eprintln!("  ⚠ Could not capture msgid for DM");
+        let _ = ha.quit(Some("done")).await;
+        let _ = hb.quit(Some("done")).await;
+        return;
+    }
+    eprintln!("  ✓ DM delivered with msgid {msgid}");
+
+    // A edits the DM
+    let mut edit_tags = std::collections::HashMap::new();
+    edit_tags.insert("+draft/edit".to_string(), msgid.clone());
+    ha.send_tagged(&nick_b, "dm-edited", edit_tags)
+        .await
+        .unwrap();
+
+    // B should receive the edit
+    let edit_received = maybe_wait(
+        &mut eb,
+        |e| matches!(e, Event::Message { text, tags, .. } if text == "dm-edited" && tags.get("+draft/edit").is_some()),
+        Duration::from_secs(3),
+    )
+    .await;
+
+    assert!(
+        edit_received.is_some(),
+        "B should receive the edited DM"
+    );
+    eprintln!("  ✓ DM edit delivered to recipient");
+
+    // A deletes the DM
+    ha.delete_message(&nick_b, &msgid).await.unwrap();
+
+    // B should receive the delete (TAGMSG with +draft/delete)
+    let delete_received = maybe_wait(
+        &mut eb,
+        |e| matches!(e, Event::TagMsg { tags, .. } if tags.get("+draft/delete").is_some()),
+        Duration::from_secs(3),
+    )
+    .await;
+
+    assert!(
+        delete_received.is_some(),
+        "B should receive the delete notification"
+    );
+    eprintln!("  ✓ DM delete delivered to recipient");
+
+    let _ = ha.quit(Some("done")).await;
+    let _ = hb.quit(Some("done")).await;
+}

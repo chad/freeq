@@ -982,7 +982,7 @@ fn handle_chathistory_targets(
 // ── Message editing ─────────────────────────────────────────────────
 
 /// Handle a PRIVMSG with +draft/edit=<msgid> tag.
-/// Verifies authorship, stores the edit, and broadcasts to channel.
+/// Verifies authorship, stores the edit, and broadcasts to channel or DM recipient.
 fn handle_edit(
     conn: &Connection,
     target: &str,
@@ -993,11 +993,7 @@ fn handle_edit(
 ) {
     let hostmask = conn.hostmask();
     let nick = conn.nick_or_star();
-
-    // Only channel messages can be edited (for now)
-    if !target.starts_with('#') && !target.starts_with('&') {
-        return;
-    }
+    let is_channel = target.starts_with('#') || target.starts_with('&');
 
     // Verify authorship: look up original message by msgid
     let original = state.with_db(|db| db.get_message_by_msgid(target, original_msgid));
@@ -1109,8 +1105,8 @@ fn handle_edit(
         )
     });
 
-    // Update in-memory history: replace the original message text
-    {
+    // Update in-memory history (channels only)
+    if is_channel {
         let mut channels = state.channels.lock();
         if let Some(ch) = channels.get_mut(target) {
             // Find and update the original message in history
@@ -1124,65 +1120,143 @@ fn handle_edit(
         }
     }
 
-    // Deliver to channel members
-    let members: Vec<String> = state
-        .channels
-        .lock()
-        .get(target)
-        .map(|ch| ch.members.iter().cloned().collect())
-        .unwrap_or_default();
+    // Deliver edit
+    if is_channel {
+        // Channel: deliver to all members
+        let members: Vec<String> = state
+            .channels
+            .lock()
+            .get(target)
+            .map(|ch| ch.members.iter().cloned().collect())
+            .unwrap_or_default();
 
-    let tag_caps = state.cap_message_tags.lock();
-    let time_caps = state.cap_server_time.lock();
-    let echo_caps = state.cap_echo_message.lock();
-    let conns = state.connections.lock();
-    for sid in &members {
-        if sid == &conn.id && !echo_caps.contains(sid) {
-            continue;
-        }
-        if let Some(tx) = conns.get(sid) {
-            let line = if tag_caps.contains(sid) {
-                if time_caps.contains(sid) {
-                    &tagged_line_with_time
+        let tag_caps = state.cap_message_tags.lock();
+        let time_caps = state.cap_server_time.lock();
+        let echo_caps = state.cap_echo_message.lock();
+        let conns = state.connections.lock();
+        for sid in &members {
+            if sid == &conn.id && !echo_caps.contains(sid) {
+                continue;
+            }
+            if let Some(tx) = conns.get(sid) {
+                let line = if tag_caps.contains(sid) {
+                    if time_caps.contains(sid) {
+                        &tagged_line_with_time
+                    } else {
+                        &tagged_line
+                    }
                 } else {
-                    &tagged_line
+                    &plain_line
+                };
+                let _ = tx.try_send(line.clone());
+            }
+        }
+
+        // Broadcast to S2S peers
+        let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
+        let sig = full_tags.get("+freeq.at/sig").cloned();
+        s2s_broadcast(
+            state,
+            crate::s2s::S2sMessage::Privmsg {
+                event_id: s2s_next_event_id(state),
+                from: nick.to_string(),
+                target: target.to_string(),
+                text: new_text.to_string(),
+                origin,
+                msgid: Some(edit_msgid),
+                sig,
+            },
+        );
+    } else {
+        // DM: deliver to target nick and echo to sender
+        use super::routing::{RouteResult, relay_to_nick};
+        let from_nick = conn.nick.as_deref().unwrap_or("*").to_string();
+
+        match relay_to_nick(state, &from_nick, target, new_text, s2s_next_event_id(state)) {
+            RouteResult::Local(ref session) => {
+                // Find all sessions for target's DID (multi-device support)
+                let target_sessions: Vec<String> = {
+                    let target_did = state.session_dids.lock().get(session).cloned();
+                    if let Some(ref did) = target_did {
+                        state
+                            .did_sessions
+                            .lock()
+                            .get(did)
+                            .map(|s| s.iter().cloned().collect())
+                            .unwrap_or_else(|| vec![session.clone()])
+                    } else {
+                        vec![session.clone()]
+                    }
+                };
+
+                let conns = state.connections.lock();
+                // Deliver to all target sessions
+                for target_session in &target_sessions {
+                    let has_tags = state.cap_message_tags.lock().contains(target_session);
+                    let has_time = state.cap_server_time.lock().contains(target_session);
+                    let line = if has_tags {
+                        if has_time { &tagged_line_with_time } else { &tagged_line }
+                    } else {
+                        &plain_line
+                    };
+                    if let Some(tx) = conns.get(target_session) {
+                        let _ = tx.try_send(line.clone());
+                    }
                 }
-            } else {
-                &plain_line
-            };
-            let _ = tx.try_send(line.clone());
+
+                // Echo to sender if echo-message enabled
+                if state.cap_echo_message.lock().contains(&conn.id) {
+                    let has_tags = state.cap_message_tags.lock().contains(&conn.id);
+                    let has_time = state.cap_server_time.lock().contains(&conn.id);
+                    let line = if has_tags {
+                        if has_time { &tagged_line_with_time } else { &tagged_line }
+                    } else {
+                        &plain_line
+                    };
+                    if let Some(tx) = conns.get(&conn.id) {
+                        let _ = tx.try_send(line.clone());
+                    }
+                }
+            }
+            RouteResult::Relayed => {
+                // Target is on a federated peer — edit was relayed
+                // Echo to sender
+                if state.cap_echo_message.lock().contains(&conn.id) {
+                    let has_tags = state.cap_message_tags.lock().contains(&conn.id);
+                    let has_time = state.cap_server_time.lock().contains(&conn.id);
+                    let line = if has_tags {
+                        if has_time { &tagged_line_with_time } else { &tagged_line }
+                    } else {
+                        &plain_line
+                    };
+                    if let Some(tx) = state.connections.lock().get(&conn.id) {
+                        let _ = tx.try_send(line.clone());
+                    }
+                }
+            }
+            RouteResult::Unreachable => {
+                // Target not found — send error
+                let reply = Message::from_server(
+                    &state.server_name,
+                    irc::ERR_NOSUCHNICK,
+                    vec![&nick, target, "No such nick"],
+                );
+                if let Some(tx) = state.connections.lock().get(&conn.id) {
+                    let _ = tx.try_send(format!("{reply}\r\n"));
+                }
+            }
         }
     }
-
-    // Broadcast to S2S peers
-    let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
-    let sig = full_tags.get("+freeq.at/sig").cloned();
-    s2s_broadcast(
-        state,
-        crate::s2s::S2sMessage::Privmsg {
-            event_id: s2s_next_event_id(state),
-            from: nick.to_string(),
-            target: target.to_string(),
-            text: new_text.to_string(),
-            origin,
-            msgid: Some(edit_msgid),
-            sig,
-        },
-    );
 }
 
 // ── Message deletion ────────────────────────────────────────────────
 
 /// Handle a TAGMSG with +draft/delete=<msgid> tag.
-/// Verifies authorship, soft-deletes the message, broadcasts to channel.
+/// Verifies authorship, soft-deletes the message, broadcasts to channel or DM recipient.
 fn handle_delete(conn: &Connection, target: &str, original_msgid: &str, state: &Arc<SharedState>) {
     let hostmask = conn.hostmask();
     let nick = conn.nick_or_star();
-
-    // Only channel messages can be deleted (for now)
-    if !target.starts_with('#') && !target.starts_with('&') {
-        return;
-    }
+    let is_channel = target.starts_with('#') || target.starts_with('&');
 
     // Verify authorship
     let original = state.with_db(|db| db.get_message_by_msgid(target, original_msgid));
@@ -1191,8 +1265,8 @@ fn handle_delete(conn: &Connection, target: &str, original_msgid: &str, state: &
             let original_nick = row.sender.split('!').next().unwrap_or("");
             let current_nick = nick;
             if !original_nick.eq_ignore_ascii_case(current_nick) {
-                // Also allow ops to delete messages
-                let is_op = state
+                // Also allow ops to delete messages (channels only)
+                let is_op = is_channel && state
                     .channels
                     .lock()
                     .get(target)
@@ -1235,8 +1309,8 @@ fn handle_delete(conn: &Connection, target: &str, original_msgid: &str, state: &
     // Soft-delete in DB
     state.with_db(|db| db.soft_delete_message(target, original_msgid));
 
-    // Remove from in-memory history
-    {
+    // Remove from in-memory history (channels only)
+    if is_channel {
         let mut channels = state.channels.lock();
         if let Some(ch) = channels.get_mut(target) {
             ch.history
@@ -1257,24 +1331,58 @@ fn handle_delete(conn: &Connection, target: &str, original_msgid: &str, state: &
         format!("{tag_msg}\r\n")
     };
 
-    // Deliver to tag-capable channel members only (plain clients can't see deletes)
-    let members: Vec<String> = state
-        .channels
-        .lock()
-        .get(target)
-        .map(|ch| ch.members.iter().cloned().collect())
-        .unwrap_or_default();
+    // Deliver delete notification
+    if is_channel {
+        // Channel: deliver to tag-capable members only (plain clients can't see deletes)
+        let members: Vec<String> = state
+            .channels
+            .lock()
+            .get(target)
+            .map(|ch| ch.members.iter().cloned().collect())
+            .unwrap_or_default();
 
-    let tag_caps = state.cap_message_tags.lock();
-    let conns = state.connections.lock();
-    for sid in &members {
-        if sid == &conn.id {
-            continue; // Don't echo delete back to sender
+        let tag_caps = state.cap_message_tags.lock();
+        let conns = state.connections.lock();
+        for sid in &members {
+            if sid == &conn.id {
+                continue; // Don't echo delete back to sender
+            }
+            if tag_caps.contains(sid)
+                && let Some(tx) = conns.get(sid)
+            {
+                let _ = tx.try_send(tagged_line.clone());
+            }
         }
-        if tag_caps.contains(sid)
-            && let Some(tx) = conns.get(sid)
-        {
-            let _ = tx.try_send(tagged_line.clone());
+    } else {
+        // DM: deliver to target nick
+        // Note: We don't use relay_to_nick here since it sends PRIVMSG, but we need TAGMSG.
+        // For DMs, we handle delivery manually here.
+        if let Some(session) = state.nick_to_session.lock().get_session(target).map(|s| s.to_string()) {
+            // Find all sessions for target's DID (multi-device support)
+            let target_sessions: Vec<String> = {
+                let target_did = state.session_dids.lock().get(&session).cloned();
+                if let Some(ref did) = target_did {
+                    state
+                        .did_sessions
+                        .lock()
+                        .get(did)
+                        .map(|s| s.iter().cloned().collect())
+                        .unwrap_or_else(|| vec![session.clone()])
+                } else {
+                    vec![session.clone()]
+                }
+            };
+
+            let tag_caps = state.cap_message_tags.lock();
+            let conns = state.connections.lock();
+            for target_session in &target_sessions {
+                if tag_caps.contains(target_session) {
+                    if let Some(tx) = conns.get(target_session) {
+                        let _ = tx.try_send(tagged_line.clone());
+                    }
+                }
+            }
         }
+        // Note: For federated DM deletes, we'd need S2S support — not implemented yet
     }
 }
