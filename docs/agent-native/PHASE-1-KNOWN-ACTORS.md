@@ -40,106 +40,186 @@ Before anything else, agents need DIDs. Humans get theirs from AT Protocol (Blue
 
 **New crate**: `freeq-bot-id/`
 
-A tiny CLI (~150 lines of Rust) that generates bot identities:
+A CLI that generates bot identities **cryptographically bound to their creator**. The creator must authenticate with their own AT Protocol identity to sign a delegation certificate that's embedded in the bot's DID document. This proves the bot was created by a specific human — not just claimed.
 
 ```bash
-# With a domain — produces did:web
+# Step 1: Creator logs in once (caches session)
+freeq-bot-id login --handle chad.bsky.social
+#   🔑 Authenticated as did:plc:4qsyxmnsblo4luuycm3572bq
+#   Session cached at ~/.freeq/creator-session.json
+
+# Step 2: Create a bot identity (requires creator session)
 freeq-bot-id create --name factory --domain freeq.at
-#   ✅ Private key: ~/.freeq/bots/factory/key.ed25519
-#   ✅ DID document: ./factory/did.json
+#   ✅ Bot keypair generated
+#   ✅ Creator delegation signed by did:plc:4qsyxmnsblo4luuycm3572bq
 #   ✅ DID: did:web:freeq.at:bots:factory
+#   ✅ Private key: ~/.freeq/bots/factory/key.ed25519
+#   ✅ DID document: ./factory/did.json (includes delegation proof)
 #
 #   Serve did.json at: https://freeq.at/bots/factory/did.json
 #   Connect with: freeq-bots --did did:web:freeq.at:bots:factory --key ~/.freeq/bots/factory/key.ed25519
 
-# Without a domain — produces did:key (zero infrastructure)
-freeq-bot-id create --name factory
-#   ✅ Private key: ~/.freeq/bots/factory/key.ed25519
+# Without a domain — produces did:key + delegation certificate as separate file
+freeq-bot-id create --name worker
 #   ✅ DID: did:key:z6MkrTQ...
+#   ✅ Private key: ~/.freeq/bots/worker/key.ed25519
+#   ✅ Delegation cert: ~/.freeq/bots/worker/delegation.json
 #
-#   Connect with: freeq-bots --did did:key:z6MkrTQ... --key ~/.freeq/bots/factory/key.ed25519
+#   Connect with: freeq-bots --did did:key:z6MkrTQ... --key ~/.freeq/bots/worker/key.ed25519
 
 # Inspect an existing identity
 freeq-bot-id info --name factory
 #   DID: did:web:freeq.at:bots:factory
 #   Public key: z6MkrTQ...
+#   Creator: did:plc:4qsyxmnsblo4luuycm3572bq (chad.bsky.social)
 #   Created: 2026-03-11
-#   Key file: ~/.freeq/bots/factory/key.ed25519
+#   Delegation: ✅ valid (signed by creator)
 
-# Rotate key (generates new keypair, updates did.json, prints old key for revocation)
+# Rotate key (creator must re-sign)
 freeq-bot-id rotate --name factory
+
+# Revoke a bot identity
+freeq-bot-id revoke --name factory
 ```
+
+### Delegation Certificate
+
+The creator's signature binds the bot's identity to theirs. This is a small signed JSON object:
+
+```json
+{
+  "type": "FreeqBotDelegation/v1",
+  "bot_did": "did:web:freeq.at:bots:factory",
+  "bot_public_key": "z6MkrTQ...",
+  "creator_did": "did:plc:4qsyxmnsblo4luuycm3572bq",
+  "created_at": "2026-03-11T20:00:00Z",
+  "revocation_authority": "did:plc:4qsyxmnsblo4luuycm3572bq",
+  "signature": "<creator's ed25519 signature over the above fields>"
+}
+```
+
+The creator signs this with the signing key from their AT Protocol session. The signature is verifiable by anyone who can resolve the creator's DID.
+
+### How the Creator Signs
+
+The `login` step authenticates with the creator's PDS via AT Protocol OAuth (same flow as the TUI client). This gives us a DPoP-bound session. We use the session to:
+
+1. Resolve the creator's DID document → get their signing/auth key.
+2. Sign the delegation certificate with the session's DPoP key (which is bound to the creator's DID).
+
+Alternatively, for simplicity, `freeq-bot-id` can generate a local ed25519 keypair for the creator, register it via the `MSGSIG` mechanism we already have (the same way clients register session signing keys), and use that to sign the delegation. The server can then verify: "this delegation was signed by a key that was authenticated as `did:plc:xxx`."
+
+### Where the Delegation Lives
+
+**For `did:web`**: embedded directly in the DID document as a `service` entry:
+
+```json
+{
+  "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/multikey/v1"],
+  "id": "did:web:freeq.at:bots:factory",
+  "authentication": [{
+    "id": "did:web:freeq.at:bots:factory#key-1",
+    "type": "Multikey",
+    "controller": "did:web:freeq.at:bots:factory",
+    "publicKeyMultibase": "z6MkrTQ..."
+  }],
+  "service": [{
+    "id": "did:web:freeq.at:bots:factory#freeq-delegation",
+    "type": "FreeqBotDelegation",
+    "serviceEndpoint": {
+      "creator_did": "did:plc:4qsyxmnsblo4luuycm3572bq",
+      "created_at": "2026-03-11T20:00:00Z",
+      "revocation_authority": "did:plc:4qsyxmnsblo4luuycm3572bq",
+      "signature": "<creator's signature>"
+    }
+  }]
+}
+```
+
+Anyone resolving the bot's DID can verify: "this bot's identity was delegated by `did:plc:4qsyxmnsblo4luuycm3572bq`, and here's the cryptographic proof."
+
+**For `did:key`**: stored as a separate `delegation.json` file. The bot submits it during SASL auth (new step after challenge-response), or via the `PROVENANCE` command. The server verifies the creator's signature and stores it.
+
+### Server Verification
+
+When a bot authenticates with `did:web` or `did:key`, the server:
+
+1. Resolves the DID document / receives the delegation cert.
+2. Extracts the `FreeqBotDelegation` service entry.
+3. Resolves the **creator's** DID (`did:plc:4qsyxmnsblo4luuycm3572bq`).
+4. Verifies the delegation signature against the creator's public key.
+5. If valid: binds the session to both the bot's DID and the verified creator DID.
+6. If no delegation or invalid signature: the bot can still connect, but `creator_did` in provenance is unverified (shown as "⚠ unverified" in the UI).
+
+This means the provenance claim "created by chad" is **cryptographically proven**, not self-asserted.
 
 **Implementation**:
 
 ```rust
-// freeq-bot-id/src/main.rs
-use clap::{Parser, Subcommand};
-use ed25519_dalek::{SigningKey, VerifyingKey};
-use rand::rngs::OsRng;
-
-#[derive(Parser)]
-struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    Create {
-        #[arg(long)]
-        name: String,
-        #[arg(long)]
-        domain: Option<String>,
-    },
-    Info {
-        #[arg(long)]
-        name: String,
-    },
-    Rotate {
-        #[arg(long)]
-        name: String,
-    },
-}
-
-fn create(name: &str, domain: Option<&str>) -> Result<()> {
+fn create(name: &str, domain: Option<&str>, creator_session: &CreatorSession) -> Result<()> {
+    // Generate bot keypair
     let signing_key = SigningKey::generate(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
     let multibase_pub = multibase_encode_ed25519(&verifying_key);
 
+    let bot_did = if let Some(domain) = domain {
+        format!("did:web:{}:bots:{}", domain, name)
+    } else {
+        format!("did:key:{}", multibase_pub)
+    };
+
+    // Create delegation certificate
+    let delegation = json!({
+        "type": "FreeqBotDelegation/v1",
+        "bot_did": bot_did,
+        "bot_public_key": multibase_pub,
+        "creator_did": creator_session.did,
+        "created_at": chrono::Utc::now().to_rfc3339(),
+        "revocation_authority": creator_session.did,
+    });
+
+    // Sign with creator's key
+    let canonical = jcs_canonicalize(&delegation)?;
+    let signature = creator_session.signing_key.sign(canonical.as_bytes());
+    let delegation_signed = {
+        let mut d = delegation.clone();
+        d["signature"] = json!(base64url_encode(&signature.to_bytes()));
+        d
+    };
+
+    // Save bot key
     let key_dir = dirs::home_dir().unwrap().join(".freeq/bots").join(name);
     std::fs::create_dir_all(&key_dir)?;
     std::fs::write(key_dir.join("key.ed25519"), signing_key.to_bytes())?;
 
     if let Some(domain) = domain {
-        // did:web
-        let did = format!("did:web:{}:bots:{}", domain, name);
-        let did_doc = serde_json::json!({
+        // Build DID document with embedded delegation
+        let did_doc = json!({
             "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/multikey/v1"],
-            "id": did,
+            "id": bot_did,
             "authentication": [{
-                "id": format!("{}#key-1", did),
+                "id": format!("{}#key-1", bot_did),
                 "type": "Multikey",
-                "controller": did,
+                "controller": bot_did,
                 "publicKeyMultibase": multibase_pub,
+            }],
+            "service": [{
+                "id": format!("{}#freeq-delegation", bot_did),
+                "type": "FreeqBotDelegation",
+                "serviceEndpoint": delegation_signed,
             }],
         });
         let doc_dir = PathBuf::from(name);
         std::fs::create_dir_all(&doc_dir)?;
         std::fs::write(doc_dir.join("did.json"), serde_json::to_string_pretty(&did_doc)?)?;
-
-        println!("✅ DID: {did}");
-        println!("✅ Private key: {}", key_dir.join("key.ed25519").display());
-        println!("✅ DID document: {}/did.json", doc_dir.display());
-        println!("\n   Serve did.json at: https://{}/bots/{}/did.json", domain, name);
     } else {
-        // did:key
-        let did = format!("did:key:{}", multibase_pub);
-        println!("✅ DID: {did}");
-        println!("✅ Private key: {}", key_dir.join("key.ed25519").display());
+        // Save delegation as separate file for did:key
+        std::fs::write(key_dir.join("delegation.json"),
+            serde_json::to_string_pretty(&delegation_signed)?)?;
     }
 
-    println!("\n   Connect with: freeq-bots --did <DID> --key {}", key_dir.join("key.ed25519").display());
+    println!("✅ DID: {bot_did}");
+    println!("✅ Creator: {} (delegation signed)", creator_session.did);
     Ok(())
 }
 ```
