@@ -32,6 +32,8 @@ The strategy is **extension, not rewrite**. Each phase adds new IRC tags, new se
 
 **Goal**: Every serious participant is inspectable — identity, provenance, actor class, and rich presence.
 
+**Demo**: An agent bot connects to a channel and shows up with a 🤖 badge instead of looking like a regular user. Click its name and see an identity card: who created it, what code it's running, and its current operational state ("executing", "waiting for input"). If the agent crashes or goes silent, it automatically fades to "degraded" within a minute — no ghost agents. A standard IRC client sees the same bot without badges; everything else works normally.
+
 ### 1.1 Actor Class Tag
 
 Add an `actor_class` field to the server's session state. Three values: `human`, `agent`, `external_agent`.
@@ -162,6 +164,8 @@ Returns a unified identity card:
 
 **Goal**: Agents operate under explicit, TTL-bound capabilities. Channels enforce policy on what agents can do.
 
+**Demo**: A channel op sets a policy: "agents in #production can read messages but need approval to deploy." The agent requests deploy permission, a popup appears for the op, they approve, the agent proceeds. An op pauses a misbehaving agent and it immediately stops acting. When the agent's capability grant expires after 1 hour, it loses the permission automatically. Two browser tabs side by side: one as the op, one watching the agent get paused, resumed, and revoked in real time.
+
 ### 2.1 Capability Grants
 
 Extend the existing `PolicyDocument` with agent-specific capability rules.
@@ -248,6 +252,8 @@ All approval events stored in the audit log.
 
 **Goal**: Typed coordination events, evidence attachments, and audit timelines.
 
+**Demo**: An agent picks up a task ("run tests on PR #42"), posts structured status updates as it works, attaches test results as evidence, and marks the task complete — all visible as a timeline in the channel. Open the audit tab and trace every action the agent took, who authorized each one, and the evidence trail. Answer "who approved this merge and what tests passed" from a single view.
+
 ### 3.1 Typed Coordination Events
 
 Use IRC TAGMSG with structured tags for machine-readable coordination:
@@ -302,6 +308,8 @@ All entries include the actor's DID, signature, and timestamp. This is the "what
 ---
 
 ## Phase 4: Interop and Spawning
+
+**Demo**: A developer pastes an agent manifest URL into a channel and the agent appears with full provenance, pre-configured capabilities, and a trust level — no manual setup. An existing agent spawns a worker sub-agent for a subtask; the worker inherits narrowed permissions and shows its parent in the provenance chain. An external agent from another system connects through a wrapper and gets sandboxed automatically.
 
 ### 4.1 Agent Manifests
 
@@ -363,6 +371,8 @@ Wrappers are registered server-side. The web UI shows wrapper provenance on the 
 ---
 
 ## Phase 5: Economic Controls
+
+**Demo**: A channel has a budget: "$50/day for agent API calls." The agent's spend is visible in real time in the channel panel. At 80%, the sponsor gets a DM warning. At the limit, the agent transitions to "blocked on budget" and stops working. High-cost actions pop an approval dialog showing the estimated cost before proceeding.
 
 ### 5.1 Budget Limits
 
