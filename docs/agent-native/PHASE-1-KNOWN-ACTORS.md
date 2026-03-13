@@ -32,6 +32,233 @@ pub fn is_addressed_to_me(text: &str, my_nick: &str) -> Option<&str> {
 
 ---
 
+## 0. Bot Identity: `did:web`, `did:key`, and the `freeq-bot-id` Tool
+
+Before anything else, agents need DIDs. Humans get theirs from AT Protocol (Bluesky accounts), but requiring bot operators to create a Bluesky account and go through phone verification is a non-starter. Agents need a self-sovereign identity path.
+
+### `freeq-bot-id` CLI Tool
+
+**New crate**: `freeq-bot-id/`
+
+A tiny CLI (~150 lines of Rust) that generates bot identities:
+
+```bash
+# With a domain — produces did:web
+freeq-bot-id create --name factory --domain freeq.at
+#   ✅ Private key: ~/.freeq/bots/factory/key.ed25519
+#   ✅ DID document: ./factory/did.json
+#   ✅ DID: did:web:freeq.at:bots:factory
+#
+#   Serve did.json at: https://freeq.at/bots/factory/did.json
+#   Connect with: freeq-bots --did did:web:freeq.at:bots:factory --key ~/.freeq/bots/factory/key.ed25519
+
+# Without a domain — produces did:key (zero infrastructure)
+freeq-bot-id create --name factory
+#   ✅ Private key: ~/.freeq/bots/factory/key.ed25519
+#   ✅ DID: did:key:z6MkrTQ...
+#
+#   Connect with: freeq-bots --did did:key:z6MkrTQ... --key ~/.freeq/bots/factory/key.ed25519
+
+# Inspect an existing identity
+freeq-bot-id info --name factory
+#   DID: did:web:freeq.at:bots:factory
+#   Public key: z6MkrTQ...
+#   Created: 2026-03-11
+#   Key file: ~/.freeq/bots/factory/key.ed25519
+
+# Rotate key (generates new keypair, updates did.json, prints old key for revocation)
+freeq-bot-id rotate --name factory
+```
+
+**Implementation**:
+
+```rust
+// freeq-bot-id/src/main.rs
+use clap::{Parser, Subcommand};
+use ed25519_dalek::{SigningKey, VerifyingKey};
+use rand::rngs::OsRng;
+
+#[derive(Parser)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    Create {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        domain: Option<String>,
+    },
+    Info {
+        #[arg(long)]
+        name: String,
+    },
+    Rotate {
+        #[arg(long)]
+        name: String,
+    },
+}
+
+fn create(name: &str, domain: Option<&str>) -> Result<()> {
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let verifying_key = signing_key.verifying_key();
+    let multibase_pub = multibase_encode_ed25519(&verifying_key);
+
+    let key_dir = dirs::home_dir().unwrap().join(".freeq/bots").join(name);
+    std::fs::create_dir_all(&key_dir)?;
+    std::fs::write(key_dir.join("key.ed25519"), signing_key.to_bytes())?;
+
+    if let Some(domain) = domain {
+        // did:web
+        let did = format!("did:web:{}:bots:{}", domain, name);
+        let did_doc = serde_json::json!({
+            "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/multikey/v1"],
+            "id": did,
+            "authentication": [{
+                "id": format!("{}#key-1", did),
+                "type": "Multikey",
+                "controller": did,
+                "publicKeyMultibase": multibase_pub,
+            }],
+        });
+        let doc_dir = PathBuf::from(name);
+        std::fs::create_dir_all(&doc_dir)?;
+        std::fs::write(doc_dir.join("did.json"), serde_json::to_string_pretty(&did_doc)?)?;
+
+        println!("✅ DID: {did}");
+        println!("✅ Private key: {}", key_dir.join("key.ed25519").display());
+        println!("✅ DID document: {}/did.json", doc_dir.display());
+        println!("\n   Serve did.json at: https://{}/bots/{}/did.json", domain, name);
+    } else {
+        // did:key
+        let did = format!("did:key:{}", multibase_pub);
+        println!("✅ DID: {did}");
+        println!("✅ Private key: {}", key_dir.join("key.ed25519").display());
+    }
+
+    println!("\n   Connect with: freeq-bots --did <DID> --key {}", key_dir.join("key.ed25519").display());
+    Ok(())
+}
+```
+
+### DID Document Format
+
+The generated `did.json` for `did:web:freeq.at:bots:factory`:
+
+```json
+{
+  "@context": [
+    "https://www.w3.org/ns/did/v1",
+    "https://w3id.org/security/multikey/v1"
+  ],
+  "id": "did:web:freeq.at:bots:factory",
+  "authentication": [
+    {
+      "id": "did:web:freeq.at:bots:factory#key-1",
+      "type": "Multikey",
+      "controller": "did:web:freeq.at:bots:factory",
+      "publicKeyMultibase": "z6MkrTQ..."
+    }
+  ]
+}
+```
+
+### Server: `did:web` Resolution
+
+**File**: `freeq-server/src/connection/sasl.rs` (or wherever DID resolution lives)
+
+Add `did:web` resolver alongside existing `did:plc` resolution:
+
+```rust
+async fn resolve_did(did: &str) -> Result<DidDocument> {
+    if did.starts_with("did:plc:") {
+        // Existing AT Protocol resolution via plc.directory
+        resolve_did_plc(did).await
+    } else if did.starts_with("did:web:") {
+        resolve_did_web(did).await
+    } else if did.starts_with("did:key:") {
+        resolve_did_key(did)
+    } else {
+        Err(anyhow!("Unsupported DID method: {}", did))
+    }
+}
+
+async fn resolve_did_web(did: &str) -> Result<DidDocument> {
+    // did:web:freeq.at:bots:factory → https://freeq.at/bots/factory/did.json
+    // did:web:example.com → https://example.com/.well-known/did.json
+    let parts: Vec<&str> = did.strip_prefix("did:web:").unwrap().split(':').collect();
+    let domain = parts[0].replace("%3A", ":");  // port encoding
+    let path = if parts.len() > 1 {
+        format!("/{}/did.json", parts[1..].join("/"))
+    } else {
+        "/.well-known/did.json".to_string()
+    };
+    let url = format!("https://{}{}", domain, path);
+
+    let doc: DidDocument = reqwest::get(&url).await?.json().await?;
+    Ok(doc)
+}
+
+fn resolve_did_key(did: &str) -> Result<DidDocument> {
+    // did:key:z6Mk... → extract public key from the multibase string
+    let multibase = did.strip_prefix("did:key:").unwrap();
+    let public_key = decode_multibase_ed25519(multibase)?;
+
+    // Synthesize a DID document from the key
+    Ok(DidDocument {
+        id: did.to_string(),
+        authentication: vec![VerificationMethod {
+            id: format!("{}#key-1", did),
+            key_type: "Multikey".to_string(),
+            controller: did.to_string(),
+            public_key_multibase: Some(multibase.to_string()),
+        }],
+    })
+}
+```
+
+This is ~60 lines total for both resolvers. The SASL challenge-response flow stays identical — server sends challenge, bot signs with private key, server verifies against the public key from the resolved DID document.
+
+### Server: `did:key` SASL Flow
+
+For `did:key`, the SASL `AUTHENTICATE` message carries the DID directly. The server:
+1. Extracts the public key from the DID string (no network fetch needed).
+2. Sends a challenge.
+3. Verifies the signature.
+4. Binds the session to the `did:key:...` identity.
+
+This means `did:key` bots can authenticate with zero external dependencies — no PDS, no domain, no HTTP fetch. Just a keypair.
+
+### Hosting DID Documents for Our Bots
+
+**File**: `freeq-site/app.py`
+
+Add a static route for our own bots' DID documents:
+
+```python
+@app.route('/bots/<name>/did.json')
+def bot_did(name):
+    path = os.path.join('bots', name, 'did.json')
+    if os.path.exists(path):
+        return send_file(path, mimetype='application/json')
+    abort(404)
+```
+
+Then `did:web:freeq.at:bots:factory` resolves to `https://freeq.at/bots/factory/did.json`.
+
+### Summary of Identity Options
+
+| Method | Infrastructure Needed | Human-Readable | Suitable For |
+|---|---|---|---|
+| `did:plc` (Bluesky) | PDS account | Via handle | Humans, bots with social presence |
+| `did:web` | Domain + HTTPS | Yes (`did:web:freeq.at:bots:factory`) | Production bots, org-operated agents |
+| `did:key` | Nothing | No | Ephemeral bots, sub-agents, dev/testing |
+
+---
+
 ## 1. Actor Class Registration
 
 ### Server Changes

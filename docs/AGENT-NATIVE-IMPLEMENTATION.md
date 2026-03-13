@@ -12,7 +12,7 @@ Before adding anything, it's worth recognizing how much of the foundation alread
 
 | Vision Concept | Existing Implementation |
 |---|---|
-| Cryptographic identity | DID-based SASL auth (AT Protocol), ed25519 session keys |
+| Cryptographic identity | DID-based SASL auth (AT Protocol `did:plc`, plus `did:web` and `did:key` for agents), ed25519 session keys |
 | Identity inspection | WHOIS shows DID, handle, origin server; profile cards in web/iOS |
 | Message signing | Per-session ed25519 signing (`+freeq.at/sig`), server verification |
 | Channel policy | Full policy engine: `PolicyDocument`, requirements, `MembershipAttestation` |
@@ -545,13 +545,15 @@ All new SDK methods get UniFFI bindings for iOS/Android/Python.
 ## Implementation Order
 
 ### Phase 1 Sprint (2–3 weeks)
-1. `actor_class` field + AGENT command + extended-join tag
-2. `ProvenanceDeclaration` type + PROVENANCE command + storage
-3. `PRESENCE` command with structured states
-4. `HEARTBEAT` command with TTL enforcement
-5. Identity card REST endpoint
-6. Web client: agent badges, presence states, identity card
-7. SDK: `register_agent()`, `set_presence()`, `start_heartbeat()`
+1. `freeq-bot-id` CLI tool: generate ed25519 keypair → `did:web` or `did:key`
+2. Server: `did:web` + `did:key` DID resolution in SASL flow
+3. `actor_class` field + AGENT command + extended-join tag
+4. `ProvenanceDeclaration` type + PROVENANCE command + storage
+5. `PRESENCE` command with structured states
+6. `HEARTBEAT` command with TTL enforcement
+7. Identity card REST endpoint
+8. Web client: agent badges, presence states, identity card
+9. SDK: `register_agent()`, `set_presence()`, `start_heartbeat()`
 
 ### Phase 2 Sprint (2–3 weeks)
 1. `AgentCapability` type + policy integration

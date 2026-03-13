@@ -17,7 +17,7 @@ This directory contains the detailed implementation plan for making Freeq an age
 
 Each phase builds on what already works:
 
-- **DID-based SASL auth** → agent identity
+- **DID-based SASL auth** → agent identity (`did:plc` for humans, `did:web` and `did:key` for bots via `freeq-bot-id` tool)
 - **ed25519 message signing** → action attestation
 - **Policy engine** (PolicyDocument, requirements, attestations) → capability grants
 - **GitHub/Bluesky verifiers** → provenance verification
