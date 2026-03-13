@@ -526,7 +526,7 @@ Spawned agents are visible on federated servers. When a child agent sends a mess
    Start the auditor bot with `--manifest manifests/auditor.freeq.toml`. It connects, auto-registers as agent, auto-submits provenance, auto-requests capabilities, starts heartbeating. Zero manual setup.
 
 2. **Delegated spawn**:
-   - Type `/factory build a landing page` in `#factory`.
+   - Say `factory: build a landing page` in `#factory`.
    - During the testing phase, "qa-worker" appears in the member list.
    - Click its name → identity card shows "Parent: factory, TTL: 5 minutes, Task: 01JQXYZ".
    - Tests finish, qa-worker disappears.

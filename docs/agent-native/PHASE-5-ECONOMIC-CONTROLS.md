@@ -402,7 +402,7 @@ Budget policies are part of the channel's `PolicyDocument` and propagate via exi
 
 ### Steps
 
-1. **Build a project**: `/factory build a weather dashboard`.
+1. **Build a project**: `factory: build a weather dashboard`.
 
 2. **Watch spend accumulate**: Budget gauge fills up as LLM calls happen. Each message from the bot has a small spend indicator: "💰 $0.15".
 
@@ -410,7 +410,7 @@ Budget policies are part of the channel's `PolicyDocument` and propagate via exi
 
 4. **Warning at 80%**: When spend hits $40, toast notification appears. Chad gets a DM. irssi shows "⚠ Budget 80% used ($40.00 / $50.00)".
 
-5. **Try another build**: `/factory build a blog`. Bot checks budget, sees $8.50 remaining, warns "⚠ Low budget: $8.50 remaining. Build may be interrupted."
+5. **Try another build**: `factory: build a blog`. Bot checks budget, sees $8.50 remaining, warns "⚠ Low budget: $8.50 remaining. Build may be interrupted."
 
 6. **Budget exceeded mid-build**: Bot transitions to "blocked on budget". Presence shows 💰. Message in channel: "🛑 factory blocked: daily budget exceeded ($50.20 / $50.00)".
 

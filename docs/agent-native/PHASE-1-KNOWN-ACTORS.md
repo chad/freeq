@@ -2,7 +2,33 @@
 
 **Goal**: Every serious participant is inspectable — identity, provenance, actor class, and rich presence.
 
-**Demo**: Start the factory bot and a human user in `#factory`. The bot shows up with a 🤖 badge. Click its name in the web client to see an identity card: "Created by did:plc:xxx, running freeq-bots v0.1, source github.com/chad/freeq, current state: idle." Type `/factory build a landing page` — the identity card live-updates to "executing: specifying." If you kill the bot process, it transitions to "degraded" within 60 seconds and then disappears. A user on irssi sees the bot join and chat normally with no disruption.
+**Demo**: Start the factory bot and a human user in `#factory`. The bot shows up with a 🤖 badge. Click its name in the web client to see an identity card: "Created by did:plc:xxx, running freeq-bots v0.1, source github.com/chad/freeq, current state: idle." Say `factory: build a landing page` — the identity card live-updates to "executing: specifying." If you kill the bot process, it transitions to "degraded" within 60 seconds and then disappears. A user on irssi sees the bot join and chat normally with no disruption.
+
+---
+
+## Design Note: Conversational Addressing, Not Slash Commands
+
+Agents are addressed conversationally, not via slash commands. Users talk to agents by name:
+
+```
+factory: build a landing page for a coffee shop
+@factory what's the status?
+factory, pause
+```
+
+**Why not slash commands?** Slash commands (`/factory build ...`) only work in our web client. On irssi, weechat, or any standard IRC client, `/factory` tries to execute a local IRC command called `FACTORY`, which doesn't exist. Conversational addressing works everywhere because it's just a regular PRIVMSG.
+
+This also matches the vision: agents are first-class participants in a shared room, not hidden services invoked with magic prefixes. Everyone sees the request and the response as a natural conversation.
+
+The bot matches messages addressed to its nick (prefix `nick:`, `nick,`, or `@nick`). The SDK provides a helper:
+
+```rust
+/// Check if a message is addressed to this agent.
+pub fn is_addressed_to_me(text: &str, my_nick: &str) -> Option<&str> {
+    // Matches: "factory: build ...", "factory, build ...", "@factory build ..."
+    // Returns the text after the address prefix, or None.
+}
+```
 
 ---
 
@@ -498,7 +524,7 @@ Sent on agent registration, presence change, and heartbeat. Remote servers store
    - Click the bot's name → identity card appears with provenance, presence state, heartbeat health.
 
 4. **Trigger bot activity**:
-   - Type `/factory build a landing page for a coffee shop` in `#factory`.
+   - Say `factory: build a landing page for a coffee shop` in `#factory`.
    - Watch the identity card update: state goes from "idle" → "executing: specifying requirements" → "executing: designing" → etc.
    - irssi user sees the same chat messages, just without the visual presence updates.
 

@@ -2,7 +2,7 @@
 
 **Goal**: Typed coordination events, evidence attachments, and audit timelines that make agent work inspectable and traceable.
 
-**Demo**: A user says `/factory build a todo app` in `#factory`. The factory bot creates a task, posts structured updates as each agent role works (product → architect → builder → reviewer → QA → deploy), attaches evidence (architecture doc, test results, deploy URL) at each stage, and completes the task. The web client renders this as a visual timeline with expandable evidence. An op opens the audit tab and filters by the factory bot to see every action it took, every approval it received, and every artifact it produced — all cryptographically signed. The same session viewed from irssi shows readable text summaries of each step.
+**Demo**: A user says `factory: build a todo app` in `#factory`. The factory bot creates a task, posts structured updates as each agent role works (product → architect → builder → reviewer → QA → deploy), attaches evidence (architecture doc, test results, deploy URL) at each stage, and completes the task. The web client renders this as a visual timeline with expandable evidence. An op opens the audit tab and filters by the factory bot to see every action it took, every approval it received, and every artifact it produced — all cryptographically signed. The same session viewed from irssi shows readable text summaries of each step.
 
 ---
 
@@ -203,7 +203,7 @@ Each factory phase maps to a task update:
 
 | Factory Phase | Event Sequence |
 |---|---|
-| `/factory build <spec>` | `task_request` → human-readable "📋 New task: ..." |
+| `factory: build <spec>` | `task_request` → human-readable "📋 New task: ..." |
 | Specifying | `task_update(phase=specifying)` |
 | Designing | `task_update(phase=designing)` + `evidence_attach(type=architecture)` |
 | Building | `task_update(phase=building)` |
@@ -517,7 +517,7 @@ Receiving server stores the event and relays the TAGMSG + PRIVMSG to local chann
    - Factory bot (authenticated agent)
    - irssi (guest)
 
-2. **Trigger a build**: `/factory build a todo app with user accounts`
+2. **Trigger a build**: `factory: build a todo app with user accounts`
 
 3. **Watch the factory work** in real time:
    - **Web client**: messages appear as structured event cards with phase indicators, progress, and evidence attachments. The task timeline widget shows progress through each phase.

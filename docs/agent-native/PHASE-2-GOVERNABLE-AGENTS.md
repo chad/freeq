@@ -551,7 +551,7 @@ S2sMessage::ApprovalResult {
 
 1. **Bot joins #production** — web client shows it with capabilities listed: "post_message ✅, deploy ⏳ (requires approval)".
 
-2. **User triggers a build**: `/factory build a landing page for a coffee shop`.
+2. **User triggers a build**: `factory: build a landing page for a coffee shop`.
 
 3. **Bot works through phases** — presence updates visible in web client identity card.
 
