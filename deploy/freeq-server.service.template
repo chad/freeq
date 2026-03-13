@@ -1,0 +1,32 @@
+[Unit]
+Description=FreeQ IRC Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{USER}}
+Group={{USER}}
+WorkingDirectory={{REPO_DIR}}
+ExecStart={{REPO_DIR}}/target/release/freeq-server \
+    --listen-addr 0.0.0.0:6667 \
+    --tls-listen-addr 0.0.0.0:6697 \
+    --tls-cert /etc/letsencrypt/live/{{DOMAIN}}/fullchain.pem \
+    --tls-key /etc/letsencrypt/live/{{DOMAIN}}/privkey.pem \
+    --db-path /var/lib/freeq/freeq.db \
+    --web-addr 127.0.0.1:8080 \
+    --web-static-dir {{REPO_DIR}}/freeq-app/dist \
+    --server-name {{DOMAIN}} \
+    --motd "Welcome to freeq -- IRC with AT Protocol identity. https://freeq.at"
+EnvironmentFile=-/etc/freeq/secrets
+Restart=on-failure
+RestartSec=5
+
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/freeq
+ReadOnlyPaths=/etc/letsencrypt
+
+[Install]
+WantedBy=multi-user.target

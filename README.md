@@ -535,6 +535,10 @@ Without `--db-path`, the server runs entirely in-memory.
 The database uses SQLite with WAL mode for good concurrent read performance.
 Persistence failures are logged but do not crash the server.
 
+## Deployment
+
+See [deploy/README.md](deploy/README.md) for example VPS setup and deployment instructions.
+
 ## Tests
 
 ```sh

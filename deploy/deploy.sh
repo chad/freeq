@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
+# Deploy freeq updates (run after setup.sh)
 set -euo pipefail
 
-cd /home/chad/src/freeq
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_DIR"
 
 echo "==> Pulling latest..."
 git pull --ff-only
@@ -13,11 +15,7 @@ echo "==> Building web app..."
 cd freeq-app
 npm ci --silent
 npm run build
-cd ..
-
-echo "==> Installing service file..."
-sudo cp deploy/freeq-server.service /etc/systemd/system/freeq-server.service
-sudo systemctl daemon-reload
+cd "$REPO_DIR"
 
 echo "==> Restarting service..."
 sudo systemctl restart freeq-server
