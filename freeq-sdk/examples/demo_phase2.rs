@@ -39,14 +39,17 @@ enum OwnerCmd {
 
 /// Wait for the owner to say "next" or "quit" in the channel.
 /// Returns None on timeout/disconnect.
-async fn wait_owner(rx: &mut mpsc::Receiver<Event>, ch: &str, secs: u64) -> Option<OwnerCmd> {
+async fn wait_owner(rx: &mut mpsc::Receiver<Event>, ch: &str, secs: u64, handle: &ClientHandle) -> Option<OwnerCmd> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
+    let mut last_hb = tokio::time::Instant::now();
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
             return None;
         }
-        match timeout(remaining, rx.recv()).await {
+        let hb_remaining = Duration::from_secs(25).saturating_sub(last_hb.elapsed());
+        let wait = remaining.min(hb_remaining);
+        match timeout(wait, rx.recv()).await {
             Ok(Some(Event::Message {
                 from, target, text, tags,
             })) => {
@@ -57,7 +60,6 @@ async fn wait_owner(rx: &mut mpsc::Receiver<Event>, ch: &str, secs: u64) -> Opti
                     continue;
                 }
                 let w = text.trim().to_lowercase();
-                // Strip bot prefix like "factory: next"
                 let w = w
                     .strip_prefix("factory:")
                     .or_else(|| w.strip_prefix("factory,"))
@@ -78,7 +80,12 @@ async fn wait_owner(rx: &mut mpsc::Receiver<Event>, ch: &str, secs: u64) -> Opti
             }
             Ok(Some(_)) => continue,
             Ok(None) => return Some(OwnerCmd::Quit),
-            Err(_) => return None, // timeout
+            Err(_) => {
+                if last_hb.elapsed() >= Duration::from_secs(25) {
+                    let _ = handle.raw("HEARTBEAT 60").await;
+                    last_hb = tokio::time::Instant::now();
+                }
+            }
         }
     }
 }
@@ -94,7 +101,7 @@ async fn say(h: &ClientHandle, ch: &str, lines: &[&str]) {
 /// Prompt and wait. Returns false if user said "quit".
 async fn prompt(h: &ClientHandle, rx: &mut mpsc::Receiver<Event>, ch: &str) -> bool {
     say(h, ch, &["", "👉 Say 'next' to continue (or 'quit' to stop)."]).await;
-    match wait_owner(rx, ch, 600).await {
+    match wait_owner(rx, ch, 600, h).await {
         Some(OwnerCmd::Next) => true,
         _ => false,
     }
@@ -221,7 +228,7 @@ async fn main() -> Result<()> {
     ]).await;
 
     // Wait for either a real pause signal or "next"
-    match wait_owner(&mut events, ch, 120).await {
+    match wait_owner(&mut events, ch, 120, &handle).await {
         Some(OwnerCmd::Quit) => return shutdown(handle).await,
         _ => {} // next or timeout -- simulate
     }
@@ -282,7 +289,7 @@ async fn main() -> Result<()> {
         "(Or say 'next' to simulate approval.)",
     ]).await;
 
-    match wait_owner(&mut events, ch, 120).await {
+    match wait_owner(&mut events, ch, 120, &handle).await {
         Some(OwnerCmd::Quit) => return shutdown(handle).await,
         _ => {}
     }
@@ -466,7 +473,7 @@ async fn main() -> Result<()> {
         "(Or say 'next' to simulate.)",
     ]).await;
 
-    match wait_owner(&mut events, ch, 120).await {
+    match wait_owner(&mut events, ch, 120, &handle).await {
         Some(OwnerCmd::Quit) => return shutdown(handle).await,
         _ => {}
     }
