@@ -298,9 +298,9 @@ impl TopicInfo {
 /// O(1) lookup by nick or session_id — no more linear scans.
 #[derive(Debug, Default)]
 pub struct NickMap {
-    /// lowercase_nick → session_id
+    /// lowercase_nick → primary session_id (first session to register this nick)
     nick_to_sid: HashMap<String, String>,
-    /// session_id → display_nick (original case)
+    /// session_id → display_nick (original case) — supports multi-device (N sessions per nick)
     sid_to_nick: HashMap<String, String>,
 }
 
@@ -310,22 +310,30 @@ impl NickMap {
     }
 
     /// Insert a nick→session mapping. Nick is stored case-insensitively.
+    /// For multi-device: multiple sessions can share the same nick.
+    /// The nick→sid mapping points to the most recent session, but all
+    /// sessions are tracked in sid→nick for NAMES resolution.
     pub fn insert(&mut self, display_nick: &str, session_id: &str) {
         let lower = display_nick.to_lowercase();
         // Remove old mapping for this session if it had a different nick
         if let Some(old_nick) = self.sid_to_nick.remove(session_id) {
-            self.nick_to_sid.remove(&old_nick.to_lowercase());
+            let old_lower = old_nick.to_lowercase();
+            if old_lower != lower {
+                // Only remove nick→sid if this session was the primary for that old nick
+                if self.nick_to_sid.get(&old_lower).map(|s| s.as_str()) == Some(session_id) {
+                    self.nick_to_sid.remove(&old_lower);
+                }
+            }
         }
-        // Remove old mapping for this nick if a different session held it
-        if let Some(old_sid) = self.nick_to_sid.remove(&lower) {
-            self.sid_to_nick.remove(&old_sid);
-        }
+        // Set/update the primary session for this nick
+        // (Don't evict other sessions' sid_to_nick entries — they share the nick)
         self.nick_to_sid.insert(lower, session_id.to_string());
         self.sid_to_nick
             .insert(session_id.to_string(), display_nick.to_string());
     }
 
     /// Look up session_id by nick (case-insensitive). O(1).
+    /// Returns the primary (most recently inserted) session for this nick.
     pub fn get_session(&self, nick: &str) -> Option<&str> {
         self.nick_to_sid
             .get(&nick.to_lowercase())
@@ -342,11 +350,13 @@ impl NickMap {
         self.nick_to_sid.contains_key(&nick.to_lowercase())
     }
 
-    /// Remove by nick (case-insensitive). Returns the session_id if found.
+    /// Remove by nick (case-insensitive). Returns the primary session_id if found.
+    /// Also removes ALL sid→nick entries for sessions that had this nick.
     pub fn remove_by_nick(&mut self, nick: &str) -> Option<String> {
         let lower = nick.to_lowercase();
+        // Remove all sid→nick entries pointing to this nick
+        self.sid_to_nick.retain(|_, n| n.to_lowercase() != lower);
         if let Some(sid) = self.nick_to_sid.remove(&lower) {
-            self.sid_to_nick.remove(&sid);
             Some(sid)
         } else {
             None
@@ -356,7 +366,20 @@ impl NickMap {
     /// Remove by session_id. Returns the display nick if found.
     pub fn remove_by_session(&mut self, session_id: &str) -> Option<String> {
         if let Some(nick) = self.sid_to_nick.remove(session_id) {
-            self.nick_to_sid.remove(&nick.to_lowercase());
+            let lower = nick.to_lowercase();
+            // Only remove nick→sid if this session was the primary
+            if self.nick_to_sid.get(&lower).map(|s| s.as_str()) == Some(session_id) {
+                self.nick_to_sid.remove(&lower);
+                // Promote another session with the same nick (multi-device)
+                if let Some((other_sid, _)) = self
+                    .sid_to_nick
+                    .iter()
+                    .find(|(_, n)| n.to_lowercase() == lower)
+                {
+                    self.nick_to_sid
+                        .insert(lower, other_sid.clone());
+                }
+            }
             Some(nick)
         } else {
             None
