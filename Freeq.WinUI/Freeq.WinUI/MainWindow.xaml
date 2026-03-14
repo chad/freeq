@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Window
+    x:Class="Freeq.WinUI.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:Freeq.WinUI.Controls"
+    Title="Freeq">
+
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
+    <Grid Background="{StaticResource BgBrush}">
+        <!-- Main three-pane layout -->
+        <Grid x:Name="MainLayout" Visibility="Collapsed">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition x:Name="MemberListColumn" Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Sidebar -->
+            <controls:Sidebar Grid.Column="0" x:Name="SidebarControl" />
+
+            <!-- Center: TopBar + Messages + Compose -->
+            <Grid Grid.Column="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <controls:TopBar Grid.Row="0" x:Name="TopBarControl" />
+                <controls:MessageList Grid.Row="1" x:Name="MessageListControl" />
+                <controls:ComposeBox Grid.Row="2" x:Name="ComposeBoxControl" />
+            </Grid>
+
+            <!-- Member List -->
+            <controls:MemberList Grid.Column="2" x:Name="MemberListControl" />
+        </Grid>
+
+        <!-- Connect Dialog (overlay) -->
+        <controls:ConnectDialog x:Name="ConnectDialogControl" />
+    </Grid>
+</Window>
