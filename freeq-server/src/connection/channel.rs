@@ -1255,15 +1255,18 @@ pub(super) fn handle_invite(
             session_id: target_sid,
         } => {
             // Add invite by session ID + DID
-            {
+            let s2s_invitee = {
                 let mut channels = state.channels.lock();
+                let did = state.session_dids.lock().get(&target_sid).cloned();
                 if let Some(ch) = channels.get_mut(channel) {
                     ch.invites.insert(target_sid.clone());
-                    if let Some(did) = state.session_dids.lock().get(&target_sid) {
-                        ch.invites.insert(did.clone());
+                    if let Some(ref d) = did {
+                        ch.invites.insert(d.clone());
                     }
                 }
-            }
+                // For S2S, prefer DID over nick-based token
+                did.unwrap_or_else(|| format!("nick:{target_nick}"))
+            };
 
             // Notify inviter
             let reply = Message::from_server(server_name, "341", vec![nick, target_nick, channel]);
@@ -1275,24 +1278,48 @@ pub(super) fn handle_invite(
             if let Some(tx) = state.connections.lock().get(&target_sid) {
                 let _ = tx.try_send(invite_msg);
             }
+
+            // Broadcast invite to S2S peers
+            s2s_broadcast(
+                state,
+                crate::s2s::S2sMessage::Invite {
+                    event_id: s2s_next_event_id(state),
+                    channel: channel.to_string(),
+                    invitee: s2s_invitee,
+                    invited_by: nick.to_string(),
+                    origin: state.server_iroh_id.lock().clone().unwrap_or_default(),
+                },
+            );
         }
 
         NetworkTarget::Remote(rm) => {
             // Add invite by DID if available (so it survives reconnect/rejoin)
-            {
+            let s2s_invitee = {
                 let mut channels = state.channels.lock();
                 if let Some(ch) = channels.get_mut(channel) {
                     if let Some(ref did) = rm.did {
                         ch.invites.insert(did.clone());
                     }
-                    // Also store by nick as a fallback for guests without DID
                     ch.invites.insert(format!("nick:{target_nick}"));
                 }
-            }
+                rm.did.clone().unwrap_or_else(|| format!("nick:{target_nick}"))
+            };
 
             // Notify inviter (remote target can't be notified directly)
             let reply = Message::from_server(server_name, "341", vec![nick, target_nick, channel]);
             send(state, session_id, format!("{reply}\r\n"));
+
+            // Broadcast invite to S2S peers
+            s2s_broadcast(
+                state,
+                crate::s2s::S2sMessage::Invite {
+                    event_id: s2s_next_event_id(state),
+                    channel: channel.to_string(),
+                    invitee: s2s_invitee,
+                    invited_by: nick.to_string(),
+                    origin: state.server_iroh_id.lock().clone().unwrap_or_default(),
+                },
+            );
         }
 
         NetworkTarget::Unknown => {

@@ -15,6 +15,7 @@ export interface Message {
   isSystem?: boolean;
   replyTo?: string;
   editOf?: string;
+  isStreaming?: boolean;
   deleted?: boolean;
   reactions?: Map<string, Set<string>>; // emoji → nicks
   encrypted?: boolean; // true if this message was E2EE encrypted
@@ -166,7 +167,7 @@ export interface Store {
   // Actions — messages
   addMessage: (channel: string, msg: Message) => void;
   addSystemMessage: (channel: string, text: string) => void;
-  editMessage: (channel: string, originalMsgId: string, newText: string, newMsgId?: string) => void;
+  editMessage: (channel: string, originalMsgId: string, newText: string, newMsgId?: string, isStreaming?: boolean) => void;
   deleteMessage: (channel: string, msgId: string) => void;
   addReaction: (channel: string, msgId: string, emoji: string, fromNick: string) => void;
   incrementMentions: (channel: string) => void;
@@ -558,13 +559,15 @@ export const useStore = create<Store>((set, get) => ({
     get().addMessage(channel, msg);
   },
 
-  editMessage: (channel, originalMsgId, newText, newMsgId) => set((s) => {
+  editMessage: (channel, originalMsgId, newText, newMsgId, isStreaming) => set((s) => {
     const channels = new Map(s.channels);
     const ch = channels.get(channel.toLowerCase());
     if (ch) {
+      // Match on id OR editOf — handles chained edits (e.g., streaming)
+      // where the first edit changes id but subsequent edits still reference the original
       ch.messages = ch.messages.map((m) =>
-        m.id === originalMsgId
-          ? { ...m, text: newText, id: newMsgId || m.id, editOf: originalMsgId }
+        (m.id === originalMsgId || m.editOf === originalMsgId)
+          ? { ...m, text: newText, id: newMsgId || m.id, editOf: originalMsgId, isStreaming: !!isStreaming }
           : m
       );
       channels.set(channel.toLowerCase(), { ...ch });
@@ -575,8 +578,8 @@ export const useStore = create<Store>((set, get) => ({
     for (const [id, batch] of batches) {
       if (batch.target.toLowerCase() !== channel.toLowerCase()) continue;
       batch.messages = batch.messages.map((m) =>
-        m.id === originalMsgId
-          ? { ...m, text: newText, id: newMsgId || m.id, editOf: originalMsgId }
+        (m.id === originalMsgId || m.editOf === originalMsgId)
+          ? { ...m, text: newText, id: newMsgId || m.id, editOf: originalMsgId, isStreaming: !!isStreaming }
           : m
       );
       batches.set(id, batch);

@@ -336,6 +336,19 @@ pub enum S2sMessage {
         origin: String,
     },
 
+    /// An invite was issued for a user on a channel.
+    #[serde(rename = "invite")]
+    Invite {
+        #[serde(default)]
+        event_id: String,
+        channel: String,
+        /// The invitee identifier (DID, nick:XXX, or session ID).
+        invitee: String,
+        /// Nick of the user who issued the invite.
+        invited_by: String,
+        origin: String,
+    },
+
     /// Internal event: a peer's S2S link has disconnected.
     /// Not sent over the wire — synthesized locally so the event processor
     /// can clean up remote_members for that peer's origin.
@@ -386,6 +399,9 @@ pub struct ChannelInfo {
     /// Active bans (mask strings).
     #[serde(default)]
     pub bans: Vec<String>,
+    /// Active invites (DIDs, nick:XXX tokens).
+    #[serde(default)]
+    pub invites: Vec<String>,
 }
 
 /// Bounded set for event dedup. Uses two layers:

@@ -1141,14 +1141,15 @@ fn handle_edit(
     });
 
     // Update in-memory history (channels only)
+    // Note: we keep the original msgid stable so that subsequent edits
+    // (e.g., streaming) can still find the message by original_msgid.
     if is_channel {
         let mut channels = state.channels.lock();
         if let Some(ch) = channels.get_mut(target) {
-            // Find and update the original message in history
             for hist in ch.history.iter_mut() {
                 if hist.msgid.as_deref() == Some(original_msgid) {
                     hist.text = new_text.to_string();
-                    hist.tags.insert("msgid".to_string(), edit_msgid.clone());
+                    // Don't change hist.msgid — keep original stable for chained edits
                     break;
                 }
             }

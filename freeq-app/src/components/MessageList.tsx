@@ -653,7 +653,8 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
             <span className="text-xs text-fg-dim bg-warning/10 text-warning px-1.5 py-0.5 rounded">away</span>
           )}
           <span className="text-xs text-fg-dim whitespace-nowrap cursor-default" title={msg.timestamp.toLocaleString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}>{formatTime(msg.timestamp)}</span>
-          {msg.editOf && <span className="text-xs text-fg-dim">(edited)</span>}
+          {msg.isStreaming && <span className="text-xs text-blue-400 animate-pulse">streaming…</span>}
+          {msg.editOf && !msg.isStreaming && <span className="text-xs text-fg-dim">(edited)</span>}
           {msg.encrypted && <EncryptedBadge />}
         </div>
         <MessageContent msg={msg} />

@@ -29,4 +29,5 @@ pub mod oauth;
 pub mod p2p;
 pub mod pds;
 pub mod ratchet;
+pub mod streaming;
 pub mod x3dh;

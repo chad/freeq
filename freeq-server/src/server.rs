@@ -1708,6 +1708,9 @@ async fn process_s2s_message(
         S2sMessage::Ban {
             event_id, origin, ..
         } => (event_id.clone(), origin.clone()),
+        S2sMessage::Invite {
+            event_id, origin, ..
+        } => (event_id.clone(), origin.clone()),
         S2sMessage::PolicySync {
             event_id, origin, ..
         } => (event_id.clone(), origin.clone()),
@@ -1747,6 +1750,7 @@ async fn process_s2s_message(
         | S2sMessage::Mode { .. }
         | S2sMessage::Kick { .. }
         | S2sMessage::Ban { .. }
+        | S2sMessage::Invite { .. }
         | S2sMessage::ChannelCreated { .. }, crate::s2s::TrustLevel::Readonly) => {
             tracing::warn!(
                 peer = %authenticated_peer_id,
@@ -2045,13 +2049,17 @@ async fn process_s2s_message(
             {
                 let channels = state.channels.lock();
                 if let Some(ch) = channels.get(&channel) {
-                    // Check +i (invite only)
+                    // Check +i (invite only) — but allow if user has an invite
                     if ch.invite_only {
-                        tracing::info!(
-                            channel = %channel, nick = %nick,
-                            "S2S Join rejected: channel is +i (invite only)"
-                        );
-                        return;
+                        let has_invite = did.as_ref().is_some_and(|d| ch.invites.contains(d))
+                            || ch.invites.contains(&format!("nick:{nick}"));
+                        if !has_invite {
+                            tracing::info!(
+                                channel = %channel, nick = %nick,
+                                "S2S Join rejected: channel is +i (invite only)"
+                            );
+                            return;
+                        }
                     }
                     // Check bans
                     let hostmask = format!("{nick}!{nick}@s2s");
@@ -2070,6 +2078,11 @@ async fn process_s2s_message(
             {
                 let mut channels = state.channels.lock();
                 let ch = channels.entry(channel.clone()).or_default();
+                // Consume invite (all forms: DID, nick)
+                if let Some(ref d) = did {
+                    ch.invites.remove(d);
+                }
+                ch.invites.remove(&format!("nick:{nick}"));
                 ch.remote_members.insert(
                     nick.clone(),
                     RemoteMember {
@@ -2324,6 +2337,7 @@ async fn process_s2s_message(
                             moderated: ch.moderated,
                             key: ch.key.clone(),
                             bans: ch.bans.iter().map(|b| b.mask.clone()).collect(),
+                            invites: ch.invites.iter().cloned().collect(),
                         }
                     })
                     .collect();
@@ -2507,6 +2521,11 @@ async fn process_s2s_message(
                                     .as_secs(),
                             });
                         }
+                    }
+
+                    // Merge invites from remote (additive — don't remove local invites)
+                    for invite in &info.invites {
+                        ch.invites.insert(invite.clone());
                     }
 
                     let dids = state.session_dids.lock();
@@ -2827,6 +2846,59 @@ async fn process_s2s_message(
             }
 
             deliver_to_channel(state, &channel_key, &mode_line);
+        }
+
+        S2sMessage::Invite {
+            channel,
+            invitee,
+            invited_by,
+            ..
+        } => {
+            let channel_key = channel.to_lowercase();
+
+            // Authorization: verify invited_by is a member (and op if +i)
+            {
+                let channels = state.channels.lock();
+                if let Some(ch) = channels.get(&channel_key) {
+                    let rm = ch.remote_member(&invited_by);
+                    let is_member = rm.is_some();
+                    if !is_member {
+                        tracing::warn!(
+                            channel = %channel_key, invited_by = %invited_by,
+                            "S2S Invite rejected: inviter is not a member"
+                        );
+                        return;
+                    }
+                    if ch.invite_only {
+                        let is_op = rm.is_some_and(|rm| {
+                            rm.is_op
+                                || rm.did.as_ref().is_some_and(|d| {
+                                    ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
+                                })
+                        });
+                        if !is_op {
+                            tracing::warn!(
+                                channel = %channel_key, invited_by = %invited_by,
+                                "S2S Invite rejected: channel is +i and inviter is not an op"
+                            );
+                            return;
+                        }
+                    }
+                }
+            }
+
+            // Add the invite
+            {
+                let mut channels = state.channels.lock();
+                if let Some(ch) = channels.get_mut(&channel_key) {
+                    ch.invites.insert(invitee.clone());
+                    tracing::debug!(
+                        channel = %channel_key, invitee = %invitee,
+                        invited_by = %invited_by,
+                        "S2S Invite: added invite"
+                    );
+                }
+            }
         }
 
         S2sMessage::NickChange { old, new, .. } => {

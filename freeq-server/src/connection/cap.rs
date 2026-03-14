@@ -150,6 +150,7 @@ pub(super) async fn handle_authenticate(
 
     if param.eq_ignore_ascii_case("ATPROTO-CHALLENGE") {
         conn.sasl_in_progress = true;
+        conn.dpop_retries = 0; // Reset DPoP retry counter on new SASL attempt
         let encoded = state.challenge_store.create(session_id);
         let reply = Message::new("AUTHENTICATE", vec![&encoded]);
         send(state, session_id, format!("{reply}\r\n"));
@@ -305,23 +306,43 @@ pub(super) async fn handle_authenticate(
                             broadcast_account_notify(state, session_id, &nick, &did);
                         }
                         Err(reason) if reason.starts_with("DPOP_NONCE:") => {
-                            // DPoP nonce rotation: PDS requires a fresh nonce.
-                            // Re-issue a challenge so the client can retry with the nonce.
-                            let nonce = &reason["DPOP_NONCE:".len()..];
-                            tracing::info!(%session_id, %nonce, "DPoP nonce required, re-issuing challenge");
+                            conn.dpop_retries += 1;
+                            if conn.dpop_retries > 3 {
+                                tracing::warn!(%session_id, retries = conn.dpop_retries, "DPoP nonce retry limit exceeded");
+                                conn.sasl_in_progress = false;
+                                conn.sasl_failures += 1;
+                                let fail = Message::from_server(
+                                    server_name,
+                                    irc::ERR_SASLFAIL,
+                                    vec![conn.nick_or_star(), "SASL authentication failed (DPoP nonce retry limit exceeded)"],
+                                );
+                                send(state, session_id, format!("{fail}\r\n"));
+                                if conn.sasl_failures >= 3 {
+                                    send(
+                                        state,
+                                        session_id,
+                                        "ERROR :Too many SASL failures\r\n".to_string(),
+                                    );
+                                }
+                            } else {
+                                // DPoP nonce rotation: PDS requires a fresh nonce.
+                                // Re-issue a challenge so the client can retry with the nonce.
+                                let nonce = &reason["DPOP_NONCE:".len()..];
+                                tracing::info!(%session_id, %nonce, retry = conn.dpop_retries, "DPoP nonce required, re-issuing challenge");
 
-                            send(
-                                state,
-                                session_id,
-                                format!(
-                                    ":{server_name} NOTICE {} :DPOP_NONCE {nonce}\r\n",
-                                    conn.nick_or_star()
-                                ),
-                            );
+                                send(
+                                    state,
+                                    session_id,
+                                    format!(
+                                        ":{server_name} NOTICE {} :DPOP_NONCE {nonce}\r\n",
+                                        conn.nick_or_star()
+                                    ),
+                                );
 
-                            // Issue a new challenge for retry
-                            let encoded = state.challenge_store.create(session_id);
-                            send(state, session_id, format!("AUTHENTICATE {encoded}\r\n"));
+                                // Issue a new challenge for retry
+                                let encoded = state.challenge_store.create(session_id);
+                                send(state, session_id, format!("AUTHENTICATE {encoded}\r\n"));
+                            }
                         }
                         Err(reason) => {
                             tracing::warn!(%session_id, "SASL auth failed: {reason}");

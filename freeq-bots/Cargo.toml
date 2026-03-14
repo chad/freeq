@@ -17,6 +17,10 @@ path = "src/bin/chatroom.rs"
 name = "loadtest"
 path = "src/bin/loadtest.rs"
 
+[[bin]]
+name = "stream-demo"
+path = "src/bin/stream_demo.rs"
+
 [dependencies]
 freeq-sdk = { path = "../freeq-sdk" }
 tokio = { workspace = true }

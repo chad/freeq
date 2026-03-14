@@ -7389,3 +7389,60 @@ async fn single_server_dm1_edit_and_delete() {
     let _ = ha.quit(Some("done")).await;
     let _ = hb.quit(Some("done")).await;
 }
+
+/// S2S: Invite issued on server A should allow user on server B to join +i channel.
+#[tokio::test]
+async fn s2s_invite_syncs_across_servers() {
+    let Some((local, remote)) = get_servers() else {
+        return;
+    };
+    let channel = test_channel("sinv");
+    let nick_op = test_nick("sinv", "op");
+    let nick_guest = test_nick("sinv", "g");
+
+    // Op connects to local server, guest to remote
+    let (h_op, mut e_op) = connect_guest(&local, &nick_op).await;
+    let (h_g, mut e_g) = connect_guest(&remote, &nick_guest).await;
+    wait_registered(&mut e_op).await;
+    wait_registered(&mut e_g).await;
+
+    // Op creates channel and sets +i
+    h_op.join(&channel).await.unwrap();
+    wait_joined(&mut e_op, &channel).await;
+    h_op.raw(&format!("MODE {channel} +i")).await.unwrap();
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // Guest tries to join from remote — should fail
+    h_g.join(&channel).await.unwrap();
+    wait_for(
+        &mut e_g,
+        |e| matches!(e, Event::RawLine(line) if line.contains("473")),
+        "ERR_INVITEONLYCHAN on remote",
+    )
+    .await;
+    eprintln!("  ✓ +i blocks uninvited remote user");
+
+    // Op invites the guest (by nick — guest is a remote user from op's perspective)
+    h_op.raw(&format!("INVITE {nick_guest} {channel}"))
+        .await
+        .unwrap();
+    // Wait for 341 confirmation to op
+    wait_for(
+        &mut e_op,
+        |e| matches!(e, Event::RawLine(line) if line.contains("341")),
+        "INVITE confirmation",
+    )
+    .await;
+    eprintln!("  ✓ INVITE issued on local server");
+
+    // Let S2S propagate the invite
+    tokio::time::sleep(S2S_SETTLE).await;
+
+    // Now guest should be able to join from remote
+    h_g.join(&channel).await.unwrap();
+    wait_joined(&mut e_g, &channel).await;
+    eprintln!("  ✓ Invited remote user can join +i channel via S2S invite sync");
+
+    let _ = h_op.quit(Some("done")).await;
+    let _ = h_g.quit(Some("done")).await;
+}

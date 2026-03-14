@@ -205,9 +205,9 @@ If something feels “too clever,” it’s probably wrong.
 - [x] **S2S authorization on Topic** — ✅ DONE. +t channels reject topic changes from non-ops. Removed "trust unknown users" fallback.
 - [x] **SyncResponse channel creation limit** — ✅ DONE. Capped at 500 channels per peer. Excess logged and dropped.
 - [x] **ChannelCreated should propagate default modes** — ✅ DONE. New channels from S2S get +nt defaults.
-- [ ] **Invites should sync via S2S** — Currently invites are local server state only. A user invited on server A can only join on server A. Relay invite tokens to peers.
+- [x] **Invites should sync via S2S** — ✅ DONE. S2sMessage::Invite variant relays invite tokens (DID or nick:XXX) to peers. SyncResponse carries invites (additive merge). S2S Join enforcement checks invite list before rejecting +i. Invites consumed on join.
 - [x] **S2S rate limiting** — ✅ DONE. 100 events/sec per peer, drops with warning log.
-- [ ] **DPoP nonce retry for SASL verification** — PDS nonce rotation causes server-side verification to fail.
+- [x] **DPoP nonce retry for SASL verification** — ✅ DONE. Server detects PDS `use_dpop_nonce` errors, sends fresh nonce to client via NOTICE, re-issues SASL challenge. Client (SDK) updates DPoP nonce and retries automatically. Capped at 3 retries per SASL attempt to prevent infinite loops. Counter resets on new SASL attempt.
 
 ### P2 — Important
 

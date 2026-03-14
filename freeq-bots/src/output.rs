@@ -4,6 +4,9 @@
 //! This module formats them for readable IRC output.
 
 use freeq_sdk::client::ClientHandle;
+use freeq_sdk::streaming::StreamingMessage;
+use tokio::sync::mpsc;
+use crate::llm::StreamDelta;
 
 /// An agent identity for channel messages.
 #[derive(Debug, Clone)]
@@ -127,6 +130,47 @@ pub async fn error(
     text: &str,
 ) -> anyhow::Result<()> {
     status(handle, channel, agent, "❌", text).await
+}
+
+/// Stream an LLM response to a channel, updating a single message in real-time.
+///
+/// Uses the IRC edit-message hack: sends an initial message, then repeatedly
+/// edits it as tokens arrive from the LLM stream. Clients that support
+/// `+draft/edit` see the message update in place.
+///
+/// Returns the final message text and msgid.
+pub async fn stream_response(
+    handle: &ClientHandle,
+    channel: &str,
+    agent: &AgentId,
+    mut deltas: mpsc::Receiver<StreamDelta>,
+) -> anyhow::Result<(String, String)> {
+    let prefix = format!("[{}] ", agent.role);
+
+    // Start a streaming message with a thinking cursor
+    let mut stream = StreamingMessage::start(handle, channel).await?;
+
+    let mut full_text = String::new();
+    while let Some(delta) = deltas.recv().await {
+        match delta {
+            StreamDelta::Text(chunk) => {
+                full_text.push_str(&chunk);
+                // Set the full content with prefix each time
+                stream.set(&format!("{prefix}{full_text}")).await?;
+            }
+            StreamDelta::Done => break,
+            StreamDelta::Error(e) => {
+                let error_text = format!("{prefix}❌ Stream error: {e}");
+                stream.finish_with(&error_text).await?;
+                anyhow::bail!("LLM stream error: {e}");
+            }
+        }
+    }
+
+    // Flush any remaining content and finish
+    let final_text = format!("{prefix}{full_text}");
+    let msgid = stream.finish_with(&final_text).await?;
+    Ok((full_text, msgid))
 }
 
 /// Wrap text into lines of max_len, breaking on word boundaries.

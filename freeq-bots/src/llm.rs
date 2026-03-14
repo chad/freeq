@@ -4,7 +4,9 @@
 //! Each agent gets a system prompt and optional tool definitions.
 
 use anyhow::{Context, Result};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 /// A message in a conversation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,4 +182,142 @@ impl LlmClient {
             .join("");
         Ok(text)
     }
+
+    /// Stream a conversation to Claude, yielding text deltas via a channel.
+    ///
+    /// Each item sent on the returned receiver is a `StreamDelta`:
+    /// - `StreamDelta::Text(String)` — a text token chunk
+    /// - `StreamDelta::Done` — the stream is complete
+    ///
+    /// This uses Claude's SSE streaming API.
+    pub async fn chat_stream(
+        &self,
+        system: &str,
+        messages: &[Message],
+        tools: &[ToolDef],
+        max_tokens: u32,
+    ) -> Result<mpsc::Receiver<StreamDelta>> {
+        let mut body = serde_json::json!({
+            "model": &self.model,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": messages,
+            "stream": true,
+        });
+
+        if !tools.is_empty() {
+            body["tools"] = serde_json::to_value(tools)?;
+        }
+
+        let resp = self
+            .http
+            .post("https://api.anthropic.com/v1/messages")
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to call Claude API")?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Claude API error {status}: {body}");
+        }
+
+        let (tx, rx) = mpsc::channel(256);
+
+        // Spawn a task to parse the SSE stream
+        let byte_stream = resp.bytes_stream();
+        tokio::spawn(async move {
+            let mut stream = byte_stream;
+            let mut buffer = String::new();
+            while let Some(chunk) = stream.next().await {
+                let chunk = match chunk {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::error!("Stream error: {e}");
+                        let _ = tx.send(StreamDelta::Error(e.to_string())).await;
+                        break;
+                    }
+                };
+                buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+                // Process complete SSE lines
+                while let Some(pos) = buffer.find("\n\n") {
+                    let event_block = buffer[..pos].to_string();
+                    buffer = buffer[pos + 2..].to_string();
+
+                    for line in event_block.lines() {
+                        if let Some(data) = line.strip_prefix("data: ") {
+                            if data == "[DONE]" {
+                                let _ = tx.send(StreamDelta::Done).await;
+                                return;
+                            }
+                            if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
+                                match event.event_type.as_str() {
+                                    "content_block_delta" => {
+                                        if let Some(delta) = event.delta {
+                                            if let Some(text) = delta.text {
+                                                let _ = tx.send(StreamDelta::Text(text)).await;
+                                            }
+                                        }
+                                    }
+                                    "message_stop" => {
+                                        let _ = tx.send(StreamDelta::Done).await;
+                                        return;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Stream ended without explicit Done
+            let _ = tx.send(StreamDelta::Done).await;
+        });
+
+        Ok(rx)
+    }
+
+    /// Simple single-turn streaming completion (no tools).
+    pub async fn complete_stream(
+        &self,
+        system: &str,
+        prompt: &str,
+    ) -> Result<mpsc::Receiver<StreamDelta>> {
+        let messages = vec![Message {
+            role: "user".to_string(),
+            content: MessageContent::Text(prompt.to_string()),
+        }];
+        self.chat_stream(system, &messages, &[], 4096).await
+    }
+}
+
+/// A delta from a streaming Claude response.
+#[derive(Debug, Clone)]
+pub enum StreamDelta {
+    /// A text chunk (partial token).
+    Text(String),
+    /// Stream completed successfully.
+    Done,
+    /// An error occurred during streaming.
+    Error(String),
+}
+
+/// Internal SSE event parsing.
+#[derive(Debug, Deserialize)]
+struct StreamEvent {
+    #[serde(rename = "type")]
+    event_type: String,
+    #[serde(default)]
+    delta: Option<StreamEventDelta>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamEventDelta {
+    #[serde(default)]
+    text: Option<String>,
 }

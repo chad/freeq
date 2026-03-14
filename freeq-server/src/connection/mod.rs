@@ -175,6 +175,7 @@ pub struct Connection {
     // SASL state
     pub(crate) sasl_in_progress: bool,
     pub(crate) sasl_failures: u8,
+    pub(crate) dpop_retries: u8,
 }
 
 impl Connection {
@@ -205,6 +206,7 @@ impl Connection {
             ghost_channels: None,
             sasl_in_progress: false,
             sasl_failures: 0,
+            dpop_retries: 0,
         }
     }
 

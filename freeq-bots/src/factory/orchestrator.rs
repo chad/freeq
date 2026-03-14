@@ -205,7 +205,7 @@ impl Factory {
         )
         .await?;
 
-        let refined_spec = llm.complete(
+        let spec_deltas = llm.complete_stream(
             "You are a product lead. Take the user's rough idea and produce a clear, concise product spec. Include: purpose, core features (bulleted), tech constraints (if any), and success criteria. Be specific but brief. Output ONLY the spec, no preamble.",
             spec,
         ).await?;
@@ -213,7 +213,6 @@ impl Factory {
         let project_name = crate::prototype::generate_project_name_pub(llm, spec).await?;
         *self.project_name.lock().await = Some(project_name.clone());
 
-        memory.set(&project_name, "spec", "current", &refined_spec)?;
         output::say(
             handle,
             channel,
@@ -221,7 +220,8 @@ impl Factory {
             &format!("Project: {project_name}"),
         )
         .await?;
-        output::say(handle, channel, &product(), &refined_spec).await?;
+        let (refined_spec, _) = output::stream_response(handle, channel, &product(), spec_deltas).await?;
+        memory.set(&project_name, "spec", "current", &refined_spec)?;
 
         // Phase 2: Architect — propose design
         *self.phase.lock().await = Phase::Designing;
@@ -234,13 +234,13 @@ impl Factory {
         )
         .await?;
 
-        let design = llm.complete(
+        let design_deltas = llm.complete_stream(
             "You are a software architect. Given a product spec, propose a minimal, deployable architecture. Include: stack choice (prefer Python/Flask for speed), file structure, key abstractions. Be terse. Output ONLY the design, no preamble.",
             &refined_spec,
         ).await?;
 
+        let (design, _) = output::stream_response(handle, channel, &architect(), design_deltas).await?;
         memory.set(&project_name, "decision", "architecture", &design)?;
-        output::say(handle, channel, &architect(), &design).await?;
 
         // Phase 3: Builder — write code
         *self.phase.lock().await = Phase::Building;
@@ -287,7 +287,7 @@ impl Factory {
                 }
             }
 
-            // Post commentary
+            // Post commentary (non-streaming since it's between tool calls)
             let commentary = text_parts.join("").trim().to_string();
             if !commentary.is_empty() && commentary.len() < 500 {
                 output::say(handle, channel, &builder(), &commentary).await?;
@@ -387,11 +387,11 @@ impl Factory {
         *self.phase.lock().await = Phase::Reviewing;
         let ctx = memory.project_context(&project_name)?;
         if !ctx.is_empty() {
-            let review = llm.complete(
+            let review_deltas = llm.complete_stream(
                 "You are a code reviewer. Given a project's files and spec, give a brief review: what's good, what could be improved. Be constructive and concise. 3-5 bullet points max.",
                 &ctx,
             ).await?;
-            output::say(handle, channel, &reviewer(), &review).await?;
+            output::stream_response(handle, channel, &reviewer(), review_deltas).await?;
         }
 
         // Done

@@ -29,6 +29,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use base64::Engine;
+use std::collections::HashMap;
 use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -38,6 +39,11 @@ use tokio_rustls::rustls;
 use crate::auth::{self, ChallengeSigner};
 use crate::event::Event;
 use crate::irc::Message;
+
+/// Registry for pending echo-message callbacks.
+/// When a client sends a PRIVMSG with a `+freeq.at/echo-nonce` tag, the nonce
+/// is registered here. When the echo comes back, the msgid is sent via the oneshot.
+type EchoRegistry = std::sync::Arc<parking_lot::Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>;
 
 /// Configuration for connecting to an IRC server.
 #[derive(Debug, Clone)]
@@ -85,6 +91,7 @@ pub enum Command {
 #[derive(Clone)]
 pub struct ClientHandle {
     cmd_tx: mpsc::Sender<Command>,
+    echo_registry: EchoRegistry,
 }
 
 impl ClientHandle {
@@ -113,6 +120,33 @@ impl ClientHandle {
     pub async fn raw(&self, line: &str) -> Result<()> {
         self.cmd_tx.send(Command::Raw(line.to_string())).await?;
         Ok(())
+    }
+
+    /// Send a tagged message and await the server-assigned msgid via echo-message.
+    ///
+    /// This inserts a unique nonce tag (`+freeq.at/echo-nonce`) that the client
+    /// loop matches against incoming echo-messages. Requires `echo-message` cap.
+    ///
+    /// Returns the server-assigned `msgid`.
+    pub async fn send_and_await_echo(
+        &self,
+        target: &str,
+        text: &str,
+        mut tags: std::collections::HashMap<String, String>,
+    ) -> Result<String> {
+        let nonce = format!("echo-{:016x}", rand::random::<u64>());
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.echo_registry.lock().insert(nonce.clone(), tx);
+        tags.insert("+freeq.at/echo-nonce".to_string(), nonce.clone());
+        self.send_tagged(target, text, tags).await?;
+        match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
+            Ok(Ok(msgid)) => Ok(msgid),
+            Ok(Err(_)) => anyhow::bail!("Echo channel dropped"),
+            Err(_) => {
+                self.echo_registry.lock().remove(&nonce);
+                anyhow::bail!("Timed out waiting for echo-message msgid")
+            }
+        }
     }
 
     /// Send a message with IRCv3 tags (for rich media).
@@ -830,11 +864,14 @@ pub fn connect_with_stream(
 ) -> (ClientHandle, mpsc::Receiver<Event>) {
     let (event_tx, event_rx) = mpsc::channel(4096);
     let (cmd_tx, cmd_rx) = mpsc::channel(256);
+    let echo_registry: EchoRegistry = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new()));
 
     let handle = ClientHandle {
         cmd_tx: cmd_tx.clone(),
+        echo_registry: echo_registry.clone(),
     };
 
+    let echo_reg = echo_registry.clone();
     tokio::spawn(async move {
         let _ = event_tx.send(Event::Connected).await;
         let result = match conn {
@@ -847,6 +884,7 @@ pub fn connect_with_stream(
                     signer,
                     event_tx.clone(),
                     cmd_rx,
+                    echo_reg,
                 )
                 .await
             }
@@ -859,6 +897,7 @@ pub fn connect_with_stream(
                     signer,
                     event_tx.clone(),
                     cmd_rx,
+                    echo_reg,
                 )
                 .await
             }
@@ -872,6 +911,7 @@ pub fn connect_with_stream(
                     signer,
                     event_tx.clone(),
                     cmd_rx,
+                    echo_reg,
                 )
                 .await
             }
@@ -901,13 +941,16 @@ pub fn connect(
 ) -> (ClientHandle, mpsc::Receiver<Event>) {
     let (event_tx, event_rx) = mpsc::channel(4096);
     let (cmd_tx, cmd_rx) = mpsc::channel(256);
+    let echo_registry: EchoRegistry = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new()));
 
     let handle = ClientHandle {
         cmd_tx: cmd_tx.clone(),
+        echo_registry: echo_registry.clone(),
     };
 
+    let echo_reg = echo_registry.clone();
     tokio::spawn(async move {
-        if let Err(e) = run_client(config, signer, event_tx.clone(), cmd_rx).await {
+        if let Err(e) = run_client(config, signer, event_tx.clone(), cmd_rx, echo_reg).await {
             let _ = event_tx
                 .send(Event::Disconnected {
                     reason: e.to_string(),
@@ -924,6 +967,7 @@ async fn run_client(
     signer: Option<Arc<dyn ChallengeSigner>>,
     event_tx: mpsc::Sender<Event>,
     cmd_rx: mpsc::Receiver<Command>,
+    echo_registry: EchoRegistry,
 ) -> Result<()> {
     let conn = establish_connection(&config).await?;
     let _ = event_tx.send(Event::Connected).await;
@@ -937,6 +981,7 @@ async fn run_client(
                 signer,
                 event_tx,
                 cmd_rx,
+                echo_registry,
             )
             .await
         }
@@ -949,6 +994,7 @@ async fn run_client(
                 signer,
                 event_tx,
                 cmd_rx,
+                echo_registry,
             )
             .await
         }
@@ -962,6 +1008,7 @@ async fn run_client(
                 signer,
                 event_tx,
                 cmd_rx,
+                echo_registry,
             )
             .await
         }
@@ -1062,6 +1109,7 @@ async fn run_irc<R, W>(
     signer: Option<Arc<dyn ChallengeSigner>>,
     event_tx: mpsc::Sender<Event>,
     mut cmd_rx: mpsc::Receiver<Command>,
+    echo_registry: EchoRegistry,
 ) -> Result<()>
 where
     R: tokio::io::AsyncBufRead + Unpin,
@@ -1437,6 +1485,16 @@ where
                                     let target = msg.params[0].clone();
                                     let text = msg.params[1].clone();
                                     let tags = msg.tags.clone();
+
+                                    // Check for echo-nonce match (for send_and_await_echo)
+                                    if let Some(nonce) = tags.get("+freeq.at/echo-nonce") {
+                                        if let Some(tx) = echo_registry.lock().remove(nonce) {
+                                            if let Some(msgid) = tags.get("msgid") {
+                                                let _ = tx.send(msgid.clone());
+                                            }
+                                        }
+                                    }
+
                                     let _ = event_tx.send(Event::Message { from, target, text, tags }).await;
                                 }
                             }

@@ -143,10 +143,10 @@ pub async fn audit(
         "Analyzing architecture...",
     )
     .await?;
-    let analysis = llm.complete(SYSTEM, &prompt).await?;
 
-    // Post the audit results
-    output::say(handle, channel, &auditor(), &analysis).await?;
+    // Stream the analysis in real-time
+    let deltas = llm.complete_stream(SYSTEM, &prompt).await?;
+    output::stream_response(handle, channel, &auditor(), deltas).await?;
 
     // Clean up
     let _ = tokio::fs::remove_dir_all(&workspace.root).await;
