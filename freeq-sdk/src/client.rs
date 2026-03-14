@@ -337,6 +337,52 @@ impl ClientHandle {
             .await
     }
 
+    /// Request approval for a capability in a channel.
+    pub async fn request_approval(
+        &self,
+        channel: &str,
+        capability: &str,
+        resource: Option<&str>,
+    ) -> Result<()> {
+        let resource_part = resource.map(|r| format!(";resource={r}")).unwrap_or_default();
+        self.raw(&format!("APPROVAL_REQUEST {channel} :{capability}{resource_part}"))
+            .await
+    }
+
+    /// Pause an agent (must be op in shared channel).
+    pub async fn pause_agent(&self, nick: &str, reason: Option<&str>) -> Result<()> {
+        match reason {
+            Some(r) => self.raw(&format!("AGENT PAUSE {nick} :{r}")).await,
+            None => self.raw(&format!("AGENT PAUSE {nick}")).await,
+        }
+    }
+
+    /// Resume an agent (must be op in shared channel).
+    pub async fn resume_agent(&self, nick: &str) -> Result<()> {
+        self.raw(&format!("AGENT RESUME {nick}")).await
+    }
+
+    /// Revoke an agent (must be op in shared channel).
+    pub async fn revoke_agent(&self, nick: &str, reason: Option<&str>) -> Result<()> {
+        match reason {
+            Some(r) => self.raw(&format!("AGENT REVOKE {nick} :{r}")).await,
+            None => self.raw(&format!("AGENT REVOKE {nick}")).await,
+        }
+    }
+
+    /// Approve an agent's pending capability request.
+    pub async fn approve_agent(&self, nick: &str, capability: &str) -> Result<()> {
+        self.raw(&format!("AGENT APPROVE {nick} {capability}")).await
+    }
+
+    /// Deny an agent's pending capability request.
+    pub async fn deny_agent(&self, nick: &str, capability: &str, reason: Option<&str>) -> Result<()> {
+        match reason {
+            Some(r) => self.raw(&format!("AGENT DENY {nick} {capability} :{r}")).await,
+            None => self.raw(&format!("AGENT DENY {nick} {capability}")).await,
+        }
+    }
+
     /// Start automatic heartbeat in a background task.
     /// Returns a handle that stops the heartbeat when dropped.
     pub fn start_heartbeat(

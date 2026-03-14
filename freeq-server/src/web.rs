@@ -194,6 +194,8 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/signing-keys/{did}", get(api_did_signing_key))
         .route("/api/v1/verify/{msgid}", get(api_verify_message))
         .route("/api/v1/actors/{did}", get(api_actor_identity))
+        .route("/api/v1/channels/{name}/agent-capabilities", get(api_agent_capabilities))
+        .route("/api/v1/channels/{name}/approvals", get(api_pending_approvals))
         .route("/auth/mobile", get(auth_mobile_redirect))
         .route("/join/{channel}", get(channel_invite_page))
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)) // 12MB
@@ -421,6 +423,74 @@ async fn api_did_signing_key(
 
 /// Verify a message's cryptographic signature by msgid.
 /// Returns the message, signature, verification result, and the math to prove it.
+/// GET /api/v1/channels/{name}/agent-capabilities — list active capability grants.
+async fn api_agent_capabilities(
+    State(state): State<Arc<SharedState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Json<serde_json::Value> {
+    let channel = format!("#{name}");
+    let grants: Vec<serde_json::Value> = state
+        .with_db(|db| {
+            // Get all agents in the channel
+            let members: Vec<String> = {
+                let channels = state.channels.lock();
+                channels.get(&channel.to_lowercase())
+                    .map(|ch| ch.members.iter().cloned().collect())
+                    .unwrap_or_default()
+            };
+            let dids: Vec<String> = {
+                let sd = state.session_dids.lock();
+                members.iter().filter_map(|sid| sd.get(sid).cloned()).collect()
+            };
+            let mut all = Vec::new();
+            for did in &dids {
+                for g in db.get_capabilities(&channel.to_lowercase(), did) {
+                    all.push(serde_json::json!({
+                        "id": g.id,
+                        "agent_did": g.agent_did,
+                        "capability": g.capability,
+                        "scope": g.scope,
+                        "ttl_seconds": g.ttl_seconds,
+                        "requires_approval": g.requires_approval,
+                        "rate_limit": g.rate_limit,
+                        "granted_by": g.granted_by,
+                        "granted_at": g.granted_at,
+                        "expires_at": g.expires_at,
+                    }));
+                }
+            }
+            Ok(all)
+        })
+        .unwrap_or_default();
+    Json(serde_json::json!({ "channel": channel, "capabilities": grants }))
+}
+
+/// GET /api/v1/channels/{name}/approvals — list pending approvals.
+async fn api_pending_approvals(
+    State(state): State<Arc<SharedState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Json<serde_json::Value> {
+    let channel = format!("#{name}");
+    let approvals: Vec<serde_json::Value> = state
+        .with_db(|db| {
+            Ok(db.get_pending_approvals(&channel.to_lowercase())
+                .into_iter()
+                .map(|a| {
+                    serde_json::json!({
+                        "id": a.id,
+                        "agent_did": a.agent_did,
+                        "capability": a.capability,
+                        "resource": a.resource,
+                        "requested_at": a.requested_at,
+                        "expires_at": a.expires_at,
+                    })
+                })
+                .collect::<Vec<_>>())
+        })
+        .unwrap_or_default();
+    Json(serde_json::json!({ "channel": channel, "approvals": approvals }))
+}
+
 /// GET /api/v1/actors/{did} — identity card for any actor (human or agent).
 async fn api_actor_identity(
     State(state): State<Arc<SharedState>>,

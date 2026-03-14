@@ -48,10 +48,21 @@ async fn start_test_server(
     std::net::SocketAddr,
     tokio::task::JoinHandle<anyhow::Result<()>>,
 ) {
+    start_test_server_with_db(resolver, false).await
+}
+
+async fn start_test_server_with_db(
+    resolver: DidResolver,
+    enable_db: bool,
+) -> (
+    std::net::SocketAddr,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
     let config = freeq_server::config::ServerConfig {
         listen_addr: "127.0.0.1:0".to_string(),
         server_name: "test-server".to_string(),
         challenge_timeout_secs: 60,
+        db_path: if enable_db { Some(":memory:".to_string()) } else { None },
         ..Default::default()
     };
     let server = freeq_server::server::Server::with_resolver(config, resolver);
@@ -730,6 +741,166 @@ async fn presence_no_params() {
     .await;
 
     handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 2: Governance
+// ══════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn governance_pause_resume() {
+    start_deadlock_detector();
+    let (addr, server_handle) = start_test_server(empty_resolver()).await;
+
+    // Op (human with channel ops)
+    let (_op_did, op_handle, mut op_events) = connect_did_key(addr, "operator").await;
+    // Agent
+    let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "govbot").await;
+    bot_handle.register_agent("agent").await.unwrap();
+    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+
+    // Both join channel — op gets ops as first joiner
+    op_handle.join("#governed").await.unwrap();
+    expect_event(&mut op_events, 2000, |e| matches!(e, Event::Joined { .. }), "Op joined").await;
+    bot_handle.join("#governed").await.unwrap();
+    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+
+    // Op pauses the bot
+    op_handle.pause_agent("govbot", Some("maintenance")).await.unwrap();
+
+    // Bot should receive governance TAGMSG
+    expect_raw_line(&mut bot_events, 2000, "governance=pause", "Bot receives PAUSE").await;
+
+    // Op should see the channel notice
+    expect_raw_line(&mut op_events, 2000, "paused by operator", "Channel PAUSE notice").await;
+
+    // Op resumes the bot
+    op_handle.resume_agent("govbot").await.unwrap();
+    expect_raw_line(&mut bot_events, 2000, "governance=resume", "Bot receives RESUME").await;
+
+    bot_handle.quit(None).await.unwrap();
+    op_handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn governance_revoke_disconnects() {
+    start_deadlock_detector();
+    let (addr, server_handle) = start_test_server(empty_resolver()).await;
+
+    let (_op_did, op_handle, mut op_events) = connect_did_key(addr, "revoker").await;
+    let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "revbot").await;
+    bot_handle.register_agent("agent").await.unwrap();
+    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+
+    op_handle.join("#revtest").await.unwrap();
+    expect_event(&mut op_events, 2000, |e| matches!(e, Event::Joined { .. }), "Op joined").await;
+    bot_handle.join("#revtest").await.unwrap();
+    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+
+    // Op revokes the bot
+    op_handle.revoke_agent("revbot", Some("bye")).await.unwrap();
+
+    // Bot should receive ERROR (force disconnect)
+    expect_raw_line(&mut bot_events, 2000, "ERROR", "Bot receives ERROR/disconnect").await;
+
+    op_handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn governance_requires_op() {
+    start_deadlock_detector();
+    let (addr, server_handle) = start_test_server(empty_resolver()).await;
+
+    // Two users, neither is op of the other's channel
+    let (_did1, user1, mut ev1) = connect_did_key(addr, "nopower").await;
+    let (_did2, user2, mut ev2) = connect_did_key(addr, "target").await;
+    user2.register_agent("agent").await.unwrap();
+    expect_raw_line(&mut ev2, 2000, "registered as agent", "AGENT REGISTER").await;
+
+    // user2 creates a channel (gets ops)
+    user2.join("#botchan").await.unwrap();
+    expect_event(&mut ev2, 2000, |e| matches!(e, Event::Joined { .. }), "User2 joined").await;
+    // user1 joins (not op)
+    user1.join("#botchan").await.unwrap();
+    expect_event(&mut ev1, 2000, |e| matches!(e, Event::Joined { .. }), "User1 joined").await;
+
+    // user1 tries to pause user2 — should fail
+    user1.pause_agent("target", None).await.unwrap();
+    expect_raw_line(&mut ev1, 2000, "482", "PAUSE rejected: not op").await;
+
+    user1.quit(None).await.unwrap();
+    user2.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn approval_request_and_grant() {
+    start_deadlock_detector();
+    let (addr, server_handle) = start_test_server_with_db(empty_resolver(), true).await;
+
+    let (_op_did, op_handle, mut op_events) = connect_did_key(addr, "approver").await;
+    let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "reqbot").await;
+    bot_handle.register_agent("agent").await.unwrap();
+    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+
+    op_handle.join("#approval").await.unwrap();
+    expect_event(&mut op_events, 2000, |e| matches!(e, Event::Joined { .. }), "Op joined").await;
+    bot_handle.join("#approval").await.unwrap();
+    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+
+    // Bot requests deploy approval
+    bot_handle.request_approval("#approval", "deploy", Some("landing-page")).await.unwrap();
+
+    // Bot gets confirmation
+    expect_raw_line(&mut bot_events, 2000, "Approval requested", "Request confirmed").await;
+
+    // Op sees notification in channel
+    expect_raw_line(&mut op_events, 2000, "requests approval", "Op sees request").await;
+
+    // Op approves
+    op_handle.approve_agent("reqbot", "deploy").await.unwrap();
+
+    // Bot gets approval granted TAGMSG
+    expect_raw_line(&mut bot_events, 2000, "approval_granted", "Bot gets approval").await;
+
+    // Channel sees approval notice
+    expect_raw_line(&mut op_events, 2000, "approved", "Channel sees approval").await;
+
+    bot_handle.quit(None).await.unwrap();
+    op_handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn approval_request_and_deny() {
+    start_deadlock_detector();
+    let (addr, server_handle) = start_test_server_with_db(empty_resolver(), true).await;
+
+    let (_op_did, op_handle, mut op_events) = connect_did_key(addr, "denier").await;
+    let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "denybot").await;
+    bot_handle.register_agent("agent").await.unwrap();
+    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+
+    op_handle.join("#denytest").await.unwrap();
+    expect_event(&mut op_events, 2000, |e| matches!(e, Event::Joined { .. }), "Op joined").await;
+    bot_handle.join("#denytest").await.unwrap();
+    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+
+    bot_handle.request_approval("#denytest", "deploy", None).await.unwrap();
+    expect_raw_line(&mut bot_events, 2000, "Approval requested", "Request confirmed").await;
+    expect_raw_line(&mut op_events, 2000, "requests approval", "Op sees request").await;
+
+    // Op denies
+    op_handle.deny_agent("denybot", "deploy", Some("not ready")).await.unwrap();
+
+    // Bot gets denial
+    expect_raw_line(&mut bot_events, 2000, "approval_denied", "Bot gets denial").await;
+
+    bot_handle.quit(None).await.unwrap();
+    op_handle.quit(None).await.unwrap();
     server_handle.abort();
 }
 

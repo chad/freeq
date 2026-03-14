@@ -1356,14 +1356,289 @@ where
                             }
                         }
                     }
+                    // ── Phase 2: Governance signals ──────────────────
+                    // AGENT PAUSE <nick> [reason]
+                    "PAUSE" | "RESUME" | "REVOKE" => {
+                        let target_nick = match msg.params.get(1) {
+                            Some(n) => n.clone(),
+                            None => {
+                                let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
+                                    vec![&nick, "AGENT", "Usage: AGENT PAUSE/RESUME/REVOKE <nick> [reason]"]);
+                                send(&state, &session_id, format!("{reply}\r\n"));
+                                continue;
+                            }
+                        };
+                        let reason = msg.params.get(2).cloned();
+                        let action = subcmd.to_lowercase();
+
+                        // Find target session
+                        let target_session = state.nick_to_session.lock().get_session(&target_nick).map(|s| s.to_string());
+                        let target_session = match target_session {
+                            Some(s) => s,
+                            None => {
+                                let reply = Message::from_server(&server_name, irc::ERR_NOSUCHNICK,
+                                    vec![&nick, &target_nick, "No such nick"]);
+                                send(&state, &session_id, format!("{reply}\r\n"));
+                                continue;
+                            }
+                        };
+
+                        // Verify sender is op in a shared channel OR server oper
+                        let is_oper = conn.is_oper;
+                        let is_op_in_shared = {
+                            let channels = state.channels.lock();
+                            channels.values().any(|ch| {
+                                ch.members.contains(&session_id)
+                                    && ch.members.contains(&target_session)
+                                    && ch.ops.contains(&session_id)
+                            })
+                        };
+                        if !is_oper && !is_op_in_shared {
+                            let reply = Message::from_server(&server_name, "482",
+                                vec![&nick, "You must be an op in a shared channel"]);
+                            send(&state, &session_id, format!("{reply}\r\n"));
+                            continue;
+                        }
+
+                        // Send governance TAGMSG to the target agent
+                        let reason_tag = reason.as_deref().map(|r| format!(";+freeq.at/reason={r}")).unwrap_or_default();
+                        let hostmask = conn.hostmask();
+                        let gov_msg = format!(
+                            "@+freeq.at/governance={action};+freeq.at/issued-by={}{reason_tag} :{hostmask} TAGMSG {target_nick}\r\n",
+                            nick
+                        );
+                        if let Some(tx) = state.connections.lock().get(&target_session) {
+                            let _ = tx.try_send(gov_msg);
+                        }
+
+                        // Broadcast human-readable notice to shared channels
+                        let emoji = match action.as_str() {
+                            "pause" => "⏸",
+                            "resume" => "▶",
+                            "revoke" => "❌",
+                            _ => "🔧",
+                        };
+                        let reason_str = reason.as_deref().map(|r| format!(": {r}")).unwrap_or_default();
+                        let notice_text = format!("{emoji} {target_nick} {action}d by {nick}{reason_str}");
+                        {
+                            let shared_channels: Vec<String> = {
+                                let channels = state.channels.lock();
+                                channels.iter()
+                                    .filter(|(_, ch)| ch.members.contains(&session_id) && ch.members.contains(&target_session))
+                                    .map(|(name, _)| name.clone())
+                                    .collect()
+                            };
+                            for ch_name in &shared_channels {
+                                helpers::broadcast_to_channel(
+                                    &state, ch_name,
+                                    &format!(":{server_name} NOTICE {ch_name} :{notice_text}\r\n"),
+                                );
+                            }
+                        }
+
+                        // Log to DB
+                        let target_did = state.session_dids.lock().get(&target_session).cloned();
+                        if let Some(ref did) = target_did {
+                            let issuer_did = conn.authenticated_did.as_deref().unwrap_or(&nick);
+                            state.with_db(|db| db.log_governance(None, did, &action, issuer_did, reason.as_deref()));
+                        }
+
+                        // For REVOKE: also revoke all capabilities and force part
+                        if action == "revoke" {
+                            if let Some(ref did) = target_did {
+                                let channels: Vec<String> = {
+                                    let chs = state.channels.lock();
+                                    chs.iter()
+                                        .filter(|(_, ch)| ch.members.contains(&target_session))
+                                        .map(|(name, _)| name.clone())
+                                        .collect()
+                                };
+                                for ch in &channels {
+                                    state.with_db(|db| db.revoke_all_capabilities(ch, did));
+                                }
+                            }
+                            // Send ERROR to force disconnect
+                            if let Some(tx) = state.connections.lock().get(&target_session) {
+                                let _ = tx.try_send(format!("ERROR :Revoked by {nick}{reason_str}\r\n"));
+                            }
+                        }
+
+                        tracing::info!(action = %action, target = %target_nick, by = %nick, "AGENT governance");
+                    }
+
+                    // AGENT APPROVE <nick> <capability>
+                    "APPROVE" => {
+                        let (target_nick, capability) = match (msg.params.get(1), msg.params.get(2)) {
+                            (Some(n), Some(c)) => (n.clone(), c.clone()),
+                            _ => {
+                                let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
+                                    vec![&nick, "AGENT", "Usage: AGENT APPROVE <nick> <capability>"]);
+                                send(&state, &session_id, format!("{reply}\r\n"));
+                                continue;
+                            }
+                        };
+
+                        let target_did = {
+                            let ts = state.nick_to_session.lock().get_session(&target_nick).map(|s| s.to_string());
+                            ts.and_then(|sid| state.session_dids.lock().get(&sid).cloned())
+                        };
+
+                        if let Some(ref did) = target_did {
+                            let issuer_did = conn.authenticated_did.as_deref().unwrap_or(&nick);
+                            // Find pending approval in any shared channel
+                            let approval = {
+                                let shared: Vec<String> = {
+                                    let channels = state.channels.lock();
+                                    channels.keys().cloned().collect()
+                                };
+                                shared.into_iter().find_map(|ch| {
+                                    state.with_db(|db| Ok(db.find_pending_approval_for_agent(&ch, did, &capability))).flatten()
+                                })
+                            };
+
+                            if let Some(approval) = approval {
+                                let granted = state.with_db(|db| db.grant_approval(&approval.id, issuer_did))
+                                    .unwrap_or(false);
+                                if granted {
+                                    // Notify agent
+                                    let target_session = state.nick_to_session.lock().get_session(&target_nick).map(|s| s.to_string());
+                                    if let Some(ref ts) = target_session {
+                                        let line = format!(
+                                            "@+freeq.at/governance=approval_granted;+freeq.at/capability={capability} :{server_name} TAGMSG {target_nick}\r\n"
+                                        );
+                                        if let Some(tx) = state.connections.lock().get(ts) {
+                                            let _ = tx.try_send(line);
+                                        }
+                                    }
+                                    // Notify channel
+                                    let notice = format!(":{server_name} NOTICE {} :✅ {nick} approved '{capability}' for {target_nick}\r\n", approval.channel);
+                                    helpers::broadcast_to_channel(&state, &approval.channel, &notice);
+
+                                    state.with_db(|db| db.log_governance(Some(&approval.channel), did, "approve", issuer_did, Some(&capability)));
+                                    tracing::info!(target = %target_nick, capability = %capability, by = %nick, "Approval granted");
+                                }
+                            } else {
+                                let reply = Message::from_server(&server_name, "NOTICE",
+                                    vec![&nick, &format!("No pending approval for {target_nick}/{capability}")]);
+                                send(&state, &session_id, format!("{reply}\r\n"));
+                            }
+                        } else {
+                            let reply = Message::from_server(&server_name, irc::ERR_NOSUCHNICK,
+                                vec![&nick, &target_nick, "No such nick or not authenticated"]);
+                            send(&state, &session_id, format!("{reply}\r\n"));
+                        }
+                    }
+
+                    // AGENT DENY <nick> <capability> [reason]
+                    "DENY" => {
+                        let (target_nick, capability) = match (msg.params.get(1), msg.params.get(2)) {
+                            (Some(n), Some(c)) => (n.clone(), c.clone()),
+                            _ => {
+                                let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
+                                    vec![&nick, "AGENT", "Usage: AGENT DENY <nick> <capability> [reason]"]);
+                                send(&state, &session_id, format!("{reply}\r\n"));
+                                continue;
+                            }
+                        };
+                        let reason = msg.params.get(3).cloned();
+                        let target_did = {
+                            let ts = state.nick_to_session.lock().get_session(&target_nick).map(|s| s.to_string());
+                            ts.and_then(|sid| state.session_dids.lock().get(&sid).cloned())
+                        };
+
+                        if let Some(ref did) = target_did {
+                            let issuer_did = conn.authenticated_did.as_deref().unwrap_or(&nick);
+                            let shared: Vec<String> = state.channels.lock().keys().cloned().collect();
+                            let approval = shared.into_iter().find_map(|ch| {
+                                state.with_db(|db| Ok(db.find_pending_approval_for_agent(&ch, did, &capability))).flatten()
+                            });
+
+                            if let Some(approval) = approval {
+                                let denied = state.with_db(|db| db.deny_approval(&approval.id, issuer_did, reason.as_deref()))
+                                    .unwrap_or(false);
+                                if denied {
+                                    let target_session = state.nick_to_session.lock().get_session(&target_nick).map(|s| s.to_string());
+                                    if let Some(ref ts) = target_session {
+                                        let reason_tag = reason.as_deref().map(|r| format!(";+freeq.at/reason={r}")).unwrap_or_default();
+                                        let line = format!(
+                                            "@+freeq.at/governance=approval_denied;+freeq.at/capability={capability}{reason_tag} :{server_name} TAGMSG {target_nick}\r\n"
+                                        );
+                                        if let Some(tx) = state.connections.lock().get(ts) {
+                                            let _ = tx.try_send(line);
+                                        }
+                                    }
+                                    let reason_str = reason.as_deref().map(|r| format!(": {r}")).unwrap_or_default();
+                                    let notice = format!(":{server_name} NOTICE {} :❌ {nick} denied '{capability}' for {target_nick}{reason_str}\r\n", approval.channel);
+                                    helpers::broadcast_to_channel(&state, &approval.channel, &notice);
+                                    tracing::info!(target = %target_nick, capability = %capability, by = %nick, "Approval denied");
+                                }
+                            }
+                        }
+                    }
+
                     _ => {
                         let reply = Message::from_server(
                             &server_name,
                             "NOTICE",
-                            vec![&nick, &format!("Unknown AGENT subcommand: {subcmd}. Use: AGENT REGISTER")],
+                            vec![&nick, &format!("Unknown AGENT subcommand: {subcmd}. Use: REGISTER, PAUSE, RESUME, REVOKE, APPROVE, DENY")],
                         );
                         send(&state, &session_id, format!("{reply}\r\n"));
                     }
+                }
+            }
+
+            // APPROVAL_REQUEST — agent requests approval for a capability.
+            // Usage: APPROVAL_REQUEST #channel :capability;resource=description
+            "APPROVAL_REQUEST" => {
+                if !conn.registered { continue; }
+                let nick = conn.nick_or_star().to_string();
+                let channel = match msg.params.first() {
+                    Some(c) if c.starts_with('#') => c.clone(),
+                    _ => {
+                        let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
+                            vec![&nick, "APPROVAL_REQUEST", "Usage: APPROVAL_REQUEST #channel :capability;resource=desc"]);
+                        send(&state, &session_id, format!("{reply}\r\n"));
+                        continue;
+                    }
+                };
+                let raw_params = msg.params.get(1).cloned().unwrap_or_default();
+                let mut capability = raw_params.as_str();
+                let mut resource: Option<String> = None;
+                if let Some((cap, rest)) = raw_params.split_once(';') {
+                    capability = cap;
+                    for part in rest.split(';') {
+                        if let Some((k, v)) = part.split_once('=') {
+                            if k.trim() == "resource" { resource = Some(v.trim().to_string()); }
+                        }
+                    }
+                }
+
+                if let Some(ref did) = conn.authenticated_did {
+                    let approval_id = crate::msgid::generate();
+                    state.with_db(|db| db.create_approval(&approval_id, &channel, did, capability, resource.as_deref()));
+
+                    // Notify channel ops
+                    let resource_str = resource.as_deref().map(|r| format!(" on {r}")).unwrap_or_default();
+                    let notice = format!(
+                        ":{server_name} NOTICE {channel} :🔔 {nick} requests approval for '{capability}'{resource_str}. Use: AGENT APPROVE {nick} {capability}\r\n"
+                    );
+                    helpers::broadcast_to_channel(&state, &channel, &notice);
+
+                    // Send structured TAGMSG for rich clients
+                    let tagmsg = format!(
+                        "@+freeq.at/event=approval_request;+freeq.at/approval-id={approval_id};+freeq.at/capability={capability} :{} TAGMSG {channel}\r\n",
+                        conn.hostmask()
+                    );
+                    helpers::broadcast_to_channel(&state, &channel, &tagmsg);
+
+                    let reply = Message::from_server(&server_name, "NOTICE",
+                        vec![&nick, &format!("Approval requested: {capability} in {channel} (id: {approval_id})")]);
+                    send(&state, &session_id, format!("{reply}\r\n"));
+                    tracing::info!(nick = %nick, channel = %channel, capability = %capability, "Approval requested");
+                } else {
+                    let reply = Message::from_server(&server_name, "NOTICE",
+                        vec![&nick, "Must be authenticated to request approval"]);
+                    send(&state, &session_id, format!("{reply}\r\n"));
                 }
             }
 

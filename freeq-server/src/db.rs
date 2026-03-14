@@ -219,6 +219,52 @@ impl Db {
             let _ = self.conn.execute(sql, []);
         }
 
+        // Phase 2: agent governance tables
+        self.conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS agent_capability_grants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel TEXT NOT NULL,
+                agent_did TEXT NOT NULL,
+                capability TEXT NOT NULL,
+                scope TEXT,
+                ttl_seconds INTEGER DEFAULT 0,
+                requires_approval INTEGER DEFAULT 0,
+                rate_limit INTEGER DEFAULT 0,
+                granted_by TEXT NOT NULL,
+                granted_at INTEGER NOT NULL,
+                expires_at INTEGER,
+                revoked_at INTEGER,
+                UNIQUE(channel, agent_did, capability, scope)
+            );
+
+            CREATE TABLE IF NOT EXISTS governance_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel TEXT,
+                target_did TEXT NOT NULL,
+                action TEXT NOT NULL,
+                issued_by TEXT NOT NULL,
+                reason TEXT,
+                timestamp INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS pending_approvals (
+                id TEXT PRIMARY KEY,
+                channel TEXT NOT NULL,
+                agent_did TEXT NOT NULL,
+                capability TEXT NOT NULL,
+                resource TEXT,
+                requested_at INTEGER NOT NULL,
+                granted_by TEXT,
+                granted_at INTEGER,
+                denied_by TEXT,
+                denied_at INTEGER,
+                deny_reason TEXT,
+                expires_at INTEGER
+            );
+            ",
+        )?;
+
         Ok(())
     }
 
@@ -1013,5 +1059,255 @@ mod tests {
 
         let loaded = db.load_channels().unwrap();
         assert_eq!(loaded.get("#test").unwrap().bans.len(), 1);
+    }
+}
+
+// ── Agent governance DB methods ────────────────────────────────────
+
+/// A capability grant row.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CapabilityGrantRow {
+    pub id: i64,
+    pub channel: String,
+    pub agent_did: String,
+    pub capability: String,
+    pub scope: Option<String>,
+    pub ttl_seconds: u64,
+    pub requires_approval: bool,
+    pub rate_limit: u32,
+    pub granted_by: String,
+    pub granted_at: i64,
+    pub expires_at: Option<i64>,
+    pub revoked_at: Option<i64>,
+}
+
+/// A governance log entry.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GovernanceLogEntry {
+    pub id: i64,
+    pub channel: Option<String>,
+    pub target_did: String,
+    pub action: String,
+    pub issued_by: String,
+    pub reason: Option<String>,
+    pub timestamp: i64,
+}
+
+/// A pending approval row.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PendingApprovalRow {
+    pub id: String,
+    pub channel: String,
+    pub agent_did: String,
+    pub capability: String,
+    pub resource: Option<String>,
+    pub requested_at: i64,
+    pub granted_by: Option<String>,
+    pub granted_at: Option<i64>,
+    pub denied_by: Option<String>,
+    pub denied_at: Option<i64>,
+    pub deny_reason: Option<String>,
+    pub expires_at: Option<i64>,
+}
+
+impl Db {
+    // ── Capability grants ──────────────────────────────────────────
+
+    pub fn grant_capability(
+        &self,
+        channel: &str,
+        agent_did: &str,
+        capability: &str,
+        scope: Option<&str>,
+        ttl_seconds: u64,
+        requires_approval: bool,
+        rate_limit: u32,
+        granted_by: &str,
+    ) -> SqlResult<i64> {
+        let now = chrono::Utc::now().timestamp();
+        let expires_at = if ttl_seconds > 0 {
+            Some(now + ttl_seconds as i64)
+        } else {
+            None
+        };
+        self.conn.execute(
+            "INSERT INTO agent_capability_grants
+             (channel, agent_did, capability, scope, ttl_seconds, requires_approval, rate_limit, granted_by, granted_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(channel, agent_did, capability, scope) DO UPDATE SET
+                ttl_seconds=excluded.ttl_seconds,
+                requires_approval=excluded.requires_approval,
+                rate_limit=excluded.rate_limit,
+                granted_by=excluded.granted_by,
+                granted_at=excluded.granted_at,
+                expires_at=excluded.expires_at,
+                revoked_at=NULL",
+            params![channel, agent_did, capability, scope, ttl_seconds as i64, requires_approval as i32, rate_limit as i32, granted_by, now, expires_at],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn get_capabilities(&self, channel: &str, agent_did: &str) -> Vec<CapabilityGrantRow> {
+        let mut stmt = self.conn
+            .prepare(
+                "SELECT id, channel, agent_did, capability, scope, ttl_seconds, requires_approval, rate_limit, granted_by, granted_at, expires_at, revoked_at
+                 FROM agent_capability_grants
+                 WHERE channel = ?1 AND agent_did = ?2 AND revoked_at IS NULL
+                   AND (expires_at IS NULL OR expires_at > ?3)"
+            )
+            .unwrap();
+        let now = chrono::Utc::now().timestamp();
+        stmt.query_map(params![channel, agent_did, now], |row| {
+            Ok(CapabilityGrantRow {
+                id: row.get(0)?,
+                channel: row.get(1)?,
+                agent_did: row.get(2)?,
+                capability: row.get(3)?,
+                scope: row.get(4)?,
+                ttl_seconds: row.get::<_, i64>(5)? as u64,
+                requires_approval: row.get::<_, i32>(6)? != 0,
+                rate_limit: row.get::<_, i32>(7)? as u32,
+                granted_by: row.get(8)?,
+                granted_at: row.get(9)?,
+                expires_at: row.get(10)?,
+                revoked_at: row.get(11)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    pub fn revoke_capability(&self, grant_id: i64) -> SqlResult<()> {
+        let now = chrono::Utc::now().timestamp();
+        self.conn.execute(
+            "UPDATE agent_capability_grants SET revoked_at = ?1 WHERE id = ?2",
+            params![now, grant_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn revoke_all_capabilities(&self, channel: &str, agent_did: &str) -> SqlResult<usize> {
+        let now = chrono::Utc::now().timestamp();
+        let count = self.conn.execute(
+            "UPDATE agent_capability_grants SET revoked_at = ?1
+             WHERE channel = ?2 AND agent_did = ?3 AND revoked_at IS NULL",
+            params![now, channel, agent_did],
+        )?;
+        Ok(count)
+    }
+
+    pub fn expire_capabilities(&self) -> SqlResult<usize> {
+        let now = chrono::Utc::now().timestamp();
+        let count = self.conn.execute(
+            "UPDATE agent_capability_grants SET revoked_at = ?1
+             WHERE expires_at IS NOT NULL AND expires_at < ?1 AND revoked_at IS NULL",
+            params![now],
+        )?;
+        Ok(count)
+    }
+
+    // ── Governance log ─────────────────────────────────────────────
+
+    pub fn log_governance(
+        &self,
+        channel: Option<&str>,
+        target_did: &str,
+        action: &str,
+        issued_by: &str,
+        reason: Option<&str>,
+    ) -> SqlResult<()> {
+        let now = chrono::Utc::now().timestamp();
+        self.conn.execute(
+            "INSERT INTO governance_log (channel, target_did, action, issued_by, reason, timestamp)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![channel, target_did, action, issued_by, reason, now],
+        )?;
+        Ok(())
+    }
+
+    // ── Pending approvals ──────────────────────────────────────────
+
+    pub fn create_approval(
+        &self,
+        id: &str,
+        channel: &str,
+        agent_did: &str,
+        capability: &str,
+        resource: Option<&str>,
+    ) -> SqlResult<()> {
+        let now = chrono::Utc::now().timestamp();
+        let expires_at = now + 3600; // 1 hour
+        self.conn.execute(
+            "INSERT INTO pending_approvals (id, channel, agent_did, capability, resource, requested_at, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, channel, agent_did, capability, resource, now, expires_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn grant_approval(&self, id: &str, granted_by: &str) -> SqlResult<bool> {
+        let now = chrono::Utc::now().timestamp();
+        let count = self.conn.execute(
+            "UPDATE pending_approvals SET granted_by = ?1, granted_at = ?2
+             WHERE id = ?3 AND granted_by IS NULL AND denied_by IS NULL
+               AND (expires_at IS NULL OR expires_at > ?2)",
+            params![granted_by, now, id],
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn deny_approval(&self, id: &str, denied_by: &str, reason: Option<&str>) -> SqlResult<bool> {
+        let now = chrono::Utc::now().timestamp();
+        let count = self.conn.execute(
+            "UPDATE pending_approvals SET denied_by = ?1, denied_at = ?2, deny_reason = ?3
+             WHERE id = ?4 AND granted_by IS NULL AND denied_by IS NULL",
+            params![denied_by, now, reason, id],
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn get_pending_approvals(&self, channel: &str) -> Vec<PendingApprovalRow> {
+        let mut stmt = self.conn
+            .prepare(
+                "SELECT id, channel, agent_did, capability, resource, requested_at,
+                        granted_by, granted_at, denied_by, denied_at, deny_reason, expires_at
+                 FROM pending_approvals
+                 WHERE channel = ?1 AND granted_by IS NULL AND denied_by IS NULL
+                   AND (expires_at IS NULL OR expires_at > ?2)
+                 ORDER BY requested_at ASC"
+            )
+            .unwrap();
+        let now = chrono::Utc::now().timestamp();
+        stmt.query_map(params![channel, now], |row| {
+            Ok(PendingApprovalRow {
+                id: row.get(0)?,
+                channel: row.get(1)?,
+                agent_did: row.get(2)?,
+                capability: row.get(3)?,
+                resource: row.get(4)?,
+                requested_at: row.get(5)?,
+                granted_by: row.get(6)?,
+                granted_at: row.get(7)?,
+                denied_by: row.get(8)?,
+                denied_at: row.get(9)?,
+                deny_reason: row.get(10)?,
+                expires_at: row.get(11)?,
+            })
+        })
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect()
+    }
+
+    pub fn find_pending_approval_for_agent(
+        &self,
+        channel: &str,
+        agent_did: &str,
+        capability: &str,
+    ) -> Option<PendingApprovalRow> {
+        self.get_pending_approvals(channel)
+            .into_iter()
+            .find(|a| a.agent_did == agent_did && a.capability == capability)
     }
 }
