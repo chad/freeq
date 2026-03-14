@@ -196,6 +196,9 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/actors/{did}", get(api_actor_identity))
         .route("/api/v1/channels/{name}/agent-capabilities", get(api_agent_capabilities))
         .route("/api/v1/channels/{name}/approvals", get(api_pending_approvals))
+        .route("/api/v1/channels/{name}/events", get(api_channel_events))
+        .route("/api/v1/channels/{name}/audit", get(api_channel_audit))
+        .route("/api/v1/tasks/{task_id}", get(api_task))
         .route("/auth/mobile", get(auth_mobile_redirect))
         .route("/join/{channel}", get(channel_invite_page))
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)) // 12MB
@@ -489,6 +492,159 @@ async fn api_pending_approvals(
         })
         .unwrap_or_default();
     Json(serde_json::json!({ "channel": channel, "approvals": approvals }))
+}
+
+/// GET /api/v1/channels/{name}/events — query coordination events.
+async fn api_channel_events(
+    State(state): State<Arc<SharedState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let channel = format!("#{name}");
+    let event_type = params.get("type").map(|s| s.as_str());
+    let ref_id = params.get("ref_id").map(|s| s.as_str());
+    let actor = params.get("actor").map(|s| s.as_str());
+    let since = params.get("since").and_then(|s| {
+        chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.timestamp())
+            .or_else(|| s.parse::<i64>().ok())
+    });
+    let limit = params.get("limit").and_then(|s| s.parse().ok()).unwrap_or(100usize);
+
+    let events: Vec<serde_json::Value> = state
+        .with_db(|db| {
+            Ok(db.query_coordination_events(&channel.to_lowercase(), event_type, ref_id, actor, since, limit)
+                .into_iter()
+                .map(|e| serde_json::json!({
+                    "event_id": e.event_id,
+                    "event_type": e.event_type,
+                    "actor_did": e.actor_did,
+                    "channel": e.channel,
+                    "ref_id": e.ref_id,
+                    "payload": serde_json::from_str::<serde_json::Value>(&e.payload_json).unwrap_or(serde_json::json!({})),
+                    "signature": e.signature,
+                    "timestamp": e.timestamp,
+                }))
+                .collect::<Vec<_>>())
+        })
+        .unwrap_or_default();
+    Json(serde_json::json!({ "channel": channel, "events": events }))
+}
+
+/// GET /api/v1/tasks/{task_id} — task detail with all related events.
+async fn api_task(
+    State(state): State<Arc<SharedState>>,
+    axum::extract::Path(task_id): axum::extract::Path<String>,
+) -> Json<serde_json::Value> {
+    let result = state.with_db(|db| {
+        let task = db.get_task(&task_id);
+        let events = db.get_task_events_all_channels(&task_id);
+        Ok((task, events))
+    });
+
+    match result {
+        Some((Some(task), events)) => {
+            let status = events.iter().rev()
+                .find(|e| e.event_type == "task_complete" || e.event_type == "task_failed")
+                .map(|e| e.event_type.clone())
+                .unwrap_or_else(|| "in_progress".to_string());
+            let evidence: Vec<serde_json::Value> = events.iter()
+                .filter(|e| e.event_type == "evidence_attach")
+                .map(|e| serde_json::json!({
+                    "event_id": e.event_id,
+                    "payload": serde_json::from_str::<serde_json::Value>(&e.payload_json).unwrap_or(serde_json::json!({})),
+                    "timestamp": e.timestamp,
+                }))
+                .collect();
+            let all_events: Vec<serde_json::Value> = events.iter()
+                .map(|e| serde_json::json!({
+                    "event_id": e.event_id,
+                    "event_type": e.event_type,
+                    "actor_did": e.actor_did,
+                    "payload": serde_json::from_str::<serde_json::Value>(&e.payload_json).unwrap_or(serde_json::json!({})),
+                    "signature": e.signature,
+                    "timestamp": e.timestamp,
+                }))
+                .collect();
+            Json(serde_json::json!({
+                "task_id": task.event_id,
+                "description": serde_json::from_str::<serde_json::Value>(&task.payload_json)
+                    .ok().and_then(|v| v.get("description").cloned())
+                    .unwrap_or(serde_json::json!(null)),
+                "status": status,
+                "actor_did": task.actor_did,
+                "channel": task.channel,
+                "created_at": task.timestamp,
+                "events": all_events,
+                "evidence": evidence,
+            }))
+        }
+        _ => Json(serde_json::json!({ "error": "Task not found" })),
+    }
+}
+
+/// GET /api/v1/channels/{name}/audit — unified audit timeline.
+async fn api_channel_audit(
+    State(state): State<Arc<SharedState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let channel = format!("#{name}");
+    let actor = params.get("actor").map(|s| s.as_str());
+    let since = params.get("since").and_then(|s| {
+        chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.timestamp())
+            .or_else(|| s.parse::<i64>().ok())
+    });
+    let limit = params.get("limit").and_then(|s| s.parse().ok()).unwrap_or(200usize);
+
+    let mut timeline: Vec<serde_json::Value> = Vec::new();
+
+    // 1. Coordination events
+    if let Some(events) = state.with_db(|db| {
+        Ok(db.query_coordination_events(&channel.to_lowercase(), None, None, actor, since, limit))
+    }) {
+        for e in events {
+            timeline.push(serde_json::json!({
+                "timestamp": e.timestamp,
+                "category": "coordination",
+                "event": e.event_type,
+                "actor_did": e.actor_did,
+                "details": serde_json::from_str::<serde_json::Value>(&e.payload_json).unwrap_or(serde_json::json!({})),
+                "signature": e.signature,
+                "event_id": e.event_id,
+            }));
+        }
+    }
+
+    // 2. Governance log
+    if let Some(entries) = state.with_db(|db| {
+        Ok(db.query_governance_log(Some(&channel), limit)
+            .into_iter()
+            .map(|e| serde_json::json!({
+                "timestamp": e.timestamp,
+                "category": "governance",
+                "event": e.action,
+                "actor_did": e.target_did,
+                "details": {
+                    "issued_by": e.issued_by,
+                    "reason": e.reason,
+                },
+            }))
+            .collect::<Vec<_>>())
+    }) {
+        timeline.extend(entries);
+    }
+
+    // Sort by timestamp
+    timeline.sort_by(|a, b| {
+        let ta = a.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+        let tb = b.get("timestamp").and_then(|v| v.as_i64()).unwrap_or(0);
+        ta.cmp(&tb)
+    });
+    if timeline.len() > limit {
+        timeline.truncate(limit);
+    }
+
+    Json(serde_json::json!({ "channel": channel, "timeline": timeline }))
 }
 
 /// GET /api/v1/actors/{did} — identity card for any actor (human or agent).

@@ -84,11 +84,26 @@ async fn start_test_server_with_web(
         ..Default::default()
     };
     let server = freeq_server::server::Server::with_resolver(config, resolver);
-    let (irc_addr, handle) = server.start().await.unwrap();
-    // Web addr is irc_addr.port() + 1 by convention in tests? No — we need to get it.
-    // Actually the server binds web on a separate random port. Let me check the API.
-    // For now, we'll skip REST tests that need a web port and test via IRC commands.
-    (irc_addr, irc_addr, handle) // placeholder
+    server.start_with_web().await.unwrap()
+}
+
+async fn start_test_server_with_web_and_db(
+    resolver: DidResolver,
+) -> (
+    std::net::SocketAddr,
+    std::net::SocketAddr,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
+    let config = freeq_server::config::ServerConfig {
+        listen_addr: "127.0.0.1:0".to_string(),
+        web_addr: Some("127.0.0.1:0".to_string()),
+        server_name: "test-server".to_string(),
+        challenge_timeout_secs: 60,
+        db_path: Some(":memory:".to_string()),
+        ..Default::default()
+    };
+    let server = freeq_server::server::Server::with_resolver(config, resolver);
+    server.start_with_web().await.unwrap()
 }
 
 fn empty_resolver() -> DidResolver {
@@ -931,5 +946,188 @@ async fn presence_all_states() {
     }
 
     handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 3: Coordinated Work
+// ══════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn coordination_create_task() {
+    start_deadlock_detector();
+    let (addr, server_handle) = start_test_server_with_db(empty_resolver(), true).await;
+
+    let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "taskbot").await;
+    let (_user_did, user_handle, mut user_events) = connect_did_key(addr, "watcher").await;
+    bot_handle.register_agent("agent").await.unwrap();
+    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+
+    bot_handle.join("#tasks").await.unwrap();
+    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+    user_handle.join("#tasks").await.unwrap();
+    expect_event(&mut user_events, 2000, |e| matches!(e, Event::Joined { .. }), "User joined").await;
+
+    // Bot creates a task
+    let task_id = bot_handle.create_task("#tasks", "Build a todo app").await.unwrap();
+    assert!(!task_id.is_empty(), "Task ID should be non-empty");
+
+    // User sees the human-readable PRIVMSG
+    expect_raw_line(&mut user_events, 2000, "New task: Build a todo app", "User sees task creation").await;
+
+    bot_handle.quit(None).await.unwrap();
+    user_handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn coordination_full_task_lifecycle() {
+    start_deadlock_detector();
+    let (addr, server_handle) = start_test_server_with_db(empty_resolver(), true).await;
+
+    let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "lifecycle").await;
+    let (_user_did, user_handle, mut user_events) = connect_did_key(addr, "observer").await;
+    bot_handle.register_agent("agent").await.unwrap();
+    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+
+    bot_handle.join("#lifecycle").await.unwrap();
+    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+    user_handle.join("#lifecycle").await.unwrap();
+    expect_event(&mut user_events, 2000, |e| matches!(e, Event::Joined { .. }), "User joined").await;
+
+    // Create task
+    let task_id = bot_handle.create_task("#lifecycle", "Build something").await.unwrap();
+    expect_raw_line(&mut user_events, 3000, "New task", "User sees task").await;
+
+    // Update task through phases (small delays to avoid message ordering issues)
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    bot_handle.update_task("#lifecycle", &task_id, "designing", "Chose React stack").await.unwrap();
+    expect_raw_line(&mut user_events, 3000, "designing", "User sees designing phase").await;
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    bot_handle.update_task("#lifecycle", &task_id, "building", "Writing code").await.unwrap();
+    expect_raw_line(&mut user_events, 3000, "building", "User sees building phase").await;
+
+    // Attach evidence
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    bot_handle.attach_evidence("#lifecycle", &task_id, "test_result", "12/12 passed", None).await.unwrap();
+    expect_raw_line(&mut user_events, 3000, "12/12 passed", "User sees evidence").await;
+
+    // Complete task
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    bot_handle.complete_task("#lifecycle", &task_id, "All done", Some("https://example.com")).await.unwrap();
+    expect_raw_line(&mut user_events, 3000, "Task complete", "User sees completion").await;
+
+    bot_handle.quit(None).await.unwrap();
+    user_handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn coordination_task_failure() {
+    start_deadlock_detector();
+    let (addr, server_handle) = start_test_server_with_db(empty_resolver(), true).await;
+
+    let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "failbot").await;
+    let (_user_did, user_handle, mut user_events) = connect_did_key(addr, "failwatch").await;
+    bot_handle.register_agent("agent").await.unwrap();
+    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+
+    bot_handle.join("#failtest").await.unwrap();
+    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+    user_handle.join("#failtest").await.unwrap();
+    expect_event(&mut user_events, 2000, |e| matches!(e, Event::Joined { .. }), "User joined").await;
+
+    let task_id = bot_handle.create_task("#failtest", "Doomed task").await.unwrap();
+    expect_raw_line(&mut user_events, 2000, "New task", "User sees task").await;
+
+    bot_handle.fail_task("#failtest", &task_id, "Out of memory").await.unwrap();
+    expect_raw_line(&mut user_events, 2000, "Task failed", "User sees failure").await;
+
+    bot_handle.quit(None).await.unwrap();
+    user_handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn coordination_events_rest_api() {
+    start_deadlock_detector();
+    let (addr, web_addr, server_handle) = start_test_server_with_web_and_db(empty_resolver()).await;
+
+    let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "restbot").await;
+    bot_handle.register_agent("agent").await.unwrap();
+    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+
+    bot_handle.join("#resttest").await.unwrap();
+    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+
+    let task_id = bot_handle.create_task("#resttest", "REST test task").await.unwrap();
+    // Wait for processing
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    bot_handle.update_task("#resttest", &task_id, "building", "Making it").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Query events via REST
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{web_addr}/api/v1/channels/resttest/events"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let events = body["events"].as_array().unwrap();
+    assert!(events.len() >= 2, "Expected at least 2 events, got {}: {:?}", events.len(), events);
+
+    // Query task detail
+    let resp = client
+        .get(format!("http://{web_addr}/api/v1/tasks/{task_id}"))
+        .send()
+        .await
+        .unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["task_id"], task_id);
+    assert_eq!(body["status"], "in_progress");
+
+    bot_handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn coordination_evidence_rest_api() {
+    start_deadlock_detector();
+    let (addr, web_addr, server_handle) = start_test_server_with_web_and_db(empty_resolver()).await;
+
+    let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "evbot").await;
+    bot_handle.register_agent("agent").await.unwrap();
+    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+
+    bot_handle.join("#evidence").await.unwrap();
+    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+
+    let task_id = bot_handle.create_task("#evidence", "Evidence test").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    bot_handle.attach_evidence("#evidence", &task_id, "test_result", "All pass", Some("https://ci.example.com")).await.unwrap();
+    bot_handle.attach_evidence("#evidence", &task_id, "deploy_log", "Deployed", None).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    bot_handle.complete_task("#evidence", &task_id, "Done", None).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Check task detail
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("http://{web_addr}/api/v1/tasks/{task_id}"))
+        .send()
+        .await
+        .unwrap();
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["status"], "task_complete");
+    let evidence = body["evidence"].as_array().unwrap();
+    assert_eq!(evidence.len(), 2, "Expected 2 evidence items, got {}: {:?}", evidence.len(), evidence);
+
+    bot_handle.quit(None).await.unwrap();
     server_handle.abort();
 }

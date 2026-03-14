@@ -73,6 +73,41 @@ pub(super) fn handle_tagmsg(
         return;
     }
 
+    // ── Coordination event storage (+freeq.at/event) ──
+    if let Some(event_type) = tags.get("+freeq.at/event") {
+        if let Some(ref did) = conn.authenticated_did {
+            let event_id = tags.get("msgid")
+                .cloned()
+                .unwrap_or_else(|| crate::msgid::generate());
+            let ref_id = tags.get("+freeq.at/ref")
+                .or_else(|| tags.get("+freeq.at/task-id"))
+                .cloned();
+            let payload = tags.get("+freeq.at/payload")
+                .cloned()
+                .unwrap_or_else(|| "{}".to_string());
+            let signature = tags.get("+freeq.at/sig").cloned();
+            let now = chrono::Utc::now().timestamp();
+            let event = crate::db::CoordinationEventRow {
+                event_id: event_id.clone(),
+                event_type: event_type.clone(),
+                actor_did: did.clone(),
+                channel: target.to_string(),
+                ref_id,
+                payload_json: payload,
+                signature,
+                timestamp: now,
+            };
+            state.with_db(|db| db.store_coordination_event(&event));
+            tracing::debug!(
+                event_type = %event_type,
+                event_id = %event_id,
+                actor = %did,
+                channel = %target,
+                "Stored coordination event"
+            );
+        }
+    }
+
     let hostmask = conn.hostmask();
 
     let timestamp = std::time::SystemTime::now()

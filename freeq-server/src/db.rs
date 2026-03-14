@@ -265,6 +265,23 @@ impl Db {
             ",
         )?;
 
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS coordination_events (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                actor_did TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                ref_id TEXT,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                signature TEXT,
+                timestamp INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_coord_channel ON coordination_events(channel, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_coord_ref ON coordination_events(ref_id);
+            CREATE INDEX IF NOT EXISTS idx_coord_actor ON coordination_events(actor_did, timestamp);
+            ",
+        )?;
+
         Ok(())
     }
 
@@ -1309,5 +1326,194 @@ impl Db {
         self.get_pending_approvals(channel)
             .into_iter()
             .find(|a| a.agent_did == agent_did && a.capability == capability)
+    }
+}
+
+// ── Coordination events DB methods ─────────────────────────────────
+
+/// A coordination event row.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CoordinationEventRow {
+    pub event_id: String,
+    pub event_type: String,
+    pub actor_did: String,
+    pub channel: String,
+    pub ref_id: Option<String>,
+    pub payload_json: String,
+    pub signature: Option<String>,
+    pub timestamp: i64,
+}
+
+impl Db {
+    pub fn store_coordination_event(&self, event: &CoordinationEventRow) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO coordination_events
+             (event_id, event_type, actor_did, channel, ref_id, payload_json, signature, timestamp)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                event.event_id,
+                event.event_type,
+                event.actor_did,
+                event.channel,
+                event.ref_id,
+                event.payload_json,
+                event.signature,
+                event.timestamp,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Query coordination events with optional filters.
+    pub fn query_coordination_events(
+        &self,
+        channel: &str,
+        event_type: Option<&str>,
+        ref_id: Option<&str>,
+        actor_did: Option<&str>,
+        since: Option<i64>,
+        limit: usize,
+    ) -> Vec<CoordinationEventRow> {
+        let mut sql = String::from(
+            "SELECT event_id, event_type, actor_did, channel, ref_id, payload_json, signature, timestamp
+             FROM coordination_events WHERE channel = ?1"
+        );
+        let mut param_idx = 2;
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(channel.to_string())];
+
+        if let Some(et) = event_type {
+            sql.push_str(&format!(" AND event_type = ?{param_idx}"));
+            params_vec.push(Box::new(et.to_string()));
+            param_idx += 1;
+        }
+        if let Some(ri) = ref_id {
+            sql.push_str(&format!(" AND ref_id = ?{param_idx}"));
+            params_vec.push(Box::new(ri.to_string()));
+            param_idx += 1;
+        }
+        if let Some(ad) = actor_did {
+            sql.push_str(&format!(" AND actor_did = ?{param_idx}"));
+            params_vec.push(Box::new(ad.to_string()));
+            param_idx += 1;
+        }
+        if let Some(s) = since {
+            sql.push_str(&format!(" AND timestamp >= ?{param_idx}"));
+            params_vec.push(Box::new(s));
+            param_idx += 1;
+        }
+        let _ = param_idx; // suppress unused warning
+        sql.push_str(&format!(" ORDER BY timestamp ASC LIMIT {limit}"));
+
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
+        let mut stmt = match self.conn.prepare(&sql) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("Failed to prepare coordination query: {e}");
+                return Vec::new();
+            }
+        };
+        match stmt.query_map(params_refs.as_slice(), |row| {
+            Ok(CoordinationEventRow {
+                event_id: row.get(0)?,
+                event_type: row.get(1)?,
+                actor_did: row.get(2)?,
+                channel: row.get(3)?,
+                ref_id: row.get(4)?,
+                payload_json: row.get(5)?,
+                signature: row.get(6)?,
+                timestamp: row.get(7)?,
+            })
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Get a task and all its related events.
+    pub fn get_task(&self, task_id: &str) -> Option<CoordinationEventRow> {
+        let mut stmt = self.conn.prepare(
+            "SELECT event_id, event_type, actor_did, channel, ref_id, payload_json, signature, timestamp
+             FROM coordination_events WHERE event_id = ?1 AND event_type = 'task_request'"
+        ).ok()?;
+        stmt.query_row(params![task_id], |row| {
+            Ok(CoordinationEventRow {
+                event_id: row.get(0)?,
+                event_type: row.get(1)?,
+                actor_did: row.get(2)?,
+                channel: row.get(3)?,
+                ref_id: row.get(4)?,
+                payload_json: row.get(5)?,
+                signature: row.get(6)?,
+                timestamp: row.get(7)?,
+            })
+        }).ok()
+    }
+
+    /// Get all events referencing a task ID.
+    pub fn get_task_events(&self, task_id: &str) -> Vec<CoordinationEventRow> {
+        self.query_coordination_events("", None, Some(task_id), None, None, 1000)
+            .into_iter()
+            .collect()
+    }
+
+    /// Get task events regardless of channel (by ref_id).
+    pub fn get_task_events_all_channels(&self, task_id: &str) -> Vec<CoordinationEventRow> {
+        let mut stmt = match self.conn.prepare(
+            "SELECT event_id, event_type, actor_did, channel, ref_id, payload_json, signature, timestamp
+             FROM coordination_events WHERE ref_id = ?1 ORDER BY timestamp ASC"
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        match stmt.query_map(params![task_id], |row| {
+            Ok(CoordinationEventRow {
+                event_id: row.get(0)?,
+                event_type: row.get(1)?,
+                actor_did: row.get(2)?,
+                channel: row.get(3)?,
+                ref_id: row.get(4)?,
+                payload_json: row.get(5)?,
+                signature: row.get(6)?,
+                timestamp: row.get(7)?,
+            })
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Query governance log entries for a channel.
+    pub fn query_governance_log(&self, channel: Option<&str>, limit: usize) -> Vec<GovernanceLogEntry> {
+        let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match channel {
+            Some(ch) => (
+                "SELECT id, channel, target_did, action, issued_by, reason, timestamp
+                 FROM governance_log WHERE channel = ?1 ORDER BY timestamp ASC LIMIT ?2".to_string(),
+                vec![Box::new(ch.to_string()), Box::new(limit as i64)],
+            ),
+            None => (
+                "SELECT id, channel, target_did, action, issued_by, reason, timestamp
+                 FROM governance_log ORDER BY timestamp ASC LIMIT ?1".to_string(),
+                vec![Box::new(limit as i64)],
+            ),
+        };
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
+        let mut stmt = match self.conn.prepare(&sql) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        match stmt.query_map(params_refs.as_slice(), |row| {
+            Ok(GovernanceLogEntry {
+                id: row.get(0)?,
+                channel: row.get(1)?,
+                target_did: row.get(2)?,
+                action: row.get(3)?,
+                issued_by: row.get(4)?,
+                reason: row.get(5)?,
+                timestamp: row.get(6)?,
+            })
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
     }
 }

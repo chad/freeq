@@ -383,6 +383,135 @@ impl ClientHandle {
         }
     }
 
+    // ── Phase 3: Coordination events ────────────────────────────────
+
+    /// Emit a typed coordination event to a channel.
+    /// Sends both a TAGMSG (structured, for rich clients) and PRIVMSG (human-readable).
+    pub async fn emit_event(
+        &self,
+        channel: &str,
+        event_type: &str,
+        payload_json: &str,
+        ref_id: Option<&str>,
+        human_text: &str,
+    ) -> Result<String> {
+        let event_id = format!("{:016x}{:016x}",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
+            rand::random::<u64>(),
+        );
+        let mut tags = format!(
+            "+freeq.at/event={event_type};msgid={event_id};+freeq.at/payload={}",
+            payload_json.replace(';', "%3B").replace(' ', "%20")
+        );
+        if let Some(rid) = ref_id {
+            tags.push_str(&format!(";+freeq.at/ref={rid}"));
+        }
+        // Send structured TAGMSG
+        self.raw(&format!("@{tags} TAGMSG {channel}")).await?;
+        // Send human-readable PRIVMSG
+        self.privmsg(channel, human_text).await?;
+        Ok(event_id)
+    }
+
+    /// Create a new task and return its ID.
+    pub async fn create_task(&self, channel: &str, description: &str) -> Result<String> {
+        let payload = serde_json::json!({"description": description}).to_string();
+        self.emit_event(
+            channel,
+            "task_request",
+            &payload,
+            None,
+            &format!("📋 New task: {description}"),
+        ).await
+    }
+
+    /// Update a task's status.
+    pub async fn update_task(
+        &self,
+        channel: &str,
+        task_id: &str,
+        phase: &str,
+        summary: &str,
+    ) -> Result<()> {
+        let payload = serde_json::json!({"phase": phase, "summary": summary}).to_string();
+        self.emit_event(
+            channel,
+            "task_update",
+            &payload,
+            Some(task_id),
+            &format!("🔄 [{phase}] {summary}"),
+        ).await?;
+        Ok(())
+    }
+
+    /// Complete a task.
+    pub async fn complete_task(
+        &self,
+        channel: &str,
+        task_id: &str,
+        summary: &str,
+        url: Option<&str>,
+    ) -> Result<()> {
+        let mut payload = serde_json::json!({"summary": summary});
+        if let Some(u) = url {
+            payload["url"] = serde_json::json!(u);
+        }
+        let url_str = url.map(|u| format!(" — {u}")).unwrap_or_default();
+        self.emit_event(
+            channel,
+            "task_complete",
+            &payload.to_string(),
+            Some(task_id),
+            &format!("🎉 Task complete: {summary}{url_str}"),
+        ).await?;
+        Ok(())
+    }
+
+    /// Fail a task.
+    pub async fn fail_task(
+        &self,
+        channel: &str,
+        task_id: &str,
+        error: &str,
+    ) -> Result<()> {
+        let payload = serde_json::json!({"error": error}).to_string();
+        self.emit_event(
+            channel,
+            "task_failed",
+            &payload,
+            Some(task_id),
+            &format!("❌ Task failed: {error}"),
+        ).await?;
+        Ok(())
+    }
+
+    /// Attach evidence to a task.
+    pub async fn attach_evidence(
+        &self,
+        channel: &str,
+        task_id: &str,
+        evidence_type: &str,
+        summary: &str,
+        url: Option<&str>,
+    ) -> Result<()> {
+        let mut payload = serde_json::json!({
+            "type": evidence_type,
+            "summary": summary,
+        });
+        if let Some(u) = url {
+            payload["url"] = serde_json::json!(u);
+        }
+        let url_str = url.map(|u| format!(" — {u}")).unwrap_or_default();
+        self.emit_event(
+            channel,
+            "evidence_attach",
+            &payload.to_string(),
+            Some(task_id),
+            &format!("📎 Evidence ({evidence_type}): {summary}{url_str}"),
+        ).await?;
+        Ok(())
+    }
+
     /// Start automatic heartbeat in a background task.
     /// Returns a handle that stops the heartbeat when dropped.
     pub fn start_heartbeat(
