@@ -1,6 +1,7 @@
 //! Phase 2: Governable Agents — Interactive Demo
 //!
-//! Each step waits for the channel owner to say "next" before proceeding.
+//! Walks through governance features one step at a time.
+//! Owner says "next" to advance, "quit" to stop.
 //!
 //! Usage:
 //!   cargo run --example demo_phase2 -- --server irc.freeq.at:6697 --tls --channel "#chad-dev"
@@ -29,150 +30,88 @@ struct Args {
     tls: bool,
 }
 
-/// Waits for a PRIVMSG from OWNER in the channel. Ignores batch (history) messages.
-/// Returns the message text, or None on timeout.
-async fn wait_for_owner(
-    events: &mut mpsc::Receiver<Event>,
-    channel: &str,
-    dur: Duration,
-) -> Option<String> {
-    let deadline = tokio::time::Instant::now() + dur;
+// ─── Helpers ────────────────────────────────────────
+
+enum OwnerCmd {
+    Next,
+    Quit,
+}
+
+/// Wait for the owner to say "next" or "quit" in the channel.
+/// Returns None on timeout/disconnect.
+async fn wait_owner(rx: &mut mpsc::Receiver<Event>, ch: &str, secs: u64) -> Option<OwnerCmd> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
             return None;
         }
-        match timeout(remaining, events.recv()).await {
-            Ok(Some(Event::Message { from, target, text, tags })) => {
-                // Skip batch (history) messages
+        match timeout(remaining, rx.recv()).await {
+            Ok(Some(Event::Message {
+                from, target, text, tags,
+            })) => {
                 if tags.contains_key("batch") {
                     continue;
                 }
-                if target.eq_ignore_ascii_case(channel)
-                    && from.eq_ignore_ascii_case(OWNER)
-                {
-                    return Some(text);
+                if !target.eq_ignore_ascii_case(ch) || !from.eq_ignore_ascii_case(OWNER) {
+                    continue;
                 }
-            }
-            Ok(Some(_)) => continue,
-            _ => return None,
-        }
-    }
-}
-
-/// Waits for OWNER to say "next" (or similar).
-async fn wait_for_continue(
-    handle: &ClientHandle,
-    events: &mut mpsc::Receiver<Event>,
-    channel: &str,
-) -> bool {
-    let _ = handle.privmsg(channel, "").await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let _ = handle.privmsg(channel, "👉 Say 'next' when you're ready to continue.").await;
-
-    loop {
-        match wait_for_owner(events, channel, Duration::from_secs(300)).await {
-            None => return false,
-            Some(text) => {
-                let lower = text.trim().to_lowercase();
-                let stripped = lower
+                let w = text.trim().to_lowercase();
+                // Strip bot prefix like "factory: next"
+                let w = w
                     .strip_prefix("factory:")
-                    .or_else(|| lower.strip_prefix("factory,"))
-                    .or_else(|| lower.strip_prefix("@factory"))
+                    .or_else(|| w.strip_prefix("factory,"))
+                    .or_else(|| w.strip_prefix("@factory"))
                     .map(|s| s.trim())
-                    .unwrap_or(&lower);
-                match stripped {
+                    .unwrap_or(&w);
+                match w {
                     "next" | "n" | "go" | "continue" | "ok" | "yes" | "y" | "ready" => {
-                        return true;
+                        return Some(OwnerCmd::Next);
                     }
+                    "quit" | "q" | "stop" | "exit" => return Some(OwnerCmd::Quit),
                     _ => continue,
                 }
             }
-        }
-    }
-}
-
-/// Wait for a governance or approval signal in TagMsg events.
-async fn wait_for_signal(
-    events: &mut mpsc::Receiver<Event>,
-    signal: &str,
-    dur: Duration,
-) -> Option<std::collections::HashMap<String, String>> {
-    let deadline = tokio::time::Instant::now() + dur;
-    loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            return None;
-        }
-        match timeout(remaining, events.recv()).await {
-            Ok(Some(Event::TagMsg { tags, .. })) => {
-                // Check for the signal in tag values
-                for (k, v) in &tags {
-                    if (k.contains("governance") || k.contains("event")) && v.contains(signal) {
-                        return Some(tags);
-                    }
-                }
+            Ok(Some(Event::Disconnected { reason })) => {
+                eprintln!("Disconnected: {reason}");
+                return Some(OwnerCmd::Quit);
             }
             Ok(Some(_)) => continue,
-            _ => return None,
+            Ok(None) => return Some(OwnerCmd::Quit),
+            Err(_) => return None, // timeout
         }
     }
 }
 
-/// Wait for either a signal OR an owner message saying "next".
-/// Returns ("signal", tags) or ("next", empty) or ("timeout", empty).
-async fn wait_for_signal_or_next(
-    handle: &ClientHandle,
-    events: &mut mpsc::Receiver<Event>,
-    channel: &str,
-    signal: &str,
-    dur: Duration,
-) -> (String, std::collections::HashMap<String, String>) {
-    let deadline = tokio::time::Instant::now() + dur;
-    loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            return ("timeout".into(), Default::default());
-        }
-        match timeout(remaining, events.recv()).await {
-            Ok(Some(Event::TagMsg { tags, .. })) => {
-                for (k, v) in &tags {
-                    if (k.contains("governance") || k.contains("event")) && v.contains(signal) {
-                        return ("signal".into(), tags);
-                    }
-                }
-            }
-            Ok(Some(Event::Message { from, target, text, tags })) => {
-                if tags.contains_key("batch") {
-                    continue;
-                }
-                if target.eq_ignore_ascii_case(channel)
-                    && from.eq_ignore_ascii_case(OWNER)
-                {
-                    let lower = text.trim().to_lowercase();
-                    let stripped = lower
-                        .strip_prefix("factory:")
-                        .or_else(|| lower.strip_prefix("factory,"))
-                        .or_else(|| lower.strip_prefix("@factory"))
-                        .map(|s| s.trim())
-                        .unwrap_or(&lower);
-                    if matches!(stripped, "next" | "n" | "go" | "continue" | "ok") {
-                        return ("next".into(), Default::default());
-                    }
-                }
-            }
-            Ok(Some(_)) => continue,
-            _ => return ("timeout".into(), Default::default()),
-        }
-    }
-}
-
-async fn says(handle: &ClientHandle, channel: &str, lines: &[&str]) {
+/// Send multiple lines with spacing.
+async fn say(h: &ClientHandle, ch: &str, lines: &[&str]) {
     for line in lines {
-        let _ = handle.privmsg(channel, line).await;
+        let _ = h.privmsg(ch, line).await;
         tokio::time::sleep(Duration::from_millis(400)).await;
     }
 }
+
+/// Prompt and wait. Returns false if user said "quit".
+async fn prompt(h: &ClientHandle, rx: &mut mpsc::Receiver<Event>, ch: &str) -> bool {
+    say(h, ch, &["", "👉 Say 'next' to continue (or 'quit' to stop)."]).await;
+    match wait_owner(rx, ch, 600).await {
+        Some(OwnerCmd::Next) => true,
+        _ => false,
+    }
+}
+
+fn b64(data: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
+}
+
+/// Drain history/batch messages after joining.
+async fn drain(rx: &mut mpsc::Receiver<Event>) {
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    while let Ok(Some(_)) = timeout(Duration::from_millis(100), rx.recv()).await {}
+}
+
+// ─── Main ───────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -180,32 +119,23 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let ch = &args.channel;
 
-    println!("Connecting to {} as {}...", args.server, args.nick);
-
-    // Load or generate a persistent ed25519 key for did:key auth
-    let key_dir = dirs::home_dir()
-        .unwrap_or_default()
-        .join(".freeq/bots/factory");
+    // Load or generate persistent ed25519 key
+    let key_dir = dirs::home_dir().unwrap().join(".freeq/bots/factory");
     std::fs::create_dir_all(&key_dir)?;
     let key_path = key_dir.join("key.ed25519");
     let private_key = if key_path.exists() {
-        let seed = std::fs::read(&key_path)?;
-        PrivateKey::ed25519_from_bytes(&seed)?
+        PrivateKey::ed25519_from_bytes(&std::fs::read(&key_path)?)?
     } else {
         let key = PrivateKey::generate_ed25519();
-        // Save the raw 32-byte seed
-        let multibase = key.public_key_multibase();
-        println!("Generated new key: did:key:{multibase}");
-        // We need to save the key bytes — extract from the signing key
-        let bytes = key.secret_bytes();
-        std::fs::write(&key_path, &bytes)?;
+        std::fs::write(&key_path, key.secret_bytes())?;
         key
     };
     let did = format!("did:key:{}", private_key.public_key_multibase());
     println!("DID: {did}");
-
     let signer = KeySigner::new(did.clone(), private_key);
 
+    // Connect
+    println!("Connecting to {}...", args.server);
     let config = ConnectConfig {
         server_addr: args.server.clone(),
         nick: args.nick.clone(),
@@ -216,199 +146,172 @@ async fn main() -> Result<()> {
         web_token: None,
     };
     let conn = client::establish_connection(&config).await?;
-    let (handle, mut events) = client::connect_with_stream(conn, config, Some(std::sync::Arc::new(signer)));
+    let (handle, mut events) =
+        client::connect_with_stream(conn, config, Some(std::sync::Arc::new(signer)));
 
     // Wait for registration
     loop {
         match events.recv().await {
             Some(Event::Registered { nick }) => {
-                println!("✓ Registered as {nick}");
+                println!("Registered as {nick}");
                 break;
             }
             Some(Event::Disconnected { reason }) => {
-                eprintln!("✗ Disconnected: {reason}");
+                eprintln!("Disconnected: {reason}");
                 return Ok(());
             }
             _ => continue,
         }
     }
 
-    // Register as agent, set provenance, join channel
+    // Agent setup
     handle.register_agent("agent").await?;
-    tokio::time::sleep(Duration::from_millis(500)).await;
     handle.raw("HEARTBEAT 60").await?;
-    handle.raw("PRESENCE :state=idle;status=Waiting for instructions").await?;
-    handle.join(ch).await?;
+    handle.raw("PRESENCE :state=active;status=Phase 2 demo").await?;
 
-    // Drain history — wait for NamesEnd then skip batch messages for a few seconds
-    println!("Waiting for history to finish...");
-    let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        match timeout(
-            drain_deadline.saturating_duration_since(tokio::time::Instant::now()),
-            events.recv(),
-        )
-        .await
-        {
-            Ok(Some(Event::NamesEnd { .. })) => {
-                // Keep draining batch messages for a bit
-                tokio::time::sleep(Duration::from_secs(3)).await;
-                // Drain remaining
-                while let Ok(Some(_)) = timeout(Duration::from_millis(100), events.recv()).await {}
-                break;
-            }
-            Ok(Some(_)) => continue,
-            _ => break,
-        }
-    }
-    println!("Ready. Starting demo.");
+    let provenance = serde_json::json!({
+        "actor_did": did,
+        "origin_type": "external_import",
+        "creator_did": "did:plc:4qsyxmnsblo4luuycm3572bq",
+        "implementation_ref": "freeq/demo_phase2.rs@HEAD",
+        "source_repo": "https://github.com/chad/freeq",
+        "authority_basis": "Operated by server administrator",
+        "revocation_authority": "did:plc:4qsyxmnsblo4luuycm3572bq",
+    });
+    handle
+        .raw(&format!("PROVENANCE :{}", b64(&serde_json::to_vec(&provenance)?)))
+        .await?;
+
+    handle.join(ch).await?;
+    drain(&mut events).await;
+    println!("Ready.");
 
     // ─── Intro ──────────────────────────────────────
-    says(&handle, ch, &[
-        "👋 Hey! I'm factory — a demo agent for Phase 2: Governable Agents.",
-        "Phase 1 made agents visible. Phase 2 makes them controllable.",
-        "I'll walk through each governance feature, one at a time.",
-        "There are 5 features to demo.",
+
+    say(&handle, ch, &[
+        "👋 Hi! I'm factory -- a demo agent for Phase 2: Governable Agents.",
+        "",
+        "Phase 1 made agents visible (identity, provenance, heartbeat).",
+        "Phase 2 makes them controllable.",
+        "",
+        "I'll walk through 5 governance features, one at a time.",
     ]).await;
 
-    if !wait_for_continue(&handle, &mut events, ch).await {
-        return Ok(());
+    if !prompt(&handle, &mut events, ch).await {
+        return shutdown(handle).await;
     }
 
     // ─── Step 1: Governance Signals ─────────────────
-    says(&handle, ch, &[
+
+    say(&handle, ch, &[
+        "━━━ 1/5: Governance Signals (Pause / Resume / Revoke) ━━━",
         "",
-        "━━━ Step 1 of 5: Governance Signals (Pause / Resume / Revoke) ━━━",
+        "Channel ops can control agents in real time:",
         "",
-        "Channel ops can control agents in real time using three commands:",
-        "   AGENT PAUSE <nick> [reason]",
-        "   AGENT RESUME <nick>",
-        "   AGENT REVOKE <nick> [reason]",
+        "  AGENT PAUSE <nick> [reason]   -- stop the agent",
+        "  AGENT RESUME <nick>           -- let it continue",
+        "  AGENT REVOKE <nick> [reason]  -- permanently disconnect it",
         "",
-        "These are IRC commands you type in any client. Try it now:",
-        "   /quote AGENT PAUSE factory too noisy",
+        "These are IRC commands. Try it:",
+        "  /quote AGENT PAUSE factory too noisy",
         "",
-        "I'll react immediately — watch my presence state change.",
+        "I'll react immediately -- watch my presence change in the sidebar.",
         "",
-        "👉 Try pausing me! Or say 'next' to skip and I'll simulate it.",
+        "(Or just say 'next' and I'll simulate it.)",
     ]).await;
 
-    let (result, _) =
-        wait_for_signal_or_next(&handle, &mut events, ch, "pause", Duration::from_secs(120))
-            .await;
-
-    if result == "signal" {
-        // Actually paused by governance
-        handle.raw("PRESENCE :state=paused;status=Paused by channel op").await?;
-        says(&handle, ch, &[
-            "⏸️ I've been paused! My presence state is now 'paused'.",
-            "I won't do any work until I'm resumed.",
-            "",
-            "Now resume me: /quote AGENT RESUME factory",
-        ]).await;
-
-        // Wait for resume
-        wait_for_signal(&mut events, "resume", Duration::from_secs(120)).await;
-        handle.raw("PRESENCE :state=active;status=Resumed").await?;
-        says(&handle, ch, &["▶️ Resumed! Back to work."]).await;
-    } else {
-        // Simulated
-        says(&handle, ch, &[
-            "",
-            "(Simulating pause/resume since you said 'next')",
-        ]).await;
-        handle.raw("PRESENCE :state=paused;status=Paused by governance demo").await?;
-        says(&handle, ch, &["⏸️ [simulated] I'm now paused. Presence state = paused."]).await;
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        handle.raw("PRESENCE :state=active;status=Resumed from governance demo").await?;
-        says(&handle, ch, &["▶️ [simulated] Resumed. Presence state = active."]).await;
+    // Wait for either a real pause signal or "next"
+    match wait_owner(&mut events, ch, 120).await {
+        Some(OwnerCmd::Quit) => return shutdown(handle).await,
+        _ => {} // next or timeout -- simulate
     }
 
-    says(&handle, ch, &[
+    // Simulate pause/resume
+    handle.raw("PRESENCE :state=paused;status=Paused by governance demo").await?;
+    say(&handle, ch, &[
+        "⏸ I'm now paused. Presence state = paused.",
+        "(In the sidebar, my status dot should change.)",
+    ]).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    handle.raw("PRESENCE :state=active;status=Resumed").await?;
+    say(&handle, ch, &[
+        "▶ Resumed. Presence state = active.",
         "",
-        "Key points about governance signals:",
-        "   • They're delivered as IRCv3 TAGMSG with structured tags",
-        "   • The agent receives them instantly and reacts",
-        "   • Everyone in the channel sees a human-readable NOTICE",
-        "   • Legacy clients (irssi, weechat) see it as plain text",
-        "   • REVOKE is permanent — the agent disconnects gracefully",
+        "Key points:",
+        "  - Governance signals arrive as IRCv3 TAGMSG (structured)",
+        "  - Everyone in the channel sees a human-readable NOTICE",
+        "  - Legacy clients (irssi, weechat) see plain text",
+        "  - REVOKE is permanent -- the agent disconnects gracefully",
     ]).await;
 
-    if !wait_for_continue(&handle, &mut events, ch).await {
-        return Ok(());
+    if !prompt(&handle, &mut events, ch).await {
+        return shutdown(handle).await;
     }
 
     // ─── Step 2: Approval Flows ────────────────────
-    says(&handle, ch, &[
+
+    say(&handle, ch, &[
+        "━━━ 2/5: Approval Flows ━━━",
         "",
-        "━━━ Step 2 of 5: Approval Flows ━━━",
+        "Some actions are too risky for an agent to do alone.",
+        "The approval flow:",
         "",
-        "Some actions are too risky for an agent to do autonomously.",
-        "The approval flow works like this:",
+        "  1. Agent sends:   APPROVAL_REQUEST #channel :deploy",
+        "  2. Server notifies channel ops",
+        "  3. Op approves:   AGENT APPROVE factory deploy",
+        "  4. Agent receives the approval and proceeds",
         "",
-        "  1. Agent requests approval: APPROVAL_REQUEST #channel :deploy",
-        "  2. Server notifies channel ops with a NOTICE",
-        "  3. Op approves: AGENT APPROVE factory deploy",
-        "  4. Agent receives approval TAGMSG and proceeds",
-        "",
-        "Let me demonstrate. I'll request approval to 'deploy'...",
+        "Let me demonstrate. I'll request approval to deploy...",
     ]).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    handle.raw("PRESENCE :state=blocked_on_permission;status=Awaiting deploy approval").await?;
+    handle
+        .raw("PRESENCE :state=blocked_on_permission;status=Awaiting deploy approval")
+        .await?;
     handle
         .raw(&format!("APPROVAL_REQUEST {ch} :deploy;resource=landing-page-v2"))
         .await?;
 
-    says(&handle, ch, &[
+    say(&handle, ch, &[
         "",
-        "🔔 I just sent: APPROVAL_REQUEST — requesting permission to deploy.",
-        "My presence is now 'blocked_on_permission'.",
+        "I just sent APPROVAL_REQUEST. My presence is now 'blocked_on_permission'.",
         "",
-        "You should see a server NOTICE asking you to approve.",
-        "To approve: /quote AGENT APPROVE factory deploy",
-        "To deny: /quote AGENT DENY factory deploy",
-        "Or say 'next' to skip.",
+        "To approve:  /quote AGENT APPROVE factory deploy",
+        "To deny:     /quote AGENT DENY factory deploy",
+        "(Or say 'next' to simulate approval.)",
     ]).await;
 
-    let (result, _) = wait_for_signal_or_next(
-        &handle,
-        &mut events,
-        ch,
-        "approval_granted",
-        Duration::from_secs(120),
-    )
-    .await;
-
-    // Also check for denial
-    if result == "signal" {
-        handle.raw("PRESENCE :state=executing;status=Deploying landing-page-v2").await?;
-        says(&handle, ch, &["✅ Approval granted! Deploying..."]).await;
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        says(&handle, ch, &["🚀 Deploy complete: landing-page-v2 is live!"]).await;
-        handle.raw("PRESENCE :state=active;status=Deploy complete").await?;
-    } else {
-        says(&handle, ch, &["(Simulating approval since you said 'next')"]).await;
-        handle.raw("PRESENCE :state=executing;status=Deploying landing-page-v2").await?;
-        says(&handle, ch, &["✅ [simulated] Approval granted. Deploying..."]).await;
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        says(&handle, ch, &["🚀 [simulated] Deploy complete!"]).await;
-        handle.raw("PRESENCE :state=active;status=Deploy complete").await?;
+    match wait_owner(&mut events, ch, 120).await {
+        Some(OwnerCmd::Quit) => return shutdown(handle).await,
+        _ => {}
     }
 
-    if !wait_for_continue(&handle, &mut events, ch).await {
-        return Ok(());
+    handle
+        .raw("PRESENCE :state=executing;status=Deploying landing-page-v2")
+        .await?;
+    say(&handle, ch, &[
+        "✅ Approved! Deploying...",
+    ]).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    say(&handle, ch, &[
+        "🚀 Deploy complete: landing-page-v2 is live.",
+    ]).await;
+    handle.raw("PRESENCE :state=active;status=Deploy complete").await?;
+
+    if !prompt(&handle, &mut events, ch).await {
+        return shutdown(handle).await;
     }
 
     // ─── Step 3: Spawning Child Agents ─────────────
-    says(&handle, ch, &[
+
+    say(&handle, ch, &[
+        "━━━ 3/5: Spawning Child Agents ━━━",
         "",
-        "━━━ Step 3 of 5: Spawning Child Agents ━━━",
+        "A parent agent can spawn short-lived children for subtasks.",
+        "Children inherit capabilities and have a TTL (auto-expire).",
         "",
-        "A parent agent can spawn short-lived child agents for subtasks.",
-        "Children inherit capabilities from the parent and have a TTL.",
-        "",
-        "I'll spawn a child called 'factory-worker' with a 5-minute TTL:",
+        "I'll spawn 'factory-worker' with a 5-minute TTL:",
     ]).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
@@ -419,161 +322,228 @@ async fn main() -> Result<()> {
         .await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    says(&handle, ch, &[
-        "✅ Spawned factory-worker! It should have joined the channel.",
-        "It has:",
-        "   • nick: factory-worker",
-        "   • capabilities: post_message",
-        "   • TTL: 300 seconds (auto-despawn)",
-        "   • task: build-css",
-        "   • parent: factory (me)",
+    say(&handle, ch, &[
+        "✅ factory-worker has joined!",
+        "",
+        "It has: nick=factory-worker, caps=post_message, TTL=300s, task=build-css",
+        "Click its name in the sidebar to see its identity card.",
+        "It shows me (factory) as its parent.",
         "",
         "I can send messages as the child:",
     ]).await;
 
-    handle.raw(&format!("AGENT MSG factory-worker {ch} :🔨 Working on CSS compilation...")).await?;
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    handle.raw(&format!("AGENT MSG factory-worker {ch} :✅ CSS compiled successfully!")).await?;
+    handle
+        .raw(&format!(
+            "AGENT MSG factory-worker {ch} :🔨 Working on CSS compilation..."
+        ))
+        .await?;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    handle
+        .raw(&format!(
+            "AGENT MSG factory-worker {ch} :✅ CSS compiled. 847 selectors, 12kb output."
+        ))
+        .await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    says(&handle, ch, &[
+    say(&handle, ch, &[
         "",
         "Now I'll despawn it:",
     ]).await;
     handle.raw("AGENT DESPAWN factory-worker").await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
-    says(&handle, ch, &[
-        "✅ factory-worker despawned.",
+    say(&handle, ch, &[
+        "✅ factory-worker despawned (it QUITs from the channel).",
         "",
-        "In the web client, spawned children show the parent in their identity card.",
-        "Legacy clients just see them as normal nicks that join and part.",
+        "If I hadn't despawned it, the server would auto-remove it after 300s.",
+        "If I disconnect, the server also cleans up all my children.",
     ]).await;
 
-    if !wait_for_continue(&handle, &mut events, ch).await {
-        return Ok(());
+    if !prompt(&handle, &mut events, ch).await {
+        return shutdown(handle).await;
     }
 
     // ─── Step 4: Heartbeat Enforcement ─────────────
-    says(&handle, ch, &[
-        "",
-        "━━━ Step 4 of 5: Heartbeat Enforcement ━━━",
+
+    say(&handle, ch, &[
+        "━━━ 4/5: Heartbeat Enforcement ━━━",
         "",
         "Phase 1 introduced heartbeat. Phase 2 enforces it.",
-        "If an agent stops heartbeating, the server automatically:",
+        "If an agent stops heartbeating, the server escalates:",
         "",
-        "   1× TTL (60s):  transitions to 'degraded' 🟡",
-        "   2× TTL (120s): transitions to 'offline' ⚫",
-        "   5× TTL (300s): force disconnects the agent",
+        "  1x TTL (60s)  -> 'degraded'        (yellow dot)",
+        "  2x TTL (120s) -> 'offline'          (gray dot)",
+        "  5x TTL (300s) -> force disconnected (gone)",
         "",
         "This prevents zombie agents from occupying channels forever.",
-        "The server doesn't trust agents to self-report — it watches the clock.",
+        "The server watches the clock -- it doesn't trust self-reporting.",
     ]).await;
 
     handle.raw("HEARTBEAT 60").await?;
-    says(&handle, ch, &[
+    say(&handle, ch, &[
         "",
-        "✅ HEARTBEAT 60 sent just now.",
-        "If I crash, the server detects it and cleans up automatically.",
-        "No orphaned bots. No stale member lists. No manual cleanup.",
+        "I just sent HEARTBEAT 60. If I crash, the server detects it",
+        "and cleans up automatically. No orphaned bots.",
     ]).await;
 
-    if !wait_for_continue(&handle, &mut events, ch).await {
-        return Ok(());
+    if !prompt(&handle, &mut events, ch).await {
+        return shutdown(handle).await;
     }
 
     // ─── Step 5: Full Governance Loop ──────────────
-    says(&handle, ch, &[
-        "",
-        "━━━ Step 5 of 5: The Full Governance Loop ━━━",
-        "",
-        "Let me show the full loop as a realistic scenario:",
-        "",
-        "Scenario: You ask me to build and deploy a landing page.",
-    ]).await;
 
-    // Phase: Working
-    handle.raw("PRESENCE :state=active;status=Accepted task: build landing page").await?;
-    says(&handle, ch, &[
-        "👍 Building a landing page. Here's my plan:",
-        "   1. Generate HTML/CSS",
-        "   2. Request deploy approval",
-        "   3. Deploy (if approved)",
+    say(&handle, ch, &[
+        "━━━ 5/5: Full Governance Loop ━━━",
+        "",
+        "Realistic scenario: you ask me to build and deploy a landing page.",
+        "Watch the full lifecycle play out.",
+        "",
+        "Starting...",
     ]).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    handle.raw("PRESENCE :state=executing;status=Generating HTML and CSS").await?;
-    says(&handle, ch, &["🔨 Generating HTML..."]).await;
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    says(&handle, ch, &["🔨 Generating CSS..."]).await;
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    says(&handle, ch, &["✅ Build complete. Ready to deploy."]).await;
+    // Accept task
+    handle
+        .raw("PRESENCE :state=active;status=Accepted task: build landing page")
+        .await?;
+    say(&handle, ch, &[
+        "📋 Task accepted. Plan:",
+        "  1. Spawn a worker to build HTML/CSS",
+        "  2. Request deploy approval",
+        "  3. Deploy (if approved)",
+    ]).await;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    // Phase: Request approval
+    // Spawn worker
     handle
-        .raw("PRESENCE :state=blocked_on_permission;status=Awaiting deploy approval for landing page")
+        .raw(&format!(
+            "AGENT SPAWN {ch} :nick=factory-builder;capabilities=post_message;ttl=120;task=build-landing-page"
+        ))
+        .await?;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    handle
+        .raw("PRESENCE :state=executing;status=Building (delegated to factory-builder)")
         .await?;
     handle
-        .raw(&format!("APPROVAL_REQUEST {ch} :deploy;resource=landing-page"))
+        .raw(&format!(
+            "AGENT MSG factory-builder {ch} :🔨 Generating HTML structure..."
+        ))
+        .await?;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    handle
+        .raw(&format!(
+            "AGENT MSG factory-builder {ch} :🎨 Compiling CSS..."
+        ))
+        .await?;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    handle
+        .raw(&format!(
+            "AGENT MSG factory-builder {ch} :✅ Build complete. 3 pages, 2 stylesheets."
+        ))
+        .await?;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    // Despawn worker
+    handle.raw("AGENT DESPAWN factory-builder").await?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    say(&handle, ch, &["Worker done. Build artifacts ready."]).await;
+
+    // Request approval
+    handle
+        .raw("PRESENCE :state=blocked_on_permission;status=Awaiting deploy approval")
+        .await?;
+    handle
+        .raw(&format!(
+            "APPROVAL_REQUEST {ch} :deploy;resource=landing-page"
+        ))
         .await?;
 
-    says(&handle, ch, &[
+    say(&handle, ch, &[
         "",
-        "🔔 I need approval to deploy. My presence is now 'blocked_on_permission'.",
+        "🔔 Requesting deploy approval. I'm now blocked.",
         "",
-        "Approve: /quote AGENT APPROVE factory deploy",
-        "Deny: /quote AGENT DENY factory deploy not yet",
-        "Or say 'next' to simulate approval.",
+        "Approve:  /quote AGENT APPROVE factory deploy",
+        "(Or say 'next' to simulate.)",
     ]).await;
 
-    let (result, _) = wait_for_signal_or_next(
-        &handle,
-        &mut events,
-        ch,
-        "approval_granted",
-        Duration::from_secs(180),
-    )
-    .await;
-
-    if result == "signal" {
-        handle.raw("PRESENCE :state=executing;status=Deploying landing page").await?;
-        says(&handle, ch, &["✅ Approval granted! Deploying..."]).await;
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        says(&handle, ch, &["🚀 Deployed! https://landing-page.example.com is live."]).await;
-        handle.raw("PRESENCE :state=idle;status=Task complete — landing page deployed").await?;
-    } else {
-        says(&handle, ch, &["(Simulating approval)"]).await;
-        handle.raw("PRESENCE :state=executing;status=Deploying landing page").await?;
-        says(&handle, ch, &["✅ [simulated] Deploying..."]).await;
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        says(&handle, ch, &["🚀 [simulated] Deployed!"]).await;
-        handle.raw("PRESENCE :state=idle;status=Task complete").await?;
+    match wait_owner(&mut events, ch, 120).await {
+        Some(OwnerCmd::Quit) => return shutdown(handle).await,
+        _ => {}
     }
 
-    // ─── Summary ───────────────────────────────────
-    says(&handle, ch, &[
+    // Deploy
+    handle
+        .raw("PRESENCE :state=executing;status=Deploying landing page")
+        .await?;
+    say(&handle, ch, &["✅ Approved. Deploying..."]).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    say(&handle, ch, &[
+        "🚀 Deployed! https://landing-page.example.com is live.",
+    ]).await;
+    handle
+        .raw("PRESENCE :state=idle;status=Task complete -- landing page deployed")
+        .await?;
+
+    // ─── Summary ────────────────────────────────────
+
+    say(&handle, ch, &[
         "",
-        "━━━ Phase 2: Governable Agents — Summary ━━━",
+        "━━━ Phase 2: Governable Agents -- Summary ━━━",
         "",
         "What we demonstrated:",
-        "   1. ⏸️ Pause/Resume/Revoke — real-time agent governance",
-        "   2. 🔔 Approval flows — agents request permission for risky actions",
-        "   3. 👶 Child agents — parent spawns workers with TTL",
-        "   4. 💓 Heartbeat enforcement — server detects dead agents",
-        "   5. 🔄 Full governance loop — task → build → approve → deploy",
+        "  1. Pause/Resume/Revoke -- real-time agent governance",
+        "  2. Approval flows -- agents ask permission for risky actions",
+        "  3. Child agents -- parent spawns workers with TTL",
+        "  4. Heartbeat enforcement -- server detects dead agents",
+        "  5. Full loop -- task -> spawn worker -> build -> approve -> deploy",
         "",
-        "Everything visible in plain text for legacy IRC clients.",
-        "Rich clients get structured TAGMSG tags for UI integration.",
+        "Everything visible as plain text for legacy IRC clients.",
+        "Rich clients get structured tags for UI integration.",
         "",
         "Phase 1 answered: 'Who is this agent?'",
         "Phase 2 answers: 'What can it do, and who controls it?'",
         "",
-        "👋 factory signing off. Demo complete!",
+        "👋 factory signing off. Say 'quit' or I'll hang out here.",
     ]).await;
 
-    handle.raw("PRESENCE :state=offline;status=Demo complete").await?;
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    handle.quit(Some("Phase 2 demo complete")).await?;
+    handle.raw("PRESENCE :state=idle;status=Demo complete").await?;
+
+    // Idle loop: heartbeat + wait for quit
+    let mut last_hb = tokio::time::Instant::now();
+    loop {
+        let hb_remaining = Duration::from_secs(25).saturating_sub(last_hb.elapsed());
+        match timeout(hb_remaining, events.recv()).await {
+            Ok(Some(Event::Message {
+                from, target, text, tags,
+            })) => {
+                if tags.contains_key("batch") {
+                    continue;
+                }
+                if target.eq_ignore_ascii_case(ch) && from.eq_ignore_ascii_case(OWNER) {
+                    let w = text.trim().to_lowercase();
+                    if matches!(w.as_str(), "quit" | "q" | "stop" | "exit") {
+                        break;
+                    }
+                }
+            }
+            Ok(Some(Event::Disconnected { reason })) => {
+                eprintln!("Disconnected: {reason}");
+                return Ok(());
+            }
+            Ok(_) => {}
+            Err(_) => {
+                handle.raw("HEARTBEAT 60").await?;
+                last_hb = tokio::time::Instant::now();
+            }
+        }
+    }
+
+    shutdown(handle).await
+}
+
+async fn shutdown(handle: ClientHandle) -> Result<()> {
+    handle.raw("PRESENCE :state=offline;status=Shutting down").await?;
+    handle.quit(Some("Goodbye!")).await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
     println!("Done.");
     Ok(())

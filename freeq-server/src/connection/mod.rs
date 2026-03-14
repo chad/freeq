@@ -2570,6 +2570,29 @@ fn cleanup_session_state(state: &Arc<SharedState>, session_id: &str) {
     state.session_actor_class.lock().remove(session_id);
     state.agent_presence.lock().remove(session_id);
     state.agent_heartbeats.lock().remove(session_id);
+
+    // Clean up any spawned (virtual) child agents owned by this session
+    let mut spawned = state.spawned_agents.lock();
+    let children: Vec<crate::server::SpawnedAgent> = spawned
+        .values()
+        .filter(|sa| sa.parent_session == session_id)
+        .cloned()
+        .collect();
+    for child in &children {
+        spawned.remove(&child.child_did);
+    }
+    drop(spawned);
+
+    // Broadcast QUIT for each orphaned child
+    for child in children {
+        let quit_line = format!(
+            ":{}!spawn@freeq/spawn QUIT :Parent disconnected\r\n",
+            child.nick
+        );
+        helpers::broadcast_to_channel(state, &child.channel, &quit_line);
+        state.with_db(|db| db.record_despawn(&child.child_did));
+        tracing::info!(child = %child.nick, parent_session = %session_id, "Despawned orphaned child agent");
+    }
 }
 
 /// Remove a session from all channels. Retains channels that still have content.
