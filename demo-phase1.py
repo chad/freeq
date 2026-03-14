@@ -30,22 +30,42 @@ HOST = "irc.freeq.at"
 PORT = 6697
 
 
-def generate_did_key():
-    """Generate ed25519 keypair and derive did:key."""
-    seed = os.urandom(32)
-    key = Ed25519PrivateKey.from_private_bytes(seed)
-    pub = key.public_key().public_bytes(
-        serialization.Encoding.Raw, serialization.PublicFormat.Raw
-    )
-    # did:key multicodec: 0xed01 prefix + raw pubkey, then base58btc
+KEY_DIR = os.path.expanduser("~/.freeq/bots/scout-bot")
+
+def _derive_did(pub_bytes):
     ALPHABET = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-    mc = b"\xed\x01" + pub
+    mc = b"\xed\x01" + pub_bytes
     n = int.from_bytes(mc, "big")
     result = b""
     while n > 0:
         n, r = divmod(n, 58)
         result = ALPHABET[r : r + 1] + result
-    did = "did:key:z" + result.decode()
+    return "did:key:z" + result.decode()
+
+def generate_did_key():
+    """Load or generate ed25519 keypair and derive did:key.
+    Persists the key so the DID stays stable across runs (avoids nick ownership conflicts)."""
+    key_path = os.path.join(KEY_DIR, "key.ed25519")
+    if os.path.exists(key_path):
+        seed = open(key_path, "rb").read()
+        key = Ed25519PrivateKey.from_private_bytes(seed)
+        pub = key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw
+        )
+        did = _derive_did(pub)
+        print(f"   (loaded existing key from {key_path})")
+        return key, did
+
+    seed = os.urandom(32)
+    key = Ed25519PrivateKey.from_private_bytes(seed)
+    pub = key.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
+    did = _derive_did(pub)
+    os.makedirs(KEY_DIR, exist_ok=True)
+    with open(key_path, "wb") as f:
+        f.write(seed)
+    print(f"   (saved new key to {key_path})")
     return key, did
 
 
