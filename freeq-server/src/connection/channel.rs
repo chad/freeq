@@ -484,10 +484,19 @@ pub(super) fn handle_join(
         // Local members: look up nick from session ID (deduplicated for multi-device)
         let nicks = state.nick_to_session.lock();
         let mut seen_nicks = std::collections::HashSet::new();
+        let member_count = member_sessions.len();
         let mut list: Vec<String> = member_sessions
             .iter()
             .filter_map(|s| {
-                nicks.get_nick(s).and_then(|n| {
+                let nick_result = nicks.get_nick(s);
+                if nick_result.is_none() {
+                    tracing::warn!(
+                        channel = %channel,
+                        session = %s,
+                        "NAMES: session in ch.members but not in nick_to_session"
+                    );
+                }
+                nick_result.and_then(|n| {
                     let nick_lower = n.to_lowercase();
                     if !seen_nicks.insert(nick_lower) {
                         return None;
@@ -503,6 +512,13 @@ pub(super) fn handle_join(
                 })
             })
             .collect();
+        if list.is_empty() && member_count > 0 {
+            tracing::warn!(
+                channel = %channel,
+                member_count = member_count,
+                "NAMES: all members resolved to empty list!"
+            );
+        }
         // Remote members from S2S peers (with @ prefix if op on home server or DID-based)
         let channels_lock = state.channels.lock();
         let ch_state = channels_lock.get(channel);

@@ -391,6 +391,10 @@ export const useStore = create<Store>((set, get) => ({
     const channels = new Map(s.channels);
     const ch = getOrCreateChannel(channels, channel);
     const existing = ch.members.get(member.nick.toLowerCase());
+    const finalIsOp = member.isOp ?? existing?.isOp ?? false;
+    if (finalIsOp || member.isOp !== undefined) {
+      console.log(`[DEBUG] addMember ${channel} ${member.nick}: isOp=${member.isOp} existing=${existing?.isOp} final=${finalIsOp}`);
+    }
     ch.members.set(member.nick.toLowerCase(), {
       nick: member.nick,
       did: member.did ?? existing?.did,

@@ -856,6 +856,7 @@ async function handleLine(rawLine: string) {
     case '353': {
       const channel = msg.params[2];
       const nicks = (msg.params[3] || '').split(' ').filter(Boolean);
+      console.log(`[DEBUG] 353 NAMES for ${channel}: ${msg.params[3]}`);
       for (const n of nicks) {
         // With multi-prefix, nicks can have multiple prefixes: @+nick, @%+nick, etc.
         // Strip all leading prefix chars to get bare nick.
@@ -865,6 +866,7 @@ async function handleLine(rawLine: string) {
         const isOp = prefixes.includes('@');
         const isHalfop = prefixes.includes('%');
         const isVoiced = prefixes.includes('+');
+        if (isOp) console.log(`[DEBUG] 353: ${bare} is OP (prefix: "${prefixes}")`);
         store.addMember(channel, { nick: bare, isOp, isHalfop, isVoiced });
       }
       break;
@@ -896,6 +898,7 @@ async function handleLine(rawLine: string) {
       if (target.startsWith('#') || target.startsWith('&')) {
         const mode = msg.params[1] || '';
         const arg = msg.params[2];
+        console.log(`[DEBUG] MODE ${target} ${mode} ${arg || ''} (from: ${from})`);
         store.handleMode(target, mode, arg, from);
         store.addSystemMessage(target, `${from} set mode ${mode}${arg ? ' ' + arg : ''}`);
       }
