@@ -1319,19 +1319,28 @@ where
                                 // Broadcast actor class to shared channels if they support the cap
                                 if conn.cap_message_tags {
                                     let hostmask = conn.hostmask();
-                                    let channels = state.channels.lock();
+                                    // Collect targets first, then send (avoid holding multiple locks)
+                                    let targets: Vec<(String, Vec<String>)> = {
+                                        let channels = state.channels.lock();
+                                        channels.iter()
+                                            .filter(|(_, ch)| ch.members.contains(&session_id))
+                                            .map(|(ch_name, ch)| {
+                                                let members: Vec<String> = ch.members.iter()
+                                                    .filter(|sid| *sid != &session_id)
+                                                    .cloned()
+                                                    .collect();
+                                                (ch_name.clone(), members)
+                                            })
+                                            .collect()
+                                    };
                                     let conns = state.connections.lock();
-                                    for (ch_name, ch) in channels.iter() {
-                                        if ch.members.contains(&session_id) {
-                                            let msg_line = format!(
-                                                "@+freeq.at/actor-class={class} :{hostmask} NOTICE {ch_name} :registered as {class}\r\n"
-                                            );
-                                            for member_sid in &ch.members {
-                                                if member_sid != &session_id {
-                                                    if let Some(tx) = conns.get(member_sid) {
-                                                        let _ = tx.try_send(msg_line.clone());
-                                                    }
-                                                }
+                                    for (ch_name, members) in &targets {
+                                        let msg_line = format!(
+                                            "@+freeq.at/actor-class={class} :{hostmask} NOTICE {ch_name} :registered as {class}\r\n"
+                                        );
+                                        for member_sid in members {
+                                            if let Some(tx) = conns.get(member_sid) {
+                                                let _ = tx.try_send(msg_line.clone());
                                             }
                                         }
                                     }
@@ -1461,19 +1470,27 @@ where
 
                 // Broadcast to away-notify subscribers in shared channels
                 {
-                    let channels = state.channels.lock();
-                    let away_caps = state.cap_away_notify.lock();
-                    let conns = state.connections.lock();
-                    for ch in channels.values() {
-                        if ch.members.contains(&session_id) {
-                            for member_sid in &ch.members {
-                                if member_sid != &session_id && away_caps.contains(member_sid) {
-                                    if let Some(tx) = conns.get(member_sid) {
-                                        let line = format!(":{hostmask} AWAY :{away_json}\r\n");
-                                        let _ = tx.try_send(line);
+                    // Collect targets first, then send (avoid holding multiple locks)
+                    let targets: Vec<String> = {
+                        let channels = state.channels.lock();
+                        let away_caps = state.cap_away_notify.lock();
+                        let mut sids = Vec::new();
+                        for ch in channels.values() {
+                            if ch.members.contains(&session_id) {
+                                for member_sid in &ch.members {
+                                    if member_sid != &session_id && away_caps.contains(member_sid) {
+                                        sids.push(member_sid.clone());
                                     }
                                 }
                             }
+                        }
+                        sids
+                    };
+                    let conns = state.connections.lock();
+                    let line = format!(":{hostmask} AWAY :{away_json}\r\n");
+                    for sid in &targets {
+                        if let Some(tx) = conns.get(sid) {
+                            let _ = tx.try_send(line.clone());
                         }
                     }
                 }
