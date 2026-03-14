@@ -495,13 +495,13 @@ export const useStore = create<Store>((set, get) => ({
 
     // User modes (+o, +h, +v)
     if ((modeChar === 'o' || modeChar === 'h' || modeChar === 'v') && arg) {
-      const member = ch.members.get(arg.toLowerCase());
-      if (member) {
-        if (modeChar === 'o') member.isOp = adding;
-        if (modeChar === 'h') member.isHalfop = adding;
-        if (modeChar === 'v') member.isVoiced = adding;
-        ch.members.set(arg.toLowerCase(), { ...member });
-      }
+      const member = ch.members.get(arg.toLowerCase()) ?? {
+        nick: arg, isOp: false, isHalfop: false, isVoiced: false,
+      };
+      if (modeChar === 'o') member.isOp = adding;
+      if (modeChar === 'h') member.isHalfop = adding;
+      if (modeChar === 'v') member.isVoiced = adding;
+      ch.members.set(arg.toLowerCase(), { ...member });
     } else {
       // Channel modes
       if (adding) ch.modes.add(modeChar);
