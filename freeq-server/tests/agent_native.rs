@@ -1336,3 +1336,191 @@ async fn spawned_agents_rest_api() {
     parent.quit(None).await.unwrap();
     server_handle.abort();
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Phase 5: Economic Controls
+// ══════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn budget_set_and_query() {
+    start_deadlock_detector();
+    let (addr, server_handle) = start_test_server_with_db(empty_resolver(), true).await;
+
+    let (_did, op, mut op_ev) = connect_did_key(addr, "budgetop").await;
+    op.join("#budgettest").await.unwrap();
+    expect_event(&mut op_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Joined").await;
+
+    // Set budget
+    op.set_budget("#budgettest", 50.0, "usd", "per_day", "did:plc:sponsor").await.unwrap();
+    expect_raw_line(&mut op_ev, 2000, "Budget set", "Budget set confirmed").await;
+
+    // Query budget
+    op.query_budget("#budgettest").await.unwrap();
+    expect_raw_line(&mut op_ev, 2000, "0.00/50.00 usd", "Budget query shows 0 spend").await;
+
+    op.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn spend_reporting() {
+    start_deadlock_detector();
+    let (addr, server_handle) = start_test_server_with_db(empty_resolver(), true).await;
+
+    let (_did, bot, mut bot_ev) = connect_did_key(addr, "spendbot").await;
+    bot.register_agent("agent").await.unwrap();
+    expect_raw_line(&mut bot_ev, 2000, "registered as agent", "AGENT REGISTER").await;
+
+    bot.join("#spendtest").await.unwrap();
+    expect_event(&mut bot_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Joined").await;
+
+    // Set budget first
+    bot.set_budget("#spendtest", 10.0, "usd", "per_day", "did:plc:sponsor").await.unwrap();
+    expect_raw_line(&mut bot_ev, 2000, "Budget set", "Budget set").await;
+
+    // Report spend
+    bot.report_spend("#spendtest", 1.50, "usd", "claude-sonnet-4-20250514: 500 tokens", None).await.unwrap();
+    expect_raw_line(&mut bot_ev, 2000, "Recorded: 1.5", "Spend recorded").await;
+
+    // Query to verify
+    bot.query_budget("#spendtest").await.unwrap();
+    expect_raw_line(&mut bot_ev, 2000, "1.50/10.00", "Budget shows 1.50 spent").await;
+
+    bot.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn budget_warning_threshold() {
+    start_deadlock_detector();
+    let (addr, server_handle) = start_test_server_with_db(empty_resolver(), true).await;
+
+    let (_did, bot, mut bot_ev) = connect_did_key(addr, "warnbot").await;
+    let (_did2, watcher, mut watch_ev) = connect_did_key(addr, "warnwatch").await;
+    bot.register_agent("agent").await.unwrap();
+    expect_raw_line(&mut bot_ev, 2000, "registered as agent", "AGENT REGISTER").await;
+
+    bot.join("#warntest").await.unwrap();
+    expect_event(&mut bot_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+    watcher.join("#warntest").await.unwrap();
+    expect_event(&mut watch_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Watcher joined").await;
+
+    // Set budget with 0.8 warn threshold (default)
+    bot.set_budget("#warntest", 10.0, "usd", "per_day", "did:plc:sponsor").await.unwrap();
+    expect_raw_line(&mut bot_ev, 2000, "Budget set", "Budget set").await;
+
+    // Spend below threshold
+    bot.report_spend("#warntest", 7.0, "usd", "big call", None).await.unwrap();
+    expect_raw_line(&mut bot_ev, 2000, "Recorded", "Spend 1 recorded").await;
+
+    // This spend should cross the 80% threshold (7.0 + 2.0 = 9.0 = 90%)
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    bot.report_spend("#warntest", 2.0, "usd", "another call", None).await.unwrap();
+
+    // Watcher should see the warning
+    expect_raw_line(&mut watch_ev, 3000, "Budget", "Watcher sees budget warning").await;
+
+    bot.quit(None).await.unwrap();
+    watcher.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn budget_hard_limit_blocks() {
+    start_deadlock_detector();
+    let (addr, server_handle) = start_test_server_with_db(empty_resolver(), true).await;
+
+    let (_did, bot, mut bot_ev) = connect_did_key(addr, "limitbot").await;
+    bot.register_agent("agent").await.unwrap();
+    expect_raw_line(&mut bot_ev, 2000, "registered as agent", "AGENT REGISTER").await;
+
+    bot.join("#limitest").await.unwrap();
+    expect_event(&mut bot_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Joined").await;
+
+    // Set a small budget
+    bot.set_budget("#limitest", 5.0, "usd", "per_day", "did:plc:sponsor").await.unwrap();
+    expect_raw_line(&mut bot_ev, 2000, "Budget set", "Budget set").await;
+
+    // Exceed the budget
+    bot.report_spend("#limitest", 6.0, "usd", "expensive call", None).await.unwrap();
+
+    // Bot should receive budget_exceeded governance signal
+    expect_raw_line(&mut bot_ev, 3000, "budget_exceeded", "Bot receives budget block signal").await;
+
+    bot.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn budget_rest_api() {
+    start_deadlock_detector();
+    let (addr, web_addr, server_handle) = start_test_server_with_web_and_db(empty_resolver()).await;
+
+    let (_did, bot, mut bot_ev) = connect_did_key(addr, "restbudget").await;
+    bot.register_agent("agent").await.unwrap();
+    expect_raw_line(&mut bot_ev, 2000, "registered as agent", "AGENT REGISTER").await;
+
+    bot.join("#budgetapi").await.unwrap();
+    expect_event(&mut bot_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Joined").await;
+
+    // Set budget and report spend
+    bot.set_budget("#budgetapi", 100.0, "usd", "per_day", "did:plc:sponsor").await.unwrap();
+    expect_raw_line(&mut bot_ev, 2000, "Budget set", "Budget set").await;
+
+    bot.report_spend("#budgetapi", 3.50, "usd", "test spend", Some("TASK001")).await.unwrap();
+    expect_raw_line(&mut bot_ev, 2000, "Recorded", "Spend recorded").await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let client = reqwest::Client::new();
+
+    // Check budget endpoint
+    let resp = client
+        .get(format!("http://{web_addr}/api/v1/channels/budgetapi/budget"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(body["current_period"]["total_spent"].as_f64().unwrap() >= 3.49);
+
+    // Check spend endpoint
+    let resp = client
+        .get(format!("http://{web_addr}/api/v1/channels/budgetapi/spend"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let spend = body["spend"].as_array().unwrap();
+    assert!(!spend.is_empty(), "Expected at least 1 spend record");
+    assert_eq!(spend[0]["task_ref"], "TASK001");
+
+    bot.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn budget_requires_op() {
+    start_deadlock_detector();
+    let (addr, server_handle) = start_test_server_with_db(empty_resolver(), true).await;
+
+    let (_did, op, mut op_ev) = connect_did_key(addr, "budgetowner").await;
+    let (_did2, pleb, mut pleb_ev) = connect_did_key(addr, "budgetpleb").await;
+
+    op.join("#oponly").await.unwrap();
+    expect_event(&mut op_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Op joined").await;
+    pleb.join("#oponly").await.unwrap();
+    expect_event(&mut pleb_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Pleb joined").await;
+
+    // Non-op tries to set budget — should fail
+    pleb.set_budget("#oponly", 50.0, "usd", "per_day", "did:plc:test").await.unwrap();
+    expect_raw_line(&mut pleb_ev, 2000, "operator", "Budget set rejected for non-op").await;
+
+    // Op sets budget — should succeed
+    op.set_budget("#oponly", 50.0, "usd", "per_day", "did:plc:test").await.unwrap();
+    expect_raw_line(&mut op_ev, 2000, "Budget set", "Op can set budget").await;
+
+    op.quit(None).await.unwrap();
+    pleb.quit(None).await.unwrap();
+    server_handle.abort();
+}

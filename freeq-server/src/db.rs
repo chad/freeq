@@ -292,6 +292,31 @@ impl Db {
         )?;
 
         self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS agent_spend (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel TEXT NOT NULL,
+                agent_did TEXT NOT NULL,
+                amount REAL NOT NULL,
+                unit TEXT NOT NULL,
+                description TEXT,
+                task_ref TEXT,
+                timestamp INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_spend_channel_agent ON agent_spend(channel, agent_did, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_spend_period ON agent_spend(channel, agent_did, unit, timestamp);
+
+            CREATE TABLE IF NOT EXISTS channel_budgets (
+                channel TEXT NOT NULL,
+                agent_did TEXT,
+                budget_json TEXT NOT NULL,
+                set_by TEXT NOT NULL,
+                set_at INTEGER NOT NULL,
+                PRIMARY KEY(channel, agent_did)
+            );
+            ",
+        )?;
+
+        self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS coordination_events (
                 event_id TEXT PRIMARY KEY,
                 event_type TEXT NOT NULL,
@@ -1355,6 +1380,19 @@ impl Db {
     }
 }
 
+/// A spend record.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SpendRecord {
+    pub id: i64,
+    pub channel: String,
+    pub agent_did: String,
+    pub amount: f64,
+    pub unit: String,
+    pub description: Option<String>,
+    pub task_ref: Option<String>,
+    pub timestamp: i64,
+}
+
 /// A spawned agent record.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SpawnedAgentRow {
@@ -1654,6 +1692,149 @@ impl Db {
                 spawned_at: row.get(8)?,
             }),
         ).ok()
+    }
+
+    // ── Agent spend tracking ──────────────────────────────────────────
+
+    pub fn record_spend(
+        &self,
+        channel: &str,
+        agent_did: &str,
+        amount: f64,
+        unit: &str,
+        description: Option<&str>,
+        task_ref: Option<&str>,
+    ) -> SqlResult<()> {
+        let now = chrono::Utc::now().timestamp();
+        self.conn.execute(
+            "INSERT INTO agent_spend (channel, agent_did, amount, unit, description, task_ref, timestamp)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![channel, agent_did, amount, unit, description, task_ref, now],
+        )?;
+        Ok(())
+    }
+
+    /// Sum spend for a channel/agent/unit since a given timestamp.
+    pub fn sum_spend(&self, channel: &str, agent_did: Option<&str>, unit: &str, since: i64) -> f64 {
+        let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match agent_did {
+            Some(did) => (
+                "SELECT COALESCE(SUM(amount), 0.0) FROM agent_spend
+                 WHERE channel = ?1 AND agent_did = ?2 AND unit = ?3 AND timestamp >= ?4".to_string(),
+                vec![Box::new(channel.to_string()), Box::new(did.to_string()), Box::new(unit.to_string()), Box::new(since)],
+            ),
+            None => (
+                "SELECT COALESCE(SUM(amount), 0.0) FROM agent_spend
+                 WHERE channel = ?1 AND unit = ?2 AND timestamp >= ?3".to_string(),
+                vec![Box::new(channel.to_string()), Box::new(unit.to_string()), Box::new(since)],
+            ),
+        };
+        let refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
+        self.conn.query_row(&sql, refs.as_slice(), |row| row.get(0)).unwrap_or(0.0)
+    }
+
+    /// Query spend records with optional filters.
+    pub fn query_spend(
+        &self,
+        channel: &str,
+        agent_did: Option<&str>,
+        since: Option<i64>,
+        limit: usize,
+    ) -> Vec<SpendRecord> {
+        let mut sql = String::from(
+            "SELECT id, channel, agent_did, amount, unit, description, task_ref, timestamp
+             FROM agent_spend WHERE channel = ?1"
+        );
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(channel.to_string())];
+        let mut idx = 2;
+        if let Some(did) = agent_did {
+            sql.push_str(&format!(" AND agent_did = ?{idx}"));
+            params_vec.push(Box::new(did.to_string()));
+            idx += 1;
+        }
+        if let Some(s) = since {
+            sql.push_str(&format!(" AND timestamp >= ?{idx}"));
+            params_vec.push(Box::new(s));
+            idx += 1;
+        }
+        let _ = idx;
+        sql.push_str(&format!(" ORDER BY timestamp DESC LIMIT {limit}"));
+        let refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
+        let mut stmt = match self.conn.prepare(&sql) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        match stmt.query_map(refs.as_slice(), |row| {
+            Ok(SpendRecord {
+                id: row.get(0)?,
+                channel: row.get(1)?,
+                agent_did: row.get(2)?,
+                amount: row.get(3)?,
+                unit: row.get(4)?,
+                description: row.get(5)?,
+                task_ref: row.get(6)?,
+                timestamp: row.get(7)?,
+            })
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Spend by agent for a channel/unit/period.
+    pub fn spend_by_agent(&self, channel: &str, unit: &str, since: i64) -> Vec<(String, f64, i64)> {
+        let mut stmt = match self.conn.prepare(
+            "SELECT agent_did, SUM(amount), COUNT(*) FROM agent_spend
+             WHERE channel = ?1 AND unit = ?2 AND timestamp >= ?3
+             GROUP BY agent_did ORDER BY SUM(amount) DESC"
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        match stmt.query_map(params![channel, unit, since], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?, row.get::<_, i64>(2)?))
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    // ── Channel budgets ──────────────────────────────────────────────
+
+    pub fn set_budget(
+        &self,
+        channel: &str,
+        agent_did: Option<&str>,
+        budget_json: &str,
+        set_by: &str,
+    ) -> SqlResult<()> {
+        let now = chrono::Utc::now().timestamp();
+        let did_key = agent_did.unwrap_or("*");
+        self.conn.execute(
+            "INSERT OR REPLACE INTO channel_budgets (channel, agent_did, budget_json, set_by, set_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![channel, did_key, budget_json, set_by, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_budget(&self, channel: &str, agent_did: Option<&str>) -> Option<String> {
+        let did_key = agent_did.unwrap_or("*");
+        // Try agent-specific first, then channel default
+        self.conn.query_row(
+            "SELECT budget_json FROM channel_budgets WHERE channel = ?1 AND agent_did = ?2",
+            params![channel, did_key],
+            |row| row.get(0),
+        ).ok().or_else(|| {
+            if agent_did.is_some() {
+                self.conn.query_row(
+                    "SELECT budget_json FROM channel_budgets WHERE channel = ?1 AND agent_did = '*'",
+                    params![channel],
+                    |row| row.get(0),
+                ).ok()
+            } else {
+                None
+            }
+        })
     }
 
     /// Query governance log entries for a channel.

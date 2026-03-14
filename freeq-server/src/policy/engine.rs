@@ -116,6 +116,8 @@ impl PolicyEngine {
             limits: None,
             transparency: None,
             credential_endpoints: std::collections::BTreeMap::new(),
+            agent_budget: None,
+            agent_budgets: std::collections::BTreeMap::new(),
         };
         let policy = self.store.store_policy(policy)?;
 
@@ -152,6 +154,8 @@ impl PolicyEngine {
             limits: current.limits.clone(),
             transparency: current.transparency.clone(),
             credential_endpoints: current.credential_endpoints.clone(),
+            agent_budget: current.agent_budget.clone(),
+            agent_budgets: current.agent_budgets.clone(),
         };
         self.store.store_policy(policy)
     }
@@ -189,6 +193,8 @@ impl PolicyEngine {
             limits: current.limits.clone(),
             transparency: current.transparency.clone(),
             credential_endpoints,
+            agent_budget: current.agent_budget.clone(),
+            agent_budgets: current.agent_budgets.clone(),
         };
         self.store.store_policy(policy)
     }
@@ -841,6 +847,8 @@ mod tests {
             limits: None,
             transparency: None,
             credential_endpoints: std::collections::BTreeMap::new(),
+            agent_budget: None,
+            agent_budgets: std::collections::BTreeMap::new(),
         };
         engine.store.store_policy(policy).unwrap();
 

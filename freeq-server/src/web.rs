@@ -202,6 +202,8 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/agents/manifests", get(api_list_manifests))
         .route("/api/v1/agents/manifests/{did}", get(api_get_manifest))
         .route("/api/v1/agents/spawned", get(api_spawned_agents))
+        .route("/api/v1/channels/{name}/budget", get(api_channel_budget))
+        .route("/api/v1/channels/{name}/spend", get(api_channel_spend))
         .route("/auth/mobile", get(auth_mobile_redirect))
         .route("/join/{channel}", get(channel_invite_page))
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)) // 12MB
@@ -704,6 +706,80 @@ async fn api_spawned_agents(
         }))
         .collect();
     Json(serde_json::json!({ "spawned_agents": agents }))
+}
+
+/// GET /api/v1/channels/{name}/budget — budget status.
+async fn api_channel_budget(
+    State(state): State<Arc<SharedState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Json<serde_json::Value> {
+    let channel = format!("#{name}");
+    let budget_json = state.with_db(|db| Ok(db.get_budget(&channel.to_lowercase(), None))).flatten();
+    match budget_json {
+        Some(bj) => {
+            if let Ok(budget) = serde_json::from_str::<crate::policy::types::BudgetPolicy>(&bj) {
+                let period_start = crate::connection::budget_period_start(&budget.period);
+                let total_spent = state.with_db(|db| Ok(db.sum_spend(&channel.to_lowercase(), None, &budget.unit, period_start)))
+                    .unwrap_or(0.0);
+                let by_agent: Vec<serde_json::Value> = state.with_db(|db| {
+                    Ok(db.spend_by_agent(&channel.to_lowercase(), &budget.unit, period_start)
+                        .into_iter()
+                        .map(|(did, spent, count)| serde_json::json!({
+                            "agent_did": did,
+                            "spent": spent,
+                            "items": count,
+                        }))
+                        .collect::<Vec<_>>())
+                }).unwrap_or_default();
+                let remaining = budget.max_amount - total_spent;
+                let pct = if budget.max_amount > 0.0 { total_spent / budget.max_amount * 100.0 } else { 0.0 };
+                Json(serde_json::json!({
+                    "channel": channel,
+                    "policy": serde_json::from_str::<serde_json::Value>(&bj).unwrap_or_default(),
+                    "current_period": {
+                        "total_spent": total_spent,
+                        "remaining": remaining,
+                        "percent_used": pct,
+                        "by_agent": by_agent,
+                    },
+                }))
+            } else {
+                Json(serde_json::json!({ "channel": channel, "error": "Invalid budget policy" }))
+            }
+        }
+        None => Json(serde_json::json!({ "channel": channel, "budget": null })),
+    }
+}
+
+/// GET /api/v1/channels/{name}/spend — spend records.
+async fn api_channel_spend(
+    State(state): State<Arc<SharedState>>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Json<serde_json::Value> {
+    let channel = format!("#{name}");
+    let agent = params.get("agent").map(|s| s.as_str());
+    let since = params.get("since").and_then(|s| {
+        chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.timestamp())
+            .or_else(|| s.parse::<i64>().ok())
+    });
+    let limit = params.get("limit").and_then(|s| s.parse().ok()).unwrap_or(100usize);
+
+    let records: Vec<serde_json::Value> = state.with_db(|db| {
+        Ok(db.query_spend(&channel.to_lowercase(), agent, since, limit)
+            .into_iter()
+            .map(|r| serde_json::json!({
+                "id": r.id,
+                "agent_did": r.agent_did,
+                "amount": r.amount,
+                "unit": r.unit,
+                "description": r.description,
+                "task_ref": r.task_ref,
+                "timestamp": r.timestamp,
+            }))
+            .collect::<Vec<_>>())
+    }).unwrap_or_default();
+    Json(serde_json::json!({ "channel": channel, "spend": records }))
 }
 
 /// GET /api/v1/actors/{did} — identity card for any actor (human or agent).

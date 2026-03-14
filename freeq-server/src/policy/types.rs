@@ -67,6 +67,54 @@ pub struct PolicyDocument {
     /// This is UX metadata, not part of the security model.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub credential_endpoints: BTreeMap<String, CredentialEndpoint>,
+
+    /// Budget constraints for agent activity in this channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_budget: Option<BudgetPolicy>,
+
+    /// Per-agent budget overrides (DID → budget).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agent_budgets: BTreeMap<String, BudgetPolicy>,
+}
+
+/// Budget constraints for agent spending in a channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BudgetPolicy {
+    /// Budget currency/unit: "usd", "credits", "api_calls", "tokens".
+    pub unit: String,
+
+    /// Maximum amount per period.
+    pub max_amount: f64,
+
+    /// Budget period.
+    pub period: BudgetPeriod,
+
+    /// DID of the budget sponsor (who gets notified and pays).
+    pub sponsor_did: String,
+
+    /// Threshold (0.0–1.0) at which to warn the sponsor.
+    #[serde(default = "default_warn_threshold")]
+    pub warn_threshold: f64,
+
+    /// Whether exceeding the budget blocks the agent or just warns.
+    #[serde(default = "default_hard_limit")]
+    pub hard_limit: bool,
+
+    /// Per-action cost threshold that triggers spend approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_threshold: Option<f64>,
+}
+
+fn default_warn_threshold() -> f64 { 0.8 }
+fn default_hard_limit() -> bool { true }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetPeriod {
+    PerHour,
+    PerDay,
+    PerWeek,
+    PerTask,
 }
 
 /// Metadata about where/how to obtain a specific credential type.

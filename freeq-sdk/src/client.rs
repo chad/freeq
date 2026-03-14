@@ -553,6 +553,43 @@ impl ClientHandle {
         self.raw(&format!("AGENT MSG {child_nick} {channel} :{text}")).await
     }
 
+    // ── Phase 5: Economic Controls ─────────────────────────────────
+
+    /// Report spend for the current action.
+    pub async fn report_spend(
+        &self,
+        channel: &str,
+        amount: f64,
+        unit: &str,
+        description: &str,
+        task_ref: Option<&str>,
+    ) -> Result<()> {
+        let mut params = format!("amount={amount:.6};unit={unit};desc={description}");
+        if let Some(task) = task_ref {
+            params.push_str(&format!(";task={task}"));
+        }
+        self.raw(&format!("SPEND {channel} :{params}")).await
+    }
+
+    /// Set a channel budget (must be channel op).
+    pub async fn set_budget(
+        &self,
+        channel: &str,
+        max_amount: f64,
+        unit: &str,
+        period: &str,
+        sponsor_did: &str,
+    ) -> Result<()> {
+        self.raw(&format!(
+            "BUDGET {channel} :max={max_amount};unit={unit};period={period};sponsor={sponsor_did}"
+        )).await
+    }
+
+    /// Query channel budget status.
+    pub async fn query_budget(&self, channel: &str) -> Result<()> {
+        self.raw(&format!("BUDGET {channel}")).await
+    }
+
     /// Start automatic heartbeat in a background task.
     /// Returns a handle that stops the heartbeat when dropped.
     pub fn start_heartbeat(

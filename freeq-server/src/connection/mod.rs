@@ -1884,6 +1884,197 @@ where
                 }
             }
 
+            // SPEND command — agent reports spend for budget tracking.
+            // Usage: SPEND #channel :amount=0.03;unit=usd;desc=claude-sonnet-4-20250514: 1.2k tokens;task=01JQXYZ
+            "SPEND" => {
+                if !conn.registered { continue; }
+                let nick = conn.nick_or_star().to_string();
+                let channel = match msg.params.first() {
+                    Some(c) if c.starts_with('#') => c.clone(),
+                    _ => {
+                        let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
+                            vec![&nick, "SPEND", "Usage: SPEND #channel :amount=0.03;unit=usd;desc=...;task=..."]);
+                        send(&state, &session_id, format!("{reply}\r\n"));
+                        continue;
+                    }
+                };
+                let raw_params = msg.params.get(1).cloned().unwrap_or_default();
+                let mut amount: f64 = 0.0;
+                let mut unit = "usd".to_string();
+                let mut description: Option<String> = None;
+                let mut task_ref: Option<String> = None;
+                for part in raw_params.split(';') {
+                    if let Some((k, v)) = part.split_once('=') {
+                        match k.trim() {
+                            "amount" => amount = v.trim().parse().unwrap_or(0.0),
+                            "unit" => unit = v.trim().to_string(),
+                            "desc" | "description" => description = Some(v.trim().to_string()),
+                            "task" => task_ref = Some(v.trim().to_string()),
+                            _ => {}
+                        }
+                    }
+                }
+
+                if amount <= 0.0 {
+                    let reply = Message::from_server(&server_name, "NOTICE",
+                        vec![&nick, "SPEND requires positive amount"]);
+                    send(&state, &session_id, format!("{reply}\r\n"));
+                    continue;
+                }
+
+                if let Some(ref did) = conn.authenticated_did {
+                    // Record spend
+                    state.with_db(|db| db.record_spend(&channel, did, amount, &unit, description.as_deref(), task_ref.as_deref()));
+
+                    // Check budget and enforce
+                    let budget_json = state.with_db(|db| Ok(db.get_budget(&channel, Some(did)))).flatten();
+                    if let Some(ref bj) = budget_json {
+                        if let Ok(budget) = serde_json::from_str::<crate::policy::types::BudgetPolicy>(bj) {
+                            let period_start = budget_period_start(&budget.period);
+                            let total_spent = state.with_db(|db| Ok(db.sum_spend(&channel, Some(did), &budget.unit, period_start)))
+                                .unwrap_or(0.0);
+                            let ratio = total_spent / budget.max_amount;
+                            let prev_ratio = (total_spent - amount) / budget.max_amount;
+
+                            // Warn at threshold (first crossing)
+                            if ratio >= budget.warn_threshold && prev_ratio < budget.warn_threshold {
+                                let warn = format!(
+                                    ":{server_name} NOTICE {channel} :⚠ Budget {:.0}% used by {nick} ({:.2}/{:.2} {unit})\r\n",
+                                    ratio * 100.0, total_spent, budget.max_amount
+                                );
+                                helpers::broadcast_to_channel(&state, &channel, &warn);
+                                tracing::info!(channel = %channel, agent = %nick, pct = ratio * 100.0, "Budget warning threshold hit");
+                            }
+
+                            // Block at limit
+                            if ratio >= 1.0 && budget.hard_limit {
+                                let block = format!(
+                                    ":{server_name} NOTICE {channel} :🛑 {nick} blocked: budget exceeded ({:.2}/{:.2} {unit})\r\n",
+                                    total_spent, budget.max_amount
+                                );
+                                helpers::broadcast_to_channel(&state, &channel, &block);
+
+                                // Send governance signal to agent
+                                let gov_line = format!(
+                                    "@+freeq.at/governance=budget_exceeded;+freeq.at/spent={:.2};+freeq.at/limit={:.2};+freeq.at/unit={unit} :{server_name} TAGMSG {nick}\r\n",
+                                    total_spent, budget.max_amount
+                                );
+                                send(&state, &session_id, gov_line);
+                            }
+                        }
+                    }
+
+                    let reply = Message::from_server(&server_name, "NOTICE",
+                        vec![&nick, &format!("💰 Recorded: {amount:.4} {unit}")]);
+                    send(&state, &session_id, format!("{reply}\r\n"));
+                } else {
+                    let reply = Message::from_server(&server_name, "NOTICE",
+                        vec![&nick, "Must be authenticated to report spend"]);
+                    send(&state, &session_id, format!("{reply}\r\n"));
+                }
+            }
+
+            // BUDGET command — set or query channel budget.
+            // Usage: BUDGET #channel — query
+            // Usage: BUDGET #channel :max=50;unit=usd;period=per_day;sponsor=did:plc:xxx;warn=0.8;hard=true
+            "BUDGET" => {
+                if !conn.registered { continue; }
+                let nick = conn.nick_or_star().to_string();
+                let channel = match msg.params.first() {
+                    Some(c) if c.starts_with('#') => c.clone(),
+                    _ => {
+                        let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
+                            vec![&nick, "BUDGET", "Usage: BUDGET #channel [:max=50;unit=usd;period=per_day;...]"]);
+                        send(&state, &session_id, format!("{reply}\r\n"));
+                        continue;
+                    }
+                };
+
+                if let Some(raw) = msg.params.get(1) {
+                    // Set budget — require op or oper
+                    let is_op = {
+                        let channels = state.channels.lock();
+                        channels.get(&channel.to_lowercase())
+                            .map(|ch| ch.ops.contains(&session_id))
+                            .unwrap_or(false)
+                    };
+                    if !is_op && !conn.is_oper {
+                        let reply = Message::from_server(&server_name, "482",
+                            vec![&nick, &channel, "You must be a channel operator to set budgets"]);
+                        send(&state, &session_id, format!("{reply}\r\n"));
+                        continue;
+                    }
+
+                    let mut max_amount: f64 = 50.0;
+                    let mut unit_str = "usd".to_string();
+                    let mut period_str = "per_day".to_string();
+                    let mut sponsor = conn.authenticated_did.clone().unwrap_or_else(|| nick.clone());
+                    let mut warn: f64 = 0.8;
+                    let mut hard = true;
+                    for part in raw.split(';') {
+                        if let Some((k, v)) = part.split_once('=') {
+                            match k.trim() {
+                                "max" | "max_amount" => max_amount = v.trim().parse().unwrap_or(50.0),
+                                "unit" => unit_str = v.trim().to_string(),
+                                "period" => period_str = v.trim().to_string(),
+                                "sponsor" => sponsor = v.trim().to_string(),
+                                "warn" | "warn_threshold" => warn = v.trim().parse().unwrap_or(0.8),
+                                "hard" | "hard_limit" => hard = v.trim() == "true",
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    let budget = crate::policy::types::BudgetPolicy {
+                        unit: unit_str.clone(),
+                        max_amount,
+                        period: match period_str.as_str() {
+                            "per_hour" => crate::policy::types::BudgetPeriod::PerHour,
+                            "per_week" => crate::policy::types::BudgetPeriod::PerWeek,
+                            "per_task" => crate::policy::types::BudgetPeriod::PerTask,
+                            _ => crate::policy::types::BudgetPeriod::PerDay,
+                        },
+                        sponsor_did: sponsor,
+                        warn_threshold: warn,
+                        hard_limit: hard,
+                        approval_threshold: None,
+                    };
+                    let budget_json = serde_json::to_string(&budget).unwrap_or_default();
+                    let issuer = conn.authenticated_did.as_deref().unwrap_or(&nick);
+                    state.with_db(|db| db.set_budget(&channel, None, &budget_json, issuer));
+
+                    let reply = Message::from_server(&server_name, "NOTICE",
+                        vec![&nick, &format!("💰 Budget set for {channel}: {max_amount:.2} {unit_str}/{period_str} (warn: {:.0}%, hard: {hard})", warn * 100.0)]);
+                    send(&state, &session_id, format!("{reply}\r\n"));
+
+                    // Broadcast to channel
+                    let notice = format!(
+                        ":{server_name} NOTICE {channel} :💰 Budget set: {max_amount:.2} {unit_str}/{period_str} by {nick}\r\n"
+                    );
+                    helpers::broadcast_to_channel(&state, &channel, &notice);
+                    tracing::info!(channel = %channel, by = %nick, max = max_amount, unit = %unit_str, "BUDGET set");
+                } else {
+                    // Query budget
+                    let budget_json = state.with_db(|db| Ok(db.get_budget(&channel, None))).flatten();
+                    if let Some(ref bj) = budget_json {
+                        if let Ok(budget) = serde_json::from_str::<crate::policy::types::BudgetPolicy>(bj) {
+                            let period_start = budget_period_start(&budget.period);
+                            let total_spent = state.with_db(|db| Ok(db.sum_spend(&channel, None, &budget.unit, period_start)))
+                                .unwrap_or(0.0);
+                            let remaining = budget.max_amount - total_spent;
+                            let pct = (total_spent / budget.max_amount * 100.0).min(100.0);
+                            let reply = Message::from_server(&server_name, "NOTICE",
+                                vec![&nick, &format!("💰 {channel}: {total_spent:.2}/{:.2} {} ({pct:.0}% used, {remaining:.2} remaining)", budget.max_amount, budget.unit)]);
+                            send(&state, &session_id, format!("{reply}\r\n"));
+                        }
+                    } else {
+                        let reply = Message::from_server(&server_name, "NOTICE",
+                            vec![&nick, &format!("No budget set for {channel}")]);
+                        send(&state, &session_id, format!("{reply}\r\n"));
+                    }
+                }
+            }
+
             // PROVENANCE command — submit a provenance declaration for this agent.
             // Usage: PROVENANCE :<base64url-encoded JSON>
             "PROVENANCE" => {
@@ -2391,3 +2582,34 @@ fn cleanup_channel_membership(state: &Arc<SharedState>, session_id: &str) {
             || !ch.bans.is_empty()
     });
 }
+
+/// Compute the start timestamp for a budget period.
+pub fn budget_period_start(period: &crate::policy::types::BudgetPeriod) -> i64 {
+    use crate::policy::types::BudgetPeriod;
+    let now = chrono::Utc::now();
+    match period {
+        BudgetPeriod::PerHour => {
+            now.date_naive()
+                .and_hms_opt(now.time().hour(), 0, 0)
+                .map(|dt| dt.and_utc().timestamp())
+                .unwrap_or(0)
+        }
+        BudgetPeriod::PerDay => {
+            now.date_naive()
+                .and_hms_opt(0, 0, 0)
+                .map(|dt| dt.and_utc().timestamp())
+                .unwrap_or(0)
+        }
+        BudgetPeriod::PerWeek => {
+            use chrono::Datelike;
+            let days_since_monday = now.weekday().num_days_from_monday();
+            let monday = now.date_naive() - chrono::Duration::days(days_since_monday as i64);
+            monday.and_hms_opt(0, 0, 0)
+                .map(|dt| dt.and_utc().timestamp())
+                .unwrap_or(0)
+        }
+        BudgetPeriod::PerTask => 0, // per-task tracks from task creation, not calendar
+    }
+}
+
+use chrono::Timelike;
