@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useStore } from '../store';
 import { rawCommand } from '../irc/client';
+import { AuditTimeline } from './AuditTimeline';
 
 interface PolicyInfo {
   policy?: {
@@ -214,7 +215,7 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
   const myMember = ch?.members.get(nick.toLowerCase());
   const isOp = myMember?.isOp ?? false;
 
-  const [tab, setTab] = useState<'rules' | 'requirements' | 'roles'>('rules');
+  const [tab, setTab] = useState<'rules' | 'requirements' | 'roles' | 'audit'>('rules');
   const [policy, setPolicy] = useState<PolicyInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -319,6 +320,7 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
     { id: 'rules' as const, label: 'Rules' },
     { id: 'requirements' as const, label: 'Verifiers' },
     { id: 'roles' as const, label: 'Roles' },
+    { id: 'audit' as const, label: 'Audit' },
   ];
 
   return (
@@ -633,6 +635,12 @@ function SettingsContent({ channel, onClose }: { channel: string; onClose: () =>
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {tab === 'audit' && (
+          <div className="h-[500px]">
+            <AuditTimeline channel={channel} onClose={onClose} />
           </div>
         )}
       </div>

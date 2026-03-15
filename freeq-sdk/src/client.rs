@@ -442,8 +442,8 @@ impl ClientHandle {
         }
         // Send structured TAGMSG
         self.raw(&format!("@{tags} TAGMSG {channel}")).await?;
-        // Send human-readable PRIVMSG
-        self.privmsg(channel, human_text).await?;
+        // Send human-readable PRIVMSG with the same event tags (for rich client rendering)
+        self.raw(&format!("@{tags} PRIVMSG {channel} :{human_text}")).await?;
         Ok(event_id)
     }
 
