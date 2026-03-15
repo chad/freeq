@@ -71,6 +71,7 @@ SLUG_MAP = {
     "encryption": ("site", "ENCRYPTION.md"),
     "bot-quickstart": ("site", "BOT-QUICKSTART.md"),
     "policy-system": ("site", "POLICY.md"),
+    "agents": ("site", "agents.md"),
 }
 
 
