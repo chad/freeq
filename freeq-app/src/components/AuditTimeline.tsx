@@ -53,7 +53,7 @@ export function AuditTimeline({ channel, onClose }: AuditTimelineProps) {
     if (actorFilter) params.set('actor', actorFilter);
     if (categoryFilter) params.set('type', categoryFilter);
 
-    fetch(`/api/v1/channels/${encodeURIComponent(channel)}/audit?${params}`)
+    fetch(`/api/v1/channels/${encodeURIComponent(channel.replace(/^#/, ''))}/audit?${params}`)
       .then(r => r.ok ? r.json() : { events: [] })
       .then(data => {
         setEvents(data.events || []);

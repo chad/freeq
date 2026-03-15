@@ -83,7 +83,7 @@ pub(super) fn handle_tagmsg(
                 .or_else(|| tags.get("+freeq.at/task-id"))
                 .cloned();
             let payload = tags.get("+freeq.at/payload")
-                .cloned()
+                .map(|p| urlencoding::decode(p).unwrap_or_else(|_| p.clone().into()).into_owned())
                 .unwrap_or_else(|| "{}".to_string());
             let signature = tags.get("+freeq.at/sig").cloned();
             let now = chrono::Utc::now().timestamp();
