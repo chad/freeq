@@ -322,7 +322,7 @@ where
         });
 
     // Channel for sending messages TO this client
-    let (tx, mut rx) = mpsc::channel::<String>(4096);
+    let (tx, mut rx) = mpsc::channel::<String>(16384);
     state.connections.lock().insert(session_id.clone(), tx);
 
     let server_name = state.server_name.clone();

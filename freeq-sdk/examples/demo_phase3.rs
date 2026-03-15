@@ -123,13 +123,18 @@ async fn emit_event(
         tags.push_str(&format!(";+freeq.at/evidence-type={et}"));
     }
 
+    // Escape payload for tag value (no spaces, no semicolons)
+    let payload_escaped = payload_json.replace(';', "%3B").replace(' ', "%20");
+    let tags_with_payload = format!("{tags};+freeq.at/payload={payload_escaped}");
+
     // TAGMSG with structured payload (machine-readable)
-    let tagmsg = format!("{tags} TAGMSG {ch} :{payload_json}");
+    let tagmsg = format!("{tags_with_payload} TAGMSG {ch}");
     let _ = h.raw(&tagmsg).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // PRIVMSG with human-readable fallback
-    let _ = h.privmsg(ch, human_msg).await;
+    // PRIVMSG with same tags (for rich web client rendering) + human-readable text
+    let privmsg = format!("{tags_with_payload} PRIVMSG {ch} :{human_msg}");
+    let _ = h.raw(&privmsg).await;
     tokio::time::sleep(Duration::from_millis(400)).await;
 }
 

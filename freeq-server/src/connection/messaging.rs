@@ -83,7 +83,7 @@ pub(super) fn handle_tagmsg(
                 .or_else(|| tags.get("+freeq.at/task-id"))
                 .cloned();
             let payload = tags.get("+freeq.at/payload")
-                .cloned()
+                .map(|p| urlencoding::decode(p).unwrap_or_else(|_| p.clone().into()).into_owned())
                 .unwrap_or_else(|| "{}".to_string());
             let signature = tags.get("+freeq.at/sig").cloned();
             let now = chrono::Utc::now().timestamp();
@@ -531,7 +531,15 @@ pub(super) fn handle_privmsg(
                         &plain_line
                     };
                     if let Some(tx) = conns.get(target_session) {
-                        let _ = tx.try_send(line.clone());
+                        if let Err(_e) = tx.try_send(line.clone()) {
+                            let target_nick = state.nick_to_session.lock().get_nick(target_session).map(|s| s.to_string()).unwrap_or_default();
+                            tracing::warn!(
+                                from = %conn.nick.as_deref().unwrap_or("?"),
+                                to = %target_nick,
+                                session = %target_session,
+                                "DM dropped: target send buffer full"
+                            );
+                        }
                     }
                 }
 
@@ -1031,7 +1039,37 @@ fn handle_edit(
     let is_channel = target.starts_with('#') || target.starts_with('&');
 
     // Verify authorship: look up original message by msgid
-    let original = state.with_db(|db| db.get_message_by_msgid(target, original_msgid));
+    // For DMs, messages are stored under the canonical dm_key, not the nick.
+    // Try the target first (works for channels), then fall back to a global lookup.
+    let original = {
+        let by_target = state.with_db(|db| db.get_message_by_msgid(target, original_msgid));
+        match &by_target {
+            Some(Some(_)) => by_target,
+            _ => {
+                // Channel lookup failed — try DM key if this is a DM
+                if !is_channel {
+                    if let Some(sender_did) = conn.authenticated_did.as_deref() {
+                        if let Some(recipient_did) = state.nick_owners.lock().get(&target.to_lowercase()).cloned() {
+                            let dm_key = crate::db::canonical_dm_key(sender_did, &recipient_did);
+                            let by_dm = state.with_db(|db| db.get_message_by_msgid(&dm_key, original_msgid));
+                            if matches!(&by_dm, Some(Some(_))) {
+                                by_dm
+                            } else {
+                                // Final fallback: global msgid search
+                                state.with_db(|db| db.find_message_by_msgid(original_msgid))
+                            }
+                        } else {
+                            state.with_db(|db| db.find_message_by_msgid(original_msgid))
+                        }
+                    } else {
+                        state.with_db(|db| db.find_message_by_msgid(original_msgid))
+                    }
+                } else {
+                    by_target
+                }
+            }
+        }
+    };
     match original {
         Some(Some(row)) => {
             // Extract nick from the stored sender hostmask

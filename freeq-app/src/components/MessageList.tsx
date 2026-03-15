@@ -8,6 +8,7 @@ import { BlueskyEmbed } from './BlueskyEmbed';
 import { LinkPreview } from './LinkPreview';
 import { MessageContextMenu } from './MessageContextMenu';
 import { MarkdownMessage } from './MarkdownRenderer';
+import { CoordinationEventCard, isCoordinationEvent } from './CoordinationCards';
 
 // ── Colors ──
 
@@ -16,7 +17,7 @@ const NICK_COLORS = [
   '#ff9547', '#00c4ff', '#ff5c5c', '#7edd7e', '#ff85d0',
 ];
 
-function nickColor(nick: string): string {
+export function nickColor(nick: string): string {
   let h = 0;
   for (let i = 0; i < nick.length; i++) h = nick.charCodeAt(i) + ((h << 5) - h);
   return NICK_COLORS[Math.abs(h) % NICK_COLORS.length];
@@ -373,6 +374,12 @@ function MessageContent({ msg }: { msg: Message }) {
         <span style={{ color }} className="font-semibold not-italic">{'* '}{msg.from}</span>{' '}{msg.text}
       </div>
     );
+  }
+
+  // Coordination event cards (Phase 3)
+  if (isCoordinationEvent(msg)) {
+    const card = <CoordinationEventCard msg={msg} />;
+    if (card) return card;
   }
 
   // Markdown messages — render with full markdown support
