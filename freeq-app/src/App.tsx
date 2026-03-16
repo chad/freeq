@@ -208,7 +208,7 @@ export default function App() {
         )}
         <div className={`${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        } fixed md:relative md:translate-x-0 z-30 h-full transition-transform duration-200`}>
+        } fixed inset-y-0 left-0 md:relative md:inset-auto md:h-full md:translate-x-0 z-30 transition-transform duration-200`}>
           <Sidebar onOpenSettings={() => setSettings(true)} />
         </div>
 
