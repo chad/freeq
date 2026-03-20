@@ -21,6 +21,7 @@ import com.freeq.ui.components.ChannelSettingsSheet
 import com.freeq.ui.components.ComposeBar
 import com.freeq.ui.components.MemberList
 import com.freeq.ui.components.MessageList
+import com.freeq.ui.components.PinnedMessagesSheet
 import com.freeq.ui.components.SearchSheet
 import com.freeq.ui.components.UserProfileSheet
 
@@ -39,6 +40,7 @@ fun ChatDetailScreen(
     var showMembers by remember { mutableStateOf(false) }
     var showSearch by remember { mutableStateOf(false) }
     var showChannelSettings by remember { mutableStateOf(false) }
+    var showPinnedMessages by remember { mutableStateOf(false) }
     var profileSheetNick by remember { mutableStateOf<String?>(null) }
     var scrollToMessageId by remember { mutableStateOf<String?>(null) }
     val isChannel = channelName.startsWith("#")
@@ -223,6 +225,22 @@ fun ChatDetailScreen(
                 onLeave = {
                     appState.activeChannel.value = null
                     onBack()
+                },
+                onShowPinnedMessages = {
+                    showChannelSettings = false
+                    showPinnedMessages = true
+                }
+            )
+        }
+
+        // Pinned messages sheet
+        if (showPinnedMessages && isChannel) {
+            PinnedMessagesSheet(
+                channelName = channelName,
+                onDismiss = { showPinnedMessages = false },
+                onNavigateToMessage = { msgId ->
+                    showPinnedMessages = false
+                    scrollToMessageId = msgId
                 }
             )
         }

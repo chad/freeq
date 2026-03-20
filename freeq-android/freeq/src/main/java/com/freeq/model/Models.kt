@@ -514,6 +514,16 @@ class AppState(application: Application) : AndroidViewModel(application) {
         sendRaw("CHATHISTORY LATEST $channel * 100")
     }
 
+    fun pinMessage(channel: String, msgId: String) {
+        sendRaw("PIN $channel $msgId")
+        PinCache.addPin(channel, msgId)
+    }
+
+    fun unpinMessage(channel: String, msgId: String) {
+        sendRaw("UNPIN $channel $msgId")
+        PinCache.removePin(channel, msgId)
+    }
+
     // ── Read tracking ──
 
     fun markRead(channel: String) {
@@ -832,6 +842,10 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                     }
                 }
                 AvatarCache.prefetchAll(event.members.map { it.nick })
+                // Prefetch pins for channels
+                if (event.channel.startsWith("#")) {
+                    PinCache.prefetch(event.channel)
+                }
             }
 
             is FreeqEvent.TopicChanged -> {
