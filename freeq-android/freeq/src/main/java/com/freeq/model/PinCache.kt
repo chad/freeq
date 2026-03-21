@@ -9,32 +9,37 @@ import java.util.concurrent.ConcurrentHashMap
 
 object PinCache {
     // Observable state for Compose - triggers recomposition when pins change
-    private val cache = mutableStateMapOf<String, Set<String>>()
+    // Exposed so composables can read directly and subscribe to changes
+    val pins = mutableStateMapOf<String, Set<String>>()
     private val pending = ConcurrentHashMap.newKeySet<String>()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     fun isPinned(channel: String, msgId: String): Boolean =
-        cache[channel.lowercase()]?.contains(msgId) == true
+        pins[channel.lowercase()]?.contains(msgId) == true
 
     fun prefetch(channel: String) {
         val key = channel.lowercase()
-        if (cache.containsKey(key) || pending.contains(key)) return
+        if (pins.containsKey(key) || pending.contains(key)) return
         pending.add(key)
         scope.launch { fetchPins(channel, key) }
     }
 
     fun addPin(channel: String, msgId: String) {
         val key = channel.lowercase()
-        cache[key] = (cache[key] ?: emptySet()) + msgId
+        scope.launch(Dispatchers.Main) {
+            pins[key] = (pins[key] ?: emptySet()) + msgId
+        }
     }
 
     fun removePin(channel: String, msgId: String) {
         val key = channel.lowercase()
-        cache[key]?.let { cache[key] = it - msgId }
+        scope.launch(Dispatchers.Main) {
+            pins[key]?.let { pins[key] = it - msgId }
+        }
     }
 
     fun setAll(channel: String, msgIds: Set<String>) {
-        cache[channel.lowercase()] = msgIds
+        pins[channel.lowercase()] = msgIds
     }
 
     private suspend fun fetchPins(channel: String, key: String) {
@@ -52,7 +57,7 @@ object PinCache {
                 val msgIds = (0 until pinsArray.length()).mapNotNull { i ->
                     pinsArray.getJSONObject(i).optString("msgid").takeIf { it.isNotEmpty() }
                 }.toSet()
-                withContext(Dispatchers.Main) { cache[key] = msgIds }
+                withContext(Dispatchers.Main) { pins[key] = msgIds }
             }
         } catch (_: Exception) {}
         finally { pending.remove(key) }

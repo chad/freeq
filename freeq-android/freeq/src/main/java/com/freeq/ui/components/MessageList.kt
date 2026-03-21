@@ -394,7 +394,8 @@ private fun MessageBubble(
     val isOwn = msg.from.equals(appState.nick.value, ignoreCase = true)
     val isMention = !isOwn && appState.nick.value.isNotEmpty() &&
             msg.text.contains(appState.nick.value, ignoreCase = true)
-    val isPinned = PinCache.isPinned(channelState.name, msg.id)
+    // Read directly from pins map so Compose tracks the state change
+    val isPinned = PinCache.pins[channelState.name.lowercase()]?.contains(msg.id) == true
 
     val bgModifier = when {
         isHighlighted -> Modifier.background(FreeqColors.accent.copy(alpha = 0.12f))
@@ -571,14 +572,6 @@ private fun MessageBubble(
                                 text = "(edited)",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                            )
-                        }
-                        if (isPinned) {
-                            Icon(
-                                Icons.Default.PushPin,
-                                contentDescription = "Pinned",
-                                tint = FreeqColors.warning,
-                                modifier = Modifier.size(14.dp)
                             )
                         }
                     }
