@@ -1396,12 +1396,13 @@ fn handle_delete(conn: &Connection, target: &str, original_msgid: &str, state: &
     // Soft-delete in DB
     state.with_db(|db| db.soft_delete_message(target, original_msgid));
 
-    // Remove from in-memory history (channels only)
+    // Remove from in-memory history and pins (channels only)
     if is_channel {
         let mut channels = state.channels.lock();
         if let Some(ch) = channels.get_mut(target) {
             ch.history
                 .retain(|h| h.msgid.as_deref() != Some(original_msgid));
+            ch.pins.retain(|p| p.msgid != original_msgid);
         }
     }
 
