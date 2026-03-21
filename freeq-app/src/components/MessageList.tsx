@@ -635,7 +635,7 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
   return (
     <div
       className={`msg-full group px-4 pt-3 pb-1 hover:bg-white/[0.02] flex gap-3 relative ${
-        isPinned ? 'bg-orange-500/[0.04] border-l-2 border-orange-500' :
+        isPinned ? 'bg-accent/[0.04] border-l-2 border-orange-400' :
         isMention ? 'bg-accent/[0.04] border-l-2 border-accent' : ''
       }`}
       onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
@@ -730,7 +730,7 @@ function GroupedMessage({ msg, channel }: MessageProps) {
   return (
     <div
       className={`group px-4 py-0.5 hover:bg-white/[0.02] flex gap-3 relative ${
-        isPinned ? 'bg-orange-500/[0.04] border-l-2 border-orange-500' :
+        isPinned ? 'bg-accent/[0.04] border-l-2 border-orange-400' :
         isMention ? 'bg-accent/[0.04] border-l-2 border-accent' : ''
       }`}
       onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
