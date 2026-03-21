@@ -834,10 +834,19 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
             }
 
             is FreeqEvent.Names -> {
-                // Add members from NAMES reply (may arrive in multiple 353 batches)
+                // Add or update members from NAMES reply (may arrive in multiple 353 batches)
                 val ch = state.getOrCreateChannel(event.channel)
                 for (m in event.members) {
-                    if (ch.members.none { it.nick.equals(m.nick, ignoreCase = true) }) {
+                    val idx = ch.members.indexOfFirst { it.nick.equals(m.nick, ignoreCase = true) }
+                    if (idx >= 0) {
+                        // Update existing member with correct op/voice status from NAMES
+                        ch.members[idx] = ch.members[idx].copy(
+                            isOp = m.isOp,
+                            isHalfop = m.isHalfop,
+                            isVoiced = m.isVoiced,
+                            awayMsg = m.awayMsg ?: ch.members[idx].awayMsg
+                        )
+                    } else {
                         ch.members.add(MemberInfo(nick = m.nick, isOp = m.isOp, isHalfop = m.isHalfop, isVoiced = m.isVoiced, awayMsg = m.awayMsg))
                     }
                 }
