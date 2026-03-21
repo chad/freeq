@@ -767,13 +767,29 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                 val ircMsg = event.msg
                 val isSelf = ircMsg.fromNick.equals(state.nick.value, ignoreCase = true)
 
-                // Handle pin/unpin sync broadcasts (don't show as chat message)
+                // Handle pin/unpin sync broadcasts
                 if (ircMsg.pinMsgid != null && ircMsg.target.startsWith("#")) {
                     PinCache.addPin(ircMsg.target, ircMsg.pinMsgid!!)
+                    val ch = state.getOrCreateChannel(ircMsg.target)
+                    ch.appendIfNew(ChatMessage(
+                        id = UUID.randomUUID().toString(),
+                        from = "",
+                        text = "${ircMsg.fromNick} pinned a message",
+                        isAction = false,
+                        timestamp = Date()
+                    ))
                     return
                 }
                 if (ircMsg.unpinMsgid != null && ircMsg.target.startsWith("#")) {
                     PinCache.removePin(ircMsg.target, ircMsg.unpinMsgid!!)
+                    val ch = state.getOrCreateChannel(ircMsg.target)
+                    ch.appendIfNew(ChatMessage(
+                        id = UUID.randomUUID().toString(),
+                        from = "",
+                        text = "${ircMsg.fromNick} unpinned a message",
+                        isAction = false,
+                        timestamp = Date()
+                    ))
                     return
                 }
 
