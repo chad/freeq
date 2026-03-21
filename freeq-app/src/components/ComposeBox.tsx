@@ -75,11 +75,11 @@ export function ComposeBox() {
     ? [...ch.members.values()].filter((m) => m.typing).map((m) => m.nick)
     : [];
 
-  // Members for autocomplete
+  // Members for autocomplete - use size as dependency since Map reference doesn't change
   const memberNicks = useMemo(() => {
     if (!ch) return [];
     return [...ch.members.values()].map((m) => m.nick).sort();
-  }, [ch?.members]);
+  }, [ch, ch?.members.size]);
 
   // Clear compose and focus on channel switch
   useEffect(() => {
