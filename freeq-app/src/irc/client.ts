@@ -555,6 +555,7 @@ async function handleLine(rawLine: string) {
       nick = serverNick;
       store.setNick(nick);
       store.setRegistered(true);
+      store.setConnectedServer(lastUrl);
       // Auto-join channels:
       // 1. Explicit channels from connect() call (e.g. invite link)
       // 2. Channels from current session (reconnect)

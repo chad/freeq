@@ -12,6 +12,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   const nick = useStore((s) => s.nick);
   const authDid = useStore((s) => s.authDid);
   const connectionState = useStore((s) => s.connectionState);
+  const connectedServer = useStore((s) => s.connectedServer);
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
   const density = useStore((s) => s.messageDensity);
@@ -49,6 +50,7 @@ export function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           <Section title="Account">
             <InfoRow label="Nickname" value={nick} />
             <InfoRow label="Connection" value={connectionState} />
+            {connectedServer && <InfoRow label="Server" value={connectedServer.replace(/^wss?:\/\//, '').replace(/\/.*$/, '')} />}
             {authDid && <InfoRow label="DID" value={authDid} mono />}
           </Section>
 
