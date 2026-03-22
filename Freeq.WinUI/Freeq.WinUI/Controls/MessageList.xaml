@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Freeq.WinUI.Controls.MessageList"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Freeq.WinUI.Controls"
+    xmlns:models="using:Freeq.WinUI.Models">
+
+    <Grid Background="{StaticResource BgBrush}">
+        <ListView x:Name="MessagesListView" SelectionMode="None"
+                  Padding="0,8,0,8">
+            <ListView.ItemContainerStyle>
+                <Style TargetType="ListViewItem">
+                    <Setter Property="Padding" Value="0" />
+                    <Setter Property="MinHeight" Value="0" />
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                </Style>
+            </ListView.ItemContainerStyle>
+            <ListView.ItemTemplate>
+                <DataTemplate x:DataType="models:MessageModel">
+                    <Grid Padding="16,6,16,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Avatar -->
+                        <Border Grid.Column="0" Width="36" Height="36"
+                                CornerRadius="18" VerticalAlignment="Top"
+                                Margin="0,2,12,0"
+                                Background="{StaticResource SurfaceBrush}">
+                            <TextBlock Text="{x:Bind NickInitial}" FontSize="14" FontWeight="Bold"
+                                       Foreground="{StaticResource AccentBrush}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+
+                        <!-- Content -->
+                        <StackPanel Grid.Column="1">
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <!-- Nick -->
+                                <TextBlock Text="{x:Bind Nick}" FontSize="14" FontWeight="SemiBold"
+                                           Foreground="{StaticResource AccentBrush}" />
+
+                                <!-- Verified badge -->
+                                <TextBlock Text="&#x2713;" FontSize="11"
+                                           Foreground="{StaticResource AccentBrush}"
+                                           VerticalAlignment="Center"
+                                           Visibility="{x:Bind local:MessageList.BoolToVis(IsVerified)}" />
+
+                                <!-- Timestamp -->
+                                <TextBlock Text="{x:Bind TimeString}" FontSize="{StaticResource TinyFontSize}"
+                                           Foreground="{StaticResource FgDimBrush}"
+                                           VerticalAlignment="Center" />
+
+                                <!-- Edited indicator -->
+                                <TextBlock Text="(edited)" FontSize="{StaticResource TinyFontSize}"
+                                           Foreground="{StaticResource FgDimBrush}"
+                                           VerticalAlignment="Center"
+                                           Visibility="{x:Bind local:MessageList.BoolToVis(IsEdited)}" />
+                            </StackPanel>
+
+                            <!-- Message text -->
+                            <TextBlock Text="{x:Bind Content}" FontSize="{StaticResource BodyFontSize}"
+                                       Foreground="{StaticResource FgBrush}"
+                                       TextWrapping="Wrap" Margin="0,2,0,0"
+                                       IsTextSelectionEnabled="True" />
+                        </StackPanel>
+                    </Grid>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+
+        <!-- Empty state -->
+        <StackPanel x:Name="EmptyState" VerticalAlignment="Center" HorizontalAlignment="Center"
+                    Visibility="Collapsed">
+            <TextBlock Text="#" FontSize="48" Foreground="{StaticResource FgDimBrush}"
+                       HorizontalAlignment="Center" FontWeight="Bold" />
+            <TextBlock x:Name="EmptyChannelName" FontSize="20" FontWeight="Bold"
+                       Foreground="{StaticResource FgBrush}"
+                       HorizontalAlignment="Center" Margin="0,8,0,4" />
+            <TextBlock Text="This is the beginning of the conversation."
+                       FontSize="{StaticResource BodyFontSize}"
+                       Foreground="{StaticResource FgDimBrush}"
+                       HorizontalAlignment="Center" />
+        </StackPanel>
+    </Grid>
+</UserControl>

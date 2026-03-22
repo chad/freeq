@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Freeq.WinUI.Controls.Sidebar"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Freeq.WinUI.Controls"
+    xmlns:models="using:Freeq.WinUI.Models">
+
+    <Grid Background="{StaticResource BgSecondaryBrush}" Width="256"
+          BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="56" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Brand Header -->
+        <Grid Grid.Row="0" Padding="16,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Logo -->
+            <Border Grid.Column="0" Width="28" Height="28" CornerRadius="6"
+                    Background="{StaticResource AccentDimBrush}"
+                    VerticalAlignment="Center">
+                <TextBlock Text="f" FontSize="16" FontWeight="Bold"
+                           Foreground="{StaticResource AccentBrush}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+
+            <TextBlock Grid.Column="1" Text="freeq" FontSize="20" FontWeight="Bold"
+                       Foreground="{StaticResource AccentBrush}"
+                       VerticalAlignment="Center" Margin="10,0,0,0" />
+
+            <!-- Connection status dot -->
+            <Ellipse Grid.Column="2" Width="8" Height="8"
+                     x:Name="StatusDot" VerticalAlignment="Center"
+                     Fill="{StaticResource FgDimBrush}" />
+        </Grid>
+
+        <!-- Channel List -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel Padding="8,0">
+
+                <!-- Favorites Section -->
+                <StackPanel x:Name="FavoritesSection" Visibility="Collapsed" Margin="0,8,0,0">
+                    <TextBlock Text="FAVORITES" FontSize="{StaticResource SectionHeaderFontSize}"
+                               FontWeight="Bold" Foreground="{StaticResource FgDimBrush}"
+                               Padding="8,4" CharacterSpacing="120" />
+                    <ListView x:Name="FavoritesList" SelectionMode="Single"
+                              ItemClick="OnChannelClick" IsItemClickEnabled="True">
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="models:ChannelModel">
+                                <Grid Padding="8,6" Margin="-12,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="&#x2605;" FontSize="12"
+                                               Foreground="{StaticResource WarningBrush}"
+                                               VerticalAlignment="Center" Margin="0,0,6,0" />
+                                    <TextBlock Grid.Column="1" Text="{x:Bind Name}"
+                                               Foreground="{StaticResource FgMutedBrush}"
+                                               FontSize="{StaticResource BodyFontSize}"
+                                               VerticalAlignment="Center" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </StackPanel>
+
+                <!-- Channels Section -->
+                <StackPanel Margin="0,8,0,0">
+                    <Grid Padding="8,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="CHANNELS" FontSize="{StaticResource SectionHeaderFontSize}"
+                                   FontWeight="Bold" Foreground="{StaticResource FgDimBrush}"
+                                   CharacterSpacing="120" />
+                        <Button Grid.Column="1" Content="+" FontSize="14"
+                                Background="Transparent" Foreground="{StaticResource FgDimBrush}"
+                                Padding="6,2" MinWidth="0" MinHeight="0"
+                                Click="OnJoinChannelClick" />
+                    </Grid>
+                    <ListView x:Name="ChannelsList" SelectionMode="Single"
+                              ItemClick="OnChannelClick" IsItemClickEnabled="True">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="MinHeight" Value="0" />
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="models:ChannelModel">
+                                <Grid Padding="8,8" Margin="0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="#" FontSize="14"
+                                               Foreground="{StaticResource FgDimBrush}"
+                                               VerticalAlignment="Center" Margin="0,0,6,0"
+                                               FontWeight="Bold" />
+                                    <TextBlock Grid.Column="1" Text="{x:Bind DisplayName}"
+                                               Foreground="{StaticResource FgMutedBrush}"
+                                               FontSize="{StaticResource BodyFontSize}"
+                                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                    <Border Grid.Column="2"
+                                            Visibility="{x:Bind local:Sidebar.IntToVisibility(UnreadCount)}"
+                                            Background="{StaticResource DangerBrush}"
+                                            CornerRadius="999" MinWidth="18" Padding="4,1"
+                                            HorizontalAlignment="Right" VerticalAlignment="Center">
+                                        <TextBlock Text="{x:Bind UnreadCount}"
+                                                   FontSize="10" FontWeight="Bold"
+                                                   Foreground="White"
+                                                   HorizontalAlignment="Center" />
+                                    </Border>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </StackPanel>
+
+                <!-- DMs Section -->
+                <StackPanel Margin="0,8,0,0">
+                    <TextBlock Text="MESSAGES" FontSize="{StaticResource SectionHeaderFontSize}"
+                               FontWeight="Bold" Foreground="{StaticResource FgDimBrush}"
+                               Padding="8,4" CharacterSpacing="120" />
+                    <ListView x:Name="DmsList" SelectionMode="Single"
+                              ItemClick="OnChannelClick" IsItemClickEnabled="True">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="MinHeight" Value="0" />
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="models:ChannelModel">
+                                <Grid Padding="8,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border Grid.Column="0" Width="32" Height="32"
+                                            CornerRadius="16" Background="{StaticResource SurfaceBrush}"
+                                            VerticalAlignment="Center" Margin="0,0,8,0">
+                                        <TextBlock Text="{x:Bind DisplayName}"
+                                                   FontSize="13" FontWeight="Bold"
+                                                   Foreground="{StaticResource AccentBrush}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <TextBlock Grid.Column="1" Text="{x:Bind DisplayName}"
+                                               Foreground="{StaticResource FgMutedBrush}"
+                                               FontSize="{StaticResource BodyFontSize}"
+                                               VerticalAlignment="Center" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- User Footer -->
+        <Grid Grid.Row="2" Padding="12,10"
+              BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <!-- User Avatar -->
+            <Border Grid.Column="0" Width="36" Height="36"
+                    CornerRadius="18" Background="{StaticResource SurfaceBrush}"
+                    VerticalAlignment="Center" Margin="0,0,10,0">
+                <TextBlock x:Name="UserInitial" FontSize="14" FontWeight="Bold"
+                           Foreground="{StaticResource AccentBrush}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <TextBlock x:Name="UserNick" FontSize="{StaticResource BodyFontSize}"
+                           Foreground="{StaticResource FgBrush}" FontWeight="SemiBold" />
+                <TextBlock x:Name="UserStatus" FontSize="{StaticResource TinyFontSize}"
+                           Foreground="{StaticResource FgDimBrush}" />
+            </StackPanel>
+
+            <!-- Settings/Disconnect -->
+            <Button Grid.Column="2" x:Name="DisconnectButton"
+                    Content="&#xE7E8;" FontFamily="Segoe MDL2 Assets" FontSize="16"
+                    Background="Transparent" Foreground="{StaticResource FgDimBrush}"
+                    Padding="8" MinWidth="0" MinHeight="0"
+                    ToolTipService.ToolTip="Disconnect"
+                    Click="OnDisconnectClick" />
+        </Grid>
+    </Grid>
+</UserControl>
