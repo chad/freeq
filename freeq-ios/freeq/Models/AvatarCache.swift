@@ -17,6 +17,8 @@ class AvatarCache: ObservableObject {
     /// Request avatar fetch for a nick (if not already cached/pending).
     func prefetch(_ nick: String, did: String? = nil) {
         let key = nick.lowercased()
+        // Skip guest nicks - they're not Bluesky accounts (avoid false positives like guest111.bsky.social)
+        guard !key.hasPrefix("guest"), !key.hasPrefix("web") else { return }
         guard cache[key] == nil, !pending.contains(key), !failed.contains(key) else { return }
         pending.insert(key)
 

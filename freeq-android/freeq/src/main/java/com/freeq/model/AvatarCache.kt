@@ -36,6 +36,8 @@ object AvatarCache {
 
     fun prefetch(nick: String) {
         val key = nick.lowercase()
+        // Skip guest nicks - they're not Bluesky accounts (avoid false positives like guest111.bsky.social)
+        if (key.startsWith("guest") || key.startsWith("web")) return
         if (cache.containsKey(key) || pending.contains(key) || failed.contains(key)) return
         pending.add(key)
         scope.launch { fetchAvatar(nick, key) }
