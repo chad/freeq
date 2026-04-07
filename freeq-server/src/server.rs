@@ -2346,7 +2346,10 @@ pub(crate) async fn process_s2s_message(
                 let emoji = emoji.clone();
                 let target_msgid = target_msgid.clone();
                 let channel = target.clone();
-                state.with_db(|db| db.store_reaction(&target_msgid, &channel, &nick, did.as_deref(), &emoji, ts));
+                let was_new = state.with_db(|db| db.store_reaction(&target_msgid, &channel, &nick, did.as_deref(), &emoji, ts));
+                if was_new == Some(false) {
+                    state.with_db(|db| db.remove_reaction(&target_msgid, &nick, &emoji));
+                }
             }
 
             // Deliver to local channel members

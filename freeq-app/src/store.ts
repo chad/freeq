@@ -692,7 +692,7 @@ export const useStore = create<Store>((set, get) => ({
   }),
 
   addReaction: (channel, msgId, emoji, fromNick) => set((s) => {
-    if (!emoji || !emoji.trim()) return {}; // Reject empty emoji
+    if (!emoji || !emoji.trim()) return {};
     const channels = new Map(s.channels);
     const ch = channels.get(channel.toLowerCase());
     if (!ch) return { channels };
@@ -700,8 +700,14 @@ export const useStore = create<Store>((set, get) => ({
       if (m.id !== msgId) return m;
       const reactions = new Map(m.reactions || []);
       const nicks = new Set(reactions.get(emoji) || []);
-      nicks.add(fromNick);
-      reactions.set(emoji, nicks);
+      if (nicks.has(fromNick)) {
+        nicks.delete(fromNick);
+        if (nicks.size === 0) reactions.delete(emoji);
+        else reactions.set(emoji, nicks);
+      } else {
+        nicks.add(fromNick);
+        reactions.set(emoji, nicks);
+      }
       return { ...m, reactions };
     });
     channels.set(channel.toLowerCase(), { ...ch });

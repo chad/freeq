@@ -148,7 +148,10 @@ pub(super) fn handle_tagmsg(
             .as_secs();
         let emoji = emoji.clone();
         let target_msgid = target_msgid.clone();
-        state.with_db(|db| db.store_reaction(&target_msgid, &channel, &nick, did.as_deref(), &emoji, ts));
+        let was_new = state.with_db(|db| db.store_reaction(&target_msgid, &channel, &nick, did.as_deref(), &emoji, ts));
+        if was_new == Some(false) {
+            state.with_db(|db| db.remove_reaction(&target_msgid, &nick, &emoji));
+        }
     }
 
     let hostmask = conn.hostmask();

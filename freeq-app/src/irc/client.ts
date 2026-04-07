@@ -884,14 +884,13 @@ async function handleLine(rawLine: string) {
         break;
       }
       // Handle reactions — +reply tag references the target message
+      // Skip self-echoes: the optimistic update in sendReaction already toggled locally.
       const reaction = msg.tags['+react'];
-      if (reaction) {
+      if (reaction && !isSelf) {
         const reactTarget = msg.tags['+reply'];
         if (reactTarget) {
           store.addReaction(bufName, reactTarget, reaction, from);
         } else {
-          // No +reply — reaction to the channel generally.
-          // Attach to the most recent non-system message.
           const ch = store.channels.get(bufName.toLowerCase());
           if (ch) {
             const lastMsg = [...ch.messages].reverse().find((m) => !m.isSystem && !m.deleted);

@@ -433,11 +433,11 @@ describe('reactions', () => {
     expect(m.reactions?.get('🎉')?.has('me')).toBe(true);
   });
 
-  it('duplicate self-reaction does not double-count', () => {
+  it('duplicate self-reaction toggles off', () => {
     useStore.getState().addReaction('#react', 'rmsg', '👍', 'me');
     useStore.getState().addReaction('#react', 'rmsg', '👍', 'me');
     const ch = useStore.getState().channels.get('#react')!;
     const m = ch.messages.find(m => m.id === 'rmsg')!;
-    expect(m.reactions?.get('👍')?.size).toBe(1);
+    expect(m.reactions?.has('👍')).toBe(false);
   });
 });

@@ -843,7 +843,8 @@ impl Db {
 
     // ── Reactions ──────────────────────────────────────────────────────
 
-    /// Store a reaction. Upsert — duplicate (msgid, nick, emoji) is ignored.
+    /// Store a reaction. Returns `true` if a new row was inserted, `false` if a
+    /// duplicate `(msgid, nick, emoji)` already existed (INSERT OR IGNORE).
     pub fn store_reaction(
         &self,
         target_msgid: &str,
@@ -852,13 +853,13 @@ impl Db {
         reactor_did: Option<&str>,
         emoji: &str,
         timestamp: u64,
-    ) -> SqlResult<()> {
-        self.conn.execute(
+    ) -> SqlResult<bool> {
+        let inserted = self.conn.execute(
             "INSERT OR IGNORE INTO reactions (target_msgid, channel, reactor_nick, reactor_did, emoji, timestamp)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![target_msgid, channel, reactor_nick, reactor_did, emoji, timestamp as i64],
         )?;
-        Ok(())
+        Ok(inserted > 0)
     }
 
     /// Remove a reaction.
