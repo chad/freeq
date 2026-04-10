@@ -11,6 +11,9 @@ COPY freeq-sdk-ffi/ freeq-sdk-ffi/
 COPY freeq-tui/ freeq-tui/
 COPY freeq-bots/ freeq-bots/
 COPY freeq-auth-broker/ freeq-auth-broker/
+COPY freeq-windows-core/ freeq-windows-core/
+COPY freeq-bot-id/ freeq-bot-id/
+COPY freeq-av-client/ freeq-av-client/
 
 RUN cargo build --release -p freeq-server -p freeq-auth-broker
 
