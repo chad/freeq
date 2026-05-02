@@ -200,7 +200,12 @@ export function ConnectScreen() {
         oauthConnectInProgress = true;
         setAutoConnecting(true);
         const h = localStorage.getItem(LS_HANDLE) || result.handle || '';
-        const ch = (localStorage.getItem(LS_CHANNELS) || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
+        // Use saved joined channels if available (reflects actual PART/JOIN state),
+        // otherwise fall back to the saved channels from connect screen input.
+        const savedJoined = localStorage.getItem('freeq-joined-channels');
+        const ch = savedJoined
+          ? JSON.parse(savedJoined)
+          : (localStorage.getItem(LS_CHANNELS) || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
         const finalNick = nickFromHandle(result.handle || h);
         const token = result.web_token || result.token || result.access_jwt || '';
         setSaslCredentials(token, result.did, result.pds_url || '', 'web-token');
@@ -229,7 +234,12 @@ export function ConnectScreen() {
 
     brokerAutoAttempts++;
     setAutoConnecting(true);
-    const ch = (localStorage.getItem(LS_CHANNELS) || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
+    // Use saved joined channels if available (reflects actual PART/JOIN state),
+    // otherwise fall back to the saved channels from connect screen input.
+    const savedJoined = localStorage.getItem('freeq-joined-channels');
+    const ch = savedJoined
+      ? JSON.parse(savedJoined)
+      : (localStorage.getItem(LS_CHANNELS) || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
@@ -335,8 +345,13 @@ export function ConnectScreen() {
   const doGuestLogin = () => {
     if (!nick.trim()) { setError('Enter a nickname'); return; }
     setError('');
-    localStorage.setItem(LS_CHANNELS, channels);
-    connect(server, nick.trim(), chans);
+    // Use saved joined channels if available (reflects actual PART/JOIN state),
+    // otherwise fall back to the saved channels from connect screen input.
+    const savedJoined = localStorage.getItem('freeq-joined-channels');
+    const ch = savedJoined
+      ? JSON.parse(savedJoined)
+      : (localStorage.getItem(LS_CHANNELS) || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
+    connect(server, nick.trim(), ch);
   };
 
   const connecting = connectionState === 'connecting' || connectionState === 'connected';

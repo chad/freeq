@@ -604,3 +604,92 @@ async fn rapid_join_part_join_keeps_db_consistent() {
 
     h1.quit(None).await.ok();
 }
+
+// ───────────────────────────────────────────────────────────────────
+// ADVERSARIAL: Client reconnect after PART must NOT auto-rejoin
+//
+// This test verifies the end-to-end behavior that iOS clients rely on:
+// after PART + disconnect + reconnect, the server must not auto-join
+// the PARTed channel. This exercises the DB cleanup path that the
+// iOS client's `autoJoinChannels` UserDefaults state mirrors.
+// ───────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn part_then_reconnect_does_not_auto_rejoin() {
+    let key = PrivateKey::generate_ed25519();
+    let key1 = PrivateKey::ed25519_from_bytes(&key.secret_bytes()).unwrap();
+    let key2 = PrivateKey::ed25519_from_bytes(&key.secret_bytes()).unwrap(); // clone for second connection
+    let (addr, db_path, _h) = start_with_db_path(&key).await;
+
+    // First connection
+    let (h1, mut rx1) = connect_as_did(addr, "leaver", key1).await;
+    wait_auth(&mut rx1).await;
+    wait_registered(&mut rx1).await;
+
+    h1.join("#stay").await.unwrap();
+    wait_event(&mut rx1, |e| matches!(e, Event::Joined { channel, .. } if channel == "#stay"), "Joined #stay").await;
+    h1.join("#leaved").await.unwrap();
+    wait_event(&mut rx1, |e| matches!(e, Event::Joined { channel, .. } if channel == "#leaved"), "Joined #leaved").await;
+
+    // Verify both channels are in DB
+    let before = db_user_channels(&db_path, DID);
+    assert!(before.iter().any(|c| c == "#stay"), "before: #stay should be in DB");
+    assert!(before.iter().any(|c| c == "#leaved"), "before: #leaved should be in DB");
+
+    // PART the channel we want to leave
+    h1.raw("PART #leaved").await.unwrap();
+    wait_event(&mut rx1, |e| matches!(e, Event::Parted { channel, .. } if channel == "#leaved"), "Parted").await;
+
+    // Verify DB was cleaned up
+    let after_part = db_user_channels(&db_path, DID);
+    assert!(after_part.iter().any(|c| c == "#stay"), "after PART: #stay should still be in DB");
+    assert!(!after_part.iter().any(|c| c == "#leaved"), "after PART: #leaved must NOT be in DB");
+
+    // Disconnect
+    h1.quit(None).await.ok();
+
+    // Reconnection
+    let (h2, mut rx2) = connect_as_did(addr, "leaver", key2).await;
+    wait_auth(&mut rx2).await;
+    wait_registered(&mut rx2).await;
+
+    // Allow events to settle
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Collect any auto-join events
+    let joined_stay = wait_for_event_timeout(&mut rx2, 500, |e| {
+        matches!(e, Event::Joined { channel, .. } if channel == "#stay")
+    }).await;
+
+    let joined_leaved = wait_for_event_timeout(&mut rx2, 200, |e| {
+        matches!(e, Event::Joined { channel, .. } if channel == "#leaved")
+    }).await;
+
+    // Must have joined #stay (was not PARTed)
+    assert!(joined_stay.is_some(), "should auto-join #stay on reconnect");
+
+    // Must NOT have joined #leaved (was PARTed)
+    assert!(joined_leaved.is_none(), "should NOT auto-join #leaved after PART");
+
+    h2.quit(None).await.ok();
+}
+
+// Helper to wait for an event with timeout, returning None on timeout
+async fn wait_for_event_timeout<F>(rx: &mut mpsc::Receiver<Event>, timeout_ms: u64, pred: F) -> Option<Event>
+where
+    F: Fn(&Event) -> bool,
+{
+    use tokio::time::{timeout, Duration};
+    match timeout(Duration::from_millis(timeout_ms), async {
+        loop {
+            if let Some(e) = rx.recv().await {
+                if pred(&e) {
+                    return e;
+                }
+            }
+        }
+    }).await {
+        Ok(e) => Some(e),
+        Err(_) => None,
+    }
+}

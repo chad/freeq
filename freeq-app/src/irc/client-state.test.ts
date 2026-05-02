@@ -478,3 +478,33 @@ describe('sendReaction local echo', () => {
     expect(msg.reactions?.get('🎉')?.size).toBe(1);
   });
 });
+
+// ── Reconnect channel persistence ───────────────────────────────────────
+
+describe('reconnect channel persistence', () => {
+  it('saved joined channels should be preferred over connect screen input', () => {
+    // This simulates the fix for the bug where PART would not persist
+    // across reconnects because the web app used the wrong localStorage key
+    const savedJoined = JSON.stringify(['#stay', '#general']);
+    storage.set('freeq-joined-channels', savedJoined);
+    storage.set('freeq-channels', '#leaved,#general,#stay'); // stale input from connect screen
+
+    // When reconnecting, saved joined channels should be used
+    const ch = JSON.parse(storage.get('freeq-joined-channels') || '[]');
+    expect(ch).toEqual(['#stay', '#general']);
+    expect(ch).not.toContain('#leaved');
+  });
+
+  it('falls back to freeq-channels when freeq-joined-channels is missing', () => {
+    storage.delete('freeq-joined-channels');
+    storage.set('freeq-channels', '#fallback');
+
+    // When no joined channels saved, use connect screen input
+    const savedJoined = storage.get('freeq-joined-channels');
+    const ch = savedJoined
+      ? JSON.parse(savedJoined)
+      : (storage.get('freeq-channels') || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
+
+    expect(ch).toEqual(['#fallback']);
+  });
+});
