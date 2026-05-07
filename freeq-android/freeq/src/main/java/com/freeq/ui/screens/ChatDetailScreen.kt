@@ -142,6 +142,7 @@ fun ChatDetailScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .imePadding()
         ) {
             // Main content: messages + compose
             Column(
