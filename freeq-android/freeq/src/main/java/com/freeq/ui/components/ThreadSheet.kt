@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Reply
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -118,6 +119,14 @@ fun ThreadSheet(
                                         fontSize = 11.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                                     )
+                                    if (msg.isSigned) {
+                                        Icon(
+                                            Icons.Default.Lock,
+                                            contentDescription = "Signed by sender",
+                                            tint = FreeqColors.success,
+                                            modifier = Modifier.size(10.dp)
+                                        )
+                                    }
                                 }
 
                                 // Text

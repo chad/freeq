@@ -24,6 +24,7 @@ data class ChatMessage(
     val replyTo: String? = null,
     var isEdited: Boolean = false,
     var isDeleted: Boolean = false,
+    val isSigned: Boolean = false,
     val reactions: MutableMap<String, MutableSet<String>> = mutableMapOf()
 )
 
@@ -816,7 +817,8 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                     text = ircMsg.text,
                     isAction = ircMsg.isAction,
                     timestamp = Date(ircMsg.timestampMs),
-                    replyTo = ircMsg.replyTo
+                    replyTo = ircMsg.replyTo,
+                    isSigned = ircMsg.isSigned
                 )
 
                 // Handle edits (prefer editOf, fall back to replacesMsgid)
