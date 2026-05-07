@@ -297,7 +297,6 @@ class AppState(application: Application) : AndroidViewModel(application) {
     }
 
     private fun connect(nickName: String, useWebSocket: Boolean) {
-        Log.i("freeq.auth", "connect('$nickName') useWebSocket=$useWebSocket hasPending=${pendingWebToken != null}")
         intentionalDisconnect = false
         loggedOut.value = false
         nick.value = nickName
@@ -395,35 +394,28 @@ class AppState(application: Application) : AndroidViewModel(application) {
     }
 
     fun reconnectSavedSession() {
-        Log.i("freeq.auth", "reconnect: hasSaved=$hasSavedSession state=${connectionState.value} pending=${pendingWebToken != null} cached=${cachedWebToken != null} cachedTTL=${(cachedWebTokenExpiry - System.currentTimeMillis()).coerceAtLeast(0)}ms broker=${brokerToken != null} nick='${nick.value}'")
         if (!hasSavedSession || connectionState.value != ConnectionState.Disconnected) return
-        if (pendingWebToken != null) {
-            Log.i("freeq.auth", "reconnect: using pendingWebToken")
-            connect(nick.value); return
-        }
+        if (pendingWebToken != null) { connect(nick.value); return }
 
         // Reuse cached web token if still within TTL (avoids broker round-trip)
         val cached = cachedWebToken
         if (cached != null && System.currentTimeMillis() < cachedWebTokenExpiry) {
-            Log.i("freeq.auth", "reconnect: using cached webToken")
             pendingWebToken = cached
             connect(nick.value)
             return
         }
 
         val token = brokerToken ?: run {
-            Log.i("freeq.auth", "reconnect: no brokerToken, disconnecting")
+            // No broker token and cached web token expired — must sign in again
             connectionState.value = ConnectionState.Disconnected
             return
         }
-        Log.i("freeq.auth", "reconnect: fetching broker /session")
 
         connectionState.value = ConnectionState.Connecting
 
         scope.launch {
             try {
                 val session = withContext(Dispatchers.IO) { fetchBrokerSession(token) }
-                Log.i("freeq.auth", "reconnect: broker /session OK nick='${session.nick}' did='${session.did}'")
                 brokerRetryCount = 0
                 pendingWebToken = session.token
                 cacheWebToken(session.token)
@@ -450,7 +442,6 @@ class AppState(application: Application) : AndroidViewModel(application) {
     private data class BrokerSessionResponse(val token: String, val nick: String, val did: String)
 
     private fun fetchBrokerSession(brokerToken: String): BrokerSessionResponse {
-        Log.i("freeq.auth", "fetchBrokerSession: brokerTokLen=${brokerToken.length} brokerTokPrefix=${brokerToken.take(6)} brokerTokSuffix=${brokerToken.takeLast(6)}")
         // Retry up to 3 times with backoff — DPoP nonce rotation causes the first call to fail
         for (attempt in 0..2) {
             val url = java.net.URL("$authBrokerBase/session")
@@ -465,7 +456,6 @@ class AppState(application: Application) : AndroidViewModel(application) {
                 out.write("""{"broker_token":"$brokerToken"}""".toByteArray())
             }
             val status = conn.responseCode
-            Log.i("freeq.auth", "fetchBrokerSession: attempt=$attempt status=$status")
             if (status == 502 && attempt < 2) {
                 Thread.sleep(if (attempt == 0) 500 else 1000)
                 continue
@@ -760,7 +750,6 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
             }
 
             is FreeqEvent.Registered -> {
-                Log.i("freeq.auth", "Registered: nick='${event.nick}' did=${state.authenticatedDID.value} guestRename=${event.nick.startsWith("Guest", ignoreCase = true)}")
                 state.reconnectAttempts = 0
                 // If authenticated user got Guest nick, token was stale — retry broker
                 if (state.authenticatedDID.value != null
@@ -794,7 +783,6 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
             }
 
             is FreeqEvent.Authenticated -> {
-                Log.i("freeq.auth", "Authenticated: did='${event.did}'")
                 state.authenticatedDID.value = event.did
                 state.securePrefs.edit().putString("did", event.did).apply()
                 // Refresh login timestamp on every successful auth so
@@ -804,7 +792,6 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
             }
 
             is FreeqEvent.AuthFailed -> {
-                Log.w("freeq.auth", "AuthFailed: ${event.reason}")
                 state.errorMessage.value = "Auth failed: ${event.reason}"
             }
 

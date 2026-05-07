@@ -6,7 +6,6 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -69,7 +68,6 @@ class MainActivity : ComponentActivity() {
                 val brokerTok = uri.getQueryParameter("broker_token")
                 val nick = uri.getQueryParameter("nick") ?: return
                 val did = uri.getQueryParameter("did")
-                Log.i("freeq.auth", "deepLink: tokenLen=${token.length} brokerTokLen=${brokerTok?.length ?: 0} brokerTokPrefix=${brokerTok?.take(6)} brokerTokSuffix=${brokerTok?.takeLast(6)} nick='$nick' did=$did")
 
                 state.pendingWebToken = token
                 brokerTok?.let { state.brokerToken = it }
