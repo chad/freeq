@@ -167,6 +167,10 @@ class AppState(application: Application) : AndroidViewModel(application) {
             return System.currentTimeMillis() - lastLoginTime >= fourteenDaysMs
         }
     internal var intentionalDisconnect = false
+    /** Set to true after a WS connect attempt has been swapped for plain
+     *  TCP within a single user-initiated `connect()` call. Prevents
+     *  ping-ponging between transports. Reset on each fresh `connect()`. */
+    private var transportFallbackUsed = false
     var loggedOut = mutableStateOf(false)
     private var cachedWebToken: String? = null
     private var cachedWebTokenExpiry: Long = 0L  // epoch millis
@@ -287,7 +291,13 @@ class AppState(application: Application) : AndroidViewModel(application) {
     // ── Connection ──
 
     fun connect(nickName: String) {
-        Log.i("freeq.auth", "connect('$nickName') hasPending=${pendingWebToken != null}")
+        // Fresh user-initiated connect — start by preferring WebSocket again.
+        transportFallbackUsed = false
+        connect(nickName, useWebSocket = true)
+    }
+
+    private fun connect(nickName: String, useWebSocket: Boolean) {
+        Log.i("freeq.auth", "connect('$nickName') useWebSocket=$useWebSocket hasPending=${pendingWebToken != null}")
         intentionalDisconnect = false
         loggedOut.value = false
         nick.value = nickName
@@ -309,9 +319,10 @@ class AppState(application: Application) : AndroidViewModel(application) {
             val handler = AndroidEventHandler(this)
             client = FreeqClient(serverAddress.value, nickName, handler)
             client?.setPlatform("freeq android")
-            // Prefer WebSocket on 443/wss like the iOS client; the SDK falls
-            // back to the configured TCP `serverAddress` if WS connect fails.
-            client?.setWebsocketUrl(ServerConfig.wssServer)
+            // Prefer WebSocket on 443/wss like the iOS client; pass an empty
+            // string to disable WS and use the TCP `serverAddress` directly
+            // (the fallback path triggered by attemptTransportFallback below).
+            client?.setWebsocketUrl(if (useWebSocket) ServerConfig.wssServer else "")
 
             pendingWebToken?.let { token ->
                 client?.setWebToken(token)
@@ -323,6 +334,22 @@ class AppState(application: Application) : AndroidViewModel(application) {
             connectionState.value = ConnectionState.Disconnected
             errorMessage.value = "Connection failed: ${e.message}"
         }
+    }
+
+    /** If a Disconnected reason looks like a WS handshake / connect failure
+     *  and we haven't already swapped this attempt, retry on plain TCP once.
+     *  Returns true if a fallback was scheduled (caller should not also run
+     *  the standard auto-reconnect path). Mirrors iOS attemptTransportFallback. */
+    internal fun attemptTransportFallback(reason: String): Boolean {
+        if (transportFallbackUsed) return false
+        if (!reason.lowercase().contains("websocket")) return false
+        if (!hasSavedSession || nick.value.isEmpty()) return false
+        transportFallbackUsed = true
+        Log.w("freeq.auth", "WS connect failed; falling back to TCP. reason=$reason")
+        client?.disconnect()
+        client = null
+        connect(nick.value, useWebSocket = false)
+        return true
     }
 
     fun disconnect() {
@@ -1048,6 +1075,11 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                 state.connectionState.value = ConnectionState.Disconnected
                 if (event.reason.isNotEmpty() && !state.intentionalDisconnect) {
                     state.errorMessage.value = "Disconnected: ${event.reason}"
+                }
+                // If the WS handshake failed on this attempt, swap to plain
+                // TCP once before falling through to broker-session retry.
+                if (!state.intentionalDisconnect && state.attemptTransportFallback(event.reason)) {
+                    return
                 }
                 // Auto-reconnect: prefer broker session restore, fall back to plain reconnect
                 if (state.nick.value.isNotEmpty() && !state.intentionalDisconnect) {
