@@ -656,20 +656,40 @@ class AppState(application: Application) : AndroidViewModel(application) {
     // ── Channel helpers ──
 
     fun getOrCreateChannel(name: String): ChannelState {
-        channels.firstOrNull { it.name.equals(name, ignoreCase = true) }?.let { return it }
-        val channel = ChannelState(name)
-        channels.add(channel)
-        return channel
+        val trimmed = name.trim()
+        return when (BufferRouter.classify(trimmed)) {
+            // A bare nick handed to getOrCreateChannel must NOT be appended
+            // to `channels` — it'd render in the Channels pane styled like a
+            // channel and shadow real channels of the same letters.
+            BufferRouter.Target.DM -> getOrCreateDM(trimmed)
+            BufferRouter.Target.INVALID -> ChannelState("_empty")
+            BufferRouter.Target.CHANNEL -> {
+                channels.firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
+                    ?.let { return it }
+                val channel = ChannelState(trimmed)
+                channels.add(channel)
+                channel
+            }
+        }
     }
 
     fun getOrCreateDM(nick: String): ChannelState {
-        if (nick.isEmpty()) return ChannelState("")
-        dmBuffers.firstOrNull { it.name.equals(nick, ignoreCase = true) }?.let { return it }
-        val dm = ChannelState(nick)
-        dm.lastActivityTime.value = 0L // Don't appear as recent until a message arrives
-        dmBuffers.add(dm)
-        requestHistory(nick)
-        return dm
+        val trimmed = nick.trim()
+        return when (BufferRouter.classify(trimmed)) {
+            // Caller handed us a channel-prefixed name; route to channels
+            // instead. Same anti-shadowing reason as in getOrCreateChannel.
+            BufferRouter.Target.CHANNEL -> getOrCreateChannel(trimmed)
+            BufferRouter.Target.INVALID -> ChannelState("_empty")
+            BufferRouter.Target.DM -> {
+                dmBuffers.firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
+                    ?.let { return it }
+                val dm = ChannelState(trimmed)
+                dm.lastActivityTime.value = 0L // Don't appear as recent until a message arrives.
+                dmBuffers.add(dm)
+                requestHistory(trimmed)
+                dm
+            }
+        }
     }
 
     // ── Persistence ──
@@ -890,15 +910,7 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                     return
                 }
 
-                val msg = ChatMessage(
-                    id = ircMsg.msgid ?: UUID.randomUUID().toString(),
-                    from = ircMsg.fromNick,
-                    text = ircMsg.text,
-                    isAction = ircMsg.isAction,
-                    timestamp = Date(ircMsg.timestampMs),
-                    replyTo = ircMsg.replyTo,
-                    isSigned = ircMsg.isSigned
-                )
+                val msg = MessageMapper.fromIrc(ircMsg)
 
                 // Handle edits (prefer editOf, fall back to replacesMsgid)
                 val editTarget = ircMsg.editOf ?: ircMsg.replacesMsgid
@@ -1074,7 +1086,7 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
                 // Auto-reconnect: prefer broker session restore, fall back to plain reconnect
                 if (state.nick.value.isNotEmpty() && !state.intentionalDisconnect) {
                     state.reconnectAttempts++
-                    val delay = minOf(1L shl minOf(state.reconnectAttempts, 5), 30L)
+                    val delay = ReconnectBackoff.delaySeconds(state.reconnectAttempts)
                     state.scope.launch {
                         kotlinx.coroutines.delay(delay * 1000)
                         if (state.connectionState.value == ConnectionState.Disconnected

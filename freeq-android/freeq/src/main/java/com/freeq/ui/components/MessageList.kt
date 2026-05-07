@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.sp
 import com.freeq.model.AppState
 import com.freeq.model.AvatarCache
 import com.freeq.model.ChannelState
+import com.freeq.model.UnreadBoundary
 import com.freeq.model.PinCache
 import com.freeq.model.ChatMessage
 import com.freeq.model.MemberInfo
@@ -219,7 +220,7 @@ fun MessageList(
                 }
             }
 
-            val unreadSeparatorMsgId = findUnreadBoundary(
+            val unreadSeparatorMsgId = UnreadBoundary.find(
                 messages, lastReadId, lastReadTimestamp, appState.nick.value
             )
 
@@ -995,43 +996,6 @@ private fun TypingIndicator(typers: List<String>) {
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
         )
     }
-}
-
-/**
- * Find the first unread message ID to place the "New messages" separator before.
- * Tries matching by message ID first, falls back to timestamp for cross-session reliability.
- * Returns null if there are no unread messages or the user has already sent a message.
- */
-private fun findUnreadBoundary(
-    messages: List<ChatMessage>,
-    lastReadId: String?,
-    lastReadTimestamp: Long,
-    nick: String
-): String? {
-    // Primary: find lastReadId in messages
-    if (lastReadId != null) {
-        val idx = messages.indexOfFirst { it.id == lastReadId }
-        if (idx >= 0 && idx < messages.size - 1) {
-            val tail = messages.subList(idx + 1, messages.size)
-            val hasRealUnread = tail.any { it.from.isNotEmpty() }
-            val userCaughtUp = tail.any { it.from.equals(nick, ignoreCase = true) }
-            if (hasRealUnread && !userCaughtUp) return messages[idx + 1].id
-        }
-    }
-
-    // Fallback: find first real message after lastReadTimestamp
-    if (lastReadTimestamp > 0) {
-        val idx = messages.indexOfFirst {
-            it.timestamp.time > lastReadTimestamp && it.from.isNotEmpty()
-        }
-        if (idx >= 0) {
-            val tail = messages.subList(idx, messages.size)
-            val userCaughtUp = tail.any { it.from.equals(nick, ignoreCase = true) }
-            if (!userCaughtUp) return messages[idx].id
-        }
-    }
-
-    return null
 }
 
 private fun formatTime(date: Date): String {
