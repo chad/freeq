@@ -171,8 +171,9 @@ class AppState(application: Application) : AndroidViewModel(application) {
     private var cachedWebTokenExpiry: Long = 0L  // epoch millis
 
     val hasSavedSession: Boolean
-        get() = nick.value.isNotEmpty() && (brokerToken != null
-                || (cachedWebToken != null && System.currentTimeMillis() < cachedWebTokenExpiry))
+        // brokerToken alone is enough — broker /session call returns the real
+        // handle, so we don't need a saved nick to attempt reconnect.
+        get() = brokerToken != null
     val lastReadMessageIds = mutableStateMapOf<String, String>()
     val lastReadTimestamps = mutableStateMapOf<String, Long>()
     var isDarkTheme = mutableStateOf(true)
@@ -236,8 +237,17 @@ class AppState(application: Application) : AndroidViewModel(application) {
             prefs.edit().remove("webTokenExpiry").apply()
         }
 
-        // Restore persisted state
-        nick.value = prefs.getString("nick", "") ?: ""
+        // Restore persisted state. If the saved nick is a Guest temp name but
+        // we have a DID, the previous session got Guest-renamed and poisoned
+        // the saved nick — drop it and let the broker /session call return the
+        // user's real handle on next reconnect.
+        val savedNick = prefs.getString("nick", "") ?: ""
+        if (authenticatedDID.value != null && savedNick.startsWith("Guest", ignoreCase = true)) {
+            prefs.edit().remove("nick").apply()
+            nick.value = ""
+        } else {
+            nick.value = savedNick
+        }
         serverAddress.value = prefs.getString("server", ServerConfig.ircServer) ?: ServerConfig.ircServer
         prefs.getStringSet("channels", setOf("#general"))?.forEach { ch ->
             if (ch !in autoJoinChannels) autoJoinChannels.add(ch)
@@ -282,7 +292,16 @@ class AppState(application: Application) : AndroidViewModel(application) {
         connectionState.value = ConnectionState.Connecting
         errorMessage.value = null
 
-        prefs.edit().putString("nick", nickName).putString("server", serverAddress.value).apply()
+        // Don't overwrite the saved nick with a Guest temp name when we're a
+        // DID-authenticated user — once that happens, every subsequent reconnect
+        // sends the Guest nick, SASL fails, and the user is stuck.
+        val shouldPersistNick = !(authenticatedDID.value != null
+                && nickName.startsWith("Guest", ignoreCase = true))
+        if (shouldPersistNick) {
+            prefs.edit().putString("nick", nickName).putString("server", serverAddress.value).apply()
+        } else {
+            prefs.edit().putString("server", serverAddress.value).apply()
+        }
 
         try {
             val handler = AndroidEventHandler(this)
@@ -402,11 +421,19 @@ class AppState(application: Application) : AndroidViewModel(application) {
                 Thread.sleep(if (attempt == 0) 500 else 1000)
                 continue
             }
-            // 401 = broker token may be invalid — require 3 consecutive 401s before nuking
-            // But keep users logged in for at least 14 days unless they explicitly log out
+            // 401 from /session means the broker doesn't recognize this
+            // broker_token at all — its session record is gone (broker DB
+            // wiped, token rotated, manual revoke). That's not a transient
+            // failure: no amount of retrying will recover. Clear the bad
+            // creds so hasSavedSession flips false and the UI falls back to
+            // ConnectScreen for re-OAuth, instead of spinning on
+            // ReconnectingScreen forever. We still wait for 3 consecutive
+            // 401s in case there's a brief broker glitch, but the 14-day
+            // "keep logged in" guard does not apply here — the broker has
+            // *explicitly* told us it doesn't know this token.
             if (status == 401) {
                 consecutive401Count++
-                if (consecutive401Count >= 3 && canAutoClearBrokerCredentials) {
+                if (consecutive401Count >= 3) {
                     consecutive401Count = 0
                     this.brokerToken = null
                     cachedWebToken = null
