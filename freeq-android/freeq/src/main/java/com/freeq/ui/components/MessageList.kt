@@ -90,7 +90,7 @@ fun MessageList(
         val targetId = scrollToMessageId ?: return@LaunchedEffect
         val idx = messages.indexOfFirst { it.id == targetId }
         if (idx >= 0) {
-            listState.animateScrollToItem(idx)
+            listState.animateScrollToItem(idx + 1)
             highlightedMessageId = targetId
         }
     }
@@ -105,11 +105,15 @@ fun MessageList(
         }
     }
 
-    // On first load, scroll to last-read position (or bottom if none)
+    // On first load, scroll to last-read position (or bottom if none).
+    //
+    // The LazyColumn has a `__load_older__` header at slot 0, so message i
+    // lives at LazyColumn slot i + 1. Forgetting this offset lands one
+    // short of the bottom and leaves the scroll-to-bottom FAB visible.
     var initialScrollDone by remember { mutableStateOf(false) }
     LaunchedEffect(messages.size) {
         if (!initialScrollDone && messages.isNotEmpty()) {
-            val targetIdx = if (lastReadId != null) {
+            val msgIdx = if (lastReadId != null) {
                 val idx = messages.indexOfFirst { it.id == lastReadId }
                 if (idx >= 0) idx else messages.size - 1
             } else if (lastReadTimestamp > 0) {
@@ -118,13 +122,13 @@ fun MessageList(
             } else {
                 messages.size - 1
             }
-            listState.scrollToItem(targetIdx)
+            listState.scrollToItem(msgIdx + 1)
             initialScrollDone = true
         } else if (initialScrollDone && messages.isNotEmpty() && scrollToMessageId == null) {
             val lastMsg = messages.lastOrNull()
             val isOwnMessage = lastMsg?.from?.equals(appState.nick.value, ignoreCase = true) == true
             if (isOwnMessage || (isNearBottom && !listState.isScrollInProgress)) {
-                listState.animateScrollToItem(messages.size - 1)
+                listState.animateScrollToItem(messages.size)
             }
         }
     }
@@ -280,9 +284,19 @@ fun MessageList(
             }
         }
 
-        // Scroll-to-bottom FAB
+        // Scroll-to-bottom FAB — only when newer content has arrived from
+        // someone else. If the latest message is the user's own, the auto-
+        // scroll on send already puts them at the bottom; surfacing their
+        // own message here would just occlude the message they're reading
+        // or editing.
+        val ownIsLatest by remember {
+            derivedStateOf {
+                messages.lastOrNull { it.from.isNotEmpty() }
+                    ?.from?.equals(appState.nick.value, ignoreCase = true) == true
+            }
+        }
         AnimatedVisibility(
-            visible = !isNearBottom && messages.isNotEmpty(),
+            visible = !isNearBottom && messages.isNotEmpty() && !ownIsLatest,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 12.dp),
@@ -293,7 +307,7 @@ fun MessageList(
             Surface(
                 onClick = {
                     scope.launch {
-                        listState.animateScrollToItem(messages.size - 1)
+                        listState.animateScrollToItem(messages.size)
                     }
                 },
                 shape = RoundedCornerShape(14.dp),
