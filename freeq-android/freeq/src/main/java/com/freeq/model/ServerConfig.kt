@@ -9,6 +9,10 @@ object ServerConfig {
     val apiBaseUrl: String
         get() = "https://" + ircServer.substringBefore(":")
 
+    /** Secure WebSocket IRC URL (derived from ircServer host). */
+    val wssServer: String
+        get() = "wss://" + ircServer.substringBefore(":") + "/irc"
+
     /** Auth broker base URL (default: production standalone broker) */
     // For deployments using embedded auth (no standalone broker), use apiBaseUrl:
     // val authBrokerBase: String get() = apiBaseUrl

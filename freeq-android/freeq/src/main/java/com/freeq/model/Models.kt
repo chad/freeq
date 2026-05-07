@@ -3,6 +3,7 @@ package com.freeq.model
 import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import androidx.compose.runtime.mutableStateListOf
@@ -150,8 +151,8 @@ class AppState(application: Application) : AndroidViewModel(application) {
     var pendingNavigation = mutableStateOf<String?>(null)
     var pendingJoinChannel: String? = null  // Track user-initiated joins for navigation
     var brokerToken: String? = null
-    val authBrokerBase: String
-        get() = "${ServerConfig.apiBaseUrl}/auth/broker"
+    private val authBrokerBase: String
+        get() = ServerConfig.authBrokerBase
     private var brokerRetryCount = 0
     private var consecutive401Count = 0  // Require 3 consecutive 401s before nuking token
 
@@ -286,6 +287,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     // ── Connection ──
 
     fun connect(nickName: String) {
+        Log.i("freeq.auth", "connect('$nickName') hasPending=${pendingWebToken != null}")
         intentionalDisconnect = false
         loggedOut.value = false
         nick.value = nickName
@@ -307,6 +309,9 @@ class AppState(application: Application) : AndroidViewModel(application) {
             val handler = AndroidEventHandler(this)
             client = FreeqClient(serverAddress.value, nickName, handler)
             client?.setPlatform("freeq android")
+            // Prefer WebSocket on 443/wss like the iOS client; the SDK falls
+            // back to the configured TCP `serverAddress` if WS connect fails.
+            client?.setWebsocketUrl(ServerConfig.wssServer)
 
             pendingWebToken?.let { token ->
                 client?.setWebToken(token)
@@ -341,6 +346,13 @@ class AppState(application: Application) : AndroidViewModel(application) {
         prefs.edit().putLong("webTokenExpiry", cachedWebTokenExpiry).apply()
     }
 
+    fun invalidateCachedWebToken() {
+        cachedWebToken = null
+        cachedWebTokenExpiry = 0L
+        securePrefs.edit().remove("webToken").apply()
+        prefs.edit().remove("webTokenExpiry").apply()
+    }
+
     fun logout() {
         intentionalDisconnect = true
         loggedOut.value = true
@@ -356,28 +368,35 @@ class AppState(application: Application) : AndroidViewModel(application) {
     }
 
     fun reconnectSavedSession() {
+        Log.i("freeq.auth", "reconnect: hasSaved=$hasSavedSession state=${connectionState.value} pending=${pendingWebToken != null} cached=${cachedWebToken != null} cachedTTL=${(cachedWebTokenExpiry - System.currentTimeMillis()).coerceAtLeast(0)}ms broker=${brokerToken != null} nick='${nick.value}'")
         if (!hasSavedSession || connectionState.value != ConnectionState.Disconnected) return
-        if (pendingWebToken != null) { connect(nick.value); return }
+        if (pendingWebToken != null) {
+            Log.i("freeq.auth", "reconnect: using pendingWebToken")
+            connect(nick.value); return
+        }
 
         // Reuse cached web token if still within TTL (avoids broker round-trip)
         val cached = cachedWebToken
         if (cached != null && System.currentTimeMillis() < cachedWebTokenExpiry) {
+            Log.i("freeq.auth", "reconnect: using cached webToken")
             pendingWebToken = cached
             connect(nick.value)
             return
         }
 
         val token = brokerToken ?: run {
-            // No broker token and cached web token expired — must sign in again
+            Log.i("freeq.auth", "reconnect: no brokerToken, disconnecting")
             connectionState.value = ConnectionState.Disconnected
             return
         }
+        Log.i("freeq.auth", "reconnect: fetching broker /session")
 
         connectionState.value = ConnectionState.Connecting
 
         scope.launch {
             try {
                 val session = withContext(Dispatchers.IO) { fetchBrokerSession(token) }
+                Log.i("freeq.auth", "reconnect: broker /session OK nick='${session.nick}' did='${session.did}'")
                 brokerRetryCount = 0
                 pendingWebToken = session.token
                 cacheWebToken(session.token)
@@ -385,6 +404,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
                 securePrefs.edit().putString("did", session.did).apply()
                 connect(session.nick)
             } catch (e: Exception) {
+                Log.w("freeq.auth", "reconnect: broker /session failed (retry ${brokerRetryCount + 1}): ${e.message}")
                 brokerRetryCount++
                 if (brokerRetryCount <= 4) {
                     val delayMs = 3000L * (1L shl (brokerRetryCount - 1)) // 3, 6, 12, 24s
@@ -403,6 +423,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
     private data class BrokerSessionResponse(val token: String, val nick: String, val did: String)
 
     private fun fetchBrokerSession(brokerToken: String): BrokerSessionResponse {
+        Log.i("freeq.auth", "fetchBrokerSession: brokerTokLen=${brokerToken.length} brokerTokPrefix=${brokerToken.take(6)} brokerTokSuffix=${brokerToken.takeLast(6)}")
         // Retry up to 3 times with backoff — DPoP nonce rotation causes the first call to fail
         for (attempt in 0..2) {
             val url = java.net.URL("$authBrokerBase/session")
@@ -417,6 +438,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
                 out.write("""{"broker_token":"$brokerToken"}""".toByteArray())
             }
             val status = conn.responseCode
+            Log.i("freeq.auth", "fetchBrokerSession: attempt=$attempt status=$status")
             if (status == 502 && attempt < 2) {
                 Thread.sleep(if (attempt == 0) 500 else 1000)
                 continue
@@ -711,11 +733,17 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
             }
 
             is FreeqEvent.Registered -> {
+                Log.i("freeq.auth", "Registered: nick='${event.nick}' did=${state.authenticatedDID.value} guestRename=${event.nick.startsWith("Guest", ignoreCase = true)}")
                 state.reconnectAttempts = 0
                 // If authenticated user got Guest nick, token was stale — retry broker
                 if (state.authenticatedDID.value != null
                     && event.nick.startsWith("Guest", ignoreCase = true)) {
                     state.disconnect()
+                    // The cached web-token we just sent is single-use and the
+                    // server consumed it on the failed SASL attempt. Wipe it
+                    // so reconnectSavedSession falls through to broker
+                    // /session for a fresh token (matches iOS).
+                    state.invalidateCachedWebToken()
                     state.scope.launch {
                         delay(2000)
                         if (state.connectionState.value == ConnectionState.Disconnected
@@ -739,10 +767,17 @@ class AndroidEventHandler(private val state: AppState) : EventHandler {
             }
 
             is FreeqEvent.Authenticated -> {
+                Log.i("freeq.auth", "Authenticated: did='${event.did}'")
                 state.authenticatedDID.value = event.did
+                state.securePrefs.edit().putString("did", event.did).apply()
+                // Refresh login timestamp on every successful auth so
+                // hasSavedSession's grace window doesn't expire on a
+                // long-lived registered user (matches iOS).
+                state.prefs.edit().putLong("lastLoginTime", System.currentTimeMillis()).apply()
             }
 
             is FreeqEvent.AuthFailed -> {
+                Log.w("freeq.auth", "AuthFailed: ${event.reason}")
                 state.errorMessage.value = "Auth failed: ${event.reason}"
             }
 

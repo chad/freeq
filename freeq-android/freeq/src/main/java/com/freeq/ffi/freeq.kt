@@ -853,6 +853,8 @@ internal open class UniffiVTableCallbackInterfaceP2pEventHandler(
 
 
 
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -897,6 +899,8 @@ fun uniffi_freeq_sdk_ffi_checksum_method_freeqclient_set_platform(
 fun uniffi_freeq_sdk_ffi_checksum_method_freeqclient_set_topic(
 ): Short
 fun uniffi_freeq_sdk_ffi_checksum_method_freeqclient_set_web_token(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqclient_set_websocket_url(
 ): Short
 fun uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_decrypt_message(
 ): Short
@@ -1037,6 +1041,8 @@ fun uniffi_freeq_sdk_ffi_fn_method_freeqclient_set_platform(`ptr`: Pointer,`plat
 fun uniffi_freeq_sdk_ffi_fn_method_freeqclient_set_topic(`ptr`: Pointer,`channel`: RustBuffer.ByValue,`topic`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_freeq_sdk_ffi_fn_method_freeqclient_set_web_token(`ptr`: Pointer,`token`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_freeq_sdk_ffi_fn_method_freeqclient_set_websocket_url(`ptr`: Pointer,`url`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_freeq_sdk_ffi_fn_clone_freeqe2ee(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Pointer
@@ -1257,6 +1263,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqclient_set_web_token() != 47149.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqclient_set_websocket_url() != 40379.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_decrypt_message() != 42382.toShort()) {
@@ -2022,6 +2031,8 @@ public interface FreeqClientInterface {
     
     fun `setWebToken`(`token`: kotlin.String)
     
+    fun `setWebsocketUrl`(`url`: kotlin.String)
+    
     companion object
 }
 
@@ -2252,6 +2263,18 @@ open class FreeqClient: Disposable, AutoCloseable, FreeqClientInterface
     uniffiRustCallWithError(FreeqException) { _status ->
     UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqclient_set_web_token(
         it, FfiConverterString.lower(`token`),_status)
+}
+    }
+    
+    
+
+    
+    @Throws(FreeqException::class)override fun `setWebsocketUrl`(`url`: kotlin.String)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FreeqException) { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqclient_set_websocket_url(
+        it, FfiConverterString.lower(`url`),_status)
 }
     }
     
