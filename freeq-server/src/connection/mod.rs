@@ -1078,6 +1078,12 @@ where
                                             .did_msg_keys
                                             .lock()
                                             .insert(did.clone(), pubkey_b64.clone());
+                                        // Persist to DB so the key survives server restarts
+                                        // and is available when the registering DID is offline
+                                        // (used by FreeqBotDelegation/v1 cert verification).
+                                        let did_for_db = did.clone();
+                                        let key_bytes = bytes.clone();
+                                        state.with_db(|db| db.save_signing_key(&did_for_db, &key_bytes));
                                     }
                                     tracing::info!(
                                         session = %session_id,

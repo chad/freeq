@@ -224,6 +224,12 @@ impl Db {
                 updated_at  INTEGER NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS signing_keys (
+                did            TEXT PRIMARY KEY,
+                pubkey         BLOB NOT NULL,         -- raw 32-byte ed25519 public key
+                registered_at  INTEGER NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS user_channels (
                 did     TEXT NOT NULL,
                 channel TEXT NOT NULL,
@@ -1073,6 +1079,49 @@ impl Db {
         rows.collect()
     }
 
+    // ── Per-DID signing keys (MSGSIG) ────────────────────────────────
+    //
+    // When a session sends `MSGSIG <pubkey>`, the connection layer mirrors it
+    // here so we can verify signatures from that DID across server restarts
+    // and even when the DID has no active session. Used by:
+    //   • PROVENANCE FreeqBotDelegation/v1 cert verification
+    //   • (future) cross-session signature checks for offline signers
+
+    /// UPSERT the registered signing key for a DID. `pubkey` must be 32 bytes.
+    pub fn save_signing_key(&self, did: &str, pubkey: &[u8]) -> SqlResult<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.conn.execute(
+            "INSERT INTO signing_keys (did, pubkey, registered_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(did) DO UPDATE SET pubkey=excluded.pubkey, registered_at=excluded.registered_at",
+            params![did, pubkey, now as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Look up the registered signing key for a DID. Returns the raw 32-byte
+    /// ed25519 public key, or None if the DID has never registered one.
+    pub fn get_signing_key(&self, did: &str) -> SqlResult<Option<[u8; 32]>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT pubkey FROM signing_keys WHERE did = ?1")?;
+        let mut rows = stmt.query_map(params![did], |row| row.get::<_, Vec<u8>>(0))?;
+        match rows.next() {
+            Some(row) => {
+                let bytes = row?;
+                if bytes.len() != 32 {
+                    return Ok(None);
+                }
+                let mut out = [0u8; 32];
+                out.copy_from_slice(&bytes);
+                Ok(Some(out))
+            }
+            None => Ok(None),
+        }
+    }
+
     // ── User channel persistence (auto-rejoin) ────────────────────────
 
     /// Record that a DID-authenticated user has joined a channel.
@@ -1529,6 +1578,42 @@ mod tests {
         let loaded = channels.get("#test").unwrap();
         assert_eq!(loaded.pins.len(), 2);
         assert_eq!(loaded.pins[0].msgid, "msg002"); // most recent first
+    }
+
+    #[test]
+    fn signing_key_roundtrip_and_upsert() {
+        let db = Db::open_memory().unwrap();
+        let did = "did:plc:abc";
+        assert!(db.get_signing_key(did).unwrap().is_none());
+
+        let key1 = [1u8; 32];
+        db.save_signing_key(did, &key1).unwrap();
+        assert_eq!(db.get_signing_key(did).unwrap(), Some(key1));
+
+        // UPSERT overwrites with the new key
+        let key2 = [2u8; 32];
+        db.save_signing_key(did, &key2).unwrap();
+        assert_eq!(db.get_signing_key(did).unwrap(), Some(key2));
+
+        // Different DID is independent
+        db.save_signing_key("did:plc:xyz", &[9u8; 32]).unwrap();
+        assert_eq!(db.get_signing_key(did).unwrap(), Some(key2));
+        assert_eq!(db.get_signing_key("did:plc:xyz").unwrap(), Some([9u8; 32]));
+    }
+
+    #[test]
+    fn signing_key_rejects_wrong_length_on_read() {
+        // If somehow a non-32-byte blob ends up in the table, the read API
+        // returns None rather than panicking. This guards against a future
+        // schema change or a manual DB edit.
+        let db = Db::open_memory().unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO signing_keys (did, pubkey, registered_at) VALUES (?1, ?2, ?3)",
+                params!["did:plc:short", &[1u8; 16][..], 0i64],
+            )
+            .unwrap();
+        assert!(db.get_signing_key("did:plc:short").unwrap().is_none());
     }
 }
 
