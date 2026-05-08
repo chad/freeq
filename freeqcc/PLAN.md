@@ -327,6 +327,28 @@ Worth flagging upfront because the user mentioned both:
 
 ---
 
+## 11.5 Pivot 2026-05-08 — server-side verification first
+
+After auditing `freeq-bot-id` and the server's `PROVENANCE` handler I found:
+
+- The server stores any JSON sent via `PROVENANCE` without verifying it (`connection/mod.rs:2201`).
+  The signed-cert flow described in PHASE-1 is documented but not yet implemented server-side.
+- `freeq-bot-id` mints its own bot key; it can't sign a delegation for an externally-supplied
+  agent key. Either v1.0 ships unsigned (declarative) or we land verification server-side first.
+
+**Decision**: ship verification server-side first, then resume freeqcc phase 4. This makes
+freeqcc v1 launch with real verified provenance from day one — a much stronger HN story.
+
+New ordering:
+- 4a (server, BEFORE freeqcc phase 4): extend `PROVENANCE` to recognize `FreeqBotDelegation/v1`,
+  verify the ed25519 signature against the creator's registered signing key, mark the
+  declaration verified vs unverified, and surface that in WHOIS / `/api/v1/actors/{did}`.
+- 4b (freeqcc phase 4, AFTER 4a): mint cert in TS, sign it with whatever creator key is
+  available (initial path: use the same MSGSIG key the freeq web client uploads when the
+  user signs in), submit via `PROVENANCE`, observe verified status in WHOIS.
+
+Until 4a lands, freeqcc phases 5–10 are blocked. Phases 1–3 are committed and stable.
+
 ## 11. Calls — APPROVED 2026-05-08
 
 - ✅ Delegation cert via existing `freeq-bot-id` Rust binary.
