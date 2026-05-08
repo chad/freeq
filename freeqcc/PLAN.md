@@ -327,6 +327,59 @@ Worth flagging upfront because the user mentioned both:
 
 ---
 
+## 11.6 Server-side cert verification — concrete plan
+
+After two more audits (PROVENANCE handler internals, DidResolver key surface), the
+implementation breaks down into six self-contained changes inside `freeq-server` (+ one
+fix to `freeq-bot-id`). Decision context: did:plc users' atproto keys are PDS-locked, so
+DidResolver-only verification can't work for Bluesky users today. We persist MSGSIG-style
+ed25519 keys into the DB and verify against those.
+
+**S1. Persist MSGSIG keys to DB.** New table `signing_keys (did TEXT PRIMARY KEY, pubkey BLOB,
+registered_at INTEGER)`. On `MSGSIG <pubkey>`, UPSERT under the session's authenticated
+DID. New read API `db.get_signing_key(did) -> Option<[u8;32]>`. The existing in-memory
+`did_msg_keys` map stays as a hot cache; DB is the source of truth.
+
+**S2. Move JCS canonicalization to `freeq-sdk`.** `policy::canonical::canonicalize` lives in
+`freeq-server::policy`; `freeq-bot-id` can't depend on the server. Move the helper to
+`freeq-sdk::canonical::canonicalize` (re-export from policy module so existing call sites
+keep working).
+
+**S3. Fix `freeq-bot-id` JCS bug.** `main.rs:188` uses `serde_json::to_string(&deleg)` instead
+of JCS-canonicalize. Without this fix the sigs we mint can't be verified by a JCS-checking
+server. One-line replacement once S2 lands.
+
+**S4. PROVENANCE verification in the handler.** In `connection/mod.rs:2199` block, after
+parsing JSON, detect `type == "FreeqBotDelegation/v1"`. Extract `creator_did` and
+`signature`. Look up creator's pubkey via `db.get_signing_key(creator_did)`. JCS-canonicalize
+the cert with `signature: null`. Verify ed25519 sig. Store result.
+
+**S5. Verified status in storage + REST.** Replace
+`provenance_declarations: Mutex<HashMap<String, Value>>` with
+`Mutex<HashMap<String, ProvenanceRecord>>` where `ProvenanceRecord = { json, verified,
+verified_at, verifier_key_did }`. Update the 3 callers: `connection/mod.rs:2223` (write),
+`web.rs:854` (read), `web.rs:886` (parent provenance read). REST response gains
+`provenance_verified: bool` alongside `provenance`.
+
+**S6. Tests.** In `tests/agent_native.rs`:
+- valid signed cert → verified = true
+- tampered signature → verified = false
+- unsigned cert (signature null) → verified = false
+- creator has no registered MSGSIG key → verified = false
+- cert.bot_did doesn't match session's authenticated DID → reject outright (NOTICE error)
+
+Code-size estimate: ~600 lines including tests, distributed roughly 100/50/5/200/50/200 across
+S1–S6.
+
+### Why we skipped option-2 (DidResolver-only) and option-3 (hybrid)
+
+- **DidResolver-only** would require a way for did:plc users to add freeq-specific
+  verification keys to their DID document. That's a multi-day infra change (new PLC
+  operations, OAuth flows, key-rotation handling) — out of scope for an HN launch.
+- **Hybrid** stacks both paths but adds complexity for marginal benefit at v1.0. Once
+  S1–S5 ship and the freeq web client uses the persisted MSGSIG keys, we have the
+  infra to add a DidResolver fallback in v1.1 cleanly.
+
 ## 11.5 Pivot 2026-05-08 — server-side verification first
 
 After auditing `freeq-bot-id` and the server's `PROVENANCE` handler I found:
