@@ -8,6 +8,7 @@
 //!
 //! - [`client`] — Async IRC client with SASL support
 //! - [`auth`] — Challenge signing traits and implementations
+//! - [`canonical`] — JCS (RFC 8785) canonicalization for hashing/signing
 //! - [`crypto`] — secp256k1 and ed25519 key operations
 //! - [`did`] — DID document resolution (did:plc, did:web)
 //! - [`pds`] — AT Protocol PDS client (session creation/verification)
@@ -16,6 +17,7 @@
 
 pub mod auth;
 pub mod bot;
+pub mod canonical;
 pub mod client;
 pub mod crypto;
 pub mod did;
