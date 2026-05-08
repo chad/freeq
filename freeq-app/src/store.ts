@@ -634,31 +634,50 @@ export const useStore = create<Store>((set, get) => ({
       return { serverMessages: [...s.serverMessages, msg].slice(-500) };
     }
 
-    const channels = new Map(s.channels);
-    const ch = getOrCreateChannel(channels, channel);
+    const key = channel.toLowerCase();
+    const oldCh = s.channels.get(key);
 
-    // Auto-join DM buffers so they appear in the sidebar
-    const isDMBuf = !channel.startsWith('#') && !channel.startsWith('&') && channel !== 'server';
-    if (isDMBuf && !ch.isJoined) {
-      ch.isJoined = true;
-    }
-
-    // Dedup by msgid — CHATHISTORY can return messages already shown live
-    if (msg.id && !msg.isSystem && ch.messages.some((m) => m.id === msg.id)) {
+    // Dedup by msgid — CHATHISTORY can return messages already shown live.
+    // Done BEFORE any mutation so the short-circuit doesn't leak in-place
+    // edits through `return {}`.
+    if (msg.id && !msg.isSystem && oldCh?.messages.some((m) => m.id === msg.id)) {
       return {};
     }
 
-    ch.messages = [...ch.messages, msg].slice(-1000);
-    if (!msg.isSystem && s.activeChannel.toLowerCase() !== channel.toLowerCase()) {
-      ch.unreadCount++;
-    }
-    channels.set(channel.toLowerCase(), ch);
+    const isDMBuf = !channel.startsWith('#') && !channel.startsWith('&') && channel !== 'server';
+    const base = oldCh ?? {
+      name: channel,
+      topic: '',
+      members: new Map(),
+      messages: [],
+      modes: new Set(),
+      isEncrypted: false,
+      unreadCount: 0,
+      mentionCount: 0,
+      isJoined: false,
+      pins: [],
+    };
+    // Always produce a fresh Channel object so subscribers comparing
+    // channel identity (Sidebar, MessageList children, etc.) see a new
+    // reference and re-render. Mutating in place can hide updates from
+    // memoized components and shallow selectors.
+    const ch: typeof base = {
+      ...base,
+      messages: [...base.messages, msg].slice(-1000),
+      isJoined: base.isJoined || isDMBuf,
+      unreadCount:
+        !msg.isSystem && s.activeChannel.toLowerCase() !== key
+          ? base.unreadCount + 1
+          : base.unreadCount,
+    };
+
+    const channels = new Map(s.channels);
+    channels.set(key, ch);
 
     // Auto-unhide DM conversations when a new live message arrives
-    const isDM = !channel.startsWith('#') && !channel.startsWith('&') && channel !== 'server';
-    if (isDM && !msg.isSystem && s.hiddenDMs.has(channel.toLowerCase())) {
+    if (isDMBuf && !msg.isSystem && s.hiddenDMs.has(key)) {
       const hidden = new Set(s.hiddenDMs);
-      hidden.delete(channel.toLowerCase());
+      hidden.delete(key);
       localStorage.setItem('freeq-hidden-dms', JSON.stringify([...hidden]));
       return { channels, hiddenDMs: hidden };
     }
