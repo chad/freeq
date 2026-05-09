@@ -570,7 +570,11 @@ export class FreeqClient extends EventEmitter {
         break;
 
       case '903':
-        if (this.sasl?.did) {
+        // Auto-mint a per-session ed25519 signing key and register it via
+        // MSGSIG. Some consumers (Node-side bots, agents that already hold
+        // their own signing key) want to skip this; opt out via
+        // FreeqClientOptions.autoMsgSig=false.
+        if (this.sasl?.did && this.opts.autoMsgSig !== false) {
           signing.setSigningDid(this.sasl.did);
           signing.generateSigningKey().then((pubkey) => {
             if (pubkey) this.raw(`MSGSIG ${pubkey}`);

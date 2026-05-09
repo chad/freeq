@@ -116,11 +116,43 @@ pub(super) fn attach_same_did(
     };
 
     if existing_sessions.is_empty() {
-        // First session for this DID — normal registration
-        // Ensure nick is in nick_to_session
+        // First session for this DID — normal registration.
+        //
+        // Ensure nick is in nick_to_session. The previous version skipped
+        // when contains_nick(nick) was true, which is wrong: the existing
+        // entry can be a stale mapping pointing to a dead session_id (e.g.
+        // a previous connection that closed without proper cleanup, or
+        // surfaced after a server restart in some other path). Skipping
+        // the insert leaves us with `online: true` (session_dids has us)
+        // but `nick: None` (nick_to_session does not), which silently
+        // breaks WHOIS, NAMES, and DM routing.
+        //
+        // Safe-to-claim rule:
+        //   - free nick → claim
+        //   - held by a session with the SAME authenticated DID as us
+        //     → claim (multi-device sibling, NickMap.insert preserves siblings)
+        //   - held by a session with no DID in session_dids → stale dead
+        //     entry → claim (overwrite)
+        //   - held by a session with a DIFFERENT live DID → leave alone;
+        //     try_complete_registration's ownership check renames us to
+        //     a Guest nick before the connection finishes registering.
         if let Some(ref nick) = conn.nick {
             let mut nts = state.nick_to_session.lock();
-            if !nts.contains_nick(nick) {
+            let safe_to_claim = match nts.get_session(nick) {
+                None => true,
+                Some(other_sid) => {
+                    let other_sid_owned = other_sid.to_string();
+                    drop(nts);
+                    let session_dids = state.session_dids.lock();
+                    let conflict = matches!(
+                        session_dids.get(&other_sid_owned),
+                        Some(other_did) if other_did != &did,
+                    );
+                    nts = state.nick_to_session.lock();
+                    !conflict
+                }
+            };
+            if safe_to_claim {
                 nts.insert(nick, session_id);
                 tracing::info!(nick = %nick, "Registered nick for DID {did}");
             }
@@ -171,6 +203,18 @@ pub(super) fn attach_same_did(
         // For multi-device, multiple sessions share the same nick. NickMap.insert()
         // now supports this: it adds sid→nick without evicting other sessions.
         nts.insert(canon, session_id);
+    } else if let Some(ref nick) = conn.nick {
+        // Fallback: existing sessions for this DID exist but NONE has a
+        // nick_to_session mapping. That can happen if a prior session
+        // landed in the half-registered state (the original bug). We can
+        // self-heal here: insert our session under the nick we asked for.
+        // NickMap.insert is multi-device safe.
+        let mut nts = state.nick_to_session.lock();
+        nts.insert(nick, session_id);
+        tracing::warn!(
+            did = %did, nick = %nick, session = %session_id,
+            "Multi-device attach found no canonical nick — recovering by inserting requested nick"
+        );
     }
 
     // Find all channels the DID is in via existing sessions

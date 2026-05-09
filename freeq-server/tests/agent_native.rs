@@ -412,13 +412,221 @@ async fn provenance_submit() {
         .await
         .unwrap();
 
+    // Free-form provenance (non FreeqBotDelegation/v1) is stored unverified.
     expect_raw_line(
         &mut events,
         2000,
-        "Provenance declaration stored",
-        "PROVENANCE stored",
+        "Provenance stored (unverified)",
+        "PROVENANCE stored unverified",
     )
     .await;
+
+    handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+// ── Test: PROVENANCE FreeqBotDelegation/v1 verification ──────────────
+
+/// Spin up a session, register a known ed25519 key as the creator's MSGSIG
+/// (overwriting the SDK's auto-generated one), then disconnect. Returns
+/// `(creator_did, creator_signing_key)` so the caller can mint signed certs.
+async fn register_creator_msgsig(
+    addr: std::net::SocketAddr,
+    nick: &str,
+) -> (String, ed25519_dalek::SigningKey) {
+    use base64::Engine;
+    let signing_key = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+    let pk = PrivateKey::ed25519_from_bytes(&signing_key.to_bytes()).unwrap();
+    let did = format!("did:key:{}", pk.public_key_multibase());
+    let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(did.clone(), pk));
+
+    let config = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: nick.to_string(),
+        user: nick.to_string(),
+        realname: format!("{nick} creator"),
+        ..Default::default()
+    };
+    let (handle, mut events) = client::connect(config, Some(signer));
+    expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
+    expect_event(&mut events, 2000, |e| matches!(e, Event::Authenticated { .. }), "Authenticated").await;
+    expect_event(&mut events, 2000, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+
+    // Overwrite SDK's auto-MSGSIG with our known key
+    let pubkey_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(signing_key.verifying_key().as_bytes());
+    handle.raw(&format!("MSGSIG {pubkey_b64}")).await.unwrap();
+    expect_raw_line(&mut events, 2000, "MSGSIG OK", "MSGSIG accepted").await;
+
+    handle.quit(None).await.unwrap();
+    (did, signing_key)
+}
+
+/// Build a FreeqBotDelegation/v1 cert and sign it with the creator's key.
+fn build_signed_cert(
+    bot_did: &str,
+    creator_did: &str,
+    creator_key: &ed25519_dalek::SigningKey,
+) -> serde_json::Value {
+    use base64::Engine;
+    use ed25519_dalek::Signer;
+    let bot_multibase = bot_did.strip_prefix("did:key:").unwrap_or("");
+    let mut cert = serde_json::json!({
+        "type": "FreeqBotDelegation/v1",
+        "bot_did": bot_did,
+        "bot_public_key": bot_multibase,
+        "creator_did": creator_did,
+        "created_at": "2026-05-08T15:00:00Z",
+        "revocation_authority": creator_did,
+    });
+    let canonical = freeq_sdk::canonical::canonicalize(&cert).unwrap();
+    let sig = creator_key.sign(canonical.as_bytes());
+    cert["signature"] = serde_json::Value::String(
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes()),
+    );
+    cert
+}
+
+#[tokio::test]
+async fn provenance_freeq_bot_delegation_verified() {
+    // Server with DB so MSGSIG keys persist across the disconnect/reconnect
+    // boundary.
+    let (addr, server_handle) = start_test_server_with_db(empty_resolver(), true).await;
+
+    // Creator registers a known signing key, then disconnects.
+    let (creator_did, creator_key) = register_creator_msgsig(addr, "creator").await;
+
+    // Bot connects under its own did:key, mints a cert signed by creator's key.
+    let (bot_did, handle, mut events) = connect_did_key(addr, "verifybot").await;
+    let cert = build_signed_cert(&bot_did, &creator_did, &creator_key);
+    handle.submit_provenance(&cert).await.unwrap();
+
+    expect_raw_line(
+        &mut events,
+        2000,
+        "Provenance verified",
+        "FreeqBotDelegation/v1 verified",
+    )
+    .await;
+
+    handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn provenance_freeq_bot_delegation_tampered_signature() {
+    let (addr, server_handle) = start_test_server_with_db(empty_resolver(), true).await;
+    let (creator_did, creator_key) = register_creator_msgsig(addr, "creator").await;
+
+    let (bot_did, handle, mut events) = connect_did_key(addr, "tamperbot").await;
+    let mut cert = build_signed_cert(&bot_did, &creator_did, &creator_key);
+    // Tamper: flip a single character in the signature.
+    let sig = cert["signature"].as_str().unwrap().to_string();
+    let mut bytes = sig.into_bytes();
+    bytes[0] = if bytes[0] == b'A' { b'B' } else { b'A' };
+    cert["signature"] = serde_json::Value::String(String::from_utf8(bytes).unwrap());
+    handle.submit_provenance(&cert).await.unwrap();
+
+    let line = expect_raw_line(
+        &mut events,
+        2000,
+        "Provenance stored (unverified)",
+        "tampered cert stored unverified",
+    )
+    .await;
+    assert!(
+        line.contains("Signature did not verify") || line.contains("not valid base64url"),
+        "expected sig-verify failure reason, got: {line}"
+    );
+
+    handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn provenance_freeq_bot_delegation_unsigned() {
+    let (addr, server_handle) = start_test_server_with_db(empty_resolver(), true).await;
+    let (bot_did, handle, mut events) = connect_did_key(addr, "unsignedbot").await;
+
+    let cert = serde_json::json!({
+        "type": "FreeqBotDelegation/v1",
+        "bot_did": bot_did,
+        "bot_public_key": bot_did.strip_prefix("did:key:").unwrap(),
+        "creator_did": "did:plc:nokey",
+        "created_at": "2026-05-08T15:00:00Z",
+        "revocation_authority": "did:plc:nokey",
+        // intentionally no `signature` field
+    });
+    handle.submit_provenance(&cert).await.unwrap();
+
+    let line = expect_raw_line(
+        &mut events,
+        2000,
+        "Provenance stored (unverified)",
+        "unsigned cert stored unverified",
+    )
+    .await;
+    assert!(
+        line.contains("no signature") || line.contains("declarative"),
+        "expected unsigned reason, got: {line}"
+    );
+
+    handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn provenance_freeq_bot_delegation_creator_not_registered() {
+    // No creator session — creator_did never registered a MSGSIG key.
+    let (addr, server_handle) = start_test_server_with_db(empty_resolver(), true).await;
+
+    // Mint a cert signed by an arbitrary ed25519 key, claim creator_did
+    // that the server has never seen.
+    let creator_key = ed25519_dalek::SigningKey::generate(&mut rand::thread_rng());
+    let creator_pk = PrivateKey::ed25519_from_bytes(&creator_key.to_bytes()).unwrap();
+    let creator_did = format!("did:key:{}", creator_pk.public_key_multibase());
+
+    let (bot_did, handle, mut events) = connect_did_key(addr, "lonelybot").await;
+    let cert = build_signed_cert(&bot_did, &creator_did, &creator_key);
+    handle.submit_provenance(&cert).await.unwrap();
+
+    let line = expect_raw_line(
+        &mut events,
+        2000,
+        "Provenance stored (unverified)",
+        "creator-not-registered stored unverified",
+    )
+    .await;
+    assert!(
+        line.contains("No registered MSGSIG key"),
+        "expected no-registered-key reason, got: {line}"
+    );
+
+    handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+#[tokio::test]
+async fn provenance_freeq_bot_delegation_did_mismatch_rejected() {
+    let (addr, server_handle) = start_test_server_with_db(empty_resolver(), true).await;
+    let (creator_did, creator_key) = register_creator_msgsig(addr, "creator").await;
+
+    let (_bot_did, handle, mut events) = connect_did_key(addr, "mismatchbot").await;
+    // Cert claims a *different* bot_did than the session's authenticated DID.
+    let cert = build_signed_cert("did:key:zPretender", &creator_did, &creator_key);
+    handle.submit_provenance(&cert).await.unwrap();
+
+    let line = expect_raw_line(
+        &mut events,
+        2000,
+        "Provenance rejected",
+        "DID-mismatch cert rejected",
+    )
+    .await;
+    assert!(
+        line.contains("does not match the authenticated session DID"),
+        "expected DID-mismatch reason, got: {line}"
+    );
 
     handle.quit(None).await.unwrap();
     server_handle.abort();
@@ -680,7 +888,7 @@ async fn full_agent_lifecycle() {
         }))
         .await
         .unwrap();
-    expect_raw_line(&mut events, 2000, "Provenance declaration stored", "Step 2: provenance").await;
+    expect_raw_line(&mut events, 2000, "Provenance stored (unverified)", "Step 2: provenance").await;
 
     // 3. Set presence
     handle

@@ -22,6 +22,7 @@ pub(crate) mod login;
 pub mod helpers;
 pub(crate) mod messaging;
 mod policy_cmd;
+mod provenance;
 mod queries;
 mod registration;
 pub(crate) mod routing;
@@ -1078,6 +1079,12 @@ where
                                             .did_msg_keys
                                             .lock()
                                             .insert(did.clone(), pubkey_b64.clone());
+                                        // Persist to DB so the key survives server restarts
+                                        // and is available when the registering DID is offline
+                                        // (used by FreeqBotDelegation/v1 cert verification).
+                                        let did_for_db = did.clone();
+                                        let key_bytes = bytes.clone();
+                                        state.with_db(|db| db.save_signing_key(&did_for_db, &key_bytes));
                                     }
                                     tracing::info!(
                                         session = %session_id,
@@ -2218,15 +2225,61 @@ where
                     .or_else(|| serde_json::from_str::<serde_json::Value>(encoded).ok());
 
                 match json_result {
-                    Some(provenance) => {
+                    Some(mut provenance) => {
                         if let Some(ref did) = conn.authenticated_did {
-                            state.provenance_declarations.lock().insert(did.clone(), provenance);
-                            let reply = Message::from_server(
-                                &server_name, "NOTICE",
-                                vec![&nick, "Provenance declaration stored"],
-                            );
-                            send(&state, &session_id, format!("{reply}\r\n"));
-                            tracing::info!(nick = %nick, did = %did, "Provenance declaration stored");
+                            // Run synchronous verification. For FreeqBotDelegation/v1
+                            // certs this checks the ed25519 sig against the creator's
+                            // registered MSGSIG key (db.get_signing_key). Other shapes
+                            // pass through as unverified.
+                            //
+                            // Hard-reject only on cert/session DID mismatch (the agent
+                            // is presenting a cert that doesn't belong to its session).
+                            let did_clone = did.clone();
+                            let outcome_result = state
+                                .with_db(|db| {
+                                    Ok::<_, rusqlite::Error>(provenance::verify_provenance(
+                                        &provenance,
+                                        &did_clone,
+                                        Some(db),
+                                    ))
+                                })
+                                .unwrap_or_else(|| {
+                                    // No DB attached — verify will report "no DB" reason.
+                                    provenance::verify_provenance(&provenance, &did_clone, None)
+                                });
+
+                            match outcome_result {
+                                Err(reject_reason) => {
+                                    let reply = Message::from_server(
+                                        &server_name, "NOTICE",
+                                        vec![&nick, &format!("Provenance rejected: {reject_reason}")],
+                                    );
+                                    send(&state, &session_id, format!("{reply}\r\n"));
+                                    tracing::warn!(
+                                        nick = %nick, did = %did, reason = %reject_reason,
+                                        "Provenance declaration rejected"
+                                    );
+                                }
+                                Ok(outcome) => {
+                                    provenance::annotate(&mut provenance, &outcome);
+                                    state
+                                        .provenance_declarations
+                                        .lock()
+                                        .insert(did.clone(), provenance);
+                                    let status = if outcome.verified { "verified" } else { "stored (unverified)" };
+                                    let reply = Message::from_server(
+                                        &server_name, "NOTICE",
+                                        vec![&nick, &format!("Provenance {status}: {}", outcome.reason)],
+                                    );
+                                    send(&state, &session_id, format!("{reply}\r\n"));
+                                    tracing::info!(
+                                        nick = %nick, did = %did,
+                                        verified = outcome.verified,
+                                        reason = %outcome.reason,
+                                        "Provenance declaration stored"
+                                    );
+                                }
+                            }
                         } else {
                             let reply = Message::from_server(
                                 &server_name, "NOTICE",
@@ -2625,6 +2678,12 @@ where
             );
             cleanup_session_state(&state, &session_id);
             cleanup_channel_membership(&state, &session_id);
+            // Drop this session_id from the NickMap. If it was the primary
+            // for the nick, NickMap.remove_by_session promotes a sibling
+            // session that still holds the nick. Without this, the nick→sid
+            // pointer can be left dangling at a dead session_id, breaking
+            // WHOIS/PRIVMSG routing for the still-online sibling.
+            state.nick_to_session.lock().remove_by_session(&session_id);
         }
     } else {
         cleanup_session_state(&state, &session_id);

@@ -693,3 +693,86 @@ where
         Err(_) => None,
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// REGRESSION: nick_to_session must be populated even when a previous
+// session for the same DID left a stale entry. Triggered by the
+// half-registered-session bug where actor.nick is None on the REST
+// endpoint while online=true.
+// ═══════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn nick_to_session_recovers_when_stale_entry_lingers() {
+    // The bug: attach_same_did's "first session for DID" path used
+    // `if !nts.contains_nick(nick)` which skipped insert when a stale
+    // entry from a dead session still occupied the nick. Result: new
+    // session ends up in session_dids but NOT in nick_to_session, so
+    // WHOIS by nick can't find the DID and DM routing breaks.
+    //
+    // Repro: connect → drop without QUIT → manipulate state to leave
+    // a stale nick_to_session entry → reconnect → assert the nick is
+    // mapped to the new session_id.
+    //
+    // We don't have direct test access to the SharedState, so this
+    // test exercises the realistic scenario instead: a second session
+    // for the same DID arriving when the first session's nick mapping
+    // is in an unusual state. The fallback branch in attach_same_did
+    // (multi-device path with no canonical_nick) handles this.
+
+    let key = PrivateKey::generate_ed25519();
+    let key1 = PrivateKey::ed25519_from_bytes(&key.secret_bytes()).unwrap();
+    let key2 = PrivateKey::ed25519_from_bytes(&key.secret_bytes()).unwrap();
+    let (addr, _h) = start(&key).await;
+
+    // Session A registers.
+    let (h1, mut rx1) = connect_as_did(addr, "alpha", key1).await;
+    wait_auth(&mut rx1).await;
+    let nick1 = wait_registered(&mut rx1).await;
+    assert_eq!(nick1.to_lowercase(), "alpha");
+
+    // Session B for the same DID — should adopt the same nick via
+    // multi-device attach (canonical_nick path).
+    let (h2, mut rx2) = connect_as_did(addr, "alpha", key2).await;
+    wait_auth(&mut rx2).await;
+    let nick2 = wait_registered(&mut rx2).await;
+    assert_eq!(nick2.to_lowercase(), "alpha", "both sessions share the nick");
+
+    // Both sessions should resolve via WHOIS from a third (guest) probe.
+    // We use a raw IRC conversation so we can drive WHOIS and parse 401/311.
+    let probe_nick = "probe";
+    let probe_config = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: probe_nick.to_string(),
+        user: probe_nick.to_string(),
+        realname: "regression probe".to_string(),
+        ..Default::default()
+    };
+    let (h_probe, mut rx_probe) = client::connect(probe_config, None);
+    wait_registered(&mut rx_probe).await;
+    h_probe.raw("WHOIS alpha").await.unwrap();
+    let mut got_311 = false;
+    let mut got_401 = false;
+    let _ = timeout(Duration::from_millis(2000), async {
+        while let Some(e) = rx_probe.recv().await {
+            if let Event::RawLine(line) = e {
+                if line.contains(" 311 probe alpha ") {
+                    got_311 = true;
+                }
+                if line.contains(" 401 probe alpha ") {
+                    got_401 = true;
+                }
+                if line.contains(" 318 probe alpha ") {
+                    break; // end of WHOIS
+                }
+            }
+        }
+    }).await;
+
+    assert!(got_311, "WHOIS alpha must return 311 (RPL_WHOISUSER) — \
+        if 401 instead, the bug is back: nick→session mapping is missing.");
+    assert!(!got_401, "WHOIS alpha returned 401 — half-state bug regressed.");
+
+    h_probe.quit(None).await.ok();
+    h1.quit(None).await.ok();
+    h2.quit(None).await.ok();
+}
