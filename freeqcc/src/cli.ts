@@ -1,5 +1,15 @@
 #!/usr/bin/env node
 // freeqcc CLI: launch | status | stop | doctor.
+
+// E2EE polyfill: the freeq SDK's e2ee module uses idb (IndexedDB) for
+// pre-key bundle persistence. Browsers have it; Node doesn't. Without
+// this polyfill the SDK logs '[e2ee] Init failed: indexedDB is not
+// defined' and silently degrades to plaintext-only DMs. With it,
+// encrypted DMs from clients that have E2EE on by default can be
+// decrypted. Polyfill must be applied before any SDK import that
+// triggers e2ee.initialize.
+import "fake-indexeddb/auto";
+
 import { Command } from "commander";
 import prompts from "prompts";
 import { execSync, spawn } from "node:child_process";

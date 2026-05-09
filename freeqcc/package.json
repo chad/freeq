@@ -19,6 +19,7 @@
   "dependencies": {
     "@freeq/sdk": "file:../freeq-sdk-js",
     "commander": "^14.0.1",
+    "fake-indexeddb": "^6.2.5",
     "prompts": "^2.4.2"
   },
   "devDependencies": {
