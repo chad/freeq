@@ -263,16 +263,17 @@ program
   .command("grant <did> <action>")
   .description(
     "Grant <did> the right to invoke <action>. Adds the entry if new. " +
-      "Action must be one of: join, part, privmsg, notice, nick.",
+      "Action must be one of: join, part, privmsg-user, privmsg-channel, " +
+      "notice-user, notice-channel, nick.",
   )
   .option("--label <label>", "Optional human-readable label")
   .action(async (did: string, action: string, opts: { label?: string }) => {
-    const { loadAllowlist, saveAllowlist, OWNER_ACTIONS } = await import(
+    const { loadAllowlist, saveAllowlist, ALL_ACTIONS } = await import(
       "./allowlist.js"
     );
-    if (!OWNER_ACTIONS.includes(action)) {
+    if (!ALL_ACTIONS.includes(action)) {
       console.error(
-        `unknown action '${action}'. Known: ${OWNER_ACTIONS.join(", ")}.`,
+        `unknown action '${action}'. Known: ${ALL_ACTIONS.join(", ")}.`,
       );
       process.exit(1);
     }
@@ -391,7 +392,7 @@ program
         return;
       }
     }
-    for (const path of [paths.agentKey, paths.delegation, paths.session]) {
+    for (const path of [paths.agentKey, paths.delegation]) {
       try {
         await unlink(path);
         console.log(`removed ${path}`);
@@ -400,6 +401,14 @@ program
           throw err;
         }
       }
+    }
+    // Wipe per-DID claude sessions — they're keyed to the old DID.
+    try {
+      const { rm } = await import("node:fs/promises");
+      await rm(paths.sessionsDir, { recursive: true, force: true });
+      console.log(`removed ${paths.sessionsDir}`);
+    } catch {
+      // best-effort
     }
     console.log(
       "\nDone. Next 'freeqcc launch' generates a fresh did:key and delegation cert.",
@@ -556,12 +565,20 @@ async function safeLoadIdentity(): Promise<{ did: string } | null> {
 }
 
 /** Find any running `freeqcc launch` processes (across pids — covers
- *  orphans from previous sessions). Excludes the current process. */
+ *  orphans from previous sessions). Excludes the current process and ppid.
+ *
+ *  We then re-read each candidate's argv via `ps` and require that its argv0
+ *  is a `node` (or `freeqcc`) binary AND that `launch` appears as a separate
+ *  argv element. Without that, a user running e.g. `vim CHANGELOG.md` that
+ *  contains the words "freeqcc launch" — or a forgotten `cat`/`grep` — would
+ *  match on -f, and we'd SIGTERM the wrong process.
+ */
 function findOrphanFreeqccPids(): number[] {
+  let candidates: number[];
   try {
     // -f matches the full command line. Each line is a pid.
     const out = execSync("pgrep -f 'freeqcc launch'", { encoding: "utf8" });
-    return out
+    candidates = out
       .split("\n")
       .map((s) => parseInt(s.trim(), 10))
       .filter((n) => Number.isFinite(n) && n !== process.pid && n !== process.ppid);
@@ -569,6 +586,31 @@ function findOrphanFreeqccPids(): number[] {
     // pgrep returns exit 1 when there are no matches.
     return [];
   }
+  return candidates.filter((pid) => {
+    let argv: string;
+    try {
+      // -ww disables width truncation; -o args= prints the full command.
+      argv = execSync(`ps -ww -o args= -p ${pid}`, { encoding: "utf8" }).trim();
+    } catch {
+      return false;
+    }
+    // Tokenize on whitespace. We don't need a full shell parser — just enough
+    // to confirm "launch" is its own argv token, not a substring of e.g. a
+    // file path inside an editor.
+    const tokens = argv.split(/\s+/);
+    if (tokens.length < 2) return false;
+    const argv0 = tokens[0];
+    if (
+      !/(^|\/)node$/.test(argv0) &&
+      !/(^|\/)freeqcc$/.test(argv0)
+    ) {
+      // Skip processes whose argv0 isn't a node/freeqcc binary (e.g. an
+      // editor opened on a file with "freeqcc launch" in the buffer).
+      return false;
+    }
+    if (!tokens.includes("launch")) return false;
+    return true;
+  });
 }
 
 /** Returns the pid if the daemon is running, else null. */

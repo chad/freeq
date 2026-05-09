@@ -30,7 +30,10 @@ export interface TokenContext {
   expiresAt: number; // ms epoch
 }
 
-const HARD_TTL_MS = 10 * 60 * 1000; // 10 minutes
+// 60s hard TTL: the dispatch loop expires tokens explicitly on
+// onComplete/onError, so this is just a safety net for crashes that skip
+// those callbacks. Single-DM dispatches almost always finish well under 60s.
+const HARD_TTL_MS = 60 * 1000;
 
 export class TokenStore {
   private map = new Map<string, TokenContext>();
@@ -99,6 +102,13 @@ export interface IrcSink {
   readonly nick: string;
 }
 
+// Length caps: defense-in-depth so a runaway model can't push 100KB into a
+// single IRC line (servers will truncate/disconnect, but we'd rather catch it
+// here with a clean error than rely on remote behavior).
+const MAX_CHANNEL_LEN = 200;
+const MAX_NICK_LEN = 64;
+const MAX_TEXT_LEN = 2000;
+
 function asString(v: unknown, name: string): string {
   if (typeof v !== "string") throw new Error(`bad args: ${name} must be a string`);
   return v;
@@ -110,12 +120,20 @@ function asChannel(v: unknown, name: string): string {
     throw new Error(`bad args: ${name} must start with # or &`);
   }
   if (/[\s,\0\r\n]/.test(s)) throw new Error(`bad args: ${name} has invalid chars`);
+  if (s.length > MAX_CHANNEL_LEN) throw new Error(`bad args: ${name} > ${MAX_CHANNEL_LEN} chars`);
   return s;
 }
 
-function asTarget(v: unknown, name: string): string {
+/** Validate a user nick (no #/& prefix, no separators, length-capped). Used
+ *  for privmsg-user / notice-user / nick targets. */
+function asNick(v: unknown, name: string): string {
   const s = asString(v, name);
+  if (s.startsWith("#") || s.startsWith("&")) {
+    throw new Error(`bad args: ${name} looks like a channel; use privmsg-channel instead`);
+  }
   if (/[\s,\0\r\n]/.test(s)) throw new Error(`bad args: ${name} has invalid chars`);
+  if (s.length === 0) throw new Error(`bad args: ${name} cannot be empty`);
+  if (s.length > MAX_NICK_LEN) throw new Error(`bad args: ${name} > ${MAX_NICK_LEN} chars`);
   return s;
 }
 
@@ -123,6 +141,7 @@ function asText(v: unknown, name: string): string {
   const s = asString(v, name);
   // PRIVMSG/NOTICE bodies must not contain bare CR/LF (would break the wire).
   if (/[\r\n\0]/.test(s)) throw new Error(`bad args: ${name} contains control chars`);
+  if (s.length > MAX_TEXT_LEN) throw new Error(`bad args: ${name} > ${MAX_TEXT_LEN} chars`);
   return s;
 }
 
@@ -140,20 +159,32 @@ function runAction(action: string, args: unknown[], sink: IrcSink): Record<strin
       sink.raw(reason ? `PART ${channel} :${reason}` : `PART ${channel}`);
       return {};
     }
-    case "privmsg": {
-      const target = asTarget(args[0], "target");
+    case "privmsg-user": {
+      const target = asNick(args[0], "nick");
       const text = asText(args[1], "text");
       sink.raw(`PRIVMSG ${target} :${text}`);
       return {};
     }
-    case "notice": {
-      const target = asTarget(args[0], "target");
+    case "privmsg-channel": {
+      const target = asChannel(args[0], "channel");
+      const text = asText(args[1], "text");
+      sink.raw(`PRIVMSG ${target} :${text}`);
+      return {};
+    }
+    case "notice-user": {
+      const target = asNick(args[0], "nick");
+      const text = asText(args[1], "text");
+      sink.raw(`NOTICE ${target} :${text}`);
+      return {};
+    }
+    case "notice-channel": {
+      const target = asChannel(args[0], "channel");
       const text = asText(args[1], "text");
       sink.raw(`NOTICE ${target} :${text}`);
       return {};
     }
     case "nick": {
-      const newnick = asTarget(args[0], "newnick");
+      const newnick = asNick(args[0], "newnick");
       sink.raw(`NICK ${newnick}`);
       return {};
     }

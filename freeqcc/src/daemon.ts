@@ -398,6 +398,8 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
           isOwner: isOwnerDispatch,
           grantedActions,
           replyTarget,
+          senderDid,
+          ownerDid: owner.did,
         },
       );
     } finally {
