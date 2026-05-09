@@ -206,6 +206,11 @@ async function runStreaming(
         capability.replyTarget,
       ),
     );
+    // Allowlist `Bash(freeqcc send …)` so claude -p can actually call the
+    // tool. Without this, non-interactive mode has no TTY to prompt for
+    // permission and the Bash invocation returns 'requires approval'
+    // — visible to the user as the bot saying "I can't, my hands are tied".
+    args.push("--allowedTools", "Bash(freeqcc send:*)");
   }
   args.push(text);
 
