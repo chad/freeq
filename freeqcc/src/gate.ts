@@ -1,9 +1,8 @@
 // Owner-only DM gate.
 //
-// State held in-memory; resets on daemon restart. v1.0 does NOT persist
-// the rate-limit state across restarts — the worst case is the owner
-// gets one extra dispatch in the rolling-hour window after a restart.
-// Refusal cooldowns also reset, which is fine.
+// State persisted at ~/.freeqcc/gate.json so cooldowns + the rolling
+// hourly turn cap survive daemon restarts. Refusal-cooldowns are
+// per-sender and also persisted.
 //
 // Tunables live in DEFAULT_LIMITS; the CLI may surface them later.
 
@@ -33,6 +32,46 @@ export function newGateState(): GateState {
     lastDispatchAt: 0,
     dispatchTimestamps: [],
   };
+}
+
+interface SerializedGateState {
+  lastRefusalAt: Array<[string, number]>;
+  lastDispatchAt: number;
+  dispatchTimestamps: number[];
+}
+
+import { readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { paths, ensureDir } from "./paths.js";
+
+const GATE_FILE = join(paths.dir, "gate.json");
+
+export async function loadGateState(): Promise<GateState> {
+  let raw: string;
+  try {
+    raw = await readFile(GATE_FILE, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return newGateState();
+    throw err;
+  }
+  const parsed = JSON.parse(raw) as SerializedGateState;
+  return {
+    lastRefusalAt: new Map(parsed.lastRefusalAt ?? []),
+    lastDispatchAt: parsed.lastDispatchAt ?? 0,
+    dispatchTimestamps: Array.isArray(parsed.dispatchTimestamps)
+      ? parsed.dispatchTimestamps
+      : [],
+  };
+}
+
+export async function saveGateState(state: GateState): Promise<void> {
+  await ensureDir();
+  const serialized: SerializedGateState = {
+    lastRefusalAt: Array.from(state.lastRefusalAt.entries()),
+    lastDispatchAt: state.lastDispatchAt,
+    dispatchTimestamps: state.dispatchTimestamps,
+  };
+  await writeFile(GATE_FILE, JSON.stringify(serialized) + "\n", { mode: 0o600 });
 }
 
 export interface EvaluateArgs {

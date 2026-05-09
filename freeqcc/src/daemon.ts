@@ -7,9 +7,31 @@ import { loadOrCreateIdentity } from "./identity.js";
 import { loadOrPromptOwner } from "./owner.js";
 import { loadOrMintDelegation } from "./delegation.js";
 import { connect, type Connected } from "./connect.js";
-import { evaluate, newGateState, type GateState } from "./gate.js";
+import { evaluate, loadGateState, saveGateState, type GateState } from "./gate.js";
 import { dispatchToClaudeStreaming } from "./dispatch.js";
 import { logRefused } from "./audit.js";
+import { paths, ensureDir } from "./paths.js";
+import { writeFile } from "node:fs/promises";
+
+interface DispatchTelemetry {
+  dispatchCount: number;
+  totalCostUsd: number;
+  lastDispatchCostUsd: number;
+  lastDispatchAt: string;
+}
+
+async function persistDispatchTelemetry(t: DispatchTelemetry): Promise<void> {
+  try {
+    await ensureDir();
+    await writeFile(
+      paths.dir + "/telemetry.json",
+      JSON.stringify(t, null, 2) + "\n",
+      { mode: 0o600 },
+    );
+  } catch {
+    // best-effort
+  }
+}
 
 export interface DaemonOptions {
   /** IRC nick. If omitted, derives from owner handle: `<owner>-agent` (truncated). */
@@ -72,9 +94,16 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
   // We track sender DIDs via the SDK's `memberDid` event (fires on WHOIS).
   // For an unknown sender we fire WHOIS, queue the message for up to 3s,
   // and dispatch (or refuse) once the DID resolves.
-  const gateState: GateState = newGateState();
+  const gateState: GateState = await loadGateState();
+  const persistGate = (): void => {
+    saveGateState(gateState).catch((err) => {
+      console.warn(`[gate] persist failed: ${(err as Error).message}`);
+    });
+  };
   const nickToDid = new Map<string, string>(); // case-insensitive: stored lowercase
   const pendingByNick = new Map<string, Array<() => void>>();
+  let totalCostUsd = 0;
+  let dispatchCount = 0;
 
   conn.client.on("memberDid", (nick: string, did: string) => {
     nickToDid.set(nick.toLowerCase(), did);
@@ -143,6 +172,7 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
         reason: decision.reason,
       });
       console.log(`[refused] ${fromNick} (${senderDid ?? "no-did"}): ${decision.reason}`);
+      persistGate();
       return;
     }
 
@@ -150,6 +180,8 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
     // produces tokens, then mark final.
     conn.client.raw("PRESENCE :state=executing;status=responding to owner");
     console.log(`[dispatch] ${fromNick} → ${replyTarget}: ${text.slice(0, 80)}`);
+    dispatchCount++;
+    persistGate();
 
     // Streaming bookkeeping. The first PRIVMSG carries +freeq.at/streaming=1
     // and the SDK auto-includes msgid in tags. Server overwrites msgid with
@@ -221,7 +253,17 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
             scheduleFlush();
           }
         },
-        onComplete: async (final, _sessionId, durationMs) => {
+        onComplete: async (final, _sessionId, durationMs, costUsd) => {
+          if (typeof costUsd === "number" && Number.isFinite(costUsd)) {
+            totalCostUsd += costUsd;
+            // Record per-conversation cost so /freeqcc status can show it.
+            void persistDispatchTelemetry({
+              dispatchCount,
+              totalCostUsd,
+              lastDispatchCostUsd: costUsd,
+              lastDispatchAt: new Date().toISOString(),
+            });
+          }
           if (pendingFlush) {
             clearTimeout(pendingFlush);
             pendingFlush = null;
@@ -308,10 +350,18 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
     },
   );
 
-  // Graceful shutdown on SIGINT/SIGTERM
+  // Graceful shutdown on SIGINT/SIGTERM. Also wipes the pid file —
+  // cli.ts can't rely on a finally-block here because process.exit(0)
+  // bypasses outer try/finally.
   const shutdown = async (sig: string): Promise<void> => {
     console.log(`\n[${sig}] shutting down...`);
     await conn.stop(`signal ${sig}`);
+    try {
+      const { unlink } = await import("node:fs/promises");
+      await unlink(paths.daemonPid);
+    } catch {
+      // already gone
+    }
     process.exit(0);
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));

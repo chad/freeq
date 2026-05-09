@@ -129,6 +129,22 @@ program
     );
     console.log(`server:         ${config?.serverUrl ?? "wss://irc.freeq.at/irc (default)"}`);
 
+    // Telemetry: how many dispatches, total claude API cost
+    const telemetry = await safeReadJson<{
+      dispatchCount?: number;
+      totalCostUsd?: number;
+      lastDispatchCostUsd?: number;
+      lastDispatchAt?: string;
+    }>(paths.dir + "/telemetry.json");
+    if (telemetry) {
+      const cost = (telemetry.totalCostUsd ?? 0).toFixed(4);
+      const last = telemetry.lastDispatchCostUsd?.toFixed(4) ?? "—";
+      console.log(`dispatches:     ${telemetry.dispatchCount ?? 0} total ($${cost} cumulative, $${last} last)`);
+      if (telemetry.lastDispatchAt) {
+        console.log(`last dispatch:  ${telemetry.lastDispatchAt}`);
+      }
+    }
+
     // If running, query the actor endpoint for live state.
     if (pidAlive && agent) {
       const url = `https://irc.freeq.at/api/v1/actors/${encodeURIComponent(agent.did)}`;
@@ -176,6 +192,67 @@ program
         throw err;
       }
     }
+  });
+
+// ── rotate-key ───────────────────────────────────────────────────────
+
+program
+  .command("rotate-key")
+  .description("Rotate the agent's did:key identity. Daemon must be stopped first.")
+  .option("--force", "Skip the confirmation prompt")
+  .action(async (opts: { force?: boolean }) => {
+    const pid = await readPid();
+    if (pid) {
+      console.error(`Daemon is running (pid ${pid}). Run 'freeqcc stop' first.`);
+      process.exit(1);
+    }
+    if (!opts.force) {
+      const r = await prompts({
+        type: "confirm",
+        name: "ok",
+        message:
+          "Rotate the agent's did:key identity? This regenerates agent.key " +
+          "and re-mints delegation.json under a new DID. The bot loses any " +
+          "existing channel ops, friends-list, etc. tied to the old DID.",
+        initial: false,
+      });
+      if (!r.ok) {
+        console.log("Cancelled.");
+        return;
+      }
+    }
+    for (const path of [paths.agentKey, paths.delegation, paths.session]) {
+      try {
+        await unlink(path);
+        console.log(`removed ${path}`);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw err;
+        }
+      }
+    }
+    console.log(
+      "\nDone. Next 'freeqcc launch' generates a fresh did:key and delegation cert.",
+    );
+  });
+
+// ── tail ─────────────────────────────────────────────────────────────
+
+program
+  .command("tail")
+  .description("Stream the daemon log (~/.freeqcc/daemon.log).")
+  .option("-n, --lines <n>", "show the last N lines first", "40")
+  .action(async (opts: { lines?: string }) => {
+    const { spawn } = await import("node:child_process");
+    const lines = opts.lines ?? "40";
+    const proc = spawn("tail", ["-F", "-n", lines, paths.daemonLog], {
+      stdio: ["ignore", "inherit", "inherit"],
+    });
+    proc.on("error", (err) => {
+      console.error(`tail failed: ${(err as Error).message}`);
+      process.exit(1);
+    });
+    process.once("SIGINT", () => proc.kill("SIGTERM"));
   });
 
 // ── doctor ───────────────────────────────────────────────────────────
@@ -252,6 +329,15 @@ program
   });
 
 // ── helpers ──────────────────────────────────────────────────────────
+
+async function safeReadJson<T>(path: string): Promise<T | null> {
+  try {
+    const raw = await readFile(path, "utf8");
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
 
 async function safeLoadOwner(): Promise<{ handle: string; did: string } | null> {
   try {
