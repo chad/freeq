@@ -7,8 +7,10 @@
 // Tunables live in DEFAULT_LIMITS; the CLI may surface them later.
 
 export const DEFAULT_LIMITS = {
-  /** Min ms between successful dispatches. */
-  cooldownMs: 60_000,
+  /** Min ms between successful dispatches. Tuned for natural chat
+   *  conversation; the hourly cap and bot↔bot cycle detection do the
+   *  heavier lifting against runaway loops. */
+  cooldownMs: 10_000,
   /** Max successful dispatches in any rolling 60-minute window. */
   hourlyTurnCap: 30,
   /** Min ms between refusal NOTICEs to the same sender. */
