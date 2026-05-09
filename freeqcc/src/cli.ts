@@ -234,6 +234,45 @@ program
     }
   });
 
+// ── send (capability-token IRC actions) ──────────────────────────────
+
+program
+  .command("send <action> [args...]")
+  .description(
+    "Run an IRC action against the running daemon. Reads the dispatch capability " +
+      "token from $FREEQCC_DISPATCH_TOKEN and the socket path from $FREEQCC_CONTROL_SOCK; " +
+      "those are set automatically inside a claude -p subprocess spawned by the daemon. " +
+      "Outside that context, this command exits 2.",
+  )
+  .action(async (action: string, args: string[]) => {
+    const sock = process.env.FREEQCC_CONTROL_SOCK;
+    const token = process.env.FREEQCC_DISPATCH_TOKEN;
+    if (!sock || !token) {
+      console.error(
+        "freeqcc send: FREEQCC_CONTROL_SOCK and FREEQCC_DISPATCH_TOKEN must be set\n" +
+          "(this command runs inside a daemon-spawned claude subprocess; not standalone).",
+      );
+      process.exit(2);
+    }
+    const { callControl } = await import("./control.js");
+    let resp;
+    try {
+      resp = await callControl({ token, action, args }, sock);
+    } catch (err) {
+      console.error(`freeqcc send: ${(err as Error).message}`);
+      process.exit(1);
+    }
+    if (resp.ok) {
+      if (resp.result !== undefined) {
+        console.log(JSON.stringify(resp.result));
+      }
+      process.exit(0);
+    } else {
+      console.error(`freeqcc send: ${resp.error ?? "unknown error"}`);
+      process.exit(1);
+    }
+  });
+
 // ── rotate-key ───────────────────────────────────────────────────────
 
 program

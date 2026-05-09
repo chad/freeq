@@ -13,6 +13,7 @@ import { logRefused } from "./audit.js";
 import { loadAllowlist, type AllowlistEntry } from "./allowlist.js";
 import { paths, ensureDir } from "./paths.js";
 import { writeFile } from "node:fs/promises";
+import { TokenStore, startControlServer, type ControlServerHandle } from "./control.js";
 
 interface DispatchTelemetry {
   dispatchCount: number;
@@ -72,6 +73,18 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
 
   console.log(`✓ connected as ${conn.nick}`);
   console.log(`  DM @${conn.nick} from @${owner.handle} to talk to your local Claude Code.`);
+
+  // ── Control socket (per-dispatch capability tokens) ──
+  // Tokens are minted in handleDm, plumbed to the claude subprocess via env,
+  // and used by `freeqcc send` to drive owner-authorized IRC actions
+  // (JOIN/PART/PRIVMSG/NOTICE/NICK). Allowlisted non-owner DIDs get tokens
+  // too, but with isOwner=false; today every action is owner-only and is
+  // refused for non-owner tokens.
+  const tokenStore = new TokenStore();
+  const controlServer: ControlServerHandle = await startControlServer({
+    store: tokenStore,
+    sink: { raw: (line) => conn.client.raw(line), get nick() { return conn.client.nick; } },
+  });
 
   // ── Bot's own channel ──
   // The freeq web client creates / uses #<bot-nick> as the conversation
@@ -190,9 +203,18 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
     // Dispatch — set executing presence, stream claude into the chat as it
     // produces tokens, then mark final.
     conn.client.raw("PRESENCE :state=executing;status=responding to owner");
-    console.log(`[dispatch] ${fromNick} → ${replyTarget}: ${text.slice(0, 80)}`);
+    const isOwnerDispatch = senderDid === owner.did;
+    console.log(`[dispatch] ${fromNick} → ${replyTarget}${isOwnerDispatch ? " (owner)" : " (allowlisted)"}: ${text.slice(0, 80)}`);
     dispatchCount++;
     persistGate();
+
+    // Mint a per-dispatch capability token. claude -p subprocess gets it via
+    // env; if claude calls `freeqcc send`, the daemon validates the token
+    // (and its isOwner flag) before doing IRC actions.
+    const dispatchToken = tokenStore.mint({
+      isOwner: isOwnerDispatch,
+      replyTarget,
+    });
 
     // Streaming bookkeeping. The first PRIVMSG carries +freeq.at/streaming=1
     // and the SDK auto-includes msgid in tags. Server overwrites msgid with
@@ -254,7 +276,9 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
     };
 
     try {
-      await dispatchToClaudeStreaming(text, {
+      await dispatchToClaudeStreaming(
+        text,
+        {
         onChunk: (accumulated) => {
           latestText = accumulated;
           if (!streamSent) {
@@ -308,6 +332,7 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
           console.log(
             `[reply] ${durationMs}ms: ${latestText.slice(0, 80)}`,
           );
+          tokenStore.expire(dispatchToken);
         },
         onError: (err) => {
           if (pendingFlush) {
@@ -326,11 +351,21 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
             );
           }
           console.error(`[dispatch error]`, err);
+          tokenStore.expire(dispatchToken);
         },
-      });
+      },
+        {
+          controlSock: paths.controlSock,
+          token: dispatchToken,
+          isOwner: isOwnerDispatch,
+          replyTarget,
+        },
+      );
     } finally {
       conn.client.off("message", onEcho);
       conn.client.raw("PRESENCE :state=online");
+      // Belt-and-suspenders: expire even if the SDK crashed before callbacks.
+      tokenStore.expire(dispatchToken);
     }
   };
 
@@ -406,6 +441,11 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
   // bypasses outer try/finally.
   const shutdown = async (sig: string): Promise<void> => {
     console.log(`\n[${sig}] shutting down...`);
+    try {
+      await controlServer.close();
+    } catch {
+      // ignore — best effort
+    }
     await conn.stop(`signal ${sig}`);
     try {
       const { unlink } = await import("node:fs/promises");

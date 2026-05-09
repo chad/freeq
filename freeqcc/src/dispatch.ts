@@ -27,6 +27,41 @@ export interface StreamHandlers {
   onError?: (err: Error) => void;
 }
 
+/** Per-dispatch capability for IRC actions via the daemon's control socket.
+ *  Plumbed as env vars to the claude subprocess. */
+export interface DispatchCapability {
+  controlSock: string;
+  token: string;
+  isOwner: boolean;
+  replyTarget: string;
+}
+
+const SYSTEM_PROMPT_FRAGMENT = `\
+You are running inside a freeqcc daemon: a freeq-DM-controllable Claude Code agent.
+Your reply text is automatically streamed back to ${"${reply_target}"} as a chat message — \
+do NOT use freeqcc send privmsg to deliver your reply; just produce the reply text and \
+the daemon handles delivery.
+
+If the user asks you to take an IRC ACTION (join/part a channel, send a message to a \
+DIFFERENT target than where you're replying, change nick), use the Bash tool to call:
+
+    freeqcc send <action> [args...]
+
+Available actions:
+  freeqcc send join "#channel"
+  freeqcc send part "#channel" ["reason"]
+  freeqcc send privmsg "<target>" "<text>"   # for messages to OTHER targets
+  freeqcc send notice "<target>" "<text>"
+  freeqcc send nick "<newnick>"
+
+Each call exits 0 on success, non-zero on error (with stderr explaining why).
+The capability token in your env is single-dispatch — it expires when this turn ends.
+Don't try to persist or share it.
+
+If FREEQCC_DISPATCH_IS_OWNER is "0" the daemon will refuse all actions; you should \
+politely decline IRC-action requests and explain that only the bot's owner can authorize them.
+`;
+
 interface SessionFile {
   sessionId: string;
   lastUsedAt: string; // ISO timestamp
@@ -141,15 +176,17 @@ function runClaude(args: string[]): Promise<string> {
 export async function dispatchToClaudeStreaming(
   text: string,
   handlers: StreamHandlers,
+  capability?: DispatchCapability,
 ): Promise<void> {
   const sessionId = await loadSession();
-  await runStreaming(text, handlers, sessionId);
+  await runStreaming(text, handlers, sessionId, capability);
 }
 
 async function runStreaming(
   text: string,
   handlers: StreamHandlers,
   sessionId: string | null,
+  capability: DispatchCapability | undefined,
 ): Promise<void> {
   const args = [
     "--print",
@@ -161,7 +198,24 @@ async function runStreaming(
   if (sessionId) {
     args.push("--resume", sessionId);
   }
+  if (capability) {
+    args.push(
+      "--append-system-prompt",
+      SYSTEM_PROMPT_FRAGMENT.replace(
+        "${reply_target}",
+        capability.replyTarget,
+      ),
+    );
+  }
   args.push(text);
+
+  const childEnv: NodeJS.ProcessEnv = { ...process.env };
+  if (capability) {
+    childEnv.FREEQCC_CONTROL_SOCK = capability.controlSock;
+    childEnv.FREEQCC_DISPATCH_TOKEN = capability.token;
+    childEnv.FREEQCC_DISPATCH_IS_OWNER = capability.isOwner ? "1" : "0";
+    childEnv.FREEQCC_DISPATCH_REPLY_TARGET = capability.replyTarget;
+  }
 
   const startedAt = Date.now();
   let accumulated = "";
@@ -169,7 +223,7 @@ async function runStreaming(
   await new Promise<void>((resolve) => {
     const proc = spawn("claude", args, {
       stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
+      env: childEnv,
     });
     let stdoutBuffer = "";
     let stderrBuffer = "";
@@ -247,7 +301,7 @@ async function runStreaming(
           /No conversation found with session ID/i.test(stderrBuffer)
         ) {
           await clearSession();
-          await runStreaming(text, handlers, null);
+          await runStreaming(text, handlers, null, capability);
           resolve();
           return;
         }
