@@ -195,23 +195,41 @@ program
 
 program
   .command("stop")
-  .description("Stop the running daemon (clean QUIT).")
+  .description("Stop the running daemon (clean QUIT). Also kills any orphan freeqcc processes.")
   .action(async () => {
-    const pid = await readPid();
-    if (!pid) {
-      console.log("No daemon is running (no pid file or process is dead).");
+    const pidFromFile = await readPid();
+    const orphans = findOrphanFreeqccPids().filter((p) => p !== pidFromFile);
+
+    if (!pidFromFile && orphans.length === 0) {
+      console.log("No daemon is running.");
       return;
     }
-    try {
-      process.kill(pid, "SIGTERM");
-      console.log(`Sent SIGTERM to pid ${pid}.`);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ESRCH") {
-        console.log(`Pid ${pid} is gone; cleaning up stale pid file.`);
-        await unlink(paths.daemonPid).catch(() => {});
-      } else {
-        throw err;
+
+    if (pidFromFile) {
+      try {
+        process.kill(pidFromFile, "SIGTERM");
+        console.log(`Sent SIGTERM to pid ${pidFromFile} (from pid file).`);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "ESRCH") {
+          console.log(`Pid ${pidFromFile} is gone; cleaning up stale pid file.`);
+          await unlink(paths.daemonPid).catch(() => {});
+        } else {
+          throw err;
+        }
+      }
+    }
+
+    if (orphans.length > 0) {
+      console.log(
+        `Found ${orphans.length} orphan freeqcc process(es) not in the pid file: ${orphans.join(", ")}. SIGTERM'ing.`,
+      );
+      for (const opid of orphans) {
+        try {
+          process.kill(opid, "SIGTERM");
+        } catch {
+          // already gone — fine
+        }
       }
     }
   });
@@ -404,6 +422,22 @@ async function safeLoadIdentity(): Promise<{ did: string } | null> {
     return await loadOrCreateIdentity();
   } catch {
     return null;
+  }
+}
+
+/** Find any running `freeqcc launch` processes (across pids — covers
+ *  orphans from previous sessions). Excludes the current process. */
+function findOrphanFreeqccPids(): number[] {
+  try {
+    // -f matches the full command line. Each line is a pid.
+    const out = execSync("pgrep -f 'freeqcc launch'", { encoding: "utf8" });
+    return out
+      .split("\n")
+      .map((s) => parseInt(s.trim(), 10))
+      .filter((n) => Number.isFinite(n) && n !== process.pid && n !== process.ppid);
+  } catch {
+    // pgrep returns exit 1 when there are no matches.
+    return [];
   }
 }
 
