@@ -7,10 +7,11 @@
 // Tunables live in DEFAULT_LIMITS; the CLI may surface them later.
 
 export const DEFAULT_LIMITS = {
-  /** Min ms between successful dispatches. Tuned for natural chat
-   *  conversation; the hourly cap and bot↔bot cycle detection do the
-   *  heavier lifting against runaway loops. */
-  cooldownMs: 10_000,
+  /** No dispatch-to-dispatch cooldown by default. Claude's own response
+   *  latency (3-15s/turn) naturally rate-limits human chat; the hourly
+   *  cap and per-peer cycle detection handle real runaway. Set to a
+   *  positive number if you want explicit pacing. */
+  cooldownMs: 0,
   /** Max successful dispatches in any rolling 60-minute window. */
   hourlyTurnCap: 30,
   /** Min ms between refusal NOTICEs to the same sender. */
