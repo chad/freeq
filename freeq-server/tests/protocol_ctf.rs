@@ -304,6 +304,7 @@ async fn ctf_21_plus_e_channel_rejects_plaintext_with_encrypted_tag() {
                 bans: vec![],
                 invite_only: false,
                 invites: HashSet::new(),
+                invite_exceptions: vec![],
                 history: std::collections::VecDeque::new(),
                 topic: None,
                 topic_locked: false,

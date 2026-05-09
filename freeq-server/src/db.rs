@@ -201,6 +201,15 @@ impl Db {
                 UNIQUE(channel, mask)
             );
 
+            CREATE TABLE IF NOT EXISTS invite_exceptions (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel  TEXT NOT NULL,
+                mask     TEXT NOT NULL,
+                set_by   TEXT NOT NULL,
+                set_at   INTEGER NOT NULL,
+                UNIQUE(channel, mask)
+            );
+
             CREATE TABLE IF NOT EXISTS messages (
                 id        INTEGER PRIMARY KEY AUTOINCREMENT,
                 channel   TEXT NOT NULL,
@@ -478,6 +487,8 @@ impl Db {
             .execute("DELETE FROM channels WHERE name = ?1", params![name])?;
         self.conn
             .execute("DELETE FROM bans WHERE channel = ?1", params![name])?;
+        self.conn
+            .execute("DELETE FROM invite_exceptions WHERE channel = ?1", params![name])?;
         Ok(())
     }
 
@@ -562,6 +573,32 @@ impl Db {
             }
         }
 
+        // Load invite exceptions (+I)
+        let mut stmt = self
+            .conn
+            .prepare("SELECT channel, mask, set_by, set_at FROM invite_exceptions")?;
+        let invex_rows = stmt.query_map([], |row| {
+            let channel: String = row.get(0)?;
+            let mask: String = row.get(1)?;
+            let set_by: String = row.get(2)?;
+            let set_at: i64 = row.get(3)?;
+            Ok((
+                channel,
+                crate::server::InviteExceptionEntry {
+                    mask,
+                    set_by,
+                    set_at: set_at as u64,
+                },
+            ))
+        })?;
+
+        for row in invex_rows {
+            let (channel, entry) = row?;
+            if let Some(ch) = channels.get_mut(&channel) {
+                ch.invite_exceptions.push(entry);
+            }
+        }
+
         // Load pins
         let mut stmt = self
             .conn
@@ -606,6 +643,30 @@ impl Db {
     pub fn remove_ban(&self, channel: &str, mask: &str) -> SqlResult<()> {
         self.conn.execute(
             "DELETE FROM bans WHERE channel = ?1 AND mask = ?2",
+            params![channel, mask],
+        )?;
+        Ok(())
+    }
+
+    // ── Invite exceptions (+I) ─────────────────────────────────────────
+
+    /// Add an invite-exception entry to a channel.
+    pub fn add_invite_exception(
+        &self,
+        channel: &str,
+        entry: &crate::server::InviteExceptionEntry,
+    ) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO invite_exceptions (channel, mask, set_by, set_at) VALUES (?1, ?2, ?3, ?4)",
+            params![channel, entry.mask, entry.set_by, entry.set_at as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Remove an invite-exception entry from a channel.
+    pub fn remove_invite_exception(&self, channel: &str, mask: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "DELETE FROM invite_exceptions WHERE channel = ?1 AND mask = ?2",
             params![channel, mask],
         )?;
         Ok(())
@@ -1351,6 +1412,76 @@ mod tests {
 
         let loaded = db.load_channels().unwrap();
         assert!(!loaded.contains_key("#test"));
+    }
+
+    #[test]
+    fn roundtrip_invite_exceptions() {
+        use crate::server::InviteExceptionEntry;
+        let db = Db::open_memory().unwrap();
+
+        // Channel must exist first.
+        let ch = ChannelState::default();
+        db.save_channel("#test", &ch).unwrap();
+
+        let entry1 = InviteExceptionEntry {
+            mask: "*!*@trusted.example".to_string(),
+            set_by: "op!o@host".to_string(),
+            set_at: 1700000000,
+        };
+        db.add_invite_exception("#test", &entry1).unwrap();
+
+        let entry2 = InviteExceptionEntry {
+            mask: "did:plc:bot1".to_string(),
+            set_by: "op!o@host".to_string(),
+            set_at: 1700000001,
+        };
+        db.add_invite_exception("#test", &entry2).unwrap();
+
+        // Duplicate insert must be a no-op (UNIQUE constraint, INSERT OR IGNORE).
+        db.add_invite_exception("#test", &entry2).unwrap();
+
+        let loaded = db.load_channels().unwrap();
+        let loaded_ch = loaded.get("#test").unwrap();
+        assert_eq!(loaded_ch.invite_exceptions.len(), 2);
+        let masks: Vec<_> = loaded_ch
+            .invite_exceptions
+            .iter()
+            .map(|e| e.mask.as_str())
+            .collect();
+        assert!(masks.contains(&"*!*@trusted.example"));
+        assert!(masks.contains(&"did:plc:bot1"));
+
+        // Remove one, the other persists.
+        db.remove_invite_exception("#test", "*!*@trusted.example")
+            .unwrap();
+        let loaded = db.load_channels().unwrap();
+        let loaded_ch = loaded.get("#test").unwrap();
+        assert_eq!(loaded_ch.invite_exceptions.len(), 1);
+        assert_eq!(loaded_ch.invite_exceptions[0].mask, "did:plc:bot1");
+    }
+
+    #[test]
+    fn channel_delete_cascades_invite_exceptions() {
+        use crate::server::InviteExceptionEntry;
+        let db = Db::open_memory().unwrap();
+        let ch = ChannelState::default();
+        db.save_channel("#test", &ch).unwrap();
+
+        let entry = InviteExceptionEntry {
+            mask: "*!*@host".to_string(),
+            set_by: "op".to_string(),
+            set_at: 0,
+        };
+        db.add_invite_exception("#test", &entry).unwrap();
+
+        db.delete_channel("#test").unwrap();
+
+        // Channel gone — and recreating it shouldn't carry orphan +I entries.
+        let ch2 = ChannelState::default();
+        db.save_channel("#test", &ch2).unwrap();
+        let loaded = db.load_channels().unwrap();
+        let loaded_ch = loaded.get("#test").unwrap();
+        assert!(loaded_ch.invite_exceptions.is_empty());
     }
 
     #[test]

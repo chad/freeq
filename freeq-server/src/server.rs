@@ -54,6 +54,10 @@ pub struct ChannelState {
     pub invite_only: bool,
     /// Invite list (session IDs or DIDs that have been invited).
     pub invites: HashSet<String>,
+    /// Invite exception list (+I): hostmasks/DIDs that bypass +i without
+    /// requiring an explicit INVITE. Persistent (unlike `invites`, which
+    /// are consumed on join).
+    pub invite_exceptions: Vec<InviteExceptionEntry>,
     /// Recent message history for replay on join.
     pub history: std::collections::VecDeque<HistoryMessage>,
     /// Channel topic, if set.
@@ -387,7 +391,50 @@ impl ChannelState {
     pub fn is_banned(&self, hostmask: &str, did: Option<&str>) -> bool {
         self.bans.iter().any(|b| b.matches(hostmask, did))
     }
+
+    /// Check if a user is on the +I invite-exception list — a persistent
+    /// allow-list that bypasses +i without consuming an INVITE.
+    pub fn is_invite_excepted(&self, hostmask: &str, did: Option<&str>) -> bool {
+        self.invite_exceptions
+            .iter()
+            .any(|e| e.matches(hostmask, did))
+    }
 }
+
+/// An entry on the +I (invite-exception) list — same shape as a BanEntry,
+/// but it grants admission instead of denying it. Hostmask or DID.
+#[derive(Debug, Clone)]
+pub struct InviteExceptionEntry {
+    pub mask: String,
+    pub set_by: String,
+    pub set_at: u64,
+}
+
+impl InviteExceptionEntry {
+    pub fn new(mask: String, set_by: String) -> Self {
+        let set_at = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        Self {
+            mask,
+            set_by,
+            set_at,
+        }
+    }
+
+    /// Same matching semantics as BanEntry: DID exact-match if mask starts
+    /// with "did:", otherwise case-insensitive wildcard match against the
+    /// nick!user@host string.
+    pub fn matches(&self, hostmask: &str, did: Option<&str>) -> bool {
+        if self.mask.starts_with("did:") {
+            did.is_some_and(|d| d == self.mask)
+        } else {
+            wildcard_match(&self.mask, hostmask)
+        }
+    }
+}
+
 
 /// Channel topic with metadata.
 #[derive(Debug, Clone)]
@@ -2143,6 +2190,9 @@ pub(crate) async fn process_s2s_message(
         S2sMessage::Ban {
             event_id, origin, ..
         } => (event_id.clone(), origin.clone()),
+        S2sMessage::InviteException {
+            event_id, origin, ..
+        } => (event_id.clone(), origin.clone()),
         S2sMessage::Invite {
             event_id, origin, ..
         } => (event_id.clone(), origin.clone()),
@@ -2191,6 +2241,7 @@ pub(crate) async fn process_s2s_message(
         | S2sMessage::Mode { .. }
         | S2sMessage::Kick { .. }
         | S2sMessage::Ban { .. }
+        | S2sMessage::InviteException { .. }
         | S2sMessage::Invite { .. }
         | S2sMessage::ChannelCreated { .. }
         | S2sMessage::AvSessionCreated { .. }
@@ -2208,6 +2259,7 @@ pub(crate) async fn process_s2s_message(
         (S2sMessage::Mode { .. }
         | S2sMessage::Kick { .. }
         | S2sMessage::Ban { .. }
+        | S2sMessage::InviteException { .. }
         | S2sMessage::ChannelCreated { .. }, crate::s2s::TrustLevel::Relay) => {
             tracing::warn!(
                 peer = %authenticated_peer_id,
@@ -2954,6 +3006,11 @@ pub(crate) async fn process_s2s_message(
                             key: ch.key.clone(),
                             bans: ch.bans.iter().map(|b| b.mask.clone()).collect(),
                             invites: ch.invites.iter().cloned().collect(),
+                            invite_exceptions: ch
+                                .invite_exceptions
+                                .iter()
+                                .map(|e| e.mask.clone())
+                                .collect(),
                         }
                     })
                     .collect();
@@ -3136,6 +3193,20 @@ pub(crate) async fn process_s2s_message(
                     for mask in &info.bans {
                         if !ch.bans.iter().any(|b| b.mask == *mask) {
                             ch.bans.push(BanEntry {
+                                mask: mask.clone(),
+                                set_by: format!("s2s:{}", peer_id),
+                                set_at: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs(),
+                            });
+                        }
+                    }
+
+                    // Merge invite exceptions (+I) from remote (additive)
+                    for mask in &info.invite_exceptions {
+                        if !ch.invite_exceptions.iter().any(|e| e.mask == *mask) {
+                            ch.invite_exceptions.push(crate::server::InviteExceptionEntry {
                                 mask: mask.clone(),
                                 set_by: format!("s2s:{}", peer_id),
                                 set_at: std::time::SystemTime::now()
@@ -3466,6 +3537,61 @@ pub(crate) async fn process_s2s_message(
                         }
                     } else {
                         ch.bans.retain(|b| b.mask != mask);
+                    }
+                }
+            }
+
+            deliver_to_channel(state, &channel_key, &mode_line);
+        }
+
+        S2sMessage::InviteException {
+            channel,
+            mask,
+            set_by,
+            adding,
+            ..
+        } => {
+            let channel_key = channel.to_lowercase();
+
+            // Authorization: verify set_by is an op (mirror of Ban)
+            {
+                let channels = state.channels.lock();
+                if let Some(ch) = channels.get(&channel_key) {
+                    let is_authorized = ch.remote_member(&set_by).is_some_and(|rm| {
+                        rm.is_op
+                            || rm.did.as_ref().is_some_and(|d| {
+                                ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
+                            })
+                    });
+                    if !is_authorized {
+                        tracing::warn!(
+                            channel = %channel_key, set_by = %set_by,
+                            "S2S InviteException rejected: setter is not an authorized op"
+                        );
+                        return;
+                    }
+                }
+            }
+
+            let mode_char = if adding { "+I" } else { "-I" };
+            let mode_line = format!(":{set_by}!remote@s2s MODE {channel} {mode_char} {mask}\r\n");
+
+            {
+                let mut channels = state.channels.lock();
+                if let Some(ch) = channels.get_mut(&channel_key) {
+                    if adding {
+                        if !ch.invite_exceptions.iter().any(|e| e.mask == mask) {
+                            ch.invite_exceptions.push(crate::server::InviteExceptionEntry {
+                                mask: mask.clone(),
+                                set_by: set_by.clone(),
+                                set_at: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs(),
+                            });
+                        }
+                    } else {
+                        ch.invite_exceptions.retain(|e| e.mask != mask);
                     }
                 }
             }

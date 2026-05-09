@@ -883,6 +883,44 @@ async fn single_server_ban() {
 }
 
 #[tokio::test]
+async fn single_server_invite_exception() {
+    let Some(server) = get_single_server() else {
+        return;
+    };
+    let nick_op = test_nick("invex", "op");
+    let nick_target = test_nick("invex", "tgt");
+    let channel = test_channel("invex");
+
+    let (h_op, mut e_op) = connect_guest(&server, &nick_op).await;
+    let (h_tgt, mut e_tgt) = connect_guest(&server, &nick_target).await;
+    wait_registered(&mut e_op).await;
+    wait_registered(&mut e_tgt).await;
+
+    h_op.join(&channel).await.unwrap();
+    wait_joined(&mut e_op, &channel).await;
+
+    // Lock the channel +i, then add the target's mask to the +I list.
+    h_op.raw(&format!("MODE {channel} +i")).await.unwrap();
+    h_op.raw(&format!("MODE {channel} +I {nick_target}!*@*"))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Target tries to join — admitted via +I match, no INVITE issued.
+    h_tgt.join(&channel).await.unwrap();
+    wait_for(
+        &mut e_tgt,
+        |e| matches!(e, Event::Joined { channel: ch, .. } if ch == &channel),
+        "target admitted via +I",
+    )
+    .await;
+    eprintln!("  ✓ +I admits without INVITE");
+
+    let _ = h_op.quit(Some("done")).await;
+    let _ = h_tgt.quit(Some("done")).await;
+}
+
+#[tokio::test]
 async fn single_server_key_channel() {
     let Some(server) = get_single_server() else {
         return;

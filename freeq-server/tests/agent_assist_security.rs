@@ -145,6 +145,7 @@ fn make_channel(state: &Arc<SharedState>, name: &str) {
             bans: vec![],
             invite_only: false,
             invites: HashSet::new(),
+            invite_exceptions: vec![],
             history: std::collections::VecDeque::new(),
             topic: None,
             topic_locked: false,

@@ -115,7 +115,8 @@ pub(super) fn handle_join(
                 let has_invite = ch.invites.contains(session_id)
                     || did.is_some_and(|d| ch.invites.contains(d))
                     || ch.invites.contains(&format!("nick:{nick}"));
-                if !has_invite {
+                let on_invite_exception = ch.is_invite_excepted(&hostmask, did);
+                if !has_invite && !on_invite_exception {
                     let reply = Message::from_server(
                         server_name,
                         irc::ERR_INVITEONLYCHAN,
@@ -124,15 +125,18 @@ pub(super) fn handle_join(
                     send(state, session_id, format!("{reply}\r\n"));
                     return;
                 }
-                // Consume the invite (all forms: session, DID, nick)
-                drop(channels);
-                let mut channels = state.channels.lock();
-                if let Some(ch) = channels.get_mut(channel) {
-                    ch.invites.remove(session_id);
-                    if let Some(d) = did {
-                        ch.invites.remove(d);
+                // Consume the invite ONLY if that's how we got in (sticky +I
+                // entries are persistent and must NOT be consumed).
+                if has_invite {
+                    drop(channels);
+                    let mut channels = state.channels.lock();
+                    if let Some(ch) = channels.get_mut(channel) {
+                        ch.invites.remove(session_id);
+                        if let Some(d) = did {
+                            ch.invites.remove(d);
+                        }
+                        ch.invites.remove(&format!("nick:{nick}"));
                     }
-                    ch.invites.remove(&format!("nick:{nick}"));
                 }
             }
         }
@@ -1019,6 +1023,97 @@ pub(super) fn handle_mode(
                     s2s_broadcast(
                         state,
                         crate::s2s::S2sMessage::Ban {
+                            event_id: s2s_next_event_id(state),
+                            channel: channel.to_string(),
+                            mask: mask.to_string(),
+                            set_by: nick.to_string(),
+                            adding,
+                            origin,
+                        },
+                    );
+                }
+            }
+            'I' => {
+                use crate::server::InviteExceptionEntry;
+
+                if !adding && mode_arg.is_none() {
+                    // -I with no arg is invalid, ignore
+                    return;
+                }
+
+                if adding && mode_arg.is_none() {
+                    // +I with no arg: list invite exceptions
+                    let channels = state.channels.lock();
+                    if let Some(chan) = channels.get(channel) {
+                        for entry in &chan.invite_exceptions {
+                            let reply = Message::from_server(
+                                server_name,
+                                irc::RPL_INVITELIST,
+                                vec![
+                                    nick,
+                                    channel,
+                                    &entry.mask,
+                                    &entry.set_by,
+                                    &entry.set_at.to_string(),
+                                ],
+                            );
+                            send(state, session_id, format!("{reply}\r\n"));
+                        }
+                    }
+                    let end = Message::from_server(
+                        server_name,
+                        irc::RPL_ENDOFINVITELIST,
+                        vec![nick, channel, "End of channel invite list"],
+                    );
+                    send(state, session_id, format!("{end}\r\n"));
+                    return;
+                }
+
+                let mask = mode_arg.unwrap().trim();
+                if mask.is_empty() {
+                    return;
+                }
+                let mask = mask;
+                if adding {
+                    let entry = InviteExceptionEntry::new(mask.to_string(), conn.hostmask());
+                    let mut channels = state.channels.lock();
+                    if let Some(chan) = channels.get_mut(channel) {
+                        const MAX_INVITE_EXCEPTIONS_PER_CHANNEL: usize = 500;
+                        if chan.invite_exceptions.len() >= MAX_INVITE_EXCEPTIONS_PER_CHANNEL {
+                            drop(channels);
+                            let reply = Message::from_server(
+                                server_name, "478",
+                                vec![nick, channel, "Channel invite-exception list is full"],
+                            );
+                            send(state, session_id, format!("{reply}\r\n"));
+                            return;
+                        }
+                        if !chan.invite_exceptions.iter().any(|e| e.mask == mask) {
+                            chan.invite_exceptions.push(entry.clone());
+                            drop(channels);
+                            state.with_db(|db| db.add_invite_exception(channel, &entry));
+                        }
+                    }
+                } else {
+                    let mut channels = state.channels.lock();
+                    if let Some(chan) = channels.get_mut(channel) {
+                        chan.invite_exceptions.retain(|e| e.mask != mask);
+                    }
+                    drop(channels);
+                    state.with_db(|db| db.remove_invite_exception(channel, mask));
+                }
+
+                let sign = if adding { "+" } else { "-" };
+                let hostmask = conn.hostmask();
+                let mode_msg = format!(":{hostmask} MODE {channel} {sign}I {mask}\r\n");
+                broadcast_to_channel(state, channel, &mode_msg);
+
+                // S2S: propagate the invite-exception change to peers
+                {
+                    let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
+                    s2s_broadcast(
+                        state,
+                        crate::s2s::S2sMessage::InviteException {
                             event_id: s2s_next_event_id(state),
                             channel: channel.to_string(),
                             mask: mask.to_string(),

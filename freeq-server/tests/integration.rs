@@ -1278,6 +1278,673 @@ async fn invite_only_channel() {
     server_handle.abort();
 }
 
+// ── Test: +I (invite-exception) admits without consumable invite ───
+//
+// Alice creates a channel, sets +i, then sets +I on Bob's nick. Bob
+// joins without an explicit INVITE (the +I list grants persistent
+// admission). Bob parts and rejoins — the +I entry is sticky and not
+// consumed on join, so the rejoin still works.
+
+#[tokio::test]
+async fn invite_exception_admits_and_persists() {
+    let (addr, server_handle) = start_test_server(empty_resolver()).await;
+
+    // Alice creates the channel and sets +i + +I.
+    let alice_cfg = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "alice".to_string(),
+        user: "alice".to_string(),
+        realname: "Alice".to_string(),
+        ..Default::default()
+    };
+    let (alice_handle, mut alice_events) = client::connect(alice_cfg, None);
+    expect_event(
+        &mut alice_events,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
+    alice_handle.join("#invex-test").await.unwrap();
+    expect_event(
+        &mut alice_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Alice joined",
+    )
+    .await;
+
+    alice_handle.raw("MODE #invex-test +i").await.unwrap();
+    expect_event(
+        &mut alice_events,
+        2000,
+        |e| matches!(e, Event::ModeChanged { mode, .. } if mode == "+i"),
+        "+i set",
+    )
+    .await;
+
+    // Set +I on a hostmask that matches Bob's connection.
+    alice_handle
+        .raw("MODE #invex-test +I *!*@freeq/guest")
+        .await
+        .unwrap();
+    expect_event(
+        &mut alice_events,
+        2000,
+        |e| matches!(e, Event::ModeChanged { mode, arg, .. } if mode == "+I" && arg.as_deref() == Some("*!*@freeq/guest")),
+        "+I set",
+    )
+    .await;
+
+    // Bob connects. NO explicit INVITE issued.
+    let bob_cfg = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "bob".to_string(),
+        user: "bob".to_string(),
+        realname: "Bob".to_string(),
+        ..Default::default()
+    };
+    let (bob_handle, mut bob_events) = client::connect(bob_cfg, None);
+    expect_event(
+        &mut bob_events,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Bob registered",
+    )
+    .await;
+
+    // Bob joins the +i channel — should be admitted via +I match.
+    bob_handle.join("#invex-test").await.unwrap();
+    expect_event(
+        &mut bob_events,
+        2000,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#invex-test"),
+        "Bob admitted via +I (first join)",
+    )
+    .await;
+
+    // Bob parts and rejoins. The +I entry is sticky — it must NOT have
+    // been consumed by the first join.
+    bob_handle.raw("PART #invex-test").await.unwrap();
+    expect_event(
+        &mut bob_events,
+        2000,
+        |e| matches!(e, Event::Parted { channel, nick } if channel == "#invex-test" && nick == "bob"),
+        "Bob parted",
+    )
+    .await;
+
+    bob_handle.join("#invex-test").await.unwrap();
+    expect_event(
+        &mut bob_events,
+        2000,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#invex-test"),
+        "Bob admitted via +I (second join — sticky)",
+    )
+    .await;
+
+    alice_handle.quit(None).await.unwrap();
+    bob_handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+// ── Test: +I list / -I removal ──────────────────────────────────────
+//
+// Adding then removing a +I entry; verify a removed entry no longer
+// admits a previously-allowed user.
+
+#[tokio::test]
+async fn invite_exception_removal_revokes_admission() {
+    let (addr, server_handle) = start_test_server(empty_resolver()).await;
+
+    let alice_cfg = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "alice".to_string(),
+        user: "alice".to_string(),
+        realname: "Alice".to_string(),
+        ..Default::default()
+    };
+    let (alice_handle, mut alice_events) = client::connect(alice_cfg, None);
+    expect_event(
+        &mut alice_events,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
+    alice_handle.join("#invex-revoke").await.unwrap();
+    expect_event(
+        &mut alice_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Alice joined",
+    )
+    .await;
+
+    alice_handle.raw("MODE #invex-revoke +i").await.unwrap();
+    expect_event(
+        &mut alice_events,
+        2000,
+        |e| matches!(e, Event::ModeChanged { mode, .. } if mode == "+i"),
+        "+i set",
+    )
+    .await;
+
+    alice_handle
+        .raw("MODE #invex-revoke +I *!*@freeq/guest")
+        .await
+        .unwrap();
+    expect_event(
+        &mut alice_events,
+        2000,
+        |e| matches!(e, Event::ModeChanged { mode, .. } if mode == "+I"),
+        "+I set",
+    )
+    .await;
+
+    // Now remove the entry.
+    alice_handle
+        .raw("MODE #invex-revoke -I *!*@freeq/guest")
+        .await
+        .unwrap();
+    expect_event(
+        &mut alice_events,
+        2000,
+        |e| matches!(e, Event::ModeChanged { mode, .. } if mode == "-I"),
+        "-I set",
+    )
+    .await;
+
+    // Bob tries to join — entry was removed, no invite, should be rejected.
+    let bob_cfg = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "bob".to_string(),
+        user: "bob".to_string(),
+        realname: "Bob".to_string(),
+        ..Default::default()
+    };
+    let (bob_handle, mut bob_events) = client::connect(bob_cfg, None);
+    expect_event(
+        &mut bob_events,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Bob registered",
+    )
+    .await;
+
+    bob_handle.join("#invex-revoke").await.unwrap();
+    expect_event(
+        &mut bob_events,
+        2000,
+        |e| matches!(e, Event::RawLine(line) if line.contains("473")),
+        "Bob rejected (473 ERR_INVITEONLYCHAN)",
+    )
+    .await;
+
+    alice_handle.quit(None).await.unwrap();
+    bob_handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+// ── Test: +I list reply (MODE #foo +I with no arg) ─────────────────
+//
+// Adding two +I entries, then sending `MODE #foo +I` should produce
+// one RPL_INVITELIST (346) per entry plus a single RPL_ENDOFINVITELIST
+// (347) sentinel.
+
+#[tokio::test]
+async fn invite_exception_list_via_mode() {
+    let (addr, server_handle) = start_test_server(empty_resolver()).await;
+
+    let cfg = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "alice".to_string(),
+        user: "alice".to_string(),
+        realname: "Alice".to_string(),
+        ..Default::default()
+    };
+    let (handle, mut events) = client::connect(cfg, None);
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "registered",
+    )
+    .await;
+    handle.join("#invex-list").await.unwrap();
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "joined",
+    )
+    .await;
+
+    // Add two entries.
+    handle.raw("MODE #invex-list +I *!*@a.example").await.unwrap();
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::ModeChanged { mode, arg, .. } if mode == "+I" && arg.as_deref() == Some("*!*@a.example")),
+        "+I a set",
+    )
+    .await;
+    handle.raw("MODE #invex-list +I *!*@b.example").await.unwrap();
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::ModeChanged { mode, arg, .. } if mode == "+I" && arg.as_deref() == Some("*!*@b.example")),
+        "+I b set",
+    )
+    .await;
+
+    // Query the list.
+    handle.raw("MODE #invex-list +I").await.unwrap();
+
+    // Expect both entries listed via 346 and a 347 sentinel.
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::RawLine(line) if line.contains(" 346 ") && line.contains("*!*@a.example")),
+        "346 lists a.example",
+    )
+    .await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::RawLine(line) if line.contains(" 346 ") && line.contains("*!*@b.example")),
+        "346 lists b.example",
+    )
+    .await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::RawLine(line) if line.contains(" 347 ") && line.contains("#invex-list")),
+        "347 end-of-list",
+    )
+    .await;
+
+    handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+// ── Test: +I with DID-form mask admits authenticated bot ───────────
+//
+// Alice (op) puts a `did:` mask on +I; Bob (authenticated with that DID)
+// joins the +i channel without an INVITE — admitted by DID match, not
+// hostmask match.
+
+#[tokio::test]
+async fn invite_exception_did_form_admits_authenticated() {
+    // Alice creates channel as guest. Bob authenticates with a known DID.
+    let bob_key = PrivateKey::generate_ed25519();
+    let bob_did = "did:plc:botforinvex";
+    let bob_doc = did::make_test_did_document(bob_did, &bob_key.public_key_multibase());
+
+    let mut docs = HashMap::new();
+    docs.insert(bob_did.to_string(), bob_doc);
+    let resolver = DidResolver::static_map(docs);
+
+    let (addr, server_handle) = start_test_server(resolver).await;
+
+    // Alice (guest) creates the channel.
+    let alice_cfg = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "alice".to_string(),
+        user: "alice".to_string(),
+        realname: "Alice".to_string(),
+        ..Default::default()
+    };
+    let (alice_handle, mut alice_events) = client::connect(alice_cfg, None);
+    expect_event(
+        &mut alice_events,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
+    alice_handle.join("#invex-did").await.unwrap();
+    expect_event(
+        &mut alice_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Alice joined",
+    )
+    .await;
+    alice_handle.raw("MODE #invex-did +i").await.unwrap();
+    expect_event(
+        &mut alice_events,
+        2000,
+        |e| matches!(e, Event::ModeChanged { mode, .. } if mode == "+i"),
+        "+i set",
+    )
+    .await;
+
+    // Add Bob's DID to +I.
+    alice_handle
+        .raw(&format!("MODE #invex-did +I {bob_did}"))
+        .await
+        .unwrap();
+    expect_event(
+        &mut alice_events,
+        2000,
+        |e| matches!(e, Event::ModeChanged { mode, arg, .. } if mode == "+I" && arg.as_deref() == Some(bob_did)),
+        "+I did set",
+    )
+    .await;
+
+    // Bob authenticates and joins.
+    let bob_signer: Arc<dyn ChallengeSigner> =
+        Arc::new(KeySigner::new(bob_did.to_string(), bob_key));
+    let bob_cfg = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "bobbot".to_string(),
+        user: "bobbot".to_string(),
+        realname: "Bob bot".to_string(),
+        ..Default::default()
+    };
+    let (bob_handle, mut bob_events) = client::connect(bob_cfg, Some(bob_signer));
+    expect_event(
+        &mut bob_events,
+        2000,
+        |e| matches!(e, Event::Authenticated { did } if did == bob_did),
+        "Bob authenticated",
+    )
+    .await;
+    expect_event(
+        &mut bob_events,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Bob registered",
+    )
+    .await;
+
+    bob_handle.join("#invex-did").await.unwrap();
+    expect_event(
+        &mut bob_events,
+        2000,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#invex-did"),
+        "Bob admitted via DID-form +I",
+    )
+    .await;
+
+    alice_handle.quit(None).await.unwrap();
+    bob_handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+// ── Test: non-op cannot set +I ─────────────────────────────────────
+//
+// Bob joins a channel as a regular member (no ops); Bob tries `MODE +I`
+// and gets ERR_CHANOPRIVSNEEDED (482). The +I list must remain empty.
+
+#[tokio::test]
+async fn invite_exception_non_op_rejected() {
+    let (addr, server_handle) = start_test_server(empty_resolver()).await;
+
+    // Alice creates the channel and is auto-op.
+    let alice_cfg = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "alice".to_string(),
+        user: "alice".to_string(),
+        realname: "Alice".to_string(),
+        ..Default::default()
+    };
+    let (alice_handle, mut alice_events) = client::connect(alice_cfg, None);
+    expect_event(
+        &mut alice_events,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Alice registered",
+    )
+    .await;
+    alice_handle.join("#invex-noop").await.unwrap();
+    expect_event(
+        &mut alice_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Alice joined",
+    )
+    .await;
+
+    // Bob joins as a regular member (no ops).
+    let bob_cfg = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "bob".to_string(),
+        user: "bob".to_string(),
+        realname: "Bob".to_string(),
+        ..Default::default()
+    };
+    let (bob_handle, mut bob_events) = client::connect(bob_cfg, None);
+    expect_event(
+        &mut bob_events,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Bob registered",
+    )
+    .await;
+    bob_handle.join("#invex-noop").await.unwrap();
+    expect_event(
+        &mut bob_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bob joined",
+    )
+    .await;
+
+    // Bob tries MODE +I — should be rejected (482 ERR_CHANOPRIVSNEEDED).
+    bob_handle
+        .raw("MODE #invex-noop +I *!*@anywhere")
+        .await
+        .unwrap();
+    expect_event(
+        &mut bob_events,
+        2000,
+        |e| matches!(e, Event::RawLine(line) if line.contains(" 482 ")),
+        "Bob gets 482 ERR_CHANOPRIVSNEEDED",
+    )
+    .await;
+
+    // Verify the list is still empty by querying it as Alice.
+    alice_handle.raw("MODE #invex-noop +I").await.unwrap();
+    expect_event(
+        &mut alice_events,
+        2000,
+        |e| matches!(e, Event::RawLine(line) if line.contains(" 347 ")),
+        "list end (no 346 entries)",
+    )
+    .await;
+
+    alice_handle.quit(None).await.unwrap();
+    bob_handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+// ── Test: +I survives server restart ───────────────────────────────
+//
+// Set +I on a channel, kill the server, restart against the same DB,
+// confirm the entry is still in the loaded ChannelState.
+
+#[tokio::test]
+async fn invite_exception_persists_across_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("test.db");
+    let db_str = db_path.to_str().unwrap();
+
+    // First instance: set +I and shut down.
+    {
+        let (addr, server_handle) = start_test_server_with_db(empty_resolver(), db_str).await;
+
+        let config = ConnectConfig {
+            server_addr: addr.to_string(),
+            nick: "op".to_string(),
+            user: "op".to_string(),
+            realname: "Op".to_string(),
+            ..Default::default()
+        };
+        let (handle, mut events) = client::connect(config, None);
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Registered { .. }),
+            "Registered",
+        )
+        .await;
+
+        handle.join("#invex-restart").await.unwrap();
+        expect_event(
+            &mut events,
+            2000,
+            |e| matches!(e, Event::Joined { .. }),
+            "Joined",
+        )
+        .await;
+
+        handle
+            .raw("MODE #invex-restart +I *!*@trusted.example")
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        handle.quit(None).await.unwrap();
+        server_handle.abort();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Verify +I is in the database directly.
+    {
+        let db = freeq_server::db::Db::open(db_str).unwrap();
+        let channels = db.load_channels().unwrap();
+        let ch = channels.get("#invex-restart").unwrap();
+        assert_eq!(ch.invite_exceptions.len(), 1);
+        assert_eq!(ch.invite_exceptions[0].mask, "*!*@trusted.example");
+    }
+}
+
+// ── Test: duplicate +I masks coalesce to a single entry ────────────
+
+#[tokio::test]
+async fn invite_exception_duplicate_prevented() {
+    let (addr, server_handle) = start_test_server(empty_resolver()).await;
+
+    let cfg = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "alice".to_string(),
+        user: "alice".to_string(),
+        realname: "Alice".to_string(),
+        ..Default::default()
+    };
+    let (handle, mut events) = client::connect(cfg, None);
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "registered",
+    )
+    .await;
+    handle.join("#invex-dup").await.unwrap();
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "joined",
+    )
+    .await;
+
+    // Set the same mask twice.
+    handle.raw("MODE #invex-dup +I *!*@x.example").await.unwrap();
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::ModeChanged { mode, .. } if mode == "+I"),
+        "first +I",
+    )
+    .await;
+    handle.raw("MODE #invex-dup +I *!*@x.example").await.unwrap();
+    // Sleep instead of waiting for a ModeChanged: the duplicate path skips
+    // the broadcast (the list didn't actually change), so no event fires.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // Query — expect exactly one 346 entry.
+    handle.raw("MODE #invex-dup +I").await.unwrap();
+    let mut count = 0;
+    let deadline = std::time::Instant::now() + Duration::from_millis(500);
+    while std::time::Instant::now() < deadline {
+        if let Ok(Some(evt)) =
+            tokio::time::timeout(Duration::from_millis(100), events.recv()).await
+        {
+            match evt {
+                Event::RawLine(line)
+                    if line.contains(" 346 ") && line.contains("*!*@x.example") =>
+                {
+                    count += 1;
+                }
+                Event::RawLine(line) if line.contains(" 347 ") => break,
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(count, 1, "expected exactly one +I entry, found {count}");
+
+    handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
+// ── Test: empty/whitespace mask is silently dropped ────────────────
+
+#[tokio::test]
+async fn invite_exception_empty_mask_dropped() {
+    let (addr, server_handle) = start_test_server(empty_resolver()).await;
+
+    let cfg = ConnectConfig {
+        server_addr: addr.to_string(),
+        nick: "alice".to_string(),
+        user: "alice".to_string(),
+        realname: "Alice".to_string(),
+        ..Default::default()
+    };
+    let (handle, mut events) = client::connect(cfg, None);
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "registered",
+    )
+    .await;
+    handle.join("#invex-empty").await.unwrap();
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "joined",
+    )
+    .await;
+
+    // Whitespace-only mask: server silently drops the entry, no broadcast.
+    handle.raw("MODE #invex-empty +I    ").await.unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // List the +I entries — expect none.
+    handle.raw("MODE #invex-empty +I").await.unwrap();
+    let mut entries = 0;
+    let deadline = std::time::Instant::now() + Duration::from_millis(500);
+    while std::time::Instant::now() < deadline {
+        if let Ok(Some(evt)) =
+            tokio::time::timeout(Duration::from_millis(100), events.recv()).await
+        {
+            match evt {
+                Event::RawLine(line) if line.contains(" 346 ") => entries += 1,
+                Event::RawLine(line) if line.contains(" 347 ") => break,
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(entries, 0, "empty mask must not create an entry, found {entries}");
+
+    handle.quit(None).await.unwrap();
+    server_handle.abort();
+}
+
 // ── Test: Founder bypasses +i on rejoin ─────────────────────────────
 //
 // Standard IRC behavior: the channel founder (and DID-ops) can rejoin a

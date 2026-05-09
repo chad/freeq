@@ -353,6 +353,21 @@ pub enum S2sMessage {
         origin: String,
     },
 
+    /// An invite-exception (+I) entry was set or removed on a channel.
+    #[serde(rename = "invite_exception")]
+    InviteException {
+        #[serde(default)]
+        event_id: String,
+        channel: String,
+        /// The mask (nick!user@host or DID).
+        mask: String,
+        /// Who set/removed the entry.
+        set_by: String,
+        /// true = entry added, false = entry removed.
+        adding: bool,
+        origin: String,
+    },
+
     /// Policy sync — share a channel's policy document with peers.
     /// Sent when a policy is created/updated/cleared.
     #[serde(rename = "policy_sync")]
@@ -483,6 +498,9 @@ pub struct ChannelInfo {
     /// Active invites (DIDs, nick:XXX tokens).
     #[serde(default)]
     pub invites: Vec<String>,
+    /// Active +I invite-exception entries (mask strings, hostmask or DID).
+    #[serde(default)]
+    pub invite_exceptions: Vec<String>,
 }
 
 /// Bounded set for event dedup. Uses two layers:
