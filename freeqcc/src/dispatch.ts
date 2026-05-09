@@ -143,6 +143,14 @@ export async function dispatchToClaudeStreaming(
   handlers: StreamHandlers,
 ): Promise<void> {
   const sessionId = await loadSession();
+  await runStreaming(text, handlers, sessionId);
+}
+
+async function runStreaming(
+  text: string,
+  handlers: StreamHandlers,
+  sessionId: string | null,
+): Promise<void> {
   const args = [
     "--print",
     "--output-format",
@@ -226,11 +234,23 @@ export async function dispatchToClaudeStreaming(
       handlers.onError?.(err);
       resolve();
     });
-    proc.on("close", (code) => {
+    proc.on("close", async (code) => {
       if (stdoutBuffer.trim()) {
         consumeLine(stdoutBuffer.trim());
       }
       if (code !== 0) {
+        // Self-heal: claude prunes old sessions; if --resume fails with
+        // "No conversation found", drop the cached id and retry without
+        // --resume. Caller still gets a clean stream (one round-trip late).
+        if (
+          sessionId &&
+          /No conversation found with session ID/i.test(stderrBuffer)
+        ) {
+          await clearSession();
+          await runStreaming(text, handlers, null);
+          resolve();
+          return;
+        }
         handlers.onError?.(
           new Error(
             `claude exited with code ${code}\nstderr: ${stderrBuffer.slice(0, 500)}`,
@@ -240,4 +260,13 @@ export async function dispatchToClaudeStreaming(
       resolve();
     });
   });
+}
+
+async function clearSession(): Promise<void> {
+  try {
+    const { unlink } = await import("node:fs/promises");
+    await unlink(paths.session);
+  } catch {
+    // best-effort
+  }
 }

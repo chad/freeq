@@ -1,14 +1,11 @@
 #!/usr/bin/env node
 // freeqcc CLI: launch | status | stop | doctor.
 
-// E2EE polyfill: the freeq SDK's e2ee module uses idb (IndexedDB) for
-// pre-key bundle persistence. Browsers have it; Node doesn't. Without
-// this polyfill the SDK logs '[e2ee] Init failed: indexedDB is not
-// defined' and silently degrades to plaintext-only DMs. With it,
-// encrypted DMs from clients that have E2EE on by default can be
-// decrypted. Polyfill must be applied before any SDK import that
-// triggers e2ee.initialize.
-import "fake-indexeddb/auto";
+// (E2EE polyfill removed: it advanced past 'indexedDB is not defined'
+// but tripped over the SDK's exportKey('raw', x25519PrivateKey) which
+// Node 22 doesn't support, sending the daemon into a reconnect loop.
+// E2EE in Node remains v1.1 work — needs SDK refactor to JWK round-
+// trips. v1.0 keeps plaintext DMs; SDK fallback handles it gracefully.)
 
 import { Command } from "commander";
 import prompts from "prompts";
