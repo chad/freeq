@@ -1806,6 +1806,12 @@ impl Server {
 
         let state = self.build_state()?;
 
+        // Periodic phantom-session sweeper. Defense-in-depth: even if
+        // close handlers leak some bookkeeping (the multi-device path used
+        // to do this), this catches it within a minute. No-op when state
+        // is consistent.
+        spawn_phantom_sweeper(Arc::clone(&state));
+
         let handle = tokio::spawn(async move {
             loop {
                 let (stream, _addr) = listener.accept().await?;
@@ -1843,6 +1849,9 @@ impl Server {
 
         let state = self.build_state()?;
         let state_for_caller = Arc::clone(&state);
+
+        // Phantom-session sweeper (defense-in-depth).
+        spawn_phantom_sweeper(Arc::clone(&state));
 
         let web_state = Arc::clone(&state);
         let router = crate::web::router(web_state);
@@ -1973,6 +1982,81 @@ const S2S_MAX_EVENTS_PER_SEC: u32 = 100;
 
 /// Strip characters that could enable IRC protocol injection (\r, \n, \0) from
 /// S2S-provided strings. Truncates to `max_len` to prevent memory abuse.
+/// Background task: every 60s, look for sessions present in any of the
+/// per-session state maps but missing from `connections` (the WS sender
+/// map). Those are leaked sessions — bookkeeping that the close handler
+/// somehow didn't finish. Removes the stragglers and logs.
+///
+/// Belt-and-suspenders for the "Attaching additional session for DID
+/// existing=N" bug where multi-device close paths used to leave the
+/// closing session_id behind in NickMap and session_dids. The connection
+/// path now removes them on close (mod.rs:2682-ish), but if anything
+/// slips through, this task catches it within a minute.
+fn spawn_phantom_sweeper(state: Arc<SharedState>) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+
+            // Snapshot the live session_ids the WS layer knows about.
+            let live: std::collections::HashSet<String> = {
+                state.connections.lock().keys().cloned().collect()
+            };
+
+            // session_dids: drop entries whose session_id isn't live.
+            let leaked_dids: Vec<String> = {
+                let sd = state.session_dids.lock();
+                sd.iter()
+                    .filter(|(sid, _)| !live.contains(sid.as_str()))
+                    .map(|(sid, _)| sid.clone())
+                    .collect()
+            };
+            if !leaked_dids.is_empty() {
+                let mut sd = state.session_dids.lock();
+                for sid in &leaked_dids {
+                    sd.remove(sid);
+                }
+                tracing::warn!(
+                    count = leaked_dids.len(),
+                    "phantom sweeper: removed leaked session_dids entries"
+                );
+            }
+
+            // NickMap (sid → nick): same treatment. NickMap.remove_by_session
+            // promotes a sibling nick if multiple sessions share it.
+            let leaked_sids_in_nickmap: Vec<String> = {
+                let nts = state.nick_to_session.lock();
+                let mut out = Vec::new();
+                for (sid, _) in nts.iter() {
+                    if !live.contains(sid) {
+                        out.push(sid.to_string());
+                    }
+                }
+                out
+            };
+            if !leaked_sids_in_nickmap.is_empty() {
+                let mut nts = state.nick_to_session.lock();
+                for sid in &leaked_sids_in_nickmap {
+                    nts.remove_by_session(sid);
+                }
+                tracing::warn!(
+                    count = leaked_sids_in_nickmap.len(),
+                    "phantom sweeper: removed leaked NickMap entries"
+                );
+            }
+
+            // agent_heartbeats / agent_presence — best-effort flush. These
+            // can hold stale records past their TTL on their own, but if
+            // the session_id is dead these entries are pure litter.
+            {
+                let mut hb = state.agent_heartbeats.lock();
+                hb.retain(|sid, _| live.contains(sid));
+                let mut pres = state.agent_presence.lock();
+                pres.retain(|sid, _| live.contains(sid));
+            }
+        }
+    });
+}
+
 fn sanitize_s2s_str(s: &str, max_len: usize) -> String {
     s.chars()
         .filter(|c| *c != '\r' && *c != '\n' && *c != '\0')

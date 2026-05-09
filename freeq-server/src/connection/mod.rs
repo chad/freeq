@@ -2678,6 +2678,12 @@ where
             );
             cleanup_session_state(&state, &session_id);
             cleanup_channel_membership(&state, &session_id);
+            // Drop this session_id from the NickMap. If it was the primary
+            // for the nick, NickMap.remove_by_session promotes a sibling
+            // session that still holds the nick. Without this, the nick→sid
+            // pointer can be left dangling at a dead session_id, breaking
+            // WHOIS/PRIVMSG routing for the still-online sibling.
+            state.nick_to_session.lock().remove_by_session(&session_id);
         }
     } else {
         cleanup_session_state(&state, &session_id);
