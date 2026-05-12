@@ -17,9 +17,7 @@ import type {
   IRCMessage, Message, Member, AvSession, AvParticipant,
   FreeqClientOptions, SaslCredentials, Batch, TransportState,
   PinnedMessage, WhoisInfo, HistoryOptions, EmitEventOptions,
-  HeartbeatHandle, PresencePayload, GovernancePayload, GovernanceSignal,
-  CoordinationEventPayload, SpendPayload, BudgetSnapshot,
-  AgentSpawnedPayload, AgentDespawnedPayload,
+  HeartbeatHandle, GovernanceSignal, CoordinationEventPayload,
 } from './types.js';
 
 export class FreeqClient extends EventEmitter {
@@ -450,17 +448,22 @@ export class FreeqClient extends EventEmitter {
     }
     opts = channelOrOpts;
     const c = opts.count ?? count;
+    const marker = opts.msgid
+      ? `msgid=${opts.msgid}`
+      : opts.timestamp
+        ? `timestamp=${opts.timestamp}`
+        : null;
     switch (opts.mode) {
       case 'latest':
         this.raw(`CHATHISTORY LATEST ${opts.target} * ${c}`);
         break;
       case 'before':
-        if (!opts.msgid) throw new Error("requestHistory mode='before' requires opts.msgid");
-        this.raw(`CHATHISTORY BEFORE ${opts.target} msgid=${opts.msgid} ${c}`);
+        if (!marker) throw new Error("requestHistory mode='before' requires opts.msgid or opts.timestamp");
+        this.raw(`CHATHISTORY BEFORE ${opts.target} ${marker} ${c}`);
         break;
       case 'after':
-        if (!opts.msgid) throw new Error("requestHistory mode='after' requires opts.msgid");
-        this.raw(`CHATHISTORY AFTER ${opts.target} msgid=${opts.msgid} ${c}`);
+        if (!marker) throw new Error("requestHistory mode='after' requires opts.msgid or opts.timestamp");
+        this.raw(`CHATHISTORY AFTER ${opts.target} ${marker} ${c}`);
         break;
     }
   }
@@ -831,7 +834,7 @@ export class FreeqClient extends EventEmitter {
           if (ch.trim()) this.raw(`JOIN ${ch.trim()}`);
         }
         this.autoJoinChannels = [];
-        if (this.sasl?.did) this.requestDmTargets();
+        if (this.sasl?.did) this.requestHistoryTargets();
         // Re-assert AWAY across reconnects so the server stops thinking
         // we're present. We deliberately re-send even on the first 001
         // if _currentAway was set earlier; it's a no-op if we weren't
@@ -1215,7 +1218,7 @@ export class FreeqClient extends EventEmitter {
 
       case '366': {
         const namesChannel = msg.params[1];
-        this.requestHistory(namesChannel);
+        this.requestHistory({ target: namesChannel, mode: 'latest' });
         break;
       }
 
@@ -1325,7 +1328,7 @@ export class FreeqClient extends EventEmitter {
           this.emit('historyTarget', targetNick, timestamp);
           // Deprecated alias — kept for one release for backwards compat.
           this.emit('dmTarget', targetNick);
-          this.requestHistory(targetNick);
+          this.requestHistory({ target: targetNick, mode: 'latest' });
         }
         break;
       }

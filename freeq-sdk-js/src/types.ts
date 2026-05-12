@@ -296,8 +296,11 @@ export interface AgentDespawnedPayload {
 export interface HistoryOptions {
   target: string;
   mode: 'latest' | 'before' | 'after';
-  /** Required for mode='before' or 'after'; ignored for 'latest'. */
+  /** Required for mode='before' or 'after' unless `timestamp` is given. */
   msgid?: string;
+  /** ISO 8601 timestamp. Alternative to `msgid` for 'before'/'after' modes
+   *  (CHATHISTORY supports either; some clients paginate by timestamp). */
+  timestamp?: string;
   /** Default: 50. */
   count?: number;
 }
