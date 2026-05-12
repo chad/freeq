@@ -888,7 +888,7 @@ describe('inbound: governance', () => {
     const { client, ws } = await makeRegistered();
     const seen: unknown[] = [];
     client.on('governance', (payload) => seen.push(payload));
-    ws.recv('@+freeq.at/governance=pause;+freeq.at/detail=too\\snoisy :op!u@h TAGMSG alice');
+    ws.recv('@+freeq.at/governance=pause;+freeq.at/reason=too\\snoisy :op!u@h TAGMSG alice');
     await flushAsync();
     expect(seen).toEqual([{
       signal: 'pause',

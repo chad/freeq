@@ -1162,7 +1162,7 @@ export class FreeqClient extends EventEmitter {
               signal: govSignal as GovernanceSignal,
               target,
               by: from || undefined,
-              reason: msg.tags['+freeq.at/detail'] || undefined,
+              reason: msg.tags['+freeq.at/reason'] || undefined,
             });
           }
         }
