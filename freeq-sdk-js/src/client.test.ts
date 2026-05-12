@@ -1,0 +1,1119 @@
+/** Unit tests for FreeqClient. */
+
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+// ── WebSocket mock ────────────────────────────────────────────────
+
+type ReadyState = 0 | 1 | 2 | 3;
+
+class MockWebSocket {
+  static CONNECTING: ReadyState = 0;
+  static OPEN: ReadyState = 1;
+  static CLOSING: ReadyState = 2;
+  static CLOSED: ReadyState = 3;
+
+  static instances: MockWebSocket[] = [];
+
+  CONNECTING: ReadyState = 0;
+  OPEN: ReadyState = 1;
+  CLOSING: ReadyState = 2;
+  CLOSED: ReadyState = 3;
+
+  url: string;
+  readyState: ReadyState = 0;
+  bufferedAmount = 0;
+  sent: string[] = [];
+
+  onopen: ((ev: unknown) => void) | null = null;
+  onmessage: ((ev: { data: string }) => void) | null = null;
+  onclose: ((ev: unknown) => void) | null = null;
+  onerror: ((ev: unknown) => void) | null = null;
+
+  constructor(url: string) {
+    this.url = url;
+    MockWebSocket.instances.push(this);
+    queueMicrotask(() => {
+      this.readyState = 1;
+      this.onopen?.({});
+    });
+  }
+
+  send(data: string): void {
+    if (this.readyState !== 1) return;
+    this.sent.push(data);
+  }
+
+  close(): void {
+    this.readyState = 3;
+    this.onclose?.({});
+  }
+
+  recv(line: string): void {
+    this.onmessage?.({ data: line + '\r\n' });
+  }
+}
+
+beforeEach(() => {
+  MockWebSocket.instances = [];
+  // @ts-expect-error mock global
+  globalThis.WebSocket = MockWebSocket;
+  if (!globalThis.crypto || !(globalThis.crypto as { randomUUID?: () => string }).randomUUID) {
+    Object.defineProperty(globalThis, 'crypto', {
+      value: {
+        randomUUID: () => 'uuid-' + Math.random().toString(36).slice(2),
+        subtle: {
+          generateKey: () => Promise.reject(new Error('Ed25519 unavailable in test env')),
+        },
+      },
+      configurable: true,
+      writable: true,
+    });
+  }
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+async function flushAsync(): Promise<void> {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+}
+
+/** Build a connected, registered FreeqClient as a guest. Returns the
+ *  client and the underlying mock WebSocket. */
+async function makeRegistered(nick = 'alice'): Promise<{
+  client: import('./client.js').FreeqClient;
+  ws: MockWebSocket;
+}> {
+  const { FreeqClient } = await import('./client.js');
+  const client = new FreeqClient({
+    url: 'wss://test/irc',
+    nick,
+    skipInitialBrokerRefresh: true,
+  });
+  client.connect();
+  await flushAsync();
+  const ws = MockWebSocket.instances[MockWebSocket.instances.length - 1]!;
+  ws.recv(':srv CAP * LS :');
+  await flushAsync();
+  ws.recv(`:srv 001 ${nick} :Welcome`);
+  await flushAsync();
+  ws.sent.length = 0;
+  return { client, ws };
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Outbound methods
+// ────────────────────────────────────────────────────────────────────
+
+describe('channel methods', () => {
+  it('join() sends JOIN', async () => {
+    const { client, ws } = await makeRegistered();
+    client.join('#foo');
+    expect(ws.sent).toContain('JOIN #foo');
+  });
+
+  it('joinMany() sends comma-separated JOIN', async () => {
+    const { client, ws } = await makeRegistered();
+    client.joinMany(['#a', '#b', '#c']);
+    expect(ws.sent).toContain('JOIN #a,#b,#c');
+  });
+
+  it('joinMany([]) is a no-op', async () => {
+    const { client, ws } = await makeRegistered();
+    client.joinMany([]);
+    expect(ws.sent).toHaveLength(0);
+  });
+
+  it('part() sends PART and updates joinedChannels', async () => {
+    const { client, ws } = await makeRegistered();
+    ws.recv(':alice!u@h JOIN #foo');
+    await flushAsync();
+    expect(client.joinedChannels.has('#foo')).toBe(true);
+    client.part('#foo');
+    expect(ws.sent).toContain('PART #foo');
+    expect(client.joinedChannels.has('#foo')).toBe(false);
+  });
+
+  it('quit() sends QUIT with reason', async () => {
+    const { client, ws } = await makeRegistered();
+    client.quit('bye');
+    expect(ws.sent).toContain('QUIT :bye');
+  });
+
+  it('quit() with no reason sends bare QUIT', async () => {
+    const { client, ws } = await makeRegistered();
+    client.quit();
+    expect(ws.sent).toContain('QUIT');
+  });
+
+  it('setMode() with arg sends MODE channel flags arg', async () => {
+    const { client, ws } = await makeRegistered();
+    client.setMode('#foo', '+o', 'bob');
+    expect(ws.sent).toContain('MODE #foo +o bob');
+  });
+
+  it('setMode() without arg sends MODE channel flags', async () => {
+    const { client, ws } = await makeRegistered();
+    client.setMode('#foo', '+m');
+    expect(ws.sent).toContain('MODE #foo +m');
+  });
+
+  it('setTopic() sends TOPIC channel :topic', async () => {
+    const { client, ws } = await makeRegistered();
+    client.setTopic('#foo', 'new topic');
+    expect(ws.sent).toContain('TOPIC #foo :new topic');
+  });
+
+  it('kick() sends KICK channel nick :reason', async () => {
+    const { client, ws } = await makeRegistered();
+    client.kick('#foo', 'bob', 'spam');
+    expect(ws.sent).toContain('KICK #foo bob :spam');
+  });
+
+  it('kick() with no reason uses default', async () => {
+    const { client, ws } = await makeRegistered();
+    client.kick('#foo', 'bob');
+    expect(ws.sent).toContain('KICK #foo bob :kicked');
+  });
+
+  it('invite() sends INVITE nick channel', async () => {
+    const { client, ws } = await makeRegistered();
+    client.invite('#foo', 'bob');
+    expect(ws.sent).toContain('INVITE bob #foo');
+  });
+
+  it('setAway() with reason sends AWAY :reason', async () => {
+    const { client, ws } = await makeRegistered();
+    client.setAway('lunch');
+    expect(ws.sent).toContain('AWAY :lunch');
+  });
+
+  it('setAway() with no arg sends bare AWAY (clears)', async () => {
+    const { client, ws } = await makeRegistered();
+    client.setAway();
+    expect(ws.sent).toContain('AWAY');
+  });
+
+  it('pin() sends PIN channel msgid', async () => {
+    const { client, ws } = await makeRegistered();
+    client.pin('#foo', 'msg123');
+    expect(ws.sent).toContain('PIN #foo msg123');
+  });
+
+  it('unpin() sends UNPIN channel msgid', async () => {
+    const { client, ws } = await makeRegistered();
+    client.unpin('#foo', 'msg123');
+    expect(ws.sent).toContain('UNPIN #foo msg123');
+  });
+
+  it('raw() sends arbitrary IRC line', async () => {
+    const { client, ws } = await makeRegistered();
+    client.raw('PING :test');
+    expect(ws.sent).toContain('PING :test');
+  });
+});
+
+describe('messaging methods', () => {
+  it('sendMessage() sends PRIVMSG with trailing param', async () => {
+    const { client, ws } = await makeRegistered();
+    client.sendMessage('#foo', 'hello world');
+    await flushAsync(); // routes through async signedPrivmsg
+    const line = ws.sent.find((l) => l.includes('PRIVMSG #foo'));
+    expect(line).toMatch(/PRIVMSG #foo :hello world/);
+  });
+
+  it('sendMessage() emits local echo when echo-message cap not negotiated', async () => {
+    const { client } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('message', (channel, msg) => seen.push({ channel, msg }));
+    client.sendMessage('#foo', 'echo test');
+    expect(seen.length).toBe(1);
+  });
+
+  it('sendReply() sets +reply tag', async () => {
+    const { client, ws } = await makeRegistered();
+    client.sendReply('#foo', 'msg123', 'replying');
+    expect(ws.sent[0]).toContain('+reply=msg123');
+  });
+
+  it('sendReplyInThread() sets +reply tag', async () => {
+    const { client, ws } = await makeRegistered();
+    client.sendReplyInThread('#foo', 'msg123', 'replying');
+    expect(ws.sent[0]).toContain('+reply=msg123');
+    expect(ws.sent[0]).toContain('PRIVMSG #foo');
+  });
+
+  it('sendEdit() sets +draft/edit tag', async () => {
+    const { client, ws } = await makeRegistered();
+    client.sendEdit('#foo', 'msg123', 'corrected');
+    expect(ws.sent[0]).toContain('+draft/edit=msg123');
+  });
+
+  it('sendDelete() sends TAGMSG with +draft/delete', async () => {
+    const { client, ws } = await makeRegistered();
+    client.sendDelete('#foo', 'msg123');
+    const line = ws.sent.find((l) => l.includes('TAGMSG'));
+    expect(line).toContain('+draft/delete=msg123');
+  });
+
+  it('sendDelete() emits messageDeleted locally', async () => {
+    const { client } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('messageDeleted', (ch, msgid) => seen.push({ ch, msgid }));
+    client.sendDelete('#foo', 'msg123');
+    expect(seen).toContainEqual({ ch: '#foo', msgid: 'msg123' });
+  });
+
+  it('sendReaction() sends TAGMSG with +react + +reply', async () => {
+    const { client, ws } = await makeRegistered();
+    client.sendReaction('#foo', '🎉', 'msg123');
+    const line = ws.sent[0];
+    expect(line).toContain('+react=🎉');
+    expect(line).toContain('+reply=msg123');
+  });
+
+  it('sendReaction() emits reactionAdded locally when msgId given', async () => {
+    const { client } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('reactionAdded', (ch, msgid, emoji, from) => seen.push({ ch, msgid, emoji, from }));
+    client.sendReaction('#foo', '🔥', 'msg-abc');
+    expect(seen).toHaveLength(1);
+  });
+
+  it('sendUnreact() sends TAGMSG with +freeq.at/unreact', async () => {
+    const { client, ws } = await makeRegistered();
+    client.sendUnreact('#foo', '🎉', 'msg123');
+    expect(ws.sent[0]).toContain('+freeq.at/unreact=🎉');
+  });
+
+  it('sendMarkdown() sets +freeq.at/mime=text/markdown', async () => {
+    const { client, ws } = await makeRegistered();
+    client.sendMarkdown('#foo', '**bold**');
+    await flushAsync();
+    expect(ws.sent[0]).toContain('+freeq.at/mime=text/markdown');
+  });
+
+  it('sendTagged() emits PRIVMSG with custom tags', async () => {
+    const { client, ws } = await makeRegistered();
+    client.sendTagged('#foo', 'hello world', { '+freeq.at/streaming': '1' });
+    expect(ws.sent[0]).toMatch(/^@\+freeq.at\/streaming=1 PRIVMSG #foo :hello world/);
+  });
+
+  it('sendTagmsg() emits tags-only TAGMSG (no body)', async () => {
+    const { client, ws } = await makeRegistered();
+    client.sendTagmsg('#foo', { '+react': '🎉', '+reply': 'abc' });
+    expect(ws.sent[0]).toContain('TAGMSG #foo');
+    expect(ws.sent[0]).toContain('+react=🎉');
+    expect(ws.sent[0]).toContain('+reply=abc');
+  });
+
+  it('sendMedia() emits PRIVMSG with media tags', async () => {
+    const { client, ws } = await makeRegistered();
+    client.sendMedia('#foo', {
+      url: 'https://x.com/img.png',
+      mime: 'image/png',
+      alt: 'a cat',
+    });
+    const line = ws.sent[0];
+    expect(line).toContain('PRIVMSG #foo');
+    expect(line).toContain('+freeq.at/media-url=https://x.com/img.png');
+    expect(line).toContain('+freeq.at/media-mime=image/png');
+  });
+
+  it('sendLinkPreview() emits PRIVMSG with link tags + fallback text', async () => {
+    const { client, ws } = await makeRegistered();
+    client.sendLinkPreview('#foo', {
+      url: 'https://x.com',
+      title: 'Title',
+      description: 'Desc',
+    });
+    const line = ws.sent[0];
+    expect(line).toContain('+freeq.at/link-url=https://x.com');
+    expect(line).toContain('+freeq.at/link-title=Title');
+    expect(line).toContain('🔗');
+  });
+
+  it('sendAndAwaitEcho() resolves with server-assigned msgid', async () => {
+    const { client, ws } = await makeRegistered();
+    const promise = client.sendAndAwaitEcho('#foo', 'hi', {});
+    await flushAsync();
+    const sentLine = ws.sent.find((l) => l.includes('PRIVMSG #foo'));
+    expect(sentLine).toBeDefined();
+    const nonceMatch = sentLine!.match(/\+freeq\.at\/echo-nonce=([^;\s]+)/);
+    expect(nonceMatch).toBeTruthy();
+    const nonce = nonceMatch![1];
+    ws.recv(`@+freeq.at/echo-nonce=${nonce};msgid=server-msg-001 :alice PRIVMSG #foo :hi`);
+    await flushAsync();
+    const msgid = await promise;
+    expect(msgid).toBe('server-msg-001');
+  });
+});
+
+describe('typing methods', () => {
+  it('startTyping() sends TAGMSG with +typing=active', async () => {
+    const { client, ws } = await makeRegistered();
+    client.startTyping('#foo');
+    expect(ws.sent[0]).toMatch(/^@\+typing=active TAGMSG #foo/);
+  });
+
+  it('stopTyping() sends TAGMSG with +typing=done', async () => {
+    const { client, ws } = await makeRegistered();
+    client.stopTyping('#foo');
+    expect(ws.sent[0]).toMatch(/^@\+typing=done TAGMSG #foo/);
+  });
+});
+
+describe('identity resolution', () => {
+  it('getDidForNick() returns undefined for unknown nicks', async () => {
+    const { client } = await makeRegistered();
+    expect(client.getDidForNick('unknown')).toBeUndefined();
+  });
+
+  it('populates cache from WHOIS 330', async () => {
+    const { client, ws } = await makeRegistered();
+    ws.recv(':srv 330 alice bob did:plc:bob123 :is authenticated as');
+    await flushAsync();
+    expect(client.getDidForNick('bob')).toBe('did:plc:bob123');
+    expect(client.getDidForNick('BOB')).toBe('did:plc:bob123'); // case-insensitive
+    expect(client.getNickForDid('did:plc:bob123')).toBe('bob');
+  });
+
+  it('populates cache from JOIN account tag', async () => {
+    const { client, ws } = await makeRegistered();
+    ws.recv(':carol!user@host JOIN #foo did:plc:carol :real');
+    await flushAsync();
+    expect(client.getDidForNick('carol')).toBe('did:plc:carol');
+    expect(client.getNickForDid('did:plc:carol')).toBe('carol');
+  });
+
+  it('cache is cleared on QUIT', async () => {
+    const { client, ws } = await makeRegistered();
+    ws.recv(':srv 330 alice dave did:plc:dave :is authenticated as');
+    await flushAsync();
+    expect(client.getDidForNick('dave')).toBeDefined();
+    ws.recv(':dave!user@host QUIT :goodbye');
+    await flushAsync();
+    expect(client.getDidForNick('dave')).toBeUndefined();
+    expect(client.getNickForDid('did:plc:dave')).toBeUndefined();
+  });
+});
+
+describe('requestWhois', () => {
+  it('resolves with WhoisInfo when 318 fires', async () => {
+    const { client, ws } = await makeRegistered();
+    const promise = client.requestWhois('bob');
+    await flushAsync();
+    expect(ws.sent).toContain('WHOIS bob');
+    ws.recv(':srv 311 alice bob ~user host.example * :Bob');
+    ws.recv(':srv 330 alice bob did:plc:bob123 :is authenticated as');
+    ws.recv(':srv 671 alice bob bob.bsky.social :is using a registered handle');
+    ws.recv(':srv 318 alice bob :End of WHOIS list');
+    await flushAsync();
+    const info = await promise;
+    expect(info.nick).toBe('bob');
+    expect(info.user).toBe('~user');
+    expect(info.host).toBe('host.example');
+    expect(info.did).toBe('did:plc:bob123');
+    expect(info.handle).toBe('bob.bsky.social');
+    expect(typeof info.fetchedAt).toBe('number');
+  });
+
+  it('rejects on timeout', async () => {
+    vi.useFakeTimers();
+    const { client } = await makeRegistered();
+    const promise = client.requestWhois('ghost', { timeoutMs: 100 });
+    promise.catch(() => { /* swallow */ });
+    vi.advanceTimersByTime(150);
+    await expect(promise).rejects.toThrow(/timed out/);
+    vi.useRealTimers();
+  });
+
+  it('multiple concurrent waiters share one WHOIS request', async () => {
+    const { client, ws } = await makeRegistered();
+    const p1 = client.requestWhois('alice2');
+    const p2 = client.requestWhois('alice2');
+    await flushAsync();
+    const whoisCount = ws.sent.filter((l) => l === 'WHOIS alice2').length;
+    expect(whoisCount).toBe(1);
+    ws.recv(':srv 311 me alice2 ~u host * :real');
+    ws.recv(':srv 318 me alice2 :End');
+    await flushAsync();
+    const [a, b] = await Promise.all([p1, p2]);
+    expect(a.nick).toBe('alice2');
+    expect(b.nick).toBe('alice2');
+  });
+
+  it('deprecated whois() method still fires WHOIS', async () => {
+    const { client, ws } = await makeRegistered();
+    client.whois('bob');
+    expect(ws.sent).toContain('WHOIS bob');
+  });
+});
+
+describe('agent lifecycle methods', () => {
+  it('registerAgent() sends AGENT REGISTER', async () => {
+    const { client, ws } = await makeRegistered();
+    client.registerAgent('agent');
+    expect(ws.sent).toContain('AGENT REGISTER :class=agent');
+  });
+
+  it('submitProvenance() sends base64url-encoded PROVENANCE', async () => {
+    const { client, ws } = await makeRegistered();
+    client.submitProvenance({ type: 'FreeqBotDelegation/v1', bot_did: 'did:key:z6Mk' });
+    const line = ws.sent.find((l) => l.startsWith('PROVENANCE'));
+    expect(line).toBeDefined();
+    const encoded = line!.slice('PROVENANCE :'.length);
+    const padded = encoded + '='.repeat((4 - (encoded.length % 4)) % 4);
+    const b64 = padded.replace(/-/g, '+').replace(/_/g, '/');
+    const decoded = atob(b64);
+    expect(decoded).toContain('FreeqBotDelegation/v1');
+  });
+
+  it('setPresence() sends PRESENCE with state', async () => {
+    const { client, ws } = await makeRegistered();
+    client.setPresence('executing', 'working on task', 'task-1');
+    expect(ws.sent).toContain('PRESENCE :state=executing;status=working on task;task=task-1');
+  });
+
+  it('setPresence() omits optional fields when undefined', async () => {
+    const { client, ws } = await makeRegistered();
+    client.setPresence('online');
+    expect(ws.sent).toContain('PRESENCE :state=online');
+  });
+
+  it('sendHeartbeat() sends HEARTBEAT', async () => {
+    const { client, ws } = await makeRegistered();
+    client.sendHeartbeat('active', 60);
+    expect(ws.sent).toContain('HEARTBEAT :state=active;ttl=60');
+  });
+
+  it('startHeartbeat() sends one immediately and returns a handle', async () => {
+    vi.useFakeTimers();
+    const { client, ws } = await makeRegistered();
+    const handle = client.startHeartbeat(30_000);
+    expect(ws.sent.filter((l) => l.startsWith('HEARTBEAT')).length).toBe(1);
+    vi.advanceTimersByTime(30_001);
+    expect(ws.sent.filter((l) => l.startsWith('HEARTBEAT')).length).toBe(2);
+    handle.stop();
+    vi.advanceTimersByTime(60_000);
+    expect(ws.sent.filter((l) => l.startsWith('HEARTBEAT')).length).toBe(2);
+    vi.useRealTimers();
+  });
+});
+
+describe('governance methods', () => {
+  it('requestApproval() sends APPROVAL_REQUEST', async () => {
+    const { client, ws } = await makeRegistered();
+    client.requestApproval('#foo', 'deploy', 'prod-server');
+    expect(ws.sent).toContain('APPROVAL_REQUEST #foo :deploy;resource=prod-server');
+  });
+
+  it('pauseAgent() sends AGENT PAUSE with reason', async () => {
+    const { client, ws } = await makeRegistered();
+    client.pauseAgent('worker1', 'too loud');
+    expect(ws.sent).toContain('AGENT PAUSE worker1 :too loud');
+  });
+
+  it('resumeAgent() sends AGENT RESUME', async () => {
+    const { client, ws } = await makeRegistered();
+    client.resumeAgent('worker1');
+    expect(ws.sent).toContain('AGENT RESUME worker1');
+  });
+
+  it('revokeAgent() sends AGENT REVOKE', async () => {
+    const { client, ws } = await makeRegistered();
+    client.revokeAgent('worker1', 'policy violation');
+    expect(ws.sent).toContain('AGENT REVOKE worker1 :policy violation');
+  });
+
+  it('approveAgent() sends AGENT APPROVE', async () => {
+    const { client, ws } = await makeRegistered();
+    client.approveAgent('worker1', 'deploy');
+    expect(ws.sent).toContain('AGENT APPROVE worker1 deploy');
+  });
+
+  it('denyAgent() sends AGENT DENY', async () => {
+    const { client, ws } = await makeRegistered();
+    client.denyAgent('worker1', 'deploy', 'not during freeze');
+    expect(ws.sent).toContain('AGENT DENY worker1 deploy :not during freeze');
+  });
+});
+
+describe('coordination event methods', () => {
+  it('emitEvent() sends paired TAGMSG + PRIVMSG with same tags', async () => {
+    const { client, ws } = await makeRegistered();
+    const eventId = client.emitEvent('#foo', 'task_request', { description: 'review PR' }, {
+      humanText: 'New task',
+    });
+    expect(eventId).toBeDefined();
+    const tagmsg = ws.sent.find((l) => l.includes(`TAGMSG #foo`));
+    const privmsg = ws.sent.find((l) => l.includes('PRIVMSG #foo'));
+    expect(tagmsg).toBeDefined();
+    expect(privmsg).toBeDefined();
+    expect(tagmsg).toContain('+freeq.at/event=task_request');
+    expect(tagmsg).toContain(`msgid=${eventId}`);
+    expect(privmsg).toContain('+freeq.at/event=task_request');
+    expect(privmsg).toContain(`msgid=${eventId}`);
+  });
+
+  it('emitEvent() percent-encodes payload', async () => {
+    const { client, ws } = await makeRegistered();
+    client.emitEvent('#foo', 'test', { msg: 'has spaces; and semicolons' });
+    const line = ws.sent.find((l) => l.includes('TAGMSG'));
+    expect(line).toContain('%20');
+    expect(line).toContain('%3B');
+  });
+
+  it('createTask() returns an event ID', async () => {
+    const { client } = await makeRegistered();
+    const taskId = client.createTask('#foo', 'do thing');
+    expect(taskId).toMatch(/^[0-9a-f]+$/);
+  });
+
+  it('updateTask() includes ref tag', async () => {
+    const { client, ws } = await makeRegistered();
+    client.updateTask('#foo', 'task-abc', 'reviewing', 'looking');
+    const line = ws.sent.find((l) => l.includes('TAGMSG'));
+    expect(line).toContain('+freeq.at/task-id=task-abc');
+  });
+
+  it('completeTask() emits task_complete', async () => {
+    const { client, ws } = await makeRegistered();
+    client.completeTask('#foo', 'task-abc', 'done', 'https://result');
+    const line = ws.sent.find((l) => l.includes('TAGMSG'));
+    expect(line).toContain('+freeq.at/event=task_complete');
+  });
+
+  it('failTask() emits task_failed', async () => {
+    const { client, ws } = await makeRegistered();
+    client.failTask('#foo', 'task-abc', 'something broke');
+    const line = ws.sent.find((l) => l.includes('TAGMSG'));
+    expect(line).toContain('+freeq.at/event=task_failed');
+  });
+
+  it('attachEvidence() emits evidence_attach with evidence-type tag', async () => {
+    const { client, ws } = await makeRegistered();
+    client.attachEvidence('#foo', 'task-abc', 'code_review', 'looks ok');
+    const line = ws.sent.find((l) => l.includes('TAGMSG'));
+    expect(line).toContain('+freeq.at/event=evidence_attach');
+    expect(line).toContain('+freeq.at/evidence-type=code_review');
+  });
+});
+
+describe('spawning methods', () => {
+  it('submitManifest() sends AGENT MANIFEST with base64 TOML', async () => {
+    const { client, ws } = await makeRegistered();
+    client.submitManifest('[manifest]\nname = "test"');
+    const line = ws.sent.find((l) => l.startsWith('AGENT MANIFEST'));
+    expect(line).toBeDefined();
+    const b64 = line!.slice('AGENT MANIFEST '.length);
+    expect(atob(b64)).toContain('[manifest]');
+  });
+
+  it('spawnAgent() sends AGENT SPAWN with semicolon-delimited params', async () => {
+    const { client, ws } = await makeRegistered();
+    client.spawnAgent('#foo', 'worker-1', ['post_message', 'read'], 300, 'task-abc');
+    const line = ws.sent.find((l) => l.startsWith('AGENT SPAWN'));
+    expect(line).toBe('AGENT SPAWN #foo :nick=worker-1;capabilities=post_message,read;ttl=300;task=task-abc');
+  });
+
+  it('despawnAgent() sends AGENT DESPAWN', async () => {
+    const { client, ws } = await makeRegistered();
+    client.despawnAgent('worker-1');
+    expect(ws.sent).toContain('AGENT DESPAWN worker-1');
+  });
+
+  it('sendAsChild() sends AGENT MSG', async () => {
+    const { client, ws } = await makeRegistered();
+    client.sendAsChild('worker-1', '#foo', 'hello from child');
+    expect(ws.sent).toContain('AGENT MSG worker-1 #foo :hello from child');
+  });
+});
+
+describe('economics methods', () => {
+  it('submitSpend() sends SPEND with amount/unit/desc', async () => {
+    const { client, ws } = await makeRegistered();
+    client.submitSpend('#foo', 0.5, 'usd', 'llm call', 'task-1');
+    const line = ws.sent.find((l) => l.startsWith('SPEND'));
+    expect(line).toBe('SPEND #foo :amount=0.500000;unit=usd;desc=llm call;task=task-1');
+  });
+
+  it('setBudget() sends BUDGET with policy params', async () => {
+    const { client, ws } = await makeRegistered();
+    client.setBudget('#foo', 10, 'usd', 'per_day', 'did:plc:sponsor');
+    expect(ws.sent).toContain('BUDGET #foo :max=10;unit=usd;period=per_day;sponsor=did:plc:sponsor');
+  });
+
+  it('requestBudget() sends bare BUDGET to query', async () => {
+    const { client, ws } = await makeRegistered();
+    client.requestBudget('#foo');
+    expect(ws.sent).toContain('BUDGET #foo');
+  });
+});
+
+describe('requestHistory', () => {
+  it('opts.mode=latest sends CHATHISTORY LATEST', async () => {
+    const { client, ws } = await makeRegistered();
+    client.requestHistory({ target: '#foo', mode: 'latest', count: 20 });
+    expect(ws.sent).toContain('CHATHISTORY LATEST #foo * 20');
+  });
+
+  it("opts.mode=before sends CHATHISTORY BEFORE with msgid", async () => {
+    const { client, ws } = await makeRegistered();
+    client.requestHistory({ target: '#foo', mode: 'before', msgid: 'abc', count: 30 });
+    expect(ws.sent).toContain('CHATHISTORY BEFORE #foo msgid=abc 30');
+  });
+
+  it('opts.mode=after sends CHATHISTORY AFTER', async () => {
+    const { client, ws } = await makeRegistered();
+    client.requestHistory({ target: '#foo', mode: 'after', msgid: 'xyz' });
+    expect(ws.sent).toContain('CHATHISTORY AFTER #foo msgid=xyz 50');
+  });
+
+  it('opts.mode=before throws if msgid missing', async () => {
+    const { client } = await makeRegistered();
+    expect(() => client.requestHistory({ target: '#foo', mode: 'before' })).toThrow(/msgid/);
+  });
+
+  it('legacy two-arg form still works', async () => {
+    const { client, ws } = await makeRegistered();
+    client.requestHistory('#foo');
+    expect(ws.sent).toContain('CHATHISTORY LATEST #foo * 50');
+  });
+});
+
+describe('history targets', () => {
+  it('requestHistoryTargets() sends CHATHISTORY TARGETS', async () => {
+    const { client, ws } = await makeRegistered();
+    client.requestHistoryTargets(25);
+    expect(ws.sent).toContain('CHATHISTORY TARGETS * * 25');
+  });
+
+  it('deprecated requestDmTargets() still works', async () => {
+    const { client, ws } = await makeRegistered();
+    client.requestDmTargets(25);
+    expect(ws.sent).toContain('CHATHISTORY TARGETS * * 25');
+  });
+
+  it("'historyTarget' event fires on CHATHISTORY TARGETS response", async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: Array<[string, string | undefined]> = [];
+    client.on('historyTarget', (target, ts) => seen.push([target, ts]));
+    ws.recv(':srv CHATHISTORY TARGETS bob 2026-05-12T10:00:00Z');
+    await flushAsync();
+    expect(seen).toContainEqual(['bob', '2026-05-12T10:00:00Z']);
+  });
+
+  it("deprecated 'dmTarget' event still fires alongside 'historyTarget'", async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: string[] = [];
+    client.on('dmTarget', (target) => seen.push(target));
+    ws.recv(':srv CHATHISTORY TARGETS bob 2026-05-12T10:00:00Z');
+    await flushAsync();
+    expect(seen).toContain('bob');
+  });
+});
+
+describe('fetchPins', () => {
+  it('returns parsed pins array on success', async () => {
+    const { client } = await makeRegistered();
+    const mockPins = [
+      { msgid: 'm1', pinned_by: 'alice', pinned_at: 1700000000 },
+      { msgid: 'm2', pinned_by: 'bob', pinned_at: 1700000100 },
+    ];
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ pins: mockPins }),
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+    const result = await client.fetchPins('#foo');
+    expect(result).toEqual(mockPins);
+  });
+
+  it("returns [] on fetch failure", async () => {
+    const { client } = await makeRegistered();
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error('network')) as typeof fetch;
+    const result = await client.fetchPins('#foo');
+    expect(result).toEqual([]);
+  });
+
+  it("'pins' event still fires alongside Promise return", async () => {
+    const { client } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('pins', (channel, pins) => seen.push({ channel, pins }));
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ pins: [{ msgid: 'm1', pinned_by: 'a', pinned_at: 1 }] }),
+    }) as typeof fetch;
+    await client.fetchPins('#foo');
+    expect(seen.length).toBe(1);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// Inbound events
+// ────────────────────────────────────────────────────────────────────
+
+describe('inbound: messages and reactions', () => {
+  it('PRIVMSG emits message event', async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('message', (channel, msg) => seen.push({ channel, text: msg.text, from: msg.from }));
+    ws.recv(':bob!u@h PRIVMSG #foo :hello');
+    await flushAsync();
+    expect(seen).toContainEqual({ channel: '#foo', text: 'hello', from: 'bob' });
+  });
+
+  it('TAGMSG with +typing emits typing event', async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('typing', (ch, nick, active) => seen.push({ ch, nick, active }));
+    ws.recv('@+typing=active :bob TAGMSG #foo');
+    await flushAsync();
+    expect(seen).toContainEqual({ ch: '#foo', nick: 'bob', active: true });
+  });
+
+  it('TAGMSG with +react emits reactionAdded', async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('reactionAdded', (ch, msgid, emoji, by) => seen.push({ ch, msgid, emoji, by }));
+    ws.recv('@+react=🔥;+reply=msg-abc :bob TAGMSG #foo');
+    await flushAsync();
+    expect(seen).toContainEqual({ ch: '#foo', msgid: 'msg-abc', emoji: '🔥', by: 'bob' });
+  });
+});
+
+describe('inbound: channel membership', () => {
+  it('JOIN emits memberJoined for others', async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('memberJoined', (ch, m) => seen.push({ ch, nick: m.nick }));
+    ws.recv(':bob!u@h JOIN #foo');
+    await flushAsync();
+    expect(seen).toContainEqual({ ch: '#foo', nick: 'bob' });
+  });
+
+  it('JOIN emits channelJoined for self', async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: string[] = [];
+    client.on('channelJoined', (ch) => seen.push(ch));
+    ws.recv(':alice!u@h JOIN #foo');
+    await flushAsync();
+    expect(seen).toContain('#foo');
+  });
+
+  it('PART emits memberLeft for others', async () => {
+    const { client, ws } = await makeRegistered();
+    ws.recv(':bob!u@h JOIN #foo');
+    await flushAsync();
+    const seen: unknown[] = [];
+    client.on('memberLeft', (ch, nick) => seen.push({ ch, nick }));
+    ws.recv(':bob!u@h PART #foo');
+    await flushAsync();
+    expect(seen).toContainEqual({ ch: '#foo', nick: 'bob' });
+  });
+
+  it('KICK emits userKicked', async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('userKicked', (ch, kicked, by, reason) => seen.push({ ch, kicked, by, reason }));
+    ws.recv(':op!u@h KICK #foo bob :spam');
+    await flushAsync();
+    expect(seen).toContainEqual({ ch: '#foo', kicked: 'bob', by: 'op', reason: 'spam' });
+  });
+
+  it('NICK emits userRenamed', async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('userRenamed', (oldNick, newNick) => seen.push({ oldNick, newNick }));
+    ws.recv(':bob!u@h NICK bobby');
+    await flushAsync();
+    expect(seen).toContainEqual({ oldNick: 'bob', newNick: 'bobby' });
+  });
+
+  it('QUIT emits userQuit', async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('userQuit', (nick, reason) => seen.push({ nick, reason }));
+    ws.recv(':bob!u@h QUIT :goodbye');
+    await flushAsync();
+    expect(seen).toContainEqual({ nick: 'bob', reason: 'goodbye' });
+  });
+
+  it('TOPIC emits topicChanged', async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('topicChanged', (ch, topic, by) => seen.push({ ch, topic, by }));
+    ws.recv(':op TOPIC #foo :the new topic');
+    await flushAsync();
+    expect(seen).toContainEqual({ ch: '#foo', topic: 'the new topic', by: 'op' });
+  });
+
+  it('INVITE emits invited', async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('invited', (ch, by) => seen.push({ ch, by }));
+    ws.recv(':bob INVITE alice #foo');
+    await flushAsync();
+    expect(seen).toContainEqual({ ch: '#foo', by: 'bob' });
+  });
+});
+
+describe('inbound: identity and MOTD', () => {
+  it('330 (WHOIS DID numeric) emits memberDid', async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('memberDid', (nick, did) => seen.push({ nick, did }));
+    ws.recv(':srv 330 alice bob did:plc:bob :is authenticated as');
+    await flushAsync();
+    expect(seen).toContainEqual({ nick: 'bob', did: 'did:plc:bob' });
+  });
+
+  it('MOTD numerics emit motd / motdStart', async () => {
+    const { client, ws } = await makeRegistered();
+    const events: string[] = [];
+    client.on('motdStart', () => events.push('start'));
+    client.on('motd', (line) => events.push(`line:${line}`));
+    ws.recv(':srv 375 alice :- begin MOTD');
+    ws.recv(':srv 372 alice :- welcome to freeq');
+    await flushAsync();
+    expect(events[0]).toBe('start');
+    expect(events[1]).toBe('line:welcome to freeq');
+  });
+});
+
+describe('inbound: governance', () => {
+  it("emits 'governance' for valid signal TAGMSG", async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('governance', (payload) => seen.push(payload));
+    ws.recv('@+freeq.at/governance=pause;+freeq.at/detail=too\\snoisy :op!u@h TAGMSG alice');
+    await flushAsync();
+    expect(seen).toEqual([{
+      signal: 'pause',
+      target: 'alice',
+      by: 'op',
+      reason: 'too noisy',
+    }]);
+  });
+
+  it("ignores unknown governance signal", async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('governance', (payload) => seen.push(payload));
+    ws.recv('@+freeq.at/governance=bogus :op TAGMSG alice');
+    await flushAsync();
+    expect(seen).toHaveLength(0);
+  });
+
+  it.each([
+    'pause',
+    'resume',
+    'revoke',
+    'approval_granted',
+    'approval_denied',
+    'budget_exceeded',
+  ])("accepts signal '%s'", async (sig) => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('governance', (payload) => seen.push(payload));
+    ws.recv(`@+freeq.at/governance=${sig} :op TAGMSG alice`);
+    await flushAsync();
+    expect(seen).toHaveLength(1);
+  });
+});
+
+describe('inbound: coordinationEvent', () => {
+  it("emits parsed event from TAGMSG", async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('coordinationEvent', (e) => seen.push(e));
+    const payload = JSON.stringify({ description: 'review' });
+    const encoded = encodeURIComponent(payload);
+    ws.recv(
+      `@msgid=evt1;+freeq.at/event=task_request;+freeq.at/payload=${encoded} :alice TAGMSG #foo`,
+    );
+    await flushAsync();
+    expect(seen).toHaveLength(1);
+    const e = seen[0] as { eventType: string; eventId: string; payload: unknown };
+    expect(e.eventType).toBe('task_request');
+    expect(e.eventId).toBe('evt1');
+    expect(e.payload).toEqual({ description: 'review' });
+  });
+
+  it("de-dupes paired TAGMSG + PRIVMSG by eventId", async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('coordinationEvent', (e) => seen.push(e));
+    ws.recv('@msgid=evt2;+freeq.at/event=task_complete :alice TAGMSG #foo');
+    ws.recv('@msgid=evt2;+freeq.at/event=task_complete :alice PRIVMSG #foo :done');
+    await flushAsync();
+    expect(seen).toHaveLength(1);
+  });
+
+  it("ignores TAGMSG without +freeq.at/event tag", async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('coordinationEvent', (e) => seen.push(e));
+    ws.recv('@+react=🎉 :alice TAGMSG #foo');
+    await flushAsync();
+    expect(seen).toHaveLength(0);
+  });
+});
+
+describe('inbound: presence', () => {
+  it("parses '<state>: <status>' AWAY text", async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('presence', (p) => seen.push(p));
+    ws.recv(':bob!u@h AWAY :executing: writing article');
+    await flushAsync();
+    expect(seen).toContainEqual({
+      nick: 'bob',
+      did: undefined,
+      state: 'executing',
+      status: 'writing article',
+      task: undefined,
+    });
+  });
+
+  it("parses bare state AWAY text", async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('presence', (p) => seen.push(p));
+    ws.recv(':bob!u@h AWAY :idle');
+    await flushAsync();
+    expect(seen).toContainEqual({
+      nick: 'bob',
+      did: undefined,
+      state: 'idle',
+      status: undefined,
+      task: undefined,
+    });
+  });
+
+  it("emits state=online when AWAY is cleared", async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('presence', (p) => seen.push(p));
+    ws.recv(':bob!u@h AWAY');
+    await flushAsync();
+    expect(seen).toContainEqual({
+      nick: 'bob',
+      did: undefined,
+      state: 'online',
+    });
+  });
+});
+
+describe('inbound: spawned agents', () => {
+  it("emits agentSpawned on JOIN with +freeq.at/parent tag", async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('agentSpawned', (p) => seen.push(p));
+    ws.recv('@+freeq.at/actor-class=agent;+freeq.at/parent=alice :worker-1!spawn@freeq/spawn/abc JOIN #foo');
+    await flushAsync();
+    expect(seen).toContainEqual({
+      parentNick: 'alice',
+      childNick: 'worker-1',
+      channel: '#foo',
+      capabilities: [],
+      ttlSeconds: undefined,
+      taskRef: undefined,
+    });
+  });
+
+  it("emits agentDespawned on QUIT from spawn hostmask", async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('agentDespawned', (p) => seen.push(p));
+    ws.recv(':worker-1!spawn@freeq/spawn QUIT :TTL expired');
+    await flushAsync();
+    expect(seen).toContainEqual({ nick: 'worker-1', reason: 'TTL expired' });
+  });
+
+  it("does NOT emit agentDespawned for regular QUITs", async () => {
+    const { client, ws } = await makeRegistered();
+    const seen: unknown[] = [];
+    client.on('agentDespawned', (p) => seen.push(p));
+    ws.recv(':bob!user@host QUIT :goodbye');
+    await flushAsync();
+    expect(seen).toHaveLength(0);
+  });
+});
+
+describe('inbound: connection lifecycle', () => {
+  it("emits 'connected' on transport open", async () => {
+    const { FreeqClient } = await import('./client.js');
+    const client = new FreeqClient({ url: 'wss://test/irc', nick: 'alice', skipInitialBrokerRefresh: true });
+    const events: string[] = [];
+    client.on('connected', () => events.push('connected'));
+    client.connect();
+    await flushAsync();
+    expect(events).toContain('connected');
+  });
+
+  it("emits 'disconnected' on transport close", async () => {
+    const { client, ws } = await makeRegistered();
+    const events: string[] = [];
+    client.on('disconnected', (reason) => events.push(reason));
+    ws.close();
+    await flushAsync();
+    expect(events.length).toBeGreaterThan(0);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// Nick collision policy
+// ────────────────────────────────────────────────────────────────────
+
+describe('onNickCollision policy', () => {
+  it("default ('auto-suffix') appends underscore on 433", async () => {
+    const { FreeqClient } = await import('./client.js');
+    const client = new FreeqClient({ url: 'wss://test/irc', nick: 'alice', skipInitialBrokerRefresh: true });
+    client.connect();
+    await flushAsync();
+    const ws = MockWebSocket.instances[MockWebSocket.instances.length - 1]!;
+    ws.recv(':srv 433 * alice :Nickname is already in use');
+    await flushAsync();
+    expect(ws.sent).toContain('NICK alice_');
+  });
+
+  it("'refuse' emits authError and disconnects", async () => {
+    const { FreeqClient } = await import('./client.js');
+    const client = new FreeqClient({
+      url: 'wss://test/irc',
+      nick: 'alice',
+      skipInitialBrokerRefresh: true,
+      onNickCollision: 'refuse',
+    });
+    const errors: string[] = [];
+    client.on('authError', (e) => errors.push(e));
+    client.connect();
+    await flushAsync();
+    const ws = MockWebSocket.instances[MockWebSocket.instances.length - 1]!;
+    ws.recv(':srv 433 * alice :Nickname is already in use');
+    await flushAsync();
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors[0]).toMatch(/taken/);
+  });
+
+  it("'random-suffix' appends a random 4-digit suffix", async () => {
+    const { FreeqClient } = await import('./client.js');
+    const client = new FreeqClient({
+      url: 'wss://test/irc',
+      nick: 'alice',
+      skipInitialBrokerRefresh: true,
+      onNickCollision: 'random-suffix',
+    });
+    client.connect();
+    await flushAsync();
+    const ws = MockWebSocket.instances[MockWebSocket.instances.length - 1]!;
+    ws.recv(':srv 433 * alice :Nickname is already in use');
+    await flushAsync();
+    const retryLines = ws.sent.filter((l) => l.startsWith('NICK alice-'));
+    expect(retryLines.length).toBeGreaterThan(0);
+    expect(retryLines[0]).toMatch(/^NICK alice-\d{4}$/);
+  });
+});

@@ -63,7 +63,7 @@ export class FreeqClient extends EventEmitter {
   private _avSessions = new Map<string, AvSession>();
   private _activeAvSession: string | null = null;
 
-  // ── New SDK parity state (added in the parity PR) ─────────────────
+  // ── Internal caches and timer state ───────────────────────────────
   /** Lowercase nick → DID. Populated from numeric 330 (WHOIS) and from
    *  inbound `+freeq.at/account` tags. */
   private _nickToDid = new Map<string, string>();
@@ -181,7 +181,7 @@ export class FreeqClient extends EventEmitter {
     this._activeAvSession = null;
     this._encryptedChannels.clear();
     this._currentAway = null;
-    // Clear new SDK parity state.
+    // Clear internal caches and timer state.
     this._nickToDid.clear();
     this._didToNick.clear();
     this._whoisBuffer.clear();
@@ -545,7 +545,7 @@ export class FreeqClient extends EventEmitter {
     this._connectionState = state;
     this.emit('connectionStateChanged', state);
 
-    // Discrete transition events (new in parity work).
+    // Discrete transition events (complement `connectionStateChanged`).
     if (state === 'connected' && prev !== 'connected') {
       this.emit('connected');
     } else if (state === 'disconnected' && prev !== 'disconnected') {
@@ -1709,10 +1709,6 @@ export class FreeqClient extends EventEmitter {
       }
     }
   }
-
-  // ────────────────────────────────────────────────────────────────────
-  // ── SDK parity additions ────────────────────────────────────────────
-  // ────────────────────────────────────────────────────────────────────
 
   // ── Channels ──
 
