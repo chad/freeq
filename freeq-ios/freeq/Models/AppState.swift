@@ -698,11 +698,27 @@ class AppState: ObservableObject {
         }
     }
 
+    /// Resolve a wire target (channel `#…`/`&…` or peer nick) to its local
+    /// buffer for optimistic-send updates. Mirrors the inbound routing logic.
+    private func bufferForSend(_ target: String) -> ChannelState {
+        if target.hasPrefix("#") || target.hasPrefix("&") {
+            return getOrCreateChannel(target)
+        } else {
+            return getOrCreateDM(target)
+        }
+    }
+
     func sendReaction(target: String, msgId: String, emoji: String) {
+        // Optimistic local update — keeps the UI consistent even if the
+        // `echo-message` cap isn't negotiated on the current connection.
+        // `applyReaction` is idempotent (Set keyed by nick), so the inbound
+        // echo (if any) is a no-op.
+        bufferForSend(target).applyReaction(msgId: msgId, emoji: emoji, from: nick)
         sendRaw("@+react=\(emoji);+reply=\(msgId) TAGMSG \(target)")
     }
 
     func sendUnreaction(target: String, msgId: String, emoji: String) {
+        bufferForSend(target).removeReaction(msgId: msgId, emoji: emoji, from: nick)
         sendRaw("@+freeq.at/unreact=\(emoji);+reply=\(msgId) TAGMSG \(target)")
     }
 
@@ -716,6 +732,7 @@ class AppState: ObservableObject {
     }
 
     func deleteMessage(target: String, msgId: String) {
+        bufferForSend(target).applyDelete(msgId: msgId)
         sendRaw("@+draft/delete=\(msgId) TAGMSG \(target)")
     }
 

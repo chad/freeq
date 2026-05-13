@@ -603,4 +603,76 @@ final class DMSelfEchoRoutingTests: XCTestCase {
         XCTAssertNotNil(dm)
         XCTAssertTrue(dm?.messages.isEmpty ?? false)
     }
+
+    // MARK: - Optimistic-send defense (no echo-message cap required)
+
+    /// `sendReaction` applies locally before going on the wire. Verifies the
+    /// UI updates even on a connection where `echo-message` cap isn't acked
+    /// (the only signal back to us would otherwise be the echo).
+    func testSendReactionInDMUpdatesLocallyWithoutEcho() {
+        let s = makeState()
+        let dm = seedDMMessage(in: s, peer: peer, id: "m1", from: me)
+
+        // No client is wired up in tests — sendRaw will log "NO CLIENT" and
+        // drop the line. The optimistic local update is the only thing that
+        // happens, which is exactly the failure mode we're defending against.
+        s.sendReaction(target: peer, msgId: "m1", emoji: "❤️")
+
+        XCTAssertEqual(dm.messages.first?.reactions["❤️"], Set([me]),
+                       "sendReaction must update local buffer even when no echo arrives")
+    }
+
+    func testSendReactionInChannelUpdatesLocallyWithoutEcho() {
+        let s = makeState()
+        let ch = seedChannelMessage(in: s, channel: "#freeq", id: "m1", from: peer)
+
+        s.sendReaction(target: "#freeq", msgId: "m1", emoji: "🎉")
+
+        XCTAssertEqual(ch.messages.first?.reactions["🎉"], Set([me]))
+    }
+
+    func testSendUnreactionInDMUpdatesLocallyWithoutEcho() {
+        let s = makeState()
+        let dm = seedDMMessage(in: s, peer: peer, id: "m1", from: me)
+        dm.applyReaction(msgId: "m1", emoji: "❤️", from: me)
+
+        s.sendUnreaction(target: peer, msgId: "m1", emoji: "❤️")
+
+        XCTAssertNil(dm.messages.first?.reactions["❤️"])
+    }
+
+    func testDeleteMessageInDMUpdatesLocallyWithoutEcho() {
+        let s = makeState()
+        let dm = seedDMMessage(in: s, peer: peer, id: "m1", from: me, text: "regret")
+
+        s.deleteMessage(target: peer, msgId: "m1")
+
+        XCTAssertEqual(dm.messages.first?.isDeleted, true)
+        XCTAssertEqual(dm.messages.first?.text, "")
+    }
+
+    /// Belt-and-suspenders: optimistic send + later echo must converge to
+    /// the same state (no double-counting, no double-deletion artifacts).
+    func testOptimisticSendThenEchoIsIdempotent() {
+        let s = makeState()
+        let dm = seedDMMessage(in: s, peer: peer, id: "m1", from: me)
+
+        s.sendReaction(target: peer, msgId: "m1", emoji: "🔥")
+        // Now the server's echo arrives:
+        handler(s).handleEvent(reactTagMsg(from: me, target: peer, emoji: "🔥", replyTo: "m1"))
+
+        XCTAssertEqual(dm.messages.first?.reactions["🔥"]?.count, 1,
+                       "optimistic send + echo must not double-count the reaction")
+    }
+
+    /// Optimistic delete + later echo: idempotent (already deleted stays deleted).
+    func testOptimisticDeleteThenEchoIsIdempotent() {
+        let s = makeState()
+        let dm = seedDMMessage(in: s, peer: peer, id: "m1", from: me)
+
+        s.deleteMessage(target: peer, msgId: "m1")
+        handler(s).handleEvent(deleteTagMsg(from: me, target: peer, msgId: "m1"))
+
+        XCTAssertEqual(dm.messages.first?.isDeleted, true)
+    }
 }
