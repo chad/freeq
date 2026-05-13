@@ -1083,7 +1083,9 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
         }
     }
 
-    private func handleEvent(_ event: FreeqEvent) {
+    // Internal (not private) so tests in `freeqTests` can invoke the dispatcher
+    // directly via `@testable import freeq` without going through the FFI.
+    func handleEvent(_ event: FreeqEvent) {
         guard let state = appState else { return }
 
         switch event {
