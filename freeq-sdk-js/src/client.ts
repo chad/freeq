@@ -160,6 +160,15 @@ export class FreeqClient extends EventEmitter {
     this.transport.connect();
   }
 
+  /** Wait for the WebSocket send buffer to drain. Returns when
+   *  `bufferedAmount` reaches 0 (or the WS is no longer open), or after
+   *  `maxMs` (default 2000ms). Call before `disconnect()` if you need
+   *  outbound messages (PRESENCE=offline, QUIT, etc.) to actually reach
+   *  the server before the socket closes. */
+  async flush(maxMs?: number): Promise<void> {
+    await this.transport?.flush(maxMs);
+  }
+
   /** Disconnect from the server. */
   disconnect(): void {
     this.transport?.disconnect();

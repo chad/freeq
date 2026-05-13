@@ -78,6 +78,20 @@ export class Transport {
     }
   }
 
+  /** Wait for the WebSocket send buffer to drain. Resolves when
+   *  `bufferedAmount` reaches 0 (or the WS is no longer open), or after
+   *  `maxMs`. Useful before disconnecting to ensure outbound messages
+   *  (PRESENCE=offline, QUIT, etc.) actually reach the server. */
+  async flush(maxMs = 2000): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    const start = Date.now();
+    while (Date.now() - start < maxMs) {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      if (this.ws.bufferedAmount === 0) return;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
+
   disconnect() {
     this.intentionalClose = true;
     this.stopHeartbeat();
@@ -86,6 +100,9 @@ export class Transport {
       this.reconnectTimer = null;
     }
     if (this.ws) {
+      // Note: callers that care about delivery (e.g. bot-kit's stop()) should
+      // call `flush()` first. We still emit a defensive QUIT here for callers
+      // that haven't sent one, but it may be lost if the buffer is non-empty.
       try { this.send('QUIT :Leaving'); } catch { /* ignore */ }
       this.ws.close();
       this.ws = null;

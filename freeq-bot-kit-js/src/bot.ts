@@ -276,13 +276,20 @@ export class FreeqBot {
     });
   }
 
-  /** Graceful shutdown: stop heartbeat, send PRESENCE=offline + QUIT, wait
-   *  briefly for the wire to flush, then disconnect. Idempotent. */
+  /** Graceful shutdown: stop heartbeat, send PRESENCE=offline + QUIT,
+   *  wait for the WebSocket send buffer to drain, then disconnect.
+   *  Idempotent.
+   *
+   *  Note: the server applies a 30-second ghost period to DID-authenticated
+   *  sessions (`QUIT_GRACE_SECS` in connection/mod.rs). The bot's channel
+   *  membership is preserved for ~30s after disconnect so a quick
+   *  reconnect doesn't churn JOIN/QUIT. To other clients, this looks like
+   *  the bot lingering after shutdown — it's intentional server-side. */
   async stop(opts: FreeqBotStopOptions | string = {}): Promise<void> {
     if (this.#stopped) return;
     this.#stopped = true;
 
-    const { reason = "shutting down", drainMs = 250 } =
+    const { reason = "shutting down", drainMs = 2000 } =
       typeof opts === "string" ? { reason: opts } : opts;
 
     if (this.#heartbeatTimer) {
@@ -299,9 +306,10 @@ export class FreeqBot {
     } catch {
       // socket may already be gone; nothing to flush
     }
-    if (drainMs > 0) {
-      await new Promise((r) => setTimeout(r, drainMs));
-    }
+    // Wait for the send buffer to actually drain (poll bufferedAmount).
+    // The previous fixed-250ms sleep was racy: process.exit() doesn't wait
+    // for in-flight WebSocket writes, so PRESENCE/QUIT could be dropped.
+    await this.client.flush(drainMs);
     this.client.disconnect();
   }
 
