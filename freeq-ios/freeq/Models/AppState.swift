@@ -818,45 +818,27 @@ class AppState: ObservableObject {
 
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
 
-            // Transient gateway / proxy errors: NEVER count as 401 evidence.
-            // The 502/503/504 family is usually broker-restart / proxy-flap
-            // noise — but on the broker, 502 *also* covers "we tried to
-            // refresh your access token at the PDS and that returned an
-            // error". If the PDS error body is `invalid_grant` (or any
-            // refresh-token-fatal variant), retrying forever is wrong; the
-            // user needs to re-OAuth. Read the body and discriminate.
-            if (status == 502 || status == 503 || status == 504) {
-                let body = String(data: data, encoding: .utf8) ?? ""
-                let bodySnippet = String(body.prefix(200))
-                let isRefreshFatal = body.contains("invalid_grant")
-                    || body.contains("invalid_token")
-                    || body.contains("expired")
-                    || body.contains("revoked")
-                authLog.notice("broker \(status, privacy: .public) attempt=\(attempt, privacy: .public) body=\(bodySnippet, privacy: .public)")
-                print("[freeq.broker] \(status) attempt=\(attempt) fatal=\(isRefreshFatal) body=\(bodySnippet)")
-                if isRefreshFatal {
-                    // The PDS told the broker that this user's refresh token is
-                    // dead. No amount of retrying recovers from this — the user
-                    // genuinely needs to re-OAuth. Clear credentials immediately
-                    // (this is "I logged out at the PDS" semantics, not a flap).
-                    authLog.error("Clearing broker credentials: PDS refresh fatal (body=\(bodySnippet, privacy: .public))")
-                    await MainActor.run {
-                        self.brokerToken = nil
-                        self.cachedWebToken = nil
-                        self.cachedWebTokenExpiry = .distantPast
-                        KeychainHelper.delete(key: "brokerToken")
-                        KeychainHelper.delete(key: "webToken")
-                        UserDefaults.standard.removeObject(forKey: "freeq.webTokenExpiry")
-                    }
-                    throw NSError(domain: "Broker", code: 401, userInfo: [NSLocalizedDescriptionKey: "Session expired (PDS refused refresh) — please sign in again"])
-                }
+            // 5xx is a *server* error, not an auth verdict. Treat every 502/
+            // 503/504 as transient: retry inside this fetch, then let the
+            // outer reconnect loop back off. NEVER clear credentials on a 5xx.
+            //
+            // History: we used to substring-search the response body for
+            // "invalid_grant" / "invalid_token" / "expired" / "revoked" and
+            // wipe credentials immediately on a match. That was dangerously
+            // brittle — any 5xx body containing those words (CDN error pages,
+            // stack traces, unrelated PDS chatter) silently logged users
+            // out. The genuine "PDS refused refresh" signal must come from
+            // the broker as a structured discriminator (a specific status
+            // code or JSON field), not inferred from English text. Until
+            // the broker exposes that, treat 5xx as recoverable; if the
+            // refresh truly is dead the broker will surface it as a 401
+            // and the 3-strikes-past-grace path will eventually wipe.
+            if status == 502 || status == 503 || status == 504 {
+                authLog.notice("broker \(status, privacy: .public) attempt=\(attempt, privacy: .public) — treating as transient")
                 if attempt < 3 {
                     try? await Task.sleep(nanoseconds: UInt64(500_000_000 * (attempt + 1)))
                     continue
                 }
-                // Out of inner retries with non-fatal 5xx. Fall through to throw
-                // so the outer reconnect loop applies its backoff — but DON'T
-                // touch credentials.
                 throw NSError(domain: "Broker", code: status, userInfo: [NSLocalizedDescriptionKey: "Broker temporarily unavailable"])
             }
 
