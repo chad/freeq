@@ -1,0 +1,31 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "69f835105aa0",
+  "session_id": "95d180e3-aa90-459b-88c1-203fe9829bc0",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-13T14:45:53.712336Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "freeq-ios/freeq/Models/KeychainHelper.swift"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "7976bdbfc829",
+  "token_usage": {
+    "input_tokens": 1187,
+    "cache_creation_tokens": 553799,
+    "cache_read_tokens": 26684985,
+    "output_tokens": 120146,
+    "api_call_count": 176
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-13T14:45:53.407493Z",
+    "agent_lines": 0,
+    "human_added": 29,
+    "human_modified": 10,
+    "human_removed": 0,
+    "total_committed": 29,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-chad-src-freeq/95d180e3-aa90-459b-88c1-203fe9829bc0.jsonl"
+}
