@@ -480,27 +480,18 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
     },
   );
 
-  // Graceful shutdown on SIGINT/SIGTERM. Also wipes the pid file —
-  // cli.ts can't rely on a finally-block here because process.exit(0)
-  // bypasses outer try/finally.
-  const shutdown = async (sig: string): Promise<void> => {
-    console.log(`\n[${sig}] shutting down...`);
-    try {
-      await controlServer.close();
-    } catch {
-      // ignore — best effort
-    }
-    await conn.stop(`signal ${sig}`);
-    try {
-      const { unlink } = await import("node:fs/promises");
-      await unlink(paths.daemonPid);
-    } catch {
-      // already gone
-    }
-    process.exit(0);
+  // Compose the shutdown sequence: control socket → connection. pid-file
+  // cleanup + SIGINT/SIGTERM wiring are owned by the createDaemonCLI
+  // scaffold in cli.ts.
+  return {
+    ...conn,
+    stop: async (reason: string) => {
+      try {
+        await controlServer.close();
+      } catch {
+        // best-effort — socket may already be gone
+      }
+      await conn.stop(reason);
+    },
   };
-  process.once("SIGINT", () => void shutdown("SIGINT"));
-  process.once("SIGTERM", () => void shutdown("SIGTERM"));
-
-  return conn;
 }

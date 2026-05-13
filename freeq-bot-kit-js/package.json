@@ -27,7 +27,8 @@
     "example:fire-task": "tsx examples/fire-task.ts"
   },
   "dependencies": {
-    "@freeq/sdk": "file:../freeq-sdk-js"
+    "@freeq/sdk": "file:../freeq-sdk-js",
+    "commander": "^14.0.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

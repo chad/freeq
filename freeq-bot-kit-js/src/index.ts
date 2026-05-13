@@ -43,3 +43,17 @@ export type {
   LoadOrMintDelegationOptions,
   BuildDelegationOptions,
 } from "./delegation.js";
+
+// Daemon CLI scaffold — Commander-based launch/stop/status/doctor/tail
+// for long-running freeq bot daemons. Caller provides runDaemon + paths;
+// bot-kit handles pid files, --detach forking, signal wiring, and the
+// built-in identity/delegation/server doctor checks.
+export { createDaemonCLI, readPidIfAlive } from "./daemon-cli.js";
+export type {
+  CreateDaemonCLIOptions,
+  DaemonPaths,
+  DaemonHandle,
+  DaemonOpts,
+  DoctorCheck,
+  DoctorResult,
+} from "./daemon-cli.js";

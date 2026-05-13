@@ -144,14 +144,69 @@ bot.state       // current PRESENCE state (string)
 
 `bot.client` is fully available for anything the wrapper doesn't surface: `bot.client.sendMessage(...)`, `bot.client.requestWhois(...)`, `bot.client.spawnAgent(...)`, etc. See the [SDK reference](../freeq-site/docs/typescript-sdk.md) for the full surface.
 
+## Daemon CLI scaffold
+
+For long-running bot daemons, `createDaemonCLI` wires the universal commands (`launch`, `stop`, `status`, `doctor`, `tail`) over a [Commander](https://www.npmjs.com/package/commander) program. The bot supplies a `runDaemon` callback; bot-kit handles pid files, `--detach` forking, signal wiring, and the built-in doctor checks (identity, delegation, server actor record).
+
+```ts
+import { createDaemonCLI } from '@freeq/bot-kit';
+
+const cli = createDaemonCLI({
+  name: 'mybot',
+  paths: {
+    dir:        '~/.mybot/',
+    daemonPid:  '~/.mybot/daemon.pid',
+    daemonLog:  '~/.mybot/daemon.log',
+    agentKey:   '~/.mybot/agent.key',
+    delegation: '~/.mybot/delegation.json',
+  },
+  // Pre-launch hook (prompts, config persistence). Runs in BOTH the
+  // foreground and the detached child — must be idempotent.
+  preflight: async (parsed) => {
+    const owner = await loadOrPromptOwner();
+    return { ownerDid: owner.did, nick: parsed.nick ?? 'mybot' };
+  },
+  // The daemon entry point. Only runs in the daemon process.
+  runDaemon: async (opts) => {
+    const bot = await FreeqBot.create({ ...opts, url: 'wss://irc.freeq.at/irc' });
+    bot.on('message', (ch, msg) => bot.client.sendMessage(ch, `echo: ${msg.text}`));
+    await bot.start();
+    return { stop: (reason) => bot.stop(reason) };
+  },
+  // Extra `launch` flags. Caller reads via parsed.<flag> inside preflight.
+  launchOptions: [
+    { flags: '--nick <nick>', description: 'Override the bot nick' },
+  ],
+  // Server actor URL — enables provenance check in `status` + `doctor`.
+  actorStatusUrl: (did) => `https://irc.freeq.at/api/v1/actors/${encodeURIComponent(did)}`,
+  // Optional bot-specific doctor checks, appended after built-ins.
+  doctorChecks: [
+    { name: 'claude binary', run: async () => {
+        try { execSync('which claude', { stdio: 'pipe' }); return { ok: true }; }
+        catch { return { ok: false, reason: 'claude not on PATH' }; }
+    }},
+  ],
+});
+
+// Add custom subcommands on top.
+cli.command('grant <did> <action>').description('Grant access').action(/* ... */);
+
+await cli.parseAsync(process.argv);
+```
+
+**Built-in `doctor` checks:** identity file (32-byte ed25519 seed → did:key), delegation cert (parses + `bot_did === agent.did`), server actor record (if `actorStatusUrl` provided, queries `online` + `provenance.verified`). Each `doctorChecks` entry runs after, in registration order, with `{ ok: true, detail? } | { ok: 'warn', reason } | { ok: false, reason }`. Doctor exits 1 if any check fails (warnings don't fail).
+
+**Two-callback launch model:** `preflight` runs in foreground (prompts ok) and re-runs idempotently in the detached child after fork. `runDaemon` only runs in the daemon process and receives `preflight`'s return value. Signal handlers (SIGINT/SIGTERM) are wired by the scaffold; the returned handle's `stop(reason)` is invoked on shutdown.
+
 ## What this package does NOT do
 
 Deliberately out of scope:
 
 - **Owner config / handle resolution.** Caller provides `ownerDid`. Bot-kit doesn't prompt or persist owner.json.
-- **Signal handlers.** `process.on('SIGINT', ...)` is process-global; the application owns it. Bot-kit shows the snippet (above) but doesn't install handlers itself.
+- **Signal handlers (when not using `createDaemonCLI`).** `process.on('SIGINT', ...)` is process-global; if you're using `FreeqBot` directly without the CLI scaffold, the application owns it. The README's quick example shows the snippet.
 - **Reconnect logic.** Already in the SDK transport (`@freeq/sdk`'s `Transport` does exponential-backoff auto-reconnect and re-emits `'ready'` on resume). Bot-kit's announce loop is already bound to every `'ready'` so reconnects re-announce automatically.
 - **DM dispatch / capability gating / ACLs.** Application logic. Use `bot.on('message', ...)` and the SDK directly.
+- **did:key rotation.** Bot-specific (e.g. freeqcc also wipes per-DID claude sessions). Write a `rotate-key` subcommand on the returned `Command`.
 - **Manifest building.** Bot-kit takes a pre-built TOML string. Compose your manifest however you like.
 
 ## Status
