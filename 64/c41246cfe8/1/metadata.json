@@ -1,0 +1,31 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "64c41246cfe8",
+  "session_id": "95d180e3-aa90-459b-88c1-203fe9829bc0",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-13T10:44:58.758351Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "freeq-ios/freeqTests/BufferRoutingTests.swift"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "7976bdbfc829",
+  "token_usage": {
+    "input_tokens": 1162,
+    "cache_creation_tokens": 294565,
+    "cache_read_tokens": 21947291,
+    "output_tokens": 106794,
+    "api_call_count": 156
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-13T10:44:58.471304Z",
+    "agent_lines": 0,
+    "human_added": 4,
+    "human_modified": 3,
+    "human_removed": 0,
+    "total_committed": 4,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-chad-src-freeq/95d180e3-aa90-459b-88c1-203fe9829bc0.jsonl"
+}
