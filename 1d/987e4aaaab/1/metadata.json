@@ -1,0 +1,31 @@
+{
+  "cli_version": "dev",
+  "checkpoint_id": "1d987e4aaaab",
+  "session_id": "95d180e3-aa90-459b-88c1-203fe9829bc0",
+  "strategy": "manual-commit",
+  "created_at": "2026-05-13T10:35:22.423492Z",
+  "branch": "main",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "freeq-ios/freeq/Models/AppState.swift"
+  ],
+  "agent": "Claude Code",
+  "turn_id": "7976bdbfc829",
+  "token_usage": {
+    "input_tokens": 1110,
+    "cache_creation_tokens": 239956,
+    "cache_read_tokens": 10712549,
+    "output_tokens": 72477,
+    "api_call_count": 104
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-05-13T10:35:22.21502Z",
+    "agent_lines": 0,
+    "human_added": 3,
+    "human_modified": 10,
+    "human_removed": 0,
+    "total_committed": 3,
+    "agent_percentage": 0
+  },
+  "transcript_path": ".claude/projects/-Users-chad-src-freeq/95d180e3-aa90-459b-88c1-203fe9829bc0.jsonl"
+}
