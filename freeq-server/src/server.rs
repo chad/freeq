@@ -2792,9 +2792,12 @@ pub(crate) async fn process_s2s_message(
             }
 
             // Validate DID format if provided — reject obviously bogus values
-            // without making outbound HTTP calls.
+            // without making outbound HTTP calls. Accepts did:plc, did:web,
+            // and did:key (the latter used by bot-kit / agent bots).
             if let Some(ref d) = did {
-                let valid = (d.starts_with("did:plc:") || d.starts_with("did:web:"))
+                let valid = (d.starts_with("did:plc:")
+                    || d.starts_with("did:web:")
+                    || d.starts_with("did:key:"))
                     && d.len() >= 12
                     && d.len() <= 256;
                 if !valid {
