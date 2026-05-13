@@ -3,7 +3,7 @@
   "checkpoint_id": "dc3e6d938cdc",
   "strategy": "manual-commit",
   "branch": "main",
-  "checkpoints_count": 1,
+  "checkpoints_count": 2,
   "files_touched": [
     "freeq-ios/freeq/Models/AppState.swift",
     "freeq-ios/freeqTests/BufferRoutingTests.swift"
@@ -15,13 +15,20 @@
       "context": "/dc/3e6d938cdc/0/context.md",
       "content_hash": "/dc/3e6d938cdc/0/content_hash.txt",
       "prompt": "/dc/3e6d938cdc/0/prompt.txt"
+    },
+    {
+      "metadata": "/dc/3e6d938cdc/1/metadata.json",
+      "transcript": "/dc/3e6d938cdc/1/full.jsonl",
+      "context": "/dc/3e6d938cdc/1/context.md",
+      "content_hash": "/dc/3e6d938cdc/1/content_hash.txt",
+      "prompt": "/dc/3e6d938cdc/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 1280,
-    "cache_creation_tokens": 4247803,
-    "cache_read_tokens": 415214312,
-    "output_tokens": 616814,
-    "api_call_count": 896
+    "input_tokens": 2350,
+    "cache_creation_tokens": 4445614,
+    "cache_read_tokens": 421879266,
+    "output_tokens": 666750,
+    "api_call_count": 975
   }
 }
