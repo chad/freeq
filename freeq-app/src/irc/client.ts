@@ -76,7 +76,7 @@ export function connect(url: string, desiredNick: string, channels?: string[]) {
   // Send QUIT when tab/window is closing
   window.addEventListener('beforeunload', () => {
     if (client) {
-      try { client.raw('QUIT :Leaving'); } catch { /* ignore */ }
+      try { client.quit('Leaving'); } catch { /* ignore */ }
     }
   });
 }
@@ -195,12 +195,17 @@ export function sendWhois(userNick: string) {
   client?.whois(userNick);
 }
 
-export function requestHistory(channel: string, before?: string) {
-  client?.requestHistory(channel, before);
+export function requestHistory(channel: string, beforeTimestamp?: string) {
+  if (!client) return;
+  if (beforeTimestamp) {
+    client.requestHistory({ target: channel, mode: 'before', timestamp: beforeTimestamp });
+  } else {
+    client.requestHistory({ target: channel, mode: 'latest' });
+  }
 }
 
 export function requestDmTargets(limit = 50) {
-  client?.requestDmTargets(limit);
+  client?.requestHistoryTargets(limit);
 }
 
 export function rawCommand(line: string) {

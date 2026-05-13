@@ -1,0 +1,348 @@
+// FreeqBot — high-level wrapper over @freeq/sdk's FreeqClient.
+//
+// Owns the boilerplate every bot needs:
+//   - load / persist did:key identity (32-byte ed25519 seed)
+//   - load / mint FreeqBotDelegation/v1 cert
+//   - run the announce sequence (PROVENANCE → AGENT REGISTER → MANIFEST? →
+//     PRESENCE → HEARTBEAT loop) on every `'ready'`, so reconnects re-announce
+//   - own current presence/heartbeat state via `setState()`
+//   - reject `start()` on auth failures / pre-ready disconnects / timeout
+//
+// Construction is async (the SDK's did-key derivation uses Web Crypto).
+// Use the static factory: `await FreeqBot.create({...})`.
+//
+// Shape modeled on discord.js / bolt-js / telegraf / grammY:
+//   - events register on the bot directly via `bot.on(...)` (typed delegation
+//     to the underlying client)
+//   - `.client` exposes the FreeqClient for anything not on the wrapper
+//   - the framework does NOT install SIGINT/SIGTERM handlers — README shows
+//     the snippet for the caller to wire it themselves
+
+import {
+  FreeqClient,
+  type FreeqEvents,
+  type NickCollisionPolicy,
+  type TransportState,
+} from "@freeq/sdk";
+import { join } from "node:path";
+import { botDir } from "./paths.js";
+import { loadOrCreateIdentity, type AgentIdentity } from "./identity.js";
+import { loadOrMintDelegation, type DelegationCert } from "./delegation.js";
+
+export type ActorClass = "agent" | "external_agent" | "human";
+
+export interface FreeqBotCreateOptions {
+  // ── Required ─────────────────────────────────────────────────────────
+  /** Bot name — scopes state under `~/.freeq/bots/<name>/`. */
+  name: string;
+  /** Owner DID (e.g. `did:plc:…`). Caller-resolved. */
+  ownerDid: string;
+  /** IRC nickname to register with. */
+  nick: string;
+  /** WebSocket URL, e.g. `wss://irc.freeq.at/irc`. */
+  url: string;
+
+  // ── Optional ─────────────────────────────────────────────────────────
+  /** Override the parent dir for bot state. Defaults to `~/.freeq/bots`. */
+  root?: string;
+  /** Actor class declared via AGENT REGISTER. Default `"agent"`. */
+  actorClass?: ActorClass;
+  /** Initial PRESENCE state. Default `"active"`. Carried by heartbeats
+   *  until `setState()` changes it. */
+  initialState?: string;
+  /** Optional initial status string for PRESENCE. */
+  initialStatus?: string;
+  /** TOML manifest. If set, announce sends `AGENT MANIFEST` after REGISTER. */
+  manifest?: string;
+  /** Channels to auto-join on connect. */
+  channels?: string[];
+  /** Heartbeat interval (ms). Default 30_000. */
+  heartbeatMs?: number;
+  /** Heartbeat TTL (seconds). Default 60. */
+  heartbeatTtlS?: number;
+  /** Server origin for REST API calls. Defaults to the URL origin. */
+  serverOrigin?: string;
+  /** Policy on 433 ERR_NICKNAMEINUSE. Default `"refuse"`. */
+  onNickCollision?: NickCollisionPolicy;
+}
+
+export interface FreeqBotStartOptions {
+  /** Reject `start()` if `'ready'` isn't reached within this many ms.
+   *  Default 30_000. */
+  timeoutMs?: number;
+}
+
+export interface FreeqBotStopOptions {
+  /** QUIT reason. Defaults to `"shutting down"`. */
+  reason?: string;
+  /** How long to wait after PRESENCE=offline/QUIT before disconnecting.
+   *  Default 250ms. */
+  drainMs?: number;
+}
+
+export class FreeqBot {
+  /** Underlying SDK client — `bot.on(...)` proxies handlers here. For typed
+   *  methods not surfaced on FreeqBot, call `bot.client.foo(...)`. */
+  readonly client: FreeqClient;
+  /** Resolved did:key identity. */
+  readonly identity: AgentIdentity;
+  /** FreeqBotDelegation/v1 cert binding identity to owner. */
+  readonly delegation: DelegationCert;
+  /** Absolute path under which this bot's state lives. */
+  readonly stateDir: string;
+
+  readonly #actorClass: ActorClass;
+  readonly #manifest: string | undefined;
+  readonly #heartbeatMs: number;
+  readonly #heartbeatTtlS: number;
+
+  #currentState: string;
+  #currentStatus: string | undefined;
+  #currentTask: string | undefined;
+  #heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  #readyHandler: (() => void) | null = null;
+  #started = false;
+  #stopped = false;
+
+  /** Use `FreeqBot.create(...)` instead. */
+  private constructor(args: {
+    client: FreeqClient;
+    identity: AgentIdentity;
+    delegation: DelegationCert;
+    stateDir: string;
+    actorClass: ActorClass;
+    manifest: string | undefined;
+    heartbeatMs: number;
+    heartbeatTtlS: number;
+    initialState: string;
+    initialStatus: string | undefined;
+  }) {
+    this.client = args.client;
+    this.identity = args.identity;
+    this.delegation = args.delegation;
+    this.stateDir = args.stateDir;
+    this.#actorClass = args.actorClass;
+    this.#manifest = args.manifest;
+    this.#heartbeatMs = args.heartbeatMs;
+    this.#heartbeatTtlS = args.heartbeatTtlS;
+    this.#currentState = args.initialState;
+    this.#currentStatus = args.initialStatus;
+  }
+
+  /** Async factory: loads/creates identity + cert from disk, constructs the
+   *  FreeqClient with crypto SASL, returns a ready-to-`.start()` bot. */
+  static async create(opts: FreeqBotCreateOptions): Promise<FreeqBot> {
+    const stateDir = await botDir(opts.name, { root: opts.root });
+    const identity = await loadOrCreateIdentity({
+      seedPath: join(stateDir, "agent.key"),
+    });
+    const delegation = await loadOrMintDelegation({
+      certPath: join(stateDir, "delegation.json"),
+      agentDid: identity.did,
+      ownerDid: opts.ownerDid,
+    });
+
+    const client = new FreeqClient({
+      url: opts.url,
+      nick: opts.nick,
+      channels: opts.channels,
+      serverOrigin: opts.serverOrigin,
+      onNickCollision: opts.onNickCollision ?? "refuse",
+      sasl: {
+        did: identity.did,
+        method: "crypto",
+        signer: identity.didKey.signer,
+        token: "",
+        pdsUrl: "",
+      },
+      // The bot has its own long-lived ed25519 identity (its did:key); skip
+      // the SDK's auto-mint of a per-session MSGSIG key. The server will
+      // server-sign outbound messages on our behalf when the client doesn't
+      // attach a signature.
+      autoMsgSig: false,
+    });
+
+    return new FreeqBot({
+      client,
+      identity,
+      delegation,
+      stateDir,
+      actorClass: opts.actorClass ?? "agent",
+      manifest: opts.manifest,
+      heartbeatMs: opts.heartbeatMs ?? 30_000,
+      heartbeatTtlS: opts.heartbeatTtlS ?? 60,
+      initialState: opts.initialState ?? "active",
+      initialStatus: opts.initialStatus,
+    });
+  }
+
+  // ── Typed event delegation ─────────────────────────────────────────────
+
+  /** Register a handler. Typed delegation to `client.on`. */
+  on<K extends keyof FreeqEvents>(event: K, handler: FreeqEvents[K]): this {
+    this.client.on(event, handler);
+    return this;
+  }
+
+  /** Unregister a handler. */
+  off<K extends keyof FreeqEvents>(event: K, handler: FreeqEvents[K]): this {
+    this.client.off(event, handler);
+    return this;
+  }
+
+  /** Register a one-shot handler. */
+  once<K extends keyof FreeqEvents>(event: K, handler: FreeqEvents[K]): this {
+    this.client.once(event, handler);
+    return this;
+  }
+
+  // ── State management ───────────────────────────────────────────────────
+
+  /** Update the bot's current state. Sends an immediate PRESENCE update and
+   *  causes subsequent heartbeats to carry the new state.
+   *
+   *  Valid states include: `online`, `idle`, `active`, `executing`,
+   *  `waiting_for_input`, `blocked_on_permission`, `blocked_on_budget`,
+   *  `degraded`, `paused`, `sandboxed`, `revoked`, `offline`. */
+  setState(state: string, status?: string, task?: string): void {
+    this.#currentState = state;
+    this.#currentStatus = status;
+    this.#currentTask = task;
+    try {
+      this.client.setPresence(state, status, task);
+    } catch {
+      // Socket may be down; next 'ready' will re-announce with current state.
+    }
+  }
+
+  /** Read the bot's current state (last value passed to `setState()`). */
+  get state(): string {
+    return this.#currentState;
+  }
+
+  // ── Lifecycle ──────────────────────────────────────────────────────────
+
+  /** Connect, await `'ready'`, run the announce sequence + heartbeat loop.
+   *  Rejects on SASL failure, pre-ready disconnect, or timeout. */
+  async start(opts: FreeqBotStartOptions = {}): Promise<void> {
+    if (this.#started) {
+      throw new Error("FreeqBot.start() called more than once");
+    }
+    this.#started = true;
+    const timeoutMs = opts.timeoutMs ?? 30_000;
+
+    // Persistent handler: re-runs on every 'ready' so reconnects re-announce.
+    this.#readyHandler = (): void => this.#announceAndHeartbeat();
+    this.client.on("ready", this.#readyHandler);
+
+    this.client.connect();
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error(`timeout waiting for ready (${timeoutMs}ms)`));
+      }, timeoutMs);
+
+      const onReady = (): void => {
+        cleanup();
+        resolve();
+      };
+      const onAuthError = (msg: string): void => {
+        cleanup();
+        reject(new Error(`SASL auth failed: ${msg}`));
+      };
+      const onState = (state: TransportState): void => {
+        if (state === "disconnected") {
+          cleanup();
+          reject(new Error("disconnected before ready"));
+        }
+      };
+      const onError = (msg: string): void => {
+        cleanup();
+        reject(new Error(msg));
+      };
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        this.client.off("ready", onReady);
+        this.client.off("authError", onAuthError);
+        this.client.off("connectionStateChanged", onState);
+        this.client.off("error", onError);
+      };
+
+      this.client.once("ready", onReady);
+      this.client.once("authError", onAuthError);
+      this.client.on("connectionStateChanged", onState);
+      this.client.once("error", onError);
+    });
+  }
+
+  /** Graceful shutdown: stop heartbeat, send PRESENCE=offline + QUIT,
+   *  wait for the WebSocket send buffer to drain, then disconnect.
+   *  Idempotent.
+   *
+   *  Note: the server applies a 30-second ghost period to DID-authenticated
+   *  sessions (`QUIT_GRACE_SECS` in connection/mod.rs). The bot's channel
+   *  membership is preserved for ~30s after disconnect so a quick
+   *  reconnect doesn't churn JOIN/QUIT. To other clients, this looks like
+   *  the bot lingering after shutdown — it's intentional server-side. */
+  async stop(opts: FreeqBotStopOptions | string = {}): Promise<void> {
+    if (this.#stopped) return;
+    this.#stopped = true;
+
+    const { reason = "shutting down", drainMs = 2000 } =
+      typeof opts === "string" ? { reason: opts } : opts;
+
+    if (this.#heartbeatTimer) {
+      clearInterval(this.#heartbeatTimer);
+      this.#heartbeatTimer = null;
+    }
+    if (this.#readyHandler) {
+      this.client.off("ready", this.#readyHandler);
+      this.#readyHandler = null;
+    }
+    try {
+      this.client.setPresence("offline");
+      this.client.raw(`QUIT :${reason}`);
+    } catch {
+      // socket may already be gone; nothing to flush
+    }
+    // Wait for the send buffer to actually drain (poll bufferedAmount).
+    // The previous fixed-250ms sleep was racy: process.exit() doesn't wait
+    // for in-flight WebSocket writes, so PRESENCE/QUIT could be dropped.
+    await this.client.flush(drainMs);
+    this.client.disconnect();
+  }
+
+  // ── Internal ───────────────────────────────────────────────────────────
+
+  /** Runs on every `'ready'` (initial + each reconnect). */
+  #announceAndHeartbeat(): void {
+    // Reset any prior heartbeat — reconnects start fresh.
+    if (this.#heartbeatTimer) {
+      clearInterval(this.#heartbeatTimer);
+      this.#heartbeatTimer = null;
+    }
+
+    try {
+      this.client.submitProvenance(this.delegation);
+      this.client.registerAgent(this.#actorClass);
+      if (this.#manifest) {
+        this.client.submitManifest(this.#manifest);
+      }
+      this.client.setPresence(this.#currentState, this.#currentStatus, this.#currentTask);
+    } catch {
+      // Socket likely gone mid-announce; next 'ready' will retry.
+      return;
+    }
+
+    const beat = (): void => {
+      try {
+        this.client.sendHeartbeat(this.#currentState, this.#heartbeatTtlS);
+      } catch {
+        // socket gone; next 'ready' will re-arm
+      }
+    };
+    beat();
+    this.#heartbeatTimer = setInterval(beat, this.#heartbeatMs);
+  }
+}

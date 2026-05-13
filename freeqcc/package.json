@@ -14,7 +14,9 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "start": "node dist/cli.js"
+    "start": "node dist/cli.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@freeq/sdk": "file:../freeq-sdk-js",
@@ -24,7 +26,8 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/prompts": "^2.4.9",
-    "typescript": "~5.9.3"
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.2"
   },
   "engines": {
     "node": ">=22"

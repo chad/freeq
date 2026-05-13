@@ -1,68 +1,77 @@
-# Bot Framework
+# Building Bots on freeq
 
-freeq includes a Rust bot framework for building IRC bots with AT Protocol identity.
+freeq supports bots in **TypeScript** (via [`@freeq/bot-kit`](../freeq-bot-kit-js/)) and **Rust** (via [`freeq-sdk::bot`](../freeq-sdk/)). Both surface the full agent-native protocol — identity, provenance, presence, heartbeats, governance, coordination events.
+
+Pick whichever language fits the rest of your stack.
 
 ## Quick start
 
-See the [Bot Quickstart](/docs/bot-quickstart/) for a complete 10-minute tutorial.
+- **TypeScript**: see the [TS Quickstart](/docs/bot-quickstart/) — 10 minutes to a running bot. The runnable [examples](../freeq-bot-kit-js/examples/) include an echo bot, a streaming-message demo, and a URL-fetch worker that exercises the full coordination-event pattern.
+- **Rust**: the Rust path is documented further down the same page, and a richer set of bots (factory / auditor / prototype / pi-bridge / load-test) lives in [`freeq-bots/`](../freeq-bots/).
 
-## Architecture
+## TypeScript — `@freeq/bot-kit`
 
+```ts
+import { FreeqBot } from '@freeq/bot-kit';
+
+const bot = await FreeqBot.create({
+  name: 'mybot',
+  ownerDid: 'did:plc:abc123',
+  nick: 'mybot',
+  url: 'wss://irc.freeq.at/irc',
+  channels: ['#bots'],
+});
+
+bot.on('message', (channel, msg) => {
+  if (msg.text === '!ping') bot.client.sendMessage(channel, 'pong');
+});
+
+await bot.start();
+process.once('SIGINT', () => bot.stop('SIGINT').then(() => process.exit(0)));
 ```
-Bot::new("!", "mybot")
-  → command routing (prefix matching)
-  → permission checks (Anyone / Authenticated / Admin)
-  → rate limiting (per-user token bucket)
-  → input size validation
-  → handler receives CommandContext
-```
 
-## Features
+bot-kit handles the agent-native sequence on every reconnect: PROVENANCE → AGENT REGISTER → optional MANIFEST → PRESENCE → HEARTBEAT loop. `bot.setState('executing', 'reviewing PR #42')` updates state and the next heartbeat carries it. `bot.client` is the underlying [`@freeq/sdk`](../freeq-sdk-js/) `FreeqClient` for anything the wrapper doesn't surface directly.
 
-- **Command routing** — Prefix-based dispatch with automatic help generation
-- **Permissions** — `Anyone`, `Authenticated` (requires DID), `Admin` (specific DIDs)
-- **Rate limiting** — Per-user token bucket with configurable window
-- **Input caps** — Reject oversized arguments
-- **Rich context** — Reply, react, thread, typing indicators from handlers
-- **Reconnect** — `run_with_reconnect()` with exponential backoff and auto-rejoin
-- **Fallback handler** — Catch non-command messages
+State (did:key seed + delegation cert) lives under `~/.freeq/bots/<name>/`.
 
-## Command permissions
+## Rust — `freeq-sdk::bot`
 
 ```rust
-// Anyone can use
-bot.command("ping", "Pong!", handler);
+let mut bot = Bot::new("!", "mybot")
+    .rate_limit(5, Duration::from_secs(30));
 
-// Must be authenticated with a DID
-bot.auth_command("whoami", "Show your DID", handler);
-
-// Only admin DIDs
-let bot = Bot::new("!", "mybot").admin("did:plc:abc123");
-bot.admin_command("kick", "Kick a user", handler);
+bot.command("ping", "Pong!", |ctx| Box::pin(async move {
+    ctx.react("🏓").await?;
+    ctx.reply_to("pong!").await
+}));
 ```
 
-## Handler context
+Features:
+- **Command routing** — prefix-based dispatch with automatic help generation
+- **Permissions** — `Anyone`, `Authenticated` (requires DID), `Admin` (specific DIDs)
+- **Rate limiting** — per-user token bucket with configurable window
+- **Rich context** — reply, react, thread, typing indicators from handlers
+- **Reconnect** — `run_with_reconnect()` with exponential backoff and auto-rejoin
 
-Every handler receives a `CommandContext` with:
+Examples in [`freeq-sdk/examples/`](../freeq-sdk/examples/):
+- `echo_bot.rs` — minimal (10 lines of logic)
+- `framework_bot.rs` — commands + permissions
+- `moderation_bot.rs` — full-featured: threads, reactions, rate limiting, admin commands, auto-reconnect
 
-- `ctx.reply("text")` — Send to channel or PM
-- `ctx.reply_to("text")` — Reply with `nick: text`
-- `ctx.reply_in_thread("text")` — Threaded reply
-- `ctx.react("🔥")` — React to the triggering message
-- `ctx.typing()` / `ctx.typing_done()` — Typing indicator
-- `ctx.sender`, `ctx.sender_did`, `ctx.args`, `ctx.msgid()`
+Larger bots in [`freeq-bots/`](../freeq-bots/):
+- `freeq-bots` — multi-mode binary (factory / auditor / prototype) driving Claude with tool use
+- `chatroom` — multi-personality LLM-powered chat traffic generator
+- `context-bot` — agent persistence reference (CHATHISTORY replay, rolling summaries, fact extraction)
+- `pi-bridge` — IRC ↔ Raspberry Pi GPIO bridge
 
-## Examples
+## Switching languages
 
-Three examples in `freeq-sdk/examples/`:
-
-- **`echo_bot.rs`** — Minimal (10 lines of logic)
-- **`framework_bot.rs`** — Commands + permissions
-- **`moderation_bot.rs`** — Full-featured: threads, reactions, rate limiting, admin commands, auto-reconnect
+Both SDKs implement the same wire protocol and share the same on-disk identity layout (`~/.freeq/bots/<name>/{agent.key,delegation.json}`). A bot can be rewritten from Rust to TS (or vice versa) without re-minting its did:key.
 
 ## Use cases
 
-- **Moderation** — Auto-voice/op by DID, ban enforcement, spam filtering
+- **Moderation** — auto-voice/op by DID, ban enforcement, spam filtering
 - **Integrations** — GitHub CI reporter, webhook bridge, link unfurling
 - **Knowledge** — FAQ responder, on-call rota, search
-- **Ops** — Deploy notifications, health checks, metrics
+- **Ops** — deploy notifications, health checks, metrics
+- **Agents** — task workers, code review, deployment, research; coordinated via `+freeq.at/event=*` TAGMSG and observable in every IRC client

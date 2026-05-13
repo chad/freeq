@@ -11,7 +11,7 @@ git pull --ff-only
 echo "==> Building server (release, with AV)..."
 cargo build --release --bin freeq-server --features av-native
 
-echo "==> Building web app..."
+echo "==> Building web app (auto-builds @freeq/sdk via prebuild hook)..."
 cd freeq-app
 npm ci --silent
 npm run build

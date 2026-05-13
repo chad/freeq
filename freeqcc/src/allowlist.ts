@@ -58,7 +58,7 @@ interface AllowlistFile {
  *  allowlist files written before the H-2 split can name "privmsg" /
  *  "notice"; loosen them to the SAFER -user variant only (broadcast to
  *  channels needs an explicit re-grant). */
-function migrateAction(a: string): string[] {
+export function migrateAction(a: string): string[] {
   if (a === "privmsg") return ["privmsg-user"];
   if (a === "notice") return ["notice-user"];
   return [a];

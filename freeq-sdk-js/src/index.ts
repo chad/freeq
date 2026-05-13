@@ -50,6 +50,21 @@ export type {
   SaslCredentials,
   FreeqClientOptions,
   Batch,
+  // Agent-native types
+  PresenceState,
+  GovernanceSignal,
+  GovernancePayload,
+  PresencePayload,
+  CoordinationEventPayload,
+  SpendPayload,
+  BudgetSnapshot,
+  AgentSpawnedPayload,
+  AgentDespawnedPayload,
+  HistoryOptions,
+  EmitEventOptions,
+  HeartbeatHandle,
+  NickCollisionPolicy,
+  ReconnectConfig,
 } from './types.js';
 
 // Profiles

@@ -16,6 +16,8 @@ import { prefetchProfiles } from './profiles.js';
 import type {
   IRCMessage, Message, Member, AvSession, AvParticipant,
   FreeqClientOptions, SaslCredentials, Batch, TransportState,
+  PinnedMessage, WhoisInfo, HistoryOptions, EmitEventOptions,
+  HeartbeatHandle, GovernanceSignal, CoordinationEventPayload,
 } from './types.js';
 
 export class FreeqClient extends EventEmitter {
@@ -58,6 +60,31 @@ export class FreeqClient extends EventEmitter {
 
   private _avSessions = new Map<string, AvSession>();
   private _activeAvSession: string | null = null;
+
+  // ── Internal caches and timer state ───────────────────────────────
+  /** Lowercase nick → DID. Populated from numeric 330 (WHOIS) and from
+   *  inbound `+freeq.at/account` tags. */
+  private _nickToDid = new Map<string, string>();
+  /** DID → lowercase nick. Reverse cache for AGENT PAUSE/REVOKE which
+   *  take nicks, not DIDs. */
+  private _didToNick = new Map<string, string>();
+  /** Accumulating WHOIS info per nick. Multiple WHOIS numerics fire
+   *  incrementally (311/312/319/330/671/673); we collect until 318
+   *  (RPL_ENDOFWHOIS) and resolve the requestWhois() Promise. */
+  private _whoisBuffer = new Map<string, Partial<WhoisInfo>>();
+  /** Pending requestWhois() Promise resolvers, keyed by lowercase nick. */
+  private _pendingWhois = new Map<string, Array<{
+    resolve: (info: WhoisInfo) => void;
+    reject: (err: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>>();
+  /** Random-suffix nick collision retry counter. */
+  private _nickCollisionRetries = 0;
+  /** Background heartbeat loop handle (set by startHeartbeat()). */
+  private _agentHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  /** Recently-seen coordination event IDs (TAGMSG + companion PRIVMSG carry
+   *  the same eventId; we fire `coordinationEvent` only once per pair). */
+  private _seenCoordinationEvents = new Map<string, number>();
 
   constructor(opts: FreeqClientOptions) {
     super();
@@ -133,6 +160,15 @@ export class FreeqClient extends EventEmitter {
     this.transport.connect();
   }
 
+  /** Wait for the WebSocket send buffer to drain. Returns when
+   *  `bufferedAmount` reaches 0 (or the WS is no longer open), or after
+   *  `maxMs` (default 2000ms). Call before `disconnect()` if you need
+   *  outbound messages (PRESENCE=offline, QUIT, etc.) to actually reach
+   *  the server before the socket closes. */
+  async flush(maxMs?: number): Promise<void> {
+    await this.transport?.flush(maxMs);
+  }
+
   /** Disconnect from the server. */
   disconnect(): void {
     this.transport?.disconnect();
@@ -152,6 +188,24 @@ export class FreeqClient extends EventEmitter {
     this._activeAvSession = null;
     this._encryptedChannels.clear();
     this._currentAway = null;
+    // Clear internal caches and timer state.
+    this._nickToDid.clear();
+    this._didToNick.clear();
+    this._whoisBuffer.clear();
+    // Reject any pending whois Promises so callers don't hang forever.
+    for (const [, waiters] of this._pendingWhois) {
+      for (const w of waiters) {
+        clearTimeout(w.timer);
+        w.reject(new Error('disconnect()'));
+      }
+    }
+    this._pendingWhois.clear();
+    this._seenCoordinationEvents.clear();
+    this._nickCollisionRetries = 0;
+    if (this._agentHeartbeatTimer) {
+      clearInterval(this._agentHeartbeatTimer);
+      this._agentHeartbeatTimer = null;
+    }
     signing.resetSigning();
     this._connectionState = 'disconnected';
   }
@@ -344,21 +398,95 @@ export class FreeqClient extends EventEmitter {
     this.raw(reason ? `AWAY :${reason}` : 'AWAY');
   }
 
-  /** Send a WHOIS query. */
+  /** Fire a WHOIS and resolve with parsed info when 318 (RPL_ENDOFWHOIS)
+   *  arrives. Renamed from `whois()` — that name remains as a deprecated
+   *  alias for one release. */
+  requestWhois(nick: string, opts: { timeoutMs?: number } = {}): Promise<WhoisInfo> {
+    const lc = nick.toLowerCase();
+    const timeoutMs = opts.timeoutMs ?? 5000;
+    return new Promise<WhoisInfo>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        // Remove this waiter from the queue.
+        const queue = this._pendingWhois.get(lc) ?? [];
+        const idx = queue.findIndex((w) => w.timer === timer);
+        if (idx >= 0) queue.splice(idx, 1);
+        if (queue.length === 0) this._pendingWhois.delete(lc);
+        else this._pendingWhois.set(lc, queue);
+        reject(new Error(`requestWhois('${nick}') timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      const queue = this._pendingWhois.get(lc) ?? [];
+      queue.push({ resolve, reject, timer });
+      this._pendingWhois.set(lc, queue);
+      // Fire WHOIS lazily — multiple concurrent waiters share one request.
+      if (queue.length === 1) {
+        this.raw(`WHOIS ${nick}`);
+      }
+    });
+  }
+
+  /** @deprecated Use `requestWhois(nick)` (returns `Promise<WhoisInfo>`).
+   *  Kept for one release; calling this still fires the `whois` event
+   *  on each numeric, same as before. */
   whois(nick: string): void {
     this.raw(`WHOIS ${nick}`);
   }
 
-  /** Request chat history for a channel. */
-  requestHistory(channel: string, before?: string): void {
-    if (before) {
-      this.raw(`CHATHISTORY BEFORE ${channel} timestamp=${before} 50`);
-    } else {
-      this.raw(`CHATHISTORY LATEST ${channel} * 50`);
+  /** Request chat history for a target (channel or DM partner).
+   *
+   *  `opts.mode` selects:
+   *    - 'latest' — most recent N messages
+   *    - 'before' — N messages before `opts.msgid`
+   *    - 'after'  — N messages after `opts.msgid`
+   */
+  requestHistory(opts: HistoryOptions): void;
+  /** @deprecated Use the `HistoryOptions` form. The two-arg form is kept
+   *  for backwards compatibility with freeq-app. */
+  requestHistory(channel: string, before?: string): void;
+  requestHistory(channelOrOpts: string | HistoryOptions, before?: string): void {
+    const count = 50;
+    let opts: HistoryOptions;
+    if (typeof channelOrOpts === 'string') {
+      // Legacy positional form: (channel, before?). `before` is treated
+      // as a timestamp marker for CHATHISTORY BEFORE (existing behavior).
+      if (before) {
+        this.raw(`CHATHISTORY BEFORE ${channelOrOpts} timestamp=${before} ${count}`);
+      } else {
+        this.raw(`CHATHISTORY LATEST ${channelOrOpts} * ${count}`);
+      }
+      return;
+    }
+    opts = channelOrOpts;
+    const c = opts.count ?? count;
+    const marker = opts.msgid
+      ? `msgid=${opts.msgid}`
+      : opts.timestamp
+        ? `timestamp=${opts.timestamp}`
+        : null;
+    switch (opts.mode) {
+      case 'latest':
+        this.raw(`CHATHISTORY LATEST ${opts.target} * ${c}`);
+        break;
+      case 'before':
+        if (!marker) throw new Error("requestHistory mode='before' requires opts.msgid or opts.timestamp");
+        this.raw(`CHATHISTORY BEFORE ${opts.target} ${marker} ${c}`);
+        break;
+      case 'after':
+        if (!marker) throw new Error("requestHistory mode='after' requires opts.msgid or opts.timestamp");
+        this.raw(`CHATHISTORY AFTER ${opts.target} ${marker} ${c}`);
+        break;
     }
   }
 
-  /** Request DM conversation targets. */
+  /** Request CHATHISTORY TARGETS — list of recent conversation targets
+   *  (channels + DM partners with recent activity).
+   *  Each result fires `historyTarget(target, timestamp?)`. */
+  requestHistoryTargets(limit = 50): void {
+    this.raw(`CHATHISTORY TARGETS * * ${limit}`);
+  }
+
+  /** @deprecated Use `requestHistoryTargets(limit)`. CHATHISTORY TARGETS
+   *  returns channels too, not just DMs; the original name was misleading.
+   *  Kept for one release. */
   requestDmTargets(limit = 50): void {
     this.raw(`CHATHISTORY TARGETS * * ${limit}`);
   }
@@ -405,23 +533,36 @@ export class FreeqClient extends EventEmitter {
     return e2ee.getSafetyNumber(remoteDid);
   }
 
-  /** Fetch pinned messages for a channel via REST API. */
-  async fetchPins(channel: string): Promise<void> {
+  /** Fetch pinned messages for a channel via REST API.
+   *  Returns the fetched pins; also fires the `pins` event for any
+   *  subscribers. Returns an empty array on failure. */
+  async fetchPins(channel: string): Promise<PinnedMessage[]> {
     try {
       const name = channel.startsWith('#') ? channel.slice(1) : channel;
       const resp = await fetch(`${this.serverOrigin}/api/v1/channels/${encodeURIComponent(name)}/pins`);
       if (resp.ok) {
         const data = await resp.json();
-        this.emit('pins', channel, data.pins || []);
+        const pins: PinnedMessage[] = data.pins || [];
+        this.emit('pins', channel, pins);
+        return pins;
       }
     } catch { /* ignore */ }
+    return [];
   }
 
   // ── Internals ──
 
   private onTransportStateChange(state: TransportState): void {
+    const prev = this._connectionState;
     this._connectionState = state;
     this.emit('connectionStateChanged', state);
+
+    // Discrete transition events (complement `connectionStateChanged`).
+    if (state === 'connected' && prev !== 'connected') {
+      this.emit('connected');
+    } else if (state === 'disconnected' && prev !== 'disconnected') {
+      this.emit('disconnected', 'transport closed');
+    }
 
     if (state === 'connected') {
       this.ackedCaps.clear();
@@ -510,9 +651,10 @@ export class FreeqClient extends EventEmitter {
   }
 
   private didForNick(targetNick: string): string | undefined {
-    // Ask listeners to resolve nick→DID. The app layer provides this via member lists.
-    // For now, iterate background whois cache — the app can also provide a resolver.
-    return undefined; // Will be augmented by the app layer
+    // Internal cache first (populated from WHOIS 330 + JOIN account tags).
+    // Falls back to the legacy external `nickToDid` resolver an app layer
+    // may have set. New code should use the public `getDidForNick()`.
+    return this._nickToDid.get(targetNick.toLowerCase()) ?? this.nickToDid?.(targetNick);
   }
 
   /** Resolve nick to DID — set by the app layer for E2EE support. */
@@ -520,6 +662,53 @@ export class FreeqClient extends EventEmitter {
 
   private resolveNickToDid(targetNick: string): string | undefined {
     return this.nickToDid?.(targetNick);
+  }
+
+  /** Parse a `+freeq.at/event=*` TAGMSG/PRIVMSG and emit `coordinationEvent`.
+   *  De-dupes by eventId so the paired TAGMSG + companion PRIVMSG fire
+   *  the event only once. */
+  private emitCoordinationEvent(channel: string, from: string, tags: Record<string, string>): void {
+    const eventType = tags['+freeq.at/event'];
+    if (!eventType) return;
+    const eventId = tags['msgid'] || '';
+    if (eventId) {
+      const now = Date.now();
+      const seen = this._seenCoordinationEvents.get(eventId);
+      if (seen !== undefined && now - seen < 30_000) return; // dup
+      this._seenCoordinationEvents.set(eventId, now);
+      // Trim periodically.
+      if (this._seenCoordinationEvents.size > 1000) {
+        const cutoff = now - 30_000;
+        for (const [k, t] of this._seenCoordinationEvents) {
+          if (t < cutoff) this._seenCoordinationEvents.delete(k);
+        }
+      }
+    }
+    // Payload is percent-encoded JSON per the wire format.
+    let payload: unknown = null;
+    const rawPayload = tags['+freeq.at/payload'];
+    if (rawPayload) {
+      try {
+        payload = JSON.parse(decodeURIComponent(rawPayload));
+      } catch {
+        payload = null;
+      }
+    }
+    const did = this.getDidForNick(from);
+    const taskId = tags['+freeq.at/task-id'] || tags['+freeq.at/ref'];
+    const evidenceType = tags['+freeq.at/evidence-type'];
+    const eventPayload: CoordinationEventPayload = {
+      channel,
+      from,
+      did,
+      eventType,
+      eventId,
+      taskId: taskId || undefined,
+      evidenceType: evidenceType || undefined,
+      payload,
+      tags,
+    };
+    this.emit('coordinationEvent', eventPayload);
   }
 
   private async signedPrivmsg(target: string, text: string, extraTags?: Record<string, string>): Promise<void> {
@@ -654,7 +843,7 @@ export class FreeqClient extends EventEmitter {
           if (ch.trim()) this.raw(`JOIN ${ch.trim()}`);
         }
         this.autoJoinChannels = [];
-        if (this.sasl?.did) this.requestDmTargets();
+        if (this.sasl?.did) this.requestHistoryTargets();
         // Re-assert AWAY across reconnects so the server stops thinking
         // we're present. We deliberately re-send even on the first 001
         // if _currentAway was set earlier; it's a no-op if we weren't
@@ -666,10 +855,36 @@ export class FreeqClient extends EventEmitter {
         break;
       }
 
-      case '433':
-        this._nick += '_';
-        this.raw(`NICK ${this._nick}`);
+      case '433': {
+        // 433 ERR_NICKNAMEINUSE — apply onNickCollision policy.
+        const policy = this.opts.onNickCollision ?? 'auto-suffix';
+        if (policy === 'refuse') {
+          this.emit('authError', `nick '${this._nick}' is already taken`);
+          this.transport?.disconnect();
+          this.transport = null;
+          this._connectionState = 'disconnected';
+          this.emit('connectionStateChanged', 'disconnected');
+        } else if (policy === 'random-suffix') {
+          const MAX_RETRIES = 3;
+          if (this._nickCollisionRetries >= MAX_RETRIES) {
+            this.emit('authError', `exhausted ${MAX_RETRIES} nick collision retries for '${this.opts.nick}'`);
+            this.transport?.disconnect();
+            this.transport = null;
+            this._connectionState = 'disconnected';
+            this.emit('connectionStateChanged', 'disconnected');
+            break;
+          }
+          this._nickCollisionRetries++;
+          const suffix = Math.floor(1000 + Math.random() * 9000).toString();
+          this._nick = `${this.opts.nick}-${suffix}`;
+          this.raw(`NICK ${this._nick}`);
+        } else {
+          // auto-suffix (legacy default): append `_` and retry.
+          this._nick += '_';
+          this.raw(`NICK ${this._nick}`);
+        }
         break;
+      }
 
       case 'NICK': {
         const newNick = msg.params[0];
@@ -694,7 +909,27 @@ export class FreeqClient extends EventEmitter {
         const joinDid = account && account !== '*' ? account : undefined;
         const actorClass = (msg.tags?.['freeq.at/actor-class'] || msg.tags?.['+freeq.at/actor-class']) as Member['actorClass'] | undefined;
         this.emit('memberJoined', channel, { nick: from, did: joinDid, actorClass });
-        if (joinDid) prefetchProfiles([joinDid]);
+        if (joinDid) {
+          prefetchProfiles([joinDid]);
+          // Populate internal nick↔DID cache (account-notify tag carries DID).
+          const lc = from.toLowerCase();
+          this._nickToDid.set(lc, joinDid);
+          this._didToNick.set(joinDid, lc);
+        }
+        // Spawned-agent broadcast (`+freeq.at/parent=<nick>` indicates
+        // a child agent joining the channel; see server connection/mod.rs
+        // SPAWN handler).
+        const parent = msg.tags['+freeq.at/parent'];
+        if (parent) {
+          this.emit('agentSpawned', {
+            parentNick: parent,
+            childNick: from,
+            channel,
+            capabilities: [],
+            ttlSeconds: undefined,
+            taskRef: undefined,
+          });
+        }
         this.emit('systemMessage', channel, `${from} joined`);
         break;
       }
@@ -714,6 +949,17 @@ export class FreeqClient extends EventEmitter {
       case 'QUIT': {
         const reason = msg.params[0] || '';
         this.emit('userQuit', from, reason);
+        // Spawned-child despawn pattern: hostmask is `*!spawn@freeq/spawn*`
+        // when the server tears down a TTL'd or explicitly despawned
+        // child agent. Mirror to `agentDespawned`.
+        if (msg.prefix.includes('!spawn@freeq/spawn')) {
+          this.emit('agentDespawned', { nick: from, reason: reason || undefined });
+        }
+        // Forget any cached DID binding for this nick.
+        const lc = from.toLowerCase();
+        const did = this._nickToDid.get(lc);
+        this._nickToDid.delete(lc);
+        if (did) this._didToNick.delete(did);
         break;
       }
 
@@ -739,6 +985,14 @@ export class FreeqClient extends EventEmitter {
         const isChannel = target.startsWith('#') || target.startsWith('&');
         const isSelf = from.toLowerCase() === this._nick.toLowerCase();
         const bufName = isChannel ? target : (isSelf ? target : from);
+
+        // Coordination event companion PRIVMSG. The paired TAGMSG fires
+        // `coordinationEvent` first; the de-dupe in emitCoordinationEvent
+        // suppresses the second fire. We still emit the regular `message`
+        // event below so human-readable text renders normally.
+        if (msg.tags['+freeq.at/event']) {
+          this.emitCoordinationEvent(target, from, msg.tags);
+        }
 
         const editOf = msg.tags['+draft/edit'];
         if (editOf) {
@@ -908,6 +1162,28 @@ export class FreeqClient extends EventEmitter {
           this.emit('typing', bufName, from, typing === 'active');
         }
 
+        // Governance signal (TAGMSG to a specific nick, usually us).
+        const govSignal = msg.tags['+freeq.at/governance'];
+        if (govSignal) {
+          const validSignals: GovernanceSignal[] = ['pause', 'resume', 'revoke', 'approval_granted', 'approval_denied', 'budget_exceeded'];
+          if ((validSignals as readonly string[]).includes(govSignal)) {
+            this.emit('governance', {
+              signal: govSignal as GovernanceSignal,
+              target,
+              by: from || undefined,
+              reason: msg.tags['+freeq.at/reason'] || undefined,
+            });
+          }
+        }
+
+        // Coordination event (+freeq.at/event=*). Server stores these
+        // from TAGMSG; PRIVMSG companion fires the same event below.
+        // De-dupe by eventId so handlers fire at most once per pair.
+        const eventType = msg.tags['+freeq.at/event'];
+        if (eventType) {
+          this.emitCoordinationEvent(target, from, msg.tags);
+        }
+
         const avState = msg.tags['+freeq.at/av-state'];
         const avId = msg.tags['+freeq.at/av-id'];
         if (avState && avId) {
@@ -951,7 +1227,7 @@ export class FreeqClient extends EventEmitter {
 
       case '366': {
         const namesChannel = msg.params[1];
-        this.requestHistory(namesChannel);
+        this.requestHistory({ target: namesChannel, mode: 'latest' });
         break;
       }
 
@@ -986,9 +1262,38 @@ export class FreeqClient extends EventEmitter {
         break;
       }
 
-      case 'AWAY':
-        this.emit('userAway', from, msg.params[0] || null);
+      case 'AWAY': {
+        const awayText = msg.params[0] || null;
+        this.emit('userAway', from, awayText);
+        // Server broadcasts structured PRESENCE updates via the AWAY
+        // mechanism (see freeq-server connection/mod.rs PRESENCE handler).
+        // Format: either "<state>" alone, or "<state>: <status text>".
+        // Parse back into the structured `presence` event.
+        if (awayText) {
+          const colonIdx = awayText.indexOf(':');
+          let state: string = awayText;
+          let status: string | undefined;
+          if (colonIdx > 0) {
+            state = awayText.slice(0, colonIdx).trim();
+            status = awayText.slice(colonIdx + 1).trim() || undefined;
+          }
+          this.emit('presence', {
+            nick: from,
+            did: this.getDidForNick(from),
+            state,
+            status,
+            task: undefined,
+          });
+        } else {
+          // AWAY cleared = back to online.
+          this.emit('presence', {
+            nick: from,
+            did: this.getDidForNick(from),
+            state: 'online',
+          });
+        }
         break;
+      }
 
       case '306':
         this.emit('userAway', this._nick, this.pendingAwayReason || 'away');
@@ -1026,8 +1331,13 @@ export class FreeqClient extends EventEmitter {
         const sub = msg.params[0];
         if (sub === 'TARGETS' && msg.params[1]) {
           const targetNick = msg.params[1];
+          const timestamp = msg.params[2] || undefined;
+          // Canonical event name (renamed from `dmTarget` — CHATHISTORY
+          // TARGETS returns channels too, not just DMs).
+          this.emit('historyTarget', targetNick, timestamp);
+          // Deprecated alias — kept for one release for backwards compat.
           this.emit('dmTarget', targetNick);
-          this.requestHistory(targetNick);
+          this.requestHistory({ target: targetNick, mode: 'latest' });
         }
         break;
       }
@@ -1071,14 +1381,22 @@ export class FreeqClient extends EventEmitter {
       // WHOIS
       case '311': {
         const whoisNick = msg.params[1] || '';
-        this.emit('whois', whoisNick, {
+        const info = {
           user: msg.params[2],
           host: msg.params[3],
           realname: msg.params[5] || msg.params[4],
           did: undefined,
           handle: undefined,
-        });
-        if (!this.backgroundWhois.has(whoisNick.toLowerCase())) {
+        };
+        this.emit('whois', whoisNick, info);
+        // Accumulate for requestWhois() Promise.
+        const lc = whoisNick.toLowerCase();
+        const buf = this._whoisBuffer.get(lc) ?? { nick: whoisNick, fetchedAt: 0 };
+        buf.user = info.user;
+        buf.host = info.host;
+        buf.realname = info.realname;
+        this._whoisBuffer.set(lc, buf);
+        if (!this.backgroundWhois.has(lc)) {
           this.emit('systemMessage', 'server', `WHOIS ${whoisNick}: ${msg.params[2]}@${msg.params[3]} (${msg.params[5] || msg.params[4]})`);
         }
         break;
@@ -1086,18 +1404,51 @@ export class FreeqClient extends EventEmitter {
       case '312': {
         const whoisNick = msg.params[1] || '';
         this.emit('whois', whoisNick, { server: msg.params[2] });
-        if (!this.backgroundWhois.has(whoisNick.toLowerCase())) {
+        const lc = whoisNick.toLowerCase();
+        const buf = this._whoisBuffer.get(lc) ?? { nick: whoisNick, fetchedAt: 0 };
+        buf.server = msg.params[2];
+        this._whoisBuffer.set(lc, buf);
+        if (!this.backgroundWhois.has(lc)) {
           this.emit('systemMessage', 'server', `  Server: ${msg.params[2]}`);
         }
         break;
       }
-      case '318':
-        this.backgroundWhois.delete((msg.params[1] || '').toLowerCase());
+      case '318': {
+        // End of WHOIS. Resolve any pending requestWhois() Promise(s)
+        // for this nick with the accumulated info.
+        const lc = (msg.params[1] || '').toLowerCase();
+        this.backgroundWhois.delete(lc);
+        const buf = this._whoisBuffer.get(lc);
+        this._whoisBuffer.delete(lc);
+        const waiters = this._pendingWhois.get(lc);
+        if (waiters) {
+          this._pendingWhois.delete(lc);
+          const info: WhoisInfo = {
+            nick: buf?.nick ?? msg.params[1] ?? '',
+            user: buf?.user,
+            host: buf?.host,
+            realname: buf?.realname,
+            server: buf?.server,
+            did: buf?.did,
+            handle: buf?.handle,
+            channels: buf?.channels,
+            fetchedAt: Date.now(),
+          };
+          for (const w of waiters) {
+            clearTimeout(w.timer);
+            w.resolve(info);
+          }
+        }
         break;
+      }
       case '319': {
         const whoisNick = msg.params[1] || '';
         this.emit('whois', whoisNick, { channels: msg.params[2] });
-        if (!this.backgroundWhois.has(whoisNick.toLowerCase())) {
+        const lc = whoisNick.toLowerCase();
+        const buf = this._whoisBuffer.get(lc) ?? { nick: whoisNick, fetchedAt: 0 };
+        buf.channels = msg.params[2];
+        this._whoisBuffer.set(lc, buf);
+        if (!this.backgroundWhois.has(lc)) {
           this.emit('systemMessage', 'server', `  Channels: ${msg.params[2]}`);
         }
         break;
@@ -1108,6 +1459,21 @@ export class FreeqClient extends EventEmitter {
         this.emit('whois', whoisNick, { did });
         if (whoisNick && did) {
           this.emit('memberDid', whoisNick, did);
+          // Populate internal bidirectional cache (used by getDidForNick /
+          // getNickForDid / requestWhois). Lowercase nick key for
+          // case-insensitive lookup. Forget any previous nick that was
+          // bound to this DID (e.g. after NICK change).
+          const lc = whoisNick.toLowerCase();
+          const prevDid = this._nickToDid.get(lc);
+          if (prevDid && prevDid !== did) this._didToNick.delete(prevDid);
+          const prevNick = this._didToNick.get(did);
+          if (prevNick && prevNick !== lc) this._nickToDid.delete(prevNick);
+          this._nickToDid.set(lc, did);
+          this._didToNick.set(did, lc);
+          // Accumulate for the requestWhois() Promise.
+          const buf = this._whoisBuffer.get(lc) ?? { nick: whoisNick, fetchedAt: 0 };
+          buf.did = did;
+          this._whoisBuffer.set(lc, buf);
           prefetchProfiles([did]);
         }
         if (!this.backgroundWhois.has(whoisNick.toLowerCase())) {
@@ -1129,9 +1495,14 @@ export class FreeqClient extends EventEmitter {
       }
       case '671': {
         const whoisNick = msg.params[1] || '';
-        this.emit('whois', whoisNick, { handle: msg.params[2]?.trim() });
-        if (!this.backgroundWhois.has(whoisNick.toLowerCase())) {
-          this.emit('systemMessage', 'server', `  Handle: ${msg.params[2]?.trim()}`);
+        const handle = msg.params[2]?.trim();
+        this.emit('whois', whoisNick, { handle });
+        const lc = whoisNick.toLowerCase();
+        const buf = this._whoisBuffer.get(lc) ?? { nick: whoisNick, fetchedAt: 0 };
+        buf.handle = handle;
+        this._whoisBuffer.set(lc, buf);
+        if (!this.backgroundWhois.has(lc)) {
+          this.emit('systemMessage', 'server', `  Handle: ${handle}`);
         }
         break;
       }
@@ -1350,4 +1721,366 @@ export class FreeqClient extends EventEmitter {
       }
     }
   }
+
+  // ── Channels ──
+
+  /** Send IRC QUIT. Closes the session cleanly on the server side. */
+  quit(reason?: string): void {
+    this.raw(reason ? `QUIT :${reason}` : 'QUIT');
+  }
+
+  /** JOIN multiple channels at once (comma-separated wire form). */
+  joinMany(channels: string[]): void {
+    if (channels.length === 0) return;
+    this.raw(`JOIN ${channels.join(',')}`);
+  }
+
+  // ── Messaging extensions ──
+
+  /** PRIVMSG with arbitrary IRCv3 tags. Caller-managed escaping is handled
+   *  by the SDK's format() helper. */
+  sendTagged(target: string, text: string, tags: Record<string, string>): void {
+    this.raw(format('PRIVMSG', [target, text], tags));
+  }
+
+  /** TAGMSG (tags-only, no body) to a target. */
+  sendTagmsg(target: string, tags: Record<string, string>): void {
+    this.raw(format('TAGMSG', [target], tags));
+  }
+
+  /** Send a media attachment (image/audio/video URL with metadata).
+   *  Server side stores the media tags; rich clients render the embed. */
+  sendMedia(
+    target: string,
+    media: { url: string; mime?: string; alt?: string; width?: number; height?: number; durationMs?: number; sizeBytes?: number; fallback?: string },
+  ): void {
+    const tags: Record<string, string> = { '+freeq.at/media-url': media.url };
+    if (media.mime) tags['+freeq.at/media-mime'] = media.mime;
+    if (media.alt) tags['+freeq.at/media-alt'] = media.alt;
+    if (media.width !== undefined) tags['+freeq.at/media-w'] = String(media.width);
+    if (media.height !== undefined) tags['+freeq.at/media-h'] = String(media.height);
+    if (media.durationMs !== undefined) tags['+freeq.at/media-duration'] = String(media.durationMs);
+    if (media.sizeBytes !== undefined) tags['+freeq.at/media-size'] = String(media.sizeBytes);
+    const body = media.fallback ?? `📎 ${media.url}`;
+    this.raw(format('PRIVMSG', [target, body], tags));
+  }
+
+  /** Attach link-preview metadata to a message. */
+  sendLinkPreview(
+    target: string,
+    preview: { url: string; title?: string; description?: string; imageUrl?: string },
+  ): void {
+    const tags: Record<string, string> = { '+freeq.at/link-url': preview.url };
+    if (preview.title) tags['+freeq.at/link-title'] = preview.title;
+    if (preview.description) tags['+freeq.at/link-desc'] = preview.description;
+    if (preview.imageUrl) tags['+freeq.at/link-image'] = preview.imageUrl;
+    const fallback = preview.title && preview.description
+      ? `🔗 ${preview.title} — ${preview.description} (${preview.url})`
+      : preview.title
+        ? `🔗 ${preview.title} (${preview.url})`
+        : `🔗 ${preview.url}`;
+    this.raw(format('PRIVMSG', [target, fallback], tags));
+  }
+
+  /** Send a message and await the server-assigned msgid via echo-message.
+   *  Resolves with the msgid the server stamps on the echo. Requires
+   *  `echo-message` cap (negotiated by default). Timeouts after 5s. */
+  sendAndAwaitEcho(target: string, text: string, tags: Record<string, string> = {}): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+      const nonce = `echo-${Date.now().toString(16)}${Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0')}`;
+      const fullTags = { ...tags, '+freeq.at/echo-nonce': nonce };
+      const timer = setTimeout(() => {
+        this.off('raw', onRaw);
+        reject(new Error('sendAndAwaitEcho timed out waiting for echo-message'));
+      }, 5000);
+      const onRaw = (_line: string, parsed: IRCMessage): void => {
+        if (parsed.command !== 'PRIVMSG' && parsed.command !== 'TAGMSG') return;
+        if (parsed.tags?.['+freeq.at/echo-nonce'] !== nonce) return;
+        const msgid = parsed.tags?.['msgid'];
+        if (!msgid) return;
+        clearTimeout(timer);
+        this.off('raw', onRaw);
+        resolve(msgid);
+      };
+      this.on('raw', onRaw);
+      this.raw(format('PRIVMSG', [target, text], fullTags));
+    });
+  }
+
+  /** Send a threaded reply (alias for sendReply, named to match Rust SDK
+   *  `reply_in_thread`). */
+  sendReplyInThread(target: string, parentMsgId: string, text: string): void {
+    this.sendReply(target, parentMsgId, text);
+  }
+
+  // ── Typing indicators ──
+
+  /** Start a typing indicator in a target (channel or DM). */
+  startTyping(target: string): void {
+    this.raw(format('TAGMSG', [target], { '+typing': 'active' }));
+  }
+
+  /** Stop a typing indicator. */
+  stopTyping(target: string): void {
+    this.raw(format('TAGMSG', [target], { '+typing': 'done' }));
+  }
+
+  // ── Identity resolution (sync getters; cache is auto-populated) ──
+
+  /** Sync lookup: nick → DID. Returns undefined if unknown.
+   *  Auto-populated from WHOIS 330, JOIN account tags, and ACCOUNT notify. */
+  getDidForNick(nick: string): string | undefined {
+    return this._nickToDid.get(nick.toLowerCase()) ?? this.nickToDid?.(nick);
+  }
+
+  /** Sync lookup: DID → current nick. Returns undefined if unknown.
+   *  Needed for AGENT PAUSE/REVOKE which take nicks, not DIDs. */
+  getNickForDid(did: string): string | undefined {
+    return this._didToNick.get(did);
+  }
+
+  // ── Agent lifecycle ──
+
+  /** Declare actor_class for this session. Class is one of:
+   *  'agent' | 'external_agent' | 'human'. Broadcast to shared channels. */
+  registerAgent(actorClass: 'agent' | 'external_agent' | 'human'): void {
+    this.raw(`AGENT REGISTER :class=${actorClass}`);
+  }
+
+  /** Submit a provenance declaration (JSON value, base64url-encoded on
+   *  the wire). For agents, typically a FreeqBotDelegation/v1 cert. */
+  submitProvenance(provenance: unknown): void {
+    const json = JSON.stringify(provenance);
+    const bytes = new TextEncoder().encode(json);
+    // base64url, no padding.
+    let b64 = btoa(String.fromCharCode(...bytes));
+    b64 = b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    this.raw(`PROVENANCE :${b64}`);
+  }
+
+  /** Update structured agent presence (state, status, task). */
+  setPresence(state: string, status?: string, task?: string): void {
+    const parts = [`state=${state}`];
+    if (status) parts.push(`status=${status}`);
+    if (task) parts.push(`task=${task}`);
+    this.raw(`PRESENCE :${parts.join(';')}`);
+  }
+
+  /** Send a single heartbeat. */
+  sendHeartbeat(state: string, ttlSeconds: number): void {
+    this.raw(`HEARTBEAT :state=${state};ttl=${ttlSeconds}`);
+  }
+
+  /** Start a background heartbeat loop at the given interval (ms).
+   *  TTL is set to 2× interval per Rust SDK convention. */
+  startHeartbeat(intervalMs: number): HeartbeatHandle {
+    if (this._agentHeartbeatTimer) clearInterval(this._agentHeartbeatTimer);
+    const ttl = Math.max(1, Math.floor(intervalMs / 1000) * 2);
+    // First beat immediately so server marks us alive without waiting.
+    this.sendHeartbeat('active', ttl);
+    this._agentHeartbeatTimer = setInterval(() => {
+      try { this.sendHeartbeat('active', ttl); }
+      catch { /* socket gone; next reconnect re-arms */ }
+    }, intervalMs);
+    return {
+      stop: () => {
+        if (this._agentHeartbeatTimer) {
+          clearInterval(this._agentHeartbeatTimer);
+          this._agentHeartbeatTimer = null;
+        }
+      },
+    };
+  }
+
+  // ── Governance ──
+
+  /** Request approval from channel ops for a capability use. */
+  requestApproval(channel: string, capability: string, resource?: string): void {
+    const tail = resource ? `${capability};resource=${resource}` : capability;
+    this.raw(`APPROVAL_REQUEST ${channel} :${tail}`);
+  }
+
+  /** Op-only. Pause target agent — expects PRESENCE=paused within 10s. */
+  pauseAgent(nick: string, reason?: string): void {
+    this.raw(reason ? `AGENT PAUSE ${nick} :${reason}` : `AGENT PAUSE ${nick}`);
+  }
+
+  /** Op-only. Resume a paused agent. */
+  resumeAgent(nick: string): void {
+    this.raw(`AGENT RESUME ${nick}`);
+  }
+
+  /** Op-only. Revoke capabilities + force disconnect. */
+  revokeAgent(nick: string, reason?: string): void {
+    this.raw(reason ? `AGENT REVOKE ${nick} :${reason}` : `AGENT REVOKE ${nick}`);
+  }
+
+  /** Op approval response. */
+  approveAgent(nick: string, capability: string): void {
+    this.raw(`AGENT APPROVE ${nick} ${capability}`);
+  }
+
+  /** Op denial response. */
+  denyAgent(nick: string, capability: string, reason?: string): void {
+    this.raw(reason
+      ? `AGENT DENY ${nick} ${capability} :${reason}`
+      : `AGENT DENY ${nick} ${capability}`);
+  }
+
+  // ── Coordination events ──
+
+  /** Emit a coordination event as paired TAGMSG (for storage) +
+   *  companion PRIVMSG (for rich-client rendering). Returns the
+   *  server-stored event ID. */
+  emitEvent(
+    channel: string,
+    eventType: string,
+    payload: unknown,
+    opts: EmitEventOptions = {},
+  ): string {
+    const eventId = opts.eventId ?? mintEventId();
+    const payloadJson = JSON.stringify(payload);
+    // Percent-encode `;` and ` ` so the value survives both IRCv3 tag
+    // escape and the server's url-decode pass (see proposal §5.0).
+    const encoded = payloadJson.replace(/;/g, '%3B').replace(/ /g, '%20');
+    const tags: Record<string, string> = {
+      msgid: eventId,
+      '+freeq.at/event': eventType,
+      '+freeq.at/payload': encoded,
+    };
+    if (opts.refId) tags['+freeq.at/task-id'] = opts.refId;
+    if (opts.extraTags) Object.assign(tags, opts.extraTags);
+    const humanText = opts.humanText ?? `${eventType}`;
+    this.raw(format('TAGMSG', [channel], tags));
+    this.raw(format('PRIVMSG', [channel, humanText], tags));
+    return eventId;
+  }
+
+  /** Sugar over `emitEvent` for `task_request`. Returns the task ID. */
+  createTask(channel: string, description: string): string {
+    return this.emitEvent(channel, 'task_request', { description }, {
+      humanText: `📋 New task: ${description}`,
+    });
+  }
+
+  /** Sugar for `task_update` — progress update on a task. */
+  updateTask(channel: string, taskId: string, phase: string, summary: string): void {
+    this.emitEvent(channel, 'task_update', { phase, summary }, {
+      refId: taskId,
+      humanText: `🔄 [${phase}] ${summary}`,
+    });
+  }
+
+  /** Sugar for `task_complete`. */
+  completeTask(channel: string, taskId: string, summary: string, url?: string): void {
+    const payload: Record<string, unknown> = { summary };
+    if (url) payload.url = url;
+    const urlStr = url ? ` — ${url}` : '';
+    this.emitEvent(channel, 'task_complete', payload, {
+      refId: taskId,
+      humanText: `🎉 Task complete: ${summary}${urlStr}`,
+    });
+  }
+
+  /** Sugar for `task_failed`. */
+  failTask(channel: string, taskId: string, error: string): void {
+    this.emitEvent(channel, 'task_failed', { error }, {
+      refId: taskId,
+      humanText: `❌ Task failed: ${error}`,
+    });
+  }
+
+  /** Sugar for `evidence_attach` — attach evidence to a task. */
+  attachEvidence(
+    channel: string,
+    taskId: string,
+    evidenceType: string,
+    summary: string,
+    url?: string,
+  ): void {
+    const payload: Record<string, unknown> = { type: evidenceType, summary };
+    if (url) payload.url = url;
+    const urlStr = url ? ` — ${url}` : '';
+    this.emitEvent(channel, 'evidence_attach', payload, {
+      refId: taskId,
+      extraTags: { '+freeq.at/evidence-type': evidenceType },
+      humanText: `📎 Evidence (${evidenceType}): ${summary}${urlStr}`,
+    });
+  }
+
+  // ── Spawning (Phase 4) ──
+
+  /** Submit an agent manifest (base64-encoded TOML). */
+  submitManifest(tomlContent: string): void {
+    const bytes = new TextEncoder().encode(tomlContent);
+    const b64 = btoa(String.fromCharCode(...bytes));
+    this.raw(`AGENT MANIFEST ${b64}`);
+  }
+
+  /** Spawn a child agent in a channel. */
+  spawnAgent(
+    channel: string,
+    nick: string,
+    capabilities: string[],
+    ttlSeconds?: number,
+    taskRef?: string,
+  ): void {
+    let params = `nick=${nick}`;
+    if (capabilities.length > 0) params += `;capabilities=${capabilities.join(',')}`;
+    if (ttlSeconds !== undefined) params += `;ttl=${ttlSeconds}`;
+    if (taskRef) params += `;task=${taskRef}`;
+    this.raw(`AGENT SPAWN ${channel} :${params}`);
+  }
+
+  /** Despawn a child agent (parent only). */
+  despawnAgent(nick: string): void {
+    this.raw(`AGENT DESPAWN ${nick}`);
+  }
+
+  /** Send a message attributed to a spawned child agent. */
+  sendAsChild(childNick: string, channel: string, text: string): void {
+    this.raw(`AGENT MSG ${childNick} ${channel} :${text}`);
+  }
+
+  // ── Economics (Phase 5) ──
+
+  /** Submit a spend record for the current action.
+   *  (Server emits a `budget_exceeded` governance TAGMSG to us if this
+   *  spend pushes us past the per-agent budget cap.) */
+  submitSpend(
+    channel: string,
+    amount: number,
+    unit: string,
+    description: string,
+    taskRef?: string,
+  ): void {
+    let params = `amount=${amount.toFixed(6)};unit=${unit};desc=${description}`;
+    if (taskRef) params += `;task=${taskRef}`;
+    this.raw(`SPEND ${channel} :${params}`);
+  }
+
+  /** Set a per-agent budget on a channel (op only). */
+  setBudget(
+    channel: string,
+    maxAmount: number,
+    unit: string,
+    period: string,
+    sponsorDid: string,
+  ): void {
+    this.raw(`BUDGET ${channel} :max=${maxAmount};unit=${unit};period=${period};sponsor=${sponsorDid}`);
+  }
+
+  /** Query channel budget state (server replies with snapshot). */
+  requestBudget(channel: string): void {
+    this.raw(`BUDGET ${channel}`);
+  }
+}
+
+/** Generate a coordination event ID. Format mirrors Rust SDK
+ *  (millis-hex + 16 random hex chars). Not a ULID. */
+function mintEventId(): string {
+  const millis = Date.now().toString(16).padStart(13, '0');
+  const r1 = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
+  const r2 = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0');
+  return millis + r1 + r2;
 }

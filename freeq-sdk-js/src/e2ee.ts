@@ -130,6 +130,12 @@ export async function getSafetyNumber(remoteDid: string): Promise<string | null>
 
 /** Initialize E2EE for an authenticated user. */
 export async function initialize(did: string, serverOrigin: string): Promise<void> {
+  if (typeof indexedDB === 'undefined') {
+    // Node / non-browser runtimes don't have IndexedDB. E2EE is browser-only
+    // (DM key store, session state). Bail silently — bots and headless agents
+    // don't use E2EE.
+    return;
+  }
   try {
     await (crypto.subtle.generateKey as any)({ name: 'X25519' }, false, ['deriveBits']);
   } catch {

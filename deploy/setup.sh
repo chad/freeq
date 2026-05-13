@@ -102,7 +102,7 @@ echo "==> Building server..."
 cd "$REPO_DIR"
 cargo build --release --bin freeq-server
 
-echo "==> Building web app..."
+echo "==> Building web app (auto-builds @freeq/sdk via prebuild hook)..."
 cd "$REPO_DIR/freeq-app"
 npm ci
 npm run build

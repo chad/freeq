@@ -165,6 +165,13 @@ export interface FreeqClientOptions {
    *  compatibility. Useful for agents that hold their own signing key
    *  (e.g. freeqcc using its did:key seed) or for headless tests. */
   autoMsgSig?: boolean;
+
+  /** Policy on 433 ERR_NICKNAMEINUSE during registration:
+   *   - `'refuse'` (default for new code): emit `authError` and disconnect.
+   *   - `'auto-suffix'`: append `_` until accepted (legacy SDK behavior).
+   *   - `'random-suffix'`: append a 4-digit random suffix, up to 3 attempts.
+   *  Omitted defaults to `'auto-suffix'` for backward compatibility. */
+  onNickCollision?: NickCollisionPolicy;
 }
 
 /** A batch of messages (e.g. CHATHISTORY response). */
@@ -172,4 +179,161 @@ export interface Batch {
   type: string;
   target: string;
   messages: Message[];
+}
+
+// ── Agent-native types ─────────────────────────────────────────────────────
+
+/** Structured presence states an agent (or human) can broadcast. */
+export type PresenceState =
+  | 'online'
+  | 'idle'
+  | 'active'
+  | 'executing'
+  | 'waiting_for_input'
+  | 'blocked_on_permission'
+  | 'blocked_on_budget'
+  | 'degraded'
+  | 'paused'
+  | 'sandboxed'
+  | 'revoked'
+  | 'offline';
+
+/** Governance signal types delivered via `+freeq.at/governance=*` TAGMSG. */
+export type GovernanceSignal =
+  | 'pause'
+  | 'resume'
+  | 'revoke'
+  | 'approval_granted'
+  | 'approval_denied'
+  | 'budget_exceeded';
+
+/** Payload of the `governance` event. */
+export interface GovernancePayload {
+  signal: GovernanceSignal;
+  /** Nick the signal addresses (typically us). */
+  target: string;
+  /** Issuer of the signal (op nick), if available. */
+  by?: string;
+  /** Optional human-readable detail. */
+  reason?: string;
+}
+
+/** Payload of the `presence` event — someone else's PRESENCE update. */
+export interface PresencePayload {
+  nick: string;
+  did?: string;
+  state: PresenceState | string;
+  status?: string;
+  task?: string;
+}
+
+/** Payload of the `coordinationEvent` event — parsed `+freeq.at/event=*` TAGMSG. */
+export interface CoordinationEventPayload {
+  /** Channel (or DM target) the event was emitted in. */
+  channel: string;
+  /** Sender's nick. */
+  from: string;
+  /** Sender's DID, if known. */
+  did?: string;
+  /** Event type — e.g. `task_request`, `task_update`, `task_complete`, etc. */
+  eventType: string;
+  /** Stable event ID (ULID). */
+  eventId: string;
+  /** Threading reference — the task this event belongs to. */
+  taskId?: string;
+  /** Evidence subtype for `evidence_attach` events. */
+  evidenceType?: string;
+  /** Decoded payload JSON. `null` if no payload tag. */
+  payload: unknown;
+  /** Raw IRCv3 tags from the wire (for advanced consumers). */
+  tags: Record<string, string>;
+}
+
+/** Payload of the `spend` event — SPEND wire command relayed by the server. */
+export interface SpendPayload {
+  channel: string;
+  did: string;
+  amount: number;
+  unit: string;
+  description?: string;
+  taskRef?: string;
+}
+
+/** Per-period budget snapshot. */
+export interface BudgetSnapshot {
+  channel: string;
+  policy?: {
+    maxAmount: number;
+    unit: string;
+    period: string;
+    sponsorDid: string;
+  };
+  currentPeriod?: {
+    totalSpent: number;
+    remaining: number;
+    percentUsed: number;
+    byAgent: Array<{ agentDid: string; spent: number; items: number }>;
+  };
+}
+
+/** Payload of the `agentSpawned` event. */
+export interface AgentSpawnedPayload {
+  parentNick: string;
+  childNick: string;
+  channel: string;
+  capabilities: string[];
+  ttlSeconds?: number;
+  taskRef?: string;
+}
+
+/** Payload of the `agentDespawned` event. */
+export interface AgentDespawnedPayload {
+  nick: string;
+  reason?: string;
+}
+
+/** Options for `requestHistory`. */
+export interface HistoryOptions {
+  target: string;
+  mode: 'latest' | 'before' | 'after';
+  /** Required for mode='before' or 'after' unless `timestamp` is given. */
+  msgid?: string;
+  /** ISO 8601 timestamp. Alternative to `msgid` for 'before'/'after' modes
+   *  (CHATHISTORY supports either; some clients paginate by timestamp). */
+  timestamp?: string;
+  /** Default: 50. */
+  count?: number;
+}
+
+/** Options for `emitEvent`. */
+export interface EmitEventOptions {
+  /** Threading reference — the task this event belongs to. */
+  refId?: string;
+  /** Human-readable companion text for the PRIVMSG. */
+  humanText?: string;
+  /** Additional IRCv3 tags to set on both the TAGMSG and PRIVMSG. */
+  extraTags?: Record<string, string>;
+  /** Pre-supplied event ID (ULID). If omitted, a fresh one is minted. */
+  eventId?: string;
+}
+
+/** Handle returned by `startHeartbeat()`. */
+export interface HeartbeatHandle {
+  /** Stop the heartbeat loop. */
+  stop(): void;
+}
+
+/** Policy for handling a 433 ERR_NICKNAMEINUSE during registration. */
+export type NickCollisionPolicy = 'refuse' | 'auto-suffix' | 'random-suffix';
+
+/** Configuration for the auto-reconnect loop. */
+export interface ReconnectConfig {
+  /** Channels to rejoin after each reconnect. */
+  channels?: string[];
+  /** Initial delay before first reconnect attempt (ms). Default: 2000. */
+  initialDelayMs?: number;
+  /** Maximum delay between attempts (ms). Default: 30000. */
+  maxDelayMs?: number;
+  /** Exponential backoff factor. Default: 2. */
+  backoffFactor?: number;
 }

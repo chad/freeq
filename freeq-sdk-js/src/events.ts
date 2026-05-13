@@ -10,6 +10,8 @@
 import type {
   Message, Member, Channel, WhoisInfo, ChannelListEntry,
   AvSession, TransportState, PinnedMessage,
+  GovernancePayload, PresencePayload, CoordinationEventPayload,
+  SpendPayload, BudgetSnapshot, AgentSpawnedPayload, AgentDespawnedPayload,
 } from './types.js';
 
 /** Map of event names to their handler signatures. */
@@ -142,6 +144,50 @@ export interface FreeqEvents {
 
   /** Fired when an ERROR message is received from the server. */
   error: (message: string) => void;
+
+  // ── Agent-native events (new in TS SDK; server-supported today) ────
+
+  /** Fired when the underlying transport opens (TCP/WS established).
+   *  Distinct from `'connectionStateChanged'`: this is a discrete
+   *  transition event, useful for telemetry. */
+  connected: () => void;
+
+  /** Fired when the transport closes. `reason` is best-effort. */
+  disconnected: (reason: string) => void;
+
+  /** Fired when another participant broadcasts a PRESENCE update.
+   *  See `setPresence()` for the outbound side. */
+  presence: (payload: PresencePayload) => void;
+
+  /** Fired when this client receives a governance signal targeted at us.
+   *  A well-behaved agent must respond promptly (e.g. transition
+   *  `setPresence('paused', …)` within 10s on `'pause'`). */
+  governance: (payload: GovernancePayload) => void;
+
+  /** Fired when a `+freeq.at/event=*` coordination event arrives in a
+   *  channel we're in (TAGMSG or its companion PRIVMSG). Handlers
+   *  dispatch on `payload.eventType`. */
+  coordinationEvent: (payload: CoordinationEventPayload) => void;
+
+  /** Fired when a SPEND wire command is broadcast to a channel we're in. */
+  spend: (payload: SpendPayload) => void;
+
+  /** Fired when BUDGET state changes in a channel we're in (set, updated,
+   *  or exceeded). Note: `budget_exceeded` also fires `governance`. */
+  budget: (payload: BudgetSnapshot) => void;
+
+  /** Fired when a parent agent broadcasts AGENT SPAWN in a channel we're in. */
+  agentSpawned: (payload: AgentSpawnedPayload) => void;
+
+  /** Fired when a child agent broadcasts AGENT DESPAWN (or its TTL expires). */
+  agentDespawned: (payload: AgentDespawnedPayload) => void;
+
+  // ── Renamed events (canonical names with deprecated aliases) ──────
+
+  /** Fired per result of `requestHistoryTargets()` — once per recent
+   *  conversation target (channel or DM partner) with the most-recent
+   *  message timestamp. */
+  historyTarget: (target: string, timestamp?: string) => void;
 }
 
 type EventHandler<K extends keyof FreeqEvents> = FreeqEvents[K];

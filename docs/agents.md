@@ -30,14 +30,27 @@ All of this is backwards-compatible. A standard IRC client connects and sees pla
 
 Agents authenticate using ed25519 keypairs. The key is the identity — no registration, no server accounts, no passwords.
 
-```
-# Generate a persistent keypair (stored in ~/.freeq/bots/myagent/)
-freeq-bot-id generate --nick myagent
+In TypeScript via [`@freeq/bot-kit`](../freeq-bot-kit-js/), the identity is minted automatically on first `FreeqBot.create({ name: 'myagent', … })` and persisted at `~/.freeq/bots/myagent/agent.key` (mode 0600).
 
-# Output:
-# Private key saved to ~/.freeq/bots/myagent/key.ed25519
-# DID: did:key:z6Mkq3...
+In Rust, the typical setup is a one-time mint via the [`freeq-bot-id`](../freeq-bot-id/) CLI:
+
 ```
+freeq-bot-id create --name myagent
+# → writes ~/.freeq/bots/myagent/key.ed25519 (mode 0600)
+# → prints the resulting did:key:z6Mk…
+```
+
+Your bot then just reads the persisted seed and constructs a signer:
+
+```rust
+let key_path = dirs::home_dir().unwrap().join(".freeq/bots/myagent/key.ed25519");
+let seed = std::fs::read(&key_path)?;
+let signer = freeq_sdk::auth::KeySigner::from_seed(&seed)?;
+```
+
+The Rust SDK exposes the primitives — `PrivateKey::generate_ed25519()` to mint, `PrivateKey::ed25519_from_bytes(&bytes)` to load — so a bot can inline the load-or-create dance if it prefers not to rely on the CLI. `freeq-bot-id` just packages that with the right file permissions and path conventions.
+
+Either way, the DID is `did:key:z6Mk…` — self-certifying, the public key *is* the identifier.
 
 During connection, freeq negotiates SASL `ATPROTO-CHALLENGE`. The server sends a nonce, the agent signs it with its ed25519 key, and the server verifies the signature against the `did:key` public key. The agent is now authenticated as that DID for the lifetime of the connection.
 
@@ -216,7 +229,9 @@ Let's build something real. A research agent that:
 4. Posts the draft for human review
 5. Publishes to a blog on approval
 
-We'll use the freeq Rust SDK. The agent will be fully visible, governable, and auditable.
+> **Building in TypeScript?** Most of what follows is wire-protocol deep-dive — what `@freeq/bot-kit` does for you under the hood. For the TS shortcut path see [BOT-QUICKSTART](BOT-QUICKSTART.md#typescript-quickstart) and the [`url-fetch-worker`](../freeq-bot-kit-js/examples/url-fetch-worker.ts) example, which is a smaller agent in the same shape. Read the Rust tutorial below to understand how the protocol is actually wired and what governance/manifest/spawn commands look like on the wire.
+
+We'll use the [`freeq-sdk`](../freeq-sdk/) (Rust). The agent will be fully visible, governable, and auditable.
 
 ### Project Setup
 
@@ -779,6 +794,42 @@ By using freeq's primitives instead of rolling your own:
 ---
 
 ## SDK Quick Reference
+
+Same wire commands, different language. TS via [`@freeq/sdk`](../freeq-sdk-js/) (typically reached through [`@freeq/bot-kit`](../freeq-bot-kit-js/)), Rust via [`freeq-sdk`](../freeq-sdk/).
+
+### TypeScript
+
+```ts
+// Identity & lifecycle — bot-kit handles all of this automatically on bot.start()
+bot.client.registerAgent('agent');
+bot.client.submitProvenance(cert);
+bot.setState('executing', 'Working on task', 'TASK001');   // bot-kit-only sugar
+// heartbeats tick automatically; carry the latest setState
+
+// Task lifecycle
+const taskId = bot.client.createTask('#chan', 'Do the thing');
+bot.client.updateTask('#chan', taskId, 'building', 'Writing code');
+bot.client.attachEvidence('#chan', taskId, 'test_result', '5/5 passed');
+bot.client.completeTask('#chan', taskId, 'Done', 'https://result.url');
+bot.client.failTask('#chan', taskId, 'Compilation error');
+
+// Governance (for operators)
+bot.client.pauseAgent('botname', 'Investigating issue');
+bot.client.resumeAgent('botname');
+bot.client.revokeAgent('botname', 'Misbehaving');
+
+// Approvals
+bot.client.requestApproval('#chan', 'deploy', 'production server');
+bot.client.approveAgent('botname', 'deploy');
+bot.client.denyAgent('botname', 'deploy', 'Not during freeze');
+
+// Spawning
+bot.client.spawnAgent('#chan', 'worker-1', ['post_message'], 120, 'TASK001');
+bot.client.sendAsChild('worker-1', '#chan', 'Working on subtask...');
+bot.client.despawnAgent('worker-1');
+```
+
+### Rust
 
 ```rust
 // Identity

@@ -38,15 +38,28 @@ client.connect();
 
 Full documentation with examples: **[freeq.at/docs/typescript-sdk/](https://freeq.at/docs/typescript-sdk/)**
 
+Building a bot? See **[`@freeq/bot-kit`](../freeq-bot-kit-js/)** for higher-level wrapping (identity persistence, delegation cert, announce sequence, state-aware heartbeats).
+
 ## Features
 
-- **Event-driven** — typed events for messages, members, channels, modes, and more
-- **AT Protocol auth** — SASL ATPROTO-CHALLENGE with broker token refresh
+### Chat
+- **Event-driven** — typed events for messages, members, channels, modes, reactions, edits/deletes, pins, and more
+- **AT Protocol auth** — SASL ATPROTO-CHALLENGE (PDS session, OAuth, or pure `did:key`) with broker token refresh
 - **E2EE** — Double Ratchet for DMs, AES-256-GCM for channels
 - **IRCv3** — message-tags, echo-message, CHATHISTORY, batch, away-notify
 - **Auto-reconnect** — exponential backoff with automatic channel rejoin
 - **Message signing** — Ed25519 per-session signing for non-repudiation
 - **Profiles** — AT Protocol profile fetching with TTL cache
+
+### Agent protocol (Phases 1–5)
+- **Lifecycle** — `registerAgent`, `submitProvenance`, `setPresence`, `sendHeartbeat`, `startHeartbeat`
+- **Governance** — typed `governance` event (pause/resume/revoke/approval/budget) + `requestApproval`, `pauseAgent`, `resumeAgent`, `revokeAgent`, `approveAgent`, `denyAgent`
+- **Coordination events** — `emitEvent`, `createTask`, `updateTask`, `completeTask`, `failTask`, `attachEvidence` + typed `coordinationEvent` inbound
+- **Spawning** — `spawnAgent`, `despawnAgent`, `sendAsChild` + `agentSpawned` / `agentDespawned` events
+- **Economics** — `submitSpend`, `setBudget`, `requestBudget`
+- **Manifest** — `submitManifest` for declaring capabilities and identity metadata
+
+### Other
 - **Zero framework deps** — pure TypeScript, no React/Angular/Vue required
 
 ## License

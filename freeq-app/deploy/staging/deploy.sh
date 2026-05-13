@@ -22,6 +22,11 @@ done
 cp -r "$REPO_ROOT/freeq-app" "$TMPDIR/web-client"
 rm -rf "$TMPDIR/web-client/node_modules" "$TMPDIR/web-client/dist" "$TMPDIR/web-client/src-tauri"
 
+# freeq-app depends on @freeq/sdk via `file:../freeq-sdk-js`. Copy the source
+# in (without node_modules/dist) so the Dockerfile can build it before web.
+cp -r "$REPO_ROOT/freeq-sdk-js" "$TMPDIR/freeq-sdk-js"
+rm -rf "$TMPDIR/freeq-sdk-js/node_modules" "$TMPDIR/freeq-sdk-js/dist"
+
 cp "$SCRIPT_DIR/Dockerfile" "$TMPDIR/Dockerfile.miren"
 
 mkdir -p "$TMPDIR/.miren"

@@ -1,0 +1,48 @@
+{
+  "name": "@freeq/bot-kit",
+  "version": "0.1.0",
+  "description": "On-disk persistence + announce-sequence orchestration for freeq bots. Sits on top of @freeq/sdk.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src/",
+    "example:echo": "tsx examples/echo-bot.ts",
+    "example:streaming": "tsx examples/streaming.ts",
+    "example:url-worker": "tsx examples/url-fetch-worker.ts",
+    "example:fire-task": "tsx examples/fire-task.ts"
+  },
+  "dependencies": {
+    "@freeq/sdk": "file:../freeq-sdk-js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.2"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": ["freeq", "bot", "agent", "at-protocol", "did-key"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/chad/freeq",
+    "directory": "freeq-bot-kit-js"
+  }
+}
