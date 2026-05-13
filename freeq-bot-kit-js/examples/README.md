@@ -4,7 +4,8 @@ Runnable examples of `@freeq/bot-kit`. None require any external service beyond 
 
 | Example | What it shows |
 |---|---|
-| [`echo-bot.ts`](echo-bot.ts) | The canonical "is bot-kit working?" smoke test. Echoes messages, replies `pong` to `!ping`. |
+| [`echo-bot.ts`](echo-bot.ts) | The canonical "is bot-kit working?" smoke test. Echoes messages, replies `pong` to `!ping`. Minimal — `FreeqBot.create` + `bot.start` + manual SIGINT. |
+| [`daemon.ts`](daemon.ts) | The same echo bot wrapped in `createDaemonCLI`. Ships `launch [--detach] / stop / status / doctor / tail` out of the box. The shape long-running bot daemons should adopt. |
 | [`streaming.ts`](streaming.ts) | Types out a message word-by-word using the edit-message hack. Same primitive LLM-powered bots use to pipe streaming responses. |
 | [`url-fetch-worker.ts`](url-fetch-worker.ts) | The canonical agent pattern on freeq — listens for `task_request` coordination events, claims them, fetches the URL, reports results via `task_complete`. |
 | [`fire-task.ts`](fire-task.ts) | Helper for testing `url-fetch-worker`. Fires a single `task_request` and exits. |

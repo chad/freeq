@@ -22,6 +22,7 @@
     "test:watch": "vitest",
     "lint": "eslint src/",
     "example:echo": "tsx examples/echo-bot.ts",
+    "example:daemon": "tsx examples/daemon.ts",
     "example:streaming": "tsx examples/streaming.ts",
     "example:url-worker": "tsx examples/url-fetch-worker.ts",
     "example:fire-task": "tsx examples/fire-task.ts"
