@@ -1012,6 +1012,12 @@ class AppState: ObservableObject {
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONSerialization.data(withJSONObject: ["broker_token": brokerToken])
+            // Cap a single attempt at 8 s. URLSession's default (~60 s) is far
+            // too long for cold-launch UX — the user is staring at a status
+            // banner while the request sits in connect/TLS. With our buffer
+            // cache hydrated, falling back to "the cached UI works, send is
+            // disabled" is strictly better than blocking on a doomed request.
+            request.timeoutInterval = 8
 
             let data: Data
             let response: URLResponse
