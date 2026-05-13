@@ -20,13 +20,18 @@
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint src/"
+    "lint": "eslint src/",
+    "example:echo": "tsx examples/echo-bot.ts",
+    "example:streaming": "tsx examples/streaming.ts",
+    "example:url-worker": "tsx examples/url-fetch-worker.ts",
+    "example:fire-task": "tsx examples/fire-task.ts"
   },
   "dependencies": {
     "@freeq/sdk": "file:../freeq-sdk-js"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "tsx": "^4.19.2",
     "typescript": "~5.9.3",
     "vitest": "^4.1.2"
   },

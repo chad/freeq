@@ -15,6 +15,17 @@ High-level wrapper over [`@freeq/sdk`](../freeq-sdk-js/) for building freeq bots
 npm install @freeq/bot-kit @freeq/sdk
 ```
 
+## Runnable examples
+
+Four illustrative bots live under [`examples/`](examples/):
+
+- [`echo-bot.ts`](examples/echo-bot.ts) — canonical smoke test; echoes messages, replies `pong` to `!ping`
+- [`streaming.ts`](examples/streaming.ts) — types out a message word-by-word using the edit-message hack
+- [`url-fetch-worker.ts`](examples/url-fetch-worker.ts) — the canonical agent pattern: claims `task_request` coordination events, fetches the URL, reports via `task_complete`, transitions state along the way
+- [`fire-task.ts`](examples/fire-task.ts) — helper that fires a single `task_request` and exits; pairs with `url-fetch-worker` for end-to-end testing
+
+Run any of them with `npm run example:<name> -- --owner did:plc:<your-did> --channel '#test'`. See [`examples/README.md`](examples/README.md) for the full worker walk-through.
+
 ## Quick example
 
 ```ts
@@ -86,13 +97,15 @@ Rejects with a typed error on:
 
 ### `bot.stop(reasonOrOptions?)`
 
-Graceful shutdown. Stops the heartbeat loop, sends `PRESENCE :state=offline` and `QUIT :<reason>`, waits briefly for the wire to flush, then disconnects. Idempotent.
+Graceful shutdown. Stops the heartbeat loop, sends `PRESENCE :state=offline` and `QUIT :<reason>`, waits for the WebSocket send buffer to drain (default 2000ms), then disconnects. Idempotent.
 
 ```ts
 await bot.stop();                                  // default reason
 await bot.stop('SIGINT');                          // string shorthand
 await bot.stop({ reason: 'redeploy', drainMs: 500 });
 ```
+
+**Server-side ghost period (~30s).** The freeq server applies a 30-second grace window to DID-authenticated sessions on disconnect — channel membership is held briefly so a quick reconnect doesn't churn JOIN/QUIT messages. To other clients in the channel this looks like the bot lingering after shutdown. It's intentional. If you watch via the freeq-app web client, the bot will visibly disappear ~30s after `bot.stop()` resolves. Heartbeat-TTL-only cleanup (when the QUIT never reaches the server) extends this to ~60-90s.
 
 ### `bot.setState(state, status?, task?)`
 
