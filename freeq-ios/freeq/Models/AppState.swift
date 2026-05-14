@@ -135,6 +135,17 @@ enum BufferCacheStore {
     }
 }
 
+extension ISO8601DateFormatter {
+    /// Shared formatter for the server's CHATHISTORY TARGETS `time` tag
+    /// (`YYYY-MM-DDTHH:MM:SS.sssZ`). Cached because `ISO8601DateFormatter`
+    /// is expensive to construct.
+    static let freeqTargets: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+}
+
 /// A channel with its messages and members.
 class ChannelState: ObservableObject, Identifiable {
     let name: String
@@ -285,6 +296,18 @@ class AppState: ObservableObject {
     /// Muted channels — no notifications, no badge increment
     @Published var mutedChannels: Set<String> = [] {
         didSet { UserDefaults.standard.set(Array(mutedChannels), forKey: "freeq.mutedChannels") }
+    }
+
+    /// DM peers the user has explicitly closed. Stored lowercased so we
+    /// can compare against any case-shape the server hands back. Closed
+    /// DMs are:
+    ///   - skipped during cache hydration on cold launch
+    ///   - skipped when the server sends `CHATHISTORY TARGETS` on register
+    /// A close is automatically *undone* when the peer sends a new PRIVMSG
+    /// (incoming activity is the universal signal that we want the DM
+    /// back), or when the user manually opens a new DM with that nick.
+    @Published var closedDMs: Set<String> = [] {
+        didSet { UserDefaults.standard.set(Array(closedDMs), forKey: "freeq.closedDMs") }
     }
 
     /// MOTD lines collected from server
@@ -665,6 +688,9 @@ class AppState: ObservableObject {
         if let savedMuted = UserDefaults.standard.stringArray(forKey: "freeq.mutedChannels") {
             mutedChannels = Set(savedMuted)
         }
+        if let savedClosed = UserDefaults.standard.stringArray(forKey: "freeq.closedDMs") {
+            closedDMs = Set(savedClosed)
+        }
         // Migrate secrets from UserDefaults to Keychain (one-time)
         KeychainHelper.migrateFromUserDefaults(userDefaultsKey: "freeq.did", keychainKey: "did")
         KeychainHelper.migrateFromUserDefaults(userDefaultsKey: "freeq.brokerToken", keychainKey: "brokerToken")
@@ -730,6 +756,9 @@ class AppState: ObservableObject {
             return
         }
         for cb in root.buffers {
+            // Respect user-closed DMs even if a stale cache file (written
+            // before the current closedDMs set was added) carries them.
+            if cb.isDM && closedDMs.contains(cb.name.lowercased()) { continue }
             let buffer = cb.isDM
                 ? getOrCreateDM(cb.name)
                 : getOrCreateChannel(cb.name)
@@ -1086,6 +1115,16 @@ class AppState: ObservableObject {
         } catch {
             print("❌ sendRaw ERROR: \(error)")
         }
+    }
+
+    /// Close a DM: remove from the live list and persist a "stay closed"
+    /// marker so it doesn't come back via cache hydration or the server's
+    /// CHATHISTORY TARGETS list on next register. The peer messaging us
+    /// (or us messaging them) automatically un-closes it.
+    func closeDM(_ name: String) {
+        closedDMs.insert(name.lowercased())
+        dmBuffers.removeAll { $0.name.lowercased() == name.lowercased() }
+        activeChannel = nil
     }
 
     /// Resolve a wire target (channel `#…`/`&…` or peer nick) to its local
@@ -1693,6 +1732,10 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 }
             } else {
                 let bufferName = isSelf ? target : from
+                // New activity in a previously-closed DM un-closes it. If
+                // the peer messages me, or I message them, I want the DM
+                // back in the list.
+                state.closedDMs.remove(bufferName.lowercased())
                 let dm = state.getOrCreateDM(bufferName)
                 dm.appendIfNew(msg)
                 state.incrementUnread(bufferName)
@@ -1778,9 +1821,23 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 for msg in sorted { dm.appendIfNew(msg) }
             }
 
-        case .chatHistoryTarget(let nick, _):
-            // Create DM buffer for each conversation partner
-            let _ = state.getOrCreateDM(nick)
+        case .chatHistoryTarget(let nick, let timestamp):
+            // Server tells us "you have history with this peer"; create the
+            // DM buffer and seed lastActivity from the server-provided
+            // timestamp (`time` tag, ISO8601). Without this, every DM
+            // created from CHATHISTORY TARGETS gets `Date()` as its
+            // lastActivity and the DM list sorts by registration order
+            // (effectively random) until messages backfill.
+            //
+            // Respect user-closed DMs: server-side history is what made
+            // closed DMs reappear on reload before we tracked them locally.
+            if state.closedDMs.contains(nick.lowercased()) { return }
+            let dm = state.getOrCreateDM(nick)
+            if let ts = timestamp,
+               let parsed = ISO8601DateFormatter.freeqTargets.date(from: ts),
+               parsed > dm.lastActivity {
+                dm.lastActivity = parsed
+            }
 
         case .tagMsg(let tagMsg):
             let tags = Dictionary(uniqueKeysWithValues: tagMsg.tags.map { ($0.key, $0.value) })

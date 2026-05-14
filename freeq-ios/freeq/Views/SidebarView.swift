@@ -249,7 +249,7 @@ struct SidebarView: View {
                 Label("Mark as Read", systemImage: "checkmark.circle")
             }
             Button(role: .destructive) {
-                appState.dmBuffers.removeAll { $0.name == dm.name }
+                appState.closeDM(dm.name)
                 if appState.activeChannel == dm.name {
                     appState.activeChannel = appState.channels.first?.name
                 }

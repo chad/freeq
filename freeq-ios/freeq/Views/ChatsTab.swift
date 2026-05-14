@@ -48,7 +48,7 @@ struct ChatsTab: View {
                                     if conv.name.hasPrefix("#") {
                                         appState.partChannel(conv.name)
                                     } else {
-                                        appState.dmBuffers.removeAll { $0.name == conv.name }
+                                        appState.closeDM(conv.name)
                                     }
                                 } label: {
                                     Label(conv.name.hasPrefix("#") ? "Leave" : "Close", systemImage: "arrow.right.square")
@@ -219,19 +219,32 @@ struct ChatRow: View {
         conversation.messages.last(where: { !$0.from.isEmpty && !$0.isDeleted })
     }
 
+    private static let listTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = .current
+        f.timeStyle = .short  // "3:42 PM" in en_US, "15:42" in en_GB / de_DE / etc.
+        f.dateStyle = .none
+        return f
+    }()
+
+    private static let listDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = .current
+        // setLocalizedDateFormatFromTemplate respects the user's region:
+        // "1/15/26" in en_US, "15/01/2026" in en_GB / de_DE.
+        f.setLocalizedDateFormatFromTemplate("yMd")
+        return f
+    }()
+
     private var timeString: String {
         guard let msg = lastMessage else { return "" }
         let cal = Calendar.current
         if cal.isDateInToday(msg.timestamp) {
-            let fmt = DateFormatter()
-            fmt.dateFormat = "HH:mm"
-            return fmt.string(from: msg.timestamp)
+            return Self.listTimeFormatter.string(from: msg.timestamp)
         } else if cal.isDateInYesterday(msg.timestamp) {
             return "Yesterday"
         } else {
-            let fmt = DateFormatter()
-            fmt.dateFormat = "dd/MM/yy"
-            return fmt.string(from: msg.timestamp)
+            return Self.listDateFormatter.string(from: msg.timestamp)
         }
     }
 
