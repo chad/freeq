@@ -17,7 +17,13 @@ export type {
   FreeqBotCreateOptions,
   FreeqBotStartOptions,
   FreeqBotStopOptions,
+  MentionResult,
+  MentionMatcher,
 } from "./bot.js";
+
+// Default mention matcher — exported so bot authors can compose with it
+// (e.g. wrap it with extra logic) rather than reimplementing.
+export { matchMention } from "./mention.js";
 
 // Re-export the SDK surface that bot consumers commonly need, so they can
 // depend on @freeq/bot-kit alone. (Bots that need anything not re-exported

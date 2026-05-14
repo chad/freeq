@@ -33,6 +33,18 @@ import {
   type DidResolver,
   type ResolveOpts,
 } from "./did-resolver.js";
+import { matchMention } from "./mention.js";
+
+/** Result of `bot.checkMention(channel, text)`. */
+export type MentionResult =
+  | { kind: "ignore" }
+  | { kind: "cooldown"; remainingMs: number }
+  | { kind: "respond"; stripped: string };
+
+/** Signature for the caller-supplied mention matcher. Receives the message
+ *  text and the bot's current nick; returns the stripped text on match,
+ *  or `null` to ignore. */
+export type MentionMatcher = (text: string, nick: string) => string | null;
 
 export type ActorClass = "agent" | "external_agent" | "human";
 
@@ -80,6 +92,19 @@ export interface FreeqBotCreateOptions {
      *  users; TTL bounds staleness regardless. */
     cacheTtlMs?: number;
   };
+  /** Channel-mention tuning for `bot.checkMention()`. */
+  mention?: {
+    /** Per-channel cooldown in ms. After a `respond` on a channel,
+     *  subsequent addressed messages on the same channel return
+     *  `cooldown` until this elapses. Default 60_000. Set to 0 to
+     *  disable. */
+    cooldownMs?: number;
+    /** Override the default addressing rule. Receives the message text
+     *  and the bot's current nick; returns the stripped text on match,
+     *  or `null` to ignore. Default matches `@<nick>` or `<nick>:`/
+     *  `<nick>,` anywhere (with word boundary). */
+    matcher?: (text: string, nick: string) => string | null;
+  };
 }
 
 export interface FreeqBotStartOptions {
@@ -121,6 +146,10 @@ export class FreeqBot {
   #stopped = false;
   readonly #didResolver: DidResolver;
 
+  readonly #mentionCooldownMs: number;
+  readonly #mentionMatcher: MentionMatcher;
+  readonly #mentionLastRespond = new Map<string, number>(); // channel.toLowerCase() → ms
+
   /** Use `FreeqBot.create(...)` instead. */
   private constructor(args: {
     client: FreeqClient;
@@ -135,6 +164,8 @@ export class FreeqBot {
     initialStatus: string | undefined;
     didResolverTimeoutMs: number | undefined;
     didResolverCacheTtlMs: number | undefined;
+    mentionCooldownMs: number;
+    mentionMatcher: MentionMatcher;
   }) {
     this.client = args.client;
     this.identity = args.identity;
@@ -150,6 +181,8 @@ export class FreeqBot {
       timeoutMs: args.didResolverTimeoutMs,
       cacheTtlMs: args.didResolverCacheTtlMs,
     });
+    this.#mentionCooldownMs = args.mentionCooldownMs;
+    this.#mentionMatcher = args.mentionMatcher;
   }
 
   /** Async factory: loads/creates identity + cert from disk, constructs the
@@ -185,6 +218,11 @@ export class FreeqBot {
       autoMsgSig: false,
     });
 
+    const defaultMentionMatcher: MentionMatcher = (text, nick) => {
+      const r = matchMention(nick, text);
+      return r ? r.stripped : null;
+    };
+
     return new FreeqBot({
       client,
       identity,
@@ -198,6 +236,8 @@ export class FreeqBot {
       initialStatus: opts.initialStatus,
       didResolverTimeoutMs: opts.senderDidResolver?.timeoutMs,
       didResolverCacheTtlMs: opts.senderDidResolver?.cacheTtlMs,
+      mentionCooldownMs: opts.mention?.cooldownMs ?? 60_000,
+      mentionMatcher: opts.mention?.matcher ?? defaultMentionMatcher,
     });
   }
 
@@ -265,6 +305,46 @@ export class FreeqBot {
     opts?: ResolveOpts,
   ): Promise<string | null> {
     return this.#didResolver.resolve(msg, opts);
+  }
+
+  // ── Channel addressing ─────────────────────────────────────────────────
+
+  /** Classify a channel message as addressed-to-this-bot or not.
+   *
+   *  Reads the bot's current nick live (so server-side renames are picked
+   *  up without re-wiring) and runs the configured matcher. Default
+   *  matcher accepts `@<nick>` or `<nick>:`/`<nick>,` anywhere in the
+   *  message; callers can pass their own via `FreeqBot.create({mention:
+   *  {matcher}})`.
+   *
+   *  Returns one of:
+   *    - `{kind: "ignore"}` — not addressed
+   *    - `{kind: "cooldown", remainingMs}` — addressed, but the bot
+   *      already responded on this channel within the cooldown window
+   *    - `{kind: "respond", stripped}` — bot was addressed; `stripped`
+   *      is the message text with the addressing prefix removed
+   *
+   *  A `respond` result records "now" as the channel's last-respond
+   *  timestamp before returning, so the next addressed message on the
+   *  same channel within `cooldownMs` returns `cooldown`. Different
+   *  channels have independent cooldowns. */
+  checkMention(channel: string, text: string): MentionResult {
+    const nick = this.client.nick;
+    if (!nick) return { kind: "ignore" };
+    const stripped = this.#mentionMatcher(text, nick);
+    if (stripped === null) return { kind: "ignore" };
+
+    const key = channel.toLowerCase();
+    const now = Date.now();
+    if (this.#mentionCooldownMs > 0) {
+      const last = this.#mentionLastRespond.get(key);
+      if (last !== undefined) {
+        const remainingMs = last + this.#mentionCooldownMs - now;
+        if (remainingMs > 0) return { kind: "cooldown", remainingMs };
+      }
+    }
+    this.#mentionLastRespond.set(key, now);
+    return { kind: "respond", stripped };
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────

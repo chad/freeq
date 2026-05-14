@@ -173,6 +173,71 @@ const bot = await FreeqBot.create({
 
 Per-call `opts.timeoutMs` overrides for a single resolution.
 
+### `bot.checkMention(channel, text)`
+
+Classify a channel message as addressed-to-this-bot. Returns one of three results:
+
+```ts
+type MentionResult =
+  | { kind: 'ignore' }
+  | { kind: 'cooldown'; remainingMs: number }
+  | { kind: 'respond'; stripped: string };
+```
+
+The bot reads its own nick live, so server-side renames are picked up automatically. Per-channel cooldown stops the bot from replying to a flurry of @-mentions in the same channel.
+
+```ts
+bot.on('message', (channel, msg) => {
+  if (msg.isSelf) return;
+  const m = bot.checkMention(channel, msg.text);
+  if (m.kind !== 'respond') return;
+  // m.stripped: the message text with the addressing prefix removed
+  bot.client.sendMessage(channel, `${msg.from}: I heard you say "${m.stripped}"`);
+});
+```
+
+**Default matcher** triggers when:
+- `@<nick>` appears anywhere, preceded by start-of-string or whitespace, with `<nick>` as a complete word — so `email@nick.com` doesn't match.
+- `<nick>:` or `<nick>,` appears anywhere, preceded by start-of-string or whitespace, with `<nick>` as a complete word.
+
+Bare `<nick>` as a standalone word with no `@` or punctuation does **not** trigger — third-person references like "I'll ask yokota about it" are conversation *about* the bot, not addressing it.
+
+**Override the matcher** at construction:
+
+```ts
+const bot = await FreeqBot.create({
+  ...,
+  mention: {
+    cooldownMs: 60_000,                     // per-channel cooldown; default 60_000; set to 0 to disable
+    matcher: (text, nick) => {              // optional — defaults to the rule above
+      // Return the stripped text on a match, null to ignore.
+      const m = /^@?(\S+?)[:,]?\s+(.*)$/s.exec(text);
+      if (!m || m[1]!.toLowerCase() !== nick.toLowerCase()) return null;
+      return m[2]!;
+    },
+  },
+});
+```
+
+The matcher is the policy; bot-kit owns the mechanism (live nick read + per-channel cooldown). Callers who want to compose with the default can import it:
+
+```ts
+import { matchMention } from '@freeq/bot-kit';
+
+const bot = await FreeqBot.create({
+  ...,
+  mention: {
+    matcher: (text, nick) => {
+      // Use the default, but also accept "/hi <nick>" as an alternate trigger.
+      const m = matchMention(nick, text);
+      if (m) return m.stripped;
+      const slash = new RegExp(`^/hi\\s+${nick.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\b\\s*(.*)$`, "i").exec(text);
+      return slash ? (slash[1] ?? "") : null;
+    },
+  },
+});
+```
+
 ### Events
 
 `bot.on(event, handler)`, `bot.off(...)`, `bot.once(...)` are typed delegations to `bot.client.on/off/once`. Subscribe to any event from `FreeqEvents`:

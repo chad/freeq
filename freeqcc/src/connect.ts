@@ -9,6 +9,7 @@ import {
   type AgentIdentity,
   type DelegationCert,
   type FreeqClient,
+  type MentionResult,
   type ResolveOpts,
 } from "@freeq/bot-kit";
 import { homedir } from "node:os";
@@ -40,6 +41,9 @@ export interface Connected {
     msg: { from: string; tags?: Record<string, string> },
     opts?: ResolveOpts,
   ): Promise<string | null>;
+  /** Classify a channel message as addressed-to-us with per-channel
+   *  cooldown. Returns ignore / cooldown / respond. */
+  checkMention(channel: string, text: string): MentionResult;
 }
 
 const DEFAULT_URL = "wss://irc.freeq.at/irc";
@@ -87,5 +91,6 @@ export async function connect(opts: ConnectOptions): Promise<Connected> {
     nick: bot.client.nick || opts.nick,
     stop: (reason?: string) => bot.stop(reason ?? "freeqcc stop"),
     resolveSenderDid: (msg, resolveOpts) => bot.resolveSenderDid(msg, resolveOpts),
+    checkMention: (channel, text) => bot.checkMention(channel, text),
   };
 }

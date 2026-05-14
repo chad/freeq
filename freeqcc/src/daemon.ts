@@ -365,21 +365,6 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
     }
   };
 
-  // Per-channel cooldown for @mention replies in non-bot channels.
-  const channelMentionCooldown = new Map<string, number>();
-  const MENTION_COOLDOWN_MS = 60_000;
-
-  const isMention = (text: string): boolean => {
-    const lower = text.toLowerCase();
-    const nickLower = conn.nick.toLowerCase();
-    return (
-      lower.includes(`@${nickLower}`) ||
-      // Some clients omit the @; match a word-boundary nick so "yokota-bot" matches
-      // but "yokota-bot-something" doesn't.
-      new RegExp(`(^|\\s)${nickLower.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}(\\s|[,.!?:;]|$)`, "i").test(text)
-    );
-  };
-
   conn.client.on(
     "message",
     (
@@ -412,21 +397,19 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
         return;
       }
 
-      // Other channels: only respond when explicitly @mentioned. Per-channel
-      // 60s cooldown to prevent the bot from replying to every message in
-      // a busy channel during a thread it's involved in.
-      if (!isMention(msg.text)) return;
-      const lastReply = channelMentionCooldown.get(channel.toLowerCase()) ?? 0;
-      if (Date.now() - lastReply < MENTION_COOLDOWN_MS) {
-        console.log(`[mention cooldown] ${channel}: silent (last reply ${Math.round((Date.now() - lastReply) / 1000)}s ago)`);
+      // Other channels: only respond when explicitly addressed. bot-kit's
+      // checkMention owns the matcher + per-channel cooldown. Default
+      // matcher accepts `@<nick>` or `<nick>:`/`<nick>,` anywhere (with
+      // word boundary); bare `<nick>` references are ignored.
+      const m = conn.checkMention(channel, msg.text);
+      if (m.kind === "ignore") return;
+      if (m.kind === "cooldown") {
+        console.log(
+          `[mention cooldown] ${channel}: silent (${Math.round(m.remainingMs / 1000)}s remaining)`,
+        );
         return;
       }
-      channelMentionCooldown.set(channel.toLowerCase(), Date.now());
-      // Strip the @<bot-nick> prefix from the text so claude doesn't see it
-      const stripped = msg.text
-        .replace(new RegExp(`@?${conn.nick.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}\\b[,:]?\\s*`, "i"), "")
-        .trim();
-      void handleDm(msg.from, stripped || msg.text, msg.tags ?? {}, channel).catch((e) => {
+      void handleDm(msg.from, m.stripped || msg.text, msg.tags ?? {}, channel).catch((e) => {
         console.error("[handleDm error]", e);
       });
     },
