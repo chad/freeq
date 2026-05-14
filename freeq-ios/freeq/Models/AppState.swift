@@ -1834,9 +1834,17 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
             if state.closedDMs.contains(nick.lowercased()) { return }
             let dm = state.getOrCreateDM(nick)
             if let ts = timestamp,
-               let parsed = ISO8601DateFormatter.freeqTargets.date(from: ts),
-               parsed > dm.lastActivity {
-                dm.lastActivity = parsed
+               let parsed = ISO8601DateFormatter.freeqTargets.date(from: ts) {
+                // If the buffer has no real messages yet, the current
+                // lastActivity is just `Date()` from `getOrCreateDM` —
+                // overwrite it. If the buffer was hydrated with messages
+                // (cache or in-session), only update when the server's
+                // timestamp is more recent. The previous version only had
+                // the `parsed > dm.lastActivity` branch, which always
+                // failed for fresh buffers (parsed is older than `now`).
+                if dm.messages.isEmpty || parsed > dm.lastActivity {
+                    dm.lastActivity = parsed
+                }
             }
 
         case .tagMsg(let tagMsg):
