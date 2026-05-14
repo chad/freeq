@@ -6,7 +6,7 @@ Pick whichever language fits the rest of your stack.
 
 ## Quick start
 
-- **TypeScript**: see the [TS Quickstart](/docs/bot-quickstart/) — 10 minutes to a running bot. The runnable [examples](../freeq-bot-kit-js/examples/) include an echo bot, a streaming-message demo, and a URL-fetch worker that exercises the full coordination-event pattern.
+- **TypeScript**: see the [TS Quickstart](/docs/bot-quickstart/) — 10 minutes to a running bot. The runnable [examples](../freeq-bot-kit-js/examples/) include an echo bot, a streaming-message demo, a URL-fetch coordination worker, a daemon-CLI-wrapped bot, and `gated-bot.ts` which composes the full owner-gated pattern.
 - **Rust**: the Rust path is documented further down the same page, and a richer set of bots (factory / auditor / prototype / pi-bridge / load-test) lives in [`freeq-bots/`](../freeq-bots/).
 
 ## TypeScript — `@freeq/bot-kit`
@@ -33,6 +33,22 @@ process.once('SIGINT', () => bot.stop('SIGINT').then(() => process.exit(0)));
 bot-kit handles the agent-native sequence on every reconnect: PROVENANCE → AGENT REGISTER → optional MANIFEST → PRESENCE → HEARTBEAT loop. `bot.setState('executing', 'reviewing PR #42')` updates state and the next heartbeat carries it. `bot.client` is the underlying [`@freeq/sdk`](../freeq-sdk-js/) `FreeqClient` for anything the wrapper doesn't surface directly.
 
 State (did:key seed + delegation cert) lives under `~/.freeq/bots/<name>/`.
+
+### Beyond the basics
+
+Past the echo-bot quickstart, every non-trivial bot hits the same four questions. bot-kit ships a primitive for each, plus a daemon CLI scaffold for the fifth (operational) one:
+
+| Question | Primitive |
+|---|---|
+| Who sent this message? | `bot.resolveSenderDid(msg)` — account-tag → cache → WHOIS, returns DID or `null` |
+| Should I respond to them? | `createDidMap` — hot-reloadable DID-keyed map, wire as allowlist / banlist / roles |
+| Was I addressed in a channel? | `bot.checkMention(channel, text)` — configurable matcher + per-channel cooldown |
+| Am I being spammed / looping? | `createTurnGate` — refusal cooldown + rolling hourly cap + per-peer cycle detection |
+| How does my user run my bot? | `createDaemonCLI` — `launch / stop / status / doctor / tail`, --detach, signal wiring |
+
+[`examples/gated-bot.ts`](../freeq-bot-kit-js/examples/gated-bot.ts) is the full assembly in one file. Each primitive is documented in [`@freeq/bot-kit`'s README](../freeq-bot-kit-js/README.md).
+
+The data primitives (`createDidMap`, `createTurnGate`) take optional `load`/`save` callbacks — bot-kit never touches the filesystem; the caller wires whatever persistence layer they want (atomic file write, DB, KV).
 
 ## Rust — `freeq-sdk::bot`
 

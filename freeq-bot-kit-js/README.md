@@ -17,9 +17,11 @@ npm install @freeq/bot-kit @freeq/sdk
 
 ## Runnable examples
 
-Four illustrative bots live under [`examples/`](examples/):
+Six illustrative bots live under [`examples/`](examples/):
 
 - [`echo-bot.ts`](examples/echo-bot.ts) — canonical smoke test; echoes messages, replies `pong` to `!ping`
+- [`daemon.ts`](examples/daemon.ts) — the echo bot wrapped in `createDaemonCLI`, with `launch / stop / status / doctor / tail` out of the box
+- [`gated-bot.ts`](examples/gated-bot.ts) — owner-gated bot with allowlist, refusal cooldown, channel addressing, and rate-limiting. The full pattern, end-to-end, in one file
 - [`streaming.ts`](examples/streaming.ts) — types out a message word-by-word using the edit-message hack
 - [`url-fetch-worker.ts`](examples/url-fetch-worker.ts) — the canonical agent pattern: claims `task_request` coordination events, fetches the URL, reports via `task_complete`, transitions state along the way
 - [`fire-task.ts`](examples/fire-task.ts) — helper that fires a single `task_request` and exits; pairs with `url-fetch-worker` for end-to-end testing
@@ -56,6 +58,65 @@ process.once('SIGTERM', () => bot.stop('SIGTERM').then(() => process.exit(0)));
 
 That's it. On first run you'll get a fresh did:key under `~/.freeq/bots/echo-bot/`. Subsequent runs reuse the same identity.
 
+## Building a real bot
+
+The echo example above shows the minimum viable shape: connect, listen, reply. Any bot more serious than that will need answers to four questions:
+
+| Question | What bot-kit gives you |
+|---|---|
+| **Who sent this message?** | `bot.resolveSenderDid(msg)` — account-tag → cache → WHOIS, returns the sender's DID or `null` for guests |
+| **Should I respond to them?** | `createDidMap` — a hot-reloadable, DID-keyed map you can wire as an allowlist, banlist, role registry, anything. Caller-owned persistence |
+| **Was I actually addressed (in a channel)?** | `bot.checkMention(channel, text)` — matches `@<nick>` or `<nick>:`/`<nick>,` (configurable matcher), with per-channel cooldown |
+| **Am I being spammed / looping?** | `createTurnGate` — refusal cooldown, rolling hourly cap, per-peer cycle detection. Caller-owned persistence |
+
+And one operational question:
+
+| Question | What bot-kit gives you |
+|---|---|
+| **How does my user run my bot?** | `createDaemonCLI` — Commander-based scaffold for `launch / stop / status / doctor / tail`, with --detach forking, pid file management, and signal wiring |
+
+These five primitives compose into the canonical owner-gated bot pattern. The full assembled version is [`examples/gated-bot.ts`](examples/gated-bot.ts); here's the sketch:
+
+```ts
+const allowlist = await createDidMap<AllowEntry>({ load: {...}, save: writeFileAtomic(...) });
+const gate      = await createTurnGate({ load: ..., save: writeFileAtomic(...) });
+const bot       = await FreeqBot.create({ name, ownerDid, nick, url, channels });
+
+bot.on('message', async (channel, msg) => {
+  if (msg.isSelf) return;
+
+  // Channel? Only handle when addressed.
+  const text = channel.startsWith('#')
+    ? (() => {
+        const m = bot.checkMention(channel, msg.text);
+        return m.kind === 'respond' ? m.stripped : null;
+      })()
+    : msg.text;
+  if (text === null) return;
+
+  // Who's this?
+  const senderDid = await bot.resolveSenderDid(msg);
+
+  // Is this allowed? Caller policy: owner OR allowlisted.
+  const isAllowed = senderDid && (senderDid === ownerDid || allowlist.has(senderDid));
+
+  // Run it through the rate-limit gate.
+  const decision = gate.evaluate({
+    senderDid, senderNick: msg.from,
+    refusalReason: isAllowed ? undefined : 'not on allowlist',
+    skipCycleDetection: senderDid === ownerDid,  // owners aren't bots
+  });
+
+  if (decision.kind === 'silent') return;
+  if (decision.kind === 'refuse') return bot.client.sendMessage(replyTarget, decision.reason);
+  // ...do the work, then await gate.persist()...
+});
+
+await bot.start();
+```
+
+The bot reads the sender, checks policy, runs the gate, and dispatches — three small choices in a row. Each primitive is documented in detail in the API section below, but this is the rhythm.
+
 ## API
 
 ### `FreeqBot.create(options)`
@@ -84,7 +145,14 @@ await FreeqBot.create({
 });
 ```
 
-Caller resolves the `ownerDid`. If you have a Bluesky handle, use `fetchProfile` from `@freeq/sdk` (or any other resolver) before calling `FreeqBot.create`.
+Caller resolves the `ownerDid`. If you have a Bluesky handle, bot-kit re-exports `fetchProfile` so you can resolve it without a separate `@freeq/sdk` import:
+
+```ts
+import { fetchProfile, FreeqBot } from '@freeq/bot-kit';
+
+const { did: ownerDid } = await fetchProfile('alice.bsky.social');
+const bot = await FreeqBot.create({ ownerDid, ... });
+```
 
 ### `bot.start({ timeoutMs? })`
 
@@ -544,13 +612,13 @@ A human owner DM-chatting with the bot at 30-second intervals would hit the defa
 
 Deliberately out of scope:
 
-- **Owner config / handle resolution.** Caller provides `ownerDid`. Bot-kit doesn't prompt or persist owner.json.
+- **Policy decisions.** `createDidMap` is a hot-reloadable DID-keyed map; `createTurnGate` runs rate-limit + cycle detection. Bot-kit takes no position on what membership means (allow / ban / role) or who counts as "owner" — those are caller wiring, not framework behavior.
+- **Persistence layer.** Both `createDidMap` and `createTurnGate` take optional `load` / `save` callbacks. Bot-kit never touches the filesystem; callers wire `write-file-atomic`, a DB, or whatever they need.
 - **Signal handlers (when not using `createDaemonCLI`).** `process.on('SIGINT', ...)` is process-global; if you're using `FreeqBot` directly without the CLI scaffold, the application owns it. The README's quick example shows the snippet.
 - **Reconnect logic.** Already in the SDK transport (`@freeq/sdk`'s `Transport` does exponential-backoff auto-reconnect and re-emits `'ready'` on resume). Bot-kit's announce loop is already bound to every `'ready'` so reconnects re-announce automatically.
-- **DM dispatch / capability gating / ACLs.** Application logic. Use `bot.on('message', ...)` + `createDidMap` for the membership question; bot-kit doesn't pick what "allowed" means.
-- **did:key rotation.** Bot-specific (e.g. freeqcc also wipes per-DID claude sessions). Write a `rotate-key` subcommand on the returned `Command`.
-- **Manifest building.** Bot-kit takes a pre-built TOML string. Compose your manifest however you like.
+- **did:key rotation.** No `rotate-key` command shipped. Bot-kit *could* generically delete `agent.key` + `delegation.json` and let the next launch mint fresh ones, but in practice rotation always means more than that — freeqcc, for example, also needs to wipe per-DID claude session caches. So we leave it to the bot to add a `rotate-key` subcommand on the `Command` returned by `createDaemonCLI`, with whatever extra cleanup it needs.
+- **Manifest building.** The announce sequence includes `AGENT MANIFEST :<toml>` if you pass a `manifest` string to `FreeqBot.create`. Bot-kit doesn't compose the TOML for you — actor_class, capabilities, supported intents, and version strings are all per-bot, so we accept a pre-formatted string and pass it through. Use any TOML library; see [agents.md](../docs/agents.md) for the manifest schema.
 
 ## Status
 
-v0.1 — extracted from `freeqcc` and `freeq-swarm`. Both projects will migrate onto this package.
+v0.2 — five primitives in: `FreeqBot`, `createDaemonCLI`, `createDidMap`, `bot.resolveSenderDid`, `bot.checkMention`, `createTurnGate`. Used in production by `freeqcc`; `freeq-swarm` migration planned.
