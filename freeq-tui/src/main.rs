@@ -662,10 +662,42 @@ async fn run_app(
                     EditAction::NextBuffer => app.next_buffer(),
                     EditAction::PrevBuffer => app.prev_buffer(),
                     EditAction::ScrollUp(n) => {
-                        if let Some(buf) = app.buffers.get_mut(&app.active_buffer) {
-                            // Ctrl+scroll or Alt+scroll could scroll nick list
-                            // For now, just scroll messages
-                            buf.scroll = buf.scroll.saturating_add(n);
+                        let (auto_fetch_target, auto_fetch_anchor) = {
+                            if let Some(buf) = app.buffers.get_mut(&app.active_buffer) {
+                                buf.scroll = buf.scroll.saturating_add(n);
+                                // Heuristic: when scroll puts us within ~20 lines
+                                // of the top of what's loaded, request more.
+                                let near_top = buf
+                                    .scroll
+                                    .saturating_add(20)
+                                    >= buf.messages.len() as u16;
+                                let eligible = near_top
+                                    && !buf.history_in_flight
+                                    && !buf.history_exhausted
+                                    && (buf.name.starts_with('#')
+                                        || buf.name.starts_with('&'));
+                                let oldest = if eligible {
+                                    buf.oldest_msgid().map(String::from)
+                                } else {
+                                    None
+                                };
+                                if let Some(anchor) = oldest {
+                                    buf.history_in_flight = true;
+                                    (Some(buf.name.clone()), Some(anchor))
+                                } else {
+                                    (None, None)
+                                }
+                            } else {
+                                (None, None)
+                            }
+                        };
+                        if let (Some(target), Some(anchor)) = (auto_fetch_target, auto_fetch_anchor)
+                            && handle.history_before(&target, &anchor, 50).await.is_err()
+                            && let Some(buf) = app.buffers.get_mut(&app.active_buffer)
+                        {
+                            // Failed to send — clear the flag so a future
+                            // scroll attempt can retry.
+                            buf.history_in_flight = false;
                         }
                     }
                     EditAction::ScrollDown(n) => {
@@ -859,6 +891,11 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
             app.status_msg(&format!("Authentication failed: {reason}"));
         }
         Event::Joined { channel, nick } => {
+            let cloak = app
+                .nick_hosts
+                .get(&nick.to_lowercase())
+                .filter(|h| h.starts_with("freeq/"))
+                .cloned();
             let buf = app.buffer_mut(&channel);
             if !buf.nicks.iter().any(|n| {
                 let bare = n.trim_start_matches(['@', '+']);
@@ -866,7 +903,10 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
             }) {
                 buf.nicks.push(nick.clone());
             }
-            buf.push_system(&format!("{nick} has joined"));
+            match cloak {
+                Some(host) => buf.push_system(&format!("{nick} [{host}] has joined")),
+                None => buf.push_system(&format!("{nick} has joined")),
+            }
             if nick == app.nick {
                 app.active_buffer = channel.to_lowercase();
             }
@@ -925,6 +965,57 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
             let timestamp = format_timestamp(&tags);
             let timestamp_ms = parse_timestamp_ms(&tags);
             let batch_id = tags.get("batch");
+            // Validate untrusted tag values before they enter our state.
+            // A malicious peer could craft msgids/reply-targets containing
+            // CR/LF (IRC command injection), whitespace (param-splitting),
+            // or terminal escapes (cursor takeover when displayed).
+            let msgid = tags
+                .get("msgid")
+                .filter(|v| crate::app::is_valid_msgid(v))
+                .cloned();
+            let reply_to = tags
+                .get("+reply")
+                .filter(|v| crate::app::is_valid_msgid(v))
+                .cloned();
+
+            // Pin/unpin: server sends a NOTICE CTCP ACTION with a tag. Update
+            // the channel's pin set; let the action message itself fall through
+            // so the user sees who pinned what.
+            if target.starts_with('#') || target.starts_with('&') {
+                if let Some(pinned_id) =
+                    tags.get("+freeq.at/pin").filter(|v| crate::app::is_valid_msgid(v))
+                {
+                    app.buffer_mut(&target).add_pinned(pinned_id);
+                } else if let Some(unpinned_id) =
+                    tags.get("+freeq.at/unpin").filter(|v| crate::app::is_valid_msgid(v))
+                {
+                    app.buffer_mut(&target).pinned.remove(unpinned_id);
+                }
+            }
+
+            // Edit message: rewrite the original in place; don't push a new line.
+            if let Some(original_msgid) =
+                tags.get("+draft/edit").filter(|v| crate::app::is_valid_msgid(v))
+            {
+                let buf_name = if !target.starts_with('#') && !target.starts_with('&') {
+                    if from == app.nick {
+                        target.clone()
+                    } else {
+                        from.clone()
+                    }
+                } else {
+                    target.clone()
+                };
+                app.apply_edit(
+                    &from,
+                    batch_id.map(|s| s.as_str()),
+                    &buf_name,
+                    original_msgid,
+                    msgid.as_deref(),
+                    &text,
+                );
+                return;
+            }
 
             // Check for media attachment in tags
             let media = freeq_sdk::media::MediaAttachment::from_tags(&tags);
@@ -953,6 +1044,10 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                             text: format!("* {from} {action}"),
                             is_system: true,
                             image_url: None,
+                            msgid: msgid.clone(),
+                            is_edited: false,
+                            is_deleted: false,
+                            reply_to: reply_to.clone(),
                         },
                     );
                 }
@@ -988,6 +1083,10 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                         text: display,
                         is_system: false,
                         image_url: img_url,
+                        msgid: msgid.clone(),
+                        is_edited: false,
+                        is_deleted: false,
+                        reply_to: reply_to.clone(),
                     },
                 );
             } else {
@@ -1015,6 +1114,10 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                             text: display,
                             is_system: false,
                             image_url: None,
+                            msgid: msgid.clone(),
+                            is_edited: false,
+                            is_deleted: false,
+                            reply_to: reply_to.clone(),
                         },
                     );
                 } else {
@@ -1038,6 +1141,10 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                             text: text.clone(),
                             is_system: false,
                             image_url: None,
+                            msgid: msgid.clone(),
+                            is_edited: false,
+                            is_deleted: false,
+                            reply_to: reply_to.clone(),
                         },
                     );
 
@@ -1050,15 +1157,32 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
         }
         Event::BatchStart {
             id,
-            batch_type: _,
+            batch_type,
             target,
         } => {
-            app.start_batch(&id, &target);
+            app.start_batch_typed(&id, &target, &batch_type);
         }
         Event::BatchEnd { id } => {
             app.end_batch(&id);
         }
         Event::TagMsg { from, target, tags } => {
+            // Delete: mark the target line as deleted; don't display a new line.
+            if let Some(deleted_msgid) =
+                tags.get("+draft/delete").filter(|v| crate::app::is_valid_msgid(v))
+            {
+                let buf_name = if !target.starts_with('#') && !target.starts_with('&') {
+                    if from == app.nick {
+                        target.clone()
+                    } else {
+                        from.clone()
+                    }
+                } else {
+                    target.clone()
+                };
+                let batch_id = tags.get("batch").map(|s| s.as_str());
+                app.apply_delete(&from, batch_id, &buf_name, deleted_msgid);
+                return;
+            }
             // Handle reactions
             if let Some(reaction) = freeq_sdk::media::Reaction::from_tags(&tags) {
                 let buf_name = if !target.starts_with('#') && !target.starts_with('&') {
@@ -1070,12 +1194,29 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                 } else {
                     target.clone()
                 };
+                let target_msgid = tags.get("+reply").cloned();
+                let target_preview = target_msgid
+                    .as_deref()
+                    .and_then(|id| app.buffers.get(&buf_name.to_lowercase())?.find_by_msgid(id))
+                    .map(|line| {
+                        let snippet: String = line.text.chars().take(40).collect();
+                        if line.text.chars().count() > 40 {
+                            format!(" → \"{snippet}…\"")
+                        } else {
+                            format!(" → \"{snippet}\"")
+                        }
+                    })
+                    .unwrap_or_default();
                 app.buffer_mut(&buf_name).push(crate::app::BufferLine {
                     timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
                     from: String::new(),
-                    text: format!("  {} reacted {}", from, reaction.emoji),
+                    text: format!("  {} reacted {}{}", from, reaction.emoji, target_preview),
                     is_system: true,
                     image_url: None,
+                    msgid: None,
+                    is_edited: false,
+                    is_deleted: false,
+                    reply_to: None,
                 });
             }
         }
@@ -1314,6 +1455,14 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
                 .push_system(&format!("  DM: {nick}  (last: {ts_display})"));
         }
         Event::RawLine(ref line) => {
+            // Stash host part of the prefix on JOIN lines so we can surface
+            // hostname cloaks (freeq/plc/xxx, freeq/guest) without changing
+            // the SDK Event::Joined signature. RawLine is emitted before the
+            // parsed event, so by the time Event::Joined fires the host is
+            // already in nick_hosts.
+            if let Some((nick, host)) = parse_join_prefix(line) {
+                app.remember_nick_host(nick, &host);
+            }
             if app.debug_raw {
                 app.buffer_mut("status").push_system(&format!("← {line}"));
             }
@@ -1347,18 +1496,233 @@ async fn process_input(app: &mut App, handle: &client::ClientHandle, input: &str
                     app.status_msg("Not in a channel");
                 }
             }
+            "/search" | "/find" => {
+                let target = app.active_buffer.clone();
+                if arg.trim().is_empty() {
+                    app.status_msg("Usage: /search <text>");
+                } else {
+                    let needle = arg.trim().to_lowercase();
+                    let matches: Vec<(String, String, String)> = app
+                        .buffers
+                        .get(&target.to_lowercase())
+                        .map(|buf| {
+                            buf.messages
+                                .iter()
+                                .filter(|line| {
+                                    !line.is_system
+                                        && !line.is_deleted
+                                        && line.text.to_lowercase().contains(&needle)
+                                })
+                                .rev()
+                                .take(20)
+                                .map(|line| {
+                                    (
+                                        line.timestamp.clone(),
+                                        line.from.clone(),
+                                        line.text.clone(),
+                                    )
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    if matches.is_empty() {
+                        app.status_msg(&format!("No matches for {:?}", arg.trim()));
+                    } else {
+                        app.status_msg(&format!(
+                            "── {} match(es) for {:?} (newest first) ──",
+                            matches.len(),
+                            arg.trim()
+                        ));
+                        for (ts, from, text) in matches.iter().rev() {
+                            let trimmed: String = text.chars().take(120).collect();
+                            let ellipsis = if text.chars().count() > 120 {
+                                "…"
+                            } else {
+                                ""
+                            };
+                            app.status_msg(&format!(
+                                "  {ts} <{from}> {trimmed}{ellipsis}"
+                            ));
+                        }
+                    }
+                }
+            }
+            "/pin" => {
+                let target = app.active_buffer.clone();
+                if !target.starts_with('#') && !target.starts_with('&') {
+                    app.status_msg("/pin only works in channels");
+                } else {
+                    let target_msgid = {
+                        let buf = app.buffers.get(&target.to_lowercase());
+                        let trimmed = arg.trim();
+                        if !trimmed.is_empty()
+                            && buf.is_some_and(|b| b.find_by_msgid(trimmed).is_some())
+                        {
+                            Some(trimmed.to_string())
+                        } else if trimmed.is_empty() {
+                            buf.and_then(|b| b.recent_msgid()).map(|s| s.to_string())
+                        } else {
+                            None
+                        }
+                    };
+                    match target_msgid {
+                        None if !arg.trim().is_empty() => {
+                            app.status_msg("Unknown msgid in this buffer")
+                        }
+                        None => app.status_msg("No message to pin in this buffer"),
+                        Some(id) => {
+                            handle.pin(&target, &id).await?;
+                            // Server NOTICE will update the pin set on echo.
+                        }
+                    }
+                }
+            }
+            "/unpin" => {
+                let target = app.active_buffer.clone();
+                if !target.starts_with('#') && !target.starts_with('&') {
+                    app.status_msg("/unpin only works in channels");
+                } else if arg.trim().is_empty() {
+                    app.status_msg("Usage: /unpin <msgid>");
+                } else {
+                    handle.unpin(&target, arg.trim()).await?;
+                }
+            }
+            "/pins" => {
+                let target = app.active_buffer.clone();
+                if !target.starts_with('#') && !target.starts_with('&') {
+                    app.status_msg("/pins only works in channels");
+                } else {
+                    handle.raw(&format!("PINS {target}")).await?;
+                }
+            }
+            "/reply" | "/re" => {
+                let target = app.active_buffer.clone();
+                if target == "status" {
+                    app.status_msg("Not in a channel or DM");
+                } else if arg.is_empty() {
+                    app.status_msg("Usage: /reply [<msgid>] <text>");
+                } else {
+                    // Disambiguate "<msgid> <text>" vs "<text>" by checking
+                    // whether the first token matches a known msgid.
+                    let (target_msgid, reply_text) = {
+                        let buf = app.buffers.get(&target.to_lowercase());
+                        let parts: Vec<&str> = arg.splitn(2, ' ').collect();
+                        let first = parts[0];
+                        let rest = parts.get(1).copied().unwrap_or("");
+                        if !rest.is_empty()
+                            && buf.is_some_and(|b| b.find_by_msgid(first).is_some())
+                        {
+                            (Some(first.to_string()), rest.to_string())
+                        } else {
+                            let parent = buf
+                                .and_then(|b| b.recent_msgid())
+                                .map(|s| s.to_string());
+                            (parent, arg.to_string())
+                        }
+                    };
+                    match target_msgid {
+                        None => app.status_msg("No message to reply to in this buffer"),
+                        Some(id) => {
+                            handle.reply(&target, &id, &reply_text).await?;
+                            // echo-message returns the new line; the +reply tag
+                            // populates reply_to so the indicator renders.
+                        }
+                    }
+                }
+            }
+            "/edit" | "/e" => {
+                let target = app.active_buffer.clone();
+                if target == "status" {
+                    app.status_msg("Not in a channel or DM");
+                } else if arg.is_empty() {
+                    app.status_msg("Usage: /edit [<msgid>] <new text>");
+                } else {
+                    // Two forms: "/edit <msgid> <text>" or "/edit <text>".
+                    // Disambiguate by checking whether the first token matches
+                    // a known msgid in the active buffer; if not, treat the
+                    // whole arg as the new text targeting our most recent.
+                    let (target_msgid, new_text) = {
+                        let buf = app.buffers.get(&target.to_lowercase());
+                        let parts: Vec<&str> = arg.splitn(2, ' ').collect();
+                        let first = parts[0];
+                        let rest = parts.get(1).copied().unwrap_or("");
+                        if !rest.is_empty()
+                            && buf.is_some_and(|b| b.find_by_msgid(first).is_some())
+                        {
+                            (Some(first.to_string()), rest.to_string())
+                        } else {
+                            let own = buf
+                                .and_then(|b| b.recent_own_msgid(&app.nick))
+                                .map(|s| s.to_string());
+                            (own, arg.to_string())
+                        }
+                    };
+                    match target_msgid {
+                        None => app.status_msg("No own message to edit in this buffer"),
+                        Some(id) => {
+                            // Optimistic local apply — the echo runs apply_edit
+                            // again with the same content, which is idempotent.
+                            let nick = app.nick.clone();
+                            app.apply_edit(&nick, None, &target, &id, None, &new_text);
+                            handle.edit_message(&target, &id, &new_text).await?;
+                        }
+                    }
+                }
+            }
+            "/delete" | "/del" => {
+                let target = app.active_buffer.clone();
+                if target == "status" {
+                    app.status_msg("Not in a channel or DM");
+                } else {
+                    let target_msgid = {
+                        let buf = app.buffers.get(&target.to_lowercase());
+                        let trimmed = arg.trim();
+                        if !trimmed.is_empty()
+                            && buf.is_some_and(|b| b.find_by_msgid(trimmed).is_some())
+                        {
+                            Some(trimmed.to_string())
+                        } else if trimmed.is_empty() {
+                            buf.and_then(|b| b.recent_own_msgid(&app.nick))
+                                .map(|s| s.to_string())
+                        } else {
+                            None
+                        }
+                    };
+                    match target_msgid {
+                        None if !arg.trim().is_empty() => {
+                            app.status_msg("Unknown msgid in this buffer")
+                        }
+                        None => app.status_msg("No own message to delete in this buffer"),
+                        Some(id) => {
+                            // Optimistic local apply — echo re-applies idempotently.
+                            let nick = app.nick.clone();
+                            app.apply_delete(&nick, None, &target, &id);
+                            handle.delete_message(&target, &id).await?;
+                        }
+                    }
+                }
+            }
             "/react" | "/r" => {
                 if arg.is_empty() {
                     app.status_msg("Usage: /react <emoji>");
                 } else {
                     let target = app.active_buffer.clone();
                     if target != "status" {
-                        let reaction = freeq_sdk::media::Reaction {
-                            emoji: arg.trim().to_string(),
-                            msgid: None, // TODO: track message IDs for targeted reactions
-                        };
-                        handle.send_reaction(&target, &reaction).await?;
-                        // echo-message will deliver the reaction back to us
+                        let target_msgid = app
+                            .buffers
+                            .get(&target.to_lowercase())
+                            .and_then(|b| b.recent_msgid())
+                            .map(|s| s.to_string());
+                        if target_msgid.is_none() {
+                            app.status_msg("No message to react to in this buffer");
+                        } else {
+                            let reaction = freeq_sdk::media::Reaction {
+                                emoji: arg.trim().to_string(),
+                                msgid: target_msgid,
+                            };
+                            handle.send_reaction(&target, &reaction).await?;
+                            // echo-message will deliver the reaction back to us
+                        }
                     }
                 }
             }
@@ -1390,14 +1754,10 @@ async fn process_input(app: &mut App, handle: &client::ClientHandle, input: &str
                     if target != "status" {
                         let action = format!("\x01ACTION {arg}\x01");
                         handle.privmsg(&target, &action).await?;
-                        let nick = app.nick.clone();
-                        app.buffer_mut(&target).push(crate::app::BufferLine {
-                            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
-                            from: String::new(),
-                            text: format!("* {nick} {arg}"),
-                            is_system: true,
-                            image_url: None,
-                        });
+                        // echo-message is negotiated; the server echoes our
+                        // ACTION back as Event::Message which renders it via
+                        // the CTCP branch. No optimistic local push, or we'd
+                        // duplicate the line.
                     }
                 }
             }
@@ -1750,7 +2110,14 @@ async fn process_input(app: &mut App, handle: &client::ClientHandle, input: &str
                 app.status_msg("  /msg target text    Private message");
                 app.status_msg("  /msgs [N]           List DM conversations (default 50)");
                 app.status_msg("  /me action          Action message (* nick does something)");
-                app.status_msg("  /react emoji        React to the channel (/r)");
+                app.status_msg("  /react emoji        React to most recent message (/r)");
+                app.status_msg("  /reply [id] text    Reply to most recent (or specific) message (/re)");
+                app.status_msg("  /edit [id] text     Edit your last (or a specific) message (/e)");
+                app.status_msg("  /delete [id]        Delete your last (or a specific) message (/del)");
+                app.status_msg("  /pin [id]           Pin most recent (or specific) message");
+                app.status_msg("  /unpin <id>         Unpin a message by msgid");
+                app.status_msg("  /pins               List pinned messages in this channel");
+                app.status_msg("  /search text        Search messages in current buffer (/find)");
                 app.status_msg("  /preview url        Fetch and share a link preview");
                 app.status_msg("── Channel moderation ───────────────────");
                 app.status_msg("  /op nick            Give ops (@)");
@@ -2081,7 +2448,7 @@ async fn upload_and_send_media(
             handle.send_media(target, &media).await?;
 
             // Show in our own buffer
-            let display = format_media_display(&media);
+            let _display = format_media_display(&media);
             let img_url = if media.content_type.starts_with("image/") {
                 Some(media.url.clone())
             } else {
@@ -2090,14 +2457,10 @@ async fn upload_and_send_media(
             if let Some(ref url) = img_url {
                 fetch_image_if_needed(&app.image_cache, url);
             }
-            let nick = app.nick.clone();
-            app.buffer_mut(target).push(crate::app::BufferLine {
-                timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
-                from: nick,
-                text: display,
-                is_system: false,
-                image_url: img_url,
-            });
+            // No optimistic local push — echo-message will deliver the
+            // media message back through Event::Message which renders it
+            // via the media branch. Avoid the duplicate that resulted from
+            // pushing locally and then receiving the echo.
 
             let suffix = if cross_post {
                 " (also posted to Bluesky)"
@@ -2219,6 +2582,51 @@ fn fetch_image_if_needed(cache: &crate::app::ImageCache, url: &str) {
 }
 
 /// Format a media attachment for display in the TUI.
+/// Pull (nick, host) from an IRC line whose command is JOIN.
+/// Skips IRCv3 message tags (leading `@...`) and matches lines like
+/// `:nick!user@host JOIN #channel ...`. Returns None for non-JOIN
+/// lines or lines we can't parse.
+fn parse_join_prefix(line: &str) -> Option<(&str, String)> {
+    let mut rest = line;
+    if let Some(stripped) = rest.strip_prefix('@') {
+        // Skip the tags block up to the first space.
+        let space = stripped.find(' ')?;
+        rest = &stripped[space + 1..];
+    }
+    let prefix = rest.strip_prefix(':')?;
+    let space = prefix.find(' ')?;
+    let (source, after) = (&prefix[..space], &prefix[space + 1..]);
+    // `after` should start with the command. Confirm it's JOIN.
+    let cmd = after.split_ascii_whitespace().next()?;
+    if !cmd.eq_ignore_ascii_case("JOIN") {
+        return None;
+    }
+    let bang = source.find('!')?;
+    let nick = &source[..bang];
+    let at = source[bang + 1..].find('@')?;
+    let host = &source[bang + 1 + at + 1..];
+    // IRC convention bounds nicks to 30 chars and hostnames to 64 (RFC
+    // 2812 §1.3). We allow generous headroom to account for cloak
+    // formats but still reject pathological inputs that would let a
+    // hostile peer eat memory in our nick_hosts cache.
+    const MAX_NICK_LEN: usize = 64;
+    const MAX_HOST_LEN: usize = 256;
+    if nick.is_empty() || nick.len() > MAX_NICK_LEN {
+        return None;
+    }
+    if host.is_empty() || host.len() > MAX_HOST_LEN {
+        return None;
+    }
+    // Reject control characters in either component. They have no business
+    // appearing in a real prefix, and rendering them would let a hostile
+    // peer move the terminal cursor through our system messages.
+    let bad = |s: &str| s.chars().any(|c| c.is_control());
+    if bad(nick) || bad(host) {
+        return None;
+    }
+    Some((nick, host.to_string()))
+}
+
 fn format_timestamp(tags: &std::collections::HashMap<String, String>) -> String {
     if let Some(ts) = tags.get("time")
         && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ts)
@@ -2367,5 +2775,105 @@ fn try_nick_complete(app: &mut App) {
         let new_cursor = word_start + completion.len() + suffix.len();
         app.editor.text = new_text;
         app.editor.cursor = new_cursor;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_join_prefix;
+
+    #[test]
+    fn parse_join_prefix_basic() {
+        let line = ":alice!~u@freeq/plc/abc123 JOIN #freeq";
+        let (nick, host) = parse_join_prefix(line).expect("matches");
+        assert_eq!(nick, "alice");
+        assert_eq!(host, "freeq/plc/abc123");
+    }
+
+    #[test]
+    fn parse_join_prefix_with_tags() {
+        let line = "@account=alice;time=2026-05-13T12:00:00.000Z :alice!~u@freeq/guest JOIN #room";
+        let (nick, host) = parse_join_prefix(line).expect("matches");
+        assert_eq!(nick, "alice");
+        assert_eq!(host, "freeq/guest");
+    }
+
+    #[test]
+    fn parse_join_prefix_with_extended_join_params() {
+        // Extended-join adds account + realname as params; prefix is unchanged.
+        let line = ":alice!~u@freeq/plc/xyz JOIN #room account :Alice Doe";
+        let (nick, host) = parse_join_prefix(line).expect("matches");
+        assert_eq!(nick, "alice");
+        assert_eq!(host, "freeq/plc/xyz");
+    }
+
+    #[test]
+    fn parse_join_prefix_rejects_non_join() {
+        let line = ":alice!~u@host PRIVMSG #room :hi";
+        assert!(parse_join_prefix(line).is_none());
+    }
+
+    #[test]
+    fn parse_join_prefix_rejects_serverless_prefix() {
+        let line = "PING :keepalive";
+        assert!(parse_join_prefix(line).is_none());
+    }
+
+    #[test]
+    fn parse_join_prefix_rejects_malformed_prefix() {
+        // No `!` ⇒ can't extract nick.
+        let line = ":alice JOIN #room";
+        assert!(parse_join_prefix(line).is_none());
+    }
+
+    /// SECURITY: a server (or wire injector) might emit a JOIN whose host
+    /// part contains control characters. Those would land in nick_hosts
+    /// and be rendered into the system message ("alice […] has joined")
+    /// where they could move the cursor or repaint the screen. Reject any
+    /// host that contains control characters (specifically CR/LF, NUL,
+    /// or ESC).
+    #[test]
+    fn parse_join_prefix_rejects_control_chars_in_host() {
+        let cases = [
+            ":alice!~u@freeq/plc/abc\r JOIN #room",
+            ":alice!~u@freeq/plc/abc\n JOIN #room",
+            ":alice!~u@\x00evil JOIN #room",
+            ":alice!~u@\x1b[31mEVIL JOIN #room",
+        ];
+        for line in cases {
+            assert!(
+                parse_join_prefix(line).is_none(),
+                "must reject control-char host: {line:?}"
+            );
+        }
+    }
+
+    /// SECURITY: same hardening applied to the nick component — a
+    /// crafted prefix with control chars in the nick must be rejected.
+    #[test]
+    fn parse_join_prefix_rejects_control_chars_in_nick() {
+        let line = ":alice\x07!~u@freeq/plc/abc JOIN #room";
+        assert!(parse_join_prefix(line).is_none());
+    }
+
+    /// DoS: an unbounded JOIN prefix lets a hostile peer push huge
+    /// strings into our `nick_hosts` map (where the cap helps but each
+    /// stored entry is still O(prefix-size) bytes). Reject anything
+    /// where the nick or host part is longer than IRC convention.
+    #[test]
+    fn parse_join_prefix_rejects_giant_components() {
+        let huge_host = "a".repeat(8192);
+        let line = format!(":alice!~u@{huge_host} JOIN #room");
+        assert!(
+            parse_join_prefix(&line).is_none(),
+            "must reject host longer than reasonable bound"
+        );
+
+        let huge_nick = "n".repeat(8192);
+        let line = format!(":{huge_nick}!~u@freeq/plc/abc JOIN #room");
+        assert!(
+            parse_join_prefix(&line).is_none(),
+            "must reject giant nick"
+        );
     }
 }

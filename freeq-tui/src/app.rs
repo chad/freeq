@@ -1,6 +1,6 @@
 //! Application state for the TUI.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -8,6 +8,111 @@ use crate::editor::{LineEditor, Mode};
 
 /// Maximum number of messages to keep per buffer.
 const MAX_MESSAGES: usize = 1000;
+
+/// Maximum entries in the nick → host cloak cache. A hostile or noisy
+/// network with thousands of join/quit nicks would otherwise grow this
+/// map indefinitely; we evict arbitrary entries when over the cap.
+pub const NICK_HOST_CAP: usize = 4096;
+
+/// Cap on the number of in-flight (open, unclosed) BATCH groups. A
+/// hostile server could otherwise spam BATCH START with unique ids
+/// and never close them, growing `app.batches` without bound.
+pub const BATCH_CONCURRENT_CAP: usize = 16;
+
+/// Cap on the number of accumulated lines in a single in-flight BATCH.
+/// A hostile server could otherwise open a BATCH and stream messages
+/// forever (never sending BATCH END), pinning the lines vec in memory.
+/// CHATHISTORY requests cap at 50 by client convention so this is well
+/// above legitimate usage.
+pub const BATCH_LINE_CAP: usize = 2000;
+
+/// Defensive cap on the per-channel pinned-message set. The server
+/// authoritatively limits pins to 50 per channel, but the TUI populates
+/// its set from `+freeq.at/pin` notification tags on the wire — a
+/// hostile peer could flood those. Cap at slightly above the server's
+/// limit so we tolerate legitimate growth without unbounded memory.
+pub const PINNED_CAP: usize = 64;
+
+/// Upper bound on accepted `msgid` length. Server-assigned msgids are
+/// ULIDs (26 chars). The cap leaves headroom for benign experimentation
+/// without letting a hostile peer feed the buffer index a megabyte string.
+pub const MSGID_MAX_LEN: usize = 64;
+
+/// True for commands that carry secrets in their arguments and so must
+/// NOT be persisted in the input-history ring. Match the command word
+/// case-insensitively; only the leading slash-token matters.
+pub fn is_secret_command(line: &str) -> bool {
+    let first = line
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    matches!(
+        first.as_str(),
+        "/encrypt" | "/oper" | "/pass" | "/password"
+    )
+}
+
+/// Word-boundary-aware mention check. Returns true when `nick` appears
+/// in `text` as a standalone token (preceded by start-of-string or a
+/// non-alphanumeric, followed by end-of-string or a non-alphanumeric).
+/// Case-insensitive. Empty nick never matches.
+///
+/// Used both by the renderer's mention highlight and by `chat_msg`'s
+/// `has_mention` flag — they must agree, or the tab indicator would
+/// disagree with the inline highlight.
+pub fn is_mention(text: &str, nick: &str) -> bool {
+    if nick.is_empty() {
+        return false;
+    }
+    let text_lower = text.to_lowercase();
+    let nick_lower = nick.to_lowercase();
+    let mut search_from = 0;
+    while let Some(pos) = text_lower[search_from..].find(&nick_lower) {
+        let abs = search_from + pos;
+        let end = abs + nick_lower.len();
+        let before_ok = abs == 0
+            || !text_lower[..abs]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let after_ok = end == text_lower.len()
+            || !text_lower[end..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        if before_ok && after_ok {
+            return true;
+        }
+        search_from = abs + nick_lower.chars().next().map_or(1, |c| c.len_utf8());
+    }
+    false
+}
+
+/// Reject `msgid` values that would either:
+/// 1. Inject IRC commands when interpolated into raw lines (CR/LF/NUL).
+/// 2. Split into extra params when used in `PIN <ch> <id>` etc. (whitespace).
+/// 3. Confuse IRCv3 tag parsing (`;` separator, leading `:` for prefix).
+/// 4. Bleed into terminal escapes when displayed (control chars).
+/// 5. Visually spoof or hide content (BiDi overrides, zero-width chars,
+///    Unicode line/paragraph separators — all non-Cc but still hostile).
+/// 6. Exhaust memory (length cap).
+///
+/// Real server-assigned msgids are ULIDs (Crockford base32, upper-case)
+/// with optional plain alphanumerics for legacy/test rigs, so an ASCII
+/// graphic-only allow-list is both safe and accurate.
+pub fn is_valid_msgid(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= MSGID_MAX_LEN
+        && !s.starts_with(':')
+        && s.chars().all(|c| {
+            // ASCII printable, excluding space and the IRC tag/list/prefix
+            // metacharacters. This excludes every non-ASCII char by
+            // construction, which kills BiDi, zero-width, and U+2028/2029
+            // attacks at the door.
+            c.is_ascii_graphic() && c != ';' && c != ',' && c != ':'
+        })
+}
 
 /// A single line in a message buffer.
 #[derive(Debug, Clone)]
@@ -18,6 +123,18 @@ pub struct BufferLine {
     pub is_system: bool,
     /// If this message has an associated image, its URL (key into ImageCache).
     pub image_url: Option<String>,
+    /// Server-assigned message ID (ULID) from the IRCv3 `msgid` tag.
+    /// `None` for system lines, our own optimistic echoes before the server reply,
+    /// or messages from servers that don't advertise message-tags.
+    pub msgid: Option<String>,
+    /// Set when an inbound `+draft/edit` for this message has been applied.
+    /// Rendering layer shows an "(edited)" suffix.
+    pub is_edited: bool,
+    /// Set when an inbound `+draft/delete` for this message has been applied.
+    /// Rendering layer replaces the body with a muted placeholder.
+    pub is_deleted: bool,
+    /// Parent message ID this is a reply to (from IRCv3 `+reply` tag).
+    pub reply_to: Option<String>,
 }
 
 /// State of a cached image.
@@ -62,6 +179,15 @@ pub struct Buffer {
     pub nick_scroll: usize,
     /// Whether we're accumulating nicks from multiple 353 replies.
     pub names_pending: bool,
+    /// Msgids of currently pinned messages in this buffer (channels only).
+    /// Updated from `+freeq.at/pin` / `+freeq.at/unpin` tags on incoming notices.
+    pub pinned: HashSet<String>,
+    /// True when we've requested CHATHISTORY BEFORE and haven't yet seen
+    /// the closing BATCH. Prevents fan-out requests while scrolling.
+    pub history_in_flight: bool,
+    /// True once we've seen an empty CHATHISTORY batch — no older messages
+    /// exist on the server, so we should stop firing requests.
+    pub history_exhausted: bool,
 }
 
 /// In-progress BATCH buffer (e.g., CHATHISTORY).
@@ -69,10 +195,59 @@ pub struct Buffer {
 pub struct BatchBuffer {
     pub target: String,
     pub lines: Vec<(i64, BufferLine)>,
+    /// IRCv3 batch type (e.g. "chathistory", "labeled-response").
+    /// Used by `end_batch` to decide whether an empty batch should mark
+    /// the buffer's history as exhausted. Without this, an empty batch
+    /// of an unrelated type would permanently disable scroll-up fetch.
+    pub batch_type: String,
+}
+
+impl BatchBuffer {
+    /// Apply a `+draft/edit` to an accumulated line. Used during CHATHISTORY
+    /// replay so the original message is rewritten in place instead of
+    /// displaying both the original and the edit. Same authorship check
+    /// as `Buffer::apply_edit`.
+    pub fn apply_edit(
+        &mut self,
+        editor_nick: &str,
+        original_msgid: &str,
+        new_msgid: Option<&str>,
+        new_text: &str,
+    ) -> bool {
+        for (_, line) in self.lines.iter_mut() {
+            if line.msgid.as_deref() == Some(original_msgid) {
+                if !line.from.eq_ignore_ascii_case(editor_nick) || line.is_deleted {
+                    return false;
+                }
+                line.text = sanitize_text(new_text);
+                line.is_edited = true;
+                if let Some(id) = new_msgid {
+                    line.msgid = Some(id.to_string());
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Apply a `+draft/delete` to an accumulated line.
+    pub fn apply_delete(&mut self, deleter_nick: &str, msgid: &str) -> bool {
+        for (_, line) in self.lines.iter_mut() {
+            if line.msgid.as_deref() == Some(msgid) {
+                if !line.from.eq_ignore_ascii_case(deleter_nick) {
+                    return false;
+                }
+                line.is_deleted = true;
+                line.text.clear();
+                return true;
+            }
+        }
+        false
+    }
 }
 
 impl Buffer {
-    fn new(name: &str) -> Self {
+    pub fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
             messages: VecDeque::new(),
@@ -83,16 +258,45 @@ impl Buffer {
             has_mention: false,
             nick_scroll: 0,
             names_pending: false,
+            pinned: HashSet::new(),
+            history_in_flight: false,
+            history_exhausted: false,
         }
     }
 
-    pub fn push(&mut self, line: BufferLine) {
+    pub fn push(&mut self, mut line: BufferLine) {
+        // SECURITY: a hostile peer can put ANSI escapes (cursor moves, color
+        // resets, screen clears) into their nick or message body. We render
+        // both directly into the terminal, so we strip control chars at the
+        // single chokepoint here — no caller can forget. `text` already
+        // tolerates `\n`/`\t` for legitimate formatting; the `from` field
+        // never contains either in a real IRC nick.
+        line.from = sanitize_text(&line.from)
+            .chars()
+            .filter(|c| *c != '\n' && *c != '\t')
+            .collect();
+        line.text = sanitize_text(&line.text);
         self.messages.push_back(line);
         if self.messages.len() > MAX_MESSAGES {
             self.messages.pop_front();
         }
         // Auto-scroll to bottom when new message arrives
         self.scroll = 0;
+    }
+
+    /// Add a pinned msgid, enforcing `PINNED_CAP`. When the cap would be
+    /// exceeded we drop one arbitrary entry — true LRU isn't worth the
+    /// bookkeeping for what's already a defense-in-depth bound.
+    pub fn add_pinned(&mut self, msgid: &str) {
+        if self.pinned.contains(msgid) {
+            return;
+        }
+        if self.pinned.len() >= PINNED_CAP
+            && let Some(victim) = self.pinned.iter().next().cloned()
+        {
+            self.pinned.remove(&victim);
+        }
+        self.pinned.insert(msgid.to_string());
     }
 
     pub fn push_system(&mut self, text: &str) {
@@ -102,7 +306,144 @@ impl Buffer {
             text: sanitize_text(text),
             is_system: true,
             image_url: None,
+            msgid: None,
+            is_edited: false,
+            is_deleted: false,
+            reply_to: None,
         });
+    }
+
+    /// Find a message by its server-assigned msgid.
+    /// O(n) over MAX_MESSAGES; fine at the current buffer size.
+    pub fn find_by_msgid(&self, msgid: &str) -> Option<&BufferLine> {
+        self.messages
+            .iter()
+            .rev()
+            .find(|line| line.msgid.as_deref() == Some(msgid))
+    }
+
+    /// Mutable variant of `find_by_msgid`. Used by the upcoming `/edit` and
+    /// `/delete` commands to mutate a previously-received message in place.
+    #[allow(dead_code)]
+    pub fn find_by_msgid_mut(&mut self, msgid: &str) -> Option<&mut BufferLine> {
+        self.messages
+            .iter_mut()
+            .rev()
+            .find(|line| line.msgid.as_deref() == Some(msgid))
+    }
+
+    /// Oldest non-system message in this buffer that has a server-assigned
+    /// msgid. Used as the anchor for `CHATHISTORY BEFORE` auto-fetch.
+    pub fn oldest_msgid(&self) -> Option<&str> {
+        self.messages
+            .iter()
+            .find(|line| !line.is_system && line.msgid.is_some())
+            .and_then(|line| line.msgid.as_deref())
+    }
+
+    /// Most recent non-system message that has a server-assigned msgid.
+    /// Used by `/react`, `/reply`, etc. when no explicit target is given —
+    /// the natural TUI gesture is "act on the message I just saw."
+    pub fn recent_msgid(&self) -> Option<&str> {
+        self.messages
+            .iter()
+            .rev()
+            .find(|line| !line.is_system && !line.is_deleted && line.msgid.is_some())
+            .and_then(|line| line.msgid.as_deref())
+    }
+
+    /// Most recent non-system, non-deleted message authored by `nick`
+    /// that has a server-assigned msgid. Used by `/edit` and `/delete`
+    /// to act on the user's own last message.
+    pub fn recent_own_msgid(&self, nick: &str) -> Option<&str> {
+        self.messages
+            .iter()
+            .rev()
+            .find(|line| {
+                !line.is_system
+                    && !line.is_deleted
+                    && line.from.eq_ignore_ascii_case(nick)
+                    && line.msgid.is_some()
+            })
+            .and_then(|line| line.msgid.as_deref())
+    }
+
+    /// Apply an inbound `+draft/edit`. The edit message carries its own
+    /// fresh `msgid`; we swap the line's msgid to the new one so subsequent
+    /// edits chain correctly (matches the iOS pattern).
+    ///
+    /// SECURITY: the `editor_nick` (sender of the edit message) MUST match
+    /// the original line's author. The server enforces this too, but a
+    /// trusting client can be spoofed by a malicious peer (or a buggy/
+    /// compromised server) into rewriting other users' history. We refuse
+    /// the edit and return false in that case.
+    ///
+    /// Also refuses to "edit" a deleted line — that would resurrect a
+    /// deletion the user explicitly performed.
+    ///
+    /// Returns true if an existing line was edited; false if the target
+    /// wasn't in this buffer, the sender doesn't match, or the line is
+    /// already deleted.
+    pub fn apply_edit(
+        &mut self,
+        editor_nick: &str,
+        original_msgid: &str,
+        new_msgid: Option<&str>,
+        new_text: &str,
+    ) -> bool {
+        if let Some(line) = self.find_by_msgid_mut(original_msgid) {
+            if !line.from.eq_ignore_ascii_case(editor_nick) {
+                return false;
+            }
+            if line.is_deleted {
+                return false;
+            }
+            line.text = sanitize_text(new_text);
+            line.is_edited = true;
+            if let Some(id) = new_msgid {
+                line.msgid = Some(id.to_string());
+            }
+            // Carry pin through the msgid swap. Without this the
+            // renderer's `msg.msgid in buffer.pinned` check silently
+            // drops the 📌 marker after every edit of a pinned message.
+            if let Some(id) = new_msgid
+                && self.pinned.remove(original_msgid)
+            {
+                self.pinned.insert(id.to_string());
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Apply an inbound `+draft/delete`. We don't drop the line — the
+    /// rendering layer shows a muted placeholder so scrollback positions
+    /// stay stable.
+    ///
+    /// SECURITY: like `apply_edit`, the `deleter_nick` MUST match the
+    /// original author (channel ops can also delete server-side, but the
+    /// server's permission check is authoritative there; this client-side
+    /// check is the defense-in-depth layer for spoofed peer-to-peer wire
+    /// events).
+    ///
+    /// Returns true if a line was marked deleted.
+    pub fn apply_delete(&mut self, deleter_nick: &str, msgid: &str) -> bool {
+        if let Some(line) = self.find_by_msgid_mut(msgid) {
+            if !line.from.eq_ignore_ascii_case(deleter_nick) {
+                return false;
+            }
+            line.is_deleted = true;
+            line.text.clear();
+            // Drop the pin too so the renderer doesn't keep flagging
+            // a `[deleted]` line as "pinned" — both an inconsistency and
+            // a small information leak about which deleted messages were
+            // significant.
+            self.pinned.remove(msgid);
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -220,6 +561,11 @@ pub struct App {
     pub p2p_event_rx: Option<tokio::sync::mpsc::Receiver<freeq_sdk::p2p::P2pEvent>>,
     /// Pending URL from a server notice (waiting for user to press Enter to open).
     pub pending_url: Option<String>,
+    /// Most recently observed host for each nick (lowercase keys).
+    /// Populated by parsing the IRC prefix on JOIN lines. Used to surface
+    /// hostname cloaks like `freeq/plc/xxx` in join system messages and
+    /// /whois output without changing the SDK Event::Joined signature.
+    pub nick_hosts: HashMap<String, String>,
 }
 
 /// Results from background tasks that need to update the UI.
@@ -274,6 +620,7 @@ impl App {
             p2p_handle: None,
             p2p_event_rx: None,
             pending_url: None,
+            nick_hosts: HashMap::new(),
         }
     }
 
@@ -312,37 +659,61 @@ impl App {
             text: clean_text.clone(),
             is_system: false,
             image_url: None,
+            msgid: None,
+            is_edited: false,
+            is_deleted: false,
+            reply_to: None,
         });
 
-        // Track unread + mentions for inactive buffers
+        // Track unread + mentions for inactive buffers. IRC nicks are
+        // case-insensitive — without `eq_ignore_ascii_case`, the echo
+        // of our own message under a server-canonicalized case would
+        // count as someone else's message and bump unread.
         if !is_active
-            && from != self.nick
+            && !from.eq_ignore_ascii_case(&self.nick)
             && let Some(buf) = self.buffers.get_mut(&buf_key)
         {
             buf.unread += 1;
-            if clean_text
-                .to_lowercase()
-                .contains(&self.nick.to_lowercase())
-            {
+            if is_mention(&clean_text, &self.nick) {
                 buf.has_mention = true;
             }
         }
     }
 
-    /// Start a BATCH (e.g., CHATHISTORY).
+    /// Start a BATCH (e.g., CHATHISTORY). Bounds concurrent in-flight
+    /// batches via `BATCH_CONCURRENT_CAP` — a hostile server can't open
+    /// thousands of never-closed batches to exhaust memory. The default
+    /// type is "chathistory"; call `start_batch_typed` to specify
+    /// otherwise. (Convenience for tests; the event handler always
+    /// uses `start_batch_typed` with the server-supplied type.)
+    #[allow(dead_code)]
     pub fn start_batch(&mut self, id: &str, target: &str) {
+        self.start_batch_typed(id, target, "chathistory");
+    }
+
+    pub fn start_batch_typed(&mut self, id: &str, target: &str, batch_type: &str) {
+        if self.batches.len() >= BATCH_CONCURRENT_CAP {
+            if let Some(victim) = self.batches.keys().next().cloned() {
+                self.batches.remove(&victim);
+            }
+        }
         self.batches.insert(
             id.to_string(),
             BatchBuffer {
                 target: target.to_string(),
                 lines: Vec::new(),
+                batch_type: batch_type.to_string(),
             },
         );
     }
 
-    /// Add a line to a batch by ID.
+    /// Add a line to a batch by ID. Drops the line if the batch is at
+    /// `BATCH_LINE_CAP` — bounds memory in the face of a malicious or
+    /// runaway server that opens a BATCH and never closes it.
     pub fn add_batch_line(&mut self, id: &str, timestamp_ms: i64, line: BufferLine) {
-        if let Some(batch) = self.batches.get_mut(id) {
+        if let Some(batch) = self.batches.get_mut(id)
+            && batch.lines.len() < BATCH_LINE_CAP
+        {
             batch.lines.push((timestamp_ms, line));
         }
     }
@@ -352,6 +723,8 @@ impl App {
         if let Some(mut batch) = self.batches.remove(id) {
             let buf = self.buffer_mut(&batch.target);
             batch.lines.sort_by(|a, b| a.0.cmp(&b.0));
+            let was_empty = batch.lines.is_empty();
+            let was_chathistory = batch.batch_type.eq_ignore_ascii_case("chathistory");
             // Prepend in order (oldest first)
             for (_, line) in batch.lines.into_iter().rev() {
                 buf.messages.push_front(line);
@@ -359,6 +732,82 @@ impl App {
                     buf.messages.pop_back();
                 }
             }
+            // Auto-fetch tracking: only CHATHISTORY batches drive these
+            // flags. An empty `labeled-response` (or anything else) must
+            // not permanently disable scroll-up history fetch.
+            if was_chathistory {
+                buf.history_in_flight = false;
+                if was_empty {
+                    buf.history_exhausted = true;
+                }
+            }
+        }
+    }
+
+    /// Record a nick → host mapping observed on a JOIN line. Enforces the
+    /// `NICK_HOST_CAP` so that flooding the channel with distinct nicks
+    /// can't OOM the TUI. Eviction is arbitrary: when the cap is hit we
+    /// drop a single existing entry before inserting the new one.
+    pub fn remember_nick_host(&mut self, nick: &str, host: &str) {
+        let key = nick.to_lowercase();
+        if !self.nick_hosts.contains_key(&key) && self.nick_hosts.len() >= NICK_HOST_CAP {
+            // Evict one arbitrary entry — true LRU isn't worth the bookkeeping
+            // for a defense-in-depth bound on a host-display cache.
+            if let Some(victim) = self.nick_hosts.keys().next().cloned() {
+                self.nick_hosts.remove(&victim);
+            }
+        }
+        self.nick_hosts.insert(key, host.to_string());
+    }
+
+    /// Apply a `+draft/edit` either to an in-flight batch (during CHATHISTORY
+    /// replay) or to the live buffer. The edit message carries its own
+    /// `msgid`; that becomes the line's new id so subsequent edits chain.
+    ///
+    /// Does NOT lazily create a buffer for `buf_name`. A spoofed or
+    /// misrouted edit targeting a buffer the user never opened would
+    /// otherwise spawn a phantom empty buffer in the tab bar.
+    pub fn apply_edit(
+        &mut self,
+        editor_nick: &str,
+        batch_id: Option<&str>,
+        buf_name: &str,
+        original_msgid: &str,
+        new_msgid: Option<&str>,
+        new_text: &str,
+    ) -> bool {
+        if let Some(id) = batch_id
+            && let Some(batch) = self.batches.get_mut(id)
+        {
+            return batch.apply_edit(editor_nick, original_msgid, new_msgid, new_text);
+        }
+        let key = buf_name.to_lowercase();
+        if let Some(buf) = self.buffers.get_mut(&key) {
+            buf.apply_edit(editor_nick, original_msgid, new_msgid, new_text)
+        } else {
+            false
+        }
+    }
+
+    /// Apply a `+draft/delete` either to an in-flight batch or the live
+    /// buffer. Same no-phantom-buffer guarantee as `apply_edit`.
+    pub fn apply_delete(
+        &mut self,
+        deleter_nick: &str,
+        batch_id: Option<&str>,
+        buf_name: &str,
+        msgid: &str,
+    ) -> bool {
+        if let Some(id) = batch_id
+            && let Some(batch) = self.batches.get_mut(id)
+        {
+            return batch.apply_delete(deleter_nick, msgid);
+        }
+        let key = buf_name.to_lowercase();
+        if let Some(buf) = self.buffers.get_mut(&key) {
+            buf.apply_delete(deleter_nick, msgid)
+        } else {
+            false
         }
     }
 
@@ -420,11 +869,14 @@ impl App {
         self.buffers.keys().cloned().collect()
     }
 
-    /// Take and clear the input line, pushing it to history.
+    /// Take and clear the input line, pushing it to history. Commands
+    /// that carry credentials (`/encrypt <passphrase>`, `/oper <name>
+    /// <password>`) are NOT recorded — leaking them via Ctrl-P recall
+    /// or a memory dump would compromise the user's secrets.
     pub fn input_take(&mut self) -> String {
         self.history_pos = None;
         let line = self.editor.take();
-        if !line.is_empty() {
+        if !line.is_empty() && !is_secret_command(&line) {
             self.history.push(line.clone());
         }
         line
@@ -478,6 +930,735 @@ pub fn sanitize_text(s: &str) -> String {
             c == '\n' || c == '\t' || (c >= ' ' && c != '\x7f')
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line_with_msgid(text: &str, msgid: Option<&str>) -> BufferLine {
+        line(text, "alice", msgid)
+    }
+
+    fn line(text: &str, from: &str, msgid: Option<&str>) -> BufferLine {
+        BufferLine {
+            timestamp: "12:00:00".into(),
+            from: from.into(),
+            text: text.into(),
+            is_system: false,
+            image_url: None,
+            msgid: msgid.map(String::from),
+            is_edited: false,
+            is_deleted: false,
+            reply_to: None,
+        }
+    }
+
+    #[test]
+    fn find_by_msgid_round_trip() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line_with_msgid("hello", Some("01ABC")));
+        buf.push(line_with_msgid("world", Some("01DEF")));
+
+        assert_eq!(buf.find_by_msgid("01ABC").map(|l| l.text.as_str()), Some("hello"));
+        assert_eq!(buf.find_by_msgid("01DEF").map(|l| l.text.as_str()), Some("world"));
+        assert!(buf.find_by_msgid("missing").is_none());
+    }
+
+    #[test]
+    fn find_by_msgid_mut_allows_in_place_edit() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line_with_msgid("original", Some("01ABC")));
+
+        let line = buf.find_by_msgid_mut("01ABC").expect("line exists");
+        line.text = "edited".into();
+
+        assert_eq!(buf.find_by_msgid("01ABC").unwrap().text, "edited");
+    }
+
+    #[test]
+    fn recent_msgid_skips_system_lines() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line_with_msgid("first", Some("01AAA")));
+        buf.push_system("alice has joined");
+        buf.push(line_with_msgid("second", Some("01BBB")));
+        buf.push_system("bob has left");
+
+        // Most recent non-system, msgid-bearing line wins.
+        assert_eq!(buf.recent_msgid(), Some("01BBB"));
+    }
+
+    #[test]
+    fn recent_msgid_skips_lines_without_msgid() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line_with_msgid("with id", Some("01AAA")));
+        buf.push(line_with_msgid("no id", None));
+
+        // Lines without msgid (e.g. our own optimistic local echo) are not selectable.
+        assert_eq!(buf.recent_msgid(), Some("01AAA"));
+    }
+
+    #[test]
+    fn recent_msgid_none_on_empty_buffer() {
+        let buf = Buffer::new("#test");
+        assert!(buf.recent_msgid().is_none());
+    }
+
+    #[test]
+    fn push_system_has_no_msgid() {
+        let mut buf = Buffer::new("#test");
+        buf.push_system("welcome");
+        assert!(buf.messages.back().unwrap().msgid.is_none());
+        assert!(buf.messages.back().unwrap().is_system);
+    }
+
+    #[test]
+    fn apply_edit_rewrites_text_and_flips_flag() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line_with_msgid("hi", Some("01ABC")));
+
+        let ok = buf.apply_edit("alice", "01ABC", Some("01DEF"), "hello world");
+        assert!(ok);
+
+        let edited = buf.find_by_msgid("01DEF").expect("new id should resolve");
+        assert_eq!(edited.text, "hello world");
+        assert!(edited.is_edited);
+        // Original id no longer points anywhere since the line's msgid swapped.
+        assert!(buf.find_by_msgid("01ABC").is_none());
+    }
+
+    #[test]
+    fn apply_edit_without_new_msgid_keeps_original_id() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line_with_msgid("hi", Some("01ABC")));
+
+        assert!(buf.apply_edit("alice", "01ABC", None, "hello"));
+        let edited = buf.find_by_msgid("01ABC").expect("id should still resolve");
+        assert_eq!(edited.text, "hello");
+        assert!(edited.is_edited);
+    }
+
+    #[test]
+    fn apply_edit_unknown_msgid_is_noop() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line_with_msgid("hi", Some("01ABC")));
+
+        assert!(!buf.apply_edit("alice", "01ZZZ", None, "should not appear"));
+        assert_eq!(buf.find_by_msgid("01ABC").unwrap().text, "hi");
+    }
+
+    #[test]
+    fn apply_edit_sanitizes_control_chars() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line_with_msgid("hi", Some("01ABC")));
+
+        // Inject a NUL byte and an ANSI escape — both should be stripped.
+        buf.apply_edit("alice", "01ABC", None, "safe\x00\x1b[31mtext");
+        let edited = buf.find_by_msgid("01ABC").unwrap();
+        assert_eq!(edited.text, "safe[31mtext");
+    }
+
+    #[test]
+    fn apply_delete_marks_and_clears_text() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line_with_msgid("secret", Some("01ABC")));
+
+        assert!(buf.apply_delete("alice", "01ABC"));
+        let deleted = buf.find_by_msgid("01ABC").expect("line still exists by id");
+        assert!(deleted.is_deleted);
+        assert!(deleted.text.is_empty());
+    }
+
+    #[test]
+    fn apply_delete_unknown_is_noop() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line_with_msgid("hi", Some("01ABC")));
+        assert!(!buf.apply_delete("alice", "01ZZZ"));
+        assert!(!buf.find_by_msgid("01ABC").unwrap().is_deleted);
+    }
+
+    #[test]
+    fn recent_msgid_skips_deleted() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line_with_msgid("first", Some("01AAA")));
+        buf.push(line_with_msgid("second", Some("01BBB")));
+        buf.apply_delete("alice", "01BBB");
+        // 01BBB is the newest, but it's deleted — fall back to 01AAA.
+        assert_eq!(buf.recent_msgid(), Some("01AAA"));
+    }
+
+    #[test]
+    fn recent_own_msgid_filters_by_nick() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line("from alice", "alice", Some("01AAA")));
+        buf.push(line("from bob", "bob", Some("01BBB")));
+        buf.push(line("from alice 2", "alice", Some("01CCC")));
+
+        assert_eq!(buf.recent_own_msgid("alice"), Some("01CCC"));
+        assert_eq!(buf.recent_own_msgid("bob"), Some("01BBB"));
+        assert_eq!(buf.recent_own_msgid("carol"), None);
+    }
+
+    #[test]
+    fn recent_own_msgid_is_case_insensitive() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line("hello", "Alice", Some("01AAA")));
+        // IRC nicks are case-insensitive for comparison.
+        assert_eq!(buf.recent_own_msgid("alice"), Some("01AAA"));
+        assert_eq!(buf.recent_own_msgid("ALICE"), Some("01AAA"));
+    }
+
+    #[test]
+    fn recent_own_msgid_skips_deleted() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line("first", "alice", Some("01AAA")));
+        buf.push(line("second", "alice", Some("01BBB")));
+        buf.apply_delete("alice", "01BBB");
+        // alice's newest non-deleted msgid is 01AAA.
+        assert_eq!(buf.recent_own_msgid("alice"), Some("01AAA"));
+    }
+
+    #[test]
+    fn reply_to_propagates_to_buffer_line() {
+        let mut buf = Buffer::new("#test");
+        let mut line = line_with_msgid("a reply", Some("01CHILD"));
+        line.reply_to = Some("01PARENT".into());
+        buf.push(line);
+        let found = buf.find_by_msgid("01CHILD").unwrap();
+        assert_eq!(found.reply_to.as_deref(), Some("01PARENT"));
+    }
+
+    #[test]
+    fn oldest_msgid_skips_system_lines() {
+        let mut buf = Buffer::new("#test");
+        buf.push_system("joined");
+        buf.push(line_with_msgid("first", Some("01AAA")));
+        buf.push(line_with_msgid("second", Some("01BBB")));
+        assert_eq!(buf.oldest_msgid(), Some("01AAA"));
+    }
+
+    #[test]
+    fn oldest_msgid_none_on_empty_buffer() {
+        let buf = Buffer::new("#test");
+        assert!(buf.oldest_msgid().is_none());
+    }
+
+    #[test]
+    fn end_batch_clears_in_flight_and_marks_exhausted_when_empty() {
+        let mut buffers = std::collections::BTreeMap::new();
+        let mut b = Buffer::new("#test");
+        b.history_in_flight = true;
+        buffers.insert("#test".to_string(), b);
+        let mut app = App {
+            channel_keys: HashMap::new(),
+            buffers,
+            batches: HashMap::new(),
+            active_buffer: "#test".into(),
+            editor: crate::editor::LineEditor::new(crate::editor::Mode::Emacs),
+            connection_state: String::new(),
+            transport: Transport::Tcp,
+            server_addr: String::new(),
+            iroh_endpoint_id: None,
+            connected_at: None,
+            authenticated_did: None,
+            show_net_popup: false,
+            debug_raw: false,
+            nick: "alice".into(),
+            should_quit: false,
+            reconnect_pending: false,
+            reconnect_at: None,
+            reconnect_delay: Duration::from_secs(1),
+            history: Vec::new(),
+            history_pos: None,
+            history_saved: String::new(),
+            media_uploader: None,
+            image_cache: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(feature = "inline-images")]
+            picker: None,
+            #[cfg(feature = "inline-images")]
+            image_protos: HashMap::new(),
+            bg_result_tx: tokio::sync::mpsc::channel(1).0,
+            bg_result_rx: None,
+            p2p_handle: None,
+            p2p_event_rx: None,
+            pending_url: None,
+            nick_hosts: HashMap::new(),
+        };
+        app.start_batch("b1", "#test");
+        app.end_batch("b1");
+        let buf = app.buffers.get("#test").unwrap();
+        assert!(!buf.history_in_flight, "in-flight cleared on batch end");
+        assert!(buf.history_exhausted, "empty batch ⇒ no more history");
+    }
+
+    /// SECURITY: edits must only be applied if the editor matches the
+    /// original author. Otherwise a malicious peer can rewrite anyone's
+    /// message by crafting a +draft/edit targeting their msgid.
+    #[test]
+    fn apply_edit_rejects_spoofed_sender() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line("alice's secret", "alice", Some("01ALICE")));
+
+        let applied = buf.apply_edit("mallory", "01ALICE", None, "rewritten by mallory");
+        assert!(!applied, "edit from a non-author MUST be rejected");
+        let line = buf.find_by_msgid("01ALICE").unwrap();
+        assert_eq!(line.text, "alice's secret");
+        assert!(!line.is_edited);
+    }
+
+    /// CORRECTNESS: `apply_edit` swaps a line's msgid to the new id
+    /// the server assigned to the edit. But the channel's pinned set
+    /// still referenced the OLD msgid, so the renderer (which checks
+    /// `msg.msgid in buffer.pinned`) silently dropped the 📌 marker
+    /// from the pinned message. Fix: when swapping msgid, also move
+    /// the pin entry.
+    #[test]
+    fn apply_edit_carries_pin_through_msgid_swap() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line("important", "alice", Some("01OLD")));
+        buf.add_pinned("01OLD");
+        assert!(buf.pinned.contains("01OLD"));
+
+        assert!(buf.apply_edit("alice", "01OLD", Some("01NEW"), "important (refined)"));
+        assert!(
+            !buf.pinned.contains("01OLD"),
+            "old msgid should be removed from pin set"
+        );
+        assert!(
+            buf.pinned.contains("01NEW"),
+            "new msgid should carry the pin: {:?}",
+            buf.pinned
+        );
+    }
+
+    /// CORRECTNESS: `end_batch` set `history_exhausted = true` for
+    /// every empty batch, regardless of type. But IRCv3 has many batch
+    /// types (labeled-response, netjoin, etc.) and an empty
+    /// non-CHATHISTORY batch is perfectly normal — it would
+    /// permanently disable scroll-up history fetch on that buffer.
+    /// Only CHATHISTORY batches should drive that flag.
+    #[test]
+    fn end_batch_only_marks_exhausted_for_chathistory_type() {
+        let mut app = App::new("alice", false);
+        app.buffers.insert("#test".into(), Buffer::new("#test"));
+        // Non-CHATHISTORY empty batch (e.g., labeled-response).
+        app.start_batch_typed("b1", "#test", "labeled-response");
+        app.end_batch("b1");
+        let buf = app.buffers.get("#test").unwrap();
+        assert!(
+            !buf.history_exhausted,
+            "non-CHATHISTORY empty batch must not mark history exhausted"
+        );
+
+        // CHATHISTORY empty batch DOES mark exhausted.
+        app.start_batch_typed("b2", "#test", "chathistory");
+        app.end_batch("b2");
+        let buf = app.buffers.get("#test").unwrap();
+        assert!(
+            buf.history_exhausted,
+            "empty CHATHISTORY batch should mark exhausted"
+        );
+    }
+
+    /// CORRECTNESS: IRC nicks are case-insensitive (RFC 1459). The
+    /// echo of our own message can come back with whatever case the
+    /// server canonicalized, but we compared with `==` and so counted
+    /// it as someone else's message — incrementing unread + mention on
+    /// our own ping.
+    #[test]
+    fn chat_msg_treats_own_echo_case_insensitively() {
+        let mut app = App::new("alice", false);
+        app.active_buffer = "status".to_string(); // ensure #ch is inactive
+
+        // Echo of our own message with a different case canonicalization.
+        app.chat_msg("#ch", "ALICE", "hello");
+        let buf = app.buffers.get("#ch").unwrap();
+        assert_eq!(buf.unread, 0, "own echo must not bump unread");
+        assert!(!buf.has_mention, "own echo must not flag mention");
+    }
+
+    /// DoS: `app.batches` is a HashMap keyed by batch id. A hostile
+    /// server could send thousands of BATCH START messages with unique
+    /// ids and no matching BATCH END — the map grows forever even
+    /// though each individual batch is now capped (Cycle 19). Bound
+    /// the number of concurrent in-flight batches.
+    #[test]
+    fn batches_map_caps_concurrent_in_flight() {
+        let mut app = App::new("alice", false);
+        for i in 0..(BATCH_CONCURRENT_CAP + 200) {
+            app.start_batch(&format!("b{i}"), "#test");
+        }
+        assert!(
+            app.batches.len() <= BATCH_CONCURRENT_CAP,
+            "concurrent batch count must be capped at {BATCH_CONCURRENT_CAP}, got {}",
+            app.batches.len()
+        );
+    }
+
+    /// DoS: `add_batch_line` had no upper bound, so a hostile server
+    /// could open a BATCH and stream lines forever (never sending the
+    /// terminating BATCH END), causing unbounded memory growth in the
+    /// `lines` vec. Cap each batch.
+    #[test]
+    fn batch_buffer_caps_in_flight_lines() {
+        let mut app = App::new("alice", false);
+        app.start_batch("b1", "#test");
+        for i in 0..(BATCH_LINE_CAP + 500) {
+            app.add_batch_line(
+                "b1",
+                i as i64,
+                BufferLine {
+                    timestamp: "12:00:00".into(),
+                    from: "evil-server".into(),
+                    text: format!("flood {i}"),
+                    is_system: false,
+                    image_url: None,
+                    msgid: Some(format!("01F{i:05}")),
+                    is_edited: false,
+                    is_deleted: false,
+                    reply_to: None,
+                },
+            );
+        }
+        let batch = app.batches.get("b1").unwrap();
+        assert!(
+            batch.lines.len() <= BATCH_LINE_CAP,
+            "batch lines must be capped at {BATCH_LINE_CAP}, got {}",
+            batch.lines.len()
+        );
+    }
+
+    /// SECURITY: `input_take` pushed every command into the input
+    /// history (Ctrl-P / Up-arrow recall). That happily included
+    /// `/encrypt <passphrase>` (E2EE channel key) and `/oper <name>
+    /// <password>`. A user who scrolls back through history (or whose
+    /// session memory is dumped) leaks the passphrase/password. Strip
+    /// these before they reach the history vector.
+    #[test]
+    fn input_history_redacts_sensitive_commands() {
+        let mut app = App::new("alice", false);
+
+        app.editor.set("/encrypt sup3r-secret-passphrase".into());
+        let _ = app.input_take();
+        assert!(
+            !app.history.iter().any(|h| h.contains("sup3r-secret")),
+            "passphrase must not be in history: {:?}",
+            app.history
+        );
+
+        app.editor.set("/oper opname my-oper-pass".into());
+        let _ = app.input_take();
+        assert!(
+            !app.history.iter().any(|h| h.contains("my-oper-pass")),
+            "oper password must not be in history"
+        );
+
+        // Normal commands should still be remembered for recall.
+        app.editor.set("/join #freeq".into());
+        let _ = app.input_take();
+        assert!(app.history.iter().any(|h| h == "/join #freeq"));
+    }
+
+    /// CORRECTNESS: `chat_msg` set `buf.has_mention` whenever the text
+    /// contained the user's nick as a substring — same false-positive
+    /// bug we already fixed in the renderer's mention highlight. A user
+    /// nicked "ben" got pinged for every "benevolent", "benchmark", etc.
+    #[test]
+    fn chat_msg_mention_requires_word_boundary() {
+        let mut app = App::new("ben", false);
+        // #ch is not active (active buffer is "status").
+        app.chat_msg("#ch", "alice", "benevolent leader");
+        let buf = app.buffers.get("#ch").unwrap();
+        assert!(
+            !buf.has_mention,
+            "substring 'ben' inside 'benevolent' must not flag mention"
+        );
+
+        // Real mention should still set the flag.
+        app.chat_msg("#ch", "alice", "ben: please review");
+        let buf = app.buffers.get("#ch").unwrap();
+        assert!(
+            buf.has_mention,
+            "actual ping with word boundary must flag mention"
+        );
+    }
+
+    /// CORRECTNESS: `App::apply_edit`/`apply_delete` route to
+    /// `buffer_mut(name)`, which lazily creates the buffer if missing.
+    /// A spoofed/misrouted edit targeting a buffer the user never had
+    /// open would silently spawn a phantom empty buffer in the tab bar.
+    /// We must look up read-only first and bail if the buffer doesn't
+    /// exist.
+    #[test]
+    fn apply_edit_does_not_create_phantom_buffer() {
+        let mut app = App::new("alice", false);
+        let before: std::collections::BTreeSet<String> =
+            app.buffers.keys().cloned().collect();
+
+        let applied = app.apply_edit(
+            "mallory",
+            None,
+            "#never-joined",
+            "01NONEXISTENT",
+            None,
+            "phantom edit",
+        );
+        assert!(!applied);
+        let after: std::collections::BTreeSet<String> =
+            app.buffers.keys().cloned().collect();
+        assert_eq!(
+            before, after,
+            "no buffer should be created for an edit that didn't apply"
+        );
+    }
+
+    #[test]
+    fn apply_delete_does_not_create_phantom_buffer() {
+        let mut app = App::new("alice", false);
+        let before: std::collections::BTreeSet<String> =
+            app.buffers.keys().cloned().collect();
+
+        let applied = app.apply_delete("mallory", None, "#never-joined", "01NOPE");
+        assert!(!applied);
+        let after: std::collections::BTreeSet<String> =
+            app.buffers.keys().cloned().collect();
+        assert_eq!(before, after);
+    }
+
+    /// DoS: the server caps pins at 50 per channel, but the TUI was
+    /// trusting the wire and stuffing every observed `+freeq.at/pin`
+    /// tag into the buffer's pin set. A hostile peer (or a buggy/
+    /// compromised server) could flood thousands of pin notifications
+    /// and balloon memory. Cap defensively on the client.
+    #[test]
+    fn pinned_set_is_capped_per_channel() {
+        let mut buf = Buffer::new("#test");
+        for i in 0..(PINNED_CAP + 200) {
+            buf.add_pinned(&format!("01PIN{i:04}"));
+        }
+        assert!(
+            buf.pinned.len() <= PINNED_CAP,
+            "pinned set should be capped at {PINNED_CAP}, got {}",
+            buf.pinned.len()
+        );
+    }
+
+    /// CORRECTNESS: when a message is deleted, it must be removed from
+    /// the channel's pin set too — otherwise the renderer keeps showing
+    /// 📌 on a `[deleted]` line, which is confusing and arguably a leak
+    /// of the fact that "the deleted message was important enough to pin".
+    #[test]
+    fn apply_delete_unpins_the_message() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line("important", "alice", Some("01PIN")));
+        buf.pinned.insert("01PIN".to_string());
+        assert!(buf.pinned.contains("01PIN"));
+
+        assert!(buf.apply_delete("alice", "01PIN"));
+        assert!(
+            !buf.pinned.contains("01PIN"),
+            "deleted message must be unpinned"
+        );
+    }
+
+    /// SECURITY: a hostile peer can put an ANSI escape into their nick or
+    /// the message body. The render layer interpolates `from` and `text`
+    /// directly into terminal output via `<{from}> {text}`, so an escape
+    /// would let them move the cursor, recolor everything, or even
+    /// repaint the screen. Sanitize at the buffer entry point so no
+    /// matter which call site builds a BufferLine, the dangerous bytes
+    /// can't reach the terminal.
+    #[test]
+    fn buffer_push_strips_terminal_escapes_from_from_and_text() {
+        let mut buf = Buffer::new("#test");
+        buf.push(BufferLine {
+            timestamp: "12:00:00".into(),
+            from: "alice\x1b[31m\x07".into(),
+            text: "hi\x1b[2J\x00there".into(),
+            is_system: false,
+            image_url: None,
+            msgid: Some("01ABC".into()),
+            is_edited: false,
+            is_deleted: false,
+            reply_to: None,
+        });
+        let line = buf.messages.back().unwrap();
+        for c in line.from.chars() {
+            assert!(
+                !c.is_control(),
+                "from must have no control chars, got {:?}",
+                line.from
+            );
+        }
+        for c in line.text.chars() {
+            assert!(
+                c == '\n' || c == '\t' || !c.is_control(),
+                "text must have no control chars (except \\n/\\t), got {:?}",
+                line.text
+            );
+        }
+    }
+
+    /// SECURITY: `char::is_control()` only catches General_Category=Cc.
+    /// Unicode line/paragraph separators (U+2028/U+2029) and BiDi format
+    /// chars (U+202E RTL OVERRIDE) are *not* Cc, so `is_control()`
+    /// returns false for them. They can still:
+    /// - inject into multi-line IRC text (LINE SEPARATOR splits a message
+    ///   when the receiving terminal honors Unicode line breaks),
+    /// - reverse the visual order of text after them (RTL OVERRIDE — the
+    ///   classic "RIGHT-TO-LEFT spoofing" attack),
+    /// - be invisible (zero-width joiner, BOM, byte-order mark).
+    /// Reject them in msgids — there's no legitimate reason for any of
+    /// these to appear in a server-assigned identifier.
+    #[test]
+    fn is_valid_msgid_rejects_unicode_line_breaks_and_format_chars() {
+        // Line/paragraph separators.
+        assert!(!is_valid_msgid("abc\u{2028}def"));
+        assert!(!is_valid_msgid("abc\u{2029}def"));
+        // RTL override (visual spoofing).
+        assert!(!is_valid_msgid("abc\u{202E}def"));
+        // Zero-width joiner & non-joiner.
+        assert!(!is_valid_msgid("abc\u{200D}def"));
+        assert!(!is_valid_msgid("abc\u{200C}def"));
+        // BOM / zero-width no-break space.
+        assert!(!is_valid_msgid("abc\u{FEFF}def"));
+    }
+
+    /// SECURITY: a malicious peer (or buggy server) might send a `msgid`
+    /// tag whose value contains CR/LF or whitespace. If we pipe that
+    /// straight into `handle.pin/unpin/edit/delete`, the SDK formats it
+    /// into a raw IRC line — `\r\n` would let the attacker inject a
+    /// second command (e.g. `NICK pwn`), and a space alone would split
+    /// the command into extra params. Reject anything that isn't a
+    /// well-formed token.
+    #[test]
+    fn is_valid_msgid_rejects_dangerous_inputs() {
+        // ULIDs and similar plain tokens are fine.
+        assert!(is_valid_msgid("01ARZ3NDEKTSV4RRFFQ69G5FAV"));
+        assert!(is_valid_msgid("abc-123_x.y"));
+        // Empty is invalid.
+        assert!(!is_valid_msgid(""));
+        // Whitespace inside.
+        assert!(!is_valid_msgid("abc def"));
+        assert!(!is_valid_msgid("abc\tdef"));
+        // CR/LF — IRC command injection vector.
+        assert!(!is_valid_msgid("abc\r\nNICK pwn"));
+        assert!(!is_valid_msgid("abc\nfoo"));
+        // NUL.
+        assert!(!is_valid_msgid("abc\x00def"));
+        // ESC — terminal injection.
+        assert!(!is_valid_msgid("abc\x1b[31mEVIL"));
+        // IRC tag separator and prefix marker.
+        assert!(!is_valid_msgid("abc;def"));
+        assert!(!is_valid_msgid(":abc"));
+        // Length cap — server msgids are ≤ 64 chars; ULIDs are 26.
+        let long = "a".repeat(MSGID_MAX_LEN + 1);
+        assert!(!is_valid_msgid(&long));
+    }
+
+    /// DoS: a hostile network where a flood of distinct nicks JOIN+QUIT
+    /// would otherwise grow `nick_hosts` without bound. Cap it.
+    #[test]
+    fn nick_hosts_does_not_grow_without_bound() {
+        let mut app = App::new("alice", false);
+        for i in 0..(NICK_HOST_CAP + 500) {
+            app.remember_nick_host(&format!("user{i}"), "freeq/plc/test");
+        }
+        assert!(
+            app.nick_hosts.len() <= NICK_HOST_CAP,
+            "nick_hosts capped at {NICK_HOST_CAP}, got {}",
+            app.nick_hosts.len()
+        );
+    }
+
+    /// CORRECTNESS: an edit arriving for a line that's already been
+    /// deleted must NOT resurrect it — that would leak content the user
+    /// expected to be gone, and contradicts the deletion the user (or an
+    /// op) just performed.
+    #[test]
+    fn apply_edit_refuses_to_resurrect_deleted_line() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line("original", "alice", Some("01ABC")));
+        assert!(buf.apply_delete("alice", "01ABC"));
+        assert!(buf.find_by_msgid("01ABC").unwrap().is_deleted);
+
+        // alice (or a malicious peer who slipped past the sender check)
+        // tries to edit the deleted line.
+        let applied = buf.apply_edit("alice", "01ABC", None, "BACK FROM THE DEAD");
+        assert!(!applied, "must not edit a deleted line");
+        let line = buf.find_by_msgid("01ABC").unwrap();
+        assert!(line.is_deleted);
+        assert!(line.text.is_empty(), "deleted text must stay empty");
+    }
+
+    /// SECURITY: deletes must only be honored from the original author.
+    #[test]
+    fn apply_delete_rejects_spoofed_sender() {
+        let mut buf = Buffer::new("#test");
+        buf.push(line("alice's secret", "alice", Some("01ALICE")));
+
+        let applied = buf.apply_delete("mallory", "01ALICE");
+        assert!(!applied, "delete from a non-author MUST be rejected");
+        let line = buf.find_by_msgid("01ALICE").unwrap();
+        assert_eq!(line.text, "alice's secret");
+        assert!(!line.is_deleted);
+    }
+
+    #[test]
+    fn pin_set_tracks_per_channel() {
+        let mut buf = Buffer::new("#test");
+        buf.pinned.insert("01ABC".into());
+        assert!(buf.pinned.contains("01ABC"));
+        buf.pinned.remove("01ABC");
+        assert!(!buf.pinned.contains("01ABC"));
+    }
+
+    #[test]
+    fn batch_apply_edit_rewrites_within_batch() {
+        let mut batch = BatchBuffer {
+            target: "#test".into(),
+            lines: vec![
+                (1, line_with_msgid("v1", Some("01AAA"))),
+                (2, line_with_msgid("unrelated", Some("01BBB"))),
+            ],
+            batch_type: "chathistory".into(),
+        };
+        assert!(batch.apply_edit("alice", "01AAA", Some("01CCC"), "v2"));
+        assert_eq!(batch.lines[0].1.text, "v2");
+        assert!(batch.lines[0].1.is_edited);
+        assert_eq!(batch.lines[0].1.msgid.as_deref(), Some("01CCC"));
+        // Other line untouched.
+        assert_eq!(batch.lines[1].1.text, "unrelated");
+        assert!(!batch.lines[1].1.is_edited);
+    }
+
+    #[test]
+    fn batch_apply_delete_within_batch() {
+        let mut batch = BatchBuffer {
+            target: "#test".into(),
+            lines: vec![(1, line_with_msgid("secret", Some("01AAA")))],
+            batch_type: "chathistory".into(),
+        };
+        assert!(batch.apply_delete("alice", "01AAA"));
+        assert!(batch.lines[0].1.is_deleted);
+        assert!(batch.lines[0].1.text.is_empty());
+    }
+
+    #[test]
+    fn find_by_msgid_survives_ring_buffer_eviction() {
+        let mut buf = Buffer::new("#test");
+        // Fill past MAX_MESSAGES so early lines get evicted.
+        for i in 0..MAX_MESSAGES + 5 {
+            buf.push(line_with_msgid(&format!("msg {i}"), Some(&format!("id{i:04}"))));
+        }
+        // The first 5 should be gone.
+        assert!(buf.find_by_msgid("id0000").is_none());
+        assert!(buf.find_by_msgid("id0004").is_none());
+        // The most recent one should still be findable.
+        let last = MAX_MESSAGES + 4;
+        let last_id = format!("id{last:04}");
+        assert!(buf.find_by_msgid(&last_id).is_some());
+    }
 }
 
 /// Evict oldest entries from image cache if over capacity.
