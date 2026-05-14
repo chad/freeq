@@ -219,10 +219,10 @@ When modifying a high-gamma file, write tests FIRST.
 - [x] **`away-notify` cap** — ✅ DONE. Broadcast AWAY changes to shared channel members. Server, SDK, TUI, and web client all support it.
 - [x] **S2S authorization on Kick/Mode** — ✅ DONE. Receiving server verifies the kicker/mode-setter is an op (via remote_members is_op, founder_did, or did_ops) before executing. Unauthorized mode/kick events are rejected with warning log.
 - [x] **S2S authorization on Topic** — ✅ DONE. +t channels reject topic changes from non-ops. Removed "trust unknown users" fallback.
-- [ ] **SyncResponse channel creation limit** — NOT YET IMPLEMENTED. No 500-channel cap found in s2s.rs.
+- [x] **SyncResponse channel creation limit** — ✅ DONE. `MAX_SYNC_CHANNELS = 500` cap in `server.rs:3116`; overflow truncated with `tracing::warn!`.
 - [x] **ChannelCreated should propagate default modes** — ✅ DONE. New channels from S2S get +nt defaults.
 - [x] **Invites should sync via S2S** — ✅ DONE. S2sMessage::Invite variant relays invite tokens (DID or nick:XXX) to peers. SyncResponse carries invites (additive merge). S2S Join enforcement checks invite list before rejecting +i. Invites consumed on join.
-- [ ] **S2S rate limiting** — NOT YET IMPLEMENTED. Documented in SECURITY.md but no rate limiter in s2s.rs.
+- [x] **S2S rate limiting** — ✅ DONE. 100 events/sec/peer enforced in `process_s2s_message` (`server.rs:2135`) via `S2S_RATE_LIMITS` map + `S2S_MAX_EVENTS_PER_SEC`. Over-limit events dropped with a single warn-per-second per peer.
 - [x] **DPoP nonce retry for SASL verification** — ✅ DONE. Server detects PDS `use_dpop_nonce` errors, sends fresh nonce to client via NOTICE, re-issues SASL challenge. Client (SDK) updates DPoP nonce and retries automatically. Capped at 3 retries per SASL attempt to prevent infinite loops. Counter resets on new SASL attempt.
 
 ### P2 — Important
