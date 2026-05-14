@@ -1,13 +1,13 @@
 // Owner config (Bluesky handle + AT Protocol DID) persisted at ~/.freeqcc/owner.json.
 //
 // First launch: prompt for handle, resolve via Bluesky's public API
-// (fetchProfile from @freeq/sdk handles both handle and DID inputs),
-// save {handle, did}. Subsequent launches: load and return.
+// (fetchProfile, re-exported by @freeq/bot-kit, handles both handle and
+// DID inputs), save {handle, did}. Subsequent launches: load and return.
 //
 // Failure modes:
 // - Handle doesn't resolve → throw with the original input echoed
 // - File exists but malformed → throw, don't silently regenerate
-import { fetchProfile } from "@freeq/sdk";
+import { fetchProfile } from "@freeq/bot-kit";
 import { readFile, writeFile } from "node:fs/promises";
 import prompts from "prompts";
 import { paths, ensureDir } from "./paths.js";

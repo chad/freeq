@@ -19,13 +19,15 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@freeq/sdk": "file:../freeq-sdk-js",
+    "@freeq/bot-kit": "file:../freeq-bot-kit-js",
     "commander": "^14.0.1",
-    "prompts": "^2.4.2"
+    "prompts": "^2.4.2",
+    "write-file-atomic": "^8.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/prompts": "^2.4.9",
+    "@types/write-file-atomic": "^4.0.3",
     "typescript": "~5.9.3",
     "vitest": "^4.1.2"
   },

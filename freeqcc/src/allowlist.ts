@@ -1,6 +1,6 @@
 // Optional multi-DID allowlist with per-DID capability scopes.
 //
-// Format: ~/.freeqcc/allowlist.json
+// File format at ~/.freeqcc/allowlist.json:
 //   {
 //     "allowed": [
 //       { "did": "did:plc:...", "label": "alice", "actions": ["join", "privmsg"] },
@@ -13,8 +13,14 @@
 // owner with an entry but no `actions` can chat with the bot but cannot drive
 // IRC actions. A non-owner with `actions: ["join"]` can ask the bot to join
 // channels but nothing else.
-import { readFile, writeFile, rename, unlink } from "node:fs/promises";
-import { paths, ensureDir } from "./paths.js";
+//
+// Storage / live-reload is delegated to @freeq/bot-kit's createDidMap.
+// This module owns the freeqcc-specific bits: the {allowed:[…]} wrapping,
+// the legacy-action migration on parse, the atomic-write semantics on save,
+// and the per-action authorization logic (isAllowed/actionsFor) used at
+// dispatch time.
+import { createDidMap, type DidMapMutable } from "@freeq/bot-kit";
+import writeFileAtomic from "write-file-atomic";
 
 /** Default action set granted to the owner. Excludes:
  *   - "nick"  : changing the bot's IRC nick is too easy to weaponize via
@@ -64,56 +70,51 @@ export function migrateAction(a: string): string[] {
   return [a];
 }
 
-export async function loadAllowlist(): Promise<AllowlistEntry[]> {
-  let raw: string;
-  try {
-    raw = await readFile(paths.allowlist, "utf8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(raw) as AllowlistFile;
-    return (parsed.allowed ?? [])
-      .filter((e): e is AllowlistEntry => typeof e.did === "string" && e.did.length > 0)
-      .map((e) => ({
-        did: e.did,
-        label: typeof e.label === "string" ? e.label : undefined,
-        actions: Array.isArray(e.actions)
-          ? e.actions
-              .filter((a) => typeof a === "string")
-              .flatMap(migrateAction)
-          : [],
-      }));
-  } catch {
-    return [];
-  }
+function parseAllowlistJson(raw: string): AllowlistEntry[] {
+  const parsed = JSON.parse(raw) as AllowlistFile;
+  return (parsed.allowed ?? [])
+    .filter((e): e is AllowlistEntry => typeof e.did === "string" && e.did.length > 0)
+    .map((e) => ({
+      did: e.did,
+      label: typeof e.label === "string" ? e.label : undefined,
+      actions: Array.isArray(e.actions)
+        ? e.actions
+            .filter((a) => typeof a === "string")
+            .flatMap(migrateAction)
+        : [],
+    }));
 }
 
-export async function saveAllowlist(entries: AllowlistEntry[]): Promise<void> {
-  await ensureDir();
+async function saveAllowlistJson(path: string, entries: AllowlistEntry[]): Promise<void> {
+  // Atomic write: writeFileAtomic uses tmp+fsync+rename under the hood, so
+  // the file on disk is never half-truncated. A crash mid-write previously
+  // could leave allowlist.json partial, which the daemon's mtime-poll loop
+  // would re-read and parse-fail (silently dropping all grants until the
+  // file was hand-fixed). createDidMap retains previous state on parse
+  // error now, but the atomic write still prevents an operator-visible
+  // "no grants?!" window.
   const data: AllowlistFile = { allowed: entries };
-  // Atomic write: serialize to a tmp file alongside the target, then rename.
-  // A crash mid-write previously could leave allowlist.json half-truncated,
-  // which the daemon's mtime-poll loop would re-read and parse-fail (silently
-  // dropping all grants until the file was hand-fixed).
-  const tmp = `${paths.allowlist}.${process.pid}.tmp`;
-  try {
-    await writeFile(tmp, JSON.stringify(data, null, 2) + "\n", { mode: 0o600 });
-    await rename(tmp, paths.allowlist);
-  } catch (err) {
-    // Best-effort cleanup of the tmp file before bubbling the error.
-    try {
-      await unlink(tmp);
-    } catch {
-      // ignore
-    }
-    throw err;
-  }
+  await writeFileAtomic(path, JSON.stringify(data, null, 2) + "\n", { mode: 0o600 });
+}
+
+/** Build a hot-reloadable, atomically-persisted access map for the freeqcc
+ *  allowlist file. Wraps bot-kit's createDidMap with this module's specific
+ *  JSON shape and migration rules. */
+export async function createAccessMap(
+  path: string,
+): Promise<DidMapMutable<AllowlistEntry>> {
+  return createDidMap<AllowlistEntry>({
+    load: { path, parse: parseAllowlistJson },
+    save: (entries) => saveAllowlistJson(path, entries),
+  });
 }
 
 /** True if this DID is the owner OR appears in the allowlist. */
-export function isAllowed(senderDid: string, ownerDid: string, allowlist: AllowlistEntry[]): boolean {
+export function isAllowed(
+  senderDid: string,
+  ownerDid: string,
+  allowlist: AllowlistEntry[],
+): boolean {
   if (senderDid === ownerDid) return true;
   return allowlist.some((e) => e.did === senderDid);
 }

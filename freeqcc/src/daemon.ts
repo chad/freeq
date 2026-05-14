@@ -3,14 +3,15 @@
 //
 // Phase 5 wires connect + announce + heartbeat. The DM gate + claude
 // dispatch (phase 6) hangs off the returned client.
-import { loadOrCreateIdentity } from "./identity.js";
+import { loadOrCreateIdentity, loadOrMintDelegation } from "@freeq/bot-kit";
 import { loadOrPromptOwner } from "./owner.js";
-import { loadOrMintDelegation } from "./delegation.js";
 import { connect, type Connected } from "./connect.js";
-import { evaluate, loadGateState, saveGateState, type GateState } from "./gate.js";
+import { createTurnGate, type TurnGateState } from "@freeq/bot-kit";
+import { readFile } from "node:fs/promises";
+import writeFileAtomic from "write-file-atomic";
 import { dispatchToClaudeStreaming } from "./dispatch.js";
 import { logRefused } from "./audit.js";
-import { loadAllowlist, actionsFor, type AllowlistEntry } from "./allowlist.js";
+import { actionsFor, createAccessMap, type AllowlistEntry } from "./allowlist.js";
 import { paths, ensureDir } from "./paths.js";
 import { writeFile } from "node:fs/promises";
 import { TokenStore, startControlServer, type ControlServerHandle } from "./control.js";
@@ -50,9 +51,13 @@ function deriveDefaultNick(handle: string): string {
 }
 
 export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
-  const agent = await loadOrCreateIdentity();
+  const agent = await loadOrCreateIdentity({ seedPath: paths.agentKey });
   const owner = await loadOrPromptOwner();
-  const delegation = await loadOrMintDelegation({ agent, owner });
+  const delegation = await loadOrMintDelegation({
+    certPath: paths.delegation,
+    agentDid: agent.did,
+    ownerDid: owner.did,
+  });
   const nick = opts.nick ?? deriveDefaultNick(owner.handle);
 
   console.log("─── freeqcc daemon ───");
@@ -65,7 +70,7 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
 
   const conn = await connect({
     identity: agent,
-    owner,
+    ownerDid: owner.did,
     delegation,
     nick,
     serverUrl: opts.serverUrl,
@@ -108,67 +113,57 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
   // We track sender DIDs via the SDK's `memberDid` event (fires on WHOIS).
   // For an unknown sender we fire WHOIS, queue the message for up to 3s,
   // and dispatch (or refuse) once the DID resolves.
-  const gateState: GateState = await loadGateState();
-  // Mutable holder so the fs.watch reload can replace the contents.
-  const allowlistState: { current: AllowlistEntry[] } = {
-    current: await loadAllowlist(),
-  };
-  const printAllowlist = (): void => {
-    const al = allowlistState.current;
-    if (al.length === 0) return;
-    console.log(`allowlist:      ${al.length} extra DID(s) allowed beyond owner`);
-    for (const e of al) {
+  // Rate-limit + cycle-detection gate (bot-kit-owned semantics). State
+  // is persisted to ~/.freeqcc/gate.json via write-file-atomic so a
+  // crash mid-write never leaves a half-truncated state file.
+  const gatePath = paths.dir + "/gate.json";
+  const gate = await createTurnGate({
+    load: async () => {
+      try {
+        return JSON.parse(await readFile(gatePath, "utf8")) as TurnGateState;
+      } catch {
+        return {
+          lastRefusalAt: [],
+          lastDispatchAt: 0,
+          dispatchTimestamps: [],
+          perPeerDispatches: [],
+          cycleBackoffUntil: [],
+        };
+      }
+    },
+    save: async (state) =>
+      writeFileAtomic(gatePath, JSON.stringify(state, null, 2) + "\n", {
+        mode: 0o600,
+      }),
+  });
+  // Hot-reloadable access map (replaces the old fs.watch / mtime-poll loop).
+  // createAccessMap wraps bot-kit's createDidMap with freeqcc's JSON format
+  // and atomic-write semantics; the daemon just reacts to changes here.
+  const accessMap = await createAccessMap(paths.allowlist);
+  const printAllowlist = (entries: AllowlistEntry[]): void => {
+    if (entries.length === 0) return;
+    console.log(`allowlist:      ${entries.length} extra DID(s) allowed beyond owner`);
+    for (const e of entries) {
       const acts = e.actions && e.actions.length > 0 ? e.actions.join(",") : "chat-only";
       console.log(`  - ${e.did}${e.label ? ` (${e.label})` : ""} [${acts}]`);
     }
   };
-  printAllowlist();
-
-  // Live-reload allowlist on changes. mtime poll is more robust than
-  // fs.watch (which silently breaks if the file doesn't exist at startup
-  // and doesn't recover; also flaky across editor save patterns).
-  let lastAllowlistMtime = 0;
-  setInterval(async () => {
-    try {
-      const { stat } = await import("node:fs/promises");
-      const s = await stat(paths.allowlist);
-      const mt = s.mtimeMs;
-      if (mt === lastAllowlistMtime) return;
-      lastAllowlistMtime = mt;
-      const reloaded = await loadAllowlist();
-      allowlistState.current = reloaded;
-      console.log(`[allowlist] reloaded — ${reloaded.length} entries`);
-      printAllowlist();
-    } catch (err) {
-      // ENOENT (file deleted) → treat as empty allowlist
-      if ((err as NodeJS.ErrnoException).code === "ENOENT" && allowlistState.current.length > 0) {
-        allowlistState.current = [];
-        lastAllowlistMtime = 0;
-        console.log(`[allowlist] file deleted — allowlist now empty`);
-      }
-    }
-  }, 2000).unref();
+  printAllowlist(accessMap.list());
+  accessMap.onChange((entries) => {
+    console.log(`[allowlist] reloaded — ${entries.length} entries`);
+    printAllowlist(entries);
+  });
   const persistGate = (): void => {
-    saveGateState(gateState).catch((err) => {
+    void gate.persist().catch((err) => {
       console.warn(`[gate] persist failed: ${(err as Error).message}`);
     });
   };
-  const nickToDid = new Map<string, string>(); // case-insensitive: stored lowercase
-  const pendingByNick = new Map<string, Array<() => void>>();
   let totalCostUsd = 0;
   let dispatchCount = 0;
 
-  conn.client.on("memberDid", (nick: string, did: string) => {
-    nickToDid.set(nick.toLowerCase(), did);
-    const queued = pendingByNick.get(nick.toLowerCase());
-    if (queued) {
-      pendingByNick.delete(nick.toLowerCase());
-      for (const cb of queued) cb();
-    }
-  });
-
   // Pre-warm the cache for the owner so the first owner DM doesn't pay
-  // a WHOIS round-trip.
+  // a WHOIS round-trip. bot.resolveSenderDid's resolver will absorb the
+  // memberDid response automatically.
   conn.client.raw(`WHOIS ${owner.handle}`);
 
   const handleDm = async (
@@ -177,41 +172,36 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
     msgTags: Record<string, string>,
     replyTarget: string,
   ): Promise<void> => {
-    // Try to resolve sender DID synchronously: account-tag, then cache.
-    const didFromTag = msgTags["account"];
-    let senderDid: string | null =
-      (didFromTag && didFromTag.startsWith("did:") ? didFromTag : null) ??
-      nickToDid.get(fromNick.toLowerCase()) ??
-      null;
-
-    if (!senderDid) {
-      // Fire WHOIS, wait up to 3s, then re-dispatch.
-      conn.client.raw(`WHOIS ${fromNick}`);
-      const arrived = await new Promise<boolean>((resolve) => {
-        const timer = setTimeout(() => resolve(false), 3000);
-        const queue =
-          pendingByNick.get(fromNick.toLowerCase()) ?? [];
-        queue.push(() => {
-          clearTimeout(timer);
-          resolve(true);
-        });
-        pendingByNick.set(fromNick.toLowerCase(), queue);
-      });
-      if (arrived) {
-        senderDid = nickToDid.get(fromNick.toLowerCase()) ?? null;
-      }
-    }
+    // Resolver: account-tag → in-bot cache (auto-populated by memberDid;
+    // invalidated on userRenamed/userQuit + 5-min TTL) → WHOIS with 3s
+    // race. Replaces the hand-rolled WHOIS dance + nickToDid map that
+    // used to live here.
+    const senderDid = await conn.resolveSenderDid({
+      from: fromNick,
+      tags: msgTags,
+    });
 
     // Re-read allowlist each dispatch so live-reload edits take effect.
-    const allowlist = allowlistState.current;
+    const allowlist = accessMap.list();
     const allowedDids = allowlist.map((e) => e.did);
 
-    const decision = evaluate({
-      state: gateState,
+    // freeqcc's policy: owner is always allowed; allowlisted DIDs are
+    // allowed; everyone else is refused. The gate doesn't know about
+    // owner / allowlist — caller passes refusalReason when rejecting.
+    // Owner is also exempt from cycle detection (humans, not bots).
+    const isAllowed =
+      senderDid !== null &&
+      (senderDid === owner.did || allowedDids.includes(senderDid));
+    const refusalReason = isAllowed
+      ? undefined
+      : senderDid
+        ? "non-owner sender"
+        : "could not verify your identity";
+    const decision = gate.evaluate({
       senderDid,
       senderNick: fromNick,
-      ownerDid: owner.did,
-      allowedDids,
+      refusalReason,
+      skipCycleDetection: senderDid === owner.did,
     });
 
     if (decision.kind === "silent") {
@@ -410,21 +400,6 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
     }
   };
 
-  // Per-channel cooldown for @mention replies in non-bot channels.
-  const channelMentionCooldown = new Map<string, number>();
-  const MENTION_COOLDOWN_MS = 60_000;
-
-  const isMention = (text: string): boolean => {
-    const lower = text.toLowerCase();
-    const nickLower = conn.nick.toLowerCase();
-    return (
-      lower.includes(`@${nickLower}`) ||
-      // Some clients omit the @; match a word-boundary nick so "yokota-bot" matches
-      // but "yokota-bot-something" doesn't.
-      new RegExp(`(^|\\s)${nickLower.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}(\\s|[,.!?:;]|$)`, "i").test(text)
-    );
-  };
-
   conn.client.on(
     "message",
     (
@@ -457,47 +432,36 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
         return;
       }
 
-      // Other channels: only respond when explicitly @mentioned. Per-channel
-      // 60s cooldown to prevent the bot from replying to every message in
-      // a busy channel during a thread it's involved in.
-      if (!isMention(msg.text)) return;
-      const lastReply = channelMentionCooldown.get(channel.toLowerCase()) ?? 0;
-      if (Date.now() - lastReply < MENTION_COOLDOWN_MS) {
-        console.log(`[mention cooldown] ${channel}: silent (last reply ${Math.round((Date.now() - lastReply) / 1000)}s ago)`);
+      // Other channels: only respond when explicitly addressed. bot-kit's
+      // checkMention owns the matcher + per-channel cooldown. Default
+      // matcher accepts `@<nick>` or `<nick>:`/`<nick>,` anywhere (with
+      // word boundary); bare `<nick>` references are ignored.
+      const m = conn.checkMention(channel, msg.text);
+      if (m.kind === "ignore") return;
+      if (m.kind === "cooldown") {
+        console.log(
+          `[mention cooldown] ${channel}: silent (${Math.round(m.remainingMs / 1000)}s remaining)`,
+        );
         return;
       }
-      channelMentionCooldown.set(channel.toLowerCase(), Date.now());
-      // Strip the @<bot-nick> prefix from the text so claude doesn't see it
-      const stripped = msg.text
-        .replace(new RegExp(`@?${conn.nick.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}\\b[,:]?\\s*`, "i"), "")
-        .trim();
-      void handleDm(msg.from, stripped || msg.text, msg.tags ?? {}, channel).catch((e) => {
+      void handleDm(msg.from, m.stripped || msg.text, msg.tags ?? {}, channel).catch((e) => {
         console.error("[handleDm error]", e);
       });
     },
   );
 
-  // Graceful shutdown on SIGINT/SIGTERM. Also wipes the pid file —
-  // cli.ts can't rely on a finally-block here because process.exit(0)
-  // bypasses outer try/finally.
-  const shutdown = async (sig: string): Promise<void> => {
-    console.log(`\n[${sig}] shutting down...`);
-    try {
-      await controlServer.close();
-    } catch {
-      // ignore — best effort
-    }
-    await conn.stop(`signal ${sig}`);
-    try {
-      const { unlink } = await import("node:fs/promises");
-      await unlink(paths.daemonPid);
-    } catch {
-      // already gone
-    }
-    process.exit(0);
+  // Compose the shutdown sequence: control socket → connection. pid-file
+  // cleanup + SIGINT/SIGTERM wiring are owned by the createDaemonCLI
+  // scaffold in cli.ts.
+  return {
+    ...conn,
+    stop: async (reason: string) => {
+      try {
+        await controlServer.close();
+      } catch {
+        // best-effort — socket may already be gone
+      }
+      await conn.stop(reason);
+    },
   };
-  process.once("SIGINT", () => void shutdown("SIGINT"));
-  process.once("SIGTERM", () => void shutdown("SIGTERM"));
-
-  return conn;
 }

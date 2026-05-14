@@ -316,6 +316,205 @@ default = ["post_message"]
   });
 });
 
+describe("FreeqBot.resolveSenderDid", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "bot-resolve-test-"));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("returns the account-tag DID without firing WHOIS", async () => {
+    const { FreeqBot } = await import("./bot.js");
+    const bot = await FreeqBot.create({
+      name: "rb",
+      ownerDid: "did:plc:owner",
+      nick: "rb",
+      url: "wss://test/irc",
+      root,
+    });
+    // No connect() — the resolver works against the client's EventEmitter +
+    // raw() surface regardless of WebSocket state. account-tag should
+    // short-circuit before raw() would even be called.
+    const did = await bot.resolveSenderDid({
+      from: "alice",
+      tags: { account: "did:plc:alice" },
+    });
+    expect(did).toBe("did:plc:alice");
+  });
+
+  it("returns null when account-tag is absent + WHOIS disabled (strict mode)", async () => {
+    const { FreeqBot } = await import("./bot.js");
+    const bot = await FreeqBot.create({
+      name: "rb-strict",
+      ownerDid: "did:plc:owner",
+      nick: "rb-strict",
+      url: "wss://test/irc",
+      root,
+    });
+    const did = await bot.resolveSenderDid(
+      { from: "alice", tags: {} },
+      { cache: false, whois: false },
+    );
+    expect(did).toBeNull();
+  });
+});
+
+describe("FreeqBot.checkMention", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "bot-mention-test-"));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("matches @<nick> with the default matcher and returns stripped text", async () => {
+    const { FreeqBot } = await import("./bot.js");
+    const bot = await FreeqBot.create({
+      name: "mb",
+      ownerDid: "did:plc:owner",
+      nick: "yokota",
+      url: "wss://test/irc",
+      root,
+    });
+    // Inject the nick directly — FreeqBot reads this.client.nick, which the
+    // FreeqClient hasn't set yet because we never .connect()'d. Set it.
+    (bot.client as unknown as { _nick: string })._nick = "yokota";
+
+    const r = bot.checkMention("#foo", "@yokota help");
+    expect(r.kind).toBe("respond");
+    if (r.kind === "respond") expect(r.stripped).toBe("help");
+  });
+
+  it("ignores third-person bare-nick references (default matcher)", async () => {
+    const { FreeqBot } = await import("./bot.js");
+    const bot = await FreeqBot.create({
+      name: "mb-bare",
+      ownerDid: "did:plc:owner",
+      nick: "yokota",
+      url: "wss://test/irc",
+      root,
+    });
+    (bot.client as unknown as { _nick: string })._nick = "yokota";
+    expect(bot.checkMention("#foo", "yokota wrote a great thing").kind).toBe(
+      "ignore",
+    );
+  });
+
+  it("returns cooldown for a second addressing within the window", async () => {
+    const { FreeqBot } = await import("./bot.js");
+    const bot = await FreeqBot.create({
+      name: "mb-cd",
+      ownerDid: "did:plc:owner",
+      nick: "yokota",
+      url: "wss://test/irc",
+      root,
+      mention: { cooldownMs: 60_000 },
+    });
+    (bot.client as unknown as { _nick: string })._nick = "yokota";
+
+    const r1 = bot.checkMention("#foo", "@yokota first");
+    expect(r1.kind).toBe("respond");
+    const r2 = bot.checkMention("#foo", "@yokota second");
+    expect(r2.kind).toBe("cooldown");
+    if (r2.kind === "cooldown") expect(r2.remainingMs).toBeGreaterThan(0);
+  });
+
+  it("different channels have independent cooldowns", async () => {
+    const { FreeqBot } = await import("./bot.js");
+    const bot = await FreeqBot.create({
+      name: "mb-chans",
+      ownerDid: "did:plc:owner",
+      nick: "yokota",
+      url: "wss://test/irc",
+      root,
+      mention: { cooldownMs: 60_000 },
+    });
+    (bot.client as unknown as { _nick: string })._nick = "yokota";
+
+    expect(bot.checkMention("#foo", "@yokota hi").kind).toBe("respond");
+    expect(bot.checkMention("#bar", "@yokota hi").kind).toBe("respond");
+    expect(bot.checkMention("#foo", "@yokota hi again").kind).toBe("cooldown");
+  });
+
+  it("cooldown disabled when cooldownMs is 0", async () => {
+    const { FreeqBot } = await import("./bot.js");
+    const bot = await FreeqBot.create({
+      name: "mb-no-cd",
+      ownerDid: "did:plc:owner",
+      nick: "yokota",
+      url: "wss://test/irc",
+      root,
+      mention: { cooldownMs: 0 },
+    });
+    (bot.client as unknown as { _nick: string })._nick = "yokota";
+
+    expect(bot.checkMention("#foo", "@yokota a").kind).toBe("respond");
+    expect(bot.checkMention("#foo", "@yokota b").kind).toBe("respond");
+    expect(bot.checkMention("#foo", "@yokota c").kind).toBe("respond");
+  });
+
+  it("accepts a caller-supplied matcher (e.g. swarm-style start-anchored)", async () => {
+    const { FreeqBot } = await import("./bot.js");
+    const startAnchored = (text: string, nick: string): string | null => {
+      const m = /^@?(\S+?)[:,]?\s+(.*)$/s.exec(text);
+      if (!m || m[1]!.toLowerCase() !== nick.toLowerCase()) return null;
+      return m[2]!;
+    };
+    const bot = await FreeqBot.create({
+      name: "mb-custom",
+      ownerDid: "did:plc:owner",
+      nick: "yokota",
+      url: "wss://test/irc",
+      root,
+      mention: { matcher: startAnchored },
+    });
+    (bot.client as unknown as { _nick: string })._nick = "yokota";
+
+    // Matches: addressing at start
+    expect(bot.checkMention("#foo", "yokota review github.com/x").kind).toBe(
+      "respond",
+    );
+    // Doesn't match: mid-message address (custom matcher only allows start)
+    expect(bot.checkMention("#bar", "hey @yokota help").kind).toBe("ignore");
+  });
+
+  it("reads the bot's current nick live (server-side rename picked up)", async () => {
+    const { FreeqBot } = await import("./bot.js");
+    const bot = await FreeqBot.create({
+      name: "mb-live-nick",
+      ownerDid: "did:plc:owner",
+      nick: "yokota",
+      url: "wss://test/irc",
+      root,
+    });
+    const client = bot.client as unknown as { _nick: string };
+
+    client._nick = "yokota";
+    expect(bot.checkMention("#foo", "@yokota hi").kind).toBe("respond");
+
+    // Server renames us mid-session
+    client._nick = "yokota2";
+    expect(bot.checkMention("#bar", "@yokota hi").kind).toBe("ignore"); // old nick no longer addresses us
+    expect(bot.checkMention("#bar", "@yokota2 hi").kind).toBe("respond"); // new nick does
+  });
+
+  it("returns ignore when the bot's nick is unset", async () => {
+    const { FreeqBot } = await import("./bot.js");
+    const bot = await FreeqBot.create({
+      name: "mb-no-nick",
+      ownerDid: "did:plc:owner",
+      nick: "yokota",
+      url: "wss://test/irc",
+      root,
+    });
+    (bot.client as unknown as { _nick: string })._nick = "";
+    expect(bot.checkMention("#foo", "@yokota hi").kind).toBe("ignore");
+  });
+});
+
 describe("FreeqBot.setState", () => {
   let root: string;
   beforeEach(async () => {

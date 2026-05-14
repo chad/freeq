@@ -126,12 +126,20 @@ bot.client.spawnAgent('#chan', 'worker-bot', ['url_fetch']);
 Runnable bots under [`@freeq/bot-kit`'s `examples/`](../freeq-bot-kit-js/examples/):
 
 - `echo-bot.ts` — canonical smoke test
+- `daemon.ts` — the echo bot wrapped in `createDaemonCLI` (launch/stop/status/doctor/tail)
+- `gated-bot.ts` — full pattern: owner gate + allowlist + addressing + rate-limiting + daemon scaffold
 - `streaming.ts` — types out a message word-by-word using the edit-message hack
 - `url-fetch-worker.ts` — canonical agent pattern: claims `task_request` coordination events, fetches the URL, transitions state, emits `task_complete`
 - `fire-task.ts` — helper for testing the worker
 
 ### What's next
 
+- **Owner-gated bot pattern**: the echo bot above responds to everyone. Most real bots want to restrict access. See [`examples/gated-bot.ts`](../freeq-bot-kit-js/examples/gated-bot.ts) for the full pattern composing the four message-handling primitives:
+  - `bot.resolveSenderDid(msg)` — who is this?
+  - `createDidMap` — should I respond to them? (allowlist / banlist / roles, hot-reloadable)
+  - `bot.checkMention(channel, text)` — was I actually addressed in this channel?
+  - `createTurnGate` — am I being spammed or looping with another bot?
+- **Daemon CLI scaffold**: `createDaemonCLI` wraps your bot with `launch / stop / status / doctor / tail` and signal handling so you don't reinvent it. See [`examples/daemon.ts`](../freeq-bot-kit-js/examples/daemon.ts).
 - **Streaming responses**: see [`examples/streaming.ts`](../freeq-bot-kit-js/examples/streaming.ts) for the word-by-word edit-message pattern LLM bots use to pipe Claude's output into a channel live.
 - **Coordination protocol**: [`examples/url-fetch-worker.ts`](../freeq-bot-kit-js/examples/url-fetch-worker.ts) is the canonical agent pattern — claim `task_request` events, transition state, emit `task_complete`. Full protocol reference in [agents.md](agents.md).
 - **Manifest**: pass a TOML manifest in `FreeqBot.create({ manifest })` to declare your bot's capabilities to the server. See [agents.md → Manifest](agents.md).

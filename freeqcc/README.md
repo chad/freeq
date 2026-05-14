@@ -128,12 +128,11 @@ The full server-side verification machinery is already deployed (see [freeq-serv
 freeqcc/
 ├── PLAN.md              # design notes (lifts of every decision)
 ├── README.md            # this file
-├── package.json         # @freeq/freeqcc — bin: freeqcc
+├── package.json         # @freeq/freeqcc — bin: freeqcc (deps: @freeq/bot-kit)
 ├── src/                 # TypeScript daemon
-│   ├── identity.ts      # did:key generate + persist
 │   ├── owner.ts         # AT Protocol handle resolve via Bluesky public API
-│   ├── delegation.ts    # FreeqBotDelegation/v1 cert
-│   ├── connect.ts       # SDK wiring: SASL + PROVENANCE + AGENT REGISTER + heartbeat
+│   ├── connect.ts       # delegates to @freeq/bot-kit FreeqBot for SASL +
+│   │                    #   PROVENANCE + AGENT REGISTER + heartbeat lifecycle
 │   ├── gate.ts          # owner-only filter + rate limits
 │   ├── dispatch.ts      # claude -p --resume subprocess
 │   ├── daemon.ts        # long-lived process glue
@@ -147,6 +146,12 @@ freeqcc/
         ├── freeqcc-launch/SKILL.md
         ├── freeqcc-status/SKILL.md
         └── freeqcc-stop/SKILL.md
+
+did:key identity (`agent.key`) and the FreeqBotDelegation/v1 cert
+(`delegation.json`) live at `~/.freeqcc/` and are managed by `@freeq/bot-kit`
+(`loadOrCreateIdentity` / `loadOrMintDelegation`). bot-kit's `FreeqBot.create`
+is configured with `name: ".freeqcc", root: $HOME` so its stateDir lines up
+with freeqcc's existing on-disk layout.
 ```
 
 ## License
