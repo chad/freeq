@@ -121,6 +121,58 @@ Valid states: `online`, `idle`, `active`, `executing`, `waiting_for_input`, `blo
 
 Read current state via `bot.state` (the last value set).
 
+### `bot.resolveSenderDid(msg, opts?)`
+
+Resolve the DID of an incoming PRIVMSG's sender. Returns `Promise<string | null>` — `null` means "the server has no DID for this sender" (typically a guest, but could also be SASL'd user without `account-tag` whose WHOIS times out).
+
+```ts
+bot.on('message', async (channel, msg) => {
+  const senderDid = await bot.resolveSenderDid(msg);
+  if (!senderDid) return;                          // guest, not authenticated
+  if (senderDid !== ownerDid) return;              // not the owner — ignore
+  // ...handle owner message...
+});
+```
+
+Sources, in priority order:
+
+1. **`msg.tags.account`** — server attaches via the `account-tag` capability when the sender is SASL-authed. Authoritative for that exact message; never stale.
+2. **nick→DID cache** — populated by the SDK's `memberDid` events (which fire when a WHOIS reply includes a DID). Invalidated on `userRenamed` and `userQuit` events and by a TTL (5 min default).
+3. **WHOIS round-trip** — `WHOIS <nick>`, raced against `timeoutMs` (default 3000ms). Concurrent calls for the same nick share one in-flight request.
+
+**`opts`:**
+
+```ts
+interface ResolveOpts {
+  timeoutMs?: number;   // per-call WHOIS timeout override
+  cache?: boolean;      // default true; false = fresh lookup, no cache
+  whois?: boolean;      // default true; false = no round-trip
+}
+```
+
+Three useful combinations:
+
+| `cache` | `whois` | Behavior |
+|---|---|---|
+| `true` (default) | `true` (default) | account-tag → cache → WHOIS |
+| `false` | `true` | account-tag → WHOIS every call (no stale-cache risk; one round-trip per non-tag message) |
+| `false` | `false` | **strict mode** — account-tag only. Returns `null` for everyone else. Right call for security-sensitive paths. |
+
+The fourth combination (`cache: true, whois: false`) exists too: cache-only with no round-trips. Useful when you want a best-effort answer without paying for a WHOIS.
+
+**Cache safety.** IRC only broadcasts NICK/QUIT to clients sharing a channel with the user. Bots that know a user only via DM may miss the invalidation event for that user. The TTL is the safety net (caps staleness regardless), and `account-tag` always wins over the cache (so a re-authenticated user is always identified correctly). For security-sensitive paths where you can't tolerate any stale-DID risk at all, use strict mode.
+
+**Resolver tuning at construction time.** Defaults can be set on the bot:
+
+```ts
+const bot = await FreeqBot.create({
+  ...,
+  senderDidResolver: { timeoutMs: 5000, cacheTtlMs: 60_000 },
+});
+```
+
+Per-call `opts.timeoutMs` overrides for a single resolution.
+
 ### Events
 
 `bot.on(event, handler)`, `bot.off(...)`, `bot.once(...)` are typed delegations to `bot.client.on/off/once`. Subscribe to any event from `FreeqEvents`:

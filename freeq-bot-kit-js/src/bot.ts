@@ -28,6 +28,11 @@ import { join } from "node:path";
 import { botDir } from "./paths.js";
 import { loadOrCreateIdentity, type AgentIdentity } from "./identity.js";
 import { loadOrMintDelegation, type DelegationCert } from "./delegation.js";
+import {
+  createDidResolver,
+  type DidResolver,
+  type ResolveOpts,
+} from "./did-resolver.js";
 
 export type ActorClass = "agent" | "external_agent" | "human";
 
@@ -64,6 +69,17 @@ export interface FreeqBotCreateOptions {
   serverOrigin?: string;
   /** Policy on 433 ERR_NICKNAMEINUSE. Default `"refuse"`. */
   onNickCollision?: NickCollisionPolicy;
+  /** Sender-DID resolver tuning. Sets defaults on the per-bot resolver
+   *  used by `bot.resolveSenderDid()`. Override per-call via the
+   *  method's `opts` argument. */
+  senderDidResolver?: {
+    /** Default WHOIS race timeout in ms. Default 3000. */
+    timeoutMs?: number;
+    /** Cache entries expire this many ms after insert. Default 300_000
+     *  (5 min). The cache may miss invalidation events for DM-only
+     *  users; TTL bounds staleness regardless. */
+    cacheTtlMs?: number;
+  };
 }
 
 export interface FreeqBotStartOptions {
@@ -103,6 +119,7 @@ export class FreeqBot {
   #readyHandler: (() => void) | null = null;
   #started = false;
   #stopped = false;
+  readonly #didResolver: DidResolver;
 
   /** Use `FreeqBot.create(...)` instead. */
   private constructor(args: {
@@ -116,6 +133,8 @@ export class FreeqBot {
     heartbeatTtlS: number;
     initialState: string;
     initialStatus: string | undefined;
+    didResolverTimeoutMs: number | undefined;
+    didResolverCacheTtlMs: number | undefined;
   }) {
     this.client = args.client;
     this.identity = args.identity;
@@ -127,6 +146,10 @@ export class FreeqBot {
     this.#heartbeatTtlS = args.heartbeatTtlS;
     this.#currentState = args.initialState;
     this.#currentStatus = args.initialStatus;
+    this.#didResolver = createDidResolver(this.client, {
+      timeoutMs: args.didResolverTimeoutMs,
+      cacheTtlMs: args.didResolverCacheTtlMs,
+    });
   }
 
   /** Async factory: loads/creates identity + cert from disk, constructs the
@@ -173,6 +196,8 @@ export class FreeqBot {
       heartbeatTtlS: opts.heartbeatTtlS ?? 60,
       initialState: opts.initialState ?? "active",
       initialStatus: opts.initialStatus,
+      didResolverTimeoutMs: opts.senderDidResolver?.timeoutMs,
+      didResolverCacheTtlMs: opts.senderDidResolver?.cacheTtlMs,
     });
   }
 
@@ -218,6 +243,28 @@ export class FreeqBot {
   /** Read the bot's current state (last value passed to `setState()`). */
   get state(): string {
     return this.#currentState;
+  }
+
+  // ── Sender DID resolution ──────────────────────────────────────────────
+
+  /** Resolve the sender's DID for a PRIVMSG. Returns null if the message
+   *  has no account-tag, the cache doesn't know the sender, and WHOIS
+   *  times out (or is disabled).
+   *
+   *  Sources, in priority order:
+   *    1. `msg.tags.account` — authoritative for the message
+   *    2. nick→DID cache (populated automatically by `memberDid` events;
+   *       invalidated by `userRenamed` / `userQuit` and a 5-minute TTL)
+   *    3. WHOIS round-trip, raced against `timeoutMs` (default 3000ms)
+   *
+   *  Use `opts.cache: false` for a fresh lookup every call (no stale
+   *  cache); `opts.whois: false` to skip the round-trip; both false for
+   *  strict mode (account-tag only). */
+  async resolveSenderDid(
+    msg: { from: string; tags?: Record<string, string> },
+    opts?: ResolveOpts,
+  ): Promise<string | null> {
+    return this.#didResolver.resolve(msg, opts);
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────
@@ -311,6 +358,7 @@ export class FreeqBot {
     // for in-flight WebSocket writes, so PRESENCE/QUIT could be dropped.
     await this.client.flush(drainMs);
     this.client.disconnect();
+    this.#didResolver.close();
   }
 
   // ── Internal ───────────────────────────────────────────────────────────

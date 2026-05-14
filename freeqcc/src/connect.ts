@@ -9,6 +9,7 @@ import {
   type AgentIdentity,
   type DelegationCert,
   type FreeqClient,
+  type ResolveOpts,
 } from "@freeq/bot-kit";
 import { homedir } from "node:os";
 
@@ -33,6 +34,12 @@ export interface Connected {
   nick: string;
   /** Stops the heartbeat and sends QUIT. */
   stop(reason?: string): Promise<void>;
+  /** Resolve a PRIVMSG sender's DID via the bot's resolver (account-tag
+   *  → cache → WHOIS-with-timeout). Returns null if unresolvable. */
+  resolveSenderDid(
+    msg: { from: string; tags?: Record<string, string> },
+    opts?: ResolveOpts,
+  ): Promise<string | null>;
 }
 
 const DEFAULT_URL = "wss://irc.freeq.at/irc";
@@ -79,5 +86,6 @@ export async function connect(opts: ConnectOptions): Promise<Connected> {
     agentDid: bot.identity.did,
     nick: bot.client.nick || opts.nick,
     stop: (reason?: string) => bot.stop(reason ?? "freeqcc stop"),
+    resolveSenderDid: (msg, resolveOpts) => bot.resolveSenderDid(msg, resolveOpts),
   };
 }

@@ -316,6 +316,51 @@ default = ["post_message"]
   });
 });
 
+describe("FreeqBot.resolveSenderDid", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "bot-resolve-test-"));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("returns the account-tag DID without firing WHOIS", async () => {
+    const { FreeqBot } = await import("./bot.js");
+    const bot = await FreeqBot.create({
+      name: "rb",
+      ownerDid: "did:plc:owner",
+      nick: "rb",
+      url: "wss://test/irc",
+      root,
+    });
+    // No connect() — the resolver works against the client's EventEmitter +
+    // raw() surface regardless of WebSocket state. account-tag should
+    // short-circuit before raw() would even be called.
+    const did = await bot.resolveSenderDid({
+      from: "alice",
+      tags: { account: "did:plc:alice" },
+    });
+    expect(did).toBe("did:plc:alice");
+  });
+
+  it("returns null when account-tag is absent + WHOIS disabled (strict mode)", async () => {
+    const { FreeqBot } = await import("./bot.js");
+    const bot = await FreeqBot.create({
+      name: "rb-strict",
+      ownerDid: "did:plc:owner",
+      nick: "rb-strict",
+      url: "wss://test/irc",
+      root,
+    });
+    const did = await bot.resolveSenderDid(
+      { from: "alice", tags: {} },
+      { cache: false, whois: false },
+    );
+    expect(did).toBeNull();
+  });
+});
+
 describe("FreeqBot.setState", () => {
   let root: string;
   beforeEach(async () => {

@@ -69,3 +69,13 @@ export type {
   DidMapReadOnly,
   DidMapMutable,
 } from "./did-map.js";
+
+// Sender-DID resolver — also surfaced as bot.resolveSenderDid() on
+// FreeqBot. Standalone export is for bots that don't use the wrapper.
+export { createDidResolver } from "./did-resolver.js";
+export type {
+  DidResolver,
+  DidResolverClient,
+  DidResolverOptions,
+  ResolveOpts,
+} from "./did-resolver.js";

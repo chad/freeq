@@ -134,22 +134,12 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
       console.warn(`[gate] persist failed: ${(err as Error).message}`);
     });
   };
-  const nickToDid = new Map<string, string>(); // case-insensitive: stored lowercase
-  const pendingByNick = new Map<string, Array<() => void>>();
   let totalCostUsd = 0;
   let dispatchCount = 0;
 
-  conn.client.on("memberDid", (nick: string, did: string) => {
-    nickToDid.set(nick.toLowerCase(), did);
-    const queued = pendingByNick.get(nick.toLowerCase());
-    if (queued) {
-      pendingByNick.delete(nick.toLowerCase());
-      for (const cb of queued) cb();
-    }
-  });
-
   // Pre-warm the cache for the owner so the first owner DM doesn't pay
-  // a WHOIS round-trip.
+  // a WHOIS round-trip. bot.resolveSenderDid's resolver will absorb the
+  // memberDid response automatically.
   conn.client.raw(`WHOIS ${owner.handle}`);
 
   const handleDm = async (
@@ -158,30 +148,14 @@ export async function runDaemon(opts: DaemonOptions = {}): Promise<Connected> {
     msgTags: Record<string, string>,
     replyTarget: string,
   ): Promise<void> => {
-    // Try to resolve sender DID synchronously: account-tag, then cache.
-    const didFromTag = msgTags["account"];
-    let senderDid: string | null =
-      (didFromTag && didFromTag.startsWith("did:") ? didFromTag : null) ??
-      nickToDid.get(fromNick.toLowerCase()) ??
-      null;
-
-    if (!senderDid) {
-      // Fire WHOIS, wait up to 3s, then re-dispatch.
-      conn.client.raw(`WHOIS ${fromNick}`);
-      const arrived = await new Promise<boolean>((resolve) => {
-        const timer = setTimeout(() => resolve(false), 3000);
-        const queue =
-          pendingByNick.get(fromNick.toLowerCase()) ?? [];
-        queue.push(() => {
-          clearTimeout(timer);
-          resolve(true);
-        });
-        pendingByNick.set(fromNick.toLowerCase(), queue);
-      });
-      if (arrived) {
-        senderDid = nickToDid.get(fromNick.toLowerCase()) ?? null;
-      }
-    }
+    // Resolver: account-tag → in-bot cache (auto-populated by memberDid;
+    // invalidated on userRenamed/userQuit + 5-min TTL) → WHOIS with 3s
+    // race. Replaces the hand-rolled WHOIS dance + nickToDid map that
+    // used to live here.
+    const senderDid = await conn.resolveSenderDid({
+      from: fromNick,
+      tags: msgTags,
+    });
 
     // Re-read allowlist each dispatch so live-reload edits take effect.
     const allowlist = accessMap.list();
