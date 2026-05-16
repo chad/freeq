@@ -2468,6 +2468,7 @@ pub(crate) async fn process_s2s_message(
             origin: _,
             msgid,
             sig,
+            tags: relayed_tags,
             ..
         } => {
             // Sanitize all peer-provided strings to prevent IRC protocol injection.
@@ -2478,10 +2479,23 @@ pub(crate) async fn process_s2s_message(
             // Generate a local msgid if the remote didn't send one
             let msgid = msgid.unwrap_or_else(crate::msgid::generate);
 
+            // Peer-provided coordination tags. Re-filter on receipt (never
+            // trust the sending peer to have filtered correctly): keep only
+            // `+freeq.at/*` minus `+freeq.at/sig` (re-attested locally),
+            // sanitize key+value against IRC injection, and cap the count to
+            // bound relay amplification.
+            let relay_tags: HashMap<String, String> = relayed_tags
+                .into_iter()
+                .filter(|(k, _)| k.starts_with("+freeq.at/") && k != "+freeq.at/sig")
+                .take(16)
+                .map(|(k, v)| (sanitize_s2s_str(&k, 64), sanitize_s2s_str(&v, 4096)))
+                .collect();
+
             // Plain line for non-tag clients, tagged line with msgid + sig for tag clients
             let plain_line = format!(":{from} PRIVMSG {target} :{text}\r\n");
             let tagged_line = {
                 let mut tags = HashMap::new();
+                tags.extend(relay_tags.iter().map(|(k, v)| (k.clone(), v.clone())));
                 tags.insert("msgid".to_string(), msgid.clone());
                 if let Some(ref sig) = sig {
                     tags.insert("+freeq.at/sig".to_string(), sig.clone());
@@ -2531,6 +2545,7 @@ pub(crate) async fn process_s2s_message(
                         .unwrap_or_default()
                         .as_secs();
                     let mut tags = HashMap::new();
+                    tags.extend(relay_tags.iter().map(|(k, v)| (k.clone(), v.clone())));
                     tags.insert("msgid".to_string(), msgid.clone());
                     if let Some(ref sig) = sig {
                         tags.insert("+freeq.at/sig".to_string(), sig.clone());
@@ -2612,6 +2627,7 @@ pub(crate) async fn process_s2s_message(
                         .unwrap_or_default()
                         .as_secs();
                     let mut tags = HashMap::new();
+                    tags.extend(relay_tags.iter().map(|(k, v)| (k.clone(), v.clone())));
                     tags.insert("msgid".to_string(), msgid.clone());
                     if let Some(ref sig) = sig {
                         tags.insert("+freeq.at/sig".to_string(), sig.clone());
@@ -4283,6 +4299,7 @@ mod s2s_adversarial_tests {
             origin: PEER.to_string(),
             msgid: None,
             sig: None,
+            tags: HashMap::new(),
         }).await;
 
         // The message should have been delivered to local alice.
@@ -4319,6 +4336,7 @@ mod s2s_adversarial_tests {
                 origin: PEER.to_string(),
                 msgid: None,
                 sig: None,
+                tags: HashMap::new(),
             }).await;
 
             // Check what the local member received
@@ -4466,6 +4484,7 @@ mod s2s_adversarial_tests {
                 origin: PEER.to_string(),
                 msgid: None,
                 sig: None,
+                tags: HashMap::new(),
             }).await;
         }
 
@@ -4536,6 +4555,7 @@ mod s2s_adversarial_tests {
                 origin: PEER.to_string(),
                 msgid: None,
                 sig: None,
+                tags: HashMap::new(),
             }).await;
         }
 
@@ -4723,6 +4743,7 @@ mod s2s_adversarial_tests {
             origin: PEER.to_string(),
             msgid: Some("dm-msg-001".to_string()),
             sig: None,
+            tags: HashMap::new(),
         }).await;
 
         // Bob should receive the DM

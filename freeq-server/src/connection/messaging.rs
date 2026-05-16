@@ -708,6 +708,9 @@ pub(super) fn handle_privmsg(
                     origin,
                     msgid: Some(msgid.clone()),
                     sig,
+                    // Coordination card tags ride with the message so a
+                    // federated peer's clients render the same card.
+                    tags: crate::s2s::relay_coordination_tags(&full_tags),
                 },
             );
         }
@@ -801,6 +804,7 @@ pub(super) fn handle_privmsg(
                         origin: state.server_iroh_id.lock().clone().unwrap_or_default(),
                         msgid: Some(pm_msgid.clone()),
                         sig: pm_tags.get("+freeq.at/sig").cloned(),
+                        tags: crate::s2s::relay_coordination_tags(&pm_tags),
                     },
                 );
                 // Send RPL_AWAY if target is away
@@ -1562,6 +1566,7 @@ fn handle_edit(
                 origin,
                 msgid: Some(edit_msgid),
                 sig,
+                tags: crate::s2s::relay_coordination_tags(&full_tags),
             },
         );
     } else {

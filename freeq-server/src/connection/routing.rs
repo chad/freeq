@@ -81,6 +81,7 @@ pub(crate) fn relay_to_nick(
                 origin,
                 msgid: None, // PM relay — no msgid (recipient server assigns)
                 sig: None,   // PM relay — sig not available at routing layer
+                tags: std::collections::HashMap::new(), // no tags at routing layer
             });
         }
         return RouteResult::Relayed;

@@ -106,6 +106,24 @@ pub fn parse_trust_config(entries: &[String]) -> HashMap<String, TrustLevel> {
     map
 }
 
+/// Select the application coordination tags that should ride along with a
+/// PRIVMSG when it is relayed to S2S peers.
+///
+/// These (`+freeq.at/event`, `+freeq.at/payload`, `+freeq.at/task-id`,
+/// `+freeq.at/evidence-type`, and any future `+freeq.at/*`) are message
+/// content — relayed on the same peer-trust basis as the message text, so a
+/// federated client can render the same coordination card the origin server
+/// shows. Server-controlled tags are deliberately NOT relayed here and stay
+/// handled out-of-band: `+freeq.at/sig` (carried in its own field and
+/// re-attested on receipt), and `account`/`time`/`msgid` (regenerated
+/// locally; not `+freeq.at/`-prefixed so excluded anyway).
+pub fn relay_coordination_tags(full: &HashMap<String, String>) -> HashMap<String, String> {
+    full.iter()
+        .filter(|(k, _)| k.starts_with("+freeq.at/") && k.as_str() != "+freeq.at/sig")
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
 /// Messages exchanged between servers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -184,6 +202,12 @@ pub enum S2sMessage {
         /// Server-attested message signature (`+freeq.at/sig`).
         #[serde(default)]
         sig: Option<String>,
+        /// Application coordination tags (`+freeq.at/event` etc.) that ride
+        /// with the message so federated clients render the same card the
+        /// origin shows. `serde(default)` → older peers omit it, deserialize
+        /// to empty (wire back-compat). See `relay_coordination_tags`.
+        #[serde(default)]
+        tags: HashMap<String, String>,
     },
 
     /// A PIN/UNPIN relayed between servers.
@@ -1378,6 +1402,7 @@ mod tests {
             origin: server_id.clone(),
             msgid: Some("MSG123".to_string()),
             sig: None,
+            tags: HashMap::new(),
         };
 
         let signed = manager.sign_message(&msg);
@@ -1469,6 +1494,7 @@ mod tests {
             origin: server_id.clone(),
             msgid: None,
             sig: None,
+            tags: HashMap::new(),
         };
 
         let signed = manager.sign_message(&msg);
@@ -1483,6 +1509,7 @@ mod tests {
                     origin: server_id.clone(),
                     msgid: None,
                     sig: None,
+                    tags: HashMap::new(),
                 };
                 let tampered_json = serde_json::to_string(&tampered).unwrap();
                 let tampered_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -1676,5 +1703,67 @@ mod tests {
             assert!(dedup.check_and_insert("peer1", "peer1:200").await);  // new
             assert!(dedup.check_and_insert("peer2", "peer2:50").await);   // different peer
         });
+    }
+
+    #[test]
+    fn relay_coordination_tags_keeps_app_drops_server_controlled() {
+        let mut full = HashMap::new();
+        full.insert("+freeq.at/event".to_string(), "task_request".to_string());
+        full.insert("+freeq.at/payload".to_string(), "%7B%7D".to_string());
+        full.insert("+freeq.at/task-id".to_string(), "01HZ".to_string());
+        full.insert("+freeq.at/evidence-type".to_string(), "code_review".to_string());
+        // server-controlled / non-app — must NOT cross via the tags field:
+        full.insert("+freeq.at/sig".to_string(), "deadbeef".to_string());
+        full.insert("account".to_string(), "did:plc:x".to_string());
+        full.insert("time".to_string(), "2026-05-15T00:00:00Z".to_string());
+        full.insert("msgid".to_string(), "01HZMSGID".to_string());
+
+        let relayed = relay_coordination_tags(&full);
+
+        assert_eq!(relayed.get("+freeq.at/event").map(String::as_str), Some("task_request"));
+        assert_eq!(relayed.get("+freeq.at/payload").map(String::as_str), Some("%7B%7D"));
+        assert_eq!(relayed.get("+freeq.at/task-id").map(String::as_str), Some("01HZ"));
+        assert_eq!(
+            relayed.get("+freeq.at/evidence-type").map(String::as_str),
+            Some("code_review")
+        );
+        assert!(!relayed.contains_key("+freeq.at/sig"), "sig is re-attested out-of-band");
+        assert!(!relayed.contains_key("account"), "account injected per-recipient locally");
+        assert!(!relayed.contains_key("time"));
+        assert!(!relayed.contains_key("msgid"), "msgid carried in its own field");
+        assert_eq!(relayed.len(), 4);
+    }
+
+    #[test]
+    fn privmsg_tags_serde_roundtrip_and_backcompat() {
+        // Round-trip: tags survive serialize → deserialize.
+        let mut tags = HashMap::new();
+        tags.insert("+freeq.at/event".to_string(), "task_complete".to_string());
+        let msg = S2sMessage::Privmsg {
+            event_id: "p:1".to_string(),
+            from: "swarm!u@h".to_string(),
+            target: "#swarm".to_string(),
+            text: "done".to_string(),
+            origin: "peerA".to_string(),
+            msgid: Some("01HZ".to_string()),
+            sig: None,
+            tags: tags.clone(),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        match serde_json::from_str::<S2sMessage>(&json).unwrap() {
+            S2sMessage::Privmsg { tags: rt, .. } => assert_eq!(rt, tags),
+            _ => panic!("expected Privmsg"),
+        }
+
+        // Back-compat: a peer on the old wire format omits `tags` entirely.
+        let old = r##"{"type":"privmsg","event_id":"p:2","from":"a!u@h","target":"#c","text":"hi","origin":"peerB"}"##;
+        match serde_json::from_str::<S2sMessage>(old).unwrap() {
+            S2sMessage::Privmsg { tags, msgid, sig, .. } => {
+                assert!(tags.is_empty(), "missing tags → empty via serde default");
+                assert!(msgid.is_none());
+                assert!(sig.is_none());
+            }
+            _ => panic!("expected Privmsg"),
+        }
     }
 }
