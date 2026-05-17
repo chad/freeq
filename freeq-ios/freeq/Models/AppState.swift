@@ -346,6 +346,15 @@ class AppState: ObservableObject {
         // Use HTTPS API base — MoQ SFU lives behind the same reverse proxy.
         let serverUrl = ServerConfig.apiBaseUrl
 
+        // iOS won't let cpal/iroh-live open both mic and speaker until the
+        // app's AVAudioSession is configured for two-way voice. Without this,
+        // the audio backend gets 0 Hz back from the hardware and bails out
+        // with "device no longer available" before the MoQ session is even
+        // constructed. Other code paths (voice-message recording, audio
+        // playback) leave the session in `.record` or `.playback`, both of
+        // which would block the AV path.
+        Self.activateVoiceCallSession()
+
         let instance = Self.generateAvInstanceId()
         currentAvInstance = instance
 
@@ -371,6 +380,9 @@ class AppState: ObservableObject {
         } catch {
             print("[av] Failed to start call: \(error)")
             currentAvInstance = nil
+            // Hand the audio hardware back to other paths since the call
+            // never actually engaged it.
+            Self.deactivateVoiceCallSession()
         }
     }
 
@@ -380,6 +392,36 @@ class AppState: ObservableObject {
         var bytes = [UInt8](repeating: 0, count: 4)
         _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
         return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Set up the iOS audio session for a duplex voice call before the Rust
+    /// AV backend tries to open any audio units. `.playAndRecord` allows
+    /// simultaneous mic + speaker; `.voiceChat` mode picks an echo-cancelled
+    /// audio route appropriate for a call; `.defaultToSpeaker` keeps audio
+    /// on the loudspeaker by default; `.allowBluetooth` lets headsets work.
+    private static func activateVoiceCallSession() {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(
+                .playAndRecord,
+                mode: .voiceChat,
+                options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP]
+            )
+            try session.setActive(true, options: [])
+        } catch {
+            print("[av] AVAudioSession setup failed: \(error)")
+        }
+    }
+
+    /// Deactivate the voice call session so other audio paths (push
+    /// notifications, voice-message recording, link previews) can grab the
+    /// hardware back. `.notifyOthersOnDeactivation` lets the system know to
+    /// resume any music apps that were ducked during the call.
+    private static func deactivateVoiceCallSession() {
+        try? AVAudioSession.sharedInstance().setActive(
+            false,
+            options: .notifyOthersOnDeactivation
+        )
     }
 
     func leaveCall() {
@@ -393,6 +435,7 @@ class AppState: ObservableObject {
         avSession?.leave()
         avSession = nil
         currentAvInstance = nil
+        Self.deactivateVoiceCallSession()
         DispatchQueue.main.async {
             self.isInCall = false
             self.isMuted = false
