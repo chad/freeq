@@ -406,11 +406,43 @@ private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
+    typealias FfiType = UInt8
+    typealias SwiftType = UInt8
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt8 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: UInt8, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
+    typealias FfiType = UInt64
+    typealias SwiftType = UInt64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt64 {
         return try lift(readInt(&buf))
     }
 
@@ -509,6 +541,10 @@ public protocol FreeqAvProtocol: AnyObject, Sendable {
     
     func leave() 
     
+    func pushVideoFrame(bgra: [UInt8], width: UInt32, height: UInt32, timestampUs: UInt64) 
+    
+    func setCameraEnabled(enabled: Bool) throws 
+    
     func setMuted(muted: Bool) 
     
 }
@@ -584,6 +620,23 @@ open func isConnected() -> Bool  {
     
 open func leave()  {try! rustCall() {
     uniffi_freeq_sdk_ffi_fn_method_freeqav_leave(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+open func pushVideoFrame(bgra: [UInt8], width: UInt32, height: UInt32, timestampUs: UInt64)  {try! rustCall() {
+    uniffi_freeq_sdk_ffi_fn_method_freeqav_push_video_frame(self.uniffiClonePointer(),
+        FfiConverterSequenceUInt8.lower(bgra),
+        FfiConverterUInt32.lower(width),
+        FfiConverterUInt32.lower(height),
+        FfiConverterUInt64.lower(timestampUs),$0
+    )
+}
+}
+    
+open func setCameraEnabled(enabled: Bool)throws   {try rustCallWithError(FfiConverterTypeFreeqError_lift) {
+    uniffi_freeq_sdk_ffi_fn_method_freeqav_set_camera_enabled(self.uniffiClonePointer(),
+        FfiConverterBool.lower(enabled),$0
     )
 }
 }
@@ -1930,6 +1983,12 @@ public enum AvEvent {
     )
     case audioTrackStopped(nick: String
     )
+    case videoTrackStarted(nick: String
+    )
+    case videoTrackStopped(nick: String
+    )
+    case videoFrame(nick: String, bgra: [UInt8], width: UInt32, height: UInt32
+    )
     case error(message: String
     )
 }
@@ -1966,7 +2025,16 @@ public struct FfiConverterTypeAvEvent: FfiConverterRustBuffer {
         case 6: return .audioTrackStopped(nick: try FfiConverterString.read(from: &buf)
         )
         
-        case 7: return .error(message: try FfiConverterString.read(from: &buf)
+        case 7: return .videoTrackStarted(nick: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 8: return .videoTrackStopped(nick: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 9: return .videoFrame(nick: try FfiConverterString.read(from: &buf), bgra: try FfiConverterSequenceUInt8.read(from: &buf), width: try FfiConverterUInt32.read(from: &buf), height: try FfiConverterUInt32.read(from: &buf)
+        )
+        
+        case 10: return .error(message: try FfiConverterString.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -2006,8 +2074,26 @@ public struct FfiConverterTypeAvEvent: FfiConverterRustBuffer {
             FfiConverterString.write(nick, into: &buf)
             
         
-        case let .error(message):
+        case let .videoTrackStarted(nick):
             writeInt(&buf, Int32(7))
+            FfiConverterString.write(nick, into: &buf)
+            
+        
+        case let .videoTrackStopped(nick):
+            writeInt(&buf, Int32(8))
+            FfiConverterString.write(nick, into: &buf)
+            
+        
+        case let .videoFrame(nick,bgra,width,height):
+            writeInt(&buf, Int32(9))
+            FfiConverterString.write(nick, into: &buf)
+            FfiConverterSequenceUInt8.write(bgra, into: &buf)
+            FfiConverterUInt32.write(width, into: &buf)
+            FfiConverterUInt32.write(height, into: &buf)
+            
+        
+        case let .error(message):
+            writeInt(&buf, Int32(10))
             FfiConverterString.write(message, into: &buf)
             
         }
@@ -2899,6 +2985,31 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceUInt8: FfiConverterRustBuffer {
+    typealias SwiftType = [UInt8]
+
+    public static func write(_ value: [UInt8], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterUInt8.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [UInt8] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [UInt8]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterUInt8.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -2990,6 +3101,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_freeq_sdk_ffi_checksum_method_freeqav_leave() != 39649) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_freeq_sdk_ffi_checksum_method_freeqav_push_video_frame() != 30541) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_freeq_sdk_ffi_checksum_method_freeqav_set_camera_enabled() != 49053) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_freeq_sdk_ffi_checksum_method_freeqav_set_muted() != 7170) {

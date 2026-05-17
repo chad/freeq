@@ -42,6 +42,7 @@ targets:
         CODE_SIGN_STYLE: Automatic
         OTHER_LDFLAGS:
           - "-ObjC"
+          - "-lc++"   # libfreeq_sdk_ffi.a transitively links openh264 (C++)
     dependencies:
       - framework: FreeqSDK.xcframework
         embed: false

@@ -27,6 +27,7 @@
 		328A732022FC49EB4D04542C /* ToastView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E434E1E24A88662FBDFFCA35 /* ToastView.swift */; };
 		33F2DF2666D58E3874E4B4C9 /* WatchKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = ED2B936BFFD2FB65A3BBA961 /* WatchKit.framework */; };
 		3752BB3B1DC74EFFB3D5FB13 /* BufferRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E69472A0DAAB1972CC0FB351 /* BufferRoutingTests.swift */; };
+		4F32549F7429803BCF26DE25 /* VideoFeedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AF979D760370C0C44E53D1C /* VideoFeedView.swift */; };
 		590DB15E36CC6FECFC8FB1B6 /* ActivityKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5402990427FB4D600E4D9BA6 /* ActivityKit.framework */; };
 		5B1B81D53A3DE4767C2A498B /* PhoneWatchBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A31629FF3AFE028388F95C8 /* PhoneWatchBridge.swift */; };
 		5E8956E8A2AEB6B4ED4F5649 /* StepUpAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5A82F11FAB31980C3BD38DB /* StepUpAuth.swift */; };
@@ -69,6 +70,7 @@
 		E64ACA5D2EE7181CC0ACBF67 /* AvatarCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = FEED28B3F67BF6EC64040A04 /* AvatarCache.swift */; };
 		E8B6AF1D0B70F78A65DA8D03 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7C22534FE12207F730D56732 /* Assets.xcassets */; };
 		E9AE8C52F18B1C58ACB180F0 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9A3E250AEA65FB526452DDC0 /* WidgetKit.framework */; };
+		ECAFF392124C53BB4F56182B /* CallCameraCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78CD9FF3B40DF51F4177AA84 /* CallCameraCapture.swift */; };
 		F426EA83410FB9AF6A40F5A5 /* MessageListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA5BB884CBB62EBEF230A05D /* MessageListView.swift */; };
 		F5578CDEA68BCCE1C35408EF /* DiscoverTab.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8114EBF122CE613364A0CAE7 /* DiscoverTab.swift */; };
 		F7C61B31B1D336F554B9F657 /* BufferListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D97CC3F5A8E1F52F2C940FF /* BufferListView.swift */; };
@@ -113,10 +115,12 @@
 		5B107817CBF9268860E40AC0 /* SettingsTab.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsTab.swift; sourceTree = "<group>"; };
 		5DDE25216F85C26CCEE21C66 /* NetworkMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkMonitor.swift; sourceTree = "<group>"; };
 		652094AB12E394FEA901DE7E /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
+		6AF979D760370C0C44E53D1C /* VideoFeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoFeedView.swift; sourceTree = "<group>"; };
 		71E14BE7827AB5FE22AC3FF6 /* FreeqSDK.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = FreeqSDK.xcframework; sourceTree = "<group>"; };
 		7278D584F74B58B9922F23BC /* CallActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallActivityAttributes.swift; sourceTree = "<group>"; };
 		75671806EACCE62066D1B53F /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
 		77A2F5FB32DA2A3EA346FB5C /* AVFAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFAudio.framework; path = System/Library/Frameworks/AVFAudio.framework; sourceTree = SDKROOT; };
+		78CD9FF3B40DF51F4177AA84 /* CallCameraCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallCameraCapture.swift; sourceTree = "<group>"; };
 		7A31629FF3AFE028388F95C8 /* PhoneWatchBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneWatchBridge.swift; sourceTree = "<group>"; };
 		7C22534FE12207F730D56732 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		7D7683ED921B13F8CF675C3D /* VoiceTranscriber.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTranscriber.swift; sourceTree = "<group>"; };
@@ -271,6 +275,7 @@
 				83E16EC2E4202D7B88D8DEDE /* ThreadView.swift */,
 				E434E1E24A88662FBDFFCA35 /* ToastView.swift */,
 				95D94CB373FB8CFD1EAD366F /* UserProfileSheet.swift */,
+				6AF979D760370C0C44E53D1C /* VideoFeedView.swift */,
 				471DB6E8285B3DE882A52E79 /* YouTubeThumb.swift */,
 			);
 			path = Views;
@@ -281,6 +286,7 @@
 			children = (
 				DB66829DE40DA60667ECBB43 /* AppState.swift */,
 				FEED28B3F67BF6EC64040A04 /* AvatarCache.swift */,
+				78CD9FF3B40DF51F4177AA84 /* CallCameraCapture.swift */,
 				B28D17294C06F964661A5E97 /* KeychainHelper.swift */,
 				5DDE25216F85C26CCEE21C66 /* NetworkMonitor.swift */,
 				D528FB66B3A58A4A06E4379C /* Notifications.swift */,
@@ -459,7 +465,6 @@
 				};
 			};
 			buildConfigurationList = CF425087341A09E5CC8DE165 /* Build configuration list for PBXProject "freeq" */;
-			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -469,6 +474,7 @@
 			mainGroup = 01499C2CDD8D0D2662C1FB6B;
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
+			productRefGroup = F62CC89110A6FF28365B0816 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -521,6 +527,7 @@
 				E64ACA5D2EE7181CC0ACBF67 /* AvatarCache.swift in Sources */,
 				BBBACE23B6893E0329291726 /* BlueskyEmbed.swift in Sources */,
 				B2DF4E800D832B107555FD28 /* CallActivityAttributes.swift in Sources */,
+				ECAFF392124C53BB4F56182B /* CallCameraCapture.swift in Sources */,
 				0D90DB6A860ED297CC10A2CF /* CallView.swift in Sources */,
 				8051F4C388919E36E3F7D21B /* ChannelSettingsSheet.swift in Sources */,
 				9ADC4B8DCD3BCB087C8FF8C2 /* ChatDetailView.swift in Sources */,
@@ -555,6 +562,7 @@
 				A6E303F99C6393665AE44025 /* ThreadView.swift in Sources */,
 				328A732022FC49EB4D04542C /* ToastView.swift in Sources */,
 				2750E2A554136E50881B2E2E /* UserProfileSheet.swift in Sources */,
+				4F32549F7429803BCF26DE25 /* VideoFeedView.swift in Sources */,
 				2040D247133E10C570148FFE /* VoiceTranscriber.swift in Sources */,
 				D5CD91A1A07CD8436C37FC84 /* WatchPayloads.swift in Sources */,
 				74F43C40A1FAB663ECDA4B0A /* YouTubeThumb.swift in Sources */,
@@ -733,6 +741,7 @@
 				MARKETING_VERSION = 1.0.0;
 				OTHER_LDFLAGS = (
 					"-ObjC",
+					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = at.freeq.ios;
 				SDKROOT = iphoneos;
@@ -856,6 +865,7 @@
 				MARKETING_VERSION = 1.0.0;
 				OTHER_LDFLAGS = (
 					"-ObjC",
+					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = at.freeq.ios;
 				SDKROOT = iphoneos;

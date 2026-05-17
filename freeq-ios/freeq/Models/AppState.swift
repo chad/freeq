@@ -319,7 +319,7 @@ class AppState: ObservableObject {
     /// capture session itself is started/stopped here. Held across toggles
     /// so we don't pay the AVCaptureSession setup cost more than once per
     /// call.
-    fileprivate var cameraCapture: CameraCapture? = nil
+    fileprivate var cameraCapture: CallCameraCapture? = nil
 
     /// Per-nick remote video display layers, keyed by lower-cased nick. Set
     /// by `RemoteVideoTile` when it appears; cleared when the underlying
@@ -333,7 +333,7 @@ class AppState: ObservableObject {
 
     /// Local-preview wrapper for the call UI to bind against. Returns nil
     /// when the camera is off.
-    var localPreviewCapture: CameraCapture? { cameraCapture }
+    var localPreviewCapture: CallCameraCapture? { cameraCapture }
 
     func startCall(channel: String, sessionId: String) {
         guard client != nil else { return }
@@ -453,7 +453,7 @@ class AppState: ObservableObject {
     fileprivate func startLocalCamera() {
         guard let av = avSession else { return }
         if cameraCapture == nil {
-            let cap = CameraCapture()
+            let cap = CallCameraCapture()
             cap.onFrame = { [weak self] ptr, length, width, height, ts in
                 guard let av = self?.avSession else { return }
                 let bytes = Array(UnsafeBufferPointer(start: ptr, count: length))

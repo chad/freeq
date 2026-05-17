@@ -321,6 +321,16 @@ int8_t uniffi_freeq_sdk_ffi_fn_method_freeqav_is_connected(void*_Nonnull ptr, Ru
 void uniffi_freeq_sdk_ffi_fn_method_freeqav_leave(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_PUSH_VIDEO_FRAME
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_PUSH_VIDEO_FRAME
+void uniffi_freeq_sdk_ffi_fn_method_freeqav_push_video_frame(void*_Nonnull ptr, RustBuffer bgra, uint32_t width, uint32_t height, uint64_t timestamp_us, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_SET_CAMERA_ENABLED
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_SET_CAMERA_ENABLED
+void uniffi_freeq_sdk_ffi_fn_method_freeqav_set_camera_enabled(void*_Nonnull ptr, int8_t enabled, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_SET_MUTED
 #define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_SET_MUTED
 void uniffi_freeq_sdk_ffi_fn_method_freeqav_set_muted(void*_Nonnull ptr, int8_t muted, RustCallStatus *_Nonnull out_status
@@ -821,6 +831,18 @@ uint16_t uniffi_freeq_sdk_ffi_checksum_method_freeqav_is_connected(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_LEAVE
 #define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_LEAVE
 uint16_t uniffi_freeq_sdk_ffi_checksum_method_freeqav_leave(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_PUSH_VIDEO_FRAME
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_PUSH_VIDEO_FRAME
+uint16_t uniffi_freeq_sdk_ffi_checksum_method_freeqav_push_video_frame(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_SET_CAMERA_ENABLED
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_SET_CAMERA_ENABLED
+uint16_t uniffi_freeq_sdk_ffi_checksum_method_freeqav_set_camera_enabled(void
     
 );
 #endif

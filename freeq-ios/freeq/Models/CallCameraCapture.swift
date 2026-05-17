@@ -17,7 +17,7 @@ import Foundation
 /// The capture session is configured for 1280×720, BGRA, 30fps. The preview
 /// layer can be wired separately via `previewLayer` for a low-latency local
 /// preview (which doesn't go through the Rust copy).
-final class CameraCapture: NSObject {
+final class CallCameraCapture: NSObject {
     /// Callback fires on the capture queue. Implementations should be fast —
     /// the queue is serial and frames will queue up behind a slow consumer.
     var onFrame: ((_ bgra: UnsafePointer<UInt8>, _ length: Int, _ width: Int, _ height: Int, _ timestampMicros: UInt64) -> Void)?
@@ -112,7 +112,7 @@ final class CameraCapture: NSObject {
     }
 }
 
-extension CameraCapture: AVCaptureVideoDataOutputSampleBufferDelegate {
+extension CallCameraCapture: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput,
                        didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {

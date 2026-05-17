@@ -6,7 +6,7 @@ import SwiftUI
 /// so the local tile never freezes if the network drops or the encoder
 /// stalls.
 struct LocalPreviewView: UIViewRepresentable {
-    let capture: CameraCapture
+    let capture: CallCameraCapture
 
     func makeUIView(context: Context) -> PreviewContainer {
         let v = PreviewContainer()
