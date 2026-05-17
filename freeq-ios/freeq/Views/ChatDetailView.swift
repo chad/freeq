@@ -20,7 +20,9 @@ struct ChatDetailView: View {
             Theme.bgPrimary.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                // Connection status bar
+                // Connection status bar — always offer a Sign out escape
+                // hatch when not registered, so a stuck saved session (bad
+                // broker token, revoked refresh, etc.) doesn't trap the user.
                 if appState.connectionState != .registered {
                     HStack(spacing: 8) {
                         if appState.connectionState == .connecting || appState.connectionState == .connected {
@@ -34,9 +36,18 @@ struct ChatDetailView: View {
                         Text(appState.connectionState == .disconnected ? "Disconnected — pull down to reconnect" :
                              appState.connectionState == .connecting ? "Connecting..." : "Registering...")
                             .font(.system(size: 13, weight: .medium))
+                        Spacer()
+                        Button("Sign out") { appState.logout() }
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(Color.white.opacity(0.18))
+                            .clipShape(Capsule())
                     }
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(appState.connectionState == .disconnected ? Theme.danger : Theme.warning)
                     .transition(.move(edge: .top).combined(with: .opacity))

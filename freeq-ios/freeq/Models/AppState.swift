@@ -911,6 +911,8 @@ class AppState: ObservableObject {
     }
 
     /// Full logout — clears saved session so ConnectView shows next launch
+    /// (or this launch, since `hasSavedSession` is driven by the published
+    /// `brokerToken` and ContentView routes on it).
     func logout() {
         disconnect()
         UserDefaults.standard.removeObject(forKey: "freeq.lastLogin")
@@ -920,6 +922,7 @@ class AppState: ObservableObject {
         UserDefaults.standard.removeObject(forKey: "freeq.webTokenExpiry")
         UserDefaults.standard.removeObject(forKey: "freeq.nick")
         UserDefaults.standard.removeObject(forKey: "freeq.handle")
+        UserDefaults.standard.removeObject(forKey: "freeq.channels")
         cachedWebToken = nil
         cachedWebTokenExpiry = .distantPast
         SpotlightIndexer.clear()
@@ -927,8 +930,22 @@ class AppState: ObservableObject {
         // messages into a fresh sign-in.
         BufferCacheStore.clear()
         DispatchQueue.main.async {
+            // CRITICAL: must nil the in-memory copies. `hasSavedSession`
+            // reads `brokerToken != nil`; without this, ContentView keeps
+            // routing to MainTabView and `reconnectSavedSession` keeps
+            // firing even after the keychain is empty.
+            self.brokerToken = nil
+            self.pendingWebToken = nil
             self.authenticatedDID = nil
             self.nick = ""
+            self.autoJoinChannels = []
+            self.channels = []
+            self.dmBuffers = []
+            self.activeChannel = nil
+            self.reconnectAttempt = 0
+            self.brokerRetryCount = 0
+            self.connectionState = .disconnected
+            self.errorMessage = nil
         }
     }
 
