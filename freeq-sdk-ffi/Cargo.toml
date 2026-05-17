@@ -28,15 +28,26 @@ serde_json = "1"
 aes-gcm = "0.10"
 
 # AV (voice/video via MoQ SFU)
+# iroh-live features:
+#   opus       — Opus audio codec (required for audio)
+#   h264       — H.264 video codec (required; gates moq-media's video codec
+#                paths via the `any_video_codec` cfg)
+#   videotoolbox — Apple hardware H.264 encode/decode via VideoToolbox
+# Deliberately omitted:
+#   capture    — pulls rusty-capture; the Apple camera backend is stubbed
+#                and we capture from Swift via AVCaptureSession instead
+#   wgpu/metal-import/dmabuf-import — GPU surface rendering from Rust; Swift
+#                handles rendering via AVSampleBufferDisplayLayer
 moq-native = { git = "https://github.com/Frando/moq", branch = "deps/iroh-main", default-features = false, features = ["noq", "websocket", "aws-lc-rs"], optional = true }
 moq-lite = { git = "https://github.com/Frando/moq", branch = "deps/iroh-main", optional = true }
-iroh-live = { git = "https://github.com/n0-computer/iroh-live", default-features = false, features = ["opus"], optional = true }
+iroh-live = { git = "https://github.com/n0-computer/iroh-live", default-features = false, features = ["opus", "h264", "videotoolbox"], optional = true }
 rustls = { version = "0.23", features = ["aws-lc-rs"], default-features = false, optional = true }
 url = { version = "2", optional = true }
+anyhow = { workspace = true, optional = true }
 
 [features]
 default = []
-av = ["moq-native", "moq-lite", "iroh-live", "rustls", "url"]
+av = ["moq-native", "moq-lite", "iroh-live", "rustls", "url", "anyhow"]
 
 [build-dependencies]
 uniffi = { version = "0.29", features = ["build"] }

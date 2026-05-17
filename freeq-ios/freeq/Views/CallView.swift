@@ -24,18 +24,23 @@ struct CallView: View {
     private var participantGrid: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                // Local tile
+                // Local tile — shows live camera preview when on, avatar when off.
                 VStack(spacing: 4) {
                     ZStack {
                         RoundedRectangle(cornerRadius: 8)
                             .fill(Color(.secondarySystemBackground))
                             .frame(width: 100, height: 75)
 
-                        // Avatar/initials when camera is off
-                        Text(String(appState.currentNick?.prefix(2).uppercased() ?? "Me"))
-                            .font(.title2)
-                            .fontWeight(.bold)
-                            .foregroundColor(.accentColor)
+                        if appState.isCameraOn, let cap = appState.localPreviewCapture {
+                            LocalPreviewView(capture: cap)
+                                .frame(width: 100, height: 75)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                        } else {
+                            Text(String(appState.currentNick?.prefix(2).uppercased() ?? "Me"))
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.accentColor)
+                        }
                     }
 
                     Text("You")
@@ -43,7 +48,9 @@ struct CallView: View {
                         .foregroundColor(.secondary)
                 }
 
-                // Remote participants
+                // Remote participants — video tile when frames are arriving,
+                // avatar otherwise. The tile always registers a display sink so
+                // the next inbound frame can drive it.
                 ForEach(appState.callParticipants, id: \.self) { nick in
                     VStack(spacing: 4) {
                         ZStack {
@@ -51,10 +58,17 @@ struct CallView: View {
                                 .fill(Color(.secondarySystemBackground))
                                 .frame(width: 100, height: 75)
 
-                            Text(String(nick.prefix(2).uppercased()))
-                                .font(.title2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.accentColor)
+                            RemoteVideoTile(appState: appState, nick: nick)
+                                .frame(width: 100, height: 75)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .opacity(appState.participantsWithVideo.contains(nick) ? 1 : 0)
+
+                            if !appState.participantsWithVideo.contains(nick) {
+                                Text(String(nick.prefix(2).uppercased()))
+                                    .font(.title2)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(.accentColor)
+                            }
                         }
 
                         Text(nick)

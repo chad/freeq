@@ -200,6 +200,10 @@ interface AvEvent {
     ParticipantLeft(string nick);
     AudioTrackStarted(string nick);
     AudioTrackStopped(string nick);
+    VideoTrackStarted(string nick);
+    VideoTrackStopped(string nick);
+    // BGRA frame from a remote participant. Swift renders via AVSampleBufferDisplayLayer.
+    VideoFrame(string nick, sequence<u8> bgra, u32 width, u32 height);
     Error(string message);
 };
 
@@ -213,7 +217,20 @@ interface FreeqAv {
 
     void leave();
 
+    // Mute toggles whether the locally-captured mic samples are sent (vs silence).
+    // Track stays live so peers don't see AudioTrackStopped.
     void set_muted(boolean muted);
+
+    // Enable/disable the local video track. When enabled, the encoder pipeline
+    // pulls frames pushed via push_video_frame(). When disabled, the track is
+    // removed from the broadcast and peers see VideoTrackStopped.
+    [Throws=FreeqError]
+    void set_camera_enabled(boolean enabled);
+
+    // Swift-driven camera capture. Each call queues a BGRA frame for the
+    // encoder pipeline. Caller is responsible for capture cadence; the
+    // encoder will pull the most-recent queued frame.
+    void push_video_frame(sequence<u8> bgra, u32 width, u32 height, u64 timestamp_us);
 
     boolean is_connected();
 };

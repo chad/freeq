@@ -981,6 +981,14 @@ pub enum AvEvent {
     ParticipantLeft { nick: String },
     AudioTrackStarted { nick: String },
     AudioTrackStopped { nick: String },
+    VideoTrackStarted { nick: String },
+    VideoTrackStopped { nick: String },
+    VideoFrame {
+        nick: String,
+        bgra: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
     Error { message: String },
 }
 
@@ -989,11 +997,345 @@ pub trait AvEventHandler: Send + Sync + 'static {
 }
 
 #[cfg(feature = "av")]
+mod av_impl {
+    use super::{AvEvent, AvEventHandler, FreeqError, RUNTIME};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use iroh_live::media::codec::{AudioCodec, VideoCodec};
+    use iroh_live::media::format::{
+        AudioFormat, AudioPreset, PixelFormat, VideoFormat, VideoFrame, VideoPreset,
+    };
+    use iroh_live::media::publish::LocalBroadcast;
+    use iroh_live::media::traits::{AudioSource, VideoSource};
+
+    /// Wraps an [`AudioSource`] and zero-fills output when muted. Used so that
+    /// muting doesn't tear down the audio track (which would surface as
+    /// `AudioTrackStopped` to peers and cause a noticeable reconnect blip).
+    pub(super) struct MuteableAudioSource {
+        inner: Box<dyn AudioSource>,
+        muted: Arc<AtomicBool>,
+    }
+
+    impl AudioSource for MuteableAudioSource {
+        fn format(&self) -> AudioFormat {
+            self.inner.format()
+        }
+        fn pop_samples(&mut self, buf: &mut [f32]) -> anyhow::Result<Option<usize>> {
+            let result = self.inner.pop_samples(buf)?;
+            if let Some(n) = result {
+                if self.muted.load(Ordering::Relaxed) {
+                    for s in &mut buf[..n] {
+                        *s = 0.0;
+                    }
+                }
+            }
+            Ok(result)
+        }
+    }
+
+    /// Latest-frame-only video source fed from Swift via `push_video_frame`.
+    ///
+    /// The encoder pipeline calls `pop_frame` at the desired output rate; we
+    /// surface whatever Swift pushed most recently. Older frames are dropped
+    /// silently — this is the right behaviour for camera capture (display the
+    /// fresh frame, not a backlog).
+    pub(super) struct PushVideoSource {
+        pending: Arc<Mutex<Option<VideoFrame>>>,
+        format: Arc<Mutex<VideoFormat>>,
+    }
+
+    impl VideoSource for PushVideoSource {
+        fn name(&self) -> &str {
+            "swift-push"
+        }
+        fn format(&self) -> VideoFormat {
+            self.format.lock().unwrap().clone()
+        }
+        fn pop_frame(&mut self) -> anyhow::Result<Option<VideoFrame>> {
+            Ok(self.pending.lock().unwrap().take())
+        }
+        fn start(&mut self) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn stop(&mut self) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    pub(super) const DEFAULT_VIDEO_FORMAT: VideoFormat = VideoFormat {
+        pixel_format: PixelFormat::Bgra,
+        dimensions: [1280, 720],
+    };
+
+    pub(super) struct State {
+        pub broadcast: LocalBroadcast,
+        // Held to keep audio/video device handles alive for the session.
+        pub _audio_backend: iroh_live::media::audio_backend::AudioBackend,
+        pub _session: moq_lite::Session,
+        pub _origin: moq_lite::OriginProducer,
+        pub shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+        pub connected: bool,
+        pub muted: Arc<AtomicBool>,
+        // Camera state — populated when set_camera_enabled(true) is first called.
+        pub camera_enabled: bool,
+        pub pending_frame: Arc<Mutex<Option<VideoFrame>>>,
+        pub video_format: Arc<Mutex<VideoFormat>>,
+    }
+
+    pub(super) fn connect(
+        server_url: String,
+        session_id: String,
+        nick: String,
+        handler: Box<dyn AvEventHandler>,
+    ) -> Result<State, FreeqError> {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+        let broadcast_name = format!("{session_id}/{nick}");
+        let moq_url: url::Url = format!("{server_url}/av/moq")
+            .parse()
+            .map_err(|_| FreeqError::InvalidArgument)?;
+
+        let muted = Arc::new(AtomicBool::new(false));
+
+        let (session, origin, sub_consumer, audio_backend, broadcast) =
+            RUNTIME.block_on(async {
+                let broadcast = LocalBroadcast::new();
+                let audio_backend = iroh_live::media::audio_backend::AudioBackend::default();
+                audio_backend.set_aec_enabled(false);
+
+                let mic = audio_backend
+                    .default_input()
+                    .await
+                    .map_err(|_| FreeqError::ConnectionFailed)?;
+
+                let muteable = MuteableAudioSource {
+                    inner: Box::new(mic),
+                    muted: muted.clone(),
+                };
+
+                broadcast
+                    .audio()
+                    .set(muteable, AudioCodec::Opus, [AudioPreset::Hq])
+                    .map_err(|_| FreeqError::ConnectionFailed)?;
+
+                let origin = moq_lite::Origin::produce();
+                origin.publish_broadcast(&broadcast_name, broadcast.consume());
+
+                let sub_origin = moq_lite::Origin::produce();
+                let sub_consumer = sub_origin.consume();
+
+                let mut client_config = moq_native::ClientConfig::default();
+                client_config.tls.disable_verify = Some(true);
+                client_config.backend = Some(moq_native::QuicBackend::Noq);
+                let client = client_config
+                    .init()
+                    .map_err(|_| FreeqError::ConnectionFailed)?;
+
+                let session = client
+                    .with_publish(origin.consume())
+                    .with_consume(sub_origin)
+                    .connect(moq_url)
+                    .await
+                    .map_err(|_| FreeqError::ConnectionFailed)?;
+
+                Ok::<_, FreeqError>((session, origin, sub_consumer, audio_backend, broadcast))
+            })?;
+
+        tracing::info!(broadcast = %broadcast_name, "AV: connected to MoQ SFU");
+        handler.on_av_event(AvEvent::Connected);
+
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let mut sub_consumer = sub_consumer;
+
+        let our_name = broadcast_name.clone();
+        let audio_for_playback = audio_backend.clone();
+        let handler: Arc<dyn AvEventHandler> = Arc::from(handler);
+        let handler_loop = handler.clone();
+
+        RUNTIME.spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => break,
+                    announced = sub_consumer.announced() => {
+                        match announced {
+                            Some((path, Some(broadcast_consumer))) => {
+                                let path_str = path.to_string();
+                                if path_str == our_name { continue; }
+
+                                let nick = path_str
+                                    .split('/')
+                                    .last()
+                                    .unwrap_or("unknown")
+                                    .to_string();
+                                tracing::info!(nick = %nick, "AV: participant broadcast");
+                                handler_loop
+                                    .on_av_event(AvEvent::ParticipantJoined { nick: nick.clone() });
+
+                                let ab = audio_for_playback.clone();
+                                let h = handler_loop.clone();
+                                let nick_for_task = nick.clone();
+                                tokio::spawn(async move {
+                                    handle_remote_broadcast(path_str, broadcast_consumer, ab, h, nick_for_task)
+                                        .await;
+                                });
+                            }
+                            Some((path, None)) => {
+                                let nick = path
+                                    .to_string()
+                                    .split('/')
+                                    .last()
+                                    .unwrap_or("unknown")
+                                    .to_string();
+                                handler_loop.on_av_event(AvEvent::ParticipantLeft { nick });
+                            }
+                            None => break,
+                        }
+                    }
+                }
+            }
+            handler_loop.on_av_event(AvEvent::Disconnected {
+                reason: "session ended".to_string(),
+            });
+        });
+
+        Ok(State {
+            broadcast,
+            _audio_backend: audio_backend,
+            _session: session,
+            _origin: origin,
+            shutdown_tx: Some(shutdown_tx),
+            connected: true,
+            muted,
+            camera_enabled: false,
+            pending_frame: Arc::new(Mutex::new(None)),
+            video_format: Arc::new(Mutex::new(DEFAULT_VIDEO_FORMAT)),
+        })
+    }
+
+    async fn handle_remote_broadcast(
+        path_str: String,
+        broadcast_consumer: moq_lite::BroadcastConsumer,
+        audio_backend: iroh_live::media::audio_backend::AudioBackend,
+        handler: Arc<dyn AvEventHandler>,
+        nick: String,
+    ) {
+        let remote = match iroh_live::media::subscribe::RemoteBroadcast::new(
+            &path_str,
+            broadcast_consumer,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(nick = %nick, "AV: subscribe error: {e}");
+                return;
+            }
+        };
+
+        let tracks = match remote.media(&audio_backend, Default::default()).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(nick = %nick, "AV: media error: {e}");
+                return;
+            }
+        };
+
+        if tracks.audio.is_some() {
+            tracing::info!(nick = %nick, "AV: playing remote audio");
+            handler.on_av_event(AvEvent::AudioTrackStarted { nick: nick.clone() });
+        }
+        if tracks.video.is_some() {
+            tracing::info!(nick = %nick, "AV: remote video track present");
+            handler.on_av_event(AvEvent::VideoTrackStarted { nick: nick.clone() });
+            // TODO(av-video-subscribe): drive a decoder loop that pops frames
+            // from the remote video track, converts to BGRA, and emits
+            // AvEvent::VideoFrame. The current `tracks.video` plumbing in
+            // moq-media renders to a wgpu surface by default; we need a
+            // CPU-frame variant that yields raw BGRA bytes for Swift's
+            // AVSampleBufferDisplayLayer. Tracked as a follow-up: until this
+            // lands, remote audio works but remote video is a black tile.
+        }
+
+        // Hold the tracks alive for the duration of the remote broadcast.
+        let _tracks = tracks;
+        std::future::pending::<()>().await;
+    }
+
+    pub(super) fn enable_camera(state: &mut State) -> Result<(), FreeqError> {
+        if state.camera_enabled {
+            return Ok(());
+        }
+        let source = PushVideoSource {
+            pending: state.pending_frame.clone(),
+            format: state.video_format.clone(),
+        };
+        state
+            .broadcast
+            .video()
+            .set_source(source, VideoCodec::H264, [VideoPreset::P720])
+            .map_err(|e| {
+                tracing::warn!("AV: set_source failed: {e}");
+                FreeqError::ConnectionFailed
+            })?;
+        state.camera_enabled = true;
+        tracing::info!("AV: camera enabled");
+        Ok(())
+    }
+
+    pub(super) fn disable_camera(state: &mut State) {
+        if !state.camera_enabled {
+            return;
+        }
+        state.broadcast.video().clear();
+        // Drop any pending frame so a re-enable doesn't show a stale one.
+        *state.pending_frame.lock().unwrap() = None;
+        state.camera_enabled = false;
+        tracing::info!("AV: camera disabled");
+    }
+
+    pub(super) fn push_frame(state: &State, bgra: Vec<u8>, width: u32, height: u32, ts_us: u64) {
+        if !state.camera_enabled {
+            return; // drop frames while camera is off
+        }
+        let expected = (width as usize)
+            .checked_mul(height as usize)
+            .and_then(|n| n.checked_mul(4));
+        if expected != Some(bgra.len()) {
+            tracing::warn!(
+                got = bgra.len(),
+                expected = ?expected,
+                width,
+                height,
+                "AV: push_video_frame size mismatch — dropping"
+            );
+            return;
+        }
+        {
+            let mut fmt = state.video_format.lock().unwrap();
+            if fmt.dimensions != [width, height] {
+                *fmt = VideoFormat {
+                    pixel_format: PixelFormat::Bgra,
+                    dimensions: [width, height],
+                };
+            }
+        }
+        let frame = VideoFrame::new_packed(
+            bgra.into(),
+            width,
+            height,
+            PixelFormat::Bgra,
+            Duration::from_micros(ts_us),
+        );
+        *state.pending_frame.lock().unwrap() = Some(frame);
+    }
+}
+
+#[cfg(feature = "av")]
 pub struct FreeqAv {
-    _session: Mutex<Option<moq_lite::Session>>,
-    _origin: Mutex<Option<moq_lite::OriginProducer>>,
-    _shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
-    connected: Mutex<bool>,
+    state: Mutex<Option<av_impl::State>>,
 }
 
 #[cfg(not(feature = "av"))]
@@ -1007,126 +1349,59 @@ impl FreeqAv {
         nick: String,
         handler: Box<dyn AvEventHandler>,
     ) -> Result<Self, FreeqError> {
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-
-        let broadcast_name = format!("{session_id}/{nick}");
-        let moq_url: url::Url = format!("{server_url}/av/moq")
-            .parse()
-            .map_err(|_| FreeqError::InvalidArgument)?;
-
-        // Everything needs a Tokio runtime context
-        let (session, origin, sub_consumer, audio_backend, broadcast) = RUNTIME.block_on(async {
-            let broadcast = iroh_live::media::publish::LocalBroadcast::new();
-            let audio_backend = iroh_live::media::audio_backend::AudioBackend::default();
-            audio_backend.set_aec_enabled(false);
-
-            let mic = audio_backend.default_input().await
-                .map_err(|_| FreeqError::ConnectionFailed)?;
-
-            broadcast.audio()
-                .set(mic, iroh_live::media::codec::AudioCodec::Opus, [iroh_live::media::format::AudioPreset::Hq])
-                .map_err(|_| FreeqError::ConnectionFailed)?;
-
-            let origin = moq_lite::Origin::produce();
-            origin.publish_broadcast(&broadcast_name, broadcast.consume());
-
-            let sub_origin = moq_lite::Origin::produce();
-            let sub_consumer = sub_origin.consume();
-
-            let mut client_config = moq_native::ClientConfig::default();
-            client_config.tls.disable_verify = Some(true);
-            client_config.backend = Some(moq_native::QuicBackend::Noq);
-            let client = client_config.init().map_err(|_| FreeqError::ConnectionFailed)?;
-
-            let session = client
-                .with_publish(origin.consume())
-                .with_consume(sub_origin)
-                .connect(moq_url)
-                .await
-                .map_err(|_| FreeqError::ConnectionFailed)?;
-
-            Ok::<_, FreeqError>((session, origin, sub_consumer, audio_backend, broadcast))
-        })?;
-
-        tracing::info!(broadcast = %broadcast_name, "AV: connected to MoQ SFU");
-        handler.on_av_event(AvEvent::Connected);
-
-        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-        let mut sub_consumer = sub_consumer;
-
-        // Watch for incoming broadcasts (other participants)
-        let our_name = broadcast_name.clone();
-        let audio_for_playback = audio_backend;
-        RUNTIME.spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = &mut shutdown_rx => break,
-                    announced = sub_consumer.announced() => {
-                        match announced {
-                            Some((path, Some(broadcast_consumer))) => {
-                                let path_str = path.to_string();
-                                if path_str == our_name { continue; }
-
-                                let nick = path_str.split('/').last().unwrap_or("unknown").to_string();
-                                tracing::info!(nick = %nick, "AV: participant broadcast");
-                                handler.on_av_event(AvEvent::ParticipantJoined { nick: nick.clone() });
-
-                                let ab = audio_for_playback.clone();
-                                tokio::spawn(async move {
-                                    match iroh_live::media::subscribe::RemoteBroadcast::new(&path_str, broadcast_consumer).await {
-                                        Ok(remote) => {
-                                            match remote.media(&ab, Default::default()).await {
-                                                Ok(tracks) => {
-                                                    if tracks.audio.is_some() {
-                                                        tracing::info!(nick = %nick, "AV: playing audio");
-                                                        let _tracks = tracks;
-                                                        // Hold tracks alive until session ends
-                                                        std::future::pending::<()>().await;
-                                                    }
-                                                }
-                                                Err(e) => tracing::warn!(nick = %nick, "AV: audio error: {e}"),
-                                            }
-                                        }
-                                        Err(e) => tracing::warn!(nick = %nick, "AV: subscribe error: {e}"),
-                                    }
-                                });
-                            }
-                            Some((path, None)) => {
-                                let nick = path.to_string().split('/').last().unwrap_or("unknown").to_string();
-                                handler.on_av_event(AvEvent::ParticipantLeft { nick });
-                            }
-                            None => break,
-                        }
-                    }
-                }
-            }
-            handler.on_av_event(AvEvent::Disconnected { reason: "session ended".to_string() });
-        });
-
-        // Keep broadcast alive
-        std::mem::forget(broadcast);
-
+        let state = av_impl::connect(server_url, session_id, nick, handler)?;
         Ok(Self {
-            _session: Mutex::new(Some(session)),
-            _origin: Mutex::new(Some(origin)),
-            _shutdown: Mutex::new(Some(shutdown_tx)),
-            connected: Mutex::new(true),
+            state: Mutex::new(Some(state)),
         })
     }
 
     fn leave(&self) {
-        if let Some(tx) = self._shutdown.lock().unwrap().take() {
-            let _ = tx.send(());
+        let mut guard = self.state.lock().unwrap();
+        if let Some(state) = guard.as_mut() {
+            if let Some(tx) = state.shutdown_tx.take() {
+                let _ = tx.send(());
+            }
+            state.connected = false;
         }
-        *self.connected.lock().unwrap() = false;
+        // Drop the entire State to tear down the broadcast and session.
+        *guard = None;
     }
 
-    fn set_muted(&self, _muted: bool) {
-        tracing::info!(muted = _muted, "AV: mute toggled");
+    fn set_muted(&self, muted: bool) {
+        let guard = self.state.lock().unwrap();
+        if let Some(state) = guard.as_ref() {
+            state
+                .muted
+                .store(muted, std::sync::atomic::Ordering::Relaxed);
+            tracing::info!(muted, "AV: mute set");
+        }
+    }
+
+    fn set_camera_enabled(&self, enabled: bool) -> Result<(), FreeqError> {
+        let mut guard = self.state.lock().unwrap();
+        let state = guard.as_mut().ok_or(FreeqError::NotConnected)?;
+        if enabled {
+            av_impl::enable_camera(state)
+        } else {
+            av_impl::disable_camera(state);
+            Ok(())
+        }
+    }
+
+    fn push_video_frame(&self, bgra: Vec<u8>, width: u32, height: u32, timestamp_us: u64) {
+        let guard = self.state.lock().unwrap();
+        if let Some(state) = guard.as_ref() {
+            av_impl::push_frame(state, bgra, width, height, timestamp_us);
+        }
     }
 
     fn is_connected(&self) -> bool {
-        *self.connected.lock().unwrap()
+        self.state
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|s| s.connected)
+            .unwrap_or(false)
     }
 }
 
@@ -1143,6 +1418,10 @@ impl FreeqAv {
 
     fn leave(&self) {}
     fn set_muted(&self, _muted: bool) {}
+    fn set_camera_enabled(&self, _enabled: bool) -> Result<(), FreeqError> {
+        Err(FreeqError::NotConnected)
+    }
+    fn push_video_frame(&self, _bgra: Vec<u8>, _w: u32, _h: u32, _ts: u64) {}
     fn is_connected(&self) -> bool { false }
 }
 
@@ -1188,6 +1467,14 @@ mod tests {
         let _ = AvEvent::ParticipantLeft { nick: "bob".to_string() };
         let _ = AvEvent::AudioTrackStarted { nick: "carol".to_string() };
         let _ = AvEvent::AudioTrackStopped { nick: "dave".to_string() };
+        let _ = AvEvent::VideoTrackStarted { nick: "eve".to_string() };
+        let _ = AvEvent::VideoTrackStopped { nick: "frank".to_string() };
+        let _ = AvEvent::VideoFrame {
+            nick: "grace".to_string(),
+            bgra: vec![0; 4],
+            width: 1,
+            height: 1,
+        };
         let _ = AvEvent::Error { message: "test error".to_string() };
     }
 

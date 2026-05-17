@@ -1,4 +1,5 @@
 import ActivityKit
+import AVFoundation
 import CoreSpotlight
 import Foundation
 import os.log
@@ -314,6 +315,26 @@ class AppState: ObservableObject {
     /// Live Activity tracking the in-call state. Drives the Dynamic Island.
     fileprivate var callActivity: Activity<CallActivityAttributes>? = nil
 
+    /// Front-camera capture. Allocated on first `toggleCamera(true)`; the
+    /// capture session itself is started/stopped here. Held across toggles
+    /// so we don't pay the AVCaptureSession setup cost more than once per
+    /// call.
+    fileprivate var cameraCapture: CameraCapture? = nil
+
+    /// Per-nick remote video display layers, keyed by lower-cased nick. Set
+    /// by `RemoteVideoTile` when it appears; cleared when the underlying
+    /// view goes away (weak values let the table drop the entry).
+    fileprivate var remoteVideoLayers: NSMapTable<NSString, AVSampleBufferDisplayLayer> =
+        NSMapTable.strongToWeakObjects()
+
+    /// Set of nicks for which we've received at least one frame this call.
+    /// Drives the "video active" indicator on the participant tile.
+    @Published var participantsWithVideo: Set<String> = []
+
+    /// Local-preview wrapper for the call UI to bind against. Returns nil
+    /// when the camera is off.
+    var localPreviewCapture: CameraCapture? { cameraCapture }
+
     func startCall(channel: String, sessionId: String) {
         guard client != nil else { return }
         // Use HTTPS API base — MoQ SFU lives behind the same reverse proxy.
@@ -344,6 +365,8 @@ class AppState: ObservableObject {
         if let channel = currentCallChannel, let sessionId = currentCallSessionId {
             try? client?.sendRaw(line: "@+freeq.at/av-leave;+freeq.at/av-id=\(sessionId) TAGMSG \(channel)")
         }
+        cameraCapture?.stop()
+        cameraCapture = nil
         avSession?.leave()
         avSession = nil
         DispatchQueue.main.async {
@@ -351,6 +374,7 @@ class AppState: ObservableObject {
             self.isMuted = false
             self.isCameraOn = false
             self.callParticipants = []
+            self.participantsWithVideo = []
             self.currentCallChannel = nil
             self.currentCallSessionId = nil
             self.endCallActivity()
@@ -415,7 +439,62 @@ class AppState: ObservableObject {
     }
 
     func toggleCamera() {
-        isCameraOn.toggle()
+        let next = !isCameraOn
+        if next {
+            startLocalCamera()
+        } else {
+            stopLocalCamera()
+        }
+        isCameraOn = next
+    }
+
+    /// Spin up `AVCaptureSession` (if needed) and turn on the publish-side
+    /// video track. Idempotent.
+    fileprivate func startLocalCamera() {
+        guard let av = avSession else { return }
+        if cameraCapture == nil {
+            let cap = CameraCapture()
+            cap.onFrame = { [weak self] ptr, length, width, height, ts in
+                guard let av = self?.avSession else { return }
+                let bytes = Array(UnsafeBufferPointer(start: ptr, count: length))
+                av.pushVideoFrame(
+                    bgra: bytes,
+                    width: UInt32(width),
+                    height: UInt32(height),
+                    timestampUs: ts
+                )
+            }
+            cameraCapture = cap
+        }
+        do {
+            try av.setCameraEnabled(enabled: true)
+        } catch {
+            print("[av] setCameraEnabled(true) failed: \(error)")
+            return
+        }
+        cameraCapture?.start()
+    }
+
+    fileprivate func stopLocalCamera() {
+        cameraCapture?.stop()
+        do {
+            try avSession?.setCameraEnabled(enabled: false)
+        } catch {
+            // NotConnected is fine — we may be leaving the call.
+            print("[av] setCameraEnabled(false): \(error)")
+        }
+    }
+
+    /// Called by `RemoteVideoTile.makeUIView/updateUIView`. Weakly retains
+    /// the display layer; when the SwiftUI view disappears, the layer is
+    /// released and the entry self-clears.
+    func bindVideoSink(nick: String, to layer: AVSampleBufferDisplayLayer) {
+        remoteVideoLayers.setObject(layer, forKey: nick.lowercased() as NSString)
+    }
+
+    /// Lookup helper used by the AV event handler.
+    fileprivate func videoLayer(for nick: String) -> AVSampleBufferDisplayLayer? {
+        remoteVideoLayers.object(forKey: nick.lowercased() as NSString)
     }
 
     /// Start or join a voice session on a channel.
@@ -1801,6 +1880,29 @@ final class AvCallbackHandler: @unchecked Sendable, AvEventHandler {
 
             case .audioTrackStopped(let nick):
                 print("[av] Audio stopped: \(nick)")
+
+            case .videoTrackStarted(let nick):
+                print("[av] Video started: \(nick)")
+
+            case .videoTrackStopped(let nick):
+                state.participantsWithVideo.remove(nick)
+                print("[av] Video stopped: \(nick)")
+
+            case .videoFrame(let nick, let bgra, let width, let height):
+                // Enqueue directly on the display layer (no SwiftUI re-render
+                // per frame). Mark the nick as having video on the first frame.
+                if let layer = state.videoLayer(for: nick) {
+                    VideoSampleBuffer.enqueue(
+                        bgra: bgra,
+                        width: Int(width),
+                        height: Int(height),
+                        on: layer
+                    )
+                }
+                if state.participantsWithVideo.insert(nick).inserted {
+                    // First frame from this nick — SwiftUI re-renders so the
+                    // tile transitions from avatar to video.
+                }
 
             case .error(let message):
                 print("[av] Error: \(message)")
