@@ -27,7 +27,7 @@ import com.freeq.model.ChatMessage
 import com.freeq.ui.components.UserAvatar
 import com.freeq.ui.theme.FreeqColors
 import com.freeq.ui.theme.Theme
-import java.text.SimpleDateFormat
+import java.text.DateFormat
 import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -447,14 +447,14 @@ private fun formatTime(date: Date): String {
     return when {
         cal.get(Calendar.YEAR) == today.get(Calendar.YEAR) &&
                 cal.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR) -> {
-            SimpleDateFormat("HH:mm", Locale.getDefault()).format(date)
+            DateFormat.getTimeInstance(DateFormat.SHORT, Locale.getDefault()).format(date)
         }
         cal.get(Calendar.YEAR) == today.get(Calendar.YEAR) &&
                 cal.get(Calendar.DAY_OF_YEAR) == today.get(Calendar.DAY_OF_YEAR) - 1 -> {
             "Yesterday"
         }
         else -> {
-            SimpleDateFormat("dd/MM/yy", Locale.getDefault()).format(date)
+            DateFormat.getDateInstance(DateFormat.SHORT, Locale.getDefault()).format(date)
         }
     }
 }
