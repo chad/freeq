@@ -258,6 +258,7 @@ impl Db {
             "ALTER TABLE messages ADD COLUMN replaces_msgid TEXT",
             "ALTER TABLE messages ADD COLUMN deleted_at INTEGER",
             "ALTER TABLE messages ADD COLUMN sender_did TEXT",
+            "ALTER TABLE identities ADD COLUMN last_auth_at INTEGER",
         ];
         for sql in &migrations {
             // Ignore "duplicate column name" errors — means column already exists
@@ -1216,10 +1217,14 @@ impl Db {
 
     /// Bind a DID to a nick. Overwrites any previous binding for that DID.
     pub fn save_identity(&self, did: &str, nick: &str) -> SqlResult<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
         self.conn.execute(
-            "INSERT INTO identities (did, nick) VALUES (?1, ?2)
-             ON CONFLICT(did) DO UPDATE SET nick=excluded.nick",
-            params![did, nick],
+            "INSERT INTO identities (did, nick, last_auth_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(did) DO UPDATE SET nick=excluded.nick, last_auth_at=excluded.last_auth_at",
+            params![did, nick, now],
         )?;
         Ok(())
     }
@@ -1443,6 +1448,36 @@ mod tests {
 
         // Old nick no longer resolves
         assert!(db.get_identity_by_nick("alice").unwrap().is_none());
+    }
+
+    #[test]
+    fn save_identity_records_last_auth_at() {
+        let db = Db::open_memory().unwrap();
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        db.save_identity("did:plc:alice", "alice").unwrap();
+
+        let ts: Option<i64> = db
+            .conn
+            .query_row(
+                "SELECT last_auth_at FROM identities WHERE did=?1",
+                rusqlite::params!["did:plc:alice"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let ts = ts.expect("last_auth_at should be set on save_identity");
+
+        let after = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        assert!(
+            ts >= before && ts <= after,
+            "last_auth_at {ts} not in [{before},{after}]"
+        );
     }
 
     #[test]
