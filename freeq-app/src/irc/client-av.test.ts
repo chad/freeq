@@ -176,7 +176,12 @@ describe('startAvSession', () => {
     expect(useStore.getState().activeAvSession).toBe('sess-xyz');
   });
 
-  it('refuses to double-start when avAudioActive is already true (bug: ghost duplicate sessions)', async () => {
+  it('still proceeds when avAudioActive is true (regression: stuck flag was blocking new calls)', async () => {
+    // The previous guard checked avAudioActive and silently no-op'd —
+    // which broke the green "Join voice call" button if the flag stuck
+    // true after any teardown blip. The right guard is per-channel
+    // in-flight (covered in the next test); avAudioActive alone is not
+    // a reliable "we're currently calling" signal.
     useStore.setState({ avAudioActive: true });
     const mock = makeMockClient('me');
     __setClientForTests(mock as any);
@@ -186,7 +191,26 @@ describe('startAvSession', () => {
 
     await startAvSession('#room');
 
-    expect(mock.rawCalls).toHaveLength(0);
+    expect(mock.rawCalls).toHaveLength(1);
+    expect(mock.rawCalls[0]).toMatch(/av-start/);
+  });
+
+  it('suppresses concurrent invocations on the same channel (no duplicate av-start)', async () => {
+    const mock = makeMockClient('me');
+    __setClientForTests(mock as any);
+    // Make the discovery fetch hang so both invocations race through
+    // the guard window.
+    let resolveFetch: (r: Response) => void = () => {};
+    const fetchPromise = new Promise<Response>((r) => { resolveFetch = r; });
+    vi.spyOn(globalThis, 'fetch').mockReturnValue(fetchPromise as any);
+
+    const p1 = startAvSession('#room');
+    const p2 = startAvSession('#room');
+    resolveFetch(new Response(JSON.stringify({ active: null }), { status: 200 }));
+    await Promise.all([p1, p2]);
+
+    const startCount = mock.rawCalls.filter((l) => l.includes('av-start')).length;
+    expect(startCount).toBe(1);
   });
 
   it('warns and exits when not authenticated (no TAGMSG)', async () => {

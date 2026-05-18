@@ -264,6 +264,13 @@ export function getAvInstanceId(): string | null {
   return currentAvInstance;
 }
 
+// Per-channel in-flight guard. We only want to suppress *concurrent*
+// startAvSession invocations for the same channel (rapid double-clicks
+// while the discovery fetch is in flight); the previous guard checked
+// store.avAudioActive which would stick true after any teardown blip
+// and silently no-op every future button click on that user's session.
+const _startInFlight = new Set<string>();
+
 export async function startAvSession(channel: string, title?: string) {
   const store = useStore.getState();
   if (!store.authDid) {
@@ -274,37 +281,39 @@ export async function startAvSession(channel: string, title?: string) {
     store.addSystemMessage(channel, 'Cannot start voice session: not connected to server.');
     return;
   }
-  // Guard against double-starts. The button is supposed to be hidden while
-  // a call is active, but rapid clicks / programmatic callers shouldn't
-  // generate duplicate `av-start` TAGMSGs (which create competing sessions
-  // on the server).
-  if (store.avAudioActive) return;
+  const key = channel.toLowerCase();
+  if (_startInFlight.has(key)) return;
+  _startInFlight.add(key);
 
   try {
-    const resp = await fetch(`/api/v1/channels/${encodeURIComponent(channel)}/sessions`);
-    if (resp.ok) {
-      const data = await resp.json();
-      if (data.active && data.active.state === 'Active') {
-        store.addSystemMessage(channel, `Joining existing voice session (${data.active.participant_count} participants)`);
-        joinAvSession(channel, data.active.id);
-        store.setAvAudioActive(true);
-        return;
+    try {
+      const resp = await fetch(`/api/v1/channels/${encodeURIComponent(channel)}/sessions`);
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.active && data.active.state === 'Active') {
+          store.addSystemMessage(channel, `Joining existing voice session (${data.active.participant_count} participants)`);
+          joinAvSession(channel, data.active.id);
+          store.setAvAudioActive(true);
+          return;
+        }
       }
+    } catch (e) {
+      console.warn('[av] Failed to check existing sessions:', e);
     }
-  } catch (e) {
-    console.warn('[av] Failed to check existing sessions:', e);
-  }
 
-  store.addSystemMessage(channel, 'Starting voice session...');
-  pendingAvStart = { channel, did: store.authDid };
-  currentAvInstance = generateAvInstanceId();
-  const tags: Record<string, string> = {
-    '+freeq.at/av-start': '',
-    '+freeq.at/av-instance': currentAvInstance,
-  };
-  if (title) tags['+freeq.at/av-title'] = title;
-  client?.raw(format('TAGMSG', [channel], tags));
-  store.setAvAudioActive(true);
+    store.addSystemMessage(channel, 'Starting voice session...');
+    pendingAvStart = { channel, did: store.authDid };
+    currentAvInstance = generateAvInstanceId();
+    const tags: Record<string, string> = {
+      '+freeq.at/av-start': '',
+      '+freeq.at/av-instance': currentAvInstance,
+    };
+    if (title) tags['+freeq.at/av-title'] = title;
+    client?.raw(format('TAGMSG', [channel], tags));
+    store.setAvAudioActive(true);
+  } finally {
+    _startInFlight.delete(key);
+  }
 }
 
 export function joinAvSession(channel: string, sessionId?: string) {

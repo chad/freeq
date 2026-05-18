@@ -1845,6 +1845,21 @@ fn handle_av_tagmsg(
 
                     drop(mgr);
 
+                    // Record this instance against the IRC connection. Without
+                    // this, av-start-only clients (the iOS path doesn't send
+                    // a separate av-join after creating the session) leave
+                    // av_instances_per_conn empty, and the disconnect handler
+                    // falls into the legacy whole-DID cleanup which ends the
+                    // session on every minor reconnect blip.
+                    if let Some(inst) = instance_id {
+                        state
+                            .av_instances_per_conn
+                            .lock()
+                            .entry(conn.id.clone())
+                            .or_default()
+                            .insert(inst.to_string());
+                    }
+
                     // Broadcast session start to channel
                     let title_display = title.unwrap_or("voice session");
                     broadcast_av_state(state, target, &session_id, "started", &nick, participant_count, title_display);
