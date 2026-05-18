@@ -27,15 +27,12 @@ export function CallPanel() {
   const channel = session?.channel;
 
   const publishContainerRef = useRef<HTMLDivElement>(null);
-  const watchContainerRef = useRef<HTMLDivElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const publishElRef = useRef<HTMLElement | null>(null);
-  const watchersRef = useRef<Map<string, HTMLElement>>(new Map());
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const retryCountRef = useRef<Map<string, number>>(new Map());
   const localStreamRef = useRef<MediaStream | null>(null);
 
-  const [participants, setParticipants] = useState<string[]>([]);
+  const [participantSlots, setParticipantSlots] = useState<Slot[]>([]);
 
   const myNick = getNick();
   const moqOrigin = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/av/moq`;
@@ -169,7 +166,6 @@ export function CallPanel() {
       // different instance_id — and we have to subscribe to each path
       // independently. The watcher map is keyed by the full broadcast key
       // so the per-slot lifecycle works.
-      type Slot = { nick: string; broadcastKey: string; broadcastName: string };
       const slots: Slot[] = data.participants
         .filter((p: { nick: string; instance_id?: string | null }) => {
           // Skip *our own* slot (matching nick AND matching instance_id).
@@ -187,59 +183,22 @@ export function CallPanel() {
           return { nick: p.nick, broadcastKey, broadcastName };
         });
 
-      setParticipants(slots.map((s) => s.nick));
+      console.log(
+        '[call] poll: participants=%o myInstance=%s slots=%o',
+        data.participants,
+        myInstance,
+        slots.map((s) => s.broadcastKey),
+      );
 
-      const container = watchContainerRef.current;
-      if (!container) return;
-
-      const liveKeys = new Set(slots.map((s) => s.broadcastKey));
-
-      for (const slot of slots) {
-        if (watchersRef.current.has(slot.broadcastKey)) continue;
-
-        const retries = retryCountRef.current.get(slot.broadcastKey) || 0;
-        if (retries > 0) {
-          const skipCycles = Math.min(retries, 3);
-          retryCountRef.current.set(slot.broadcastKey, retries - skipCycles);
-          if (retries > skipCycles) continue;
-        }
-
-        console.log('[call] Subscribing to:', slot.broadcastName);
-
-        const watchEl = document.createElement('moq-watch');
-        const canvas = document.createElement('canvas');
-        canvas.className = 'w-full h-full object-cover rounded-lg';
-        watchEl.appendChild(canvas);
-        container.appendChild(watchEl);
-
-        watchEl.setAttribute('jitter', '100');
-        watchEl.setAttribute('url', moqOrigin);
-        watchEl.setAttribute('name', slot.broadcastName);
-
-        const key = slot.broadcastKey;
-        watchEl.addEventListener('error', () => {
-          console.log('[call] Watch error for', key, '— will retry');
-          watchersRef.current.delete(key);
-          const count = retryCountRef.current.get(key) || 0;
-          retryCountRef.current.set(key, Math.min(count + 1, 4));
-          watchEl.setAttribute('url', '');
-          watchEl.remove();
-        });
-
-        watchersRef.current.set(key, watchEl);
-        setTimeout(() => {
-          if (watchersRef.current.has(key)) retryCountRef.current.delete(key);
-        }, 10000);
-      }
-
-      for (const [key, el] of watchersRef.current) {
-        if (!liveKeys.has(key)) {
-          el.setAttribute('url', '');
-          el.remove();
-          watchersRef.current.delete(key);
-          retryCountRef.current.delete(key);
-        }
-      }
+      // Replace the slot list in state. The actual moq-watch element for
+      // each slot is mounted inside its tile by RemoteTile via a ref
+      // callback — no more invisible container.
+      setParticipantSlots((prev) => {
+        const sameLen = prev.length === slots.length;
+        const sameKeys =
+          sameLen && prev.every((p, i) => p.broadcastKey === slots[i].broadcastKey);
+        return sameKeys ? prev : slots;
+      });
     } catch (e) {
       console.warn('[call] Poll failed:', e);
     }
@@ -259,17 +218,11 @@ export function CallPanel() {
       pub.remove();
       publishElRef.current = null;
     }
-    for (const [, el] of watchersRef.current) {
-      el.setAttribute('url', '');
-      el.remove();
-    }
-    watchersRef.current.clear();
-    retryCountRef.current.clear();
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
     }
-    setParticipants([]);
+    setParticipantSlots([]);
   }
 
   const handleMuteToggle = () => useStore.getState().setAvMuted(!avMuted);
@@ -284,7 +237,7 @@ export function CallPanel() {
   if (!avAudioActive || !sessionId) return null;
 
   const participantCount = (session?.participants.size || 0);
-  const showVideoGrid = avCameraOn || participants.length > 0;
+  const showVideoGrid = avCameraOn || participantSlots.length > 0;
   const authDid = useStore.getState().authDid;
   const myAvatar = authDid ? getCachedProfile(authDid)?.avatar : null;
 
@@ -312,15 +265,12 @@ export function CallPanel() {
             </span>
           </div>
 
-          {/* Remote tiles */}
-          {participants.map((nick) => (
-            <div key={nick} className="relative w-32 h-24 rounded-lg overflow-hidden bg-bg-tertiary flex-shrink-0">
-              {/* The moq-watch canvas renders here if video is available */}
-              <AvatarTile name={nick} />
-              <span className="absolute bottom-1 left-1 text-[10px] bg-black/60 text-white px-1 rounded">
-                {nick}
-              </span>
-            </div>
+          {/* Remote tiles — one moq-watch per participant slot, mounted
+              inside its own visible container (was previously rendered
+              into a hidden div, so video subscriptions worked but never
+              reached the screen). */}
+          {participantSlots.map((slot) => (
+            <RemoteTile key={slot.broadcastKey} slot={slot} moqOrigin={moqOrigin} />
           ))}
         </div>
       )}
@@ -372,12 +322,54 @@ export function CallPanel() {
 
       {/* Hidden containers for moq elements */}
       <div ref={publishContainerRef} className="hidden" />
-      <div ref={watchContainerRef} className="hidden" />
     </div>
   );
 }
 
 /** Shows avatar or initials when camera is off */
+type Slot = { nick: string; broadcastKey: string; broadcastName: string };
+
+/// Remote participant tile that mounts its own `<moq-watch>` element so
+/// video actually appears on the screen. The avatar sits underneath
+/// as a fallback when the participant hasn't enabled their camera.
+function RemoteTile({ slot, moqOrigin }: { slot: Slot; moqOrigin: string }) {
+  const mountRef = useRef<HTMLDivElement>(null);
+  const profile = getCachedProfile(slot.nick);
+
+  useEffect(() => {
+    const mount = mountRef.current;
+    if (!mount) return;
+    const watchEl = document.createElement('moq-watch');
+    const canvas = document.createElement('canvas');
+    canvas.className = 'absolute inset-0 w-full h-full object-cover';
+    watchEl.appendChild(canvas);
+    watchEl.style.position = 'absolute';
+    watchEl.style.inset = '0';
+    watchEl.style.width = '100%';
+    watchEl.style.height = '100%';
+    watchEl.setAttribute('jitter', '100');
+    watchEl.setAttribute('url', moqOrigin);
+    watchEl.setAttribute('name', slot.broadcastName);
+    mount.appendChild(watchEl);
+    console.log('[call] Subscribing to:', slot.broadcastName);
+
+    return () => {
+      watchEl.setAttribute('url', '');
+      watchEl.remove();
+    };
+  }, [slot.broadcastName, moqOrigin]);
+
+  return (
+    <div className="relative w-32 h-24 rounded-lg overflow-hidden bg-bg-tertiary flex-shrink-0">
+      <AvatarTile name={slot.nick} avatarUrl={profile?.avatar} />
+      <div ref={mountRef} className="absolute inset-0" />
+      <span className="absolute bottom-1 left-1 text-[10px] bg-black/60 text-white px-1 rounded z-10">
+        {slot.nick}
+      </span>
+    </div>
+  );
+}
+
 function AvatarTile({ name, avatarUrl }: { name: string; avatarUrl?: string | null }) {
   const initials = name.slice(0, 2).toUpperCase();
   return (
