@@ -29,6 +29,23 @@ export function getClient(): FreeqClient | null {
   return client;
 }
 
+/**
+ * Test-only seam. Lets unit tests inject a stub FreeqClient (typically
+ * something that only implements `raw`/`nick`) so they can assert on the
+ * raw IRC lines our AV functions send without bringing up a real SDK.
+ *
+ * Never call this from production code.
+ */
+export function __setClientForTests(c: FreeqClient | null): void {
+  client = c;
+}
+
+/** Test-only: reset the per-call instance suffix so tests can start fresh. */
+export function __resetAvInstanceForTests(): void {
+  currentAvInstance = null;
+  pendingAvStart = null;
+}
+
 // ── Public API (same signatures as before) ──
 
 export function connect(url: string, desiredNick: string, channels?: string[]) {
@@ -257,6 +274,11 @@ export async function startAvSession(channel: string, title?: string) {
     store.addSystemMessage(channel, 'Cannot start voice session: not connected to server.');
     return;
   }
+  // Guard against double-starts. The button is supposed to be hidden while
+  // a call is active, but rapid clicks / programmatic callers shouldn't
+  // generate duplicate `av-start` TAGMSGs (which create competing sessions
+  // on the server).
+  if (store.avAudioActive) return;
 
   try {
     const resp = await fetch(`/api/v1/channels/${encodeURIComponent(channel)}/sessions`);
@@ -286,15 +308,18 @@ export async function startAvSession(channel: string, title?: string) {
 }
 
 export function joinAvSession(channel: string, sessionId?: string) {
+  // Without a sessionId there's no way for the server to route the join,
+  // so don't send a half-formed TAGMSG that just looks like noise. Callers
+  // that don't know the session ID yet should call `startAvSession`
+  // (which discovers and joins as appropriate).
+  if (!sessionId) return;
   if (!currentAvInstance) currentAvInstance = generateAvInstanceId();
   const tags: Record<string, string> = {
     '+freeq.at/av-join': '',
     '+freeq.at/av-instance': currentAvInstance,
+    '+freeq.at/av-id': sessionId,
   };
-  if (sessionId) {
-    tags['+freeq.at/av-id'] = sessionId;
-    useStore.getState().setActiveAvSession(sessionId);
-  }
+  useStore.getState().setActiveAvSession(sessionId);
   client?.raw(format('TAGMSG', [channel], tags));
 }
 
@@ -336,6 +361,16 @@ export function sendAvSignal(targetNick: string, data: string) {
 }
 
 // ── Event wiring: SDK events → Zustand store ──
+
+/**
+ * Test-only export of the event wiring. Production callers should
+ * use {@link connect}, which wires events as part of bringing up the
+ * real SDK client. Tests use this to drive synthetic events through
+ * a stub `FreeqClient` and assert on the resulting store state.
+ */
+export function __wireEventsForTests(c: FreeqClient): void {
+  wireEvents(c);
+}
 
 function wireEvents(c: FreeqClient) {
   const s = () => useStore.getState();
@@ -537,9 +572,27 @@ function wireEvents(c: FreeqClient) {
       s().setActiveAvSession(sess.id);
       pendingAvStart = null;
     }
+    // When the session we're currently in ends (anyone ran `/av end`, or
+    // the host disconnected and the server reaped it), tear the panel
+    // down on our side too. Without this the leaver hears nothing but
+    // the remaining device still shows an "active call" UI.
+    if (sess.state === 'ended' && s().activeAvSession === sess.id) {
+      s().setAvAudioActive(false);
+      s().setAvCameraOn(false);
+      s().setActiveAvSession(null);
+      currentAvInstance = null;
+    }
   });
 
   c.on('avSessionRemoved', (id) => {
+    // If the SDK reaped a session we were still in (e.g. ended before we
+    // saw the `state: 'ended'` update), close the panel as a safety net.
+    if (s().activeAvSession === id) {
+      s().setAvAudioActive(false);
+      s().setAvCameraOn(false);
+      s().setActiveAvSession(null);
+      currentAvInstance = null;
+    }
     s().removeAvSession(id);
   });
 
