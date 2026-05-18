@@ -752,6 +752,15 @@ pub struct GhostSession {
     pub cancel: tokio::sync::oneshot::Sender<()>,
 }
 
+/// Result of [`SharedState::bind_identity`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindOutcome {
+    /// Binding applied (in-memory + persisted).
+    Bound,
+    /// Nick is already owned by a different DID; nothing was changed.
+    ConflictOwnedByOther { owner_did: String },
+}
+
 impl SharedState {
     /// Run a closure with the database, if persistence is enabled.
     /// Logs errors but does not propagate them — persistence failures
@@ -770,6 +779,74 @@ impl SharedState {
                 }
             }
         })
+    }
+
+    /// Bind a DID to a nick: the single authority for updating the
+    /// in-memory `did_nicks`/`nick_owners` maps AND persisting the
+    /// durable `identities` row. Replaces ad-hoc inserts at SASL
+    /// success / LOGIN / rename so all three stay consistent.
+    ///
+    /// Ownership-preserving: if `nick` is already owned by a *different*
+    /// DID, the bind is refused — neither the in-memory maps nor the DB
+    /// are touched (the caller is expected to force-rename the session,
+    /// as registration already does). This closes the hole where a nick
+    /// claimed during the CAP/SASL negotiation window silently hijacked
+    /// in-memory ownership even though the DB `UNIQUE(nick)` rejected it.
+    pub fn bind_identity(&self, did: &str, nick: &str) -> BindOutcome {
+        let nick_lower = nick.to_lowercase();
+        {
+            let owners = self.nick_owners.lock();
+            if let Some(existing) = owners.get(&nick_lower) {
+                if existing != did {
+                    return BindOutcome::ConflictOwnedByOther {
+                        owner_did: existing.clone(),
+                    };
+                }
+            }
+        }
+        self.did_nicks
+            .lock()
+            .insert(did.to_string(), nick_lower.clone());
+        self.nick_owners
+            .lock()
+            .insert(nick_lower.clone(), did.to_string());
+        // Persist durably. with_db logs on error; we additionally surface
+        // a warning so a swallowed UNIQUE(nick) (shouldn't happen now the
+        // in-memory gate above runs first) is not silent.
+        if self
+            .with_db(|db| db.save_identity(did, &nick_lower))
+            .is_none()
+            && self.db.is_some()
+        {
+            tracing::warn!(%did, nick = %nick_lower, "bind_identity: save_identity did not persist");
+        }
+        BindOutcome::Bound
+    }
+
+    /// Resolve a DID to a display nick for UI surfaces (CHATHISTORY
+    /// TARGETS, etc.). Chain: in-memory `did_nicks` → live session
+    /// (`session_dids` reverse + `nick_to_session`) → persistent
+    /// `identities` table → raw DID as last resort.
+    pub fn display_nick_for_did(&self, did: &str) -> String {
+        if let Some(n) = self.did_nicks.lock().get(did).cloned() {
+            return n;
+        }
+        // Live session: find a session whose DID matches, then its nick.
+        let sid = self
+            .session_dids
+            .lock()
+            .iter()
+            .find(|(_, d)| d.as_str() == did)
+            .map(|(sid, _)| sid.clone());
+        if let Some(sid) = sid {
+            if let Some(n) = self.nick_to_session.lock().get_nick(&sid) {
+                return n.to_string();
+            }
+        }
+        if let Some(row) = self.with_db(|db| db.get_identity_by_did(did)).flatten() {
+            return row.nick;
+        }
+        did.to_string()
     }
 
     // ── CRDT operations ────────────────────────────────────────────
@@ -4760,6 +4837,42 @@ mod s2s_adversarial_tests {
         ).await.expect("timeout waiting for DM").expect("channel closed");
         assert!(msg.contains("hey bob, private msg"), "Bob should receive DM text, got: {msg}");
         assert!(msg.contains("PRIVMSG bob"), "Should be addressed to bob, got: {msg}");
+    }
+
+    #[test]
+    fn bind_identity_binds_then_updates_same_did() {
+        let state = test_state();
+        assert_eq!(state.bind_identity("did:key:A", "Alice"), BindOutcome::Bound);
+        assert_eq!(state.did_nicks.lock().get("did:key:A").map(String::as_str), Some("alice"));
+        assert_eq!(state.nick_owners.lock().get("alice").map(String::as_str), Some("did:key:A"));
+        // Same DID renames → updates both maps.
+        assert_eq!(state.bind_identity("did:key:A", "alice2"), BindOutcome::Bound);
+        assert_eq!(state.did_nicks.lock().get("did:key:A").map(String::as_str), Some("alice2"));
+        assert_eq!(state.nick_owners.lock().get("alice2").map(String::as_str), Some("did:key:A"));
+    }
+
+    #[test]
+    fn bind_identity_refuses_nick_owned_by_other_did() {
+        let state = test_state();
+        assert_eq!(state.bind_identity("did:key:A", "alice"), BindOutcome::Bound);
+        // A different DID claiming alice → refused, maps untouched.
+        let r = state.bind_identity("did:key:B", "alice");
+        assert_eq!(r, BindOutcome::ConflictOwnedByOther { owner_did: "did:key:A".to_string() });
+        assert_eq!(state.nick_owners.lock().get("alice").map(String::as_str), Some("did:key:A"));
+        assert!(state.did_nicks.lock().get("did:key:B").is_none());
+    }
+
+    #[test]
+    fn display_nick_for_did_chain_falls_back_to_raw() {
+        let state = test_state();
+        // did_nicks hit
+        state.bind_identity("did:key:A", "alice");
+        assert_eq!(state.display_nick_for_did("did:key:A"), "alice");
+        // unknown DID, no session, no db → raw DID
+        assert_eq!(
+            state.display_nick_for_did("did:key:UNKNOWN"),
+            "did:key:UNKNOWN"
+        );
     }
 
 }

@@ -215,24 +215,33 @@ pub(super) async fn handle_authenticate(
                             // If no existing sessions, this just registers the nick normally.
                             super::registration::attach_same_did(conn, state, session_id, send);
 
-                            // Bind nick to DID (persistent identity-nick)
+                            // Bind nick to DID (in-memory + persistent),
+                            // ownership-preserving. A nick stashed during the
+                            // CAP/SASL negotiation window may be owned by a
+                            // different DID; bind_identity refuses that case
+                            // so the in-memory maps + DB stay consistent and
+                            // the existing registration force-rename handles
+                            // the session.
                             if let Some(ref nick) = conn.nick {
-                                let nick_lower = nick.to_lowercase();
-                                state
-                                    .did_nicks
-                                    .lock()
-                                    .insert(did.clone(), nick_lower.clone());
-                                state
-                                    .nick_owners
-                                    .lock()
-                                    .insert(nick_lower.clone(), did.clone());
-                                let nick_l = nick_lower.clone();
-                                let did_c = did.clone();
-                                let state_c = Arc::clone(state);
-                                tokio::spawn(async move {
-                                    state_c.crdt_set_nick_owner(&nick_l, &did_c).await;
-                                });
-                                state.with_db(|db| db.save_identity(&did, &nick.to_lowercase()));
+                                match state.bind_identity(&did, nick) {
+                                    crate::server::BindOutcome::Bound => {
+                                        let nick_l = nick.to_lowercase();
+                                        let did_c = did.clone();
+                                        let state_c = Arc::clone(state);
+                                        tokio::spawn(async move {
+                                            state_c.crdt_set_nick_owner(&nick_l, &did_c).await;
+                                        });
+                                    }
+                                    crate::server::BindOutcome::ConflictOwnedByOther {
+                                        owner_did,
+                                    } => {
+                                        tracing::warn!(
+                                            %session_id, %did, nick = %nick,
+                                            %owner_did,
+                                            "SASL bind refused: nick owned by another DID (will be force-renamed at registration)"
+                                        );
+                                    }
+                                }
                             }
 
                             // Resolve handle from DID document for WHOIS display,
