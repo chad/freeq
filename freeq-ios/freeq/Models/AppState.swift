@@ -378,7 +378,12 @@ class AppState: ObservableObject {
         // which would block the AV path.
         Self.activateVoiceCallSession()
 
-        let instance = Self.generateAvInstanceId()
+        // Reuse the instance generated at av-start if we have one (so the
+        // server-side instance recorded for the av-start TAGMSG, the FreeqAv
+        // broadcast path, and the av-join TAGMSG all match). Otherwise mint
+        // a fresh one — that's the path taken when we're joining a session
+        // someone else already started.
+        let instance = currentAvInstance ?? Self.generateAvInstanceId()
         currentAvInstance = instance
 
         do {
@@ -599,12 +604,49 @@ class AppState: ObservableObject {
             return
         }
 
-        pendingAvStart.insert(channel.lowercased())
+        // The TAGMSG broadcast that announces an active session may have
+        // been missed (channel joined after the call started, app restart,
+        // brief disconnect). Hit the REST endpoint to learn whether one's
+        // already running — same pattern as the web client. If we don't do
+        // this, blindly sending av-start gets rejected with "channel busy"
+        // and the user is stuck with the speaker icon doing nothing.
+        Task { await self.discoverAndJoinOrStart(channel: channel) }
+    }
+
+    private func discoverAndJoinOrStart(channel: String) async {
+        let encoded = channel.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed) ?? channel
+        let url = URL(string: "\(ServerConfig.apiBaseUrl)/api/v1/channels/\(encoded)/sessions")
+        if let url {
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 4
+            if let (data, _) = try? await URLSession.shared.data(for: req),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let active = json["active"] as? [String: Any],
+               let state = active["state"] as? String,
+               state == "Active",
+               let sessionId = active["id"] as? String {
+                await MainActor.run {
+                    self.activeAvSessions[channel.lowercased()] = sessionId
+                    self.startCall(channel: channel, sessionId: sessionId)
+                }
+                return
+            }
+        }
+        // No active session — start a new one. Generate the per-device
+        // instance now so the server can record it on the av-start TAGMSG.
+        let instance = Self.generateAvInstanceId()
+        await MainActor.run {
+            self.currentAvInstance = instance
+            self.pendingAvStart.insert(channel.lowercased())
+        }
         do {
-            try client?.sendRaw(line: "@+freeq.at/av-start TAGMSG \(channel)")
+            try client?.sendRaw(line: "@+freeq.at/av-start;+freeq.at/av-instance=\(instance) TAGMSG \(channel)")
         } catch {
             print("[av] Failed to send av-start: \(error)")
-            pendingAvStart.remove(channel.lowercased())
+            await MainActor.run {
+                self.currentAvInstance = nil
+                self.pendingAvStart.remove(channel.lowercased())
+            }
         }
     }
 
