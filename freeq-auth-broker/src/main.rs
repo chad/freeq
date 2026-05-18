@@ -148,10 +148,23 @@ struct DidService {
     service_endpoint: String,
 }
 
+/// Hard-bounded client for every upstream call the broker makes during
+/// `/auth/login`. Default reqwest waits forever; if bsky.social or a
+/// user's `.well-known` server is slow we'd accumulate stuck requests
+/// until the platform's gateway times out — and meanwhile the user
+/// stares at a spinner with no actionable error.
+fn upstream_client() -> Result<reqwest::Client, anyhow::Error> {
+    Ok(reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .connect_timeout(std::time::Duration::from_secs(4))
+        .build()?)
+}
+
 async fn resolve_handle(handle: &str) -> Result<String, anyhow::Error> {
+    let client = upstream_client()?;
     // Try HTTPS well-known first
     let url = format!("https://{handle}/.well-known/atproto-did");
-    if let Ok(resp) = reqwest::get(&url).await
+    if let Ok(resp) = client.get(&url).send().await
         && resp.status().is_success()
     {
         let did = resp.text().await?.trim().to_string();
@@ -165,7 +178,7 @@ async fn resolve_handle(handle: &str) -> Result<String, anyhow::Error> {
         "https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle={}",
         handle
     );
-    let json: serde_json::Value = reqwest::get(&api_url).await?.json().await?;
+    let json: serde_json::Value = client.get(&api_url).send().await?.json().await?;
     let did = json["did"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("No DID in response"))?;
@@ -173,9 +186,10 @@ async fn resolve_handle(handle: &str) -> Result<String, anyhow::Error> {
 }
 
 async fn resolve_did(did: &str) -> Result<DidDocument, anyhow::Error> {
+    let client = upstream_client()?;
     if did.starts_with("did:plc:") {
         let url = format!("https://plc.directory/{did}");
-        let doc: DidDocument = reqwest::get(&url).await?.json().await?;
+        let doc: DidDocument = client.get(&url).send().await?.json().await?;
         return Ok(doc);
     }
     if did.starts_with("did:web:") {
@@ -186,7 +200,7 @@ async fn resolve_did(did: &str) -> Result<DidDocument, anyhow::Error> {
         let host = domain.split('/').next().unwrap_or(&domain);
         reject_private_host(host).await?;
 
-        let doc: DidDocument = reqwest::get(&url).await?.json().await?;
+        let doc: DidDocument = client.get(&url).send().await?.json().await?;
         return Ok(doc);
     }
     Err(anyhow::anyhow!("Unsupported DID method"))
@@ -473,7 +487,10 @@ async fn auth_login(
         )
     })?;
 
-    let client = reqwest::Client::new();
+    let client = upstream_client().map_err(|e| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        format!("upstream client init: {e}"),
+    ))?;
     let pr_url = format!(
         "{}/.well-known/oauth-protected-resource",
         pds_url.trim_end_matches('/')
