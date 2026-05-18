@@ -804,6 +804,19 @@ impl SharedState {
                 }
             }
         }
+        // If this DID previously held a different nick, drop the stale
+        // nick_owners entry so it isn't orphaned. (Without this, the old
+        // nick stayed owned in memory and diverged from the durable
+        // table until a restart reloaded it.)
+        let prev_nick = self.did_nicks.lock().get(did).cloned();
+        if let Some(prev) = prev_nick {
+            if prev != nick_lower {
+                let mut owners = self.nick_owners.lock();
+                if owners.get(&prev).is_some_and(|d| d == did) {
+                    owners.remove(&prev);
+                }
+            }
+        }
         self.did_nicks
             .lock()
             .insert(did.to_string(), nick_lower.clone());
@@ -4849,6 +4862,20 @@ mod s2s_adversarial_tests {
         assert_eq!(state.bind_identity("did:key:A", "alice2"), BindOutcome::Bound);
         assert_eq!(state.did_nicks.lock().get("did:key:A").map(String::as_str), Some("alice2"));
         assert_eq!(state.nick_owners.lock().get("alice2").map(String::as_str), Some("did:key:A"));
+    }
+
+    #[test]
+    fn rename_drops_stale_nick_owners_entry() {
+        let state = test_state();
+        assert_eq!(state.bind_identity("did:key:A", "foo"), BindOutcome::Bound);
+        assert_eq!(state.bind_identity("did:key:A", "bar"), BindOutcome::Bound);
+        // Old nick must not stay owned (it lingered before the fix,
+        // diverging from the durable table until a restart).
+        assert!(state.nick_owners.lock().get("foo").is_none());
+        assert_eq!(state.nick_owners.lock().get("bar").map(String::as_str), Some("did:key:A"));
+        assert_eq!(state.did_nicks.lock().get("did:key:A").map(String::as_str), Some("bar"));
+        // The freed nick is immediately claimable by a different DID.
+        assert_eq!(state.bind_identity("did:key:B", "foo"), BindOutcome::Bound);
     }
 
     #[test]
