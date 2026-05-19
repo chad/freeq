@@ -138,7 +138,12 @@ export function ConnectScreen() {
   });
   const [brokerOrigin] = useState(() => {
     const stored = localStorage.getItem(LS_BROKER_BASE);
-    if (stored) return stored;
+    // Discard a stored value that equals the web origin: that means an earlier
+    // session ran in single-server mode (no external broker). The broker
+    // session refresh effect below short-circuits when brokerOrigin equals
+    // webOrigin, so trusting that stored value would defeat persistent login
+    // for users who once ran without a broker and later moved to one.
+    if (stored && stored !== webOrigin) return stored;
     if (isTauri) return 'https://auth.freeq.at';
     const host = window.location.host;
     if (host === 'irc.freeq.at') return 'https://auth.freeq.at';
