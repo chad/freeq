@@ -90,6 +90,10 @@ pub(super) fn handle_login(
 pub struct LoginCompletion {
     pub did: String,
     pub handle: String,
+    /// Set when the bind collided and the session was assigned a
+    /// deterministic derived nick; the connection loop applies it to
+    /// `conn.nick`.
+    pub renamed_nick: Option<String>,
 }
 
 /// Called from the OAuth callback when `irc_state` is present.
@@ -120,27 +124,49 @@ pub fn complete_irc_login(
         .map(|s| s.to_string())
         .unwrap_or_else(|| "*".to_string());
 
-    // Bind nick to DID
+    // Durably bind the nick to this DID. On collision with a different
+    // DID, bind_identity_with_fallback assigns a deterministic derived
+    // nick (persisted, resolves offline) instead of the previous
+    // in-memory-only overwrite that silently hijacked the nick and was
+    // lost on restart.
     let nick_lower = nick.to_lowercase();
-    state
-        .did_nicks
-        .lock()
-        .insert(did.to_string(), nick_lower.clone());
-    state
-        .nick_owners
-        .lock()
-        .insert(nick_lower, did.to_string());
+    let assigned = state.bind_identity_with_fallback(did, &nick_lower);
+    let renamed = assigned != nick_lower;
+
+    let cloak = super::helpers::cloaked_host_for_did(Some(did));
+    if renamed {
+        // Move the session server-side and tell the client. They are
+        // NOT asked to "authenticate" — they just did; the requested
+        // nick simply belongs to another identity.
+        state.nick_to_session.lock().remove_by_nick(&nick);
+        state.nick_to_session.lock().insert(&assigned, session_id);
+        let nick_line = format!(":{nick}!~u@{cloak} NICK {assigned}\r\n");
+        let renamed_notice = Message::from_server(
+            server_name,
+            "NOTICE",
+            vec![
+                &assigned,
+                &format!(
+                    "{nick} is registered to another identity. You are {assigned} (tied to your account)."
+                ),
+            ],
+        );
+        if let Some(tx) = state.connections.lock().get(session_id) {
+            let _ = tx.try_send(nick_line);
+            let _ = tx.try_send(format!("{renamed_notice}\r\n"));
+        }
+    }
 
     // Send success notices to the IRC connection
     let success = Message::from_server(
         server_name,
         irc::RPL_SASLSUCCESS,
-        vec![&nick, "SASL authentication successful"],
+        vec![&assigned, "SASL authentication successful"],
     );
     let account_notice = Message::from_server(
         server_name,
         "NOTICE",
-        vec![&nick, &format!("You are now authenticated as {did} (@{handle})")],
+        vec![&assigned, &format!("You are now authenticated as {did} (@{handle})")],
     );
 
     if let Some(tx) = state.connections.lock().get(session_id) {
@@ -148,19 +174,20 @@ pub fn complete_irc_login(
         let _ = tx.try_send(format!("{account_notice}\r\n"));
     }
 
-    // Store the completion so the connection loop can update conn.authenticated_did
+    // Store the completion so the connection loop can update
+    // conn.authenticated_did (and conn.nick if we renamed).
     state
         .login_completions
         .lock()
         .insert(session_id.to_string(), LoginCompletion {
             did: did.to_string(),
             handle: handle.to_string(),
+            renamed_nick: if renamed { Some(assigned.clone()) } else { None },
         });
 
     // Broadcast account-notify to channels
     {
-        let cloak = super::helpers::cloaked_host_for_did(Some(did));
-        let hostmask = format!("{nick}!~u@{cloak}");
+        let hostmask = format!("{assigned}!~u@{cloak}");
         let account_line = format!(":{hostmask} ACCOUNT {did}\r\n");
         let channels = state.channels.lock();
         let account_caps = state.cap_account_notify.lock();
@@ -191,7 +218,7 @@ pub fn complete_irc_login(
             if should_op && !ch.ops.contains(session_id) {
                 ch.ops.insert(session_id.to_string());
                 // Broadcast MODE +o
-                let mode_line = format!(":{} MODE {} +o {}\r\n", server_name, ch_name, nick);
+                let mode_line = format!(":{} MODE {} +o {}\r\n", server_name, ch_name, assigned);
                 for member_sid in &ch.members {
                     if let Some(tx) = conns.get(member_sid) {
                         let _ = tx.try_send(mode_line.clone());
@@ -201,5 +228,5 @@ pub fn complete_irc_login(
         }
     }
 
-    tracing::info!(nick = %nick, did = %did, handle = %handle, session = %session_id, "LOGIN completed via browser OAuth");
+    tracing::info!(nick = %assigned, did = %did, handle = %handle, session = %session_id, "LOGIN completed via browser OAuth");
 }

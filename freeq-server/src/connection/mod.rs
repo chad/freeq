@@ -519,6 +519,11 @@ where
         if conn.authenticated_did.is_none() {
             if let Some(completion) = state.login_completions.lock().remove(&session_id) {
                 conn.authenticated_did = Some(completion.did.clone());
+                // complete_irc_login may have assigned a derived nick on
+                // collision; apply it to the connection.
+                if let Some(rn) = completion.renamed_nick {
+                    conn.nick = Some(rn);
+                }
                 // Trigger auto-op etc. in channels (already handled by complete_irc_login)
             }
         }

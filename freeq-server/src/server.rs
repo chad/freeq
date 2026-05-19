@@ -4975,6 +4975,47 @@ mod s2s_adversarial_tests {
         assert_eq!(state.display_nick_for_did(did_b), assigned);
     }
 
+    /// LOGIN/OAuth completion now durably persists the binding and, on
+    /// a nick collision, assigns a deterministic derived nick (same as
+    /// the SASL/registration path) instead of an in-memory-only
+    /// overwrite lost on restart.
+    #[test]
+    fn login_completion_persists_and_derives_on_collision() {
+        use crate::connection::login::complete_irc_login;
+        let state = test_state_with_db();
+        let owner = "did:key:zOWNEROWNEROWNER";
+        let did_b = "did:key:zLOGINBBBBBBBBBB";
+
+        assert_eq!(state.bind_identity(owner, "foo"), BindOutcome::Bound);
+        state.nick_to_session.lock().insert("foo", "sess1");
+
+        complete_irc_login(&state, "sess1", did_b, "bob.test");
+
+        let assigned = state
+            .did_nicks
+            .lock()
+            .get(did_b)
+            .cloned()
+            .expect("did_b durably bound");
+        assert_ne!(assigned, "foo");
+        assert!(assigned.starts_with("foo-"), "got {assigned}");
+
+        // Rename propagated to the connection loop.
+        let comp = state
+            .login_completions
+            .lock()
+            .get("sess1")
+            .cloned()
+            .expect("completion stored");
+        assert_eq!(comp.renamed_nick.as_deref(), Some(assigned.as_str()));
+
+        // Both resolve offline (wipe in-memory; identities table answers).
+        state.did_nicks.lock().clear();
+        state.nick_owners.lock().clear();
+        assert_eq!(state.display_nick_for_did(did_b), assigned);
+        assert_eq!(state.display_nick_for_did(owner), "foo");
+    }
+
     #[test]
     fn bind_identity_refuses_nick_owned_by_other_did() {
         let state = test_state();
