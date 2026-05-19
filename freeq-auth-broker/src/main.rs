@@ -165,8 +165,20 @@ struct DidService {
 /// irrelevant.
 fn upstream_client() -> Result<reqwest::Client, anyhow::Error> {
     Ok(reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .connect_timeout(std::time::Duration::from_secs(6))
+        // 30s overall. Individual calls to bsky.social are normally
+        // fast (~600ms from a healthy network) but Miren's egress can
+        // be slow, so we keep headroom.
+        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(8))
+        // Miren's egress can't reliably open a SECOND TCP connection
+        // to bsky.social inside the same login flow — the connect
+        // phase consistently `TimedOut`. Reusing the first connection
+        // via HTTP/2 multiplexing avoids opening a second TCP socket
+        // at all. We explicitly enable keep-alive idle pooling so the
+        // second POST piggybacks on the open connection from the first.
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .pool_max_idle_per_host(32)
+        .tcp_keepalive(std::time::Duration::from_secs(30))
         .build()?)
 }
 
@@ -536,24 +548,28 @@ async fn auth_login(
         "{}/.well-known/oauth-authorization-server",
         auth_server.trim_end_matches('/')
     );
-    let auth_meta: serde_json::Value = client
+    let as_resp = client
         .get(&as_url)
         .send()
         .await
         .map_err(|e| {
             (
                 StatusCode::BAD_GATEWAY,
-                format!("Auth server metadata failed: {e}"),
-            )
-        })?
-        .json()
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_GATEWAY,
-                format!("Auth server metadata parse failed: {e}"),
+                format!("Auth server metadata failed: {e:#?}"),
             )
         })?;
+    let as_status = as_resp.status();
+    let as_body = as_resp.text().await.unwrap_or_default();
+    let auth_meta: serde_json::Value = serde_json::from_str(&as_body).map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            format!(
+                "Auth server metadata parse failed: {e} (status={as_status}, body_len={}, body_preview={:?})",
+                as_body.len(),
+                as_body.chars().take(200).collect::<String>(),
+            ),
+        )
+    })?;
 
     let authorization_endpoint = auth_meta["authorization_endpoint"]
         .as_str()
@@ -644,6 +660,11 @@ async fn auth_login(
                     format!("DPoP retry failed: {e}"),
                 )
             })?;
+        // Reuse the SAME client for the retry. Miren's egress couldn't
+        // open a second TCP connection to bsky.social within 30s, so
+        // we lean on HTTP/2 multiplexing over the first call's still-
+        // open connection. Connection pooling is enabled in
+        // `upstream_client`.
         let resp2 = client
             .post(par_endpoint)
             .header("DPoP", &dpop_proof2)
