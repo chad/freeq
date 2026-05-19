@@ -292,6 +292,18 @@ pub struct DiagnoseDisconnectInput {
     pub account: String,
 }
 
+/// "What is the AV session in this channel actually doing, and does it
+/// match what my client sees?" Returns counts + a divergence flag, with
+/// instance ids and DIDs hashed so the response is safe to share in a
+/// bug report. Anyone with `ChannelMember` rights for the channel can
+/// call it; the caller's own instance ids are quoted in cleartext so
+/// they can self-diagnose; everyone else's are hashed.
+#[derive(Debug, Deserialize)]
+pub struct DiagnoseAvSessionInput {
+    /// Channel name (with or without leading `#`).
+    pub channel: String,
+}
+
 /// "Between this msgid and now, did I miss anything?"
 #[derive(Debug, Deserialize)]
 pub struct ReplayMissedMessagesInput {

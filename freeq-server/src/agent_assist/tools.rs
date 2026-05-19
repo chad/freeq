@@ -1498,6 +1498,261 @@ fn contains_word_boundary(hay: &str, needle: &str) -> bool {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
+/// "Why isn't the call working / why does one device see different
+/// participants than the other?" Returns a privacy-preserving snapshot
+/// of the channel's active AV session and flags divergences between
+/// the three places state lives:
+///
+/// 1. `AvSessionManager` — the participant slot map served via
+///    `/api/v1/sessions/{id}` to clients.
+/// 2. `av_instances_per_conn` — which IRC connection registered which
+///    `av-instance` ids. Used by the disconnect handler to clean only
+///    the dying connection's slots.
+/// 3. `av_bridges` — whether the MoQ↔Room bridge is up for the
+///    session.
+///
+/// If (1) and (2) disagree, that's the "phantom participant / ghost
+/// publisher" class of bug; if (1) and (3) disagree, the session
+/// metadata is stale relative to live media. Both are reported as
+/// distinct findings so a bot or an operator can act on them.
+///
+/// Privacy: DIDs and instance ids are hashed (8-char b64), EXCEPT the
+/// caller's own DID — its instances are quoted in cleartext so the
+/// caller can self-correlate with what their client thinks it has.
+pub fn diagnose_av_session(
+    input: &DiagnoseAvSessionInput,
+    caller: &Caller,
+    state: &Arc<SharedState>,
+) -> FactBundle {
+    use base64::Engine as _;
+    use sha2::Digest;
+
+    let channel = if input.channel.starts_with('#') || input.channel.starts_with('&') {
+        input.channel.clone()
+    } else {
+        format!("#{}", input.channel)
+    };
+    let safe_channel = sanitize_label(&channel);
+    let level = crate::agent_assist::caller::effective_level(caller, state, &channel);
+    if !level.satisfies(DisclosureLevel::ChannelMember) {
+        return permission_denied(
+            "DIAGNOSE_AV_CHANNEL_MEMBER_ONLY",
+            "Only members of the channel may inspect its AV session state.",
+            DisclosureLevel::ChannelMember,
+        );
+    }
+
+    // 8-char URL-safe hash; enough to disambiguate within a session
+    // without leaking identity. We mix in the channel so two sessions
+    // can't be cross-correlated.
+    let hash = |s: &str| -> String {
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(safe_channel.as_bytes());
+        hasher.update(b":");
+        hasher.update(s.as_bytes());
+        let digest = hasher.finalize();
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&digest[..6])
+    };
+
+    let mgr = state.av_sessions.lock();
+    let Some(session) = mgr.active_session_for_channel(&channel) else {
+        return FactBundle {
+            ok: true,
+            code: "NO_ACTIVE_AV_SESSION".into(),
+            summary: format!("No active AV session in `{safe_channel}`."),
+            confidence: Confidence::High,
+            safe_facts: vec![],
+            suggested_fixes: vec![SuggestedFix {
+                summary: "Have someone send +freeq.at/av-start TAGMSG to the channel.".into(),
+                details: None,
+            }],
+            redactions: vec![],
+            followups: vec![],
+            min_disclosure: DisclosureLevel::ChannelMember,
+        };
+    };
+    let session = session.clone();
+    drop(mgr);
+    let session_id = session.id.clone();
+    let safe_session = hash(&session_id);
+
+    // Mgr-side: active slots in the participants map.
+    let mgr_slots: Vec<(String, String, bool)> = session
+        .participants
+        .values()
+        .filter(|p| p.left_at.is_none())
+        .map(|p| {
+            let inst_label = match p.instance_id.as_deref() {
+                Some(i) if caller.is_self(&p.did) => format!("`{}`", sanitize_label(i)),
+                Some(i) => format!("`#{}`", hash(i)),
+                None => "`<no-instance>`".into(),
+            };
+            (
+                hash(&p.did),
+                inst_label,
+                caller.is_self(&p.did),
+            )
+        })
+        .collect();
+
+    // av_instances_per_conn: the set of (did, instance) currently
+    // tracked against a live IRC connection.
+    let conn_slots: Vec<(String, String, bool)> = {
+        let per_conn = state.av_instances_per_conn.lock();
+        let dids = state.session_dids.lock();
+        per_conn
+            .iter()
+            .flat_map(|(sid, set)| {
+                let did = dids.get(sid).cloned().unwrap_or_default();
+                set.iter().map(move |inst| (did.clone(), inst.clone()))
+            })
+            .map(|(did, inst)| {
+                let inst_label = if caller.is_self(&did) {
+                    format!("`{}`", sanitize_label(&inst))
+                } else {
+                    format!("`#{}`", hash(&inst))
+                };
+                (hash(&did), inst_label, caller.is_self(&did))
+            })
+            .collect()
+    };
+
+    #[cfg(feature = "av-native")]
+    let bridge_up = state.av_bridges.lock().contains_key(&session_id);
+    #[cfg(not(feature = "av-native"))]
+    let bridge_up = false;
+
+    let mut safe_facts: Vec<String> = Vec::new();
+    safe_facts.push(format!("Session `#{safe_session}` in `{safe_channel}`."));
+    safe_facts.push(format!(
+        "AvSessionManager active slots: {}.",
+        mgr_slots.len()
+    ));
+    safe_facts.push(format!(
+        "av_instances_per_conn tracked slots: {}.",
+        conn_slots.len()
+    ));
+    safe_facts.push(format!(
+        "MoQ↔Room bridge: {}.",
+        if bridge_up { "up" } else { "down" }
+    ));
+
+    for (i, (did, inst, is_self)) in mgr_slots.iter().enumerate() {
+        safe_facts.push(format!(
+            "mgr[{}] did=`#{}` instance={}{}",
+            i,
+            did,
+            inst,
+            if *is_self { " (you)" } else { "" }
+        ));
+    }
+    for (i, (did, inst, is_self)) in conn_slots.iter().enumerate() {
+        safe_facts.push(format!(
+            "conn[{}] did=`#{}` instance={}{}",
+            i,
+            did,
+            inst,
+            if *is_self { " (you)" } else { "" }
+        ));
+    }
+
+    // ── Divergence detection ─────────────────────────────────────
+    let mut fixes: Vec<SuggestedFix> = Vec::new();
+    let mut code = "AV_SESSION_HEALTHY";
+    let mut ok = true;
+
+    let conn_set: std::collections::HashSet<(String, String)> = conn_slots
+        .iter()
+        .map(|(d, i, _)| (d.clone(), i.clone()))
+        .collect();
+    let mgr_set: std::collections::HashSet<(String, String)> = mgr_slots
+        .iter()
+        .map(|(d, i, _)| (d.clone(), i.clone()))
+        .collect();
+
+    let mgr_without_conn: Vec<_> = mgr_set.difference(&conn_set).collect();
+    let conn_without_mgr: Vec<_> = conn_set.difference(&mgr_set).collect();
+
+    if !mgr_without_conn.is_empty() {
+        ok = false;
+        code = "PHANTOM_MGR_SLOT";
+        safe_facts.push(format!(
+            "DIVERGENCE: {} participant slot(s) appear in AvSessionManager but have no \
+             live IRC connection registered. Their MoQ broadcasts are likely silent.",
+            mgr_without_conn.len()
+        ));
+        fixes.push(SuggestedFix {
+            summary: "Reap orphan slots on the next av-join — already wired, may need a \
+                      kick: have someone fresh av-join the channel."
+                .into(),
+            details: Some(
+                "The orphan reaper runs at av-join time using av_instances_per_conn as \
+                 ground truth."
+                    .into(),
+            ),
+        });
+    }
+    if !conn_without_mgr.is_empty() {
+        ok = false;
+        // Don't overwrite the more serious code if both apply.
+        if code == "AV_SESSION_HEALTHY" {
+            code = "MISSING_MGR_SLOT";
+        }
+        safe_facts.push(format!(
+            "DIVERGENCE: {} (DID, instance) pair(s) are tracked against a live IRC \
+             connection but are NOT in the participants map. The av-join either failed \
+             silently or its slot was reaped after insertion.",
+            conn_without_mgr.len()
+        ));
+        fixes.push(SuggestedFix {
+            summary: "Have the affected client re-send av-join (server may have rejected \
+                      the original)."
+                .into(),
+            details: None,
+        });
+    }
+    if mgr_slots.is_empty() && conn_slots.is_empty() && !bridge_up {
+        // Pretty likely a wedged session — present but empty.
+        ok = false;
+        code = "EMPTY_SESSION";
+    }
+
+    let summary = match code {
+        "AV_SESSION_HEALTHY" => format!(
+            "Session `#{safe_session}` has {} consistent participant slot(s); bridge \
+             is {}.",
+            mgr_slots.len(),
+            if bridge_up { "up" } else { "down" }
+        ),
+        "PHANTOM_MGR_SLOT" => {
+            "AvSessionManager has slots with no live IRC connection — peers will see \
+             black/silent tiles."
+                .into()
+        }
+        "MISSING_MGR_SLOT" => {
+            "An IRC connection registered an av-instance but the participants map \
+             doesn't contain it — likely the join was reaped or rejected."
+                .into()
+        }
+        _ => "Session is wedged (no participants, no bridge).".into(),
+    };
+
+    FactBundle {
+        ok,
+        code: code.into(),
+        summary,
+        confidence: Confidence::High,
+        safe_facts,
+        suggested_fixes: fixes,
+        redactions: vec![
+            "DIDs and instance ids of other participants are hashed (`#xxxxxxxx`).".into(),
+            "Raw MoQ broadcast paths omitted.".into(),
+        ],
+        followups: vec![],
+        min_disclosure: DisclosureLevel::ChannelMember,
+    }
+}
+
 /// A single place to construct permission-denied bundles so the wire
 /// shape is uniform and exhaustively tested.
 ///

@@ -37,6 +37,7 @@ pub fn routes() -> Router<Arc<SharedState>> {
         .route("/agent/tools/replay_missed_messages", post(post_replay_missed_messages))
         .route("/agent/tools/predict_message_outcome", post(post_predict_message_outcome))
         .route("/agent/tools/explain_message_routing", post(post_explain_message_routing))
+        .route("/agent/tools/diagnose_av_session", post(post_diagnose_av_session))
         // Free-form router (LLM-backed). Returns LLM_NOT_CONFIGURED if
         // no provider is installed.
         .route("/agent/session", post(post_session))
@@ -54,6 +55,7 @@ const CAPABILITIES: &[&str] = &[
     "replay_missed_messages",
     "predict_message_outcome",
     "explain_message_routing",
+    "diagnose_av_session",
     "free_form_session",
 ];
 
@@ -205,6 +207,18 @@ async fn post_explain_message_routing(
     let request_id = new_request_id();
     let bundle = tools::explain_message_routing(&input);
     log_audit("explain_message_routing", &request_id, &caller, &bundle);
+    Json(envelope(request_id, bundle, &caller)).into_response()
+}
+
+async fn post_diagnose_av_session(
+    State(state): State<Arc<SharedState>>,
+    headers: HeaderMap,
+    Json(input): Json<DiagnoseAvSessionInput>,
+) -> impl IntoResponse {
+    let caller = caller::extract(&headers, &state);
+    let request_id = new_request_id();
+    let bundle = tools::diagnose_av_session(&input, &caller, &state);
+    log_audit("diagnose_av_session", &request_id, &caller, &bundle);
     Json(envelope(request_id, bundle, &caller)).into_response()
 }
 
