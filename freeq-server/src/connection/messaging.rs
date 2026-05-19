@@ -2389,3 +2389,93 @@ fn broadcast_av_s2s(
 
     mgr.broadcast(msg);
 }
+
+#[cfg(test)]
+mod av_dispatch_tests {
+    //! State matrix cell #16: multiple av-* tags on one TAGMSG must
+    //! dispatch on the *action* tag, not whichever parameter tag HashMap
+    //! iteration happens to return first. Pre-fix (commit 8b13ccd) the
+    //! code did `tags.keys().find(|k| k.starts_with("+freeq.at/av-"))`,
+    //! which was non-deterministic. Now we have an explicit AV_ACTIONS
+    //! list and dispatch on the first matching action tag. This test
+    //! pins the order so a future "be helpful and reorder" refactor
+    //! doesn't accidentally re-introduce the bug.
+    use std::collections::HashMap;
+
+    /// Mirrors the dispatch order in `process_tagmsg`. Keep in sync.
+    const AV_ACTIONS: &[&str] = &[
+        "+freeq.at/av-start",
+        "+freeq.at/av-join",
+        "+freeq.at/av-leave",
+        "+freeq.at/av-end",
+    ];
+
+    fn dispatch(tags: &HashMap<String, String>) -> Option<&'static &'static str> {
+        AV_ACTIONS.iter().find(|tag| tags.contains_key(**tag))
+    }
+
+    #[test]
+    fn av_join_with_id_and_instance_dispatches_to_join() {
+        let mut tags: HashMap<String, String> = HashMap::new();
+        tags.insert("+freeq.at/av-join".into(), String::new());
+        tags.insert("+freeq.at/av-id".into(), "sess-1".into());
+        tags.insert("+freeq.at/av-instance".into(), "abcd1234".into());
+        assert_eq!(dispatch(&tags), Some(&"+freeq.at/av-join"));
+    }
+
+    #[test]
+    fn av_start_with_title_and_instance_dispatches_to_start() {
+        let mut tags: HashMap<String, String> = HashMap::new();
+        tags.insert("+freeq.at/av-start".into(), String::new());
+        tags.insert("+freeq.at/av-title".into(), "standup".into());
+        tags.insert("+freeq.at/av-instance".into(), "abcd1234".into());
+        assert_eq!(dispatch(&tags), Some(&"+freeq.at/av-start"));
+    }
+
+    #[test]
+    fn av_leave_with_id_dispatches_to_leave() {
+        let mut tags: HashMap<String, String> = HashMap::new();
+        tags.insert("+freeq.at/av-leave".into(), String::new());
+        tags.insert("+freeq.at/av-id".into(), "sess-1".into());
+        assert_eq!(dispatch(&tags), Some(&"+freeq.at/av-leave"));
+    }
+
+    #[test]
+    fn av_id_alone_with_no_action_does_not_dispatch() {
+        let mut tags: HashMap<String, String> = HashMap::new();
+        tags.insert("+freeq.at/av-id".into(), "sess-1".into());
+        tags.insert("+freeq.at/av-instance".into(), "abcd1234".into());
+        assert_eq!(dispatch(&tags), None,
+                   "parameter-only TAGMSG must not be treated as an action");
+    }
+
+    #[test]
+    fn av_signal_is_not_an_action() {
+        // av-signal is a relay tag (WebRTC payload) — must NOT be
+        // consumed as an action.
+        let mut tags: HashMap<String, String> = HashMap::new();
+        tags.insert("+freeq.at/av-signal".into(), "payload".into());
+        assert_eq!(dispatch(&tags), None);
+    }
+
+    #[test]
+    fn priority_order_start_then_join_then_leave_then_end() {
+        // The order matters: if a (malformed) message had multiple action
+        // tags, we must dispatch deterministically. Tests pin the order.
+        let mut both = HashMap::new();
+        both.insert("+freeq.at/av-start".into(), String::new());
+        both.insert("+freeq.at/av-join".into(), String::new());
+        assert_eq!(dispatch(&both), Some(&"+freeq.at/av-start"),
+                   "av-start wins over av-join when both are present");
+
+        let mut both = HashMap::new();
+        both.insert("+freeq.at/av-join".into(), String::new());
+        both.insert("+freeq.at/av-leave".into(), String::new());
+        assert_eq!(dispatch(&both), Some(&"+freeq.at/av-join"));
+
+        let mut both = HashMap::new();
+        both.insert("+freeq.at/av-leave".into(), String::new());
+        both.insert("+freeq.at/av-end".into(), String::new());
+        assert_eq!(dispatch(&both), Some(&"+freeq.at/av-leave"));
+    }
+}

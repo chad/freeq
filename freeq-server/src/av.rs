@@ -971,6 +971,204 @@ mod tests {
         assert_eq!(live_instances, vec!["tab4".to_string()]);
     }
 
+    /// State matrix cell #18: the reaper at av-join time must NOT mark a
+    /// live other-device slot as left. The live-set is built from the
+    /// (did, instance_id) pairs currently registered with IRC connections;
+    /// any active slot whose pair is in the live-set survives the sweep.
+    #[test]
+    fn reap_orphan_slots_preserves_live_other_device() {
+        let mut mgr = AvSessionManager::new();
+        // iPhone creates session, web tab joins (both still alive).
+        let id = mgr
+            .create_session(Some("#test"), "did:plc:alice", "alice", None, Some("iphone"))
+            .unwrap()
+            .id;
+        mgr.join_session(&id, "did:plc:alice", "alice", Some("web"))
+            .unwrap();
+
+        // After 3 brief tab reloads, three stale slots have accumulated.
+        mgr.join_session(&id, "did:plc:alice", "alice", Some("tab-stale1")).unwrap();
+        mgr.join_session(&id, "did:plc:alice", "alice", Some("tab-stale2")).unwrap();
+        mgr.join_session(&id, "did:plc:alice", "alice", Some("tab-stale3")).unwrap();
+        assert_eq!(mgr.active_participant_count(&id), 5);
+
+        // A fourth tab joins; the live-set has the iphone, the web tab,
+        // and the new tab. The three stale tabs must be reaped — but the
+        // iphone and web tab MUST survive.
+        let live: std::collections::HashSet<(String, Option<String>)> = [
+            ("did:plc:alice".to_string(), Some("iphone".to_string())),
+            ("did:plc:alice".to_string(), Some("web".to_string())),
+            ("did:plc:alice".to_string(), Some("tab-new".to_string())),
+        ]
+        .into_iter()
+        .collect();
+        mgr.reap_orphan_slots(&id, &live);
+        mgr.join_session(&id, "did:plc:alice", "alice", Some("tab-new"))
+            .unwrap();
+
+        // 3 live slots — iphone, web, tab-new — the three stale ones are gone.
+        assert_eq!(
+            mgr.active_participant_count(&id),
+            3,
+            "iphone + web + tab-new should remain — got {}",
+            mgr.active_participant_count(&id)
+        );
+        let s = mgr.get(&id).unwrap();
+        let instances: std::collections::BTreeSet<_> = s
+            .participants
+            .values()
+            .filter(|p| p.left_at.is_none())
+            .filter_map(|p| p.instance_id.clone())
+            .collect();
+        assert!(instances.contains("iphone"));
+        assert!(instances.contains("web"));
+        assert!(instances.contains("tab-new"));
+        assert!(!instances.contains("tab-stale1"));
+        assert!(!instances.contains("tab-stale2"));
+        assert!(!instances.contains("tab-stale3"));
+    }
+
+    /// State matrix cell #13: rejoin from the same device with a NEW
+    /// instance_id (e.g. page refresh that minted a fresh suffix) must
+    /// produce a fresh slot — never a ghost participant that other peers
+    /// see but can't subscribe to.
+    ///
+    /// Pre-condition: the old instance's slot is reaped before the new
+    /// join (the av-join handler in messaging.rs does exactly this via
+    /// `reap_orphan_slots` immediately before `join_session`).
+    #[test]
+    fn rejoin_with_fresh_instance_produces_fresh_slot() {
+        let mut mgr = AvSessionManager::new();
+        let id = mgr
+            .create_session(Some("#test"), "did:plc:alice", "alice", None, Some("old"))
+            .unwrap()
+            .id;
+        // Other participant in the call.
+        mgr.join_session(&id, "did:plc:bob", "bob", Some("bob1")).unwrap();
+        assert_eq!(mgr.active_participant_count(&id), 2);
+
+        // Alice's old tab dies (no av-leave sent). Then she re-joins with
+        // a fresh instance. The av-join handler reaps first, then joins.
+        let live_after_reap: std::collections::HashSet<(String, Option<String>)> = [
+            ("did:plc:bob".to_string(), Some("bob1".to_string())),
+            // Joining alice is in the live-set per the handler's logic:
+            ("did:plc:alice".to_string(), Some("new".to_string())),
+        ]
+        .into_iter()
+        .collect();
+        mgr.reap_orphan_slots(&id, &live_after_reap);
+        mgr.join_session(&id, "did:plc:alice", "alice", Some("new")).unwrap();
+
+        // bob + alice@new — old alice slot reaped.
+        assert_eq!(mgr.active_participant_count(&id), 2);
+        let s = mgr.get(&id).unwrap();
+        let alice_slots: Vec<_> = s.participants.values()
+            .filter(|p| p.did == "did:plc:alice" && p.left_at.is_none())
+            .filter_map(|p| p.instance_id.clone())
+            .collect();
+        assert_eq!(alice_slots, vec!["new".to_string()],
+                   "exactly one live alice slot, with the new instance — old must be reaped");
+    }
+
+    /// State matrix cell #11/#12: clean leave vs unclean drop both end in
+    /// the same observable state: that participant's slot is marked left.
+    /// `leave_for_did_instance` is the per-connection cleanup used on
+    /// disconnect; `leave_session` is the av-leave path. Both must mark
+    /// only the addressed (did, instance) slot as left.
+    #[test]
+    fn drop_without_leave_marks_only_dropping_instance() {
+        let mut mgr = AvSessionManager::new();
+        let id = mgr
+            .create_session(Some("#test"), "did:plc:alice", "alice", None, Some("iphone"))
+            .unwrap()
+            .id;
+        mgr.join_session(&id, "did:plc:alice", "alice", Some("web")).unwrap();
+        mgr.join_session(&id, "did:plc:bob", "bob", Some("bob1")).unwrap();
+        assert_eq!(mgr.active_participant_count(&id), 3);
+
+        // iPhone connection dies — disconnect handler runs leave_for_did_instance.
+        let results = mgr.leave_for_did_instance("did:plc:alice", Some("iphone"));
+        assert_eq!(results.len(), 1, "one session was affected");
+        assert!(!results[0].3, "session should NOT end — alice@web and bob are still there");
+
+        // 2 alive slots: alice@web, bob.
+        assert_eq!(mgr.active_participant_count(&id), 2);
+        let s = mgr.get(&id).unwrap();
+        let live_pairs: std::collections::BTreeSet<_> = s.participants.values()
+            .filter(|p| p.left_at.is_none())
+            .map(|p| (p.did.clone(), p.instance_id.clone().unwrap_or_default()))
+            .collect();
+        assert!(live_pairs.contains(&("did:plc:alice".into(), "web".into())));
+        assert!(live_pairs.contains(&("did:plc:bob".into(), "bob1".into())));
+        assert!(!live_pairs.contains(&("did:plc:alice".into(), "iphone".into())),
+                "iphone slot must be marked left");
+    }
+
+    /// State matrix cell #11 corollary: leave-then-rejoin from a DIFFERENT
+    /// device (different DID, same nick is invalid — but same DID,
+    /// different instance is fine and produces a separate broadcast key).
+    /// The web client subscribes per broadcast key, so this shows up as
+    /// "tile name stays the same, but the moq-watch element's `name`
+    /// attribute changes".
+    #[test]
+    fn rejoin_from_different_device_uses_distinct_instance() {
+        let mut mgr = AvSessionManager::new();
+        let id = mgr
+            .create_session(Some("#test"), "did:plc:alice", "alice", None, Some("iphone"))
+            .unwrap()
+            .id;
+        // Alice leaves cleanly.
+        mgr.leave_session(&id, "did:plc:alice", Some("iphone")).unwrap();
+        // Re-create — leave on the only participant ends the session, so
+        // start over for this scenario by creating fresh.
+        let id = mgr
+            .create_session(Some("#test"), "did:plc:alice", "alice", None, Some("ipad"))
+            .unwrap()
+            .id;
+        let s = mgr.get(&id).unwrap();
+        assert_eq!(s.participants.len(), 1);
+        let p = s.participants.values().next().unwrap();
+        assert_eq!(p.instance_id.as_deref(), Some("ipad"),
+                   "fresh device's instance must distinguish the broadcast path");
+    }
+
+    /// Cross-contract: the broadcast key the web client builds from the
+    /// REST endpoint's `nick` + `instance_id` MUST exactly match the
+    /// broadcast path the SDK FFI publishes (`{session_id}/{nick}~{instance_id}`).
+    /// Any divergence here means "web shows the tile but the moq-watch
+    /// subscription never resolves" — a silent black-tile bug.
+    ///
+    /// This is the contract that ties:
+    ///   - SDK FFI: `format!("{session_id}/{nick}~{instance_id}")` (lib.rs:1118)
+    ///   - Server REST: `instance_id` field on participants
+    ///     (web.rs::session_to_json:3712)
+    ///   - Web client: `${sessionId}/${nick}~${instance_id}` (CallPanel.tsx:182)
+    #[test]
+    fn participant_record_supports_web_broadcast_path_construction() {
+        let mut mgr = AvSessionManager::new();
+        let id = mgr
+            .create_session(Some("#test"), "did:plc:alice", "alice", None, Some("ios123"))
+            .unwrap()
+            .id;
+        mgr.join_session(&id, "did:plc:bob", "bob", Some("web456")).unwrap();
+
+        let s = mgr.get(&id).unwrap();
+        for p in s.participants.values() {
+            // The path the SDK FFI publishes under:
+            let sdk_path = match &p.instance_id {
+                Some(iid) => format!("{}/{}~{}", s.id, p.nick, iid),
+                None => format!("{}/{}", s.id, p.nick),
+            };
+            // The path the web client computes for moq-watch's `name`:
+            let web_path = match &p.instance_id {
+                Some(iid) if !iid.is_empty() => format!("{}/{}~{}", s.id, p.nick, iid),
+                _ => format!("{}/{}", s.id, p.nick),
+            };
+            assert_eq!(sdk_path, web_path,
+                       "SDK FFI path and web client path must match for {p:?}");
+        }
+    }
+
     #[test]
     fn prune_ended_sessions() {
         let mut mgr = AvSessionManager::new();

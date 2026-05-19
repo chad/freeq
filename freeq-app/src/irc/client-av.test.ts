@@ -308,6 +308,53 @@ describe('leaveAvSession', () => {
 // endAvSession
 // ═══════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════
+// Instance suffix uniqueness across consecutive sessions
+// ═══════════════════════════════════════════════════════════════
+
+describe('av-instance lifecycle', () => {
+  // State matrix cell #13/#14: after leaving and re-joining (same device
+  // or different), the next session must mint a FRESH instance suffix.
+  // If the old one stuck around, the SDK's `path == our_name` self-filter
+  // wouldn't know which broadcast was "us" the next call and we'd either
+  // subscribe to our own echo or skip a legitimate remote.
+  it('leaveAvSession clears the instance so the next call mints a new one', () => {
+    const mock = makeMockClient('me');
+    __setClientForTests(mock as any);
+
+    joinAvSession('#room', 'sess-a');
+    const firstInst = getAvInstanceId();
+    expect(firstInst).toMatch(/^[0-9a-f]{8}$/);
+
+    leaveAvSession('#room', 'sess-a');
+    expect(getAvInstanceId()).toBeNull();
+
+    // Re-join — a fresh suffix is minted.
+    joinAvSession('#room', 'sess-b');
+    const secondInst = getAvInstanceId();
+    expect(secondInst).toMatch(/^[0-9a-f]{8}$/);
+    expect(secondInst).not.toBe(firstInst);
+  });
+
+  it('multiple joinAvSession calls in the same session reuse the same instance', () => {
+    // If the user joins the same session twice (idempotent — duplicate
+    // click on "Join voice"), we keep the same suffix so the server
+    // sees the second join as a no-op on the same slot.
+    const mock = makeMockClient('me');
+    __setClientForTests(mock as any);
+
+    joinAvSession('#room', 'sess-1');
+    const inst = getAvInstanceId();
+
+    joinAvSession('#room', 'sess-1');
+    expect(getAvInstanceId()).toBe(inst);
+
+    // Both wire lines must carry the same instance.
+    const insts = mock.rawCalls.map((l) => parseTags(l)['+freeq.at/av-instance']);
+    expect(insts).toEqual([inst, inst]);
+  });
+});
+
 describe('endAvSession', () => {
   it('sends av-end with av-id tag', () => {
     const mock = makeMockClient('me');

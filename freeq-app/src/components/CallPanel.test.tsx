@@ -255,6 +255,137 @@ describe('CallPanel — participant tiles', () => {
     expect(container.querySelectorAll('moq-watch')).toHaveLength(1);
   });
 
+  it('renders three tiles for three distinct DIDs', async () => {
+    // State matrix cell #4: three-way call. All three remote nicks must
+    // appear as moq-watch elements with their correct broadcast names.
+    setupSession();
+    mockSessionsApi([
+      { nick: 'alice', instance_id: 'aaaaaaaa' },
+      { nick: 'bob', instance_id: 'bbbbbbbb' },
+      { nick: 'carol', instance_id: 'cccccccc' },
+    ]);
+
+    const { container } = render(<CallPanel />);
+    await flush();
+
+    const watches = Array.from(container.querySelectorAll('moq-watch'));
+    expect(watches).toHaveLength(3);
+    const names = watches.map((w) => w.getAttribute('name')).sort();
+    expect(names).toEqual([
+      'sess-1/alice~aaaaaaaa',
+      'sess-1/bob~bbbbbbbb',
+      'sess-1/carol~cccccccc',
+    ]);
+  });
+
+  it('keeps the live other-instance tile when a phantom stale slot is reaped', async () => {
+    // State matrix cell #18: a stale slot for our DID exists alongside a
+    // live other-device slot. The server-side reaper takes the stale slot
+    // out of the participants list before responding to /api/v1/sessions,
+    // and the LIVE same-DID slot must remain.
+    setupSession();
+    const myInstance = (await import('../irc/client')).getAvInstanceId()!;
+    // After reaping: only the live other-device slot (and our own) remain.
+    mockSessionsApi([
+      { nick: 'me', instance_id: myInstance },       // our own slot — filter
+      { nick: 'me', instance_id: 'livesecond' },     // OTHER live device — keep
+      // No stale entries here — the reaper would have removed them.
+    ]);
+
+    const { container } = render(<CallPanel />);
+    await flush();
+
+    const watches = Array.from(container.querySelectorAll('moq-watch'));
+    expect(watches).toHaveLength(1);
+    expect(watches[0].getAttribute('name')).toBe('sess-1/me~livesecond');
+  });
+
+  it('swaps the tile broadcast name when a participant re-joins with a NEW instance id', async () => {
+    // State matrix cell #13: same nick, fresh instance after a quick
+    // leave/rejoin. The poller sees the new instance the next cycle; the
+    // tile mounted previously must be torn down (url cleared, element
+    // removed) and a fresh tile mounted for the new broadcast path.
+    setupSession();
+
+    let participants: Array<{ nick: string; instance_id?: string | null }> = [
+      { nick: 'alice', instance_id: 'first' },
+    ];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.startsWith('/api/v1/sessions/')) {
+        return new Response(JSON.stringify({ participants }), { status: 200 }) as any;
+      }
+      return new Response('{}', { status: 200 }) as any;
+    });
+
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const { container } = render(<CallPanel />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+
+    let watches = Array.from(container.querySelectorAll('moq-watch'));
+    expect(watches).toHaveLength(1);
+    expect(watches[0].getAttribute('name')).toBe('sess-1/alice~first');
+    const firstWatch = watches[0];
+
+    // Alice re-joins from the same device (fresh instance) without ever
+    // appearing as a ghost. The new participant list has a different
+    // instance_id; the previous watch element must be removed (its url
+    // cleared) and a new watch element mounted.
+    participants = [{ nick: 'alice', instance_id: 'second' }];
+    await act(async () => {
+      vi.advanceTimersByTime(3001);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    vi.useRealTimers();
+    await flush();
+
+    watches = Array.from(container.querySelectorAll('moq-watch'));
+    expect(watches).toHaveLength(1);
+    expect(watches[0].getAttribute('name')).toBe('sess-1/alice~second');
+    // The previous element was unmounted; its url should have been cleared
+    // by the cleanup effect.
+    expect(firstWatch.getAttribute('url')).toBe('');
+  });
+
+  it('a participant leaving with no av-leave is removed by the next poll cycle', async () => {
+    // State matrix cell #12: A's IRC connection drops without an av-leave.
+    // Server cleanup runs (leave_for_did_instance or leave_all_for_did),
+    // which removes them from the participants list. The poller picks
+    // that up on the next cycle and the tile disappears.
+    setupSession();
+    let participants: Array<{ nick: string; instance_id?: string | null }> = [
+      { nick: 'alice', instance_id: 'aaaaaaaa' },
+    ];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.startsWith('/api/v1/sessions/')) {
+        return new Response(JSON.stringify({ participants }), { status: 200 }) as any;
+      }
+      return new Response('{}', { status: 200 }) as any;
+    });
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+    const { container } = render(<CallPanel />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+    expect(container.querySelectorAll('moq-watch')).toHaveLength(1);
+
+    // Server's disconnect handler removed alice from participants.
+    participants = [];
+    await act(async () => {
+      vi.advanceTimersByTime(3001);
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    vi.useRealTimers();
+    await flush();
+
+    expect(container.querySelectorAll('moq-watch')).toHaveLength(0);
+  });
+
   it('removes a tile within one poll cycle when a participant disappears', async () => {
     setupSession();
 
