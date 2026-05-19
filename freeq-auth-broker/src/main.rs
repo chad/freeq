@@ -167,8 +167,6 @@ fn upstream_client() -> Result<reqwest::Client, anyhow::Error> {
     Ok(reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .connect_timeout(std::time::Duration::from_secs(6))
-        .pool_max_idle_per_host(0)
-        .http1_only()
         .build()?)
 }
 
@@ -621,7 +619,22 @@ async fn auth_login(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
-    let par_resp: serde_json::Value = if status.as_u16() == 400 && dpop_nonce.is_some() {
+    // Surface the first-PAR response body in logs and require the
+    // canonical `use_dpop_nonce` error code before retrying — a 400
+    // with an incidental DPoP-Nonce header but a different error
+    // (e.g. invalid_client_metadata) should NOT be retried into a
+    // timeout; the underlying problem isn't going to resolve.
+    let first_body = resp.text().await.unwrap_or_default();
+    let body_preview = first_body.chars().take(300).collect::<String>();
+    tracing::info!(
+        status = %status,
+        has_nonce = dpop_nonce.is_some(),
+        body = %body_preview,
+        "first PAR response"
+    );
+    let par_resp: serde_json::Value = if status.as_u16() == 400 && dpop_nonce.is_some()
+        && first_body.contains("use_dpop_nonce")
+    {
         let nonce = dpop_nonce.as_deref().unwrap();
         let dpop_proof2 = dpop_key
             .proof("POST", par_endpoint, Some(nonce), None)
@@ -647,14 +660,12 @@ async fn auth_login(
             .await
             .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR parse failed: {e}")))?
     } else if status.is_success() {
-        resp.json()
-            .await
+        serde_json::from_str(&first_body)
             .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR parse failed: {e}")))?
     } else {
-        let text = resp.text().await.unwrap_or_default();
         return Err((
             StatusCode::BAD_GATEWAY,
-            format!("PAR failed ({status}): {text}"),
+            format!("PAR failed ({status}): {first_body}"),
         ));
     };
 
