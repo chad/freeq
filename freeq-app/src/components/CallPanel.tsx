@@ -347,7 +347,12 @@ function RemoteTile({ slot, moqOrigin }: { slot: Slot; moqOrigin: string }) {
     watchEl.style.inset = '0';
     watchEl.style.width = '100%';
     watchEl.style.height = '100%';
-    watchEl.setAttribute('jitter', '100');
+    // 30ms jitter is aggressive but gives much snappier video in 1:1
+    // calls on a decent network. moq-watch defaults to ~100ms, which
+    // accumulates with the upstream encoder + decoder + sync budget
+    // and turns into the half-second-plus lag the user reported.
+    // If we see stutter on bad networks, dial back up.
+    watchEl.setAttribute('jitter', '30');
     watchEl.setAttribute('url', moqOrigin);
     watchEl.setAttribute('name', slot.broadcastName);
     mount.appendChild(watchEl);

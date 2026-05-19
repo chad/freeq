@@ -1273,9 +1273,18 @@ mod av_impl {
         handler: Arc<dyn AvEventHandler>,
         nick: String,
     ) {
-        let remote = match iroh_live::media::subscribe::RemoteBroadcast::new(
+        // iroh-live's default policy is 150ms max_latency with cross-track
+        // sync. 150ms is conservative — fine for streaming a published
+        // talk, painful for a 1:1 video call. Cut it to 60ms; on a stable
+        // network this gives noticeably snappier video and the synced
+        // playout still keeps audio and video aligned. If we see decode
+        // stutter on poor networks we can dial back up.
+        let policy = iroh_live::media::playout::PlaybackPolicy::default()
+            .with_max_latency(Duration::from_millis(60));
+        let remote = match iroh_live::media::subscribe::RemoteBroadcast::with_playback_policy(
             &path_str,
             broadcast_consumer,
+            policy,
         )
         .await
         {
