@@ -153,10 +153,22 @@ struct DidService {
 /// user's `.well-known` server is slow we'd accumulate stuck requests
 /// until the platform's gateway times out — and meanwhile the user
 /// stares at a spinner with no actionable error.
+///
+/// `pool_max_idle_per_host(0)` disables connection reuse — the
+/// observed failure mode was the *second* POST to bsky.social/oauth/par
+/// (DPoP nonce retry) consistently dying with "error sending request"
+/// while the first POST on the same client succeeded. Each call now
+/// uses a fresh TCP/TLS connection, which dodges that.
+///
+/// `http1_only()` similarly avoids HTTP/2 stream-state weirdness; the
+/// request volume from this endpoint is tiny so the perf cost is
+/// irrelevant.
 fn upstream_client() -> Result<reqwest::Client, anyhow::Error> {
     Ok(reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
-        .connect_timeout(std::time::Duration::from_secs(4))
+        .timeout(std::time::Duration::from_secs(15))
+        .connect_timeout(std::time::Duration::from_secs(6))
+        .pool_max_idle_per_host(0)
+        .http1_only()
         .build()?)
 }
 
@@ -625,7 +637,7 @@ async fn auth_login(
             .form(&params)
             .send()
             .await
-            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR retry failed: {e}")))?;
+            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("PAR retry failed: {e:#?}")))?;
         if !resp2.status().is_success() {
             let text = resp2.text().await.unwrap_or_default();
             return Err((StatusCode::BAD_GATEWAY, format!("PAR failed: {text}")));
