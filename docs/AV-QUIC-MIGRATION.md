@@ -10,7 +10,9 @@ cause is the media transport, not TTS or encoding.
 The SFU (`freeq-server/src/av_sfu.rs`, a `moq_relay::Cluster`) is reachable two
 ways:
 
-- **QUIC / WebTransport** — UDP `:4443`
+- **QUIC / WebTransport** — UDP `:8080` (the SFU binds `web_addr`'s port;
+  production runs `--web-addr 0.0.0.0:8080`). The separate `staging.freeq.at`
+  deployment uses `:4443` — do not confuse the two.
 - **MoQ-over-WebSocket** — TCP, via nginx `:443 → /av/moq → :8080`
 
 QUIC is unusable for browsers today because the QUIC listener presents a
@@ -22,19 +24,23 @@ static.
 
 **Evidence.** The transcriber bot over WebSocket logged *thousands* of
 `connection closed`. The same bot over QUIC (`--sfu-url
-https://irc.freeq.at:4443/av/moq`) logged **zero**.
+https://irc.freeq.at:8080/av/moq`) logged **zero**.
 
 ## Goal
 
 All AV media over QUIC/WebTransport. WebSocket remains only as a last-resort
 fallback (moq-native already races the two and keeps whichever connects).
 
-## Constraint discovered
+## Open question — QUIC ↔ WebSocket interop
 
-A QUIC client negotiates moq-lite **v03**; a WebSocket client negotiates
-**v02**; the two do **not** interconnect through the SFU cluster. A QUIC client
-is therefore invisible to WebSocket participants — clients must move to QUIC
-*together*. A half-migration isolates participants.
+An earlier test had a QUIC client and a WebSocket client fail to see each other,
+but they were on **different SFU deployments** (the QUIC client hit
+`staging.freeq.at:4443`; the WebSocket client hit production) — so it proves
+nothing about within-cluster interop. Whether a QUIC client and a WebSocket
+client interconnect through one production `moq_relay::Cluster` is unresolved;
+they negotiate different moq-lite versions (QUIC v03, WebSocket v02). Phase 2
+re-tests this against the production SFU. If they bridge, the migration can be
+gradual; if not, clients must cut over together.
 
 ## Phases
 
@@ -76,24 +82,24 @@ FREEQ_AV_TLS_KEY=/home/chad/freeq-certs/privkey.pem
 ```
 
 Deploy + restart. **Verify:** a native client connects to
-`https://irc.freeq.at:4443/av/moq` *with cert verification enabled* and the
+`https://irc.freeq.at:8080/av/moq` *with cert verification enabled* and the
 handshake succeeds — proving the cert is publicly trusted.
 
 ### Phase 2 — Native clients on QUIC
 
-- Transcriber bot: run with `--sfu-url https://irc.freeq.at:4443/av/moq`
+- Transcriber bot: run with `--sfu-url https://irc.freeq.at:8080/av/moq`
   (already supported).
-- iOS (`freeq-sdk-ffi`): point the MoQ URL at QUIC `:4443` instead of deriving
+- iOS (`freeq-sdk-ffi`): point the MoQ URL at QUIC `:8080` instead of deriving
   `:443/av/moq`.
 - **Verify:** `connection closed` stays ~0 under publish load.
 
 ### Phase 3 — Web client on WebTransport  (`freeq-app`)
 
-Point the moq-watch / moq-publish components at `https://irc.freeq.at:4443/...`.
+Point the moq-watch / moq-publish components at `https://irc.freeq.at:8080/...`.
 
 **Investigate first:** how `freeq-app` configures the moq components' endpoint,
 and confirm moq-watch/moq-publish negotiate WebTransport (HTTP/3) when handed an
-`https://host:4443` URL. **Verify** in browser DevTools: an HTTP/3 / WebTransport
+`https://host:8080` URL. **Verify** in browser DevTools: an HTTP/3 / WebTransport
 session, not a `ws://` one.
 
 ### Phase 4 — Cross-client interop check
@@ -116,7 +122,7 @@ moq-native-raced fallback. Acceptance:
 - moq-watch/moq-publish WebTransport support, and how `freeq-app` sets the
   endpoint URL (Phase 3).
 - Whether all-QUIC fully resolves the moq-lite v02/v03 split (Phase 4).
-- QUIC `:4443` is UDP; `ufw` is inactive on the host, but some client networks
+- QUIC `:8080` is UDP; `ufw` is inactive on the host, but some client networks
   block non-443 UDP — the WebSocket fallback must stay.
 
 ## Rollback
