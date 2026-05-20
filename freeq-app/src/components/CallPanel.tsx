@@ -35,7 +35,12 @@ export function CallPanel() {
   const [participantSlots, setParticipantSlots] = useState<Slot[]>([]);
 
   const myNick = getNick();
-  const moqOrigin = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/av/moq`;
+  // Connect to the SFU's QUIC/WebTransport listener (udp :8080) rather
+  // than MoQ-over-WebSocket. WebTransport is the proper real-time media
+  // transport; the WebSocket path degrades into static under publish
+  // load. The `https://` scheme tells moq-publish/moq-watch to use
+  // WebTransport. See docs/AV-QUIC-MIGRATION.md.
+  const moqOrigin = `https://${location.hostname}:8080/av/moq`;
 
   // ── Start/stop call when avAudioActive changes ──────────────
   useEffect(() => {
