@@ -67,7 +67,30 @@ async fn run_quic_accept(port: u16, state: Arc<SfuState>) -> anyhow::Result<()> 
     server_config.bind = Some(format!("[::]:{port}").parse()?);
     server_config.backend = Some(moq_native::QuicBackend::Noq);
     server_config.max_streams = Some(moq_relay::DEFAULT_MAX_STREAMS);
-    server_config.tls.generate = vec!["localhost".to_string()];
+
+    // QUIC/WebTransport TLS. With a publicly-trusted cert (FREEQ_AV_TLS_CERT
+    // / FREEQ_AV_TLS_KEY) browsers can WebTransport straight to this
+    // listener — the proper low-latency media transport. Without it we
+    // fall back to a self-signed cert, which only native clients (cert
+    // verification disabled) can use; browsers are stuck on the staticky
+    // MoQ-over-WebSocket path. See docs/AV-QUIC-MIGRATION.md.
+    match (
+        std::env::var("FREEQ_AV_TLS_CERT"),
+        std::env::var("FREEQ_AV_TLS_KEY"),
+    ) {
+        (Ok(cert), Ok(key)) => {
+            tracing::info!(%cert, %key, "AV SFU QUIC: using configured TLS cert");
+            server_config.tls.cert = vec![cert.into()];
+            server_config.tls.key = vec![key.into()];
+        }
+        _ => {
+            tracing::warn!(
+                "AV SFU QUIC: FREEQ_AV_TLS_CERT/KEY unset — self-signed cert \
+                 (native clients only; browsers cannot WebTransport)"
+            );
+            server_config.tls.generate = vec!["localhost".to_string()];
+        }
+    }
 
     let mut server = server_config.init()?;
     tracing::info!("AV SFU QUIC on :{port} (WebTransport + MoQ)");
