@@ -16,6 +16,7 @@
     "README.md"
   ],
   "scripts": {
+    "prebuild": "cd ../freeq-sdk-js && npm install --silent && npm run build",
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
