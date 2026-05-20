@@ -1,0 +1,61 @@
+[package]
+name = "freeq-transcriber-bot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Sample agent bot that joins freeq AV sessions, transcribes the audio via whisper.cpp, and posts the transcript + an end-of-call summary back to the channel."
+
+[lib]
+name = "freeq_transcriber_bot"
+path = "src/lib.rs"
+
+[[bin]]
+name = "freeq-transcriber-bot"
+path = "src/main.rs"
+
+[dependencies]
+# Identity + IRC + crypto for SASL
+freeq-sdk = { path = "../freeq-sdk", default-features = false, features = ["ring", "rustls-tls", "websocket"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand.workspace = true
+bs58 = "0.5"
+
+# AV / MoQ stack — same versions as freeq-av-client so the workspace
+# resolves them once.
+iroh-live = { git = "https://github.com/n0-computer/iroh-live", default-features = false, features = ["opus"] }
+moq-native = { git = "https://github.com/Frando/moq", branch = "deps/iroh-main", default-features = false, features = ["noq", "websocket", "aws-lc-rs"] }
+moq-lite = { git = "https://github.com/Frando/moq", branch = "deps/iroh-main" }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
+url = "2"
+futures-util = "0.3"
+
+# STT — whisper.cpp bindings, behind the `stt` feature because the
+# build needs cmake + a C++ toolchain. Without the feature the bot
+# compiles and runs but treats every audio window as empty (so the
+# end-to-end IRC + MoQ + transcript-relay path is still testable with
+# a synthetic STT impl).
+whisper-rs = { version = "0.14", default-features = false, optional = true }
+
+# Async + utility
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dirs = "6"
+chrono = "0.4"
+
+[features]
+default = []
+stt = ["dep:whisper-rs"]
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["test-util"] }
+freeq-server = { path = "../freeq-server", default-features = false }
+
+[lints]
+workspace = true
