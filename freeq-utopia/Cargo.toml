@@ -1,16 +1,16 @@
 [package]
-name = "freeq-transcriber-bot"
+name = "freeq-utopia"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Sample agent bot that joins freeq AV sessions, transcribes the audio via whisper.cpp, and posts the transcript + an end-of-call summary back to the channel."
+description = "Utopia — an agent that joins freeq AV calls: transcribes, answers by voice, and shows live visual aids."
 
 [lib]
-name = "freeq_transcriber_bot"
+name = "freeq_utopia"
 path = "src/lib.rs"
 
 [[bin]]
-name = "freeq-transcriber-bot"
+name = "freeq-utopia"
 path = "src/main.rs"
 
 [dependencies]

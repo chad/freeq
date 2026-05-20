@@ -1,4 +1,4 @@
-//! Library facade for `freeq-transcriber-bot`.
+//! Library facade for `freeq-utopia`.
 //!
 //! The binary at `src/main.rs` is the real entrypoint; we expose the
 //! modules through `lib.rs` so adversarial unit tests can `cargo test

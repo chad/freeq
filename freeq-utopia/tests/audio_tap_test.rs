@@ -1,7 +1,7 @@
 //! Unit-level tests for `audio_tap`: PCM resampling, channel handling,
 //! and the `TapBackend` channel plumbing.
 
-use freeq_transcriber_bot::audio_tap::{PcmFrame, TapBackend, to_whisper_pcm};
+use freeq_utopia::audio_tap::{PcmFrame, TapBackend, to_whisper_pcm};
 use iroh_live::media::format::AudioFormat;
 use iroh_live::media::traits::AudioStreamFactory;
 

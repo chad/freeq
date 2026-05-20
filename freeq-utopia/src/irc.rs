@@ -160,7 +160,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         server_addr,
         nick: nick.clone(),
         user: nick.clone(),
-        realname: "freeq-transcriber-bot".to_string(),
+        realname: "freeq-utopia".to_string(),
         tls: websocket_url.is_some()
             || server.starts_with("https://")
             || server.starts_with("wss://"),
@@ -180,7 +180,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
     let _ = handle.register_agent("agent").await;
     let _ = handle
         .submit_provenance(&serde_json::json!({
-            "name": "freeq-transcriber-bot",
+            "name": "freeq-utopia",
             "version": env!("CARGO_PKG_VERSION"),
             "runtime": "freeq-sdk/rust",
             "capabilities": ["av-transcription", "summary"],
@@ -247,7 +247,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                         .privmsg(
                             start_ch,
                             "[transcript] listening (joined a call in progress). \
-                             Say or type \"transcriber: dump\" for the transcript so far.",
+                             Say or type \"utopia: dump\" for the transcript so far.",
                         )
                         .await;
                 }
@@ -321,7 +321,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                                     .privmsg(
                                         &channel,
                                         "[transcript] listening. I'll stay quiet — \
-                                         say or type \"transcriber: dump\" anytime for \
+                                         say or type \"utopia: dump\" anytime for \
                                          the transcript so far.",
                                     )
                                     .await;
@@ -403,7 +403,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                 let Some(question) = qa::extract_addressed(&text, &cfg.nick) else {
                     continue;
                 };
-                // "transcriber: dump" → post the buffered transcript
+                // "utopia: dump" → post the buffered transcript
                 // rather than running it through Q&A.
                 if is_transcript_request(question) {
                     let handle = handle_arc.clone();
@@ -483,7 +483,7 @@ async fn answer_and_speak(
 
     // Post the text answer regardless of whether speech works.
     let _ = handle
-        .privmsg(&channel, &format!("[transcriber→{asker}] {answer}"))
+        .privmsg(&channel, &format!("[utopia→{asker}] {answer}"))
         .await;
 
     // Speak it, if we have a broadcast to speak through + an EL key.
@@ -908,7 +908,7 @@ fn is_hallucination(text: &str) -> bool {
 /// True when an addressed utterance is asking the bot to post the
 /// transcript buffered so far, rather than answer a question. The bot
 /// no longer firehoses every utterance to the channel — people pull the
-/// transcript on demand with "transcriber: dump". Matched loosely
+/// transcript on demand with "utopia: dump". Matched loosely
 /// because it's typed *and* spoken (whisper punctuation varies).
 pub(crate) fn is_transcript_request(question: &str) -> bool {
     let q = question
@@ -1029,7 +1029,7 @@ async fn tap_participant(
                     tracing::info!(%nick, %text, "transcribed utterance");
 
                     // Voice-addressed Q&A: if the utterance starts with
-                    // the bot's name ("transcriber, summarize…"), treat
+                    // the bot's name ("utopia, summarize…"), treat
                     // it as a spoken question — answer + speak back —
                     // instead of just logging it as a transcript line.
                     // In a voice call people address the bot by talking,

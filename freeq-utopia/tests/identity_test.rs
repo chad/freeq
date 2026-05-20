@@ -3,7 +3,7 @@
 //! All of these run against a tempdir injected through
 //! [`identity::load_or_create_in`] so we don't touch `$HOME/.freeq`.
 
-use freeq_transcriber_bot::identity;
+use freeq_utopia::identity;
 
 /// Fresh tempdir → a brand new key + identity.json + mode 0600 on unix.
 #[test]

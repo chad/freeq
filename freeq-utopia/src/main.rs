@@ -1,4 +1,4 @@
-//! freeq-transcriber-bot: sample agent that joins freeq AV sessions and
+//! freeq-utopia: sample agent that joins freeq AV sessions and
 //! transcribes the audio.
 //!
 //! Lifecycle:
@@ -19,12 +19,12 @@
 //!    back to the channel.
 //!
 //! Run as a one-shot for development:
-//!   ANTHROPIC_API_KEY=sk-... cargo run --release --bin freeq-transcriber-bot -- \
+//!   ANTHROPIC_API_KEY=sk-... cargo run --release --bin freeq-utopia -- \
 //!     --server wss://irc.freeq.at/irc \
 //!     --channel '#avtest' \
 //!     --model-path ./models/ggml-small.en.bin
 //!
-//! Identity files live at `~/.freeq/bots/transcriber/`. First run creates
+//! Identity files live at `~/.freeq/bots/utopia/`. First run creates
 //! them; subsequent runs reuse the same DID.
 
 use std::path::PathBuf;
@@ -33,11 +33,11 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use freeq_transcriber_bot::{identity, irc, stt};
+use freeq_utopia::{identity, irc, stt};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
-    name = "freeq-transcriber-bot",
+    name = "freeq-utopia",
     about = "Joins freeq AV sessions, transcribes audio, posts the transcript + summary back to the channel."
 )]
 struct Cli {
@@ -52,7 +52,7 @@ struct Cli {
     channel: Vec<String>,
 
     /// Bot identity name. Files live at `~/.freeq/bots/<name>/`.
-    #[arg(long, default_value = "transcriber")]
+    #[arg(long, default_value = "utopia")]
     name: String,
 
     /// IRC nick. Defaults to the identity name.
@@ -115,7 +115,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("freeq_transcriber_bot=info,freeq_sdk=info,info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("freeq_utopia=info,freeq_sdk=info,info")),
         )
         .init();
 

@@ -1,4 +1,4 @@
-# freeq-transcriber-bot
+# freeq-utopia
 
 A sample agent that joins freeq AV (voice/video) sessions, transcribes the
 audio with [whisper.cpp](https://github.com/ggerganov/whisper.cpp), and posts
@@ -40,7 +40,7 @@ exercised (and unit/e2e tested) without a C++ toolchain or a model file.
 ```bash
 # control-plane only — joins calls, relays the "listening"/"ended" lines,
 # but every audio window transcribes to "" (no [transcript] <nick>: lines)
-cargo build --release -p freeq-transcriber-bot
+cargo build --release -p freeq-utopia
 ```
 
 For **real transcription**, enable the `stt` feature. It builds whisper.cpp
@@ -48,7 +48,7 @@ from source, which needs `cmake` and a C++ toolchain:
 
 ```bash
 brew install cmake          # macOS;  apt install cmake  on Debian/Ubuntu
-cargo build --release -p freeq-transcriber-bot --features stt
+cargo build --release -p freeq-utopia --features stt
 ```
 
 ## Model
@@ -69,20 +69,20 @@ curl -L -o models/ggml-small.en.bin \
 
 ```bash
 # Transcript-only (no summary)
-cargo run --release -p freeq-transcriber-bot --features stt -- \
+cargo run --release -p freeq-utopia --features stt -- \
   --server wss://irc.freeq.at/irc \
   --channel '#avtest' \
   --model-path ./models/ggml-small.en.bin
 
 # With end-of-call summary + action items
 ANTHROPIC_API_KEY=sk-ant-... \
-cargo run --release -p freeq-transcriber-bot --features stt -- \
+cargo run --release -p freeq-utopia --features stt -- \
   --server wss://irc.freeq.at/irc \
   --channel '#avtest' \
   --model-path ./models/ggml-small.en.bin
 ```
 
-First run mints `~/.freeq/bots/transcriber/`. Subsequent runs reuse the DID.
+First run mints `~/.freeq/bots/utopia/`. Subsequent runs reuse the DID.
 
 ### CLI flags
 
@@ -90,7 +90,7 @@ First run mints `~/.freeq/bots/transcriber/`. Subsequent runs reuse the DID.
 |---|---|---|
 | `--server` | `wss://irc.freeq.at/irc` | `wss://`/`https://` → WebSocket; `host:port` → raw TCP |
 | `--channel` | `#avtest` | Repeatable. Bot only transcribes calls in channels it's in |
-| `--name` | `transcriber` | Identity dir: `~/.freeq/bots/<name>/` |
+| `--name` | `utopia` | Identity dir: `~/.freeq/bots/<name>/` |
 | `--nick` | = `--name` | IRC nick |
 | `--model-path` | `./models/ggml-small.en.bin` | ggml whisper model (used only with `--features stt`) |
 | `--window-secs` | `10` | Audio accumulated before each whisper pass — lower = snappier, more CPU |
@@ -110,7 +110,7 @@ iOS client, and watch the `[transcript]` lines land. Stop it with Ctrl-C.
 
 ```bash
 # Unit + integration — runs without cmake or a model file (stt feature off)
-cargo test -p freeq-transcriber-bot
+cargo test -p freeq-utopia
 ```
 
 The suite covers identity minting + path-traversal hardening, the PCM

@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn extracts_colon_form() {
         assert_eq!(
-            extract_addressed("transcriber: what did we decide?", "transcriber"),
+            extract_addressed("utopia: what did we decide?", "utopia"),
             Some("what did we decide?")
         );
     }
@@ -122,15 +122,15 @@ mod tests {
     #[test]
     fn extracts_comma_and_at_and_bare_forms() {
         assert_eq!(
-            extract_addressed("transcriber, summarize", "transcriber"),
+            extract_addressed("utopia, summarize", "utopia"),
             Some("summarize")
         );
         assert_eq!(
-            extract_addressed("@transcriber who is talking", "transcriber"),
+            extract_addressed("@utopia who is talking", "utopia"),
             Some("who is talking")
         );
         assert_eq!(
-            extract_addressed("transcriber recap please", "transcriber"),
+            extract_addressed("utopia recap please", "utopia"),
             Some("recap please")
         );
     }
@@ -138,16 +138,16 @@ mod tests {
     #[test]
     fn case_insensitive_on_nick() {
         assert_eq!(
-            extract_addressed("Transcriber: hi", "transcriber"),
+            extract_addressed("Utopia: hi", "utopia"),
             Some("hi")
         );
     }
 
     #[test]
     fn ignores_unaddressed_or_mid_sentence_mentions() {
-        assert_eq!(extract_addressed("hello everyone", "transcriber"), None);
+        assert_eq!(extract_addressed("hello everyone", "utopia"), None);
         assert_eq!(
-            extract_addressed("ask the transcriber later", "transcriber"),
+            extract_addressed("ask the utopia later", "utopia"),
             None,
             "a mention mid-sentence is not an address"
         );
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn ignores_bare_nick_with_no_question() {
         // Just the nick, nothing after → not a question.
-        assert_eq!(extract_addressed("transcriber", "transcriber"), None);
-        assert_eq!(extract_addressed("transcriber: ", "transcriber"), None);
+        assert_eq!(extract_addressed("utopia", "utopia"), None);
+        assert_eq!(extract_addressed("utopia: ", "utopia"), None);
     }
 }

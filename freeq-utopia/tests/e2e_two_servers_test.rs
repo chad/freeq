@@ -1,8 +1,8 @@
-//! Two-in-process-server end-to-end tests for the transcriber bot.
+//! Two-in-process-server end-to-end tests for the utopia bot.
 //!
 //! Each test spins up one or two real `freeq-server` instances in-process
 //! on ephemeral ports (no S2S federation — the servers are independent),
-//! points the bot at one of them via `freeq_transcriber_bot::irc::run`,
+//! points the bot at one of them via `freeq_utopia::irc::run`,
 //! and asserts on the IRC/TAGMSG control plane by attaching a *witness*
 //! SDK client to the same channel.
 //!
@@ -22,9 +22,9 @@ use std::time::{Duration, Instant};
 
 use freeq_sdk::client::{self, ClientHandle, ConnectConfig};
 use freeq_sdk::event::Event;
-use freeq_transcriber_bot::identity::{self, Identity};
-use freeq_transcriber_bot::irc::{RunConfig, run};
-use freeq_transcriber_bot::stt::SttEngine;
+use freeq_utopia::identity::{self, Identity};
+use freeq_utopia::irc::{RunConfig, run};
+use freeq_utopia::stt::SttEngine;
 use tokio::sync::mpsc::Receiver;
 
 // ───────────────────────────── server bootstrap ─────────────────────────────

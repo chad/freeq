@@ -68,7 +68,7 @@ pub fn load_or_create_in(name: &str, home: &Path) -> Result<Identity> {
         let doc = serde_json::json!({
             "id": did,
             "createdAt": chrono::Utc::now().to_rfc3339(),
-            "note": "Minted by freeq-transcriber-bot. Compatible with freeq-bot-id and @freeq/bot-kit layouts.",
+            "note": "Minted by freeq-utopia. Compatible with freeq-bot-id and @freeq/bot-kit layouts.",
         });
         std::fs::write(&id_path, serde_json::to_vec_pretty(&doc)?)
             .with_context(|| format!("writing {}", id_path.display()))?;

@@ -2380,7 +2380,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "freeq-transcriber-bot"
+name = "freeq-tui"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "crossterm",
+ "dirs 5.0.1",
+ "freeq-sdk",
+ "hex",
+ "image",
+ "open",
+ "ratatui",
+ "ratatui-image",
+ "reqwest 0.12.28",
+ "serde",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber",
+ "whoami",
+]
+
+[[package]]
+name = "freeq-utopia"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -2406,30 +2430,6 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "whisper-rs",
-]
-
-[[package]]
-name = "freeq-tui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "crossterm",
- "dirs 5.0.1",
- "freeq-sdk",
- "hex",
- "image",
- "open",
- "ratatui",
- "ratatui-image",
- "reqwest 0.12.28",
- "serde",
- "tokio",
- "toml 0.8.23",
- "tracing",
- "tracing-subscriber",
- "whoami",
 ]
 
 [[package]]

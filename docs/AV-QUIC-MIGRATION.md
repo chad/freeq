@@ -22,7 +22,7 @@ media: the instant a client's audio encoder starts publishing, the connection
 floods `transport error: connection closed` ~50×/sec and audio degrades to
 static.
 
-**Evidence.** The transcriber bot over WebSocket logged *thousands* of
+**Evidence.** The utopia agent over WebSocket logged *thousands* of
 `connection closed`. The same bot over QUIC (`--sfu-url
 https://irc.freeq.at:8080/av/moq`) logged **zero**.
 

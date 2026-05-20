@@ -10,7 +10,7 @@ members = [
     "freeq-windows-core",
     "freeq-bot-id",
     "freeq-av-client",
-    "freeq-transcriber-bot",
+    "freeq-utopia",
 ]
 exclude = [
     "freeq-app/src-tauri",
