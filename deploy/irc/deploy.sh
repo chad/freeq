@@ -33,9 +33,12 @@ env = []
 include = []
 EOF
 
-# Procfile — Miren sets $PORT
+# Procfile — Miren sets $PORT. Binary lives at /app/freeq-server because
+# our custom Dockerfile copies it there from the builder stage (the
+# target/release/ path only exists during the Cargo build, not in the
+# slim runtime image).
 cat > "$TMPDIR/Procfile" << 'EOF'
-web: ./target/release/freeq-server --listen-addr 127.0.0.1:16667 --web-addr 0.0.0.0:${PORT:-8080} --server-name irc.freeq.at --db-path /app/data/freeq.db --data-dir /app/data --motd "Welcome to freeq — IRC with AT Protocol identity. https://freeq.at"
+web: /app/freeq-server --listen-addr 127.0.0.1:16667 --web-addr 0.0.0.0:${PORT:-8080} --server-name irc.freeq.at --db-path /app/data/freeq.db --data-dir /app/data --motd "Welcome to freeq — IRC with AT Protocol identity. https://freeq.at"
 EOF
 
 # Remove any nested .miren dirs

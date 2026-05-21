@@ -12,9 +12,13 @@ COPY freeq-bots/ freeq-bots/
 COPY freeq-bot-id/ freeq-bot-id/
 COPY freeq-sdk-ffi/ freeq-sdk-ffi/
 COPY freeq-windows-core/ freeq-windows-core/
+COPY freeq-av-client/ freeq-av-client/
 RUN cargo build --release --package freeq-server
 
-FROM debian:bookworm-slim
+# Runtime base must match the builder's GLIBC — `rust:1.89-slim` is
+# Debian trixie (GLIBC 2.41), so we can't drop the binary onto bookworm
+# (GLIBC 2.36) or it crashes at startup with "GLIBC_2.38 not found".
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /app/data
 COPY --from=builder /build/target/release/freeq-server /app/freeq-server
