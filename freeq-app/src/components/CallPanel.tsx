@@ -33,6 +33,10 @@ export function CallPanel() {
   const localStreamRef = useRef<MediaStream | null>(null);
 
   const [participantSlots, setParticipantSlots] = useState<Slot[]>([]);
+  // Full-screen: the call panel takes over the whole web-app viewport so
+  // participant video (and utopia's visual-aid cards) is actually big
+  // enough to see.
+  const [fullscreen, setFullscreen] = useState(false);
 
   const myNick = getNick();
   // Connect to the SFU's QUIC/WebTransport listener (udp :8080) rather
@@ -247,12 +251,24 @@ export function CallPanel() {
   const myAvatar = authDid ? getCachedProfile(authDid)?.avatar : null;
 
   return (
-    <div className="border-b border-border bg-bg-secondary">
+    <div
+      className={
+        fullscreen
+          ? 'fixed inset-0 z-40 bg-bg-secondary flex flex-col'
+          : 'border-b border-border bg-bg-secondary'
+      }
+    >
       {/* Video grid — shown when camera is on or participants exist */}
       {showVideoGrid && (
-        <div className="flex flex-wrap gap-2 p-2 justify-center max-h-64 overflow-y-auto">
+        <div
+          className={
+            fullscreen
+              ? 'flex-1 flex flex-wrap gap-4 p-4 justify-center items-center content-center overflow-y-auto'
+              : 'flex flex-wrap gap-2 p-2 justify-center max-h-64 overflow-y-auto'
+          }
+        >
           {/* Local tile */}
-          <div className="relative w-32 h-24 rounded-lg overflow-hidden bg-bg-tertiary flex-shrink-0">
+          <div className={tileClasses(fullscreen)}>
             {avCameraOn ? (
               <video
                 ref={localVideoRef}
@@ -275,7 +291,12 @@ export function CallPanel() {
               into a hidden div, so video subscriptions worked but never
               reached the screen). */}
           {participantSlots.map((slot) => (
-            <RemoteTile key={slot.broadcastKey} slot={slot} moqOrigin={moqOrigin} />
+            <RemoteTile
+              key={slot.broadcastKey}
+              slot={slot}
+              moqOrigin={moqOrigin}
+              fullscreen={fullscreen}
+            />
           ))}
         </div>
       )}
@@ -315,6 +336,15 @@ export function CallPanel() {
           {avCameraOn ? <CameraOnIcon size={18} /> : <CameraOffIcon size={18} />}
         </button>
 
+        {/* Full screen */}
+        <button
+          onClick={() => setFullscreen((f) => !f)}
+          className="p-2 rounded-full bg-bg-tertiary text-fg hover:bg-bg-tertiary/80 transition-colors"
+          title={fullscreen ? 'Exit full screen' : 'Full screen'}
+        >
+          {fullscreen ? <MinimizeIcon size={18} /> : <MaximizeIcon size={18} />}
+        </button>
+
         {/* Leave */}
         <button
           onClick={handleLeave}
@@ -337,7 +367,23 @@ type Slot = { nick: string; broadcastKey: string; broadcastName: string };
 /// Remote participant tile that mounts its own `<moq-watch>` element so
 /// video actually appears on the screen. The avatar sits underneath
 /// as a fallback when the participant hasn't enabled their camera.
-function RemoteTile({ slot, moqOrigin }: { slot: Slot; moqOrigin: string }) {
+/// Tile sizing — tiny thumbnails inline, large 16:9 tiles in full
+/// screen (16:9 so utopia's video isn't cropped).
+function tileClasses(fullscreen: boolean): string {
+  return fullscreen
+    ? 'relative w-[42vw] max-w-[820px] min-w-[280px] aspect-video rounded-xl overflow-hidden bg-bg-tertiary flex-shrink-0'
+    : 'relative w-32 h-24 rounded-lg overflow-hidden bg-bg-tertiary flex-shrink-0';
+}
+
+function RemoteTile({
+  slot,
+  moqOrigin,
+  fullscreen,
+}: {
+  slot: Slot;
+  moqOrigin: string;
+  fullscreen: boolean;
+}) {
   const mountRef = useRef<HTMLDivElement>(null);
   const profile = getCachedProfile(slot.nick);
 
@@ -370,13 +416,29 @@ function RemoteTile({ slot, moqOrigin }: { slot: Slot; moqOrigin: string }) {
   }, [slot.broadcastName, moqOrigin]);
 
   return (
-    <div className="relative w-32 h-24 rounded-lg overflow-hidden bg-bg-tertiary flex-shrink-0">
+    <div className={tileClasses(fullscreen)}>
       <AvatarTile name={slot.nick} avatarUrl={profile?.avatar} />
       <div ref={mountRef} className="absolute inset-0" />
       <span className="absolute bottom-1 left-1 text-[10px] bg-black/60 text-white px-1 rounded z-10">
         {slot.nick}
       </span>
     </div>
+  );
+}
+
+function MaximizeIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4" />
+    </svg>
+  );
+}
+
+function MinimizeIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" />
+    </svg>
   );
 }
 
