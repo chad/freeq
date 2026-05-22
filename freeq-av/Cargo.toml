@@ -1,0 +1,24 @@
+[package]
+name = "freeq-av"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Reusable voice/video layer for freeq agents — MoQ transport, audio capture and playback."
+
+[dependencies]
+# MoQ + media stack — same git revs as the rest of the workspace so the
+# lockfile resolves them once.
+iroh-live = { git = "https://github.com/n0-computer/iroh-live", default-features = false, features = ["opus", "h264"] }
+moq-native = { git = "https://github.com/Frando/moq", branch = "deps/iroh-main", default-features = false, features = ["noq", "websocket", "aws-lc-rs"] }
+moq-lite = { git = "https://github.com/Frando/moq", branch = "deps/iroh-main" }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
+url = "2"
+futures-util = "0.3"
+bytes = "1"
+
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

@@ -2246,6 +2246,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "freeq-av"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "futures-util",
+ "iroh-live",
+ "moq-lite",
+ "moq-native",
+ "rustls",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "freeq-av-client"
 version = "0.1.0"
 dependencies = [
