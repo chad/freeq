@@ -15,6 +15,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use freeq_agent_kit::{
+    extract_addressed, is_hallucination, split_speech_and_links, VadConfig, VadSegmenter,
+};
 use freeq_av::{broadcast_path, AvConfig, AvParticipant, AvSession, Speaker};
 use freeq_sdk::auth::KeySigner;
 use freeq_sdk::client::{self, ClientHandle, ConnectConfig};
@@ -396,7 +399,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                 if from.eq_ignore_ascii_case(&cfg.nick) {
                     continue;
                 }
-                let Some(question) = qa::extract_addressed(&text, &cfg.nick) else {
+                let Some(question) = extract_addressed(&text, &cfg.nick) else {
                     continue;
                 };
                 // Don't answer the burst of channel history the server
@@ -440,51 +443,6 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
             _ => {}
         }
     }
-}
-
-/// Split an answer into a speakable form plus the links it contained.
-/// Eliza is voice-first and URLs are unpronounceable, so they're pulled
-/// out of what she says aloud — markdown links `[label](url)` keep only
-/// `label` in speech, bare `http(s)`/`www.` URLs are dropped — and the
-/// caller posts the collected URLs into the channel as text instead.
-fn split_speech_and_links(text: &str) -> (String, Vec<String>) {
-    let mut links: Vec<String> = Vec::new();
-    let mut spoken = String::with_capacity(text.len());
-    let mut rest = text;
-    while !rest.is_empty() {
-        // Markdown link: [label](url) — speak the label, surface the url.
-        if let Some(stripped) = rest.strip_prefix('[') {
-            if let Some(mid) = stripped.find("](") {
-                if let Some(close) = stripped[mid + 2..].find(')') {
-                    let label = &stripped[..mid];
-                    let url = stripped[mid + 2..mid + 2 + close].trim();
-                    spoken.push_str(label);
-                    if url.starts_with("http") || url.starts_with("www.") {
-                        links.push(url.to_string());
-                    }
-                    rest = &stripped[mid + 2 + close + 1..];
-                    continue;
-                }
-            }
-        }
-        // Bare URL — drop it from speech entirely.
-        if rest.starts_with("http://")
-            || rest.starts_with("https://")
-            || rest.starts_with("www.")
-        {
-            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-            let url = rest[..end].trim_end_matches(|c| ",.;:!?)]}\"'".contains(c));
-            links.push(url.to_string());
-            rest = &rest[url.len()..];
-            continue;
-        }
-        let ch = rest.chars().next().unwrap();
-        spoken.push(ch);
-        rest = &rest[ch.len_utf8()..];
-    }
-    // Collapse the whitespace left where URLs were removed.
-    let spoken = spoken.split_whitespace().collect::<Vec<_>>().join(" ");
-    (spoken, links)
 }
 
 /// Handle one addressed question: ask Groq, post the answer to chat,
@@ -860,23 +818,8 @@ async fn start_transcription(
     })
 }
 
-// ── Voice-activity segmentation tuning ──────────────────────────────
-// All in 16 kHz mono samples / amplitude units.
+// ── Addressed-question dispatch timing ──────────────────────────────
 
-/// Peak amplitude above which a chunk counts as speech. Mic silence /
-/// room noise sits well under this; conversational speech peaks far
-/// above it. Deliberately low so we don't clip quiet talkers.
-const VOICE_PEAK_THRESHOLD: f32 = 0.018;
-/// A pause this long ends an utterance and triggers a flush. Long
-/// enough to ride over the gaps between words, short enough that the
-/// post still feels rapid. 0.6s @ 16 kHz.
-const SILENCE_GAP_SAMPLES: usize = (16_000.0 * 0.6) as usize;
-/// Hard cap on an utterance — flush even mid-speech so a monologue
-/// doesn't accumulate unbounded latency. 22s @ 16 kHz.
-const MAX_UTTERANCE_SAMPLES: usize = 16_000 * 22;
-/// Don't bother transcribing an utterance with less than this much
-/// actual voiced audio — it's a cough / click / room noise. 0.35s.
-const MIN_VOICED_SAMPLES: usize = (16_000.0 * 0.35) as usize;
 /// After dispatching an answer, ignore further addressed questions for
 /// this long. Collapses the duplicate transcriptions a multi-device
 /// speaker produces (each device's broadcast is tapped separately) and
@@ -887,28 +830,6 @@ const ANSWER_DEBOUNCE: Duration = Duration::from_secs(8);
 /// replay buffered audio) — answering that backlog is an unprompted
 /// "monologue" of stale messages. Live questions come after the burst.
 const STARTUP_GRACE: Duration = Duration::from_secs(15);
-
-/// Known Whisper silence/noise hallucinations. Even with VAD, a short
-/// burst of non-speech noise occasionally slips a window through;
-/// these are the canonical phantom outputs across Whisper variants.
-/// An exact (case/punctuation-insensitive) match is dropped.
-fn is_hallucination(text: &str) -> bool {
-    let t = text
-        .trim()
-        .trim_matches(|c: char| c.is_ascii_punctuation() || c.is_whitespace())
-        .to_lowercase();
-    matches!(
-        t.as_str(),
-        "" | "you"
-            | "thank you"
-            | "thanks for watching"
-            | "thank you for watching"
-            | "bye"
-            | "okay"
-            | "so"
-            | "the"
-    )
-}
 
 /// Consume one participant's decoded-PCM stream (from an [`AvSession`])
 /// and segment it into utterances by voice activity — accumulate while
@@ -930,10 +851,8 @@ async fn transcribe_participant(
     let stt = cfg.stt.clone();
     tracing::info!(%nick, %path, "participant audio live — transcribing");
 
-    // Utterance accumulator + VAD state.
-    let mut buf: Vec<f32> = Vec::new();
-    let mut voiced_samples: usize = 0;
-    let mut trailing_silence: usize = 0;
+    // VAD: turn the PCM stream into utterances, cut at natural pauses.
+    let mut segmenter = VadSegmenter::new(VadConfig::default());
     let mut frames_seen: u64 = 0;
 
     while let Some(frame) = audio.recv().await {
@@ -943,7 +862,6 @@ async fn transcribe_participant(
             continue;
         }
         let peak = pcm.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
-        let voiced = peak >= VOICE_PEAK_THRESHOLD;
         // Feed the video presence's "listening" mood — snap up, ease down.
         {
             use std::sync::atomic::Ordering;
@@ -956,46 +874,21 @@ async fn transcribe_participant(
             peer_level.store(smoothed.to_bits(), Ordering::Relaxed);
         }
 
-        if voiced {
-            buf.extend_from_slice(&pcm);
-            voiced_samples += pcm.len();
-            trailing_silence = 0;
-        } else if !buf.is_empty() {
-            // Mid-utterance silence: keep it in the buffer (the pause is
-            // part of natural speech and helps STT) and count it toward
-            // the end-of-utterance gap.
-            buf.extend_from_slice(&pcm);
-            trailing_silence += pcm.len();
-        }
-        // else: pre-speech silence — drop it, never accumulate.
-
         if frames_seen == 1 || frames_seen.is_multiple_of(250) {
             tracing::info!(
-                %nick, frames_seen, buffered = buf.len(), voiced_samples, peak,
+                %nick, frames_seen, buffered = segmenter.buffered(), peak,
                 in_rate = frame.format.sample_rate,
                 in_channels = frame.format.channel_count,
                 "audio tap heartbeat"
             );
         }
 
-        let pause_flush = trailing_silence >= SILENCE_GAP_SAMPLES && !buf.is_empty();
-        let cap_flush = buf.len() >= MAX_UTTERANCE_SAMPLES;
-        if !pause_flush && !cap_flush {
+        // Accumulate; `push` yields a chunk only on a completed utterance
+        // (pre-speech silence and noise-only flushes stay inside the
+        // segmenter).
+        let Some(chunk) = segmenter.push(&pcm) else {
             continue;
-        }
-
-        let chunk = std::mem::take(&mut buf);
-        let chunk_voiced = voiced_samples;
-        voiced_samples = 0;
-        trailing_silence = 0;
-
-        // Skip utterances that are basically noise — too little actual
-        // speech to be worth a round-trip (and a prime hallucination
-        // source).
-        if chunk_voiced < MIN_VOICED_SAMPLES {
-            tracing::debug!(%nick, chunk_voiced, "skipping low-voice utterance");
-            continue;
-        }
+        };
 
         let stt = stt.clone();
         let nick = nick.clone();
@@ -1021,7 +914,7 @@ async fn transcribe_participant(
                     // instead of just logging it as a transcript line.
                     // In a voice call people address the bot by talking,
                     // not typing.
-                    if let Some(question) = qa::extract_addressed(&text, &cfg.nick) {
+                    if let Some(question) = extract_addressed(&text, &cfg.nick) {
                         // Debounce: a speaker joined from several devices
                         // is tapped once per broadcast, so the same
                         // question arrives two or three times. Answer the

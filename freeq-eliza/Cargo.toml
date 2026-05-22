@@ -23,6 +23,9 @@ bs58 = "0.5"
 # Reusable AV layer — MoQ transport, audio capture/playback, and the
 # AvSession publish + participant-tap loop.
 freeq-av = { path = "../freeq-av" }
+# Voice-agent helpers — VAD segmentation, address detection, speech
+# post-processing.
+freeq-agent-kit = { path = "../freeq-agent-kit" }
 # iroh-live stays a direct dep: the video tile renders into its
 # VideoSource / VideoFrame types, and `to_whisper_pcm` reads its
 # AudioFormat.

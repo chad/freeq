@@ -2339,6 +2339,7 @@ dependencies = [
  "clap",
  "dirs 6.0.0",
  "ed25519-dalek 2.2.0",
+ "freeq-agent-kit",
  "freeq-av",
  "freeq-sdk",
  "freeq-server",
