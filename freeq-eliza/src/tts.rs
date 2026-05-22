@@ -16,6 +16,99 @@ pub struct TtsAudio {
 /// ElevenLabs `pcm_48000` is raw 16-bit signed-LE mono at 48 kHz.
 pub const ELEVENLABS_PCM_RATE: u32 = 48_000;
 
+/// The ElevenLabs request body — shared by the buffered and streaming
+/// synthesizers.
+fn tts_body(model: &str, text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "text": text,
+        "model_id": model,
+        "voice_settings": {
+            "stability": 0.7,
+            "similarity_boost": 0.75,
+            // 0.85 (the avatar app's calm default) sped up ~20% — the
+            // bot reads quick answers, not narration.
+            "speed": 1.02,
+        },
+    })
+}
+
+/// Decodes a stream of raw s16le PCM bytes that may be split at *any*
+/// byte boundary. A network chunk can end mid-sample (an odd byte
+/// count); that dangling byte is carried into the next [`push`] so the
+/// 16-bit framing never desyncs.
+///
+/// [`push`]: PcmStreamDecoder::push
+#[derive(Default)]
+pub struct PcmStreamDecoder {
+    /// A dangling low byte from the previous chunk, awaiting its high byte.
+    carry: Option<u8>,
+}
+
+impl PcmStreamDecoder {
+    /// Decode the next run of stream bytes to f32 PCM, carrying any
+    /// trailing odd byte forward.
+    pub fn push(&mut self, bytes: &[u8]) -> Vec<f32> {
+        let mut buf = Vec::with_capacity(bytes.len() + 1);
+        if let Some(b) = self.carry.take() {
+            buf.push(b);
+        }
+        buf.extend_from_slice(bytes);
+        if buf.len() % 2 == 1 {
+            self.carry = Some(buf[buf.len() - 1]);
+            buf.pop();
+        }
+        decode_pcm_s16le(&buf)
+    }
+}
+
+/// Stream a synthesis from ElevenLabs, handing decoded PCM to `on_pcm`
+/// as each network chunk arrives — so the agent can start speaking
+/// before synthesis finishes.
+///
+/// Same voice/model/output as [`synthesize`], but the `/stream`
+/// endpoint. `on_pcm` is called repeatedly with mono f32 PCM at
+/// [`ELEVENLABS_PCM_RATE`]; returns the total sample count.
+pub async fn synthesize_streaming(
+    client: &reqwest::Client,
+    api_key: &str,
+    voice_id: &str,
+    model: &str,
+    text: &str,
+    mut on_pcm: impl FnMut(&[f32]),
+) -> Result<usize> {
+    let url = format!(
+        "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream?output_format=pcm_48000"
+    );
+    let mut resp = client
+        .post(&url)
+        .header("xi-api-key", api_key)
+        .json(&tts_body(model, text))
+        .send()
+        .await
+        .context("elevenlabs streaming TTS request failed")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let err = resp.text().await.unwrap_or_default();
+        anyhow::bail!("elevenlabs streaming TTS {status}: {err}");
+    }
+
+    let mut decoder = PcmStreamDecoder::default();
+    let mut total = 0usize;
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .context("reading elevenlabs TTS stream")?
+    {
+        let pcm = decoder.push(&chunk);
+        if !pcm.is_empty() {
+            total += pcm.len();
+            on_pcm(&pcm);
+        }
+    }
+    Ok(total)
+}
+
 /// Synthesize `text` with ElevenLabs. `voice_id` is the ElevenLabs
 /// voice (e.g. the "Eliza" voice). `model` is e.g.
 /// `eleven_turbo_v2_5`. Voice tuning matches the avatar app's
@@ -27,24 +120,13 @@ pub async fn synthesize(
     model: &str,
     text: &str,
 ) -> Result<TtsAudio> {
-    let body = serde_json::json!({
-        "text": text,
-        "model_id": model,
-        "voice_settings": {
-            "stability": 0.7,
-            "similarity_boost": 0.75,
-            // 0.85 (the avatar app's calm default) sped up ~20% — the
-            // bot reads quick answers, not narration.
-            "speed": 1.02,
-        },
-    });
     let url = format!(
         "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=pcm_48000"
     );
     let resp = client
         .post(&url)
         .header("xi-api-key", api_key)
-        .json(&body)
+        .json(&tts_body(model, text))
         .send()
         .await
         .context("elevenlabs TTS request failed")?;
@@ -127,6 +209,55 @@ mod tests {
     #[test]
     fn raw_pcm_empty_input() {
         assert!(decode_pcm_s16le(&[]).is_empty());
+    }
+
+    // ---------- PcmStreamDecoder ----------
+
+    /// Splitting a PCM byte stream at arbitrary (including odd) offsets
+    /// must decode to exactly the same samples as decoding it whole.
+    #[test]
+    fn stream_decoder_survives_splits_at_odd_offsets() {
+        let mut raw = Vec::new();
+        for s in 0i16..200 {
+            raw.extend_from_slice(&s.to_le_bytes());
+        }
+        let whole = decode_pcm_s16le(&raw);
+
+        // Split at every offset, odd ones included — the worst case for
+        // 16-bit framing.
+        for split in 0..raw.len() {
+            let mut dec = PcmStreamDecoder::default();
+            let mut got = dec.push(&raw[..split]);
+            got.extend(dec.push(&raw[split..]));
+            assert_eq!(got, whole, "split at {split}");
+        }
+    }
+
+    #[test]
+    fn stream_decoder_handles_many_tiny_chunks() {
+        let mut raw = Vec::new();
+        for s in [-32768i16, -1, 0, 1, 32767, 12345, -9999] {
+            raw.extend_from_slice(&s.to_le_bytes());
+        }
+        let whole = decode_pcm_s16le(&raw);
+        // One byte at a time — every push but the last carries.
+        let mut dec = PcmStreamDecoder::default();
+        let mut got = Vec::new();
+        for b in &raw {
+            got.extend(dec.push(std::slice::from_ref(b)));
+        }
+        assert_eq!(got, whole);
+    }
+
+    #[test]
+    fn stream_decoder_empty_push_is_inert() {
+        let mut dec = PcmStreamDecoder::default();
+        assert!(dec.push(&[]).is_empty());
+        // A lone byte carries; the empty push must not flush or drop it.
+        assert!(dec.push(&[0x34]).is_empty());
+        assert!(dec.push(&[]).is_empty());
+        let out = dec.push(&[0x12]);
+        assert_eq!(out, vec![i16::from_le_bytes([0x34, 0x12]) as f32 / 32768.0]);
     }
 
     #[test]

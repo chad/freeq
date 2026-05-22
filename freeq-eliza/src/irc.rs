@@ -445,8 +445,9 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
     }
 }
 
-/// Handle one addressed question: ask Groq, post the answer to chat,
-/// and (if we're in a call) speak it aloud through the bot's broadcast.
+/// Handle one addressed question: stream the answer from Groq and speak
+/// it sentence-by-sentence as it generates — so Eliza starts talking
+/// almost immediately — then post any links and show a visual card.
 #[allow(clippy::too_many_arguments)]
 async fn answer_and_speak(
     cfg: Arc<SharedConfig>,
@@ -461,25 +462,74 @@ async fn answer_and_speak(
     let Some(key) = cfg.groq_api_key.as_deref() else { return };
     tracing::info!(%asker, %question, "answering addressed question");
 
-    // Show the "thinking" mood on the tile while the LLM calls run.
+    // Show the "thinking" mood on the tile while the LLM call runs.
     // The guard clears it on every exit path.
     if let Some(v) = &video {
         v.set_thinking(true);
     }
     let _thinking = ThinkingGuard(video.clone());
 
-    let answer = match qa::answer(
+    // Speaker task: drains completed sentences and streams each through
+    // TTS, enqueueing audio as it synthesizes. It runs concurrently with
+    // answer generation — Eliza speaks sentence 1 while the model is
+    // still writing sentence 2.
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let speak_task: Option<JoinHandle<()>> =
+        match (speaker, cfg.elevenlabs_api_key.clone()) {
+            (Some(sp), Some(el_key)) => {
+                let http = cfg.http.clone();
+                let voice = cfg.elevenlabs_voice_id.clone();
+                let model = cfg.elevenlabs_model.clone();
+                Some(tokio::spawn(async move {
+                    while let Some(sentence) = rx.recv().await {
+                        // URLs are unpronounceable — strip them from
+                        // speech; the channel gets them as text instead.
+                        let (spoken, _) = split_speech_and_links(&sentence);
+                        if !spoken.chars().any(char::is_alphanumeric) {
+                            continue;
+                        }
+                        if let Err(e) = tts::synthesize_streaming(
+                            &http,
+                            &el_key,
+                            &voice,
+                            &model,
+                            &spoken,
+                            |pcm| sp.enqueue(pcm, tts::ELEVENLABS_PCM_RATE),
+                        )
+                        .await
+                        {
+                            tracing::warn!(error = ?e, "streaming TTS failed");
+                        }
+                    }
+                }))
+            }
+            _ => None,
+        };
+
+    // Stream the answer; hand each completed sentence to the speaker task.
+    let mut chunker = qa::SentenceChunker::new();
+    let result = qa::answer_streaming(
         &cfg.http,
         key,
         &cfg.groq_answer_model,
         &transcript,
         &question,
+        |delta| {
+            for sentence in chunker.push(delta) {
+                let _ = tx.send(sentence);
+            }
+        },
     )
-    .await
-    {
+    .await;
+
+    let answer = match result {
         Ok(a) => a,
         Err(e) => {
             tracing::warn!(error = ?e, "QA failed");
+            drop(tx);
+            if let Some(t) = speak_task {
+                let _ = t.await;
+            }
             let _ = handle
                 .privmsg(&channel, &format!("{asker}: sorry — I couldn't answer that ({e})."))
                 .await;
@@ -487,11 +537,14 @@ async fn answer_and_speak(
         }
     };
 
-    // Eliza is voice-first. URLs are unpronounceable — pull them out of
-    // what she says aloud and post them into the channel as text. This
-    // covers links the model embedded in its answer and the agentic
-    // web-search source. `spoken` is now URL-free.
-    let (mut spoken, body_links) = split_speech_and_links(&answer.text);
+    // The final sentence has no trailing whitespace to flush it mid-stream.
+    if let Some(last) = chunker.flush() {
+        let _ = tx.send(last);
+    }
+
+    // Links: Eliza is voice-first, so URLs go to the channel as text
+    // rather than into speech. Collect them from the full answer.
+    let (_, body_links) = split_speech_and_links(&answer.text);
     let mut posted_link = false;
     for url in &body_links {
         let _ = handle.privmsg(&channel, &format!("[eliza] {url}")).await;
@@ -512,50 +565,22 @@ async fn answer_and_speak(
         }
         posted_link = true;
     }
-    if posted_link {
-        spoken.push_str(" I've posted a link in the channel if you'd like to read more.");
+    if posted_link && speak_task.is_some() {
+        let _ = tx.send(
+            "I've posted a link in the channel if you'd like to read more.".to_string(),
+        );
     }
 
-    // Multimodal: eliza speaks the answer when there's a call to speak
-    // into, and only types it into the channel when it could NOT speak
-    // it — no call, no ElevenLabs key, or a TTS failure.
-    let mut spoke = false;
-    if let (Some(speaker), Some(el_key)) = (speaker.as_ref(), cfg.elevenlabs_api_key.as_deref()) {
-        match tts::synthesize(
-            &cfg.http,
-            el_key,
-            &cfg.elevenlabs_voice_id,
-            &cfg.elevenlabs_model,
-            &spoken,
-        )
-        .await
-        {
-            Ok(audio) => {
-                // Dump the exact synthesized PCM so a "static" report can
-                // be bisected: if /tmp/freeq-tts-last.wav plays clean, the
-                // static is introduced downstream (Opus encode /
-                // transport / receiver playout), not by TTS.
-                match std::fs::write(
-                    "/tmp/freeq-tts-last.wav",
-                    tts::encode_wav(&audio.pcm, audio.sample_rate),
-                ) {
-                    Ok(()) => tracing::info!(
-                        samples = audio.pcm.len(),
-                        rate = audio.sample_rate,
-                        "saved TTS audio to /tmp/freeq-tts-last.wav"
-                    ),
-                    Err(e) => tracing::warn!(error = ?e, "could not save TTS debug WAV"),
-                }
-                speaker.enqueue(&audio.pcm, audio.sample_rate);
-                tracing::info!(
-                    queued_secs = speaker.queued_secs(),
-                    "spoke answer into the call"
-                );
-                spoke = true;
-            }
-            Err(e) => tracing::warn!(error = ?e, "TTS failed — falling back to text"),
+    // Close the sentence stream and wait for her to finish speaking it.
+    drop(tx);
+    let spoke = match speak_task {
+        Some(t) => {
+            let _ = t.await;
+            true
         }
-    }
+        None => false,
+    };
+
     if !spoke {
         tracing::info!("answered in text only");
         let _ = handle

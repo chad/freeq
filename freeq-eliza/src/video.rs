@@ -499,6 +499,27 @@ fn presence_svg(mood: Mood, t: f32, level: f32, peer: f32) -> String {
         Mood::Speaking => "eliza",
     };
 
+    // Face — blinking eyes and a mouth whose openness tracks `level`
+    // (eliza's own speech loudness), so she visibly lip-syncs as she
+    // talks. At rest `level` is ~0, leaving a calm closed mouth.
+    let blinking = (t % 4.3) < 0.13;
+    let eye_r = orb_r * 0.115;
+    let eye_ry = eye_r * if blinking { 0.12 } else { 1.0 };
+    let eye_y = 156.0 - orb_r * 0.20;
+    let eye_dx = orb_r * 0.34;
+    let mouth_cy = 156.0 + orb_r * 0.36;
+    let mouth_rx = orb_r * 0.27;
+    let mouth_ry = 2.0 + level.clamp(0.0, 1.0) * orb_r * 0.42;
+    let face = format!(
+        r##"<g fill="#0a1020">
+  <ellipse cx="{lx:.1}" cy="{eye_y:.1}" rx="{eye_r:.1}" ry="{eye_ry:.1}"/>
+  <ellipse cx="{rx:.1}" cy="{eye_y:.1}" rx="{eye_r:.1}" ry="{eye_ry:.1}"/>
+  <ellipse cx="320" cy="{mouth_cy:.1}" rx="{mouth_rx:.1}" ry="{mouth_ry:.1}"/>
+</g>"##,
+        lx = 320.0 - eye_dx,
+        rx = 320.0 + eye_dx,
+    );
+
     format!(
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">
   <defs>
@@ -516,6 +537,7 @@ fn presence_svg(mood: Mood, t: f32, level: f32, peer: f32) -> String {
   <circle cx="320" cy="156" r="{glow_r:.1}" fill="{accent}" opacity="{glow_op:.3}"/>
   {overlay}
   <circle cx="320" cy="156" r="{orb_r:.1}" fill="url(#orb)"/>
+  {face}
   <text x="320" y="318" font-family="{FONT}" font-size="26" font-weight="600" fill="#cfe0ff" text-anchor="middle" letter-spacing="6">{label}</text>
 </svg>"##,
         w = VIDEO_W,
