@@ -6,11 +6,31 @@ import * as e2ee from '../lib/e2ee';
 
 function ProvenanceBlock({ provenance }: { provenance: NonNullable<ActorInfo['provenance']> }) {
   const [creatorProfile, setCreatorProfile] = useState<ATProfile | null>(null);
+  // Nick lookup for the creator. did:plc resolves via AT Protocol profile;
+  // did:key has no profile, so we fall through to the actor-identity REST
+  // endpoint which returns the creator's current IRC nick if it has an
+  // active session. Without this, sub-agent cards render their creator as
+  // a raw "did:key:z6Mk…" string instead of a recognizable name like
+  // "lobot" — observed live with society panelists owned by the moderator.
+  const [creatorNick, setCreatorNick] = useState<string | null>(null);
   useEffect(() => {
-    if (provenance.creator_did) {
-      fetchProfile(provenance.creator_did).then((p) => p && setCreatorProfile(p));
+    if (!provenance.creator_did) return;
+    const did = provenance.creator_did;
+    const isDidKey = did.startsWith('did:key:');
+    if (!isDidKey) {
+      fetchProfile(did).then((p) => p && setCreatorProfile(p));
     }
+    fetch(`/api/v1/actors/${encodeURIComponent(did)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => {
+        if (j?.nick) setCreatorNick(j.nick);
+      })
+      .catch(() => {});
   }, [provenance.creator_did]);
+
+  const creatorLabel = creatorProfile
+    ? creatorProfile.displayName || creatorProfile.handle
+    : creatorNick || provenance.creator_did;
 
   return (
     <div className="mt-2 p-2 bg-bg-tertiary rounded-lg text-left">
@@ -26,9 +46,7 @@ function ProvenanceBlock({ provenance }: { provenance: NonNullable<ActorInfo['pr
             {creatorProfile?.avatar && (
               <img src={creatorProfile.avatar} alt="" className="w-3.5 h-3.5 rounded-full" />
             )}
-            <span className="text-fg-muted">
-              {creatorProfile ? (creatorProfile.displayName || creatorProfile.handle) : provenance.creator_did}
-            </span>
+            <span className="text-fg-muted">{creatorLabel}</span>
           </button>
         </div>
       )}

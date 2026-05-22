@@ -828,12 +828,25 @@ async fn api_actor_identity(
         .find_map(|sid| state.session_actor_class.lock().get(sid).copied())
         .unwrap_or(crate::connection::ActorClass::Human);
 
-    // Nick
+    // Nick — prefer the live nick from an active session; fall back to
+    // the persistent `identities` table for offline DIDs so callers like
+    // the freeq-app provenance card can resolve e.g. a moderator's
+    // did:key to "lobot" even when the moderator process isn't running.
+    // Without this fallback, sub-agent provenance cards rendered the
+    // raw "did:key:z6Mk…" string for any creator whose process had
+    // exited since the sub-agent was spawned.
     let nick = {
         let nts = state.nick_to_session.lock();
-        sessions
+        let live = sessions
             .iter()
-            .find_map(|sid| nts.get_nick(sid).map(|n| n.to_string()))
+            .find_map(|sid| nts.get_nick(sid).map(|n| n.to_string()));
+        drop(nts);
+        live.or_else(|| {
+            state
+                .with_db(|db| db.get_identity_by_did(&did))
+                .flatten()
+                .map(|row| row.nick)
+        })
     };
 
     // Handle
