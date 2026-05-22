@@ -12,3 +12,4 @@ pub mod stt;
 pub mod summary;
 pub mod tts;
 pub mod video;
+pub mod vision;

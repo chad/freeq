@@ -50,8 +50,10 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use std::sync::{Arc, Mutex};
+
 use iroh_live::media::codec::{AudioCodec, VideoCodec};
-use iroh_live::media::format::{AudioPreset, VideoPreset};
+use iroh_live::media::format::{AudioPreset, VideoFrame, VideoPreset};
 use iroh_live::media::publish::LocalBroadcast;
 use iroh_live::media::subscribe::RemoteBroadcast;
 use iroh_live::media::traits::VideoSource;
@@ -77,10 +79,11 @@ pub struct AvConfig {
     pub my_nick: String,
 }
 
-/// A remote participant whose audio [`AvSession`] is tapping.
+/// A remote participant whose media [`AvSession`] is tapping.
 ///
 /// `audio` yields decoded PCM until the participant leaves or the
-/// session reconnects — either way the receiver simply closes.
+/// session reconnects — either way the receiver simply closes. `video`
+/// surfaces their most recent decoded frame, when they publish video.
 pub struct AvParticipant {
     /// The participant's full broadcast path.
     pub path: String,
@@ -88,6 +91,33 @@ pub struct AvParticipant {
     pub nick: String,
     /// Decoded PCM frames from the participant's audio track.
     pub audio: mpsc::Receiver<PcmFrame>,
+    /// The participant's most recent video frame (see [`VideoHandle`]).
+    pub video: VideoHandle,
+}
+
+/// A shared handle to a participant's most recent decoded video frame.
+///
+/// [`latest`](VideoHandle::latest) returns `None` until the first frame
+/// decodes — and stays `None` for a participant who publishes no video
+/// (audio-only). Cheap to clone.
+#[derive(Clone, Default)]
+pub struct VideoHandle {
+    latest: Arc<Mutex<Option<VideoFrame>>>,
+}
+
+impl VideoHandle {
+    /// The most recent frame, cloned out — frame pixel data is
+    /// reference-counted, so the clone is shallow.
+    pub fn latest(&self) -> Option<VideoFrame> {
+        self.latest.lock().ok().and_then(|g| g.clone())
+    }
+
+    /// Replace the stored frame (called by the video pump).
+    fn set(&self, frame: VideoFrame) {
+        if let Ok(mut g) = self.latest.lock() {
+            *g = Some(frame);
+        }
+    }
 }
 
 /// A live AV session: a background task that publishes the agent's
@@ -354,20 +384,41 @@ async fn run_tap(
     };
     tracing::info!(%nick, %path, "audio track live — tapping");
 
+    let video = VideoHandle::default();
     if tx
-        .send(AvParticipant { path, nick: nick.clone(), audio: audio_rx })
+        .send(AvParticipant {
+            path,
+            nick: nick.clone(),
+            audio: audio_rx,
+            video: video.clone(),
+        })
         .await
         .is_err()
     {
         return; // AvSession dropped — nobody is listening.
     }
 
-    // Park until the participant's audio stops (or this task is aborted
-    // on reconnect). `remote` + `track` drop on return → pipeline tears
-    // down → the caller's PCM receiver closes.
-    track.stopped().await;
-    drop(remote);
-    tracing::info!(%nick, "participant audio ended");
+    // Pump the participant's video into the shared latest-frame cell —
+    // best-effort, since many participants are audio-only (`video_ready`
+    // then just never resolves). Park on whichever ends first: the audio
+    // track stopping, or the video pump finishing. `remote` + `track`
+    // drop on return → pipelines tear down → the PCM receiver closes.
+    let video_pump = async {
+        match remote.video_ready().await {
+            Ok(mut vtrack) => {
+                tracing::info!(%nick, "video track live — watching");
+                while let Some(frame) = vtrack.next_frame().await {
+                    video.set(frame);
+                }
+            }
+            Err(e) => tracing::debug!(%nick, error = ?e, "no video track"),
+        }
+    };
+    tokio::select! {
+        _ = track.stopped() => {}
+        _ = video_pump => {}
+    }
+    tracing::info!(%nick, "participant tap ended");
 }
 
 #[cfg(test)]
@@ -493,5 +544,27 @@ mod tests {
             should_tap("sess/BobLoblaw~01020304", "sess", "sess/eliza~1", "eliza"),
             Some("BobLoblaw"),
         );
+    }
+
+    // ---------- VideoHandle ----------
+
+    #[test]
+    fn video_handle_starts_empty_then_stores_and_shares_frames() {
+        use iroh_live::media::format::VideoFrame;
+        let h = VideoHandle::default();
+        assert!(h.latest().is_none(), "no frame before the first set");
+
+        let frame = VideoFrame::new_rgba(
+            bytes::Bytes::from(vec![0u8; 4 * 2 * 2]),
+            2,
+            2,
+            std::time::Duration::ZERO,
+        );
+        h.set(frame);
+        assert_eq!(h.latest().expect("frame stored").dimensions, [2, 2]);
+
+        // Clones share the one cell.
+        let h2 = h.clone();
+        assert!(h2.latest().is_some(), "clone sees the same frame");
     }
 }

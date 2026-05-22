@@ -81,6 +81,11 @@ struct Cli {
     #[arg(long, default_value = "groq/compound")]
     groq_answer_model: String,
 
+    /// Groq vision model for questions about a participant's shared
+    /// screen or camera (e.g. "Eliza, what's on my screen?").
+    #[arg(long, default_value = "meta-llama/llama-4-scout-17b-16e-instruct")]
+    vision_model: String,
+
     /// ElevenLabs voice + model for speaking answers aloud. Reads
     /// `ELEVENLABS_API_KEY` from the environment.
     #[arg(long, default_value = "aj0fZfXTBc7E3By4X8L2")]
@@ -208,6 +213,7 @@ async fn main() -> Result<()> {
         groq_api_key,
         groq_chat_model: cli.groq_chat_model,
         groq_answer_model: cli.groq_answer_model,
+        vision_model: cli.vision_model,
         elevenlabs_api_key,
         elevenlabs_voice_id: cli.elevenlabs_voice,
         elevenlabs_model: cli.elevenlabs_model,

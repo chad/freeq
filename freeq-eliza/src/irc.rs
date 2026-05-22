@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use freeq_agent_kit::{
     extract_addressed, is_hallucination, split_speech_and_links, VadConfig, VadSegmenter,
 };
-use freeq_av::{broadcast_path, AvConfig, AvParticipant, AvSession, Speaker};
+use freeq_av::{broadcast_path, AvConfig, AvParticipant, AvSession, Speaker, VideoHandle};
 use freeq_sdk::auth::KeySigner;
 use freeq_sdk::client::{self, ClientHandle, ConnectConfig};
 use freeq_sdk::event::Event;
@@ -29,7 +29,7 @@ use crate::identity::Identity;
 use crate::imagegen::AiImageConfig;
 use crate::stt::{to_whisper_pcm, SttEngine};
 use crate::video::VideoTile;
-use crate::{imagegen, qa, summary, tts};
+use crate::{imagegen, qa, summary, tts, vision};
 
 pub struct RunConfig {
     pub server: String,
@@ -59,6 +59,9 @@ pub struct RunConfig {
     /// Groq model for answering addressed questions. Defaults to an
     /// agentic model (`groq/compound`) so eliza can search the web.
     pub groq_answer_model: String,
+    /// Groq vision model for questions about a participant's shared
+    /// screen or camera.
+    pub vision_model: String,
     /// ElevenLabs API key + voice + model for speaking answers aloud.
     /// When the key is `None`, answers are posted as text only.
     pub elevenlabs_api_key: Option<String>,
@@ -84,6 +87,7 @@ struct SharedConfig {
     groq_api_key: Option<String>,
     groq_chat_model: String,
     groq_answer_model: String,
+    vision_model: String,
     elevenlabs_api_key: Option<String>,
     elevenlabs_voice_id: String,
     elevenlabs_model: String,
@@ -147,6 +151,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         groq_api_key,
         groq_chat_model,
         groq_answer_model,
+        vision_model,
         elevenlabs_api_key,
         elevenlabs_voice_id,
         elevenlabs_model,
@@ -228,6 +233,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         groq_api_key,
         groq_chat_model,
         groq_answer_model,
+        vision_model,
         elevenlabs_api_key,
         elevenlabs_voice_id,
         elevenlabs_model,
@@ -431,7 +437,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                 let asker = from.clone();
                 tokio::spawn(async move {
                     answer_and_speak(
-                        cfg, handle, channel, asker, question, transcript, None, None,
+                        cfg, handle, channel, asker, question, transcript, None, None, None,
                     )
                     .await;
                 });
@@ -458,6 +464,8 @@ async fn answer_and_speak(
     transcript: String,
     speaker: Option<Speaker>,
     video: Option<VideoTile>,
+    // The asker's own video (their screen/camera), for visual questions.
+    asker_video: Option<VideoHandle>,
 ) {
     let Some(key) = cfg.groq_api_key.as_deref() else { return };
     tracing::info!(%asker, %question, "answering addressed question");
@@ -506,21 +514,39 @@ async fn answer_and_speak(
             _ => None,
         };
 
-    // Stream the answer; hand each completed sentence to the speaker task.
+    // A visual question we can actually see → the vision model with the
+    // asker's latest frame; otherwise the normal streaming QA. Either
+    // way, completed sentences go to the speaker task.
     let mut chunker = qa::SentenceChunker::new();
-    let result = qa::answer_streaming(
-        &cfg.http,
-        key,
-        &cfg.groq_answer_model,
-        &transcript,
-        &question,
-        |delta| {
-            for sentence in chunker.push(delta) {
-                let _ = tx.send(sentence);
-            }
-        },
-    )
-    .await;
+    let frame = asker_video
+        .filter(|_| vision::is_visual_question(&question))
+        .and_then(|vh| vh.latest());
+
+    let result = if let Some(frame) = frame {
+        tracing::info!("answering as a visual question");
+        vision::describe(&cfg.http, key, &cfg.vision_model, &question, &frame)
+            .await
+            .map(|text| {
+                for sentence in chunker.push(&text) {
+                    let _ = tx.send(sentence);
+                }
+                qa::Answer { text, source: None }
+            })
+    } else {
+        qa::answer_streaming(
+            &cfg.http,
+            key,
+            &cfg.groq_answer_model,
+            &transcript,
+            &question,
+            |delta| {
+                for sentence in chunker.push(delta) {
+                    let _ = tx.send(sentence);
+                }
+            },
+        )
+        .await
+    };
 
     let answer = match result {
         Ok(a) => a,
@@ -872,7 +898,7 @@ async fn transcribe_participant(
     // presence can show a "listening" mood when a human is talking.
     peer_level: Arc<std::sync::atomic::AtomicU32>,
 ) {
-    let AvParticipant { path, nick, mut audio } = participant;
+    let AvParticipant { path, nick, mut audio, video } = participant;
     let stt = cfg.stt.clone();
     tracing::info!(%nick, %path, "participant audio live — transcribing");
 
@@ -921,6 +947,9 @@ async fn transcribe_participant(
         let handle = handle.clone();
         let active = active.clone();
         let cfg = cfg.clone();
+        // The asker's own video — so a visual question can be answered
+        // from what they're showing.
+        let asker_video = video.clone();
         // `SttEngine::transcribe` is async — Groq is an HTTP round-trip,
         // local whisper does its own spawn_blocking internally. One task
         // per utterance so a slow STT call doesn't stall the tap loop.
@@ -1007,6 +1036,7 @@ async fn transcribe_participant(
                                 transcript,
                                 Some(speaker),
                                 Some(video),
+                                Some(asker_video),
                             )
                             .await;
                         }
