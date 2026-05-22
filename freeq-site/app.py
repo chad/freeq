@@ -91,6 +91,8 @@ SLUG_MAP = {
     "agent-assistance": ("site", "agent-assistance.md"),
     "av-agents": ("site", "av-agents.md"),
     "av-protocol": ("site", "av-protocol.md"),
+    "well-known-agent": ("site", "skills/well-known-agent.md"),
+    "av-quic-migration": ("site", "AV-QUIC-MIGRATION.md"),
 }
 
 
