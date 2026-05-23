@@ -61,21 +61,39 @@ pub fn split_speech_and_links(text: &str) -> (String, Vec<String>) {
                 }
             }
         }
-        // HTML <img …> tag — drop the whole tag from speech. Otherwise
-        // TTS reads "img src equals http alt equals …" literally.
-        if rest.starts_with("<img") {
-            if let Some(end) = rest.find('>') {
-                rest = &rest[end + 1..];
-                continue;
+        // Any HTML tag (<img …>, <video …>, <iframe …>, etc.) — drop
+        // the whole tag. Catches `<img src="…" alt="…">` and the same
+        // shape for video/iframe/audio. Inner content for tags like
+        // `<a>label</a>` will still survive (we strip the tag markers,
+        // not the text between them) — handled by stripping just up to
+        // the next `>`.
+        if rest.starts_with('<') {
+            // Only treat as a tag if it starts with `<` + ASCII alpha
+            // or `</`. Otherwise it's likely literal punctuation.
+            let after = &rest[1..];
+            let looks_like_tag = after
+                .chars()
+                .next()
+                .is_some_and(|c| c == '/' || c.is_ascii_alphabetic());
+            if looks_like_tag {
+                if let Some(end) = rest.find('>') {
+                    rest = &rest[end + 1..];
+                    continue;
+                }
             }
         }
-        // Markdown link: [label](url) — speak the label, surface the url.
+        // Markdown link: [label](url) — usually speak the label and
+        // surface the URL. EXCEPTION: if the URL points at an image or
+        // a video, the label is alt text — drop the whole thing.
         if let Some(stripped) = rest.strip_prefix('[') {
             if let Some(mid) = stripped.find("](") {
                 if let Some(close) = stripped[mid + 2..].find(')') {
                     let label = &stripped[..mid];
                     let url = stripped[mid + 2..mid + 2 + close].trim();
-                    spoken.push_str(label);
+                    let url_is_media = looks_like_media_url(url);
+                    if !url_is_media {
+                        spoken.push_str(label);
+                    }
                     if url.starts_with("http") || url.starts_with("www.") {
                         links.push(url.to_string());
                     }
@@ -102,6 +120,26 @@ pub fn split_speech_and_links(text: &str) -> (String, Vec<String>) {
     // Collapse the whitespace left where URLs were removed.
     let spoken = spoken.split_whitespace().collect::<Vec<_>>().join(" ");
     (spoken, links)
+}
+
+/// Whether `url` looks like an image or video — we use this to decide
+/// whether a `[label](url)` is a *media link* (drop the label too;
+/// it's alt text, not for reading) vs. a normal hyperlink (speak the
+/// label).
+fn looks_like_media_url(url: &str) -> bool {
+    let u = url.trim().to_lowercase();
+    // data URIs.
+    if u.starts_with("data:image/") || u.starts_with("data:video/") || u.starts_with("data:audio/") {
+        return true;
+    }
+    // Strip query/fragment so `.jpg?w=200` still counts.
+    let path = u.split(['?', '#']).next().unwrap_or(&u);
+    const MEDIA_EXTS: &[&str] = &[
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".tiff", ".heic",
+        ".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v",
+        ".mp3", ".wav", ".m4a", ".ogg", ".flac",
+    ];
+    MEDIA_EXTS.iter().any(|ext| path.ends_with(ext))
 }
 
 #[cfg(test)]
@@ -209,6 +247,65 @@ mod tests {
         );
         assert_eq!(spoken, "Look at that.");
         assert!(links.is_empty(), "we keep this simple — don't extract src attrs");
+    }
+
+    #[test]
+    fn html_video_iframe_audio_tags_dropped() {
+        // Same lesson, broader strip — any tag-like construct is gone.
+        for tag in [
+            r#"<video src="https://x.com/y.mp4" poster="https://x.com/p.jpg" controls></video>"#,
+            r#"<iframe src="https://x.com/embed" width="640" height="360"></iframe>"#,
+            r#"<audio src="https://x.com/y.mp3" controls></audio>"#,
+        ] {
+            let (spoken, _) = split_speech_and_links(&format!("before {tag} after"));
+            assert_eq!(spoken, "before after", "tag wasn't stripped: {tag}");
+        }
+    }
+
+    #[test]
+    fn bare_less_than_in_text_is_preserved() {
+        // "<" not followed by alpha/`/` is not a tag and must survive.
+        let (spoken, _) = split_speech_and_links("5 < 10 < 100");
+        assert!(spoken.contains('<'), "literal '<' got eaten: {spoken:?}");
+    }
+
+    #[test]
+    fn markdown_link_to_image_url_drops_alt_text() {
+        // `[A photo of a cat](.../cat.jpg)` — the label is alt text, not
+        // a speakable label. Drop it from speech but keep the URL.
+        let (spoken, links) =
+            split_speech_and_links("There: [A photo of a cat](https://x.com/cat.jpg) cute.");
+        assert!(!spoken.to_lowercase().contains("photo"), "alt leaked: {spoken:?}");
+        assert!(!spoken.to_lowercase().contains("cat"), "alt leaked: {spoken:?}");
+        assert_eq!(spoken, "There: cute.");
+        assert_eq!(links, vec!["https://x.com/cat.jpg"]);
+    }
+
+    #[test]
+    fn markdown_link_to_video_url_drops_label_too() {
+        let (spoken, links) =
+            split_speech_and_links("Watch [the highlight reel](https://x.com/clip.mp4) then.");
+        assert!(!spoken.to_lowercase().contains("highlight"), "label leaked: {spoken:?}");
+        assert_eq!(spoken, "Watch then.");
+        assert_eq!(links, vec!["https://x.com/clip.mp4"]);
+    }
+
+    #[test]
+    fn markdown_link_to_normal_page_still_speaks_label() {
+        // Non-media URL → still a normal hyperlink; speak the label.
+        let (spoken, links) = split_speech_and_links(
+            "See [the Wikipedia article](https://en.wikipedia.org/wiki/Foo) for more.",
+        );
+        assert!(spoken.contains("the Wikipedia article"));
+        assert_eq!(links, vec!["https://en.wikipedia.org/wiki/Foo"]);
+    }
+
+    #[test]
+    fn media_url_query_string_and_data_uri() {
+        // `.jpg?w=200` and `data:image/...` both count as media.
+        assert!(looks_like_media_url("https://x.com/cat.jpg?w=200&h=200"));
+        assert!(looks_like_media_url("data:image/jpeg;base64,/9j/4AAQ..."));
+        assert!(!looks_like_media_url("https://en.wikipedia.org/wiki/Cat"));
     }
 
     #[test]

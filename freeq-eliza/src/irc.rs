@@ -627,6 +627,10 @@ async fn answer_and_speak(
         let _ = tx.send(last);
     }
 
+    // Log the full answer text — invaluable for debugging when she's
+    // saying something weird (e.g. reading image alt attributes).
+    tracing::info!(text = %answer.text, "answer text (sent to TTS)");
+
     // Links: Eliza is voice-first, so URLs go to the channel as text
     // rather than into speech. Collect them from the full answer.
     let (_, body_links) = split_speech_and_links(&answer.text);
