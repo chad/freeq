@@ -889,11 +889,14 @@ fn presence_svg(s: &PresenceState) -> String {
     let scrim = mood_scrim(accent, s);
     let overlay_primitives = presence_overlay(s);
 
+    // viewBox stays at the design coord space (640×360) — every inner
+    // coordinate in this file is authored against that grid. The
+    // output `width`/`height` scale to the actual pixmap size.
     format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice">
 {defs}
-<rect width="{w}" height="{h}" fill="url(#bg)"/>
-<rect width="{w}" height="{h}" fill="url(#halftone)" opacity="0.55"/>
+<rect width="640" height="360" fill="url(#bg)"/>
+<rect width="640" height="360" fill="url(#halftone)" opacity="0.55"/>
 {scrim}
 <circle cx="320" cy="156" r="{glow_r:.1}" fill="{accent}" opacity="{glow_op:.3}"/>
 {overlay}
@@ -1295,12 +1298,14 @@ fn frame(
     presence: &PresenceState,
 ) -> String {
     format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice">
 {defs}
 {backdrop}
 {body}
 {overlay}
 </svg>"##,
+        w = VIDEO_W,
+        h = VIDEO_H,
         defs = defs(accent),
         backdrop = backdrop(accent, t, image),
         overlay = presence_overlay(presence),
@@ -1697,9 +1702,13 @@ pub(crate) fn overlay_svg_for_particles(tile: &VideoTile, time: f32) -> Option<S
         .unwrap_or_else(|| DEFAULT_ACCENT.to_string());
 
     // ── Compose the document ──
+    // viewBox stays at the design-coordinate space (640×360) — every
+    // overlay body in this module uses hardcoded 640×360-relative
+    // positions. The renderer scales to the actual pixmap size, so
+    // the layout always fills the canvas regardless of VIDEO_W/H.
     let mut svg = String::new();
     svg.push_str(&format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{VIDEO_W}" height="{VIDEO_H}" viewBox="0 0 {VIDEO_W} {VIDEO_H}">
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{VIDEO_W}" height="{VIDEO_H}" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice">
 "##,
     ));
     svg.push_str(&defs(&accent));
