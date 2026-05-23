@@ -80,6 +80,11 @@ async fn run_monitor(
 ) {
     tracing::info!(%channel, "proactive monitor armed");
     let mut last_proactive: Option<Instant> = None;
+    // Index into `transcript` at the moment of her last proactive
+    // comment. The monitor only considers lines added AFTER this —
+    // otherwise she sees the same stale fact each tick and keeps
+    // correcting it in a loop.
+    let mut consumed_lines: usize = 0;
     // Skip the first tick — let the call settle.
     tokio::time::sleep(TICK).await;
     loop {
@@ -96,7 +101,7 @@ async fn run_monitor(
                 return;
             };
             ProactiveSnapshot {
-                transcript: call.transcript.join("\n"),
+                transcript: call.transcript.clone(),
                 speaker: call.speaker.clone(),
                 video: call.video.clone(),
                 last_answer: call.last_answer,
@@ -105,7 +110,7 @@ async fn run_monitor(
         };
 
         // Guardrails: don't interrupt herself, hold off after an
-        // answered question, respect the proactive cooldown, need
+        // answered question, respect the proactive cooldown, need new
         // material to react to.
         if snapshot.is_speaking {
             tracing::debug!("proactive: she's still speaking, skip");
@@ -122,23 +127,41 @@ async fn run_monitor(
                 continue;
             }
         }
-        if snapshot.transcript.split_whitespace().count() < 12 {
-            tracing::debug!("proactive: too little transcript, skip");
+
+        // Only look at lines added since her last proactive comment —
+        // the "looping correction" fix. A correction itself doesn't add
+        // to `transcript` (her own speech doesn't), so once she's
+        // commented on a line it falls below `consumed_lines` and
+        // never resurfaces.
+        let total = snapshot.transcript.len();
+        let start = consumed_lines.min(total);
+        let new_lines = &snapshot.transcript[start..];
+        let new_word_count = new_lines
+            .iter()
+            .flat_map(|l| l.split_whitespace())
+            .count();
+        if new_word_count < 8 {
+            tracing::debug!(
+                new_lines = new_lines.len(),
+                new_word_count,
+                "proactive: too little NEW transcript, skip"
+            );
             continue;
         }
 
-        // Last ~30 lines for context. Older lines fall off naturally —
-        // the model should react to recent conversation, not the whole
-        // call history.
-        let lines: Vec<&str> = snapshot.transcript.lines().collect();
-        let tail_start = lines.len().saturating_sub(30);
-        let recent = lines[tail_start..].join("\n");
+        // Last ~30 of the new lines for context.
+        let tail_start = new_lines.len().saturating_sub(30);
+        let recent = new_lines[tail_start..].join("\n");
 
         let secs_since = since_proactive.as_secs().min(9999) as u32;
         match decide(&cfg.http, key, &cfg.groq_chat_model, &recent, secs_since).await {
             Some(say) => {
                 tracing::info!(text = %say, "proactive: chiming in");
                 last_proactive = Some(Instant::now());
+                // Everything in the transcript up to this point is now
+                // "addressed" — the next tick will only consider lines
+                // that come AFTER this comment.
+                consumed_lines = total;
                 // Mark the active call as "she just spoke" so the
                 // answer-debounce + post-answer grace both see it.
                 {
@@ -166,7 +189,7 @@ async fn run_monitor(
 }
 
 struct ProactiveSnapshot {
-    transcript: String,
+    transcript: Vec<String>,
     speaker: Speaker,
     video: VideoTile,
     last_answer: Option<Instant>,

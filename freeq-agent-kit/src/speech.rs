@@ -46,6 +46,29 @@ pub fn split_speech_and_links(text: &str) -> (String, Vec<String>) {
     let mut spoken = String::with_capacity(text.len());
     let mut rest = text;
     while !rest.is_empty() {
+        // Markdown image: ![alt](url) — DROP THE WHOLE THING from speech.
+        // The alt text is for the image, not for reading aloud. Surface
+        // the URL as a link so it can still be posted to the channel.
+        if let Some(stripped) = rest.strip_prefix("![") {
+            if let Some(mid) = stripped.find("](") {
+                if let Some(close) = stripped[mid + 2..].find(')') {
+                    let url = stripped[mid + 2..mid + 2 + close].trim();
+                    if url.starts_with("http") || url.starts_with("www.") {
+                        links.push(url.to_string());
+                    }
+                    rest = &stripped[mid + 2 + close + 1..];
+                    continue;
+                }
+            }
+        }
+        // HTML <img …> tag — drop the whole tag from speech. Otherwise
+        // TTS reads "img src equals http alt equals …" literally.
+        if rest.starts_with("<img") {
+            if let Some(end) = rest.find('>') {
+                rest = &rest[end + 1..];
+                continue;
+            }
+        }
         // Markdown link: [label](url) — speak the label, surface the url.
         if let Some(stripped) = rest.strip_prefix('[') {
             if let Some(mid) = stripped.find("](") {
@@ -162,6 +185,30 @@ mod tests {
         let (spoken, links) = split_speech_and_links("visit www.freeq.at today");
         assert_eq!(spoken, "visit today");
         assert_eq!(links, vec!["www.freeq.at"]);
+    }
+
+    #[test]
+    fn markdown_image_syntax_drops_the_alt_text_from_speech() {
+        // The model occasionally emits ![alt](url) for an image. The alt
+        // text isn't for reading aloud — drop the whole thing; surface
+        // the URL so the caller can still post it as text.
+        let (spoken, links) =
+            split_speech_and_links("Here it is: ![A photo of a fluffy cat](https://example.com/cat.jpg) cute!");
+        assert!(!spoken.to_lowercase().contains("photo"), "alt text leaked: {spoken:?}");
+        assert!(!spoken.to_lowercase().contains("fluffy"), "alt text leaked: {spoken:?}");
+        assert_eq!(spoken, "Here it is: cute!");
+        assert_eq!(links, vec!["https://example.com/cat.jpg"]);
+    }
+
+    #[test]
+    fn html_img_tag_dropped_with_attributes() {
+        // <img src=… alt=…> — TTS would read "src equals http alt equals…"
+        // literally. The whole tag must go.
+        let (spoken, links) = split_speech_and_links(
+            "Look <img src=\"https://x.com/y.png\" alt=\"the chart\" width=\"640\"> at that.",
+        );
+        assert_eq!(spoken, "Look at that.");
+        assert!(links.is_empty(), "we keep this simple — don't extract src attrs");
     }
 
     #[test]
