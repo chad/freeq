@@ -81,7 +81,7 @@ pub(crate) fn render_loop(tile: VideoTile, character_name: &str) {
         return;
     };
 
-    let state = FaceState::new(&base_character, PARTICLES, 2.8, 42);
+    let mut state = FaceState::new(&base_character, PARTICLES, 2.8, 42);
     // Most recently-rebuilt character — apply_emotion produces a new
     // value, but we don't want to rebuild every frame when the
     // emotion is steady. Compare against the last applied (emotion,
@@ -126,6 +126,13 @@ pub(crate) fn render_loop(tile: VideoTile, character_name: &str) {
             current_character = apply_emotion(&base_character, emotion, EMOTION_INTENSITY);
             last_applied = key;
         }
+
+        // Push the louder of (her own voice, peer audio) into the
+        // particle field as a reactivity scalar. The renderer expands
+        // the per-particle wobble + size with this — when she's
+        // speaking, the face visibly shimmers; in silence it just
+        // breathes.
+        state.set_audio_level(level.max(peer));
 
         let pixmap = renderer.render(&current_character, &state, t);
 

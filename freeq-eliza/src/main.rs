@@ -33,7 +33,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use freeq_eliza::{identity, imagegen, irc, stt};
+use freeq_eliza::{character_profile, identity, imagegen, irc, stt};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -255,13 +255,22 @@ async fn main() -> Result<()> {
         groq_answer_model: cli.groq_answer_model,
         vision_model: cli.vision_model,
         elevenlabs_api_key,
-        elevenlabs_voice_id: cli.elevenlabs_voice,
         elevenlabs_model: cli.elevenlabs_model,
         image_ai,
         proactive_enabled: !cli.no_proactive,
         ambient_enabled: !cli.no_ambient,
         render_backend: cli.render_backend.clone(),
         ghostly_character: cli.ghostly_character.clone(),
+        // Per-character voice + system-prompt overrides. When the
+        // character matches an entry in `character_profile`, swap in
+        // its ElevenLabs voice ID and personality. Without a match
+        // (e.g. `--ghostly-character eliza`) we fall through to the
+        // CLI's `--elevenlabs-voice` and the default Eliza prompt.
+        elevenlabs_voice_id: character_profile::by_name(&cli.ghostly_character)
+            .map(|p| p.voice_id.to_string())
+            .unwrap_or(cli.elevenlabs_voice),
+        character_system_prompt: character_profile::by_name(&cli.ghostly_character)
+            .map(|p| p.system_prompt.to_string()),
     })
     .await
 }

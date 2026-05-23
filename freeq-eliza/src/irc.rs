@@ -85,6 +85,10 @@ pub struct RunConfig {
     pub render_backend: String,
     /// Ghostly character name when `render_backend == "particles"`.
     pub ghostly_character: String,
+    /// Per-character system-prompt override (Oblivion / Narrator /
+    /// Utopia personality). `None` falls back to the default Eliza
+    /// prompt in `qa.rs`.
+    pub character_system_prompt: Option<String>,
 }
 
 /// Subset of [`RunConfig`] shared with inner tasks. Excludes the
@@ -122,6 +126,9 @@ pub(crate) struct SharedConfig {
     pub(crate) render_backend: String,
     /// Ghostly character name when `render_backend == "particles"`.
     pub(crate) ghostly_character: String,
+    /// Per-character system prompt — when present, replaces the
+    /// default Eliza prompt in [`qa::answer_streaming`].
+    pub(crate) character_system_prompt: Option<String>,
 }
 
 /// Active-call state. Held inside an `Arc<AsyncMutex<Option<...>>>`
@@ -197,6 +204,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         ambient_enabled,
         render_backend,
         ghostly_character,
+        character_system_prompt,
     } = cfg;
 
     // Pick websocket vs raw-TCP transport based on URL scheme — mirrors
@@ -283,6 +291,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         ambient_enabled,
         render_backend,
         ghostly_character,
+        character_system_prompt,
         http: reqwest::Client::new(),
         started_at: Instant::now(),
     });
@@ -625,6 +634,7 @@ async fn answer_and_speak(
             &cfg.groq_answer_model,
             &transcript,
             &question,
+            cfg.character_system_prompt.as_deref(),
             |delta| {
                 for sentence in chunker.push(delta) {
                     let _ = tx.send(sentence);

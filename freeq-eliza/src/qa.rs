@@ -406,15 +406,20 @@ pub async fn answer_streaming(
     model: &str,
     transcript: &str,
     question: &str,
+    // Optional per-character system prompt override. `None` uses the
+    // default Eliza personality. Pass a profile's `system_prompt`
+    // when running as Oblivion / Narrator / Utopia.
+    system_override: Option<&str>,
     mut on_delta: impl FnMut(&str),
 ) -> Result<Answer> {
+    let system = system_override.unwrap_or(SYSTEM);
     let body = serde_json::json!({
         "model": model,
         "max_tokens": 320,
         "temperature": 0.3,
         "stream": true,
         "messages": [
-            { "role": "system", "content": SYSTEM },
+            { "role": "system", "content": system },
             { "role": "user", "content": user_prompt(transcript, question) },
         ],
     });
