@@ -29,6 +29,7 @@ use crate::identity::Identity;
 use crate::imagegen::AiImageConfig;
 use crate::stt::{to_whisper_pcm, SttEngine};
 use crate::video::VideoTile;
+use crate::whiteboard::Step;
 use crate::{imagegen, qa, summary, tts, vision};
 
 pub struct RunConfig {
@@ -529,6 +530,23 @@ async fn answer_and_speak(
         None
     };
 
+    // Race a whiteboard plan in parallel with the answer call. For
+    // "explain it" questions the model returns drawing steps and the
+    // tile draws them stroke-by-stroke as she speaks; for everything
+    // else it returns no steps and we fall through to the scene card.
+    // Vision-branch questions get the camera PiP instead, no board.
+    let whiteboard_task: Option<JoinHandle<Option<Vec<Step>>>> = if !visual {
+        let http = cfg.http.clone();
+        let api_key = key.to_string();
+        let model = cfg.groq_chat_model.clone();
+        let q = question.clone();
+        Some(tokio::spawn(async move {
+            qa::whiteboard(&http, &api_key, &model, &q).await
+        }))
+    } else {
+        None
+    };
+
     let result: Result<qa::Answer> = if let Some(frame) = frame {
         tracing::info!("answering as a visual question");
         match vision::frame_to_jpeg_data_uri(&frame) {
@@ -638,23 +656,45 @@ async fn answer_and_speak(
             .await;
     }
 
-    // Design a visual card for this answer — the model picks a layout
-    // and the renderer animates it in — then fetch a backdrop image for
-    // it off the hot path.
-    if let Some(video) = &video {
-        match qa::generate_scene(&cfg.http, key, &cfg.groq_chat_model, &question, &answer.text).await {
-            Some(spec) => {
-                tracing::info!(
-                    kind = ?spec.kind,
-                    title = %spec.title,
-                    points = spec.points.len(),
-                    "showing scene"
-                );
-                let query = spec.image_query.clone();
-                let scene_id = video.show_scene(spec);
-                spawn_scene_image(&cfg, video, scene_id, query);
+    // Whiteboard takes priority — if she's explaining something, draw
+    // it instead of a typographic card. Steps reveal one at a time
+    // while she speaks.
+    let board_shown = if let Some(task) = whiteboard_task {
+        match task.await {
+            Ok(Some(steps)) => {
+                tracing::info!(steps = steps.len(), "showing whiteboard");
+                if let Some(v) = &video {
+                    v.show_board(steps, "#3effd6".to_string());
+                }
+                true
             }
-            None => tracing::info!("no scene for this answer"),
+            _ => false,
+        }
+    } else {
+        false
+    };
+
+    // Otherwise: design a typographic scene card — the model picks a
+    // layout, the renderer animates it in, and a backdrop image is
+    // fetched off the hot path.
+    if !board_shown {
+        if let Some(video) = &video {
+            match qa::generate_scene(&cfg.http, key, &cfg.groq_chat_model, &question, &answer.text)
+                .await
+            {
+                Some(spec) => {
+                    tracing::info!(
+                        kind = ?spec.kind,
+                        title = %spec.title,
+                        points = spec.points.len(),
+                        "showing scene"
+                    );
+                    let query = spec.image_query.clone();
+                    let scene_id = video.show_scene(spec);
+                    spawn_scene_image(&cfg, video, scene_id, query);
+                }
+                None => tracing::info!("no scene for this answer"),
+            }
         }
     }
 }

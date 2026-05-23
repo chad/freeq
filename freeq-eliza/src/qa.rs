@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use crate::video::{SceneKind, SceneSpec};
+use crate::whiteboard::Step;
 
 #[derive(Deserialize)]
 struct ChatResponse {
@@ -267,6 +268,91 @@ pub async fn generate_scene(
         accent,
         image_query,
     })
+}
+
+const WHITEBOARD_SYSTEM: &str = "You design a simple whiteboard diagram \
+to help explain a question's answer in a live voice call. Output ONLY \
+a JSON object.\n\n\
+When does a diagram HELP? \"How does X work?\", \"what is X made of?\", \
+\"walk me through Y\", \"explain Z\", \"compare A and B\", \"what's the \
+flow/pipeline/process\" — output steps. Single-fact answers (\"capital \
+of France?\"), opinions, chitchat, image requests — output empty.\n\n\
+Output format:\n\
+{\"steps\": [...]}   when a diagram helps (3-8 steps total)\n\
+{\"steps\": []}      when it doesn't (most questions)\n\n\
+Step types (canvas is 640×360; safe content area x=60-580, y=80-300):\n\
+- {\"type\":\"text\",\"x\":N,\"y\":N,\"content\":\"…\",\"size\":\"large|med|small\"} — \
+standalone text. Use \"large\" for the title at top.\n\
+- {\"type\":\"box\",\"x\":N,\"y\":N,\"w\":N,\"h\":N,\"label\":\"short\"} — \
+labeled rectangle. Typical 110-160 wide, 44-60 tall.\n\
+- {\"type\":\"arrow\",\"x1\":N,\"y1\":N,\"x2\":N,\"y2\":N,\"label\":\"opt\"} — \
+arrow with optional midpoint label.\n\n\
+Rules:\n\
+- Order steps in REVEAL order; each draws ~900 ms after the previous.\n\
+- ALWAYS start with a \"large\" text TITLE at top (y around 50-60).\n\
+- KEEP IT CLEAN: lots of whitespace, no crowding, short labels (≤3 words).\n\
+- Layout flows LEFT-TO-RIGHT. Layout concepts with a center node + spokes.\n\
+- Arrows should land near box edges (not centers).\n\
+- Return STRICTLY the JSON object, no prose, no markdown fences.";
+
+#[derive(Deserialize)]
+struct WhiteboardPlan {
+    #[serde(default)]
+    steps: Vec<Step>,
+}
+
+/// Ask the model whether the question's answer would be clarified by a
+/// diagram, and if so what to draw. Returns `Some(steps)` when a
+/// diagram is worthwhile (3+ steps), `None` otherwise — most questions
+/// fall into None. Runs against the chat model (fast) in JSON mode,
+/// independent of the (slower, agentic) answer model — so it can race
+/// in parallel with [`answer_streaming`] and the diagram can start
+/// drawing *while* she's speaking.
+pub async fn whiteboard(
+    client: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    question: &str,
+) -> Option<Vec<Step>> {
+    let user = format!(
+        "Question addressed to Eliza: {question}\n\nDesign the diagram. Output the JSON object."
+    );
+    let body = serde_json::json!({
+        "model": model,
+        "max_tokens": 900,
+        "temperature": 0.4,
+        "response_format": { "type": "json_object" },
+        "messages": [
+            { "role": "system", "content": WHITEBOARD_SYSTEM },
+            { "role": "user", "content": user },
+        ],
+    });
+    let resp = client
+        .post("https://api.groq.com/openai/v1/chat/completions")
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let parsed: ChatResponse = resp.json().await.ok()?;
+    let text = parsed.choices.first()?.message.content.trim().to_string();
+    let plan: WhiteboardPlan = match serde_json::from_str::<WhiteboardPlan>(&text) {
+        Ok(p) => p,
+        Err(_) => {
+            // Tolerate a stray JSON wrapper / fenced block — extract the
+            // outermost {…} and re-parse.
+            let v = extract_json(&text)?;
+            serde_json::from_value::<WhiteboardPlan>(v).ok()?
+        }
+    };
+    // Require enough steps to be worth the takeover.
+    if plan.steps.len() < 3 {
+        return None;
+    }
+    Some(plan.steps)
 }
 
 /// Pull a JSON object out of a model reply — it may be fenced in

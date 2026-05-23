@@ -20,6 +20,8 @@ use std::time::{Duration, Instant};
 use iroh_live::media::format::{PixelFormat, VideoFormat, VideoFrame};
 use iroh_live::media::traits::VideoSource;
 
+use crate::whiteboard::Step;
+
 /// Tile resolution. 360p is ample and cheap to rasterize on the CPU.
 pub const VIDEO_W: u32 = 640;
 pub const VIDEO_H: u32 = 360;
@@ -34,6 +36,14 @@ const SCENE_HOLD: Duration = Duration::from_secs(12);
 /// Extra time a scene stays up once its backdrop image arrives — image
 /// generation is slow, so a late image still gets airtime.
 const IMAGE_HOLD: Duration = Duration::from_secs(8);
+
+/// How long a whiteboard stays on the tile. A bit longer than scenes —
+/// diagrams reward dwell time. Each step reveals over [`BOARD_STEP_MS`].
+const BOARD_HOLD: Duration = Duration::from_secs(20);
+/// Time between successive whiteboard step reveals.
+const BOARD_STEP_MS: u32 = 900;
+/// How long each step's fade-in animation runs.
+const BOARD_REVEAL_MS: u32 = 320;
 /// Accent used when the model gives no (or a malformed) colour.
 const DEFAULT_ACCENT: &str = "#6cb0ff";
 /// Font stack for all tile text.
@@ -99,6 +109,21 @@ enum Mood {
 /// How many EQ-strip / history samples to keep.
 const EQ_BARS: usize = 32;
 
+/// A whiteboard currently on the tile. Steps reveal in order, one
+/// every [`BOARD_STEP_MS`], with a [`BOARD_REVEAL_MS`] fade-in each.
+struct Board {
+    steps: Vec<Step>,
+    shown_at: Instant,
+    /// Accent colour for the board's strokes and labels.
+    accent: String,
+}
+
+impl Board {
+    fn is_visible(&self) -> bool {
+        self.shown_at.elapsed() < BOARD_HOLD
+    }
+}
+
 /// A scene currently on the tile, plus when it appeared (drives the
 /// reveal animation and the hold-then-revert-to-orb timer).
 struct Scene {
@@ -140,6 +165,8 @@ pub struct VideoTile {
     /// flips into [`Mood::Vision`].
     vision_thumb: Arc<Mutex<Option<String>>>,
     scene: Arc<Mutex<Option<Scene>>>,
+    /// Whiteboard takes priority over the scene card when both are set.
+    board: Arc<Mutex<Option<Board>>>,
     /// Hands out a fresh id per scene so async image jobs can target one.
     next_id: Arc<AtomicU64>,
     running: Arc<AtomicBool>,
@@ -154,9 +181,25 @@ impl VideoTile {
             thinking: Arc::new(AtomicBool::new(false)),
             vision_thumb: Arc::new(Mutex::new(None)),
             scene: Arc::new(Mutex::new(None)),
+            board: Arc::new(Mutex::new(None)),
             next_id: Arc::new(AtomicU64::new(0)),
             running: Arc::new(AtomicBool::new(true)),
         }
+    }
+
+    /// Show a whiteboard diagram on the tile. Replaces any scene or
+    /// previous board. Steps reveal one at a time at
+    /// [`BOARD_STEP_MS`] intervals, each with a fade-in over
+    /// [`BOARD_REVEAL_MS`].
+    pub fn show_board(&self, steps: Vec<Step>, accent: String) {
+        let accent = validate_accent(&accent);
+        // Clear any scene — board takes the tile.
+        *self.scene.lock().expect("scene lock") = None;
+        *self.board.lock().expect("board lock") = Some(Board {
+            steps,
+            shown_at: Instant::now(),
+            accent,
+        });
     }
 
     /// Show a PiP of the frame eliza is about to send to the vision
@@ -206,6 +249,8 @@ impl VideoTile {
         spec.accent = validate_accent(&spec.accent);
         spec.points.truncate(MAX_POINTS);
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        // Clear any board — scene takes the tile.
+        *self.board.lock().expect("board lock") = None;
         *self.scene.lock().expect("scene lock") = Some(Scene {
             spec,
             shown_at: Instant::now(),
@@ -324,12 +369,18 @@ impl VideoTile {
             };
 
             let svg = {
-                let guard = self.scene.lock().expect("scene lock");
-                match guard.as_ref() {
-                    // Show the scene while it's within its hold window;
-                    // then the tile returns to the presence orb.
-                    Some(scene) if scene.is_visible() => scene_svg(scene, &state),
-                    _ => presence_svg(&state),
+                let bguard = self.board.lock().expect("board lock");
+                if let Some(board) = bguard.as_ref().filter(|b| b.is_visible()) {
+                    board_svg(board, &state)
+                } else {
+                    drop(bguard);
+                    let guard = self.scene.lock().expect("scene lock");
+                    match guard.as_ref() {
+                        // Show the scene while it's within its hold
+                        // window; then the tile returns to presence.
+                        Some(scene) if scene.is_visible() => scene_svg(scene, &state),
+                        _ => presence_svg(&state),
+                    }
                 }
             };
 
@@ -1090,6 +1141,106 @@ fn scene_svg(scene: &Scene, presence: &PresenceState) -> String {
         .as_ref()
         .map(|(uri, at)| (uri.as_str(), at.elapsed().as_secs_f32()));
     frame(accent, presence.t, image, &body, presence)
+}
+
+// ---------------------------------------------------------------------
+// Whiteboard
+// ---------------------------------------------------------------------
+
+/// Render the current whiteboard — reveals steps one at a time at
+/// [`BOARD_STEP_MS`] intervals, each fading in over [`BOARD_REVEAL_MS`].
+/// The presence overlay primitives compose on top so she still reads as
+/// alive while drawing.
+fn board_svg(board: &Board, presence: &PresenceState) -> String {
+    let elapsed_ms = board.shown_at.elapsed().as_millis() as u32;
+    let mut body = String::new();
+    for (i, step) in board.steps.iter().enumerate() {
+        let reveal_at = i as u32 * BOARD_STEP_MS;
+        if reveal_at > elapsed_ms {
+            continue;
+        }
+        let age = elapsed_ms - reveal_at;
+        let progress = (age as f32 / BOARD_REVEAL_MS as f32).clamp(0.0, 1.0);
+        body.push_str(&render_step(step, progress, &board.accent));
+    }
+    frame(&board.accent, presence.t, None, &body, presence)
+}
+
+/// Render one whiteboard step with a fade-in (`progress` 0→1).
+fn render_step(step: &Step, progress: f32, accent: &str) -> String {
+    let op = progress;
+    // Slight grow-in for a "stamped down" feel.
+    let scale = 0.94 + progress * 0.06;
+    match step {
+        Step::Box { x, y, w, h, label } => {
+            let cx = x + w / 2.0;
+            let cy = y + h / 2.0;
+            let label_y = cy + 5.0;
+            format!(
+                r##"<g opacity="{op:.3}" transform="translate({cx:.1} {cy:.1}) scale({scale:.3}) translate({mcx:.1} {mcy:.1})">
+<rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" rx="8" fill="url(#panel)" stroke="{accent}" stroke-width="2.5" filter="url(#shadow)"/>
+<rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="2" rx="0" fill="{accent}" opacity="0.7"/>
+<text x="{cx:.1}" y="{label_y:.1}" text-anchor="middle" font-family="{FONT}" font-size="15" font-weight="800" fill="#eaf0ff">{label}</text>
+</g>"##,
+                mcx = -cx,
+                mcy = -cy,
+                label = xml_escape(label),
+            )
+        }
+        Step::Arrow { x1, y1, x2, y2, label } => {
+            // Arrowhead as an inline triangle at (x2,y2).
+            let dx = x2 - x1;
+            let dy = y2 - y1;
+            let len = (dx * dx + dy * dy).sqrt().max(0.001);
+            let ux = dx / len;
+            let uy = dy / len;
+            let head_len = 12.0;
+            let head_w = 7.0;
+            // Tip
+            let tx = *x2;
+            let ty = *y2;
+            // Two base corners of the triangle (perpendicular to dir).
+            let bx = tx - head_len * ux;
+            let by = ty - head_len * uy;
+            let lx = bx - head_w * uy;
+            let ly = by + head_w * ux;
+            let rx = bx + head_w * uy;
+            let ry = by - head_w * ux;
+            // Shorten the line so it doesn't poke through the head.
+            let lx2 = tx - (head_len - 1.0) * ux;
+            let ly2 = ty - (head_len - 1.0) * uy;
+            let label_svg = match label {
+                Some(l) if !l.is_empty() => {
+                    let mlx = (x1 + x2) / 2.0;
+                    let mly = (y1 + y2) / 2.0 - 6.0;
+                    format!(
+                        r##"<text x="{mlx:.1}" y="{mly:.1}" text-anchor="middle" font-family="{FONT}" font-size="12" font-weight="800" fill="{accent}">{l}</text>"##,
+                        l = xml_escape(l),
+                    )
+                }
+                _ => String::new(),
+            };
+            format!(
+                r##"<g opacity="{op:.3}">
+<line x1="{x1:.1}" y1="{y1:.1}" x2="{lx2:.1}" y2="{ly2:.1}" stroke="{accent}" stroke-width="3" stroke-linecap="round"/>
+<path d="M{tx:.1} {ty:.1} L{lx:.1} {ly:.1} L{rx:.1} {ry:.1} Z" fill="{accent}"/>
+{label_svg}
+</g>"##,
+            )
+        }
+        Step::Text { x, y, content, size } => {
+            let fs = size.px();
+            let weight = if matches!(size, crate::whiteboard::TextSize::Large) {
+                900
+            } else {
+                700
+            };
+            format!(
+                r##"<text x="{x:.1}" y="{y:.1}" font-family="{FONT}" font-size="{fs}" font-weight="{weight}" fill="#eaf0ff" opacity="{op:.3}">{content}</text>"##,
+                content = xml_escape(content),
+            )
+        }
+    }
 }
 
 /// Hero: a big headline with a one-line takeaway under it.

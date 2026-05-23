@@ -13,3 +13,4 @@ pub mod summary;
 pub mod tts;
 pub mod video;
 pub mod vision;
+pub mod whiteboard;
