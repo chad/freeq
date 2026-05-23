@@ -83,7 +83,10 @@ pub(crate) fn render_loop(tile: VideoTile, character_name: &str) {
         return;
     };
 
-    let mut state = FaceState::new(&base_character, PARTICLES, 2.8, 42);
+    // Scale 3.6 ≈ 30% bigger than the previous 2.8 — the face now
+    // dominates the field of view instead of floating in the middle
+    // surrounded by void. Matches the avatar reference's default.
+    let mut state = FaceState::new(&base_character, PARTICLES, 3.6, 42);
 
     // Scratch pixmap for rasterizing the overlay SVG each frame. We
     // allocate once and reuse so the per-frame cost is just the
@@ -153,6 +156,12 @@ pub(crate) fn render_loop(tile: VideoTile, character_name: &str) {
         // seconds and eases the current yaw/pitch toward it. Makes
         // the face feel like a real being looking around the room.
         state.step_gaze(t, frame_dt.as_secs_f32());
+
+        // Tick the ember swarm (only does anything when the character
+        // configured an EmberConfig — Oblivion's signature flavour).
+        if let Some(cfg) = current_character.render_config.embers {
+            state.step_embers(&cfg, frame_dt.as_secs_f32(), 3.6);
+        }
 
         let pixmap = renderer.render(&current_character, &state, t);
 
