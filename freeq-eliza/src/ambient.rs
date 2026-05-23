@@ -32,7 +32,7 @@ use tokio::sync::Mutex as AsyncMutex;
 
 use crate::imagegen;
 use crate::irc::{ActiveCall, SharedConfig};
-use crate::video::{SceneKind, SceneSpec, VideoTile};
+use crate::video::VideoTile;
 
 /// How often the ambient loop wakes. Short — the HUD chip + accent
 /// shift are cheap (one fast LLM call, no image fetch) so a tight tick
@@ -186,7 +186,7 @@ async fn run_monitor(
             tracing::debug!("ambient: scene cooldown — skipping escalation");
         } else {
             last_scene_at = Some(Instant::now());
-            escalate_to_scene(&cfg, &snapshot.video, &plan);
+            escalate_to_ambient_image(&cfg, &snapshot.video, &plan);
         }
     }
 }
@@ -197,21 +197,13 @@ struct AmbientSnapshot {
     last_answer: Option<Instant>,
 }
 
-/// Drop a minimal Hero scene with the concept + accent and kick off an
-/// async fetch of the image backdrop. Reuses the same path
-/// [`crate::irc::answer_and_speak`] uses for QA scenes.
-fn escalate_to_scene(cfg: &Arc<SharedConfig>, video: &VideoTile, plan: &AmbientPlan) {
-    let spec = SceneSpec {
-        kind: SceneKind::Hero,
-        title: plan.concept.clone(),
-        // No subtitle: ambient scenes are about the image + topic, not
-        // commentary. The HUD chip already labels the topic.
-        subtitle: String::new(),
-        points: Vec::new(),
-        accent: plan.accent.clone(),
-        image_query: plan.image_query.clone(),
-    };
-    let scene_id = video.show_scene(spec);
+/// Reserve an ambient-image slot on the tile and kick off an async
+/// fetch of the matching backdrop. **Image only — no title, no body
+/// text.** The topic name lives on the HUD chip; the image lives as a
+/// subtle backdrop. Informational scene cards (with words) are
+/// reserved for actual question answers in [`crate::irc::answer_and_speak`].
+fn escalate_to_ambient_image(cfg: &Arc<SharedConfig>, video: &VideoTile, plan: &AmbientPlan) {
+    video.show_ambient_image();
     let cfg = cfg.clone();
     let video = video.clone();
     let query = plan.image_query.clone();
@@ -224,11 +216,11 @@ fn escalate_to_scene(cfg: &Arc<SharedConfig>, video: &VideoTile, plan: &AmbientP
         let bytes = match fetched {
             Ok(Ok(bytes)) => bytes,
             Ok(Err(e)) => {
-                tracing::debug!(error = %e, "ambient scene backdrop unavailable");
+                tracing::debug!(error = %e, "ambient image unavailable");
                 return;
             }
             Err(_) => {
-                tracing::debug!("ambient scene backdrop timed out");
+                tracing::debug!("ambient image timed out");
                 return;
             }
         };
@@ -237,8 +229,8 @@ fn escalate_to_scene(cfg: &Arc<SharedConfig>, video: &VideoTile, plan: &AmbientP
                 Ok(Ok(uri)) => uri,
                 _ => return,
             };
-        video.set_scene_image(scene_id, uri);
-        tracing::info!(scene_id, "ambient scene backdrop ready");
+        video.set_ambient_image(uri);
+        tracing::info!(query = %query, "ambient image ready");
     });
 }
 

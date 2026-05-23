@@ -149,6 +149,11 @@ pub(crate) fn render_loop(tile: VideoTile, character_name: &str) {
         // breathes.
         state.set_audio_level(level.max(peer));
 
+        // Drive the head turn — picks a new gaze target every few
+        // seconds and eases the current yaw/pitch toward it. Makes
+        // the face feel like a real being looking around the room.
+        state.step_gaze(t, frame_dt.as_secs_f32());
+
         let pixmap = renderer.render(&current_character, &state, t);
 
         // ── Overlay pass ──

@@ -145,6 +145,34 @@ impl Ambient {
     }
 }
 
+/// Ambient image — a subtle, **text-less** backdrop that surfaces when
+/// the ambient monitor recognises a concrete subject in the
+/// conversation. Distinct from `Scene` (which has a title + body +
+/// points for answer-driven informational cards). Ambient images are
+/// pure visual cues: faded, no overlay text — the topic name lives in
+/// the [`Ambient`] HUD chip instead.
+struct AmbientImage {
+    image: Option<(String, Instant)>,
+    set_at: Instant,
+}
+
+/// How long an ambient image sticks around once its picture has
+/// arrived. A little longer than the scene hold so a slow image-gen
+/// still gets airtime.
+const AMBIENT_IMAGE_HOLD: Duration = Duration::from_secs(25);
+
+impl AmbientImage {
+    fn is_visible(&self) -> bool {
+        // Stays visible from the moment of `show_ambient_image` until
+        // either the image arrives + IMAGE_HOLD, or it never arrives
+        // and the placeholder slot times out.
+        match &self.image {
+            Some((_, at)) => at.elapsed() < AMBIENT_IMAGE_HOLD,
+            None => self.set_at.elapsed() < Duration::from_secs(60),
+        }
+    }
+}
+
 /// A scene currently on the tile, plus when it appeared (drives the
 /// reveal animation and the hold-then-revert-to-orb timer).
 struct Scene {
@@ -214,6 +242,10 @@ pub struct VideoTile {
     /// Ambient topic + accent, refreshed by the ambient monitor. Drives
     /// the HUD chip and a subtle scrim blend — never the main visual.
     ambient: Arc<Mutex<Option<Ambient>>>,
+    /// Ambient *image* — image-only, no title. Picks up the topic
+    /// visual from the ambient monitor's image-gen path without
+    /// putting the topic name on screen as a banner.
+    pub(crate) ambient_image: Arc<Mutex<Option<AmbientImage>>>,
     /// Hands out a fresh id per scene so async image jobs can target one.
     next_id: Arc<AtomicU64>,
     pub(crate) running: Arc<AtomicBool>,
@@ -238,6 +270,7 @@ impl VideoTile {
             scene: Arc::new(Mutex::new(None)),
             board: Arc::new(Mutex::new(None)),
             ambient: Arc::new(Mutex::new(None)),
+            ambient_image: Arc::new(Mutex::new(None)),
             next_id: Arc::new(AtomicU64::new(0)),
             running: Arc::new(AtomicBool::new(true)),
             backend,
@@ -299,6 +332,31 @@ impl VideoTile {
     pub fn clear_ambient(&self) {
         if let Ok(mut g) = self.ambient.lock() {
             *g = None;
+        }
+    }
+
+    /// Reserve an ambient image slot — the renderer starts holding
+    /// space for an upcoming backdrop. The actual image arrives
+    /// asynchronously via [`set_ambient_image`]. Unlike [`show_scene`]
+    /// there's no title / points / body — ambient images are pure
+    /// visual cues with the topic name living on the HUD chip.
+    pub fn show_ambient_image(&self) {
+        if let Ok(mut g) = self.ambient_image.lock() {
+            *g = Some(AmbientImage {
+                image: None,
+                set_at: Instant::now(),
+            });
+        }
+    }
+
+    /// Attach the fetched image (a JPEG `data:` URI) to the current
+    /// ambient slot. Ignored if there's no slot or the slot has aged
+    /// out — late images for a stale ambient pick get dropped.
+    pub fn set_ambient_image(&self, data_uri: String) {
+        if let Ok(mut g) = self.ambient_image.lock() {
+            if let Some(ai) = g.as_mut() {
+                ai.image = Some((data_uri, Instant::now()));
+            }
         }
     }
 
@@ -1611,12 +1669,18 @@ pub(crate) fn overlay_svg_for_particles(tile: &VideoTile, time: f32) -> Option<S
             .filter(|a| a.is_visible())
             .map(|a| (a.concept.clone(), a.accent.clone()))
     });
+    let ambient_image_uri = tile.ambient_image.lock().ok().and_then(|g| {
+        g.as_ref().filter(|ai| ai.is_visible()).and_then(|ai| {
+            ai.image.as_ref().map(|(uri, at)| (uri.clone(), at.elapsed().as_secs_f32()))
+        })
+    });
     let vision_thumb = tile.vision_thumb.lock().ok().and_then(|g| g.clone());
 
     // Quiet frame — nothing to draw, skip the rasterize cost.
     if scene_data.is_none()
         && board_data.is_none()
         && ambient.is_none()
+        && ambient_image_uri.is_none()
         && vision_thumb.is_none()
     {
         return None;
@@ -1642,6 +1706,9 @@ pub(crate) fn overlay_svg_for_particles(tile: &VideoTile, time: f32) -> Option<S
     // of the canvas. The backdrop fills the whole frame; the particle
     // face renders UNDER this overlay so it shows through the
     // semi-transparent scrim around the image.
+    //
+    // Scene takes priority over ambient image — when an actual
+    // informational scene is up, that's the more important visual.
     if let Some((sa, body, image)) = scene_data {
         let img_ref = image.as_ref().map(|(uri, age)| (uri.as_str(), *age));
         svg.push_str(&backdrop(&sa, time, img_ref));
@@ -1649,6 +1716,22 @@ pub(crate) fn overlay_svg_for_particles(tile: &VideoTile, time: f32) -> Option<S
     } else if let Some((_, body)) = board_data {
         // Board has no backdrop — it's strokes-on-the-particle-field.
         svg.push_str(&body);
+    } else if let Some((uri, age)) = ambient_image_uri {
+        // Ambient image — text-less, low opacity, subtle Ken Burns.
+        // No title, no points, no scrim layout — just the picture as
+        // a mood backdrop. Stays faint enough that the particle face
+        // remains the focal point.
+        let fade = ease_out(age / 1.4).min(0.55); // capped low — never dominates
+        let zoom = 1.03 + (age * 0.0035).min(0.08);
+        let panx = (age * 0.04).sin() * 7.0;
+        let pany = (age * 0.033).cos() * 5.0;
+        svg.push_str(&format!(
+            r##"<g opacity="{fade:.3}" transform="translate(320 180) scale({zoom:.4}) translate(-320 -180) translate({panx:.1} {pany:.1})">
+<image href="{uri}" x="0" y="0" width="640" height="360" preserveAspectRatio="xMidYMid slice"/>
+</g>
+<rect width="640" height="360" fill="url(#scrimV)" opacity="0.4"/>
+"##
+        ));
     }
 
     // Ambient HUD chip — inlined from `hud_sticker` so we don't need
