@@ -34,16 +34,24 @@ use crate::imagegen;
 use crate::irc::{ActiveCall, SharedConfig};
 use crate::video::{SceneKind, SceneSpec, VideoTile};
 
-const TICK: Duration = Duration::from_secs(20);
+/// How often the ambient loop wakes. Short — the HUD chip + accent
+/// shift are cheap (one fast LLM call, no image fetch) so a tight tick
+/// makes the tile feel genuinely responsive to the conversation.
+const TICK: Duration = Duration::from_secs(8);
+/// Lead-in before the first tick fires. Long enough to gather a handful
+/// of words; short enough that she manifests almost immediately.
+const FIRST_TICK_DELAY: Duration = Duration::from_secs(4);
 /// Smallest gap between concrete-subject scene escalations. An image
 /// backdrop is loud; back-to-back swaps would make the tile feel twitchy.
-const SCENE_COOLDOWN: Duration = Duration::from_secs(60);
+/// Still short enough that a sustained topic gets a real image within
+/// half a minute.
+const SCENE_COOLDOWN: Duration = Duration::from_secs(30);
 /// Don't escalate while she just spoke — her own scene/board is still
 /// the right visual.
-const POST_ANSWER_GRACE: Duration = Duration::from_secs(25);
+const POST_ANSWER_GRACE: Duration = Duration::from_secs(12);
 /// Need at least this many new transcript words since the last tick to
 /// even bother calling the LLM. Avoids a hot loop while the call is silent.
-const MIN_NEW_WORDS: usize = 12;
+const MIN_NEW_WORDS: usize = 5;
 /// Capped count of recent concepts to feed back to the model so it
 /// doesn't pick the same one each tick.
 const RECENT_CONCEPTS_MAX: usize = 4;
@@ -86,10 +94,13 @@ async fn run_monitor(
     let mut consumed_lines: usize = 0;
     let mut recent_concepts: Vec<String> = Vec::new();
     let mut last_scene_at: Option<Instant> = None;
-    // Skip the first tick so the call has a moment to settle.
-    tokio::time::sleep(TICK).await;
+    // Short lead-in on the first tick — manifest fast on a fresh call —
+    // then settle into the regular TICK cadence.
+    let mut first_tick = true;
     loop {
-        tokio::time::sleep(TICK).await;
+        let delay = if first_tick { FIRST_TICK_DELAY } else { TICK };
+        first_tick = false;
+        tokio::time::sleep(delay).await;
         let Some(key) = cfg.groq_api_key.as_deref() else {
             continue;
         };

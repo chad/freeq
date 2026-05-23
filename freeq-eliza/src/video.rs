@@ -44,10 +44,11 @@ const BOARD_HOLD: Duration = Duration::from_secs(20);
 const BOARD_STEP_MS: u32 = 900;
 /// How long each step's fade-in animation runs.
 const BOARD_REVEAL_MS: u32 = 320;
-/// How long an ambient "topic" chip stays on the tile before the next
-/// pick. Two ambient ticks (~40s) is the sweet spot — the chip lingers
-/// for one extra cycle so a quiet tick doesn't snap it back to default.
-const AMBIENT_HOLD: Duration = Duration::from_secs(45);
+/// How long an ambient "topic" chip stays on the tile before reverting
+/// to the default HUD readout. Long enough that one quiet tick doesn't
+/// snap it away (the ambient loop ticks every ~8s); short enough that a
+/// stale chip can't outlast the conversation it described.
+const AMBIENT_HOLD: Duration = Duration::from_secs(25);
 /// Accent used when the model gives no (or a malformed) colour.
 const DEFAULT_ACCENT: &str = "#6cb0ff";
 /// Font stack for all tile text.
