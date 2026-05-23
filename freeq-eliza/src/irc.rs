@@ -26,6 +26,25 @@ use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::{JoinHandle, JoinSet};
 
 use crate::identity::Identity;
+
+/// Try to extract an addressed question from `text`. Accepts both the
+/// active nick AND "eliza" as wake words — so a user with muscle
+/// memory who runs as Oblivion / Narrator / Utopia and says "Eliza,
+/// what is X?" still gets through. The character's own name still
+/// works too. Returns `None` if neither matches.
+fn address_with_aliases(text: &str, nick: &str) -> Option<String> {
+    if let Some(q) = extract_addressed(text, nick) {
+        return Some(q);
+    }
+    // Universal fallback: "eliza" is the default wake word everyone
+    // knows. Skip the redundant call when the nick already IS eliza.
+    if !nick.eq_ignore_ascii_case("eliza") {
+        if let Some(q) = extract_addressed(text, "eliza") {
+            return Some(q);
+        }
+    }
+    None
+}
 use crate::imagegen::AiImageConfig;
 use crate::stt::{to_whisper_pcm, SttEngine};
 use crate::video::VideoTile;
@@ -459,7 +478,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                 if from.eq_ignore_ascii_case(&cfg.nick) {
                     continue;
                 }
-                let Some(question) = extract_addressed(&text, &cfg.nick) else {
+                let Some(question) = address_with_aliases(&text, &cfg.nick) else {
                     continue;
                 };
                 // Don't answer the burst of channel history the server
@@ -1138,7 +1157,7 @@ async fn transcribe_participant(
                     // instead of just logging it as a transcript line.
                     // In a voice call people address the bot by talking,
                     // not typing.
-                    if let Some(question) = extract_addressed(&text, &cfg.nick) {
+                    if let Some(question) = address_with_aliases(&text, &cfg.nick) {
                         // Debounce: a speaker joined from several devices
                         // is tapped once per broadcast, so the same
                         // question arrives two or three times. Answer the
