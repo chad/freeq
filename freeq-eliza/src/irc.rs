@@ -476,6 +476,8 @@ async fn answer_and_speak(
         v.set_thinking(true);
     }
     let _thinking = ThinkingGuard(video.clone());
+    // The vision PiP (if any) is also cleared on every exit path.
+    let _vision_thumb = VisionThumbGuard(video.clone());
 
     // Speaker task: drains completed sentences and streams each through
     // TTS, enqueueing audio as it synthesizes. It runs concurrently with
@@ -529,14 +531,24 @@ async fn answer_and_speak(
 
     let result: Result<qa::Answer> = if let Some(frame) = frame {
         tracing::info!("answering as a visual question");
-        vision::describe(&cfg.http, key, &cfg.vision_model, &question, &frame)
-            .await
-            .map(|text| {
-                for sentence in chunker.push(&text) {
-                    let _ = tx.send(sentence);
+        match vision::frame_to_jpeg_data_uri(&frame) {
+            Ok(uri) => {
+                // Pin the frame as a PiP on the video tile so the call
+                // sees exactly what eliza is looking at while she talks.
+                if let Some(v) = &video {
+                    v.set_vision_thumb(uri.clone());
                 }
-                qa::Answer { text, source: None }
-            })
+                vision::describe(&cfg.http, key, &cfg.vision_model, &question, &uri)
+                    .await
+                    .map(|text| {
+                        for sentence in chunker.push(&text) {
+                            let _ = tx.send(sentence);
+                        }
+                        qa::Answer { text, source: None }
+                    })
+            }
+            Err(e) => Err(e),
+        }
     } else if visual {
         tracing::info!("visual question but no video frame from asker");
         let text = "I can't see anything right now — turn on your camera or share your screen, then ask again.".to_string();
@@ -698,6 +710,19 @@ impl Drop for ThinkingGuard {
     fn drop(&mut self) {
         if let Some(v) = &self.0 {
             v.set_thinking(false);
+        }
+    }
+}
+
+/// Clears the video tile's vision PiP when an `answer_and_speak` call
+/// ends — keeps the thumb visible across LLM + TTS so the user sees
+/// "she's describing THIS" the whole time she's talking about it.
+struct VisionThumbGuard(Option<VideoTile>);
+
+impl Drop for VisionThumbGuard {
+    fn drop(&mut self) {
+        if let Some(v) = &self.0 {
+            v.clear_vision_thumb();
         }
     }
 }

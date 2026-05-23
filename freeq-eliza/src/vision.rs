@@ -66,6 +66,16 @@ pub fn frame_to_jpeg(frame: &VideoFrame) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Encode a video frame as a `data:image/jpeg;base64,…` URI — the form
+/// both the Groq vision API and the video tile's PiP overlay want.
+pub fn frame_to_jpeg_data_uri(frame: &VideoFrame) -> Result<String> {
+    let jpeg = frame_to_jpeg(frame)?;
+    Ok(format!(
+        "data:image/jpeg;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&jpeg)
+    ))
+}
+
 #[derive(Deserialize)]
 struct VisionResponse {
     choices: Vec<VisionChoice>,
@@ -82,21 +92,17 @@ struct VisionMessage {
     content: String,
 }
 
-/// Answer `question` about `frame` with a Groq vision model. Returns the
-/// description, trimmed and ready to speak.
+/// Answer `question` about an image with a Groq vision model. Takes
+/// the image as a `data:image/jpeg;base64,…` URI ([`frame_to_jpeg_data_uri`])
+/// — pre-encoded so the caller can also pin the same URI on the video
+/// tile as a PiP without paying for a second JPEG encode.
 pub async fn describe(
     client: &reqwest::Client,
     api_key: &str,
     model: &str,
     question: &str,
-    frame: &VideoFrame,
+    image_data_uri: &str,
 ) -> Result<String> {
-    let jpeg = frame_to_jpeg(frame)?;
-    let data_uri = format!(
-        "data:image/jpeg;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(&jpeg)
-    );
-
     let body = serde_json::json!({
         "model": model,
         "max_tokens": 320,
@@ -105,7 +111,7 @@ pub async fn describe(
             { "role": "system", "content": VISION_SYSTEM },
             { "role": "user", "content": [
                 { "type": "text", "text": question },
-                { "type": "image_url", "image_url": { "url": data_uri } },
+                { "type": "image_url", "image_url": { "url": image_data_uri } },
             ]},
         ],
     });

@@ -11,6 +11,7 @@
 //! animates), rasterized with resvg, and fed to the H.264 encoder. The
 //! tile is a plain video stream, so every client just plays it.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -82,15 +83,19 @@ pub struct SceneSpec {
     pub image_query: String,
 }
 
-/// What eliza is doing — read off the audio + a "thinking" flag and
-/// shown by the presence.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// What eliza is doing — read off the audio, a "thinking" flag, and a
+/// "vision thumb" set when she's analyzing a participant's frame.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Mood {
     Idle,
     Listening,
     Thinking,
     Speaking,
+    Vision,
 }
+
+/// How many EQ-strip / history samples to keep.
+const EQ_BARS: usize = 32;
 
 /// A scene currently on the tile, plus when it appeared (drives the
 /// reveal animation and the hold-then-revert-to-orb timer).
@@ -128,6 +133,10 @@ pub struct VideoTile {
     peer_level: Arc<AtomicU32>,
     /// Set while an LLM call is in flight — drives the "thinking" mood.
     thinking: Arc<AtomicBool>,
+    /// `data:image/jpeg;base64,…` of the frame currently being analyzed
+    /// by the vision model. While set, the tile shows a PiP of it and
+    /// flips into [`Mood::Vision`].
+    vision_thumb: Arc<Mutex<Option<String>>>,
     scene: Arc<Mutex<Option<Scene>>>,
     /// Hands out a fresh id per scene so async image jobs can target one.
     next_id: Arc<AtomicU64>,
@@ -141,9 +150,27 @@ impl VideoTile {
             level: Arc::new(AtomicU32::new(0)),
             peer_level: Arc::new(AtomicU32::new(0)),
             thinking: Arc::new(AtomicBool::new(false)),
+            vision_thumb: Arc::new(Mutex::new(None)),
             scene: Arc::new(Mutex::new(None)),
             next_id: Arc::new(AtomicU64::new(0)),
             running: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    /// Show a PiP of the frame eliza is about to send to the vision
+    /// model — kept on screen until [`clear_vision_thumb`] (typically at
+    /// the end of `answer_and_speak`), so the tile reads "I'm describing
+    /// THIS" while she's still talking about it.
+    pub fn set_vision_thumb(&self, data_uri: String) {
+        if let Ok(mut g) = self.vision_thumb.lock() {
+            *g = Some(data_uri);
+        }
+    }
+
+    /// Drop the vision PiP. Safe to call when none was set.
+    pub fn clear_vision_thumb(&self) {
+        if let Ok(mut g) = self.vision_thumb.lock() {
+            *g = None;
         }
     }
 
@@ -226,13 +253,32 @@ impl VideoTile {
         let started = Instant::now();
         tracing::info!("eliza video renderer started ({VIDEO_W}x{VIDEO_H} @ {FPS}fps)");
 
+        // Per-frame state tracked across iterations: a rolling history
+        // for the EQ strip, and the last mood + when it changed for the
+        // glitch transition (~250ms scanline burst on state change).
+        let mut level_history: VecDeque<f32> = VecDeque::with_capacity(EQ_BARS);
+        let mut peer_history: VecDeque<f32> = VecDeque::with_capacity(EQ_BARS);
+        let mut last_mood: Option<Mood> = None;
+        let mut transition_at: Option<Instant> = None;
+
         while self.running.load(Ordering::Relaxed) {
             let tick = Instant::now();
             let t = started.elapsed().as_secs_f32();
             let level = f32::from_bits(self.level.load(Ordering::Relaxed)).clamp(0.0, 1.0);
             let peer = f32::from_bits(self.peer_level.load(Ordering::Relaxed)).clamp(0.0, 1.0);
             let thinking = self.thinking.load(Ordering::Relaxed);
-            let mood = if level > 0.03 {
+            let vision_thumb = self
+                .vision_thumb
+                .lock()
+                .ok()
+                .and_then(|g| g.clone());
+
+            // Vision overrides everything — when she's analyzing a frame,
+            // that's the most important thing for the viewer to see, even
+            // while she's speaking the answer.
+            let mood = if vision_thumb.is_some() {
+                Mood::Vision
+            } else if level > 0.03 {
                 Mood::Speaking
             } else if thinking {
                 Mood::Thinking
@@ -242,13 +288,46 @@ impl VideoTile {
                 Mood::Idle
             };
 
+            if Some(mood) != last_mood {
+                transition_at = Some(Instant::now());
+                last_mood = Some(mood);
+            }
+            // Glitch intensity decays from 1.0 to 0.0 over 250ms after
+            // every mood change. Sparingly — only on transitions, never
+            // ambient (continuous glitch would be exhausting to watch).
+            let glitch = transition_at
+                .map(|when| (1.0 - when.elapsed().as_secs_f32() / 0.25).clamp(0.0, 1.0))
+                .unwrap_or(0.0);
+
+            level_history.push_back(level);
+            if level_history.len() > EQ_BARS {
+                level_history.pop_front();
+            }
+            peer_history.push_back(peer);
+            if peer_history.len() > EQ_BARS {
+                peer_history.pop_front();
+            }
+            let lh: Vec<f32> = level_history.iter().copied().collect();
+            let ph: Vec<f32> = peer_history.iter().copied().collect();
+
+            let state = PresenceState {
+                mood,
+                t,
+                level,
+                peer,
+                level_history: &lh,
+                peer_history: &ph,
+                glitch,
+                vision_thumb: vision_thumb.as_deref(),
+            };
+
             let svg = {
                 let guard = self.scene.lock().expect("scene lock");
                 match guard.as_ref() {
                     // Show the scene while it's within its hold window;
                     // then the tile returns to the presence orb.
                     Some(scene) if scene.is_visible() => scene_svg(scene, t, level, mood),
-                    _ => presence_svg(mood, t, level, peer),
+                    _ => presence_svg(&state),
                 }
             };
 
@@ -337,13 +416,27 @@ fn rasterize(
     Some(VideoFrame::new_rgba(data, VIDEO_W, VIDEO_H, Duration::ZERO))
 }
 
-/// Per-mood accent colour for the presence + the corner status dot.
+/// Per-mood accent — pop-punk loud: acid yellow when she's speaking,
+/// hot pink when she's seeing, electric mint when she's listening,
+/// neon purple when she's thinking.
 fn mood_color(mood: Mood) -> &'static str {
     match mood {
         Mood::Idle => "#6cb0ff",
-        Mood::Listening => "#54e2c8",
-        Mood::Thinking => "#b594ff",
-        Mood::Speaking => "#9fd2ff",
+        Mood::Listening => "#3effd6",
+        Mood::Thinking => "#c69cff",
+        Mood::Speaking => "#ffea3e",
+        Mood::Vision => "#ff3ec8",
+    }
+}
+
+/// Short sticker label for each mood. SHOUTING because pop-punk.
+fn mood_label(mood: Mood) -> &'static str {
+    match mood {
+        Mood::Idle => "STANDBY",
+        Mood::Listening => "LISTENING",
+        Mood::Thinking => "PROCESSING",
+        Mood::Speaking => "ELIZA",
+        Mood::Vision => "VISION",
     }
 }
 
@@ -447,39 +540,84 @@ fn lines_svg(
 // Presence orb
 // ---------------------------------------------------------------------
 
-/// The state-aware presence: a glowing orb whose colour and motion say
-/// what eliza is doing — idle, listening, thinking, or speaking.
-fn presence_svg(mood: Mood, t: f32, level: f32, peer: f32) -> String {
-    let accent = mood_color(mood);
-    let breathe = (t * 1.6).sin() * 5.0;
-    let orb_r = match mood {
-        Mood::Speaking => 48.0 + breathe + level * 64.0,
-        Mood::Thinking => 44.0 + (t * 4.0).sin() * 4.0,
-        Mood::Listening => 46.0 + breathe + peer * 30.0,
+/// All the per-frame inputs the presence renderer needs. Passed by ref
+/// so the audio histories (for the EQ strip) don't have to be cloned.
+struct PresenceState<'a> {
+    mood: Mood,
+    t: f32,
+    /// Eliza's own speech loudness (drives the lip-synced mouth and the
+    /// EQ strip while she's speaking).
+    level: f32,
+    /// Loudest peer right now (drives the EQ strip + brackets the rest
+    /// of the time).
+    peer: f32,
+    /// Rolling history of `level` — `EQ_BARS` samples at ~15Hz.
+    level_history: &'a [f32],
+    /// Rolling history of `peer`.
+    peer_history: &'a [f32],
+    /// `[0,1]` glitch intensity — non-zero only briefly after a mood
+    /// change. Decays inside the renderer so the burst only flashes,
+    /// never lingers.
+    glitch: f32,
+    /// `data:image/jpeg;base64,…` of the frame currently being analyzed,
+    /// when she's in [`Mood::Vision`]. Renders as a PiP in the corner.
+    vision_thumb: Option<&'a str>,
+}
+
+/// The state-aware presence — pop-punk-cyberpunk: corner brackets that
+/// pulse with audio, a sticker chip naming the current state, a bottom
+/// EQ strip, a halftone field behind the orb, an RGB-split scanline
+/// burst on every state change, and a vision PiP when she's looking at
+/// something. The orb in the centre still breathes and lip-syncs.
+fn presence_svg(s: &PresenceState) -> String {
+    let accent = mood_color(s.mood);
+    let dot_r = match s.mood {
+        Mood::Idle => 0.9,
+        Mood::Listening => 1.2,
+        Mood::Thinking | Mood::Vision => 2.2,
+        Mood::Speaking => 1.7,
+    };
+
+    let breathe = (s.t * 1.6).sin() * 5.0;
+    let orb_r = match s.mood {
+        Mood::Speaking => 48.0 + breathe + s.level * 64.0,
+        Mood::Thinking => 44.0 + (s.t * 4.0).sin() * 4.0,
+        Mood::Vision => 46.0 + (s.t * 5.0).sin() * 3.5,
+        Mood::Listening => 46.0 + breathe + s.peer * 30.0,
         Mood::Idle => 44.0 + breathe,
     };
     let glow_r = orb_r * 1.95;
-    let glow_op = match mood {
-        Mood::Speaking => 0.14 + level * 0.4,
-        Mood::Thinking => 0.18 + (t * 4.0).sin().abs() * 0.12,
-        Mood::Listening => 0.16 + peer * 0.3,
+    let glow_op = match s.mood {
+        Mood::Speaking => 0.14 + s.level * 0.4,
+        Mood::Thinking => 0.18 + (s.t * 4.0).sin().abs() * 0.12,
+        Mood::Vision => 0.22 + (s.t * 5.0).sin().abs() * 0.15,
+        Mood::Listening => 0.16 + s.peer * 0.3,
         Mood::Idle => 0.12,
     };
 
-    // Mood-specific overlay: a rotating dashed ring while thinking,
-    // contracting ripples while listening, a steady ring otherwise.
-    let overlay = match mood {
+    // Mood-specific overlay around the orb — distinct gestures for each.
+    let overlay = match s.mood {
         Mood::Thinking => format!(
-            r##"<circle cx="320" cy="156" r="{r:.1}" fill="none" stroke="{accent}" stroke-width="3" stroke-dasharray="14 12" opacity="0.8" transform="rotate({deg:.1} 320 156)"/>"##,
+            r##"<circle cx="320" cy="156" r="{r:.1}" fill="none" stroke="{accent}" stroke-width="3" stroke-dasharray="14 12" opacity="0.85" transform="rotate({deg:.1} 320 156)"/>"##,
             r = orb_r + 26.0,
-            deg = t * 150.0,
+            deg = s.t * 150.0,
         ),
+        Mood::Vision => {
+            // "Looking" — concentric scanned ring + a rotating tick ring.
+            let r1 = orb_r + 18.0;
+            let r2 = orb_r + 34.0;
+            format!(
+                r##"<circle cx="320" cy="156" r="{r1:.1}" fill="none" stroke="{accent}" stroke-width="1.6" stroke-dasharray="8 4" opacity="0.7"/>
+<circle cx="320" cy="156" r="{r2:.1}" fill="none" stroke="{accent}" stroke-width="1" stroke-dasharray="2 6" opacity="0.55" transform="rotate({deg:.1} 320 156)"/>"##,
+                deg = -s.t * 80.0,
+            )
+        }
         Mood::Listening => {
             let mut rings = String::new();
             for i in 0..3 {
-                let phase = (t * 0.6 + i as f32 * 0.33).fract();
+                let phase = (s.t * 0.6 + i as f32 * 0.33).fract();
                 let rr = orb_r + 8.0 + phase * 64.0;
-                let op = (1.0 - phase) * 0.5;
+                let op = (1.0 - phase) * 0.6;
                 rings.push_str(&format!(
                     r##"<circle cx="320" cy="156" r="{rr:.1}" fill="none" stroke="{accent}" stroke-width="2" opacity="{op:.3}"/>"##,
                 ));
@@ -488,58 +626,256 @@ fn presence_svg(mood: Mood, t: f32, level: f32, peer: f32) -> String {
         }
         _ => format!(
             r##"<circle cx="320" cy="156" r="{r:.1}" fill="none" stroke="{accent}" stroke-width="1.5" opacity="0.3"/>"##,
-            r = orb_r + 22.0 + (t * 2.0).sin() * 3.0,
+            r = orb_r + 22.0 + (s.t * 2.0).sin() * 3.0,
         ),
     };
 
-    let label = match mood {
-        Mood::Idle => "eliza",
-        Mood::Listening => "listening",
-        Mood::Thinking => "thinking",
-        Mood::Speaking => "eliza",
-    };
-
-    // Face — blinking eyes and a mouth whose openness tracks `level`
-    // (eliza's own speech loudness), so she visibly lip-syncs as she
-    // talks. At rest `level` is ~0, leaving a calm closed mouth.
-    let blinking = (t % 4.3) < 0.13;
+    // Face — blinking eyes, a mouth whose openness tracks `level`. When
+    // she's loud the mouth gets an RGB-split chromatic ghost — punk
+    // distortion, only visible when she's actually speaking.
+    let blinking = (s.t % 4.3) < 0.13;
     let eye_r = orb_r * 0.115;
     let eye_ry = eye_r * if blinking { 0.12 } else { 1.0 };
     let eye_y = 156.0 - orb_r * 0.20;
     let eye_dx = orb_r * 0.34;
     let mouth_cy = 156.0 + orb_r * 0.36;
     let mouth_rx = orb_r * 0.27;
-    let mouth_ry = 2.0 + level.clamp(0.0, 1.0) * orb_r * 0.42;
-    let face = format!(
-        r##"<g fill="#0a1020">
-  <ellipse cx="{lx:.1}" cy="{eye_y:.1}" rx="{eye_r:.1}" ry="{eye_ry:.1}"/>
-  <ellipse cx="{rx:.1}" cy="{eye_y:.1}" rx="{eye_r:.1}" ry="{eye_ry:.1}"/>
-  <ellipse cx="320" cy="{mouth_cy:.1}" rx="{mouth_rx:.1}" ry="{mouth_ry:.1}"/>
+    let mouth_ry = 2.0 + s.level.clamp(0.0, 1.0) * orb_r * 0.42;
+    let chrom = (s.level * 6.0).clamp(0.0, 2.0); // chromatic offset in px
+    let face = if chrom > 0.2 {
+        format!(
+            r##"<g fill="#0a1020">
+<ellipse cx="{lx:.1}" cy="{eye_y:.1}" rx="{eye_r:.1}" ry="{eye_ry:.1}"/>
+<ellipse cx="{rx:.1}" cy="{eye_y:.1}" rx="{eye_r:.1}" ry="{eye_ry:.1}"/>
+</g>
+<ellipse cx="{mxR:.2}" cy="{mouth_cy:.1}" rx="{mouth_rx:.1}" ry="{mouth_ry:.1}" fill="#ff3366" opacity="0.7"/>
+<ellipse cx="{mxB:.2}" cy="{mouth_cy:.1}" rx="{mouth_rx:.1}" ry="{mouth_ry:.1}" fill="#33ffee" opacity="0.7"/>
+<ellipse cx="320" cy="{mouth_cy:.1}" rx="{mouth_rx:.1}" ry="{mouth_ry:.1}" fill="#0a1020"/>"##,
+            lx = 320.0 - eye_dx,
+            rx = 320.0 + eye_dx,
+            mxR = 320.0 - chrom,
+            mxB = 320.0 + chrom,
+        )
+    } else {
+        format!(
+            r##"<g fill="#0a1020">
+<ellipse cx="{lx:.1}" cy="{eye_y:.1}" rx="{eye_r:.1}" ry="{eye_ry:.1}"/>
+<ellipse cx="{rx:.1}" cy="{eye_y:.1}" rx="{eye_r:.1}" ry="{eye_ry:.1}"/>
+<ellipse cx="320" cy="{mouth_cy:.1}" rx="{mouth_rx:.1}" ry="{mouth_ry:.1}"/>
 </g>"##,
-        lx = 320.0 - eye_dx,
-        rx = 320.0 + eye_dx,
-    );
+            lx = 320.0 - eye_dx,
+            rx = 320.0 + eye_dx,
+        )
+    };
+
+    let brackets = corner_brackets(accent, s);
+    let sticker = state_sticker(s.mood, accent);
+    let eq = eq_strip(s, accent);
+    let pip = s
+        .vision_thumb
+        .map(|uri| vision_pip(uri, accent))
+        .unwrap_or_default();
+    let glitch = if s.glitch > 0.01 {
+        glitch_overlay(s.glitch, s.t)
+    } else {
+        String::new()
+    };
 
     format!(
         r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">
-  <defs>
-    <radialGradient id="bg" cx="50%" cy="40%" r="80%">
-      <stop offset="0%" stop-color="#16213f"/>
-      <stop offset="100%" stop-color="#05070f"/>
-    </radialGradient>
-    <radialGradient id="orb" cx="42%" cy="38%" r="70%">
-      <stop offset="0%" stop-color="#f2f7ff"/>
-      <stop offset="44%" stop-color="{accent}"/>
-      <stop offset="100%" stop-color="#16306a"/>
-    </radialGradient>
-  </defs>
-  <rect width="{w}" height="{h}" fill="url(#bg)"/>
-  <circle cx="320" cy="156" r="{glow_r:.1}" fill="{accent}" opacity="{glow_op:.3}"/>
-  {overlay}
-  <circle cx="320" cy="156" r="{orb_r:.1}" fill="url(#orb)"/>
-  {face}
-  <text x="320" y="318" font-family="{FONT}" font-size="26" font-weight="600" fill="#cfe0ff" text-anchor="middle" letter-spacing="6">{label}</text>
+{defs}
+<rect width="{w}" height="{h}" fill="url(#bg)"/>
+<rect width="{w}" height="{h}" fill="url(#halftone)" opacity="0.55"/>
+{brackets}
+<circle cx="320" cy="156" r="{glow_r:.1}" fill="{accent}" opacity="{glow_op:.3}"/>
+{overlay}
+<circle cx="320" cy="156" r="{orb_r:.1}" fill="url(#orb)"/>
+{face}
+{eq}
+{pip}
+{sticker}
+{glitch}
 </svg>"##,
+        w = VIDEO_W,
+        h = VIDEO_H,
+        defs = presence_defs(accent, dot_r),
+    )
+}
+
+/// Shared `<defs>` for the presence — gradients, halftone pattern,
+/// sticker drop-shadow. `halftone_dot_r` widens the pattern's dot for
+/// busier moods (`Thinking`, `Vision`).
+fn presence_defs(accent: &str, halftone_dot_r: f32) -> String {
+    format!(
+        r##"<defs>
+<radialGradient id="bg" cx="50%" cy="40%" r="80%">
+<stop offset="0%" stop-color="#16213f"/>
+<stop offset="100%" stop-color="#05070f"/>
+</radialGradient>
+<radialGradient id="orb" cx="42%" cy="38%" r="70%">
+<stop offset="0%" stop-color="#f2f7ff"/>
+<stop offset="44%" stop-color="{accent}"/>
+<stop offset="100%" stop-color="#16306a"/>
+</radialGradient>
+<pattern id="halftone" x="0" y="0" width="14" height="14" patternUnits="userSpaceOnUse">
+<circle cx="7" cy="7" r="{dot_r:.2}" fill="#1c2a48" opacity="0.7"/>
+</pattern>
+<filter id="sticker_shadow" x="-30%" y="-30%" width="160%" height="160%">
+<feGaussianBlur in="SourceAlpha" stdDeviation="1.5"/>
+<feOffset dx="1.5" dy="2" result="o"/>
+<feFlood flood-color="#000" flood-opacity="0.55"/>
+<feComposite in2="o" operator="in"/>
+<feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+</filter>
+</defs>"##,
+        dot_r = halftone_dot_r,
+    )
+}
+
+/// Four L-shaped brackets at the tile corners. Length pulses with the
+/// audio that's relevant to the current mood — own loudness while
+/// speaking, peer loudness while listening, a slow breathe otherwise.
+fn corner_brackets(accent: &str, s: &PresenceState) -> String {
+    let drive = match s.mood {
+        Mood::Speaking => s.level,
+        Mood::Listening => s.peer,
+        Mood::Vision => 0.55 + (s.t * 1.8).sin().abs() * 0.25,
+        Mood::Thinking => 0.30 + (s.t * 1.6).sin().abs() * 0.35,
+        Mood::Idle => 0.20 + (s.t * 0.6).sin().abs() * 0.10,
+    }
+    .clamp(0.0, 1.0);
+    let len = 18.0 + drive * 64.0;
+    let pad = 16.0;
+    let r = VIDEO_W as f32 - pad;
+    let b = VIDEO_H as f32 - pad;
+    let l = pad;
+    let t = pad;
+    format!(
+        r##"<g stroke="{accent}" stroke-width="3" stroke-linecap="square" fill="none" opacity="0.9">
+<path d="M{l:.1} {tl:.1} L{l:.1} {t:.1} L{ll:.1} {t:.1}"/>
+<path d="M{rl:.1} {t:.1} L{r:.1} {t:.1} L{r:.1} {tl:.1}"/>
+<path d="M{l:.1} {bl:.1} L{l:.1} {b:.1} L{ll:.1} {b:.1}"/>
+<path d="M{rl:.1} {b:.1} L{r:.1} {b:.1} L{r:.1} {bl:.1}"/>
+</g>"##,
+        tl = t + len,
+        bl = b - len,
+        ll = l + len,
+        rl = r - len,
+    )
+}
+
+/// Sticker chip in the top-right corner, naming the current state.
+/// Sits at a 3° tilt with a soft drop-shadow — feels placed, not
+/// rendered.
+fn state_sticker(mood: Mood, accent: &str) -> String {
+    let label = mood_label(mood);
+    let w = 22 + label.chars().count() as i32 * 9;
+    format!(
+        r##"<g transform="translate(610 38) rotate(-3 0 0)">
+<rect x="{nx}" y="-13" width="{w}" height="26" rx="3" fill="{accent}" filter="url(#sticker_shadow)"/>
+<text x="{tx}" y="5" text-anchor="middle" font-family="{FONT}" font-size="12" font-weight="900" fill="#0a0f1f" letter-spacing="2.5">{label}</text>
+</g>"##,
+        nx = -w,
+        tx = -w / 2,
+    )
+}
+
+/// Bottom-edge waveform — `EQ_BARS` bars. Shows her own audio history
+/// while speaking, peer audio history otherwise. The "who's making
+/// sound right now" cue.
+fn eq_strip(s: &PresenceState, accent: &str) -> String {
+    let history: &[f32] = match s.mood {
+        Mood::Speaking => s.level_history,
+        _ => s.peer_history,
+    };
+    if history.is_empty() {
+        return String::new();
+    }
+    let bar_w = 10.0;
+    let bar_gap = 3.0;
+    let total = history.len();
+    let strip_w = total as f32 * (bar_w + bar_gap) - bar_gap;
+    let x0 = (VIDEO_W as f32 - strip_w) / 2.0;
+    let baseline = VIDEO_H as f32 - 22.0;
+    let max_h = 28.0;
+    let mut bars = String::new();
+    for (i, &v) in history.iter().enumerate() {
+        // Boost low values so quiet speech still moves the bars.
+        let h = (v * max_h * 5.0 + 2.0).clamp(2.0, max_h);
+        let x = x0 + i as f32 * (bar_w + bar_gap);
+        bars.push_str(&format!(
+            r##"<rect x="{x:.1}" y="{y:.1}" width="{bar_w:.1}" height="{h:.1}" rx="1.5" fill="{accent}" opacity="0.9"/>"##,
+            y = baseline - h,
+        ));
+    }
+    bars
+}
+
+/// Picture-in-picture of the frame she's currently analyzing — visible
+/// only in [`Mood::Vision`]. Crosshair brackets around it; an
+/// `ANALYZING` strip across the bottom of the inset. The whole point:
+/// remove all doubt that she's actually looking.
+fn vision_pip(data_uri: &str, accent: &str) -> String {
+    let w = 144.0;
+    let h = 82.0;
+    let x = 20.0;
+    let y = 60.0;
+    let bw = 12.0;
+    let xr = x + w;
+    let yh = y + h;
+    let label_h = 14.0;
+    format!(
+        r##"<g>
+<rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" fill="#000" opacity="0.85"/>
+<image href="{uri}" x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" preserveAspectRatio="xMidYMid slice"/>
+<g stroke="{accent}" stroke-width="2.5" fill="none">
+<path d="M{x:.1} {yb:.1} L{x:.1} {y:.1} L{xb:.1} {y:.1}"/>
+<path d="M{xrb:.1} {y:.1} L{xr:.1} {y:.1} L{xr:.1} {yb:.1}"/>
+<path d="M{x:.1} {ybb:.1} L{x:.1} {yh:.1} L{xb:.1} {yh:.1}"/>
+<path d="M{xrb:.1} {yh:.1} L{xr:.1} {yh:.1} L{xr:.1} {ybb:.1}"/>
+</g>
+<rect x="{x:.1}" y="{ylabel:.1}" width="{w:.1}" height="{label_h:.1}" fill="{accent}"/>
+<text x="{xc:.1}" y="{yt:.1}" font-family="{FONT}" font-size="9" font-weight="900" fill="#0a0f1f" text-anchor="middle" letter-spacing="2.5">ANALYZING</text>
+</g>"##,
+        uri = data_uri,
+        xb = x + bw,
+        xrb = xr - bw,
+        yb = y + bw,
+        ybb = yh - bw,
+        ylabel = yh - label_h,
+        xc = x + w / 2.0,
+        yt = yh - 4.0,
+    )
+}
+
+/// Brief RGB-split + scanline burst that fires on every mood change.
+/// Intensity fades from 1 → 0 over 250ms inside the renderer, so this
+/// only flashes on transition — never as ambient noise.
+fn glitch_overlay(intensity: f32, t: f32) -> String {
+    let seeds: &[(f32, f32, &str)] = &[
+        (0.13, 0.7, "#ff3ec8"),
+        (0.43, 0.3, "#3effd6"),
+        (0.71, 0.5, "#ffea3e"),
+        (0.92, 0.8, "#ff3ec8"),
+    ];
+    let mut bars = String::new();
+    for &(seed, hseed, color) in seeds {
+        let y = ((seed + t * 1.3) % 1.0) * VIDEO_H as f32;
+        let h = 2.0 + hseed * 5.0;
+        let alpha = intensity * 0.85;
+        bars.push_str(&format!(
+            r##"<rect x="0" y="{y:.1}" width="{w}" height="{h:.1}" fill="{color}" opacity="{alpha:.3}"/>"##,
+            w = VIDEO_W,
+        ));
+    }
+    let off = intensity * 5.0;
+    let cab = intensity * 0.08;
+    format!(
+        r##"{bars}
+<rect x="{ro:.1}" y="0" width="{w}" height="{h}" fill="#ff0066" opacity="{cab:.3}"/>
+<rect x="{bo:.1}" y="0" width="{w}" height="{h}" fill="#00ddff" opacity="{cab:.3}"/>"##,
+        ro = -off,
+        bo = off,
         w = VIDEO_W,
         h = VIDEO_H,
     )
@@ -891,8 +1227,32 @@ mod tests {
     fn presence_rasterizes_in_every_mood() {
         let opt = opt();
         let mut pixmap = resvg::tiny_skia::Pixmap::new(VIDEO_W, VIDEO_H).unwrap();
-        for mood in [Mood::Idle, Mood::Listening, Mood::Thinking, Mood::Speaking] {
-            let frame = rasterize(&presence_svg(mood, 1.7, 0.5, 0.4), &opt, &mut pixmap)
+        // A bit of history so the EQ strip actually has bars to draw,
+        // and a tiny vision thumb so the PiP branch renders too.
+        let lh: Vec<f32> = (0..EQ_BARS).map(|i| (i as f32 * 0.1).sin().abs() * 0.5).collect();
+        let ph: Vec<f32> = (0..EQ_BARS).map(|i| (i as f32 * 0.13).cos().abs() * 0.4).collect();
+        // A 1×1 black JPEG (smallest valid encode), as a data URI.
+        let tiny_thumb = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/2wBDAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/8AAA/9k=";
+        for mood in [
+            Mood::Idle,
+            Mood::Listening,
+            Mood::Thinking,
+            Mood::Speaking,
+            Mood::Vision,
+        ] {
+            // Exercise the glitch overlay too — fires on every transition,
+            // so render with a mid-strength glitch in this stamp.
+            let state = PresenceState {
+                mood,
+                t: 1.7,
+                level: 0.5,
+                peer: 0.4,
+                level_history: &lh,
+                peer_history: &ph,
+                glitch: 0.6,
+                vision_thumb: if mood == Mood::Vision { Some(tiny_thumb) } else { None },
+            };
+            let frame = rasterize(&presence_svg(&state), &opt, &mut pixmap)
                 .expect("presence must rasterize");
             assert_eq!(frame.dimensions, [VIDEO_W, VIDEO_H]);
         }
