@@ -44,6 +44,10 @@ const BOARD_HOLD: Duration = Duration::from_secs(20);
 const BOARD_STEP_MS: u32 = 900;
 /// How long each step's fade-in animation runs.
 const BOARD_REVEAL_MS: u32 = 320;
+/// How long an ambient "topic" chip stays on the tile before the next
+/// pick. Two ambient ticks (~40s) is the sweet spot — the chip lingers
+/// for one extra cycle so a quiet tick doesn't snap it back to default.
+const AMBIENT_HOLD: Duration = Duration::from_secs(45);
 /// Accent used when the model gives no (or a malformed) colour.
 const DEFAULT_ACCENT: &str = "#6cb0ff";
 /// Font stack for all tile text.
@@ -124,6 +128,22 @@ impl Board {
     }
 }
 
+/// Ambient "manifesting" state — a short concept + accent colour the
+/// ambient monitor refreshes every ~20s while she's listening. It does
+/// NOT take the tile over — the HUD chip and a faint scrim blend pick
+/// it up while mood, scene, and board continue to drive the main visual.
+struct Ambient {
+    concept: String,
+    accent: String,
+    set_at: Instant,
+}
+
+impl Ambient {
+    fn is_visible(&self) -> bool {
+        self.set_at.elapsed() < AMBIENT_HOLD
+    }
+}
+
 /// A scene currently on the tile, plus when it appeared (drives the
 /// reveal animation and the hold-then-revert-to-orb timer).
 struct Scene {
@@ -167,6 +187,9 @@ pub struct VideoTile {
     scene: Arc<Mutex<Option<Scene>>>,
     /// Whiteboard takes priority over the scene card when both are set.
     board: Arc<Mutex<Option<Board>>>,
+    /// Ambient topic + accent, refreshed by the ambient monitor. Drives
+    /// the HUD chip and a subtle scrim blend — never the main visual.
+    ambient: Arc<Mutex<Option<Ambient>>>,
     /// Hands out a fresh id per scene so async image jobs can target one.
     next_id: Arc<AtomicU64>,
     running: Arc<AtomicBool>,
@@ -182,6 +205,7 @@ impl VideoTile {
             vision_thumb: Arc::new(Mutex::new(None)),
             scene: Arc::new(Mutex::new(None)),
             board: Arc::new(Mutex::new(None)),
+            ambient: Arc::new(Mutex::new(None)),
             next_id: Arc::new(AtomicU64::new(0)),
             running: Arc::new(AtomicBool::new(true)),
         }
@@ -215,6 +239,32 @@ impl VideoTile {
     /// Drop the vision PiP. Safe to call when none was set.
     pub fn clear_vision_thumb(&self) {
         if let Ok(mut g) = self.vision_thumb.lock() {
+            *g = None;
+        }
+    }
+
+    /// Apply an ambient topic — the HUD chip swaps from its default
+    /// "MOQ ▸ LIVE" readout to the concept text in the supplied accent,
+    /// and a faint accent rect blends into the tile's background. Used
+    /// by the ambient monitor while she's listening so the tile reflects
+    /// what's being discussed in real time. Accent is validated; a bad
+    /// one falls back to [`DEFAULT_ACCENT`].
+    pub fn set_ambient(&self, concept: String, accent: String) {
+        let accent = validate_accent(&accent);
+        let concept: String = concept.chars().take(28).collect();
+        if let Ok(mut g) = self.ambient.lock() {
+            *g = Some(Ambient {
+                concept,
+                accent,
+                set_at: Instant::now(),
+            });
+        }
+    }
+
+    /// Drop the ambient topic. Safe to call when none was set. The HUD
+    /// reverts to its default readout on the next frame.
+    pub fn clear_ambient(&self) {
+        if let Ok(mut g) = self.ambient.lock() {
             *g = None;
         }
     }
@@ -319,6 +369,15 @@ impl VideoTile {
                 .lock()
                 .ok()
                 .and_then(|g| g.clone());
+            let ambient = self
+                .ambient
+                .lock()
+                .ok()
+                .and_then(|g| {
+                    g.as_ref()
+                        .filter(|a| a.is_visible())
+                        .map(|a| (a.concept.clone(), a.accent.clone()))
+                });
 
             // Vision overrides everything — when she's analyzing a frame,
             // that's the most important thing for the viewer to see, even
@@ -366,6 +425,9 @@ impl VideoTile {
                 peer_history: &ph,
                 glitch,
                 vision_thumb: vision_thumb.as_deref(),
+                ambient: ambient
+                    .as_ref()
+                    .map(|(c, a)| (c.as_str(), a.as_str())),
             };
 
             let svg = {
@@ -615,6 +677,10 @@ struct PresenceState<'a> {
     /// `data:image/jpeg;base64,…` of the frame currently being analyzed,
     /// when she's in [`Mood::Vision`]. Renders as a PiP in the corner.
     vision_thumb: Option<&'a str>,
+    /// Ambient `(concept, accent)` from the ambient monitor — the topic
+    /// she's silently picking up on while listening. Drives the HUD chip
+    /// and a faint scrim blend; does NOT replace the mood.
+    ambient: Option<(&'a str, &'a str)>,
 }
 
 /// The state-aware presence — pop-punk-cyberpunk: corner brackets that
@@ -863,21 +929,34 @@ fn state_sticker(mood: Mood, accent: &str) -> String {
 }
 
 /// Small mono-style HUD chip in the top-left — pure cyberpunk garnish.
-/// A blinky tick + a fixed system-status readout.
+/// A blinky tick + a fixed system-status readout. When the ambient
+/// monitor has picked a topic, the chip swaps to that concept in the
+/// ambient accent — so the tile keeps showing she's tracking the
+/// conversation even when she isn't speaking.
 fn hud_sticker(s: &PresenceState) -> String {
     let tick = if (s.t * 1.5).sin() > 0.0 { "●" } else { "○" };
-    let text = "MOQ ▸ LIVE";
+    let (text, accent): (String, &str) = match s.ambient {
+        Some((concept, accent)) => (
+            concept.chars().take(22).collect::<String>().to_uppercase(),
+            accent,
+        ),
+        None => ("MOQ ▸ LIVE".to_string(), "#3effd6"),
+    };
+    let chars = 2 + text.chars().count() as i32; // tick + space + text
+    let w = (24 + chars * 11).max(120);
     format!(
         r##"<g transform="translate(30 50) rotate(2 0 0)">
-<rect x="-8" y="-14" width="172" height="28" rx="3" fill="#0a0f1f" stroke="#3effd6" stroke-width="1.5" opacity="0.92"/>
-<text x="4" y="5" font-family="{FONT}" font-size="14" font-weight="900" fill="#3effd6" letter-spacing="2.5">{tick} {text}</text>
+<rect x="-8" y="-14" width="{w}" height="28" rx="3" fill="#0a0f1f" stroke="{accent}" stroke-width="1.5" opacity="0.92"/>
+<text x="4" y="5" font-family="{FONT}" font-size="14" font-weight="900" fill="{accent}" letter-spacing="2.5">{tick} {text}</text>
 </g>"##,
     )
 }
 
 /// Faint accent-tinted overlay over the bg — the "room is bathed in
 /// this color" cue. Pulses with audio for the loud moods, ambient for
-/// the calm ones.
+/// the calm ones. When ambient is set, a second tint in the topic
+/// accent blends on top so the room subtly shifts colour with the
+/// conversation.
 fn mood_scrim(accent: &str, s: &PresenceState) -> String {
     let strength = match s.mood {
         Mood::Idle => 0.04,
@@ -886,11 +965,19 @@ fn mood_scrim(accent: &str, s: &PresenceState) -> String {
         Mood::Speaking => 0.06 + s.level * 0.10,
         Mood::Vision => 0.11 + (s.t * 5.0).sin().abs() * 0.05,
     };
-    format!(
+    let base = format!(
         r##"<rect width="{w}" height="{h}" fill="{accent}" opacity="{strength:.3}"/>"##,
         w = VIDEO_W,
         h = VIDEO_H,
-    )
+    );
+    match s.ambient {
+        Some((_, amb_accent)) => format!(
+            r##"{base}<rect width="{w}" height="{h}" fill="{amb_accent}" opacity="0.06"/>"##,
+            w = VIDEO_W,
+            h = VIDEO_H,
+        ),
+        None => base,
+    }
 }
 
 /// Bottom-edge waveform — `EQ_BARS` bars across most of the tile
@@ -1480,6 +1567,7 @@ mod tests {
                 peer_history: &ph,
                 glitch: 0.6,
                 vision_thumb: if mood == Mood::Vision { Some(tiny_thumb) } else { None },
+                ambient: None,
             };
             let frame = rasterize(&presence_svg(&state), &opt, &mut pixmap)
                 .expect("presence must rasterize");
@@ -1515,6 +1603,7 @@ mod tests {
                     peer_history: &[],
                     glitch: 0.0,
                     vision_thumb: None,
+                    ambient: None,
                 };
                 let svg = scene_svg(&scene, &state);
                 let frame = rasterize(&svg, &opt, &mut pixmap)
@@ -1626,6 +1715,7 @@ mod tests {
                 peer_history: &[],
                 glitch: 0.0,
                 vision_thumb: None,
+                ambient: None,
             };
             let svg = scene_svg(&scene, &state);
             rasterize(&svg, &opt, &mut pixmap).expect("must rasterize");
@@ -1648,6 +1738,7 @@ mod tests {
                 peer_history: &[],
                 glitch: 0.0,
                 vision_thumb: None,
+                ambient: None,
             };
             let svg = scene_svg(&scene, &state);
                 rasterize(&svg, &opt, &mut pixmap).expect("must rasterize");

@@ -75,6 +75,11 @@ pub struct RunConfig {
     /// unprompted with high-confidence observations. Toggle with
     /// `--no-proactive` on the CLI.
     pub proactive_enabled: bool,
+    /// Enable the ambient monitor — when true, Eliza's tile silently
+    /// reflects the topic + colour of the conversation while she
+    /// listens, and escalates to an image scene on concrete subjects.
+    /// Toggle with `--no-ambient` on the CLI.
+    pub ambient_enabled: bool,
 }
 
 /// Subset of [`RunConfig`] shared with inner tasks. Excludes the
@@ -106,6 +111,8 @@ pub(crate) struct SharedConfig {
     pub(crate) started_at: Instant,
     /// Whether the proactive monitor runs (`--no-proactive` disables it).
     pub(crate) proactive_enabled: bool,
+    /// Whether the ambient monitor runs (`--no-ambient` disables it).
+    pub(crate) ambient_enabled: bool,
 }
 
 /// Active-call state. Held inside an `Arc<AsyncMutex<Option<...>>>`
@@ -137,12 +144,17 @@ pub(crate) struct ActiveCall {
     moq_task: JoinHandle<()>,
     /// The proactive-monitor task (if enabled). Same drop story.
     proactive_task: Option<JoinHandle<()>>,
+    /// The ambient-monitor task (if enabled). Same drop story.
+    ambient_task: Option<JoinHandle<()>>,
 }
 
 impl Drop for ActiveCall {
     fn drop(&mut self) {
         self.moq_task.abort();
         if let Some(t) = &self.proactive_task {
+            t.abort();
+        }
+        if let Some(t) = &self.ambient_task {
             t.abort();
         }
         self.video.stop();
@@ -173,6 +185,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         elevenlabs_model,
         image_ai,
         proactive_enabled,
+        ambient_enabled,
     } = cfg;
 
     // Pick websocket vs raw-TCP transport based on URL scheme — mirrors
@@ -256,6 +269,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         elevenlabs_model,
         image_ai,
         proactive_enabled,
+        ambient_enabled,
         http: reqwest::Client::new(),
         started_at: Instant::now(),
     });
@@ -968,6 +982,20 @@ async fn start_transcription(
         None
     };
 
+    // Ambient monitor — silent visual companion. While the proactive
+    // monitor decides *when to speak*, the ambient monitor decides *how
+    // the tile should look*. Independent loops, snapshotting the same
+    // shared transcript.
+    let ambient_task = if cfg.ambient_enabled {
+        Some(crate::ambient::spawn_monitor(
+            cfg.clone(),
+            handle.clone(),
+            active.clone(),
+        ))
+    } else {
+        None
+    };
+
     Ok(ActiveCall {
         channel,
         session_id,
@@ -978,6 +1006,7 @@ async fn start_transcription(
         video,
         moq_task: task,
         proactive_task,
+        ambient_task,
     })
 }
 

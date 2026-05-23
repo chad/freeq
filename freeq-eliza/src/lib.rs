@@ -4,6 +4,7 @@
 //! modules through `lib.rs` so adversarial unit tests can `cargo test
 //! --lib` against them without dragging in `tokio::main`.
 
+pub mod ambient;
 pub mod identity;
 pub mod imagegen;
 pub mod irc;

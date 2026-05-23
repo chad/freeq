@@ -136,6 +136,12 @@ struct Cli {
     /// Useful when she's chatty and you want quiet.
     #[arg(long)]
     no_proactive: bool,
+
+    /// Disable the ambient monitor — the tile reverts to a static HUD
+    /// and skips topic/image manifesting while she listens. Cuts a small
+    /// extra cost (one fast LLM call every 20s) when you don't want it.
+    #[arg(long)]
+    no_ambient: bool,
 }
 
 #[tokio::main]
@@ -224,6 +230,7 @@ async fn main() -> Result<()> {
         elevenlabs_model: cli.elevenlabs_model,
         image_ai,
         proactive_enabled: !cli.no_proactive,
+        ambient_enabled: !cli.no_ambient,
     })
     .await
 }
