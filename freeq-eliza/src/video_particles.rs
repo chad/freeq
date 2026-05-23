@@ -83,10 +83,12 @@ pub(crate) fn render_loop(tile: VideoTile, character_name: &str) {
         return;
     };
 
-    // Scale 3.6 ≈ 30% bigger than the previous 2.8 — the face now
-    // dominates the field of view instead of floating in the middle
-    // surrounded by void. Matches the avatar reference's default.
-    let mut state = FaceState::new(&base_character, PARTICLES, 3.6, 42);
+    // Scale 5.0 — the face now FILLS the tile, basically edge to
+    // edge at peak yaw. Per user feedback the 3.6 version was still
+    // too small; this lands much closer to the avatar reference's
+    // "she's RIGHT there" presence.
+    const SCALE: f32 = 5.0;
+    let mut state = FaceState::new(&base_character, PARTICLES, SCALE, 42);
 
     // Scratch pixmap for rasterizing the overlay SVG each frame. We
     // allocate once and reuse so the per-frame cost is just the
@@ -160,7 +162,7 @@ pub(crate) fn render_loop(tile: VideoTile, character_name: &str) {
         // Tick the ember swarm (only does anything when the character
         // configured an EmberConfig — Oblivion's signature flavour).
         if let Some(cfg) = current_character.render_config.embers {
-            state.step_embers(&cfg, frame_dt.as_secs_f32(), 3.6);
+            state.step_embers(&cfg, frame_dt.as_secs_f32(), SCALE);
         }
 
         let pixmap = renderer.render(&current_character, &state, t);
