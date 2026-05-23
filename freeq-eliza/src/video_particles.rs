@@ -154,17 +154,37 @@ pub(crate) fn render_loop(tile: VideoTile, character_name: &str) {
         // breathes.
         state.set_audio_level(level.max(peer));
 
+        let dt_secs = frame_dt.as_secs_f32();
         // Drive the head turn — picks a new gaze target every few
         // seconds and eases the current yaw/pitch toward it. Makes
         // the face feel like a real being looking around the room.
-        state.step_gaze(t, frame_dt.as_secs_f32());
-        // Blinks every 3-7s.
-        state.step_blink(t, frame_dt.as_secs_f32());
+        state.step_gaze(t, dt_secs);
+        state.step_blink(t, dt_secs);
+        state.step_eye_saccade(t, dt_secs);
+        // Detect speech onset → full-field bright flash + camera
+        // shake jolt. Must come after set_audio_level so the rising
+        // edge sees the current frame's level.
+        state.step_audio_onset(t, dt_secs);
+
+        // Brow expression — derived from emotion. Curiosity (her
+        // alert listening / thinking) raises the brow; Passion
+        // (speaking) lowers it slightly (drama); Awe (vision) lifts
+        // higher; Calm sits neutral.
+        let brow = match emotion {
+            Emotion::Curiosity => 0.6,
+            Emotion::Awe => 0.85,
+            Emotion::Passion => -0.35,
+            Emotion::Concern => -0.5,
+            Emotion::Triumph => 0.7,
+            Emotion::Joy | Emotion::Warmth => 0.3,
+            Emotion::Calm => 0.0,
+        };
+        state.set_brow(brow);
 
         // Tick the ember swarm (only does anything when the character
         // configured an EmberConfig — Oblivion's signature flavour).
         if let Some(cfg) = current_character.render_config.embers {
-            state.step_embers(&cfg, frame_dt.as_secs_f32(), SCALE);
+            state.step_embers(&cfg, dt_secs, SCALE);
         }
 
         let pixmap = renderer.render(&current_character, &state, t);
