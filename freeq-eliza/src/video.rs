@@ -22,9 +22,11 @@ use iroh_live::media::traits::VideoSource;
 
 use crate::whiteboard::Step;
 
-/// Tile resolution. 360p is ample and cheap to rasterize on the CPU.
-pub const VIDEO_W: u32 = 640;
-pub const VIDEO_H: u32 = 360;
+/// Tile resolution. 720p — chunkier than the old 360p but with the
+/// new bloom + ember count it reads enormously better, and CPU
+/// rasterizing at 15 fps still leaves headroom.
+pub const VIDEO_W: u32 = 1280;
+pub const VIDEO_H: u32 = 720;
 const FPS: u64 = 15;
 /// Most points a scene shows (extras are dropped).
 const MAX_POINTS: usize = 6;

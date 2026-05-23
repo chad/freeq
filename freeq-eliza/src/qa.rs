@@ -479,6 +479,119 @@ pub async fn answer_streaming(
     Ok(Answer { text, source })
 }
 
+// ── Anthropic streaming answer ───────────────────────────────────────
+
+/// SSE event payload for the `content_block_delta` event in the
+/// Anthropic Messages API stream. Only field we need is the text
+/// chunk inside `delta.text`.
+#[derive(Deserialize)]
+struct AnthropicDeltaEvent {
+    #[serde(rename = "type")]
+    event_type: String,
+    #[serde(default)]
+    delta: AnthropicTextDelta,
+}
+
+#[derive(Deserialize, Default)]
+struct AnthropicTextDelta {
+    #[serde(default, rename = "type")]
+    delta_type: String,
+    #[serde(default)]
+    text: String,
+}
+
+/// Streaming variant of [`answer_streaming`] that hits Anthropic's
+/// Messages API instead of Groq's OpenAI-compatible chat completions.
+/// Use this when `model` starts with `claude-` (e.g. `claude-opus-4-7`).
+///
+/// Anthropic doesn't have native web-search inside Messages the way
+/// Groq's compound model does — answers come purely from the model's
+/// training. The returned [`Answer`] never has a `source` set.
+pub async fn anthropic_answer_streaming(
+    client: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    transcript: &str,
+    question: &str,
+    system_override: Option<&str>,
+    mut on_delta: impl FnMut(&str),
+) -> Result<Answer> {
+    let system = system_override.unwrap_or(SYSTEM);
+    let body = serde_json::json!({
+        "model": model,
+        "max_tokens": 320,
+        "temperature": 0.3,
+        "stream": true,
+        "system": system,
+        "messages": [
+            { "role": "user", "content": user_prompt(transcript, question) },
+        ],
+    });
+
+    let mut resp = client
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .context("anthropic streaming chat request failed")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let err = resp.text().await.unwrap_or_default();
+        anyhow::bail!("anthropic chat {status}: {err}");
+    }
+
+    let mut buf: Vec<u8> = Vec::new();
+    let mut text = String::new();
+
+    while let Some(network_chunk) = resp
+        .chunk()
+        .await
+        .context("reading anthropic chat stream")?
+    {
+        buf.extend_from_slice(&network_chunk);
+        while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = buf.drain(..=nl).collect();
+            let line = String::from_utf8_lossy(&line);
+            // Anthropic SSE: each event has an `event: <name>` line
+            // (which we ignore) and a `data: <json>` line. Only data
+            // lines matter for content extraction.
+            let Some(data) = line.trim().strip_prefix("data:") else {
+                continue;
+            };
+            let data = data.trim();
+            if data.is_empty() {
+                continue;
+            }
+            let Ok(evt) = serde_json::from_str::<AnthropicDeltaEvent>(data) else {
+                continue;
+            };
+            if evt.event_type == "content_block_delta" && evt.delta.delta_type == "text_delta"
+                && !evt.delta.text.is_empty()
+            {
+                text.push_str(&evt.delta.text);
+                on_delta(&evt.delta.text);
+            }
+        }
+    }
+
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        anyhow::bail!("anthropic streaming chat returned no content");
+    }
+    Ok(Answer { text, source: None })
+}
+
+/// Whether `model` should be routed to the Anthropic Messages API.
+/// Anything starting with `claude` (case-insensitive) goes to
+/// Anthropic; everything else to Groq.
+pub fn is_anthropic_model(model: &str) -> bool {
+    model.to_ascii_lowercase().starts_with("claude")
+}
+
 // ── Sentence chunking ────────────────────────────────────────────────
 
 /// Accumulates streamed text and emits complete sentences, so an answer

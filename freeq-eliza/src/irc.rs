@@ -60,6 +60,10 @@ pub struct RunConfig {
     pub window_secs: f32,
     pub summary_model: String,
     pub anthropic_key: Option<String>,
+    /// Whether the end-of-call summary path runs (separate from the
+    /// per-question answer-model dispatch, which gates on
+    /// [`Self::anthropic_key`] presence and the model name).
+    pub summary_enabled: bool,
     /// When set, the bot sends an `av-start` for this channel right
     /// after joining — it initiates a call rather than only watching
     /// for one. The channel must also appear in `channels`. The
@@ -122,6 +126,7 @@ pub(crate) struct SharedConfig {
     pub(crate) window_secs: f32,
     pub(crate) summary_model: String,
     pub(crate) anthropic_key: Option<String>,
+    pub(crate) summary_enabled: bool,
     pub(crate) sfu_url_override: Option<String>,
     pub(crate) groq_api_key: Option<String>,
     pub(crate) groq_chat_model: String,
@@ -209,6 +214,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         window_secs,
         summary_model,
         anthropic_key,
+        summary_enabled,
         start_session_in,
         sfu_url_override,
         groq_api_key,
@@ -297,6 +303,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         window_secs,
         summary_model,
         anthropic_key,
+        summary_enabled,
         sfu_url_override,
         groq_api_key,
         groq_chat_model,
@@ -425,7 +432,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                         drop(call);
                         drop(active_guard);
 
-                        if !cfg.anthropic_key.is_some() || transcript.is_empty() {
+                        if !cfg.summary_enabled || !cfg.anthropic_key.is_some() || transcript.is_empty() {
                             let _ = handle
                                 .privmsg(&channel_for_post, "[transcript] session ended.")
                                 .await;
@@ -647,20 +654,49 @@ async fn answer_and_speak(
         }
         Ok(qa::Answer { text, source: None })
     } else {
-        qa::answer_streaming(
-            &cfg.http,
-            key,
-            &cfg.groq_answer_model,
-            &transcript,
-            &question,
-            cfg.character_system_prompt.as_deref(),
-            |delta| {
-                for sentence in chunker.push(delta) {
-                    let _ = tx.send(sentence);
+        // Dispatch: a `claude-*` model goes to Anthropic Messages
+        // (uses ANTHROPIC_API_KEY); anything else stays on the Groq
+        // OpenAI-compatible endpoint (uses GROQ_API_KEY). Per-call
+        // streaming, same `Answer` shape returned either way.
+        if qa::is_anthropic_model(&cfg.groq_answer_model) {
+            match cfg.anthropic_key.as_deref() {
+                Some(akey) => {
+                    qa::anthropic_answer_streaming(
+                        &cfg.http,
+                        akey,
+                        &cfg.groq_answer_model,
+                        &transcript,
+                        &question,
+                        cfg.character_system_prompt.as_deref(),
+                        |delta| {
+                            for sentence in chunker.push(delta) {
+                                let _ = tx.send(sentence);
+                            }
+                        },
+                    )
+                    .await
                 }
-            },
-        )
-        .await
+                None => Err(anyhow::anyhow!(
+                    "model {} requires ANTHROPIC_API_KEY",
+                    cfg.groq_answer_model
+                )),
+            }
+        } else {
+            qa::answer_streaming(
+                &cfg.http,
+                key,
+                &cfg.groq_answer_model,
+                &transcript,
+                &question,
+                cfg.character_system_prompt.as_deref(),
+                |delta| {
+                    for sentence in chunker.push(delta) {
+                        let _ = tx.send(sentence);
+                    }
+                },
+            )
+            .await
+        }
     };
 
     let answer = match result {

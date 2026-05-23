@@ -78,11 +78,14 @@ struct Cli {
     #[arg(long, default_value = "llama-3.3-70b-versatile")]
     groq_chat_model: String,
 
-    /// Groq model for answering questions addressed to the bot. The
-    /// default (`groq/compound`) is agentic and searches the web; use
-    /// `groq/compound-mini` for lower latency, or a plain chat model
-    /// (e.g. `llama-3.3-70b-versatile`) to disable web search.
-    #[arg(long, default_value = "groq/compound")]
+    /// Model for answering questions addressed to the bot. Default is
+    /// Anthropic's `claude-opus-4-7` (slowest but highest quality;
+    /// requires `ANTHROPIC_API_KEY`). Falls back to Groq when given a
+    /// non-claude model — `groq/compound` is the agentic web-search
+    /// option, `groq/compound-mini` lower latency, `llama-3.3-70b-versatile`
+    /// no web. Flag name kept as `--groq-answer-model` for back-compat;
+    /// `claude-*` routes to Anthropic Messages automatically.
+    #[arg(long, default_value = "claude-opus-4-7")]
     groq_answer_model: String,
 
     /// Groq vision model for questions about a participant's shared
@@ -197,16 +200,23 @@ async fn main() -> Result<()> {
     let stt = Arc::new(build_stt(&cli)?);
     tracing::info!(backend = %stt.label(), "STT backend ready");
 
-    // Anthropic key is optional — `--no-summary` or a missing key both
-    // result in transcript-only mode.
-    let anthropic_key = if cli.no_summary {
-        None
-    } else {
-        std::env::var("ANTHROPIC_API_KEY").ok()
-    };
+    // Anthropic key is now used for TWO things: optional end-of-call
+    // summary, AND (by default) the per-question answer model when
+    // `--groq-answer-model` is a `claude-*` model. So we always try
+    // to load it; `--no-summary` only suppresses the summary path,
+    // not the answer-model route.
+    let anthropic_key = std::env::var("ANTHROPIC_API_KEY")
+        .ok()
+        .filter(|k| !k.trim().is_empty());
     if anthropic_key.is_none() {
-        tracing::info!("ANTHROPIC_API_KEY not set or --no-summary; end-of-call summary disabled");
+        tracing::info!(
+            "ANTHROPIC_API_KEY not set — claude-* answer models won't work; \
+             end-of-call summary also disabled"
+        );
     }
+    // `--no-summary` only suppresses the end-of-call summary call;
+    // it doesn't disable the answer-model route to Anthropic.
+    let summary_enabled = !cli.no_summary;
 
     // Groq key powers STT (above) + question-answering. ElevenLabs key
     // powers TTS. Read both from the environment.
@@ -248,6 +258,7 @@ async fn main() -> Result<()> {
         window_secs: cli.window_secs,
         summary_model: cli.summary_model,
         anthropic_key,
+        summary_enabled,
         start_session_in: cli.start_session_in,
         sfu_url_override: cli.sfu_url,
         groq_api_key,
