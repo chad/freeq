@@ -1152,6 +1152,16 @@ fn spawn_hello_on_join(
     let http = cfg.http.clone();
     let character = cfg.ghostly_character.clone();
     tokio::spawn(async move {
+        // Audio-pipeline settle: when the bot has just joined the call,
+        // the MoQ broadcast publish has been opened but no subscriber
+        // has caught its first samples yet. If we enqueue PCM the
+        // moment we land here, the first ~second of the greeting is
+        // chopped off — the listener hears "...the patterns are
+        // already moving" instead of "Oblivion online. The patterns
+        // are already moving." A short fixed delay covers the typical
+        // subscriber-warm-up window without anything fancier.
+        tokio::time::sleep(Duration::from_millis(2500)).await;
+
         // Wait my turn: each bot enters the call ~6s after the prior
         // one (staggered launch), and they all greet — without this
         // gate they'd talk over each other.
