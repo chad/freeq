@@ -479,7 +479,11 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
             .await
             {
                 Ok(call) => {
-                    spawn_hello_on_join(&cfg, call.speaker.clone());
+                    spawn_hello_on_join(
+                        &cfg,
+                        call.speaker.clone(),
+                        call.video.peer_level_handle(),
+                    );
                     *active.lock().await = Some(call);
                 }
                 Err(e) => tracing::warn!(error = ?e, "failed to join existing session"),
@@ -548,7 +552,11 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                                 // only once per call — the speaker
                                 // clone keeps the audio queued even if
                                 // the bot's task panics elsewhere.
-                                spawn_hello_on_join(&cfg, call.speaker.clone());
+                                spawn_hello_on_join(
+                                    &cfg,
+                                    call.speaker.clone(),
+                                    call.video.peer_level_handle(),
+                                );
                                 *active_guard = Some(call);
                             }
                             Err(e) => {
@@ -768,18 +776,38 @@ async fn answer_and_speak(
                 // Per-character voice chain — see proactive.rs for design intent.
                 let voice_profile =
                     ghostly::audio::profile::for_character(&cfg.ghostly_character);
+                // Peer-loudness handle for the don't-talk-over gate.
+                // `peer_level` is the loudest of all OTHER participants
+                // (humans + other agents) on this tile; the bot is
+                // filtered out of its own subscription so its own TTS
+                // does not drive this signal.
+                let peer_level = video.as_ref().map(|v| v.peer_level_handle());
                 Some(tokio::spawn(async move {
                     let mut chain = ghostly::audio::VoiceChain::new(
                         voice_profile,
                         tts::ELEVENLABS_PCM_RATE as f32,
                     );
                     let mut work: Vec<f32> = Vec::with_capacity(4096);
+                    let mut first = true;
                     while let Some(sentence) = rx.recv().await {
                         // URLs are unpronounceable — strip them from
                         // speech; the channel gets them as text instead.
                         let (spoken, _) = split_speech_and_links(&sentence);
                         if !spoken.chars().any(char::is_alphanumeric) {
                             continue;
+                        }
+                        // Wait-for-quiet gate: before STARTING to speak,
+                        // hold until no peer is talking. Applied only at
+                        // the first sentence of the answer — once the
+                        // bot has the floor, subsequent sentences stream
+                        // immediately. Prevents the cross-talk where two
+                        // agents both got addressed and stepped on each
+                        // other's first words.
+                        if first {
+                            if let Some(pl) = &peer_level {
+                                wait_for_room_quiet(pl).await;
+                            }
+                            first = false;
                         }
                         let chain_ref = &mut chain;
                         let work_ref = &mut work;
@@ -1068,11 +1096,49 @@ async fn answer_and_speak(
 /// Runs entirely off the answer path — image lookup/generation is slow
 /// (Wikipedia ~1s, AI fallback ~15s), so the scene shows text-first and
 /// the backdrop fades in once it arrives.
+/// Wait until the room is quiet — no peer (human or other agent) has
+/// been speaking for a short hold window. Used as a "wait my turn"
+/// gate before a bot starts its own TTS so multiple agents do not
+/// step on each other or on the human.
+///
+/// The smoothed peer-level signal already decays at ~10%/audio frame,
+/// so a hold of 250 ms is enough to disambiguate "they paused mid-
+/// sentence" from "they're done talking." Caps total wait at 5 s so a
+/// stuck-open mic from a peer cannot mute the bot forever.
+async fn wait_for_room_quiet(peer_level: &Arc<std::sync::atomic::AtomicU32>) {
+    use std::sync::atomic::Ordering;
+    const THRESHOLD: f32 = 0.04;
+    const HOLD: Duration = Duration::from_millis(250);
+    const MAX_WAIT: Duration = Duration::from_millis(5000);
+    let start = Instant::now();
+    let mut quiet_since: Option<Instant> = None;
+    loop {
+        if start.elapsed() >= MAX_WAIT {
+            return;
+        }
+        let level = f32::from_bits(peer_level.load(Ordering::Relaxed));
+        if level < THRESHOLD {
+            match quiet_since {
+                None => quiet_since = Some(Instant::now()),
+                Some(t) if t.elapsed() >= HOLD => return,
+                _ => {}
+            }
+        } else {
+            quiet_since = None;
+        }
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+}
+
 /// Speak the character's `hello_line` through ElevenLabs + the per-
 /// character voice chain + the call speaker, then return. Runs once
 /// per call activation. Silent no-op if any of (ElevenLabs key,
 /// character profile) is missing.
-fn spawn_hello_on_join(cfg: &Arc<SharedConfig>, speaker: freeq_av::Speaker) {
+fn spawn_hello_on_join(
+    cfg: &Arc<SharedConfig>,
+    speaker: freeq_av::Speaker,
+    peer_level: Arc<std::sync::atomic::AtomicU32>,
+) {
     let Some(el_key) = cfg.elevenlabs_api_key.clone() else {
         tracing::info!("hello-on-join skipped — no ELEVENLABS_API_KEY");
         return;
@@ -1086,6 +1152,10 @@ fn spawn_hello_on_join(cfg: &Arc<SharedConfig>, speaker: freeq_av::Speaker) {
     let http = cfg.http.clone();
     let character = cfg.ghostly_character.clone();
     tokio::spawn(async move {
+        // Wait my turn: each bot enters the call ~6s after the prior
+        // one (staggered launch), and they all greet — without this
+        // gate they'd talk over each other.
+        wait_for_room_quiet(&peer_level).await;
         let voice_profile = ghostly::audio::profile::for_character(&character);
         let mut chain = ghostly::audio::VoiceChain::new(
             voice_profile,
