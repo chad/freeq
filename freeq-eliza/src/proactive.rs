@@ -214,21 +214,41 @@ async fn speak_now(
     let http = cfg.http.clone();
     let voice = cfg.elevenlabs_voice_id.clone();
     let model = cfg.elevenlabs_model.clone();
+    // Ghostly voice chain — colours the raw ElevenLabs PCM with the
+    // character's profile (Oblivion → passion: dark formant/pitch +
+    // mild bitcrush + comb, etc.) BEFORE enqueueing into the speaker.
+    // Stateful (delay + reverb tails) so we build it once per
+    // speak_now invocation and reuse across sentences.
+    let voice_profile =
+        ghostly::audio::profile::for_character(&cfg.ghostly_character);
 
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     let speak_task = tokio::spawn(async move {
+        let mut chain = ghostly::audio::VoiceChain::new(
+            voice_profile,
+            tts::ELEVENLABS_PCM_RATE as f32,
+        );
+        let mut work: Vec<f32> = Vec::with_capacity(4096);
         while let Some(sentence) = rx.recv().await {
             let (spoken, _) = split_speech_and_links(&sentence);
             if !spoken.chars().any(char::is_alphanumeric) {
                 continue;
             }
+            let chain_ref = &mut chain;
+            let work_ref = &mut work;
+            let speaker_ref = &speaker;
             if let Err(e) = tts::synthesize_streaming(
                 &http,
                 &el_key,
                 &voice,
                 &model,
                 &spoken,
-                |pcm| speaker.enqueue(pcm, tts::ELEVENLABS_PCM_RATE),
+                |pcm| {
+                    work_ref.clear();
+                    work_ref.extend_from_slice(pcm);
+                    chain_ref.process(work_ref);
+                    speaker_ref.enqueue(work_ref, tts::ELEVENLABS_PCM_RATE);
+                },
             )
             .await
             {

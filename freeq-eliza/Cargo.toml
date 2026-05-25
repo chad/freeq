@@ -53,7 +53,7 @@ base64 = "0.22"
 # CLI via `--render-backend particles`. The SVG path remains the
 # default and still owns scene cards, whiteboards, the ambient HUD chip,
 # vision PiP, etc. — composite mode is future work.
-ghostly = { path = "../../ghostly" }
+ghostly = { git = "https://github.com/chad/ghostly", branch = "main" }
 
 # Async + utility
 tokio = { workspace = true }

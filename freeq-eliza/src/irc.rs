@@ -570,7 +570,15 @@ async fn answer_and_speak(
                 let http = cfg.http.clone();
                 let voice = cfg.elevenlabs_voice_id.clone();
                 let model = cfg.elevenlabs_model.clone();
+                // Per-character voice chain — see proactive.rs for design intent.
+                let voice_profile =
+                    ghostly::audio::profile::for_character(&cfg.ghostly_character);
                 Some(tokio::spawn(async move {
+                    let mut chain = ghostly::audio::VoiceChain::new(
+                        voice_profile,
+                        tts::ELEVENLABS_PCM_RATE as f32,
+                    );
+                    let mut work: Vec<f32> = Vec::with_capacity(4096);
                     while let Some(sentence) = rx.recv().await {
                         // URLs are unpronounceable — strip them from
                         // speech; the channel gets them as text instead.
@@ -578,13 +586,21 @@ async fn answer_and_speak(
                         if !spoken.chars().any(char::is_alphanumeric) {
                             continue;
                         }
+                        let chain_ref = &mut chain;
+                        let work_ref = &mut work;
+                        let sp_ref = &sp;
                         if let Err(e) = tts::synthesize_streaming(
                             &http,
                             &el_key,
                             &voice,
                             &model,
                             &spoken,
-                            |pcm| sp.enqueue(pcm, tts::ELEVENLABS_PCM_RATE),
+                            |pcm| {
+                                work_ref.clear();
+                                work_ref.extend_from_slice(pcm);
+                                chain_ref.process(work_ref);
+                                sp_ref.enqueue(work_ref, tts::ELEVENLABS_PCM_RATE);
+                            },
                         )
                         .await
                         {
