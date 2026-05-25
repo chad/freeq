@@ -155,6 +155,15 @@ pub(crate) fn render_loop(tile: VideoTile, character_name: &str) {
         // breathes.
         state.set_audio_level(level.max(peer));
 
+        // Status halo drivers — peer audio drives the breathing
+        // "listening" halo; the thinking flag drives the rotating
+        // "working" arc. Together they tell the operator at a glance
+        // whether the agent is hearing sound and whether it has a
+        // call in flight — visible regardless of which way the face
+        // happens to be turned.
+        state.set_listening_level(peer);
+        state.set_working(thinking);
+
         // Sticky gaze — when the bot is mid-exchange with someone,
         // its eyes turn toward that nick (deterministic hash → angle).
         // Cleared elsewhere when the exchange ends; idle drift resumes.
