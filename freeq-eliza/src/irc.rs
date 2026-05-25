@@ -36,6 +36,21 @@ fn address_with_aliases(text: &str, nick: &str) -> Option<String> {
     if let Some(q) = extract_addressed(text, nick) {
         return Some(q);
     }
+    // Server-suffixed nicks: a fresh DID gets bound as e.g.
+    // `oblivion-z6mkfa8x`. Humans address the bot by its character
+    // name ("oblivion"), so try the pre-dash prefix as an alias when
+    // it differs from the full nick AND from the universal "eliza"
+    // fallback. Skip when the prefix is too short to be safe.
+    if let Some(prefix) = nick.split_once('-').map(|(p, _)| p) {
+        if prefix.len() >= 4
+            && !prefix.eq_ignore_ascii_case(nick)
+            && !prefix.eq_ignore_ascii_case("eliza")
+        {
+            if let Some(q) = extract_addressed(text, prefix) {
+                return Some(q);
+            }
+        }
+    }
     // Universal fallback: "eliza" is the default wake word everyone
     // knows. Skip the redundant call when the nick already IS eliza.
     if !nick.eq_ignore_ascii_case("eliza") {
