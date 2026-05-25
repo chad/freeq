@@ -39,25 +39,18 @@ fn address_with_aliases(text: &str, nick: &str) -> Option<String> {
     // Server-suffixed nicks: a fresh DID gets bound as e.g.
     // `oblivion-z6mkfa8x`. Humans address the bot by its character
     // name ("oblivion"), so try the pre-dash prefix as an alias when
-    // it differs from the full nick AND from the universal "eliza"
-    // fallback. Skip when the prefix is too short to be safe.
+    // it differs from the full nick.
     if let Some(prefix) = nick.split_once('-').map(|(p, _)| p) {
-        if prefix.len() >= 4
-            && !prefix.eq_ignore_ascii_case(nick)
-            && !prefix.eq_ignore_ascii_case("eliza")
-        {
+        if prefix.len() >= 4 && !prefix.eq_ignore_ascii_case(nick) {
             if let Some(q) = extract_addressed(text, prefix) {
                 return Some(q);
             }
         }
     }
-    // Universal fallback: "eliza" is the default wake word everyone
-    // knows. Skip the redundant call when the nick already IS eliza.
-    if !nick.eq_ignore_ascii_case("eliza") {
-        if let Some(q) = extract_addressed(text, "eliza") {
-            return Some(q);
-        }
-    }
+    // No universal "eliza" wake word: in a multi-agent room (Oblivion +
+    // Utopia + Narrator), a generic fallback causes every bot to
+    // answer every question. Each bot replies only to its own
+    // character name.
     None
 }
 
