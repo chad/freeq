@@ -51,10 +51,25 @@ fn name_matches(cand: &str, nick: &str) -> bool {
     if cand == nick {
         return true;
     }
+    // Containment branch: STT often hallucinates extra letters around
+    // a name ("u-topia" → "eutopia", "utopia" → "zootopia") rather
+    // than mis-spelling the name itself. If the nick appears
+    // contiguously inside the candidate, treat as a match — provided
+    // the nick is long enough (≥5 chars) that random words won't
+    // collide. This unblocks the live demo: "Zootopia" /
+    // "Eutopia" / "you-topia" all reach Utopia.
+    if nick.chars().count() >= 5 && cand.len() >= nick.len() && cand.contains(nick) {
+        return true;
+    }
+    // Edit-distance tolerance scales with name length. Long names
+    // (≥7 chars) tolerate up to 3 edits — enough to land
+    // "narator"→"narrator", "obliviion"→"oblivion", and similar STT
+    // duplications.
     let tol = match nick.chars().count() {
         0..=3 => 0,
         4 => 1,
-        _ => 2,
+        5..=6 => 2,
+        _ => 3,
     };
     edit_distance(cand, nick) <= tol
 }

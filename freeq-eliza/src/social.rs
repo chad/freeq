@@ -26,6 +26,39 @@
 use crate::diagram::Diagram;
 use crate::memory::Recollection;
 
+/// Phrases a human can say to flip the room into peer-conversation
+/// mode. Each agent watches its own STT stream for any of these; on
+/// a match the global `discussion_until` deadline extends 90 s into
+/// the future. While the deadline is active, the strict
+/// human-only-address policy relaxes and bots may answer each other.
+/// A new human utterance that does NOT contain one of these phrases
+/// is the natural off-switch — humans speaking resets the chain
+/// already, and the deadline expires on its own.
+pub const DISCUSSION_TRIGGER_PHRASES: &[&str] = &[
+    "discuss it",
+    "discuss this",
+    "discuss that",
+    "discuss amongst yourselves",
+    "discuss among yourselves",
+    "talk amongst yourselves",
+    "talk among yourselves",
+    "talk it out",
+    "debate it",
+    "debate this",
+    "go ahead and discuss",
+    "you decide",
+    "you all discuss",
+];
+
+/// True if `text` is a human cue to enter peer-conversation mode.
+/// Case-insensitive whole-phrase substring match.
+pub fn is_discussion_trigger(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    DISCUSSION_TRIGGER_PHRASES
+        .iter()
+        .any(|p| lower.contains(p))
+}
+
 /// Strict direct-address check: only the punctuated forms count. The
 /// permissive parser in `freeq_agent_kit::addressing` treats any
 /// sentence beginning with the name as an address, which conflates
@@ -373,6 +406,26 @@ mod tests {
         let s = format_session_recall(&recs).unwrap();
         assert!(s.contains("fts5"), "expected most recent question, got {s:?}");
         assert!(!s.contains("voronoi"));
+    }
+
+    // ── discussion mode trigger ──────────────────────────────────
+
+    #[test]
+    fn discussion_trigger_matches_exact_phrase() {
+        assert!(is_discussion_trigger("Discuss it for a minute"));
+        assert!(is_discussion_trigger("talk it out among yourselves"));
+    }
+
+    #[test]
+    fn discussion_trigger_case_insensitive() {
+        assert!(is_discussion_trigger("DEBATE THIS for me"));
+    }
+
+    #[test]
+    fn discussion_trigger_rejects_unrelated_speech() {
+        assert!(!is_discussion_trigger("oblivion, what about the schedule"));
+        assert!(!is_discussion_trigger("the weather looks great today"));
+        assert!(!is_discussion_trigger("I'm undecided about it"));
     }
 
     #[test]

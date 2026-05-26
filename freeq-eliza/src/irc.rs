@@ -74,13 +74,20 @@ fn is_address_allowed(cfg: &SharedConfig, asker: &str) -> bool {
     if cfg.peer_agents.is_empty() {
         return true;
     }
+    // Discussion mode: when a human just said "discuss it" /
+    // "debate this", peer↔peer replies are temporarily allowed so
+    // the agents can converse with each other for ~90 s. Outside the
+    // window the strict policy below applies.
+    if let Ok(deadline) = cfg.discussion_until.lock() {
+        if Instant::now() < *deadline {
+            return true;
+        }
+    }
     // Multi-agent room: only humans address agents directly. If the
     // current addresser is a known peer agent, suppress — peer ↔ peer
     // exchanges spiral too easily (one bot's reply mentions another
     // by name, which the LLM is happy to do despite the prompt rule
-    // against it, and the loop is off). The cost is that we lose the
-    // "bots argue with each other" mode entirely; the operator has
-    // direct control over who speaks instead.
+    // against it, and the loop is off).
     !is_peer_nick(&cfg.peer_agents, &asker_lc)
 }
 
@@ -249,6 +256,12 @@ pub(crate) struct SharedConfig {
     pub(crate) diagrams: std::sync::Arc<
         std::sync::Mutex<std::collections::HashMap<String, crate::diagram::Diagram>>,
     >,
+    /// Deadline (Instant) until which the strict human-only-address
+    /// policy is relaxed and bots may answer each other freely. A
+    /// human speaking the discussion trigger ("discuss it", "debate
+    /// this", …) pushes this 90 s into the future; otherwise it
+    /// stays in the past and the strict policy applies.
+    pub(crate) discussion_until: std::sync::Arc<std::sync::Mutex<Instant>>,
 }
 
 /// Active-call state. Held inside an `Arc<AsyncMutex<Option<...>>>`
@@ -445,6 +458,9 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         )),
         diagrams: std::sync::Arc::new(std::sync::Mutex::new(
             std::collections::HashMap::new(),
+        )),
+        discussion_until: std::sync::Arc::new(std::sync::Mutex::new(
+            Instant::now() - Duration::from_secs(3600),
         )),
         http: reqwest::Client::new(),
         started_at: Instant::now(),
@@ -1736,6 +1752,24 @@ async fn transcribe_participant(
                         return;
                     }
                     tracing::info!(%nick, %text, "transcribed utterance");
+
+                    // Discussion-mode trigger. A human cue ("discuss
+                    // it", "debate this", …) unlocks bot↔bot replies
+                    // for 90 s, letting the agents converse without
+                    // the operator having to address each one. The
+                    // window is per-bot (each bot maintains its own
+                    // copy of `discussion_until`); each one sees the
+                    // same human cue so they all extend in lockstep.
+                    if !is_peer_nick(&cfg.peer_agents, &nick)
+                        && crate::social::is_discussion_trigger(&text)
+                    {
+                        if let Ok(mut deadline) = cfg.discussion_until.lock() {
+                            *deadline = Instant::now() + Duration::from_secs(90);
+                            tracing::info!(
+                                "discussion mode armed — bot↔bot replies allowed for 90 s"
+                            );
+                        }
+                    }
 
                     // Peer-aware gaze: if this utterance is a human
                     // addressing one of the OTHER agents in the room,
