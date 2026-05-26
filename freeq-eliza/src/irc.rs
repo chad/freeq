@@ -95,6 +95,17 @@ fn is_address_allowed(cfg: &SharedConfig, asker: &str) -> bool {
 /// pre-dash prefix. The server suffixes fresh DIDs with `-<bs58>` so
 /// `oblivion-z6mkfa8x` should still match a configured peer of
 /// `"oblivion"`. Case-insensitive (`peers` are lowercased on load).
+/// True if the operator has armed peer-conversation mode within the
+/// last 90 s. Read by `answer_and_speak` (to inject a hand-off
+/// instruction into the LLM prompt) and by `is_address_allowed` (to
+/// let peer agents reply to each other while the window is open).
+fn is_discussion_mode_active(cfg: &SharedConfig) -> bool {
+    cfg.discussion_until
+        .lock()
+        .map(|d| Instant::now() < *d)
+        .unwrap_or(false)
+}
+
 fn is_peer_nick(peers: &std::collections::HashSet<String>, nick: &str) -> bool {
     let nick_lc = nick.to_ascii_lowercase();
     if peers.contains(&nick_lc) {
@@ -965,6 +976,48 @@ async fn answer_and_speak(
         }
         Ok(qa::Answer { text, source: None })
     } else {
+        // Discussion-mode prompt injection. When the human has armed
+        // peer-conversation mode (`discussion_until` in the future),
+        // append an instruction to the system prompt that tells the
+        // LLM to end its answer by inviting one specific peer to
+        // respond — by name, with a comma. The named bot's STT
+        // picks that up, address detection fires, peer answers, and
+        // the chain self-sustains until the discussion window expires.
+        let mut prompt_storage: Option<String> = None;
+        let effective_system_prompt: Option<&str> =
+            if is_discussion_mode_active(&cfg) && !cfg.peer_agents.is_empty() {
+                let base = cfg
+                    .character_system_prompt
+                    .as_deref()
+                    .unwrap_or("");
+                // Build a peer list excluding ourselves so the bot
+                // does not accidentally address itself.
+                let self_canonical = cfg
+                    .nick
+                    .split_once('-')
+                    .map(|(p, _)| p)
+                    .unwrap_or(cfg.nick.as_str())
+                    .to_ascii_lowercase();
+                let peers: Vec<&str> = cfg
+                    .peer_agents
+                    .iter()
+                    .filter(|p| **p != self_canonical)
+                    .map(|s| s.as_str())
+                    .collect();
+                let peer_list = peers.join(", ");
+                let augmented = format!(
+                    "{base}\n\nDISCUSSION MODE IS ACTIVE. After your answer \
+(1-2 sentences max), end with a one-sentence direct address to ONE specific \
+peer by name (\"{peer_list}\") inviting their response. Format: \"<Name>, \
+<one-line follow-up question>.\" Pick the peer whose viewpoint would most \
+sharpen the thread. Do NOT address yourself."
+                );
+                prompt_storage = Some(augmented);
+                prompt_storage.as_deref()
+            } else {
+                cfg.character_system_prompt.as_deref()
+            };
+
         // Dispatch: a `claude-*` model goes to Anthropic Messages
         // (uses ANTHROPIC_API_KEY); anything else stays on the Groq
         // OpenAI-compatible endpoint (uses GROQ_API_KEY). Per-call
@@ -978,7 +1031,7 @@ async fn answer_and_speak(
                         &cfg.groq_answer_model,
                         &transcript,
                         &question,
-                        cfg.character_system_prompt.as_deref(),
+                        effective_system_prompt,
                         |delta| {
                             for sentence in chunker.push(delta) {
                                 let _ = tx.send(sentence);
@@ -999,7 +1052,7 @@ async fn answer_and_speak(
                 &cfg.groq_answer_model,
                 &transcript,
                 &question,
-                cfg.character_system_prompt.as_deref(),
+                effective_system_prompt,
                 |delta| {
                     for sentence in chunker.push(delta) {
                         let _ = tx.send(sentence);
