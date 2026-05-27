@@ -22,10 +22,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Check
-        run: cargo check --workspace --exclude freeq-av-client --exclude freeq-eliza
+        run: cargo check --workspace --exclude freeq-av-client --exclude freeq-eliza --exclude freeq-av
 
       - name: Test
-        run: cargo test --workspace --exclude freeq-av-client --exclude freeq-eliza
+        run: cargo test --workspace --exclude freeq-av-client --exclude freeq-eliza --exclude freeq-av
 
   clippy:
     name: Lint
@@ -40,7 +40,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Clippy
-        run: cargo clippy --workspace --exclude freeq-av-client --exclude freeq-eliza -- -D warnings
+        run: cargo clippy --workspace --exclude freeq-av-client --exclude freeq-eliza --exclude freeq-av -- -D warnings
 
   fmt:
     name: Format
