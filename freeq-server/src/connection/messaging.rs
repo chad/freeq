@@ -565,6 +565,30 @@ pub(super) fn handle_privmsg(
     tags: &std::collections::HashMap<String, String>,
     state: &Arc<SharedState>,
 ) {
+    // Non-multiline entry — preserves the existing call-shape for every
+    // caller that didn't come from a draft/multiline batch.
+    handle_privmsg_with_multiline(conn, command, target, text, tags, state, None);
+}
+
+/// Same as `handle_privmsg`, but when `multiline_lines` is Some, the
+/// channel-broadcast path emits per-receiver wire frames (BATCH-
+/// wrapped for `draft/multiline`-capable receivers, individual
+/// PRIVMSGs for fallback receivers) instead of a single line.
+///
+/// `handle_privmsg` is the wrapper for the normal single-PRIVMSG case;
+/// `dispatch_assembled_batch` in connection::draft_multiline calls
+/// this directly with `Some(batch.lines)` so the channel broadcast
+/// produces wire-valid output (a single PRIVMSG with `\n` in its body
+/// would corrupt the IRC line on the receiving side).
+pub(super) fn handle_privmsg_with_multiline(
+    conn: &Connection,
+    command: &str,
+    target: &str,
+    text: &str,
+    tags: &std::collections::HashMap<String, String>,
+    state: &Arc<SharedState>,
+    multiline_lines: Option<&[super::draft_multiline::BatchLine]>,
+) {
     let hostmask = conn.hostmask();
 
     let timestamp = std::time::SystemTime::now()
@@ -828,8 +852,16 @@ pub(super) fn handle_privmsg(
         let time_caps = state.cap_server_time.lock();
         let account_caps = state.cap_account_tag.lock();
         let echo_caps = state.cap_echo_message.lock();
+        let multiline_caps = state.cap_draft_multiline.lock();
         let conns = state.connections.lock();
         let sender_did = conn.authenticated_did.as_deref();
+        // When the logical message arrived as a draft/multiline batch
+        // we already have its per-line breakdown; reuse the same
+        // outbound batch id for every receiver. Receivers that
+        // negotiated draft/multiline see BATCH frames; everyone else
+        // sees the constituent PRIVMSGs (msgid on the first only).
+        let outbound_batch_id = multiline_lines
+            .map(|_| format!("ml{}", crate::msgid::generate()));
         for member_session in &members {
             // echo-message: include sender if they requested it
             if member_session == &conn.id && !echo_caps.contains(member_session) {
@@ -840,6 +872,33 @@ pub(super) fn handle_privmsg(
                 let has_time = time_caps.contains(member_session);
                 let wants_account =
                     sender_did.is_some() && account_caps.contains(member_session);
+                if let (Some(lines), Some(batch_id)) =
+                    (multiline_lines, outbound_batch_id.as_deref())
+                {
+                    let caps = super::draft_multiline::ReceiverCaps {
+                        has_tags,
+                        has_time,
+                        has_multiline: multiline_caps.contains(member_session),
+                        wants_account,
+                        sender_did,
+                    };
+                    let ctx = super::draft_multiline::RelayContext {
+                        hostmask: &hostmask,
+                        command,
+                        target,
+                        msgid: &msgid,
+                        time_tag: &time_tag,
+                        opener_tags: &full_tags,
+                        batch_id,
+                        lines,
+                    };
+                    for frame in super::draft_multiline::build_outbound_multiline_frames(
+                        &ctx, &caps,
+                    ) {
+                        let _ = tx.try_send(frame);
+                    }
+                    continue;
+                }
                 let line: String = if !has_tags {
                     plain_line.clone()
                 } else if !wants_account {

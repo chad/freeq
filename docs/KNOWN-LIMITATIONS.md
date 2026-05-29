@@ -33,6 +33,31 @@
   to the first row only. Workaround: client negotiates `draft/multiline`
   during CAP REQ. See [MULTILINE-CLIENT-COMPATIBILITY.md](MULTILINE-CLIENT-COMPATIBILITY.md)
   for the full wire-shape comparison.
+- **Multiline DM broadcast is unsplit**: the outbound multiline-aware
+  per-receiver shaping currently fires only for **channel** PRIVMSG/
+  NOTICE. A logical multiline message sent to a nick (DM) reaches the
+  recipient as a single PRIVMSG carrying `\n` in its body, which
+  receiving clients will either render incorrectly or split at the
+  first `\n` and discard the rest. Until DM multiline broadcast lands,
+  callers should keep multi-line content channel-scoped. (Affects
+  human-to-human and bot-to-bot DMs; channel broadcast is fine.)
+- **Multiline S2S federation is unsplit**: when a multiline message
+  is relayed to peer servers via the S2S channel, it ships the
+  assembled body in a single S2S Privmsg event. Peer servers
+  receiving it would then fan it out to their own channel members as
+  one PRIVMSG with newlines in the body, breaking the wire on those
+  members. Affects only multi-server deployments (society and the
+  agent debate flow are single-server today). Until S2S multiline
+  ships, federated channels are inadvisable for any flow that uses
+  multiline messages.
+- **CHATHISTORY replay of multiline messages is degraded**: messages
+  are stored with the assembled body (one row per logical message);
+  replay emits a single PRIVMSG carrying `\n` in the body. A
+  multiline-capable client requesting CHATHISTORY for a channel that
+  saw multiline messages will receive a wire-malformed replay. Until
+  CHATHISTORY-aware multiline replay ships, callers should avoid
+  CHATHISTORY for channels with heavy multiline traffic — live
+  broadcast is fine.
 
 ## S2S Federation
 

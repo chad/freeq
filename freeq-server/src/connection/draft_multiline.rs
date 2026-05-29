@@ -346,6 +346,194 @@ pub fn handle_batch_close(
     Ok(batch)
 }
 
+/// Per-receiver context describing what capabilities to honor when
+/// formatting a multiline relay. Distilled out of handle_privmsg's
+/// per-receiver cap checks so this module can build the wire frames
+/// without needing the full SharedState.
+pub struct ReceiverCaps<'a> {
+    /// Receiver negotiated `message-tags` — without this they get a
+    /// plain `:host PRIVMSG target :body` shape with no tags at all.
+    pub has_tags: bool,
+    /// Receiver negotiated `server-time` — `time=<iso>` tag goes on
+    /// the BATCH opener (capable) or the first PRIVMSG (fallback).
+    pub has_time: bool,
+    /// Receiver negotiated `draft/multiline` — emit BATCH frames.
+    /// Otherwise: emit N individual PRIVMSGs, msgid on first only.
+    pub has_multiline: bool,
+    /// Receiver opted into `account-tag`. When true and `sender_did`
+    /// is set, `account=<did>` is injected into the carrier frame
+    /// (BATCH opener or first PRIVMSG).
+    pub wants_account: bool,
+    /// Sender's DID, for the `account` tag injection.
+    pub sender_did: Option<&'a str>,
+}
+
+/// Fixed message context for a single outbound multiline relay.
+/// Shared across all receivers — only the per-receiver tag injection
+/// and wire-shape decision vary.
+pub struct RelayContext<'a> {
+    pub hostmask: &'a str,
+    pub command: &'a str,
+    pub target: &'a str,
+    /// `msgid` of the assembled logical message. Server-assigned at
+    /// dispatch time; same value goes to every receiver, just placed
+    /// differently per capability.
+    pub msgid: &'a str,
+    /// Time tag value (ISO 8601), already formatted. Only emitted to
+    /// receivers that negotiated `server-time`.
+    pub time_tag: &'a str,
+    /// Client-only tags from the BATCH opener (commit-reveal event,
+    /// signature, payload, etc.). Per spec, these belong on the BATCH
+    /// opener for multiline-capable receivers and on the first
+    /// PRIVMSG for fallback receivers.
+    pub opener_tags: &'a HashMap<String, String>,
+    /// Server-assigned batch id for outbound relay. Connection-scoped
+    /// (each receiver sees its own namespace); we use the same value
+    /// for every receiver for symmetry with logging.
+    pub batch_id: &'a str,
+    /// The original chunked body of the message, in arrival order.
+    pub lines: &'a [BatchLine],
+}
+
+/// Build the sequence of wire frames a single receiver should see for
+/// a multiline relay. Returns the frames in the order they should be
+/// sent.
+///
+/// Multiline-capable receiver gets, in order:
+///   1. `[@tags] BATCH +<id> draft/multiline <target>` (opener with
+///      msgid + opener_tags + optional account + optional time)
+///   2. For each line: `[@batch=<id>;maybe-concat] PRIVMSG <target> :<body>`
+///   3. `BATCH -<id>` (closer)
+///
+/// Fallback receiver gets N individual frames:
+///   1. `[@tags] PRIVMSG <target> :<line[0].body>` (msgid + opener_tags
+///      + optional account + optional time on the FIRST frame only,
+///      per spec § "Message ids" + § "Fallback")
+///   2. For each subsequent line: `PRIVMSG <target> :<line.body>` with
+///      no msgid and no opener tags
+///
+/// When `has_tags` is false, the receiver doesn't speak message-tags
+/// at all → emit only plain `:hostmask PRIVMSG target :body` lines (no
+/// BATCH frames, no msgid, no anything). Same shape as fallback but
+/// without the tag prefix on the first PRIVMSG either.
+pub fn build_outbound_multiline_frames(
+    ctx: &RelayContext<'_>,
+    caps: &ReceiverCaps<'_>,
+) -> Vec<String> {
+    if !caps.has_tags {
+        return build_plain_fallback_frames(ctx);
+    }
+    if caps.has_multiline {
+        build_capable_frames(ctx, caps)
+    } else {
+        build_tagged_fallback_frames(ctx, caps)
+    }
+}
+
+fn build_plain_fallback_frames(ctx: &RelayContext<'_>) -> Vec<String> {
+    // No message-tags negotiated — just bare PRIVMSG lines.
+    ctx.lines
+        .iter()
+        .map(|line| {
+            format!(
+                ":{host} {cmd} {target} :{body}\r\n",
+                host = ctx.hostmask,
+                cmd = ctx.command,
+                target = ctx.target,
+                body = line.body,
+            )
+        })
+        .collect()
+}
+
+fn build_capable_frames(
+    ctx: &RelayContext<'_>,
+    caps: &ReceiverCaps<'_>,
+) -> Vec<String> {
+    // Build opener tags: msgid + opener_tags + optional account + time.
+    let mut opener = ctx.opener_tags.clone();
+    opener.insert("msgid".to_string(), ctx.msgid.to_string());
+    if caps.has_time {
+        opener.insert("time".to_string(), ctx.time_tag.to_string());
+    }
+    if caps.wants_account {
+        if let Some(did) = caps.sender_did {
+            opener.insert("account".to_string(), did.to_string());
+        }
+    }
+
+    let mut frames = Vec::with_capacity(ctx.lines.len() + 2);
+    // BATCH opener.
+    let opener_msg = crate::irc::Message {
+        tags: opener,
+        prefix: Some(ctx.hostmask.to_string()),
+        command: "BATCH".to_string(),
+        params: vec![
+            format!("+{}", ctx.batch_id),
+            "draft/multiline".to_string(),
+            ctx.target.to_string(),
+        ],
+    };
+    frames.push(format!("{opener_msg}\r\n"));
+
+    // Per-line PRIVMSG (or NOTICE) frames, each carrying batch=<id>
+    // and optionally draft/multiline-concat.
+    for line in ctx.lines {
+        let mut line_tags = HashMap::new();
+        line_tags.insert("batch".to_string(), ctx.batch_id.to_string());
+        if line.concat_to_previous {
+            line_tags.insert("draft/multiline-concat".to_string(), String::new());
+        }
+        let line_msg = crate::irc::Message {
+            tags: line_tags,
+            prefix: Some(ctx.hostmask.to_string()),
+            command: ctx.command.to_string(),
+            params: vec![ctx.target.to_string(), line.body.clone()],
+        };
+        frames.push(format!("{line_msg}\r\n"));
+    }
+
+    // BATCH closer — no prefix, no tags, just `BATCH -<id>`.
+    frames.push(format!("BATCH -{}\r\n", ctx.batch_id));
+    frames
+}
+
+fn build_tagged_fallback_frames(
+    ctx: &RelayContext<'_>,
+    caps: &ReceiverCaps<'_>,
+) -> Vec<String> {
+    // Fallback receiver speaks message-tags but not multiline.
+    // Per spec § "Fallback": deliver the constituent PRIVMSGs without
+    // BATCH wrapping, with msgid + all client-only tags on the FIRST
+    // line only.
+    let mut frames = Vec::with_capacity(ctx.lines.len());
+    for (i, line) in ctx.lines.iter().enumerate() {
+        let tags = if i == 0 {
+            let mut t = ctx.opener_tags.clone();
+            t.insert("msgid".to_string(), ctx.msgid.to_string());
+            if caps.has_time {
+                t.insert("time".to_string(), ctx.time_tag.to_string());
+            }
+            if caps.wants_account {
+                if let Some(did) = caps.sender_did {
+                    t.insert("account".to_string(), did.to_string());
+                }
+            }
+            t
+        } else {
+            HashMap::new()
+        };
+        let msg = crate::irc::Message {
+            tags,
+            prefix: Some(ctx.hostmask.to_string()),
+            command: ctx.command.to_string(),
+            params: vec![ctx.target.to_string(), line.body.clone()],
+        };
+        frames.push(format!("{msg}\r\n"));
+    }
+    frames
+}
+
 /// Concatenate the lines of a closed `draft/multiline` batch into a
 /// single body, per the spec's join rules:
 ///
@@ -565,13 +753,14 @@ fn dispatch_assembled_batch(
         .as_deref()
         .unwrap_or("PRIVMSG");
     let body = assemble_body(batch);
-    super::messaging::handle_privmsg(
+    super::messaging::handle_privmsg_with_multiline(
         conn,
         command,
         &batch.target,
         &body,
         &batch.opener_tags,
         state,
+        Some(&batch.lines),
     );
 }
 
@@ -1205,6 +1394,227 @@ mod tests {
             !assembled.ends_with('\n'),
             "trailing newline leaked: {assembled:?}"
         );
+    }
+
+    // ── outbound wire formatting (Phase 4a) ──────────────────────
+
+    fn test_lines() -> Vec<BatchLine> {
+        vec![
+            line("first", false),
+            line("second", false),
+            line("third", true), // concat-to-previous
+        ]
+    }
+
+    fn test_ctx<'a>(
+        lines: &'a [BatchLine],
+        opener_tags: &'a HashMap<String, String>,
+    ) -> RelayContext<'a> {
+        RelayContext {
+            hostmask: "nick!u@host",
+            command: "PRIVMSG",
+            target: "#cloudcity",
+            msgid: "01J_MSGID",
+            time_tag: "2026-05-27T18:00:00.000Z",
+            opener_tags,
+            batch_id: "ml42",
+            lines,
+        }
+    }
+
+    fn caps_capable() -> ReceiverCaps<'static> {
+        ReceiverCaps {
+            has_tags: true,
+            has_time: false,
+            has_multiline: true,
+            wants_account: false,
+            sender_did: None,
+        }
+    }
+
+    fn caps_fallback_tagged() -> ReceiverCaps<'static> {
+        ReceiverCaps {
+            has_tags: true,
+            has_time: false,
+            has_multiline: false,
+            wants_account: false,
+            sender_did: None,
+        }
+    }
+
+    fn caps_plain() -> ReceiverCaps<'static> {
+        ReceiverCaps {
+            has_tags: false,
+            has_time: false,
+            has_multiline: false,
+            wants_account: false,
+            sender_did: None,
+        }
+    }
+
+    #[test]
+    fn capable_receiver_gets_batch_wrapped_frames() {
+        let lines = test_lines();
+        let opener_tags = HashMap::new();
+        let frames = build_outbound_multiline_frames(
+            &test_ctx(&lines, &opener_tags),
+            &caps_capable(),
+        );
+        // Opener + 3 PRIVMSGs + closer = 5 frames.
+        assert_eq!(frames.len(), 5);
+        // Opener: BATCH + + draft/multiline + target, with msgid tag.
+        assert!(frames[0].contains("BATCH +ml42"));
+        assert!(frames[0].contains("draft/multiline"));
+        assert!(frames[0].contains("#cloudcity"));
+        assert!(frames[0].contains("msgid=01J_MSGID"));
+        // Per-line frames carry batch=<id>.
+        assert!(frames[1].contains("batch=ml42"));
+        assert!(frames[1].contains("PRIVMSG #cloudcity"));
+        assert!(frames[1].contains("first"));
+        assert!(frames[2].contains("batch=ml42"));
+        assert!(frames[2].contains("second"));
+        // Third line: concat tag flows through.
+        assert!(frames[3].contains("batch=ml42"));
+        assert!(frames[3].contains("draft/multiline-concat"));
+        // Closer: BATCH - with no tags or prefix.
+        assert_eq!(frames[4], "BATCH -ml42\r\n");
+    }
+
+    #[test]
+    fn capable_receiver_msgid_only_on_opener_not_on_chunks() {
+        let lines = test_lines();
+        let opener_tags = HashMap::new();
+        let frames = build_outbound_multiline_frames(
+            &test_ctx(&lines, &opener_tags),
+            &caps_capable(),
+        );
+        assert!(frames[0].contains("msgid=01J_MSGID"));
+        // Subsequent PRIVMSG frames must not carry msgid (per spec).
+        for (i, frame) in frames.iter().enumerate().skip(1).take(3) {
+            assert!(
+                !frame.contains("msgid"),
+                "frame {i} unexpectedly carries msgid: {frame}"
+            );
+        }
+    }
+
+    #[test]
+    fn capable_receiver_opener_carries_client_only_tags() {
+        let lines = test_lines();
+        let mut opener_tags = HashMap::new();
+        opener_tags.insert("+freeq.at/event".to_string(), "reveal".to_string());
+        opener_tags.insert(
+            "+freeq.at/payload".to_string(),
+            r#"{"reveal_of":"01J_COMMIT","salt":"abc"}"#.to_string(),
+        );
+        let frames = build_outbound_multiline_frames(
+            &test_ctx(&lines, &opener_tags),
+            &caps_capable(),
+        );
+        assert!(
+            frames[0].contains("+freeq.at/event=reveal"),
+            "opener missing event tag: {}",
+            frames[0]
+        );
+        // Subsequent frames must NOT carry the client-only tags.
+        for frame in frames.iter().skip(1).take(3) {
+            assert!(
+                !frame.contains("+freeq.at/event"),
+                "client-only tag leaked into chunk: {frame}"
+            );
+        }
+    }
+
+    #[test]
+    fn capable_receiver_with_account_tag_adds_account() {
+        let lines = test_lines();
+        let opener_tags = HashMap::new();
+        let mut caps = caps_capable();
+        caps.wants_account = true;
+        caps.sender_did = Some("did:key:zSENDER");
+        let frames = build_outbound_multiline_frames(
+            &test_ctx(&lines, &opener_tags),
+            &caps,
+        );
+        // Account on the opener only.
+        assert!(frames[0].contains("account=did:key:zSENDER"));
+        for frame in frames.iter().skip(1).take(3) {
+            assert!(!frame.contains("account="));
+        }
+    }
+
+    #[test]
+    fn fallback_tagged_receiver_gets_n_privmsgs_msgid_on_first() {
+        let lines = test_lines();
+        let opener_tags = HashMap::new();
+        let frames = build_outbound_multiline_frames(
+            &test_ctx(&lines, &opener_tags),
+            &caps_fallback_tagged(),
+        );
+        // No BATCH frames; one PRIVMSG per chunk.
+        assert_eq!(frames.len(), 3);
+        for frame in &frames {
+            assert!(!frame.contains("BATCH"), "BATCH leaked to fallback: {frame}");
+            assert!(!frame.contains("batch="), "batch tag leaked to fallback: {frame}");
+        }
+        // msgid only on first.
+        assert!(frames[0].contains("msgid=01J_MSGID"));
+        assert!(!frames[1].contains("msgid"));
+        assert!(!frames[2].contains("msgid"));
+    }
+
+    #[test]
+    fn fallback_tagged_receiver_client_only_tags_on_first_only() {
+        let lines = test_lines();
+        let mut opener_tags = HashMap::new();
+        opener_tags.insert("+freeq.at/event".to_string(), "reveal".to_string());
+        let frames = build_outbound_multiline_frames(
+            &test_ctx(&lines, &opener_tags),
+            &caps_fallback_tagged(),
+        );
+        assert!(frames[0].contains("+freeq.at/event=reveal"));
+        assert!(!frames[1].contains("+freeq.at/event"));
+        assert!(!frames[2].contains("+freeq.at/event"));
+    }
+
+    #[test]
+    fn plain_receiver_gets_n_bare_privmsgs() {
+        // No message-tags negotiated → no tags at all anywhere.
+        let lines = test_lines();
+        let opener_tags = HashMap::new();
+        let frames = build_outbound_multiline_frames(
+            &test_ctx(&lines, &opener_tags),
+            &caps_plain(),
+        );
+        assert_eq!(frames.len(), 3);
+        for frame in &frames {
+            // Bare format: `:host PRIVMSG #c :body`. No `@` tag prefix.
+            assert!(
+                !frame.starts_with('@'),
+                "plain receiver got tagged frame: {frame}"
+            );
+            assert!(frame.starts_with(":nick!u@host PRIVMSG #cloudcity :"));
+            assert!(!frame.contains("BATCH"));
+        }
+        assert!(frames[0].ends_with(":first\r\n"));
+        assert!(frames[1].ends_with(":second\r\n"));
+        assert!(frames[2].ends_with(":third\r\n"));
+    }
+
+    #[test]
+    fn capable_receiver_with_server_time_adds_time_tag_to_opener_only() {
+        let lines = test_lines();
+        let opener_tags = HashMap::new();
+        let mut caps = caps_capable();
+        caps.has_time = true;
+        let frames = build_outbound_multiline_frames(
+            &test_ctx(&lines, &opener_tags),
+            &caps,
+        );
+        assert!(frames[0].contains("time=2026-05-27T18:00:00.000Z"));
+        for frame in frames.iter().skip(1).take(3) {
+            assert!(!frame.contains("time="));
+        }
     }
 
     #[test]
