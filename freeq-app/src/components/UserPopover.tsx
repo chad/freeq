@@ -4,50 +4,134 @@ import { useStore } from '../store';
 import { sendWhois } from '../irc/client';
 import * as e2ee from '../lib/e2ee';
 
-function ProvenanceBlock({ provenance }: { provenance: NonNullable<ActorInfo['provenance']> }) {
-  const [creatorProfile, setCreatorProfile] = useState<ATProfile | null>(null);
-  // Nick lookup for the creator. did:plc resolves via AT Protocol profile;
-  // did:key has no profile, so we fall through to the actor-identity REST
-  // endpoint which returns the creator's current IRC nick if it has an
-  // active session. Without this, sub-agent cards render their creator as
-  // a raw "did:key:z6Mk…" string instead of a recognizable name like
-  // "lobot" — observed live with society panelists owned by the moderator.
-  const [creatorNick, setCreatorNick] = useState<string | null>(null);
-  useEffect(() => {
-    if (!provenance.creator_did) return;
-    const did = provenance.creator_did;
-    const isDidKey = did.startsWith('did:key:');
-    if (!isDidKey) {
-      fetchProfile(did).then((p) => p && setCreatorProfile(p));
-    }
-    fetch(`/api/v1/actors/${encodeURIComponent(did)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => {
-        if (j?.nick) setCreatorNick(j.nick);
-      })
-      .catch(() => {});
-  }, [provenance.creator_did]);
+export interface CreatorChainLink {
+  did: string;
+  nick: string | null;
+  displayName: string | null;
+  avatar: string | null;
+  isHuman: boolean;
+}
 
-  const creatorLabel = creatorProfile
-    ? creatorProfile.displayName || creatorProfile.handle
-    : creatorNick || provenance.creator_did;
+/** Default depth cap when callers don't pass one. Picked deep enough
+ *  to cover realistic nesting (bot owns bot owns bot owns human is
+ *  already exotic) without enabling runaway loops on bad data. */
+export const CREATOR_CHAIN_MAX_DEPTH = 8;
+
+interface CreatorChainActorResp {
+  nick?: string | null;
+  provenance?: { creator_did?: string | null } | null;
+}
+
+interface CreatorChainProfile {
+  displayName?: string | null;
+  handle?: string | null;
+  avatar?: string | null;
+}
+
+/**
+ * Walk the creator lineage starting from `rootDid`. Returns links in
+ * order of distance from the displayed user (closest first).
+ *
+ * Stops on:
+ *  - empty/undefined `rootDid` (returns [])
+ *  - actor response with no `provenance.creator_did` (root reached)
+ *  - cycle (DID seen twice)
+ *  - hit `maxDepth`
+ *
+ * `fetchActor` and `fetchProfileFn` are injected so this is testable
+ * without a network. In production, callers pass the live fetch +
+ * fetchProfile from `lib/profiles`.
+ */
+export async function walkCreatorChain(
+  rootDid: string | null | undefined,
+  fetchActor: (did: string) => Promise<CreatorChainActorResp | null>,
+  fetchProfileFn: (did: string) => Promise<CreatorChainProfile | null>,
+  maxDepth: number = CREATOR_CHAIN_MAX_DEPTH,
+): Promise<CreatorChainLink[]> {
+  if (!rootDid) return [];
+  const chain: CreatorChainLink[] = [];
+  const seen = new Set<string>();
+  // Explicit annotations on `did` + the Promise.all tuple are not just
+  // documentation — tsc -b (project-references mode) can't infer them
+  // without help because `nextDid` is reassigned inside the loop from
+  // `actorResp.provenance.creator_did`, which itself depends on the
+  // tuple type. The implicit-any inference becomes circular.
+  let nextDid: string | null | undefined = rootDid;
+  while (nextDid && chain.length < maxDepth) {
+    if (seen.has(nextDid)) break;
+    seen.add(nextDid);
+    const did: string = nextDid;
+    const isDidKey = did.startsWith('did:key:');
+    const [actorResp, profile]: [
+      CreatorChainActorResp | null,
+      CreatorChainProfile | null,
+    ] = await Promise.all([
+      fetchActor(did).catch(() => null),
+      isDidKey ? Promise.resolve(null) : fetchProfileFn(did).catch(() => null),
+    ]);
+    chain.push({
+      did,
+      nick: actorResp?.nick ?? null,
+      displayName: profile?.displayName ?? profile?.handle ?? null,
+      avatar: profile?.avatar ?? null,
+      isHuman: !isDidKey,
+    });
+    nextDid = actorResp?.provenance?.creator_did ?? null;
+  }
+  return chain;
+}
+
+function defaultFetchActor(did: string): Promise<CreatorChainActorResp | null> {
+  return fetch(`/api/v1/actors/${encodeURIComponent(did)}`)
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+}
+
+export function ProvenanceBlock({ provenance }: { provenance: NonNullable<ActorInfo['provenance']> }) {
+  // Walks the creator lineage to render e.g. "Creator: lobot ← Nap"
+  // so the chain of trust is visible at a glance for nested bot
+  // hierarchies (panel-2 owned by lobot owned by a human). See
+  // `walkCreatorChain` for the walk logic + stop conditions.
+  const [creatorChain, setCreatorChain] = useState<CreatorChainLink[]>([]);
+  useEffect(() => {
+    if (!provenance.creator_did) {
+      setCreatorChain([]);
+      return;
+    }
+    let cancelled = false;
+    walkCreatorChain(provenance.creator_did, defaultFetchActor, fetchProfile).then(
+      (chain) => {
+        if (!cancelled) setCreatorChain(chain);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [provenance.creator_did]);
 
   return (
     <div className="mt-2 p-2 bg-bg-tertiary rounded-lg text-left">
       <div className="text-[10px] text-fg-dim font-semibold mb-1">Provenance</div>
-      {provenance.creator_did && (
-        <div className="text-[10px] text-fg-dim flex items-center gap-1.5">
+      {creatorChain.length > 0 && (
+        <div className="text-[10px] text-fg-dim flex items-center gap-1.5 flex-wrap">
           <span className="text-fg-dim/60">Creator:</span>
-          <button
-            onClick={() => { navigator.clipboard.writeText(provenance.creator_did!); import('./Toast').then(m => m.showToast('DID copied', 'success', 2000)); }}
-            title="Click to copy DID"
-            className="flex items-center gap-1 cursor-pointer hover:opacity-80"
-          >
-            {creatorProfile?.avatar && (
-              <img src={creatorProfile.avatar} alt="" className="w-3.5 h-3.5 rounded-full" />
-            )}
-            <span className="text-fg-muted">{creatorLabel}</span>
-          </button>
+          {creatorChain.map((link, i) => (
+            <span key={link.did} className="flex items-center gap-1.5">
+              {i > 0 && <span className="text-fg-dim/40" aria-hidden="true">←</span>}
+              <button
+                onClick={() => { navigator.clipboard.writeText(link.did); import('./Toast').then(m => m.showToast('DID copied', 'success', 2000)); }}
+                title={`Click to copy DID\n${link.did}`}
+                className="flex items-center gap-1 cursor-pointer hover:opacity-80"
+              >
+                {link.avatar && (
+                  <img src={link.avatar} alt="" className="w-3.5 h-3.5 rounded-full" />
+                )}
+                <span className="text-fg-muted">
+                  {link.displayName || link.nick || link.did}
+                </span>
+              </button>
+            </span>
+          ))}
         </div>
       )}
       {provenance.source_repo && (

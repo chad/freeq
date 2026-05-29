@@ -46,13 +46,82 @@ pub fn split_speech_and_links(text: &str) -> (String, Vec<String>) {
     let mut spoken = String::with_capacity(text.len());
     let mut rest = text;
     while !rest.is_empty() {
-        // Markdown link: [label](url) — speak the label, surface the url.
+        // Markdown image: ![alt](url) — DROP THE WHOLE THING from speech.
+        // The alt text is for the image, not for reading aloud. Surface
+        // the URL as a link so it can still be posted to the channel.
+        if let Some(stripped) = rest.strip_prefix("![") {
+            if let Some(mid) = stripped.find("](") {
+                if let Some(close) = stripped[mid + 2..].find(')') {
+                    let url = stripped[mid + 2..mid + 2 + close].trim();
+                    if url.starts_with("http") || url.starts_with("www.") {
+                        links.push(url.to_string());
+                    }
+                    rest = &stripped[mid + 2 + close + 1..];
+                    continue;
+                }
+            }
+        }
+        // Any HTML/XML-ish tag — drop it. Two cases:
+        //
+        // 1. A paired `<tag>…</tag>` block (e.g. `<tool>python(print("…"))</tool>`).
+        //    Agentic LLMs emit these as tool-call envelopes — the content
+        //    inside is implementation noise (code, JSON, scratch state)
+        //    that must NEVER be spoken. We strip the entire span.
+        //
+        // 2. An unpaired tag (`<img src=…>`, a stray `<video>` opener with
+        //    no close in this chunk). Strip up to the next `>`.
+        //
+        // Bare `<` not followed by alpha or `/` is preserved (so literal
+        // `"5 < 10"` survives).
+        if rest.starts_with('<') {
+            let after = &rest[1..];
+            let looks_like_tag = after
+                .chars()
+                .next()
+                .is_some_and(|c| c == '/' || c.is_ascii_alphabetic());
+            if looks_like_tag {
+                if let Some(end) = rest.find('>') {
+                    // Try the paired form: extract the tag name (skip any
+                    // leading `/` on closers; the name runs until the
+                    // first non-word char). If we find a matching
+                    // `</name>` *after* this opener, drop everything from
+                    // here through that closer.
+                    if let Some(name) = parse_tag_name(&rest[1..end]) {
+                        let close_marker = format!("</{name}");
+                        let search_from = end + 1;
+                        if search_from < rest.len() {
+                            // Case-insensitive search for the closer.
+                            let hay_lower = rest[search_from..].to_lowercase();
+                            let close_lower = close_marker.to_lowercase();
+                            if let Some(rel_close) = hay_lower.find(&close_lower) {
+                                let close_abs = search_from + rel_close;
+                                // Skip past the closer's `>`.
+                                if let Some(close_end) = rest[close_abs..].find('>') {
+                                    rest = &rest[close_abs + close_end + 1..];
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    // Unpaired (or no close in this chunk): drop the tag
+                    // alone — content after it, if any, is spoken.
+                    rest = &rest[end + 1..];
+                    continue;
+                }
+            }
+        }
+        // Markdown link: [label](url) — usually speak the label and
+        // surface the URL. EXCEPTION: if the URL points at an image or
+        // a video, the label is alt text — drop the whole thing.
         if let Some(stripped) = rest.strip_prefix('[') {
             if let Some(mid) = stripped.find("](") {
                 if let Some(close) = stripped[mid + 2..].find(')') {
                     let label = &stripped[..mid];
                     let url = stripped[mid + 2..mid + 2 + close].trim();
-                    spoken.push_str(label);
+                    let url_is_media = looks_like_media_url(url);
+                    if !url_is_media {
+                        spoken.push_str(label);
+                    }
                     if url.starts_with("http") || url.starts_with("www.") {
                         links.push(url.to_string());
                     }
@@ -79,6 +148,55 @@ pub fn split_speech_and_links(text: &str) -> (String, Vec<String>) {
     // Collapse the whitespace left where URLs were removed.
     let spoken = spoken.split_whitespace().collect::<Vec<_>>().join(" ");
     (spoken, links)
+}
+
+/// Pull the tag name out of the body of an opening tag — i.e. what's
+/// between `<` and `>` in `<tool foo="bar">` is `tool foo="bar"`, and
+/// the name is `tool`. Returns `None` if the body doesn't start with a
+/// letter (which means it's a closer like `/tool` or junk). We only
+/// keep ASCII alphanumeric/`-`/`_` characters for the name — enough
+/// for every real tag, and conservative against pathological input.
+fn parse_tag_name(body: &str) -> Option<String> {
+    let body = body.trim_start();
+    let mut chars = body.chars();
+    let first = chars.next()?;
+    if !first.is_ascii_alphabetic() {
+        return None;
+    }
+    let mut name = String::new();
+    name.push(first.to_ascii_lowercase());
+    for c in chars {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            name.push(c.to_ascii_lowercase());
+        } else {
+            break;
+        }
+    }
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+/// Whether `url` looks like an image or video — we use this to decide
+/// whether a `[label](url)` is a *media link* (drop the label too;
+/// it's alt text, not for reading) vs. a normal hyperlink (speak the
+/// label).
+fn looks_like_media_url(url: &str) -> bool {
+    let u = url.trim().to_lowercase();
+    // data URIs.
+    if u.starts_with("data:image/") || u.starts_with("data:video/") || u.starts_with("data:audio/") {
+        return true;
+    }
+    // Strip query/fragment so `.jpg?w=200` still counts.
+    let path = u.split(['?', '#']).next().unwrap_or(&u);
+    const MEDIA_EXTS: &[&str] = &[
+        ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp", ".tiff", ".heic",
+        ".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v",
+        ".mp3", ".wav", ".m4a", ".ogg", ".flac",
+    ];
+    MEDIA_EXTS.iter().any(|ext| path.ends_with(ext))
 }
 
 #[cfg(test)]
@@ -162,6 +280,130 @@ mod tests {
         let (spoken, links) = split_speech_and_links("visit www.freeq.at today");
         assert_eq!(spoken, "visit today");
         assert_eq!(links, vec!["www.freeq.at"]);
+    }
+
+    #[test]
+    fn markdown_image_syntax_drops_the_alt_text_from_speech() {
+        // The model occasionally emits ![alt](url) for an image. The alt
+        // text isn't for reading aloud — drop the whole thing; surface
+        // the URL so the caller can still post it as text.
+        let (spoken, links) =
+            split_speech_and_links("Here it is: ![A photo of a fluffy cat](https://example.com/cat.jpg) cute!");
+        assert!(!spoken.to_lowercase().contains("photo"), "alt text leaked: {spoken:?}");
+        assert!(!spoken.to_lowercase().contains("fluffy"), "alt text leaked: {spoken:?}");
+        assert_eq!(spoken, "Here it is: cute!");
+        assert_eq!(links, vec!["https://example.com/cat.jpg"]);
+    }
+
+    #[test]
+    fn html_img_tag_dropped_with_attributes() {
+        // <img src=… alt=…> — TTS would read "src equals http alt equals…"
+        // literally. The whole tag must go.
+        let (spoken, links) = split_speech_and_links(
+            "Look <img src=\"https://x.com/y.png\" alt=\"the chart\" width=\"640\"> at that.",
+        );
+        assert_eq!(spoken, "Look at that.");
+        assert!(links.is_empty(), "we keep this simple — don't extract src attrs");
+    }
+
+    #[test]
+    fn html_video_iframe_audio_tags_dropped() {
+        // Same lesson, broader strip — any tag-like construct is gone.
+        for tag in [
+            r#"<video src="https://x.com/y.mp4" poster="https://x.com/p.jpg" controls></video>"#,
+            r#"<iframe src="https://x.com/embed" width="640" height="360"></iframe>"#,
+            r#"<audio src="https://x.com/y.mp3" controls></audio>"#,
+        ] {
+            let (spoken, _) = split_speech_and_links(&format!("before {tag} after"));
+            assert_eq!(spoken, "before after", "tag wasn't stripped: {tag}");
+        }
+    }
+
+    #[test]
+    fn paired_tool_block_strips_inner_content() {
+        // Agentic Groq compound model emitted exactly this in production
+        // and we were speaking the python code aloud. The whole block
+        // must be gone — content included.
+        let leaky = r#"Yes, I can hear you clearly. <tool>python(print("Scene card: 'Audio Connection', key points: ['Hearing confirmed']"))</tool>"#;
+        let (spoken, _) = split_speech_and_links(leaky);
+        assert!(!spoken.to_lowercase().contains("scene card"), "leaked: {spoken:?}");
+        assert!(!spoken.to_lowercase().contains("python"), "leaked: {spoken:?}");
+        assert!(!spoken.to_lowercase().contains("hearing confirmed"), "leaked: {spoken:?}");
+        assert!(spoken.contains("hear you clearly"));
+    }
+
+    #[test]
+    fn paired_function_call_block_strips_inner_content() {
+        // Different envelope same lesson — function/function_call/code
+        // blocks are all tool-call artifacts.
+        for tag in ["function", "function_call", "code"] {
+            let s = format!("Answer: <{tag}>secret_internal_payload</{tag}> done.");
+            let (spoken, _) = split_speech_and_links(&s);
+            assert!(
+                !spoken.to_lowercase().contains("secret_internal_payload"),
+                "leaked from <{tag}>: {spoken:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unpaired_tag_only_strips_the_tag_itself() {
+        // No matching close in this chunk → fall back to single-tag drop
+        // so the rest of the prose still survives.
+        let (spoken, _) = split_speech_and_links("Look <span>at this");
+        assert_eq!(spoken, "Look at this");
+    }
+
+    #[test]
+    fn paired_tag_match_is_case_insensitive() {
+        let (spoken, _) = split_speech_and_links("a <TOOL>x</tool> b");
+        assert_eq!(spoken, "a b");
+    }
+
+    #[test]
+    fn bare_less_than_in_text_is_preserved() {
+        // "<" not followed by alpha/`/` is not a tag and must survive.
+        let (spoken, _) = split_speech_and_links("5 < 10 < 100");
+        assert!(spoken.contains('<'), "literal '<' got eaten: {spoken:?}");
+    }
+
+    #[test]
+    fn markdown_link_to_image_url_drops_alt_text() {
+        // `[A photo of a cat](.../cat.jpg)` — the label is alt text, not
+        // a speakable label. Drop it from speech but keep the URL.
+        let (spoken, links) =
+            split_speech_and_links("There: [A photo of a cat](https://x.com/cat.jpg) cute.");
+        assert!(!spoken.to_lowercase().contains("photo"), "alt leaked: {spoken:?}");
+        assert!(!spoken.to_lowercase().contains("cat"), "alt leaked: {spoken:?}");
+        assert_eq!(spoken, "There: cute.");
+        assert_eq!(links, vec!["https://x.com/cat.jpg"]);
+    }
+
+    #[test]
+    fn markdown_link_to_video_url_drops_label_too() {
+        let (spoken, links) =
+            split_speech_and_links("Watch [the highlight reel](https://x.com/clip.mp4) then.");
+        assert!(!spoken.to_lowercase().contains("highlight"), "label leaked: {spoken:?}");
+        assert_eq!(spoken, "Watch then.");
+        assert_eq!(links, vec!["https://x.com/clip.mp4"]);
+    }
+
+    #[test]
+    fn markdown_link_to_normal_page_still_speaks_label() {
+        // Non-media URL → still a normal hyperlink; speak the label.
+        let (spoken, links) = split_speech_and_links(
+            "See [the Wikipedia article](https://en.wikipedia.org/wiki/Foo) for more.",
+        );
+        assert!(spoken.contains("the Wikipedia article"));
+        assert_eq!(links, vec!["https://en.wikipedia.org/wiki/Foo"]);
+    }
+
+    #[test]
+    fn media_url_query_string_and_data_uri() {
+        // `.jpg?w=200` and `data:image/...` both count as media.
+        assert!(looks_like_media_url("https://x.com/cat.jpg?w=200&h=200"));
+        assert!(looks_like_media_url("data:image/jpeg;base64,/9j/4AAQ..."));
+        assert!(!looks_like_media_url("https://en.wikipedia.org/wiki/Cat"));
     }
 
     #[test]

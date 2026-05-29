@@ -49,6 +49,12 @@ bytes = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 base64 = "0.22"
 
+# Optional particle-face renderer (ported avatar visuals) — selected at
+# CLI via `--render-backend particles`. The SVG path remains the
+# default and still owns scene cards, whiteboards, the ambient HUD chip,
+# vision PiP, etc. — composite mode is future work.
+ghostly = { git = "https://github.com/chad/ghostly", branch = "main" }
+
 # Async + utility
 tokio = { workspace = true }
 anyhow = { workspace = true }
@@ -60,6 +66,10 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 dirs = "6"
 chrono = "0.4"
+# SQLite for the conversation-memory module. FTS5 powers the "she
+# remembers" feature — past exchanges retrieved on each addressed
+# question and injected into the LLM context.
+rusqlite = { workspace = true }
 
 [features]
 default = []

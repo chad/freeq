@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use crate::video::{SceneKind, SceneSpec};
+use crate::whiteboard::Step;
 
 #[derive(Deserialize)]
 struct ChatResponse {
@@ -66,17 +67,34 @@ pub struct Answer {
     pub source: Option<Source>,
 }
 
-const SYSTEM: &str = "You are Eliza, a helpful AI agent in a live voice \
-call. A participant has addressed you by name — answer their question. \
-Use the call transcript below as context when the question is about the \
-conversation itself; otherwise answer from your general knowledge. When \
-the question needs current events or specific facts you're not certain \
-of, search the web and answer from what you find. Rules: answer in 1-3 \
-short sentences — your reply is spoken aloud, so keep it brief and \
-conversational. Don't use markdown, bullet points, or emoji. Never put \
-URLs, links, or web addresses in your answer — it is read aloud and they \
-are unpronounceable; just name the source in words if you need to. Don't \
-repeat the question back. If you genuinely don't know, say so plainly.";
+const SYSTEM: &str = "You are Eliza, a live voice-AND-video agent in a \
+freeq call. Your reply is spoken aloud while an illustrated visual \
+appears on your video tile in parallel — you have a voice, a tile that \
+shows pictures, and the ability to see participants' shared cameras \
+and screens. You are NOT just a language model.\n\n\
+Rules — follow strictly:\n\
+1. PLAIN PROSE ONLY. No markdown, no bullet points, no emoji, no \
+URLs, no code, no JSON, no XML, no `<tool>` blocks, no `<function>` \
+blocks, no `python(...)` calls, no '```' fences. Speak as a person \
+would speak. The text is fed to TTS verbatim — anything that isn't a \
+sentence gets read aloud as garbage.\n\
+2. Brief: 1-3 short sentences, conversational.\n\
+3. NEVER disclaim that you are 'just a language model' or that you \
+'can't show pictures'. You absolutely can. When someone asks 'show me \
+a picture of X', 'what does Y look like', 'show me Z', or 'draw me a \
+W', say yes and answer briefly: 'Here's the Eiffel Tower at night.' / \
+'That's what a quokka looks like.' / 'Here it is.' — the picture WILL \
+appear as you speak. Sound confident, not apologetic.\n\
+4. When a question needs current events or specific facts, search the \
+web and answer from what you find. Do NOT narrate that you are \
+searching — just deliver the answer.\n\
+5. Use the call transcript below as context for questions about the \
+conversation itself. Otherwise answer from general knowledge.\n\
+6. Don't repeat the question. If you genuinely don't know, say so \
+plainly.\n\
+7. NEVER mention the words 'scene card', 'video tile', 'image query', \
+'transcript', or any other internal mechanism — those are how you \
+work, not what you say.";
 
 /// Answer `question` against `transcript` via Groq chat completions.
 /// `transcript` is the joined `<nick>: <utterance>` lines so far (may
@@ -90,20 +108,13 @@ pub async fn answer(
     transcript: &str,
     question: &str,
 ) -> Result<Answer> {
-    let context = if transcript.trim().is_empty() {
-        "(no transcript yet — the call just started)".to_string()
-    } else {
-        transcript.to_string()
-    };
-    let user = format!("Call transcript so far:\n{context}\n\nQuestion: {question}");
-
     let body = serde_json::json!({
         "model": model,
         "max_tokens": 320,
         "temperature": 0.3,
         "messages": [
             { "role": "system", "content": SYSTEM },
-            { "role": "user", "content": user },
+            { "role": "user", "content": user_prompt(transcript, question) },
         ],
     });
 
@@ -128,10 +139,25 @@ pub async fn answer(
     if text.is_empty() {
         anyhow::bail!("groq chat returned no content");
     }
-    // The first result of the first web search the model ran, if any.
-    let source = choice
-        .message
-        .executed_tools
+    let source = extract_source(&choice.message.executed_tools);
+    Ok(Answer { text, source })
+}
+
+/// The user-turn prompt: the rolling transcript as context plus the
+/// question. Shared by [`answer`] and [`answer_streaming`].
+fn user_prompt(transcript: &str, question: &str) -> String {
+    let context = if transcript.trim().is_empty() {
+        "(no transcript yet — the call just started)".to_string()
+    } else {
+        transcript.to_string()
+    };
+    format!("Call transcript so far:\n{context}\n\nQuestion: {question}")
+}
+
+/// The top web source behind an answer — the first result of the first
+/// `search` tool the agentic model ran, if any.
+fn extract_source(tools: &[ExecutedTool]) -> Option<Source> {
+    tools
         .iter()
         .filter(|t| t.tool_type == "search")
         .filter_map(|t| t.search_results.as_ref())
@@ -140,8 +166,7 @@ pub async fn answer(
         .map(|r| Source {
             title: r.title.trim().to_string(),
             url: r.url.trim().to_string(),
-        });
-    Ok(Answer { text, source })
+        })
 }
 
 const SCENE_SYSTEM: &str = "You design one visual card for Eliza's \
@@ -250,6 +275,91 @@ pub async fn generate_scene(
     })
 }
 
+const WHITEBOARD_SYSTEM: &str = "You design a simple whiteboard diagram \
+to help explain a question's answer in a live voice call. Output ONLY \
+a JSON object.\n\n\
+When does a diagram HELP? \"How does X work?\", \"what is X made of?\", \
+\"walk me through Y\", \"explain Z\", \"compare A and B\", \"what's the \
+flow/pipeline/process\" — output steps. Single-fact answers (\"capital \
+of France?\"), opinions, chitchat, image requests — output empty.\n\n\
+Output format:\n\
+{\"steps\": [...]}   when a diagram helps (3-8 steps total)\n\
+{\"steps\": []}      when it doesn't (most questions)\n\n\
+Step types (canvas is 640×360; safe content area x=60-580, y=80-300):\n\
+- {\"type\":\"text\",\"x\":N,\"y\":N,\"content\":\"…\",\"size\":\"large|med|small\"} — \
+standalone text. Use \"large\" for the title at top.\n\
+- {\"type\":\"box\",\"x\":N,\"y\":N,\"w\":N,\"h\":N,\"label\":\"short\"} — \
+labeled rectangle. Typical 110-160 wide, 44-60 tall.\n\
+- {\"type\":\"arrow\",\"x1\":N,\"y1\":N,\"x2\":N,\"y2\":N,\"label\":\"opt\"} — \
+arrow with optional midpoint label.\n\n\
+Rules:\n\
+- Order steps in REVEAL order; each draws ~900 ms after the previous.\n\
+- ALWAYS start with a \"large\" text TITLE at top (y around 50-60).\n\
+- KEEP IT CLEAN: lots of whitespace, no crowding, short labels (≤3 words).\n\
+- Layout flows LEFT-TO-RIGHT. Layout concepts with a center node + spokes.\n\
+- Arrows should land near box edges (not centers).\n\
+- Return STRICTLY the JSON object, no prose, no markdown fences.";
+
+#[derive(Deserialize)]
+struct WhiteboardPlan {
+    #[serde(default)]
+    steps: Vec<Step>,
+}
+
+/// Ask the model whether the question's answer would be clarified by a
+/// diagram, and if so what to draw. Returns `Some(steps)` when a
+/// diagram is worthwhile (3+ steps), `None` otherwise — most questions
+/// fall into None. Runs against the chat model (fast) in JSON mode,
+/// independent of the (slower, agentic) answer model — so it can race
+/// in parallel with [`answer_streaming`] and the diagram can start
+/// drawing *while* she's speaking.
+pub async fn whiteboard(
+    client: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    question: &str,
+) -> Option<Vec<Step>> {
+    let user = format!(
+        "Question addressed to Eliza: {question}\n\nDesign the diagram. Output the JSON object."
+    );
+    let body = serde_json::json!({
+        "model": model,
+        "max_tokens": 900,
+        "temperature": 0.4,
+        "response_format": { "type": "json_object" },
+        "messages": [
+            { "role": "system", "content": WHITEBOARD_SYSTEM },
+            { "role": "user", "content": user },
+        ],
+    });
+    let resp = client
+        .post("https://api.groq.com/openai/v1/chat/completions")
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let parsed: ChatResponse = resp.json().await.ok()?;
+    let text = parsed.choices.first()?.message.content.trim().to_string();
+    let plan: WhiteboardPlan = match serde_json::from_str::<WhiteboardPlan>(&text) {
+        Ok(p) => p,
+        Err(_) => {
+            // Tolerate a stray JSON wrapper / fenced block — extract the
+            // outermost {…} and re-parse.
+            let v = extract_json(&text)?;
+            serde_json::from_value::<WhiteboardPlan>(v).ok()?
+        }
+    };
+    // Require enough steps to be worth the takeover.
+    if plan.steps.len() < 3 {
+        return None;
+    }
+    Some(plan.steps)
+}
+
 /// Pull a JSON object out of a model reply — it may be fenced in
 /// markdown or wrapped in stray prose. Takes the outermost `{ … }`.
 pub(crate) fn extract_json(text: &str) -> Option<serde_json::Value> {
@@ -259,6 +369,320 @@ pub(crate) fn extract_json(text: &str) -> Option<serde_json::Value> {
         return None;
     }
     serde_json::from_str(&text[start..end]).ok()
+}
+
+// ── Streaming answer ─────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct StreamChunk {
+    #[serde(default)]
+    choices: Vec<StreamChoice>,
+}
+
+#[derive(Deserialize)]
+struct StreamChoice {
+    #[serde(default)]
+    delta: StreamDelta,
+    /// Some providers attach tool info to a `message` even mid-stream.
+    #[serde(default)]
+    message: StreamDelta,
+}
+
+#[derive(Deserialize, Default)]
+struct StreamDelta {
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    executed_tools: Vec<ExecutedTool>,
+}
+
+/// Streaming variant of [`answer`]: calls `on_delta` with each text
+/// fragment as the model produces it, so the caller can begin speaking
+/// before the answer is complete. Still accumulates the full text and
+/// returns the same [`Answer`] (with the web source, when one was used).
+pub async fn answer_streaming(
+    client: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    transcript: &str,
+    question: &str,
+    // Optional per-character system prompt override. `None` uses the
+    // default Eliza personality. Pass a profile's `system_prompt`
+    // when running as Oblivion / Narrator / Utopia.
+    system_override: Option<&str>,
+    mut on_delta: impl FnMut(&str),
+) -> Result<Answer> {
+    let system = system_override.unwrap_or(SYSTEM);
+    let body = serde_json::json!({
+        "model": model,
+        "max_tokens": 320,
+        "temperature": 0.3,
+        "stream": true,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user_prompt(transcript, question) },
+        ],
+    });
+
+    let mut resp = client
+        .post("https://api.groq.com/openai/v1/chat/completions")
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .await
+        .context("groq streaming chat request failed")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let err = resp.text().await.unwrap_or_default();
+        anyhow::bail!("groq chat {status}: {err}");
+    }
+
+    let mut buf: Vec<u8> = Vec::new();
+    let mut text = String::new();
+    let mut source: Option<Source> = None;
+
+    while let Some(network_chunk) = resp.chunk().await.context("reading groq chat stream")? {
+        buf.extend_from_slice(&network_chunk);
+        // Server-Sent Events: process complete `\n`-terminated lines; a
+        // partial trailing line waits for the next network chunk.
+        while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = buf.drain(..=nl).collect();
+            let line = String::from_utf8_lossy(&line);
+            let Some(data) = line.trim().strip_prefix("data:") else {
+                continue;
+            };
+            let data = data.trim();
+            if data.is_empty() || data == "[DONE]" {
+                continue;
+            }
+            let Ok(sc) = serde_json::from_str::<StreamChunk>(data) else {
+                continue;
+            };
+            for choice in sc.choices {
+                if !choice.delta.content.is_empty() {
+                    text.push_str(&choice.delta.content);
+                    on_delta(&choice.delta.content);
+                }
+                if source.is_none() {
+                    source = extract_source(&choice.delta.executed_tools)
+                        .or_else(|| extract_source(&choice.message.executed_tools));
+                }
+            }
+        }
+    }
+
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        anyhow::bail!("groq streaming chat returned no content");
+    }
+    Ok(Answer { text, source })
+}
+
+// ── Anthropic streaming answer ───────────────────────────────────────
+
+/// SSE event payload for the `content_block_delta` event in the
+/// Anthropic Messages API stream. Only field we need is the text
+/// chunk inside `delta.text`.
+#[derive(Deserialize)]
+struct AnthropicDeltaEvent {
+    #[serde(rename = "type")]
+    event_type: String,
+    #[serde(default)]
+    delta: AnthropicTextDelta,
+}
+
+#[derive(Deserialize, Default)]
+struct AnthropicTextDelta {
+    #[serde(default, rename = "type")]
+    delta_type: String,
+    #[serde(default)]
+    text: String,
+}
+
+/// Streaming variant of [`answer_streaming`] that hits Anthropic's
+/// Messages API instead of Groq's OpenAI-compatible chat completions.
+/// Use this when `model` starts with `claude-` (e.g. `claude-opus-4-7`).
+///
+/// Anthropic doesn't have native web-search inside Messages the way
+/// Groq's compound model does — answers come purely from the model's
+/// training. The returned [`Answer`] never has a `source` set.
+pub async fn anthropic_answer_streaming(
+    client: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    transcript: &str,
+    question: &str,
+    system_override: Option<&str>,
+    mut on_delta: impl FnMut(&str),
+) -> Result<Answer> {
+    let system = system_override.unwrap_or(SYSTEM);
+    // Note: no `temperature` field — `claude-opus-4-7` deprecated it
+    // (the model picks its own sampling). Setting it returns 400.
+    let body = serde_json::json!({
+        "model": model,
+        "max_tokens": 320,
+        "stream": true,
+        "system": system,
+        "messages": [
+            { "role": "user", "content": user_prompt(transcript, question) },
+        ],
+    });
+
+    let mut resp = client
+        .post("https://api.anthropic.com/v1/messages")
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .context("anthropic streaming chat request failed")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let err = resp.text().await.unwrap_or_default();
+        anyhow::bail!("anthropic chat {status}: {err}");
+    }
+
+    let mut buf: Vec<u8> = Vec::new();
+    let mut text = String::new();
+
+    while let Some(network_chunk) = resp
+        .chunk()
+        .await
+        .context("reading anthropic chat stream")?
+    {
+        buf.extend_from_slice(&network_chunk);
+        while let Some(nl) = buf.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = buf.drain(..=nl).collect();
+            let line = String::from_utf8_lossy(&line);
+            // Anthropic SSE: each event has an `event: <name>` line
+            // (which we ignore) and a `data: <json>` line. Only data
+            // lines matter for content extraction.
+            let Some(data) = line.trim().strip_prefix("data:") else {
+                continue;
+            };
+            let data = data.trim();
+            if data.is_empty() {
+                continue;
+            }
+            let Ok(evt) = serde_json::from_str::<AnthropicDeltaEvent>(data) else {
+                continue;
+            };
+            if evt.event_type == "content_block_delta" && evt.delta.delta_type == "text_delta"
+                && !evt.delta.text.is_empty()
+            {
+                text.push_str(&evt.delta.text);
+                on_delta(&evt.delta.text);
+            }
+        }
+    }
+
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        anyhow::bail!("anthropic streaming chat returned no content");
+    }
+    Ok(Answer { text, source: None })
+}
+
+/// Whether `model` should be routed to the Anthropic Messages API.
+/// Anything starting with `claude` (case-insensitive) goes to
+/// Anthropic; everything else to Groq.
+pub fn is_anthropic_model(model: &str) -> bool {
+    model.to_ascii_lowercase().starts_with("claude")
+}
+
+// ── Sentence chunking ────────────────────────────────────────────────
+
+/// Accumulates streamed text and emits complete sentences, so an answer
+/// can be synthesized to speech sentence-by-sentence as it streams in.
+#[derive(Default)]
+pub struct SentenceChunker {
+    buf: String,
+}
+
+impl SentenceChunker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feed a streamed text fragment; return any sentences it completed.
+    pub fn push(&mut self, delta: &str) -> Vec<String> {
+        self.buf.push_str(delta);
+        let mut out = Vec::new();
+        while let Some(end) = self.next_sentence_end() {
+            let sentence = self.buf[..end].trim().to_string();
+            self.buf.drain(..end);
+            if sentence.chars().any(char::is_alphanumeric) {
+                out.push(sentence);
+            }
+        }
+        out
+    }
+
+    /// The trailing text once the stream ends — the final sentence
+    /// usually has no whitespace after it to trigger a flush.
+    pub fn flush(&mut self) -> Option<String> {
+        let rest = self.buf.trim().to_string();
+        self.buf.clear();
+        rest.chars().any(char::is_alphanumeric).then_some(rest)
+    }
+
+    /// Byte index in `buf` just past the first complete sentence (the
+    /// start of the whitespace after a sentence-ending `.`/`!`/`?`).
+    /// `None` until enough text has arrived to be certain.
+    fn next_sentence_end(&self) -> Option<usize> {
+        let chars: Vec<(usize, char)> = self.buf.char_indices().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if !matches!(chars[i].1, '.' | '!' | '?') {
+                i += 1;
+                continue;
+            }
+            let term_at = chars[i].0;
+            // Consume a run of terminators ("?!", "...").
+            while i < chars.len() && matches!(chars[i].1, '.' | '!' | '?') {
+                i += 1;
+            }
+            // Consume any closing quote/bracket.
+            while i < chars.len() && matches!(chars[i].1, '"' | '\'' | ')' | ']' | '”' | '’') {
+                i += 1;
+            }
+            // A following char is needed to know the sentence ended.
+            let Some(&(next_at, next_c)) = chars.get(i) else {
+                return None;
+            };
+            if next_c.is_whitespace() && !ends_with_abbrev(&self.buf[..term_at]) {
+                return Some(next_at);
+            }
+        }
+        None
+    }
+}
+
+/// Whether `prefix` ends in an abbreviation or initial — so the `.`
+/// after it does not end a sentence ("Mr.", "U.S.", "e.g.", "A.").
+fn ends_with_abbrev(prefix: &str) -> bool {
+    let word = prefix
+        .rsplit(char::is_whitespace)
+        .next()
+        .unwrap_or("")
+        .trim_matches(|c: char| !c.is_alphanumeric() && c != '.')
+        .to_lowercase();
+    if word.is_empty() {
+        return false;
+    }
+    // A single letter is an initial ("A." in "A. Lincoln").
+    let letters: String = word.chars().filter(|c| c.is_alphanumeric()).collect();
+    if letters.chars().count() == 1 {
+        return true;
+    }
+    const ABBREVS: &[&str] = &[
+        "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "no", "fig", "approx",
+        "e.g", "i.e", "u.s", "a.m", "p.m", "ph.d",
+    ];
+    ABBREVS.contains(&word.as_str()) || ABBREVS.contains(&letters.as_str())
 }
 
 #[cfg(test)]
@@ -276,5 +700,54 @@ mod tests {
         // No object, or invalid JSON → None, never a panic.
         assert!(extract_json("no json here").is_none());
         assert!(extract_json("{not valid").is_none());
+    }
+
+    // ---------- SentenceChunker ----------
+
+    #[test]
+    fn chunker_emits_completed_sentences_and_holds_the_last() {
+        let mut c = SentenceChunker::new();
+        // The last sentence has no trailing whitespace → it waits.
+        let got = c.push("One thing. Two things! Three?");
+        assert_eq!(got, vec!["One thing.", "Two things!"]);
+        assert_eq!(c.flush().as_deref(), Some("Three?"));
+    }
+
+    #[test]
+    fn chunker_reassembles_across_streamed_fragments() {
+        let mut c = SentenceChunker::new();
+        let mut out = Vec::new();
+        // The same text arrives split at awkward points.
+        for frag in ["On", "e. Tw", "o. ", "Done"] {
+            out.extend(c.push(frag));
+        }
+        assert_eq!(out, vec!["One.", "Two."]);
+        assert_eq!(c.flush().as_deref(), Some("Done"));
+    }
+
+    #[test]
+    fn chunker_does_not_break_on_abbreviations() {
+        let mut c = SentenceChunker::new();
+        let got = c.push("Visit the U.S. and see Mr. Smith today. Thanks.");
+        // "U.S." and "Mr." must not split the first sentence.
+        assert_eq!(got, vec!["Visit the U.S. and see Mr. Smith today."]);
+        assert_eq!(c.flush().as_deref(), Some("Thanks."));
+    }
+
+    #[test]
+    fn chunker_handles_decimals_and_terminator_runs() {
+        let mut c = SentenceChunker::new();
+        // "3.5" — the dot is between digits, no whitespace, no break.
+        let got = c.push("It grew 3.5 times. Really?! Yes.");
+        assert_eq!(got, vec!["It grew 3.5 times.", "Really?!"]);
+        assert_eq!(c.flush().as_deref(), Some("Yes."));
+    }
+
+    #[test]
+    fn chunker_drops_punctuation_only_fragments() {
+        let mut c = SentenceChunker::new();
+        // "..." with nothing alphanumeric is not a real sentence.
+        assert!(c.push("... ").is_empty());
+        assert_eq!(c.flush(), None);
     }
 }

@@ -16,16 +16,24 @@ import { getCachedProfile } from '../lib/profiles';
  * - invisible removed → camera on (video + audio)
  */
 
-// Minimal shape of the moq-publish element we reach into for device
-// switching. moq-publish exposes `audio`/`video` as @moq/signals Signals
-// whose value is the live capture source; each source carries a `device`
-// with a `preferred` signal — set it to a deviceId to switch hardware
-// mid-call without rebuilding the broadcast.
-type MoqSignalLike<T> = { peek(): T };
-type MoqDeviceSource = { device?: { preferred: { set(id: string): void } } };
+// Minimal shape of the moq-publish element we reach into. moq-publish
+// exposes `audio`/`video` as @moq/signals Signals whose value is the
+// live capture source. Each source carries:
+//   - a `device.preferred` Signal we can `.set(deviceId)` to switch
+//     hardware mid-call without rebuilding the broadcast;
+//   - a `source` Signal whose value is the captured MediaStreamTrack —
+//     we subscribe to that for the local preview, so we don't open a
+//     second `getUserMedia` on the same camera (some browsers won't
+//     grant it twice and moq-publish's own request silently fails,
+//     leaving the broadcast with no video rendition).
+type MoqSignal<T> = { peek(): T; subscribe(fn: (value: T) => void): () => void };
+type MoqDeviceSource = {
+  device?: { preferred: { set(id: string): void } };
+  source?: MoqSignal<MediaStreamTrack | undefined>;
+};
 type MoqPublishEl = HTMLElement & {
-  audio?: MoqSignalLike<MoqDeviceSource | undefined>;
-  video?: MoqSignalLike<MoqDeviceSource | undefined>;
+  audio?: MoqSignal<MoqDeviceSource | undefined>;
+  video?: MoqSignal<MoqDeviceSource | undefined>;
 };
 
 export function CallPanel() {
@@ -43,7 +51,6 @@ export function CallPanel() {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const publishElRef = useRef<HTMLElement | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const localStreamRef = useRef<MediaStream | null>(null);
 
   const [participantSlots, setParticipantSlots] = useState<Slot[]>([]);
   // Full-screen: the call panel takes over the whole web-app viewport so
@@ -60,12 +67,16 @@ export function CallPanel() {
   const [showSettings, setShowSettings] = useState(false);
 
   const myNick = getNick();
-  // Connect to the SFU's QUIC/WebTransport listener (udp :8080) rather
-  // than MoQ-over-WebSocket. WebTransport is the proper real-time media
-  // transport; the WebSocket path degrades into static under publish
-  // load. The `https://` scheme tells moq-publish/moq-watch to use
-  // WebTransport. See docs/AV-QUIC-MIGRATION.md.
-  const moqOrigin = `https://${location.hostname}:8080/av/moq`;
+  // Use the nginx-proxied :443 WebSocket endpoint. The direct-to-
+  // :8080 WebTransport path (commented original below) currently
+  // half-connects: moq-watch logs "connected via WebTransport" but
+  // the catalog never arrives and no frames decode (reproduced in
+  // headless chromium against the live broadcast — black tile for
+  // every viewer). Until the WebTransport path is fixed the
+  // WS-via-nginx route is the only working transport.
+  //
+  // Original WebTransport URL: `https://${location.hostname}:8080/av/moq`
+  const moqOrigin = `wss://${location.hostname}/av/moq`;
 
   // ── Device enumeration ──────────────────────────────────────
   // Device labels are blank until the matching permission is granted, so
@@ -142,9 +153,19 @@ export function CallPanel() {
         : `${sessionId}/${myNick}`;
       pub.setAttribute('url', moqOrigin);
       pub.setAttribute('name', broadcastName);
+      // CRITICAL: set `invisible` BEFORE `source`. moq-publish reacts to
+      // the `source` attribute immediately by opening a single
+      // getUserMedia({audio:true, video:true}). If we set `source` first
+      // and `invisible` second, that grab can already be in flight; if
+      // the camera is busy or permission denied, the whole call (audio
+      // included) fails and the catalog ships with no audio track —
+      // Eliza/peers then see a participant who never speaks. With
+      // `invisible` set first, moq-publish grabs audio only and only
+      // adds video when we later remove `invisible`.
+      if (!useStore.getState().avCameraOn) {
+        pub.setAttribute('invisible', '');
+      }
       pub.setAttribute('source', 'camera');
-      // Camera off by default
-      pub.setAttribute('invisible', '');
       console.log('[call] Publishing:', broadcastName);
 
       pollParticipants();
@@ -178,37 +199,47 @@ export function CallPanel() {
 
   // ── Sync camera state ───────────────────────────────────────
   useEffect(() => {
-    const pub = publishElRef.current;
+    const pub = publishElRef.current as MoqPublishEl | null;
     if (!pub) return;
 
-    if (avCameraOn) {
-      pub.removeAttribute('invisible');
-      // Start local preview
-      navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-        .then((stream) => {
-          localStreamRef.current = stream;
-          if (localVideoRef.current) {
-            localVideoRef.current.srcObject = stream;
-          }
-          // Camera permission just granted — device labels are now
-          // populated, so re-enumerate to fill in the camera picker.
-          refreshDevices();
-        })
-        .catch((e) => {
-          console.warn('[call] Camera error:', e);
-          useStore.getState().setAvCameraOn(false);
-        });
-    } else {
+    if (!avCameraOn) {
       pub.setAttribute('invisible', '');
-      // Stop local preview
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach((t) => t.stop());
-        localStreamRef.current = null;
-      }
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = null;
       }
+      return;
     }
+
+    pub.removeAttribute('invisible');
+
+    // Local preview: reuse moq-publish's own MediaStreamTrack rather
+    // than opening a second `getUserMedia` on the same camera. The
+    // duplicate-grab silently broke the publish path on some browsers —
+    // moq-publish's internal request would fail and we'd end up with a
+    // happy local preview but no video rendition in the catalog.
+    const videoSig = pub.video;
+    if (!videoSig) return;
+    let unsubInner: (() => void) | null = null;
+    const unsubOuter = videoSig.subscribe((camera) => {
+      unsubInner?.();
+      unsubInner = null;
+      if (!camera?.source) return;
+      unsubInner = camera.source.subscribe((track) => {
+        if (!localVideoRef.current) return;
+        if (track) {
+          localVideoRef.current.srcObject = new MediaStream([track]);
+          // Camera permission just landed via moq-publish — refill the
+          // device picker now that labels are populated.
+          refreshDevices();
+        } else {
+          localVideoRef.current.srcObject = null;
+        }
+      });
+    });
+    return () => {
+      unsubInner?.();
+      unsubOuter();
+    };
   }, [avCameraOn, refreshDevices]);
 
   // ── Poll participants ───────────────────────────────────────
@@ -300,9 +331,8 @@ export function CallPanel() {
       pub.remove();
       publishElRef.current = null;
     }
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((t) => t.stop());
-      localStreamRef.current = null;
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = null;
     }
     setParticipantSlots([]);
     setShowSettings(false);

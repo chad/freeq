@@ -33,7 +33,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use freeq_eliza::{identity, imagegen, irc, stt};
+use freeq_eliza::{character_profile, identity, imagegen, irc, stt};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -51,9 +51,13 @@ struct Cli {
     #[arg(long, default_values_t = vec!["#avtest".to_string()])]
     channel: Vec<String>,
 
-    /// Bot identity name. Files live at `~/.freeq/bots/<name>/`.
-    #[arg(long, default_value = "eliza")]
-    name: String,
+    /// Bot identity name. Files live at `~/.freeq/bots/<name>/`. When
+    /// not given, defaults to the active character ("eliza" for the
+    /// SVG backend; the `--ghostly-character` value for the particles
+    /// backend) — so each character gets its own DID + nick rather
+    /// than colliding on "eliza".
+    #[arg(long)]
+    name: Option<String>,
 
     /// IRC nick. Defaults to the identity name.
     #[arg(long)]
@@ -74,12 +78,20 @@ struct Cli {
     #[arg(long, default_value = "llama-3.3-70b-versatile")]
     groq_chat_model: String,
 
-    /// Groq model for answering questions addressed to the bot. The
-    /// default (`groq/compound`) is agentic and searches the web; use
-    /// `groq/compound-mini` for lower latency, or a plain chat model
-    /// (e.g. `llama-3.3-70b-versatile`) to disable web search.
-    #[arg(long, default_value = "groq/compound")]
+    /// Model for answering questions addressed to the bot. Default is
+    /// Anthropic's `claude-opus-4-7` (slowest but highest quality;
+    /// requires `ANTHROPIC_API_KEY`). Falls back to Groq when given a
+    /// non-claude model — `groq/compound` is the agentic web-search
+    /// option, `groq/compound-mini` lower latency, `llama-3.3-70b-versatile`
+    /// no web. Flag name kept as `--groq-answer-model` for back-compat;
+    /// `claude-*` routes to Anthropic Messages automatically.
+    #[arg(long, default_value = "claude-opus-4-7")]
     groq_answer_model: String,
+
+    /// Groq vision model for questions about a participant's shared
+    /// screen or camera (e.g. "Eliza, what's on my screen?").
+    #[arg(long, default_value = "meta-llama/llama-4-scout-17b-16e-instruct")]
+    vision_model: String,
 
     /// ElevenLabs voice + model for speaking answers aloud. Reads
     /// `ELEVENLABS_API_KEY` from the environment.
@@ -126,6 +138,38 @@ struct Cli {
     /// `https://irc.freeq.at:4443/av/moq`.
     #[arg(long)]
     sfu_url: Option<String>,
+
+    /// Disable the proactive monitor — Eliza only speaks when addressed.
+    /// Useful when she's chatty and you want quiet.
+    #[arg(long)]
+    no_proactive: bool,
+
+    /// Disable the ambient monitor — the tile reverts to a static HUD
+    /// and skips topic/image manifesting while she listens. Cuts a small
+    /// extra cost (one fast LLM call every 20s) when you don't want it.
+    #[arg(long)]
+    no_ambient: bool,
+
+    /// Video tile renderer: `svg` (default — full freeq cyberpunk
+    /// presence with EQ strip, scene cards, ambient HUD, vision PiP) or
+    /// `particles` (ghostly particle face — face only, no overlays).
+    #[arg(long, default_value = "svg")]
+    render_backend: String,
+
+    /// Ghostly character used when `--render-backend particles`. One of
+    /// `eliza`, `narrator`, `utopia`, `oblivion`.
+    #[arg(long, default_value = "eliza")]
+    ghostly_character: String,
+
+    /// Other agent nicks this bot recognises as peers — e.g.
+    /// `--peer-agents oblivion,utopia` when running Eliza alongside
+    /// the other two for a multi-agent demo. The bot will respond
+    /// when one peer addresses it by name, but a streak of 3+
+    /// peer-only addresses (no human break) triggers a chatter guard
+    /// that suppresses further replies until a human speaks. Empty
+    /// (the default) = lone agent, no special handling.
+    #[arg(long, value_delimiter = ',', num_args = 0..)]
+    peer_agents: Vec<String>,
 }
 
 #[tokio::main]
@@ -140,10 +184,24 @@ async fn main() -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let cli = Cli::parse();
-    let nick = cli.nick.clone().unwrap_or_else(|| cli.name.clone());
+    // Identity defaults to the active character — `--render-backend
+    // particles --ghostly-character oblivion` lands in
+    // `~/.freeq/bots/oblivion/` with a fresh DID and bound nick
+    // "oblivion", instead of sharing eliza's identity and getting
+    // server-side rebound to her nick. Explicit `--name` always wins.
+    let identity_name = cli.name.clone().unwrap_or_else(|| {
+        if cli.render_backend == "particles" && !cli.ghostly_character.is_empty() {
+            cli.ghostly_character.clone()
+        } else {
+            "eliza".to_string()
+        }
+    });
+    // Nick defaults to the identity name, so a freshly-minted oblivion
+    // identity advertises itself as `oblivion` on the channel.
+    let nick = cli.nick.clone().unwrap_or_else(|| identity_name.clone());
 
     // Load or create the bot's did:key identity.
-    let ident = identity::load_or_create(&cli.name).context("loading bot identity")?;
+    let ident = identity::load_or_create(&identity_name).context("loading bot identity")?;
     tracing::info!(did = %ident.did, "bot identity ready");
 
     // Pick the STT backend. Priority: Groq (hosted, fast, no local
@@ -152,16 +210,23 @@ async fn main() -> Result<()> {
     let stt = Arc::new(build_stt(&cli)?);
     tracing::info!(backend = %stt.label(), "STT backend ready");
 
-    // Anthropic key is optional — `--no-summary` or a missing key both
-    // result in transcript-only mode.
-    let anthropic_key = if cli.no_summary {
-        None
-    } else {
-        std::env::var("ANTHROPIC_API_KEY").ok()
-    };
+    // Anthropic key is now used for TWO things: optional end-of-call
+    // summary, AND (by default) the per-question answer model when
+    // `--groq-answer-model` is a `claude-*` model. So we always try
+    // to load it; `--no-summary` only suppresses the summary path,
+    // not the answer-model route.
+    let anthropic_key = std::env::var("ANTHROPIC_API_KEY")
+        .ok()
+        .filter(|k| !k.trim().is_empty());
     if anthropic_key.is_none() {
-        tracing::info!("ANTHROPIC_API_KEY not set or --no-summary; end-of-call summary disabled");
+        tracing::info!(
+            "ANTHROPIC_API_KEY not set — claude-* answer models won't work; \
+             end-of-call summary also disabled"
+        );
     }
+    // `--no-summary` only suppresses the end-of-call summary call;
+    // it doesn't disable the answer-model route to Anthropic.
+    let summary_enabled = !cli.no_summary;
 
     // Groq key powers STT (above) + question-answering. ElevenLabs key
     // powers TTS. Read both from the environment.
@@ -203,15 +268,31 @@ async fn main() -> Result<()> {
         window_secs: cli.window_secs,
         summary_model: cli.summary_model,
         anthropic_key,
+        summary_enabled,
         start_session_in: cli.start_session_in,
         sfu_url_override: cli.sfu_url,
         groq_api_key,
         groq_chat_model: cli.groq_chat_model,
         groq_answer_model: cli.groq_answer_model,
+        vision_model: cli.vision_model,
         elevenlabs_api_key,
-        elevenlabs_voice_id: cli.elevenlabs_voice,
         elevenlabs_model: cli.elevenlabs_model,
         image_ai,
+        proactive_enabled: !cli.no_proactive,
+        ambient_enabled: !cli.no_ambient,
+        render_backend: cli.render_backend.clone(),
+        ghostly_character: cli.ghostly_character.clone(),
+        // Per-character voice + system-prompt overrides. When the
+        // character matches an entry in `character_profile`, swap in
+        // its ElevenLabs voice ID and personality. Without a match
+        // (e.g. `--ghostly-character eliza`) we fall through to the
+        // CLI's `--elevenlabs-voice` and the default Eliza prompt.
+        elevenlabs_voice_id: character_profile::by_name(&cli.ghostly_character)
+            .map(|p| p.voice_id.to_string())
+            .unwrap_or(cli.elevenlabs_voice),
+        character_system_prompt: character_profile::by_name(&cli.ghostly_character)
+            .map(|p| p.system_prompt.to_string()),
+        peer_agents: cli.peer_agents,
     })
     .await
 }

@@ -509,24 +509,25 @@ describe('CallPanel — camera', () => {
     expect(pub.hasAttribute('invisible')).toBe(true);
   });
 
-  it('starts the local preview stream when camera turns on and stops it when it turns off', async () => {
+  it('delegates the camera capture to moq-publish — no second getUserMedia({video})', async () => {
+    // Regression: CallPanel used to open its own getUserMedia({video:true})
+    // for the local preview, *in addition to* moq-publish's internal one
+    // for the publish path. On browsers that won't grant the same camera
+    // twice, moq-publish's request silently failed (it catches the error)
+    // and the broadcast went out with no video rendition — so e.g. Eliza
+    // would never see anything on a "what's on my screen?" question.
+    // The fix routes the local preview through moq-publish's own capture
+    // signal, leaving exactly one getUserMedia per resource.
     setupSession();
     mockSessionsApi([]);
 
-    const tracks = [{ stop: vi.fn(), kind: 'video' as const }];
     const stream = {
-      getTracks: () => tracks,
-      getAudioTracks: () => [],
-      getVideoTracks: () => tracks,
+      getTracks: () => [{ stop: vi.fn(), kind: 'audio' as const }],
+      getAudioTracks: () => [{ stop: vi.fn(), kind: 'audio' as const }],
+      getVideoTracks: () => [],
     } as unknown as MediaStream;
 
-    const getUserMedia = vi.fn((constraints: MediaStreamConstraints) => {
-      // CallPanel.tsx calls getUserMedia twice — once for mic permission
-      // (audio:true) and once for camera (video:true). Return the same
-      // stream for both.
-      void constraints;
-      return Promise.resolve(stream);
-    });
+    const getUserMedia = vi.fn(() => Promise.resolve(stream));
     Object.defineProperty(globalThis.navigator, 'mediaDevices', {
       value: {
         getUserMedia,
@@ -543,16 +544,14 @@ describe('CallPanel — camera', () => {
     await act(async () => { useStore.getState().setAvCameraOn(true); });
     await flush();
 
-    // At least one of the calls was for video:true.
-    const sawVideo = getUserMedia.mock.calls.some(
-      ([c]) => (c as MediaStreamConstraints)?.video === true,
+    // The only getUserMedia call CallPanel itself owns is the mic
+    // permission probe (audio:true) at call start. moq-publish does the
+    // camera capture; CallPanel must not duplicate it.
+    const sawVideoFromCallPanel = getUserMedia.mock.calls.some(
+      ([c]) => (c as MediaStreamConstraints)?.video !== undefined
+                && (c as MediaStreamConstraints)?.video !== false,
     );
-    expect(sawVideo).toBe(true);
-
-    await act(async () => { useStore.getState().setAvCameraOn(false); });
-    await flush();
-
-    expect(tracks[0].stop).toHaveBeenCalled();
+    expect(sawVideoFromCallPanel).toBe(false);
   });
 
   it('toggling camera while NOT in a call does not crash or send anything', async () => {

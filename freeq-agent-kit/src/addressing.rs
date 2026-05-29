@@ -9,9 +9,12 @@
 
 /// Filler / speech-to-text-noise words that may precede the name —
 /// "hey eliza", "um, eliza", or whisper rendering "Eliza" as "in miza".
+/// Two of these may stack ("OK so eliza", "yeah hey eliza") — the
+/// matcher tries up to two leading fillers before giving up.
 const LEADING_FILLERS: &[&str] = &[
     "hey", "hi", "hello", "ok", "okay", "so", "um", "uh", "well", "yo", "and", "but", "the", "a",
-    "in", "at", "to", "now", "oh",
+    "in", "at", "to", "now", "oh", "yeah", "yes", "alright", "right", "listen", "sorry", "look",
+    "say", "wait", "actually", "anyway", "still", "then", "ah", "mm", "mmm", "hmm", "huh", "like",
 ];
 
 /// Levenshtein edit distance between two char sequences.
@@ -48,10 +51,25 @@ fn name_matches(cand: &str, nick: &str) -> bool {
     if cand == nick {
         return true;
     }
+    // Containment branch: STT often hallucinates extra letters around
+    // a name ("u-topia" → "eutopia", "utopia" → "zootopia") rather
+    // than mis-spelling the name itself. If the nick appears
+    // contiguously inside the candidate, treat as a match — provided
+    // the nick is long enough (≥5 chars) that random words won't
+    // collide. This unblocks the live demo: "Zootopia" /
+    // "Eutopia" / "you-topia" all reach Utopia.
+    if nick.chars().count() >= 5 && cand.len() >= nick.len() && cand.contains(nick) {
+        return true;
+    }
+    // Edit-distance tolerance scales with name length. Long names
+    // (≥7 chars) tolerate up to 3 edits — enough to land
+    // "narator"→"narrator", "obliviion"→"oblivion", and similar STT
+    // duplications.
     let tol = match nick.chars().count() {
         0..=3 => 0,
         4 => 1,
-        _ => 2,
+        5..=6 => 2,
+        _ => 3,
     };
     edit_distance(cand, nick) <= tol
 }
@@ -68,14 +86,22 @@ pub fn extract_addressed(text: &str, nick: &str) -> Option<String> {
     if words.is_empty() {
         return None;
     }
-    // The name may be word 0, or word 1 after a single filler word; and
-    // STT sometimes splits it across two words ("a lisa" → "alisa").
-    for skip in [0usize, 1] {
+    // The name may be word 0, or words 1-2 preceded by up to two filler
+    // words ("OK so eliza", "yeah hey eliza"); STT sometimes splits it
+    // across two words ("a lisa" → "alisa"). Walking the skip range
+    // top-down (0, 1, 2) means the earliest match wins, which is what
+    // a human would intuit ("the eliza" is a mention, not an address).
+    for skip in [0usize, 1, 2] {
         if skip >= words.len() {
             break;
         }
-        if skip == 1 && !LEADING_FILLERS.contains(&normalize_word(words[0]).as_str()) {
-            break;
+        // Every word before the candidate must itself be a known filler;
+        // otherwise we're in mid-sentence territory and shouldn't match.
+        let preceding_ok = words[..skip]
+            .iter()
+            .all(|w| LEADING_FILLERS.contains(&normalize_word(w).as_str()));
+        if !preceding_ok {
+            continue;
         }
         for take in [1usize, 2] {
             if skip + take > words.len() {
@@ -150,6 +176,25 @@ mod tests {
             assert_eq!(
                 extract_addressed(heard, "eliza").as_deref(),
                 Some("hello"),
+                "should detect address in {heard:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn two_leading_filler_words_still_match() {
+        // People in voice calls trail off and hedge — "OK so Eliza,",
+        // "Yeah hey Eliza,", "Um well Eliza". Two leading fillers must
+        // still register; three is too far (probably a real sentence).
+        for heard in [
+            "ok so eliza what time is it",
+            "yeah hey eliza what time is it",
+            "um well eliza what time is it",
+            "alright now eliza what time is it",
+        ] {
+            assert_eq!(
+                extract_addressed(heard, "eliza").as_deref(),
+                Some("what time is it"),
                 "should detect address in {heard:?}"
             );
         }
