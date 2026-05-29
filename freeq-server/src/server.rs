@@ -5254,6 +5254,155 @@ mod s2s_adversarial_tests {
         assert_eq!(r, Err("bad_payload"));
     }
 
+    // ── Multiline reveal round-trip ───────────────────────────────────
+    //
+    // These tests prove that a reveal sent via a draft/multiline batch
+    // verifies correctly after Phase 2's `dispatch_assembled_batch` re-
+    // feeds the assembled body through the normal PRIVMSG path. The
+    // committer hashes plaintext; the sender chunks it across multiple
+    // PRIVMSGs inside a BATCH; the server reassembles per concat rules;
+    // verify_commit_reveal hashes the assembled body — same bytes, same
+    // hash. So Phase 3's "extend verify_commit_reveal" is a no-op at
+    // the verifier level; the work is in Phase 2's assembly. These tests
+    // pin that behavior so a future change to assembly or dispatch
+    // can't silently break commit-reveal.
+
+    /// Reproduce the spec's join rules in tests without coupling to
+    /// the production `assemble_body` (so a regression there shows up
+    /// as a hash mismatch rather than as both halves agreeing on a
+    /// broken assembly).
+    fn assemble_for_test(lines: &[(&str, bool)]) -> String {
+        let mut out = String::new();
+        for (i, (body, concat)) in lines.iter().enumerate() {
+            if i > 0 && !concat {
+                out.push('\n');
+            }
+            out.push_str(body);
+        }
+        out
+    }
+
+    #[test]
+    fn commit_reveal_verifies_multiline_assembled_body() {
+        // The committer locally assembled three paragraphs joined by
+        // newlines and hashed that, then sent the reveal in 3 chunks.
+        let state = test_state_with_db();
+        let did = "did:key:zPANEL_MULTILINE";
+        let salt: &[u8] = b"saltforthemultiline";
+
+        let chunks: Vec<(&str, bool)> = vec![
+            ("Paragraph one — the opening claim.", false),
+            ("Paragraph two — supporting evidence.", false),
+            ("Paragraph three — the conclusion.", false),
+        ];
+        let assembled = assemble_for_test(&chunks);
+        // Sanity: the spec's join rule produces "a\nb\nc".
+        assert!(assembled.contains('\n'));
+        assert!(!assembled.ends_with('\n'));
+
+        stage_commit(
+            &state,
+            "01J...COMMIT_MULTI",
+            did,
+            "#debate",
+            Some("01J...DEBATE_MULTI"),
+            salt,
+            &assembled,
+            "sha256",
+        );
+
+        let payload = reveal_payload("01J...COMMIT_MULTI", salt);
+        let r = crate::connection::messaging::verify_commit_reveal(
+            &state,
+            Some(did),
+            "#debate",
+            Some("01J...DEBATE_MULTI"),
+            &payload,
+            &assembled,
+        );
+        assert_eq!(r, Ok(()));
+    }
+
+    #[test]
+    fn commit_reveal_verifies_assembled_body_with_concat_chunks() {
+        // Splits a long single line across two PRIVMSGs via the
+        // `draft/multiline-concat` mechanism. The second chunk
+        // appends to the first with no separator — verifying the
+        // server's assembler agrees with the committer about the
+        // joined bytes.
+        let state = test_state_with_db();
+        let did = "did:key:zPANEL_CONCAT";
+        let salt: &[u8] = b"saltforconcatcase";
+
+        let chunks: Vec<(&str, bool)> = vec![
+            ("hello ", false),
+            ("everyone", true), // concat-to-previous
+        ];
+        let assembled = assemble_for_test(&chunks);
+        assert_eq!(assembled, "hello everyone");
+
+        stage_commit(
+            &state,
+            "01J...COMMIT_CONCAT",
+            did,
+            "#debate",
+            Some("01J...DEBATE_CONCAT"),
+            salt,
+            &assembled,
+            "sha256",
+        );
+
+        let payload = reveal_payload("01J...COMMIT_CONCAT", salt);
+        let r = crate::connection::messaging::verify_commit_reveal(
+            &state,
+            Some(did),
+            "#debate",
+            Some("01J...DEBATE_CONCAT"),
+            &payload,
+            &assembled,
+        );
+        assert_eq!(r, Ok(()));
+    }
+
+    #[test]
+    fn commit_reveal_assemble_for_test_matches_production_assemble_body() {
+        // Belt-and-suspenders: the assembly helper used in the tests
+        // above MUST agree byte-for-byte with the production
+        // `connection::draft_multiline::assemble_body`. If the spec
+        // join rules ever drift between the two, the multiline reveal
+        // round-trip tests would silently pass while production
+        // verification fails.
+        use crate::connection::draft_multiline as dm;
+        let chunks: Vec<(&str, bool)> = vec![
+            ("hello", false),
+            ("", false),
+            ("how is ", false),
+            ("everyone?", true),
+        ];
+        let from_test = assemble_for_test(&chunks);
+
+        let prod_batch = dm::OpenBatch {
+            batch_id: "x".to_string(),
+            batch_type: "draft/multiline".to_string(),
+            target: "#c".to_string(),
+            opener_tags: HashMap::new(),
+            lines: chunks
+                .iter()
+                .map(|(body, concat)| dm::BatchLine {
+                    body: (*body).to_string(),
+                    concat_to_previous: *concat,
+                    command: "PRIVMSG".to_string(),
+                })
+                .collect(),
+            byte_count: 0,
+            first_command: Some("PRIVMSG".to_string()),
+        };
+        let from_prod = dm::assemble_body(&prod_batch);
+
+        assert_eq!(from_test, from_prod);
+        assert_eq!(from_test, "hello\n\nhow is everyone?");
+    }
+
     #[test]
     fn bind_identity_refuses_nick_owned_by_other_did() {
         let state = test_state();
