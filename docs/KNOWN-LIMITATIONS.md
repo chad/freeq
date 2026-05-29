@@ -33,14 +33,6 @@
   to the first row only. Workaround: client negotiates `draft/multiline`
   during CAP REQ. See [MULTILINE-CLIENT-COMPATIBILITY.md](MULTILINE-CLIENT-COMPATIBILITY.md)
   for the full wire-shape comparison.
-- **Multiline DM broadcast is unsplit**: the outbound multiline-aware
-  per-receiver shaping currently fires only for **channel** PRIVMSG/
-  NOTICE. A logical multiline message sent to a nick (DM) reaches the
-  recipient as a single PRIVMSG carrying `\n` in its body, which
-  receiving clients will either render incorrectly or split at the
-  first `\n` and discard the rest. Until DM multiline broadcast lands,
-  callers should keep multi-line content channel-scoped. (Affects
-  human-to-human and bot-to-bot DMs; channel broadcast is fine.)
 - **Multiline S2S federation is unsplit**: when a multiline message
   is relayed to peer servers via the S2S channel, it ships the
   assembled body in a single S2S Privmsg event. Peer servers

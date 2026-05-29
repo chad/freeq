@@ -983,23 +983,59 @@ pub(super) fn handle_privmsg_with_multiline(
             format!("{tag_msg}\r\n")
         };
 
-        // Build the line for a recipient based on their negotiated caps.
-        // Honors message-tags, server-time, and account-tag (per IRCv3 spec).
+        // Build the wire frames for a recipient based on their
+        // negotiated caps. Honors message-tags, server-time, and
+        // account-tag (per IRCv3 spec). When the logical message
+        // arrived as a draft/multiline batch, emits BATCH-wrapped
+        // frames for receivers that negotiated draft/multiline and
+        // N PRIVMSGs (msgid + tags on first only) for fallback
+        // receivers. Without this branch a multiline DM would relay
+        // as a single PRIVMSG with `\n` in its body, breaking the
+        // IRC wire on the recipient side.
         let sender_did_for_dm = conn.authenticated_did.clone();
-        let build_dm_line = |recipient_session: &str| -> String {
+        let dm_outbound_batch_id = multiline_lines
+            .map(|_| format!("ml{}", crate::msgid::generate()));
+        let build_dm_frames = |recipient_session: &str| -> Vec<String> {
             let has_tags = state.cap_message_tags.lock().contains(recipient_session);
-            if !has_tags {
-                return plain_line.clone();
-            }
             let has_time = state.cap_server_time.lock().contains(recipient_session);
             let wants_account = sender_did_for_dm.is_some()
                 && state.cap_account_tag.lock().contains(recipient_session);
+            if let (Some(lines), Some(batch_id)) =
+                (multiline_lines, dm_outbound_batch_id.as_deref())
+            {
+                let caps = super::draft_multiline::ReceiverCaps {
+                    has_tags,
+                    has_time,
+                    has_multiline: state
+                        .cap_draft_multiline
+                        .lock()
+                        .contains(recipient_session),
+                    wants_account,
+                    sender_did: sender_did_for_dm.as_deref(),
+                };
+                let ctx = super::draft_multiline::RelayContext {
+                    hostmask: &hostmask,
+                    command,
+                    target,
+                    msgid: &pm_msgid,
+                    time_tag: &time_tag,
+                    opener_tags: &pm_tags,
+                    batch_id,
+                    lines,
+                };
+                return super::draft_multiline::build_outbound_multiline_frames(
+                    &ctx, &caps,
+                );
+            }
+            if !has_tags {
+                return vec![plain_line.clone()];
+            }
             if !wants_account {
-                return if has_time {
+                return vec![if has_time {
                     tagged_line_with_time.clone()
                 } else {
                     tagged_line.clone()
-                };
+                }];
             }
             let mut recip_tags = if has_time {
                 pm_tags_with_time.clone()
@@ -1016,7 +1052,7 @@ pub(super) fn handle_privmsg_with_multiline(
                 command: command.to_string(),
                 params: vec![target.to_string(), text.to_string()],
             };
-            format!("{tag_msg}\r\n")
+            vec![format!("{tag_msg}\r\n")]
         };
 
         // Route through the federation routing layer.
@@ -1072,16 +1108,19 @@ pub(super) fn handle_privmsg_with_multiline(
                 let conns = state.connections.lock();
                 // Deliver to all target sessions
                 for target_session in &target_sessions {
-                    let line = build_dm_line(target_session);
+                    let frames = build_dm_frames(target_session);
                     if let Some(tx) = conns.get(target_session) {
-                        if let Err(_e) = tx.try_send(line) {
-                            let target_nick = state.nick_to_session.lock().get_nick(target_session).map(|s| s.to_string()).unwrap_or_default();
-                            tracing::warn!(
-                                from = %conn.nick.as_deref().unwrap_or("?"),
-                                to = %target_nick,
-                                session = %target_session,
-                                "DM dropped: target send buffer full"
-                            );
+                        for frame in frames {
+                            if let Err(_e) = tx.try_send(frame) {
+                                let target_nick = state.nick_to_session.lock().get_nick(target_session).map(|s| s.to_string()).unwrap_or_default();
+                                tracing::warn!(
+                                    from = %conn.nick.as_deref().unwrap_or("?"),
+                                    to = %target_nick,
+                                    session = %target_session,
+                                    "DM dropped: target send buffer full"
+                                );
+                                break;
+                            }
                         }
                     }
                 }
@@ -1104,16 +1143,20 @@ pub(super) fn handle_privmsg_with_multiline(
                         // Original sender — use echo-message cap
                         let sender_has_echo = state.cap_echo_message.lock().contains(&conn.id);
                         if sender_has_echo {
-                            let echo_line = build_dm_line(&conn.id);
+                            let frames = build_dm_frames(&conn.id);
                             if let Some(tx) = conns.get(&conn.id) {
-                                let _ = tx.try_send(echo_line);
+                                for frame in frames {
+                                    let _ = tx.try_send(frame);
+                                }
                             }
                         }
                     } else {
                         // Other sessions of sender — deliver as if they received it
-                        let line = build_dm_line(sender_session);
+                        let frames = build_dm_frames(sender_session);
                         if let Some(tx) = conns.get(sender_session) {
-                            let _ = tx.try_send(line);
+                            for frame in frames {
+                                let _ = tx.try_send(frame);
+                            }
                         }
                     }
                 }
@@ -1124,9 +1167,11 @@ pub(super) fn handle_privmsg_with_multiline(
                 // echo-message: echo DM back to sender even for relayed messages
                 let sender_has_echo = state.cap_echo_message.lock().contains(&conn.id);
                 if sender_has_echo {
-                    let echo_line = build_dm_line(&conn.id);
+                    let frames = build_dm_frames(&conn.id);
                     if let Some(tx) = state.connections.lock().get(&conn.id) {
-                        let _ = tx.try_send(echo_line);
+                        for frame in frames {
+                            let _ = tx.try_send(frame);
+                        }
                     }
                 }
             }
