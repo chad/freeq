@@ -141,6 +141,43 @@ support, that's fine — your users will see split messages and the
 known edge cases above, but everything functional still works through
 the fallback path.
 
+## Multiline in `+E` (encrypted) channels
+
+`+E` channels require every PRIVMSG to carry the `+encrypted` tag and
+an `ENC1:`-prefixed body (the ciphertext). Vanilla IRC clients in
+these channels already have no meaningful UX — they see opaque
+ciphertext strings and their unencrypted PRIVMSGs are rejected by the
+server. **Multiline doesn't change that, and doesn't extend interop.**
+
+For freeq-built clients that DO speak `ENC1`, walls of text in `+E`
+channels work as follows:
+
+- The sender SDK encrypts the **whole assembled plaintext** into one
+  ciphertext blob.
+- If the ciphertext fits in a single IRC line (~5.6 KB plaintext ≤
+  ~7.5 KB ciphertext after base64), it's sent as **one PRIVMSG** with
+  `+encrypted` — no BATCH frames needed.
+- If the ciphertext exceeds the per-line ceiling, the SDK
+  **ciphertext-chunks** it across a `draft/multiline` BATCH with
+  every chunk tagged `+draft/multiline-concat`. The server stores one
+  row of concatenated ciphertext (server-side concat assembly is
+  cipher-agnostic — it just joins). The receiver SDK concatenates the
+  chunks and decrypts the result **once**.
+
+**Caveat for the ciphertext-chunked path:** receivers without the
+`draft/multiline` cap get each ciphertext fragment as a separate
+PRIVMSG. Each fragment is a slice of a larger ciphertext blob and is
+**not individually decryptable** — neither half of an AES-GCM
+ciphertext decrypts on its own. The receiver will see garbage rows.
+This only bites a freeq-aware client (one that DOES negotiate
+`ENC1`/`+encrypted` and is paired with a passphrase) that does NOT
+negotiate `draft/multiline`. Every freeq-built client should
+negotiate both. There is no in-the-wild population of "ENC1-aware,
+multiline-unaware" clients to worry about.
+
+(For non-encrypted channels, each chunk is its own plaintext line and
+fallback receivers see N readable PRIVMSGs — see the section above.)
+
 ## Server policy values
 
 | Tunable                              | Current value | Source                                                                 |

@@ -56,6 +56,11 @@ export class FreeqClient extends EventEmitter {
   private backgroundWhois = new Set<string>();
   private echoPlaintextCache = new Map<string, { plaintext: string; ts: number }>();
   private batches = new Map<string, Batch>();
+  /** Server-advertised `draft/multiline` policy (parsed from CAP LS). */
+  private multilineMaxBytes = 40000;
+  private multilineMaxLines = 100;
+  /** Monotonic counter for client-generated BATCH ids. */
+  private nextBatchSeq = 0;
   private pendingAwayReason: string | null = null;
 
   private _avSessions = new Map<string, AvSession>();
@@ -229,16 +234,62 @@ export class FreeqClient extends EventEmitter {
 
   // ── Sending ──
 
-  /** Send a message to a channel or user. */
+  /**
+   * Send a message to a channel or user. Multi-line text routes by
+   * negotiated cap:
+   * - `draft/multiline` acked AND text contains `\n` → BATCH (one
+   *   chunk per logical line).
+   * - Otherwise → single PRIVMSG with `\n` escaped as `\\n` and a
+   *   `+freeq.at/multiline` tag. The SDK normalizes both forms on
+   *   receive so consumers always see real `\n`.
+   *
+   * The `multiline` param is accepted but unused; routing keys on `\n`
+   * in the text and the negotiated cap.
+   */
   sendMessage(target: string, text: string, multiline = false): void {
-    const isChannel = target.startsWith('#') || target.startsWith('&');
-    const wireText = multiline ? text.replace(/\n/g, '\\n') : text;
-    const extraTags: Record<string, string> = multiline ? { '+freeq.at/multiline': '' } : {};
+    void multiline;
+    this.sendMessageInternal(target, text, {});
+  }
 
-    // If the channel is +E and we have no key, the only thing we could
-    // send is plaintext — which would leak into a room the rest of the
-    // members expect encrypted. Refuse and surface a system message
-    // instead so the user sets a passphrase before retrying.
+  /**
+   * Explicit multiline send. Accepts either a string (split on `\n`) or
+   * an array of logical lines. Emits a `draft/multiline` BATCH when the
+   * cap is acked; otherwise emits a single PRIVMSG with
+   * `+freeq.at/multiline` (the freeq inline encoding).
+   *
+   * Returns `null` — the BATCH frames are emitted asynchronously
+   * after the assembled body is signed, so the id isn't synchronously
+   * available. Callers that need the batch id can monitor the wire
+   * via the `raw` event.
+   */
+  sendMultiline(
+    target: string,
+    body: string | string[],
+    options: { tags?: Record<string, string> } = {},
+  ): string | null {
+    const text = Array.isArray(body) ? body.join('\n') : body;
+    return this.sendMessageInternal(target, text, options.tags ?? {});
+  }
+
+  /**
+   * Shared implementation behind `sendMessage` / `sendMultiline` /
+   * `sendReply` / `sendEdit`. Picks the wire shape based on whether
+   * the text has line breaks, whether the channel is E2EE, and
+   * whether the server acked `draft/multiline`.
+   *
+   * Returns the BATCH id if a multiline BATCH was used, or `null` if
+   * a single PRIVMSG (with or without `+freeq.at/multiline`) was used.
+   */
+  private sendMessageInternal(
+    target: string,
+    text: string,
+    extraOpenerTags: Record<string, string>,
+  ): string | null {
+    const isChannel = target.startsWith('#') || target.startsWith('&');
+
+    // +E channels require the `+encrypted` tag on every PRIVMSG —
+    // refuse rather than leak plaintext into a room the rest of the
+    // members expect encrypted.
     if (
       isChannel &&
       this._encryptedChannels.has(target.toLowerCase()) &&
@@ -249,66 +300,153 @@ export class FreeqClient extends EventEmitter {
         target,
         `Cannot send to ${target}: channel is encrypted (+E) and you have no key set. Use the channel passphrase to enable encryption first.`,
       );
-      return;
+      return null;
     }
 
-    if (e2ee.hasChannelKey(target)) {
-      e2ee.encryptChannel(target, wireText).then((encrypted) => {
-        if (encrypted) {
-          this.cacheEchoPlaintext(encrypted, text);
-          const tags: Record<string, string> = { '+encrypted': '', ...extraTags };
+    const hasNewline = text.includes('\n');
+    const multilineCap =
+      this.ackedCaps.has('draft/multiline') && this.ackedCaps.has('batch');
+    const perChunkBudget = this.perChunkByteBudget();
+
+    const willEncrypt =
+      e2ee.hasChannelKey(target) ||
+      (!isChannel && e2ee.isE2eeReady() && !!this.didForNick(target));
+
+    // ── E2EE path ──
+    if (willEncrypt) {
+      const remoteDid = !isChannel ? this.didForNick(target) : null;
+      const encryptFn = isChannel
+        ? () => e2ee.encryptChannel(target, text)
+        : () => e2ee.encryptMessage(remoteDid!, text, this.serverOrigin);
+
+      encryptFn().then((encrypted) => {
+        if (!encrypted) {
+          // Encryption failed — fall back to signed plaintext
+          this.sendLegacyPlaintext(target, text, extraOpenerTags);
+          return;
+        }
+        this.cacheEchoPlaintext(encrypted, text);
+        if (encrypted.length + 200 <= perChunkBudget || !multilineCap) {
+          // Fits in one line, or we can't multiline anyway → one PRIVMSG
+          const tags: Record<string, string> = {
+            '+encrypted': '',
+            ...extraOpenerTags,
+          };
           this.raw(format('PRIVMSG', [target, encrypted], tags));
         } else {
-          this.signedPrivmsg(target, wireText, extraTags);
+          // Ciphertext too big → chunk across a multiline BATCH with
+          // concat=true. Receiver concatenates fragments and decrypts once.
+          const chunks = this.chunkMultilineBody(encrypted, perChunkBudget, true);
+          if (chunks.length > this.multilineMaxLines) {
+            this.emit(
+              'systemMessage',
+              target,
+              `Message too large to send: ciphertext exceeds server multiline limit (${this.multilineMaxLines} lines).`,
+            );
+            return;
+          }
+          this.emitMultilineBatch(target, chunks, extraOpenerTags, { '+encrypted': '' });
         }
       });
-    } else if (!isChannel && e2ee.isE2eeReady()) {
-      const remoteDid = this.didForNick(target);
-      if (remoteDid) {
-        e2ee.encryptMessage(remoteDid, wireText, this.serverOrigin).then((encrypted) => {
-          if (encrypted) {
-            this.cacheEchoPlaintext(encrypted, text);
-            const tags: Record<string, string> = { '+encrypted': '', ...extraTags };
-            this.raw(format('PRIVMSG', [target, encrypted], tags));
-          } else {
-            this.signedPrivmsg(target, wireText, extraTags);
-          }
-        });
-      } else {
-        this.signedPrivmsg(target, wireText, extraTags);
+      this.maybeLocalEcho(target, text, willEncrypt);
+      return null; // Async; can't return batch id meaningfully here
+    }
+
+    // ── Non-E2EE path ──
+    if (hasNewline && multilineCap) {
+      const chunks = this.chunkMultilineBody(text, perChunkBudget, false);
+      if (
+        chunks.length > this.multilineMaxLines ||
+        text.length > this.multilineMaxBytes
+      ) {
+        // Too big for spec — fall through to the single-PRIVMSG path.
+        this.sendLegacyPlaintext(target, text, extraOpenerTags);
+        this.maybeLocalEcho(target, text, willEncrypt);
+        return null;
       }
-    } else {
-      this.signedPrivmsg(target, wireText, extraTags);
+      // Sign the ASSEMBLED body and ride the sig on the BATCH opener.
+      // The server verifies sigs over the assembled body (multiline
+      // dispatch calls handle_privmsg with the joined text), and its
+      // verification path reads `+freeq.at/sig` from the opener tags
+      // that become the synthetic PRIVMSG's tags. Per-chunk sigs would
+      // not verify because the canonical signed text is the whole body.
+      signing.signMessage(target, text).then((sig) => {
+        const openerTagsWithSig: Record<string, string> = { ...extraOpenerTags };
+        if (sig) openerTagsWithSig['+freeq.at/sig'] = sig;
+        this.emitMultilineBatch(target, chunks, openerTagsWithSig);
+      });
+      this.maybeLocalEcho(target, text, willEncrypt);
+      // Async signing — batch id isn't synchronously available.
+      return null;
     }
 
-    // Local echo if no echo-message cap
-    const willEncrypt = e2ee.hasChannelKey(target) || (!isChannel && e2ee.isE2eeReady() && !!this.didForNick(target));
-    if (!this.ackedCaps.has('echo-message')) {
-      const msg: Message = {
-        id: crypto.randomUUID(),
-        from: this._nick,
-        text,
-        timestamp: new Date(),
-        tags: {},
-        isSelf: true,
-        encrypted: willEncrypt,
-      };
-      this.emit('message', target, msg);
-    }
+    // No \n, or no multiline cap → single PRIVMSG (legacy path preserves
+    // \n escaping + +freeq.at/multiline tag for receivers that decode it).
+    this.sendLegacyPlaintext(target, text, extraOpenerTags);
+    this.maybeLocalEcho(target, text, willEncrypt);
+    return null;
   }
 
-  /** Send a reply to a specific message. */
+  /**
+   * Single-PRIVMSG fallback: escapes `\n` as `\\n` and sets
+   * `+freeq.at/multiline` when the text has line breaks, so older
+   * receivers that decode that tag still render correctly. Used when
+   * the multiline cap isn't acked.
+   */
+  private sendLegacyPlaintext(
+    target: string,
+    text: string,
+    extraTags: Record<string, string>,
+  ): void {
+    const hasNewline = text.includes('\n');
+    const wireText = hasNewline ? text.replace(/\n/g, '\\n') : text;
+    const tags: Record<string, string> = { ...extraTags };
+    if (hasNewline) tags['+freeq.at/multiline'] = '';
+    this.signedPrivmsg(target, wireText, tags);
+  }
+
+  /**
+   * Emit local echo if `echo-message` wasn't acked, so the sender's UI
+   * still sees its own outbound message immediately.
+   */
+  private maybeLocalEcho(target: string, text: string, willEncrypt: boolean): void {
+    if (this.ackedCaps.has('echo-message')) return;
+    const msg: Message = {
+      id: crypto.randomUUID(),
+      from: this._nick,
+      text,
+      timestamp: new Date(),
+      tags: {},
+      isSelf: true,
+      encrypted: willEncrypt,
+    };
+    this.emit('message', target, msg);
+  }
+
+  /**
+   * Per-PRIVMSG-chunk byte budget. The IRC line ceiling is 8192 bytes
+   * INCLUDING tags/prefix/command/params/CRLF. Reserve ~600 bytes for
+   * worst-case opener metadata (msgid + freeq tags + sender prefix +
+   * `PRIVMSG <target> :` framing); the rest is body content. The
+   * server-advertised `max-bytes` is the TOTAL across all chunks, not
+   * per-chunk, so it doesn't override this budget directly.
+   */
+  private perChunkByteBudget(): number {
+    return 8192 - 600;
+  }
+
+  /** Send a reply to a specific message. Multi-line replies use the
+   *  same wire shape as `sendMessage`. */
   sendReply(target: string, replyToMsgId: string, text: string, multiline = false): void {
-    const tags: Record<string, string> = { '+reply': replyToMsgId };
-    if (multiline) tags['+freeq.at/multiline'] = '';
-    this.raw(format('PRIVMSG', [target, text], tags));
+    void multiline;
+    this.sendMessageInternal(target, text, { '+reply': replyToMsgId });
   }
 
-  /** Edit a previously sent message. */
+  /** Edit a message. Multi-line edits use the same wire shape as
+   *  `sendMessage`. */
   sendEdit(target: string, originalMsgId: string, newText: string, multiline = false): void {
-    const tags: Record<string, string> = { '+draft/edit': originalMsgId };
-    if (multiline) tags['+freeq.at/multiline'] = '';
-    this.raw(format('PRIVMSG', [target, newText], tags));
+    void multiline;
+    this.sendMessageInternal(target, newText, { '+draft/edit': originalMsgId });
   }
 
   /** Send a message with Markdown formatting. */
@@ -732,6 +870,234 @@ export class FreeqClient extends EventEmitter {
     }
   }
 
+  // ── draft/multiline helpers ──
+
+  /**
+   * Parse the cap params advertised as `draft/multiline=max-bytes=N,max-lines=M`.
+   * Captures server policy so the chunker doesn't exceed it.
+   */
+  private parseMultilineCapParams(params: string): void {
+    for (const part of params.split(',')) {
+      const [k, v] = part.split('=');
+      const n = Number(v);
+      if (!Number.isFinite(n) || n <= 0) continue;
+      if (k === 'max-bytes') this.multilineMaxBytes = n;
+      else if (k === 'max-lines') this.multilineMaxLines = n;
+    }
+  }
+
+  /** Mint a unique BATCH id for an outbound multiline send. */
+  private mintBatchId(): string {
+    this.nextBatchSeq = (this.nextBatchSeq + 1) & 0x7fffffff;
+    return `ml${this.nextBatchSeq.toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
+  }
+
+  /**
+   * Assemble the chunks of a closed `draft/multiline` batch per spec
+   * concat rules: a chunk with `+draft/multiline-concat` is joined to
+   * the predecessor with no separator; otherwise joined with `\n`.
+   */
+  private assembleMultiline(lines: Array<{ body: string; concat: boolean }>): string {
+    let result = '';
+    for (let i = 0; i < lines.length; i++) {
+      const { body, concat } = lines[i];
+      if (i > 0 && !concat) result += '\n';
+      result += body;
+    }
+    return result;
+  }
+
+  /**
+   * Emit a `draft/multiline` BATCH on the wire. `chunks` are already
+   * sized to fit in a PRIVMSG line. `openerTags` go on the BATCH opener
+   * (e.g. commit-reveal client-tags); `+encrypted` rides on each chunk.
+   * Returns the BATCH id used.
+   */
+  private emitMultilineBatch(
+    target: string,
+    chunks: Array<{ body: string; concat: boolean }>,
+    openerTags: Record<string, string> = {},
+    perChunkTags: Record<string, string> = {},
+  ): string {
+    const batchId = this.mintBatchId();
+    this.raw(format('BATCH', [`+${batchId}`, 'draft/multiline', target], openerTags));
+    for (const c of chunks) {
+      const tags: Record<string, string> = { ...perChunkTags, batch: batchId };
+      if (c.concat) tags['+draft/multiline-concat'] = '';
+      this.raw(format('PRIVMSG', [target, c.body], tags));
+    }
+    this.raw(format('BATCH', [`-${batchId}`]));
+    return batchId;
+  }
+
+  /**
+   * Close-time handler for an assembled `draft/multiline` batch.
+   * Concatenates the chunks per spec rules, decrypts if the assembled
+   * body is ENC1/ENC3, builds a synthetic `Message` carrying the
+   * opener's identity (msgid, time, sender, etc.), and either emits it
+   * as a top-level `message` event or pushes it into the parent batch
+   * if the multiline was nested (e.g. inside a CHATHISTORY batch).
+   */
+  private async dispatchAssembledMultiline(batch: Batch): Promise<void> {
+    const lines = batch.multilineLines ?? [];
+    const openerTags = batch.openerTags ?? {};
+    const from = batch.openerFrom ?? '';
+    const target = batch.target;
+    const isChannel = target.startsWith('#') || target.startsWith('&');
+    const isSelf = from.toLowerCase() === this._nick.toLowerCase();
+    const bufName = isChannel ? target : (isSelf ? target : from);
+
+    const wireText = this.assembleMultiline(lines);
+
+    // Decryption — match the single-PRIVMSG path's logic exactly,
+    // but applied to the assembled body so ciphertext-chunked E2EE
+    // messages decrypt in one shot.
+    let displayText = wireText;
+    let isEncryptedMsg = false;
+
+    const cachedPlain = this.echoPlaintextCache.get(wireText);
+    if (cachedPlain && isSelf) {
+      displayText = cachedPlain.plaintext;
+      isEncryptedMsg = true;
+      this.echoPlaintextCache.delete(wireText);
+    } else if (e2ee.isENC1(wireText) && isChannel) {
+      const plain = await e2ee.decryptChannel(target, wireText);
+      if (plain !== null) { displayText = plain; isEncryptedMsg = true; }
+      else { displayText = '[encrypted message]'; isEncryptedMsg = true; }
+    } else if (e2ee.isEncrypted(wireText) && !isChannel && !isSelf) {
+      const remoteDid = this.resolveNickToDid(from);
+      if (remoteDid) {
+        const plain = await e2ee.decryptMessage(remoteDid, wireText, this.serverOrigin);
+        if (plain !== null) { displayText = plain; isEncryptedMsg = true; }
+        else { displayText = '[encrypted DM — could not decrypt]'; isEncryptedMsg = true; }
+      } else {
+        displayText = '[encrypted DM — unknown sender identity]'; isEncryptedMsg = true;
+      }
+    } else if (e2ee.isEncrypted(wireText) && !isChannel && isSelf) {
+      displayText = '[encrypted message]'; isEncryptedMsg = true;
+    }
+    if (openerTags['+encrypted']) isEncryptedMsg = true;
+
+    const isAction = displayText.startsWith('\x01ACTION ') && displayText.endsWith('\x01');
+    if (isAction) displayText = displayText.slice(8, -1);
+
+    const message: Message = {
+      id: openerTags['msgid'] || crypto.randomUUID(),
+      from,
+      text: displayText,
+      timestamp: openerTags['time'] ? new Date(openerTags['time']) : new Date(),
+      tags: openerTags,
+      isAction,
+      isSelf,
+      replyTo: openerTags['+reply'],
+      encrypted: isEncryptedMsg,
+      isStreaming: openerTags['+freeq.at/streaming'] === '1',
+    };
+
+    // Persisted reactions from CHATHISTORY replay (multiline-nested case)
+    const reactionsTag = openerTags['+freeq.at/reactions'];
+    if (reactionsTag && message.id) {
+      for (const part of reactionsTag.split(';')) {
+        const [emoji, nicks] = part.split(':');
+        if (emoji && nicks) {
+          for (const n of nicks.split(',')) {
+            if (n) {
+              message.reactions = message.reactions || new Map();
+              const set = message.reactions.get(emoji) || new Set();
+              set.add(n);
+              message.reactions.set(emoji, set);
+            }
+          }
+        }
+      }
+    }
+
+    // Edits ride through `messageEdited` regardless of how they arrived
+    if (openerTags['+draft/edit']) {
+      const isStreaming = openerTags['+freeq.at/streaming'] === '1';
+      this.emit(
+        'messageEdited',
+        bufName,
+        openerTags['+draft/edit'],
+        displayText,
+        openerTags['msgid'],
+        isStreaming,
+      );
+      return;
+    }
+
+    // Coordination companion: same handling as the single-PRIVMSG case.
+    if (openerTags['+freeq.at/event']) {
+      this.emitCoordinationEvent(target, from, openerTags);
+    }
+
+    // If this batch was nested inside a parent (CHATHISTORY most likely),
+    // push the assembled message into the parent's message list instead
+    // of emitting it as a top-level event.
+    if (batch.parentBatchId) {
+      const parent = this.batches.get(batch.parentBatchId);
+      if (parent) {
+        parent.messages.push(message);
+        return;
+      }
+    }
+
+    this.emit('message', bufName, message);
+
+    const isMention = !message.isSelf && displayText.toLowerCase().includes(this._nick.toLowerCase());
+    const isDM = !isChannel && !message.isSelf;
+    if (isMention || isDM) {
+      this.emit('systemMessage', '__mention__', JSON.stringify({
+        channel: bufName, from, text: displayText, isDM, isMention,
+      }));
+    }
+  }
+
+  /**
+   * Chunk a body into lines respecting `max-bytes` per chunk and the
+   * `max-lines` per batch ceiling. Two strategies:
+   *
+   *   - `concatChunks=false`: chunk on `\n` boundaries; each source line
+   *     becomes one chunk (no `+draft/multiline-concat`). If a single
+   *     source line exceeds the byte budget it is hard-split with concat
+   *     so the assembled body is byte-identical.
+   *   - `concatChunks=true`: chunk on byte boundaries only (used for
+   *     ciphertext-chunking E2EE messages — there are no logical line
+   *     breaks to honor).
+   */
+  private chunkMultilineBody(
+    body: string,
+    perChunkBudget: number,
+    concatChunks: boolean,
+  ): Array<{ body: string; concat: boolean }> {
+    const out: Array<{ body: string; concat: boolean }> = [];
+    // Split one logical piece (a source line, or the whole body in
+    // concat mode) into byte-sized chunks. The first piece inherits the
+    // caller's `firstConcat`; later pieces of the SAME source line are
+    // concat=true so reassembly re-fuses them with no separator.
+    const pushSplit = (s: string, firstConcat: boolean) => {
+      let pos = 0;
+      while (pos < s.length) {
+        const take = Math.min(perChunkBudget, s.length - pos);
+        out.push({ body: s.slice(pos, pos + take), concat: pos === 0 ? firstConcat : true });
+        pos += take;
+      }
+    };
+    if (concatChunks) {
+      // Ciphertext-style: one logical blob; every wire chunk fuses with
+      // no separator on reassembly. First piece's concat is irrelevant
+      // (no predecessor); leave it `false`.
+      pushSplit(body, false);
+      return out;
+    }
+    // Plaintext multiline: split on `\n`. Each source line opens a new
+    // chunk with concat=false so reassembly inserts the `\n` back.
+    for (const sourceLine of body.split('\n')) {
+      pushSplit(sourceLine, false);
+    }
+    return out;
+  }
+
   private async handleLine(rawLine: string): Promise<void> {
     const msg = parse(rawLine);
     const from = prefixNick(msg.prefix);
@@ -986,6 +1352,25 @@ export class FreeqClient extends EventEmitter {
         const isSelf = from.toLowerCase() === this._nick.toLowerCase();
         const bufName = isChannel ? target : (isSelf ? target : from);
 
+        // If this PRIVMSG is a chunk of an open `draft/multiline` batch,
+        // accumulate it raw and defer ALL processing (decryption,
+        // coordination events, reactions, message emission) until the
+        // BATCH closer fires. Decrypting per-chunk would fail for
+        // ciphertext-chunked E2EE messages — each fragment is a slice
+        // of one AES-GCM ciphertext and only the assembled blob decrypts.
+        const inboundBatchId = msg.tags['batch'];
+        if (inboundBatchId) {
+          const batch = this.batches.get(inboundBatchId);
+          if (batch && batch.type === 'draft/multiline') {
+            batch.multilineLines = batch.multilineLines || [];
+            batch.multilineLines.push({
+              body: text,
+              concat: '+draft/multiline-concat' in msg.tags,
+            });
+            break;
+          }
+        }
+
         // Coordination event companion PRIVMSG. The paired TAGMSG fires
         // `coordinationEvent` first; the de-dupe in emitCoordinationEvent
         // suppresses the second fire. We still emit the regular `message`
@@ -1026,6 +1411,13 @@ export class FreeqClient extends EventEmitter {
           displayText = '[encrypted message]'; isEncryptedMsg = true;
         }
         if (msg.tags['+encrypted']) isEncryptedMsg = true;
+
+        // `+freeq.at/multiline` is a freeq-specific tag that encodes
+        // `\n` as the literal two chars `\\n` in a single PRIVMSG.
+        // Normalize so consumers always see real `\n`.
+        if ('+freeq.at/multiline' in msg.tags) {
+          displayText = displayText.replace(/\\n/g, '\n');
+        }
 
         const message: Message = {
           id: msg.tags['msgid'] || crypto.randomUUID(),
@@ -1311,17 +1703,44 @@ export class FreeqClient extends EventEmitter {
       case 'BATCH': {
         const ref = msg.params[0];
         if (ref.startsWith('+')) {
-          this.batches.set(ref.slice(1), {
-            type: msg.params[1] || '',
-            target: msg.params[2] || '',
-            messages: [],
-          });
+          const id = ref.slice(1);
+          const type = msg.params[1] || '';
+          const target = msg.params[2] || '';
+          if (type === 'draft/multiline') {
+            // Per spec, the BATCH opener carries the assembled message's
+            // metadata (msgid, time, account, client-only tags). Capture
+            // those plus the sender from the prefix; the per-chunk
+            // PRIVMSGs only carry `batch=<id>`.
+            const openerTags: Record<string, string> = {};
+            for (const [k, v] of Object.entries(msg.tags)) {
+              if (k !== 'batch') openerTags[k] = v;
+            }
+            const parentBatchId = msg.tags['batch']; // nesting (e.g. inside chathistory)
+            this.batches.set(id, {
+              type,
+              target,
+              messages: [],
+              openerTags,
+              openerFrom: from,
+              multilineLines: [],
+              parentBatchId,
+            });
+          } else {
+            this.batches.set(id, { type, target, messages: [] });
+          }
         } else if (ref.startsWith('-')) {
           const id = ref.slice(1);
           const batch = this.batches.get(id);
           if (batch) {
             this.batches.delete(id);
-            this.emit('historyBatch', batch.target, batch.messages);
+            if (batch.type === 'draft/multiline') {
+              // Assemble per concat rules, decrypt if encrypted, and
+              // emit a single `message` event (or push into a parent
+              // batch if this was nested).
+              await this.dispatchAssembledMultiline(batch);
+            } else {
+              this.emit('historyBatch', batch.target, batch.messages);
+            }
           }
         }
         break;
@@ -1550,10 +1969,21 @@ export class FreeqClient extends EventEmitter {
       const caps = [
         'message-tags', 'server-time', 'batch', 'multi-prefix',
         'echo-message', 'account-notify', 'extended-join', 'away-notify',
-        'draft/chathistory',
+        'draft/chathistory', 'draft/multiline',
       ];
       for (const c of caps) {
-        if (available.includes(c)) wantedCaps.push(c);
+        // `draft/multiline` advertises with params (`=max-bytes=…,max-lines=…`)
+        // — capture them for the chunker. The base `includes()` match still
+        // works because the cap name is a prefix of the full token.
+        if (c === 'draft/multiline') {
+          const m = available.match(/draft\/multiline(?:=([^\s]+))?/);
+          if (m) {
+            wantedCaps.push(c);
+            if (m[1]) this.parseMultilineCapParams(m[1]);
+          }
+        } else if (available.includes(c)) {
+          wantedCaps.push(c);
+        }
       }
       // Negotiate `sasl` whenever the bot has SOME way to authenticate:
       // either a pre-issued token (pds-session/pds-oauth) OR a signer
