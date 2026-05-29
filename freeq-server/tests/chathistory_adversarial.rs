@@ -139,6 +139,183 @@ impl C {
 // ═══════════════════════════════════════════════════════════════
 
 #[tokio::test]
+async fn chathistory_multiline_message_replayed_as_split_privmsgs() {
+    // A message that landed via a draft/multiline batch is stored
+    // with the assembled body (\n between paragraphs). When the
+    // history is replayed via CHATHISTORY, the server must split
+    // at \n so each constituent line lands as its own valid
+    // PRIVMSG — otherwise the receiver's parser splits mid-line
+    // and produces protocol errors.
+    let r = resolver(vec![]);
+    let (addr, _h) = start(r).await;
+    run(addr, |addr| {
+        // alice negotiates draft/multiline + batch and sends a 3-line
+        // logical message via a multiline batch into #mlhist.
+        let mut alice = C::with_caps(addr, "ml_alice");
+        alice.tx("CAP REQ :draft/multiline");
+        alice.rx(|l| l.contains("ACK"), "draft/multiline ACK");
+        alice.drain();
+        alice.tx("JOIN #mlhist");
+        alice.num("366");
+        alice.drain();
+        alice.tx("BATCH +ab1 draft/multiline #mlhist");
+        alice.tx("@batch=ab1 PRIVMSG #mlhist :first line of the opening");
+        alice.tx("@batch=ab1 PRIVMSG #mlhist :second line carries the claim");
+        alice.tx("@batch=ab1 PRIVMSG #mlhist :third line is the conclusion");
+        alice.tx("BATCH -ab1");
+        alice.drain();
+        std::thread::sleep(Duration::from_millis(150));
+
+        // bob joins #mlhist and asks for history. He must see three
+        // PRIVMSGs (one per original chunk), none containing a raw
+        // newline in the body.
+        let mut bob = C::with_caps(addr, "ml_bob");
+        bob.tx("JOIN #mlhist");
+        bob.num("366");
+        bob.drain();
+        bob.tx("CHATHISTORY LATEST #mlhist * 50");
+        let msgs = bob.collect_batch_messages();
+
+        let first_seen = msgs.iter().any(|m| m.contains("first line of the opening"));
+        let second_seen = msgs.iter().any(|m| m.contains("second line carries the claim"));
+        let third_seen = msgs.iter().any(|m| m.contains("third line is the conclusion"));
+        assert!(first_seen && second_seen && third_seen,
+            "all 3 lines should appear in history replay; got {} messages: {msgs:?}",
+            msgs.len());
+
+        // None of the PRIVMSG bodies may contain a raw `\n`.
+        for m in &msgs {
+            assert!(
+                !m.contains('\n') || m.ends_with('\n'),
+                "internal \\n in replayed PRIVMSG body: {m}",
+            );
+        }
+
+        // msgid is on the first chunk only (per IRCv3 spec § "Message
+        // ids" + § "Fallback"). The remaining chunks of the same
+        // logical message must NOT carry msgid.
+        // Find the chunk carrying "first line of the opening" — it
+        // should have msgid; the chunks for line 2 and line 3 should
+        // not.
+        let first_chunk = msgs.iter().find(|m| m.contains("first line of the opening"))
+            .expect("first line present");
+        let second_chunk = msgs.iter().find(|m| m.contains("second line carries the claim"))
+            .expect("second line present");
+        let third_chunk = msgs.iter().find(|m| m.contains("third line is the conclusion"))
+            .expect("third line present");
+        assert!(first_chunk.contains("msgid="),
+            "first chunk should carry msgid: {first_chunk}");
+        assert!(!second_chunk.contains("msgid="),
+            "second chunk should NOT carry msgid: {second_chunk}");
+        assert!(!third_chunk.contains("msgid="),
+            "third chunk should NOT carry msgid: {third_chunk}");
+    }).await;
+}
+
+#[tokio::test]
+async fn chathistory_multiline_capable_receiver_gets_nested_batch() {
+    // When the requester negotiated draft/multiline, CHATHISTORY
+    // replay must nest a draft/multiline BATCH inside the chathistory
+    // BATCH for each multiline row, matching the live broadcast shape.
+    // Otherwise the receiver sees live messages grouped but history
+    // messages fragmented — bad UX and a spec degradation for clients
+    // that explicitly opted in.
+    let r = resolver(vec![]);
+    let (addr, _h) = start(r).await;
+    run(addr, |addr| {
+        // alice sends a 3-line multiline message into #mlhist2.
+        let mut alice = C::with_caps(addr, "ml2_alice");
+        alice.tx("CAP REQ :draft/multiline");
+        alice.rx(|l| l.contains("ACK"), "draft/multiline ACK");
+        alice.drain();
+        alice.tx("JOIN #mlhist2");
+        alice.num("366");
+        alice.drain();
+        alice.tx("BATCH +ab2 draft/multiline #mlhist2");
+        alice.tx("@batch=ab2 PRIVMSG #mlhist2 :alpha line");
+        alice.tx("@batch=ab2 PRIVMSG #mlhist2 :beta line");
+        alice.tx("@batch=ab2 PRIVMSG #mlhist2 :gamma line");
+        alice.tx("BATCH -ab2");
+        alice.drain();
+        std::thread::sleep(Duration::from_millis(150));
+
+        // bob negotiates draft/multiline and requests history. He
+        // should see: chathistory BATCH +, nested multiline BATCH +,
+        // 3 chunk PRIVMSGs each carrying batch=<inner>, nested BATCH -,
+        // chathistory BATCH -.
+        let mut bob = C::with_caps(addr, "ml2_bob");
+        bob.tx("CAP REQ :draft/multiline");
+        bob.rx(|l| l.contains("ACK"), "draft/multiline ACK");
+        bob.drain();
+        bob.tx("JOIN #mlhist2");
+        bob.num("366");
+        bob.drain();
+        bob.tx("CHATHISTORY LATEST #mlhist2 * 50");
+
+        // Read everything between the outer chathistory BATCH + and -.
+        let outer_open = bob.rx(|l| l.contains("BATCH +") && l.contains("chathistory"),
+            "chathistory BATCH start");
+        let outer_id = {
+            let after_at = outer_open.find("BATCH +").unwrap() + "BATCH +".len();
+            let rest = &outer_open[after_at..];
+            rest.split_whitespace().next().unwrap().to_string()
+        };
+
+        // Read until we see `BATCH -<outer_id>` as a frame parameter
+        // (not just the outer id appearing in a `batch=` tag of a
+        // nested closer).
+        let outer_close_param = format!("BATCH -{outer_id}");
+        let mut lines = Vec::new();
+        loop {
+            let l = bob.rx(|_| true, "batch line");
+            // A BATCH - frame ends with `BATCH -<id>` (after the tag/
+            // prefix prefix), so trim and check the suffix.
+            if l.trim_end().ends_with(&outer_close_param) {
+                break;
+            }
+            lines.push(l);
+        }
+
+        // Must contain a nested draft/multiline BATCH +.
+        let inner_open = lines.iter().find(|l| l.contains("BATCH +") && l.contains("draft/multiline"))
+            .expect(&format!("expected nested multiline BATCH +, lines: {lines:#?}"));
+        // Inner opener should carry the chathistory batch tag for
+        // nesting (batch=<outer_id>) AND the msgid for the logical
+        // message.
+        assert!(inner_open.contains(&format!("batch={outer_id}")),
+            "inner BATCH + should reference outer chathistory batch: {inner_open}");
+        assert!(inner_open.contains("msgid="),
+            "inner BATCH + should carry the logical message's msgid: {inner_open}");
+
+        // Three PRIVMSG chunks should carry batch=<inner_id>.
+        let inner_id = {
+            let after_at = inner_open.find("BATCH +").unwrap() + "BATCH +".len();
+            let rest = &inner_open[after_at..];
+            rest.split_whitespace().next().unwrap().to_string()
+        };
+        let chunk_count = lines.iter().filter(|l|
+            l.contains("PRIVMSG") && l.contains(&format!("batch={inner_id}"))
+        ).count();
+        assert_eq!(chunk_count, 3,
+            "expected 3 chunk PRIVMSGs carrying batch={inner_id}, got: {lines:#?}");
+
+        // The 3 chunks must carry the chunk bodies, not the joined body.
+        assert!(lines.iter().any(|l| l.contains(":alpha line")));
+        assert!(lines.iter().any(|l| l.contains(":beta line")));
+        assert!(lines.iter().any(|l| l.contains(":gamma line")));
+
+        // Nested closer BATCH -<inner_id> must be present (we already
+        // know the outer closer arrived because we broke the loop on
+        // BATCH -<outer_id>).
+        let inner_close = lines.iter().find(|l|
+            l.contains(&format!("BATCH -{inner_id}"))
+        );
+        assert!(inner_close.is_some(),
+            "expected nested BATCH -{inner_id}: {lines:#?}");
+    }).await;
+}
+
+#[tokio::test]
 async fn chathistory_requires_channel_membership() {
     let r = resolver(vec![]);
     let (addr, _h) = start(r).await;

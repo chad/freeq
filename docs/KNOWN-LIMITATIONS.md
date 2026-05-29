@@ -33,14 +33,6 @@
   to the first row only. Workaround: client negotiates `draft/multiline`
   during CAP REQ. See [MULTILINE-CLIENT-COMPATIBILITY.md](MULTILINE-CLIENT-COMPATIBILITY.md)
   for the full wire-shape comparison.
-- **CHATHISTORY replay of multiline messages is degraded**: messages
-  are stored with the assembled body (one row per logical message);
-  replay emits a single PRIVMSG carrying `\n` in the body. A
-  multiline-capable client requesting CHATHISTORY for a channel that
-  saw multiline messages will receive a wire-malformed replay. Until
-  CHATHISTORY-aware multiline replay ships, callers should avoid
-  CHATHISTORY for channels with heavy multiline traffic — live
-  broadcast is fine.
 
 ## S2S Federation
 
