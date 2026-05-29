@@ -53,6 +53,7 @@ struct Args {
 struct StaticImage {
     data: bytes::Bytes,
     last: Option<Instant>,
+    count: u64,
 }
 
 impl VideoSource for StaticImage {
@@ -76,6 +77,15 @@ impl VideoSource for StaticImage {
             return Ok(None);
         }
         self.last = Some(now);
+        self.count += 1;
+        // First frame at info — confirms a subscriber pulled video and the
+        // encoder started (if this never logs, nobody subscribed to our video
+        // track). Thereafter periodic at debug to avoid log spam.
+        if self.count == 1 {
+            tracing::info!("video subscriber present — emitting frames");
+        } else if self.count % 150 == 0 {
+            tracing::debug!(frames = self.count, "emitting video frames");
+        }
         Ok(Some(VideoFrame::new_rgba(
             self.data.clone(),
             TILE_W,
@@ -140,6 +150,7 @@ async fn main() -> anyhow::Result<()> {
     let mut session = AvSession::connect(config, audio, move || StaticImage {
         data: frame.clone(),
         last: None,
+        count: 0,
     });
     tracing::info!(broadcast = %our_broadcast, image = %args.image, "publishing image tile");
 

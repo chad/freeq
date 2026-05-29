@@ -2301,6 +2301,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "freeq-av-image"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "clap",
+ "freeq-av",
+ "image",
+ "iroh-live",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "freeq-bot-id"
 version = "0.1.0"
 dependencies = [
