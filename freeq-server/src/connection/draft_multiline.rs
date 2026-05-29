@@ -346,6 +346,28 @@ pub fn handle_batch_close(
     Ok(batch)
 }
 
+/// Concatenate the lines of a closed `draft/multiline` batch into a
+/// single body, per the spec's join rules:
+///
+/// > The combined message value of a multiline batch is defined as
+/// > the concatenation of the messages from each individual line
+/// > within the batch. Line messages are joined by a single line
+/// > feed (\n) byte unless the draft/multiline-concat message tag is
+/// > sent, in which case that line's message is directly joined with
+/// > the previous line's message with no separation.
+///
+/// — <https://ircv3.net/specs/extensions/multiline> § Batch types
+pub fn assemble_body(batch: &OpenBatch) -> String {
+    let mut out = String::with_capacity(batch.byte_count);
+    for (i, line) in batch.lines.iter().enumerate() {
+        if i > 0 && !line.concat_to_previous {
+            out.push('\n');
+        }
+        out.push_str(&line.body);
+    }
+    out
+}
+
 /// Snapshot the number of open batches for a session — used by the
 /// per-session concurrent-cap check and by tests.
 #[cfg(test)]
@@ -363,11 +385,14 @@ fn count_open_batches(state: &Arc<SharedState>, session_id: &str) -> usize {
 /// `handle_batch_close` (`-`), and emits a `FAIL BATCH <code>` reply
 /// on validation errors.
 ///
-/// Phase 1 stops at "close the batch and drop the result" — the
-/// caller doesn't yet do anything with the assembled lines. Phase 2
-/// will plug `draft/multiline` assembly here and dispatch the
-/// combined message back into the normal PRIVMSG/NOTICE pipeline.
+/// On successful close of a `draft/multiline` batch, assembles the
+/// accumulated lines per the spec's concat rules and re-feeds the
+/// result through the normal `handle_privmsg` path — so the rest of
+/// the server (history, broadcast, signing, commit-reveal verification,
+/// etc.) sees one logical PRIVMSG/NOTICE regardless of how the sender
+/// chunked it on the wire.
 pub fn handle_batch_command(
+    conn: &super::Connection,
     msg: &crate::irc::Message,
     state: &Arc<SharedState>,
     server_name: &str,
@@ -417,8 +442,8 @@ pub fn handle_batch_command(
         "-" => {
             // BATCH -<id>
             match handle_batch_close(state, session_id, batch_id) {
-                Ok(_closed_batch) => {
-                    // Phase 2 will dispatch the assembled message here.
+                Ok(closed_batch) => {
+                    dispatch_assembled_batch(conn, &closed_batch, state);
                 }
                 Err(err) => {
                     send_batch_error(state, server_name, session_id, send, &err);
@@ -516,6 +541,38 @@ fn send_fail(
     params.push(human_reason);
     let reply = crate::irc::Message::from_server(server_name, "FAIL", params);
     send(state, session_id, format!("{reply}\r\n"));
+}
+
+/// Take a closed batch and re-dispatch it as a single logical
+/// PRIVMSG/NOTICE. The body is assembled per concat rules; the
+/// client-only tags from the BATCH opener carry through; the
+/// command (PRIVMSG vs NOTICE) is whatever the first line inside the
+/// batch used. The downstream `handle_privmsg` does its normal thing
+/// — flood protection, history persistence, signing, broadcast — so
+/// the rest of the server treats the assembled message identically
+/// to a single-PRIVMSG send.
+fn dispatch_assembled_batch(
+    conn: &super::Connection,
+    batch: &OpenBatch,
+    state: &Arc<SharedState>,
+) {
+    // first_command is set on first append (try_route_to_batch). A
+    // batch with zero lines wouldn't have one, but the close-time
+    // entirely-blank-batch guard rejects that case before we get
+    // here, so first_command is always Some when we reach dispatch.
+    let command = batch
+        .first_command
+        .as_deref()
+        .unwrap_or("PRIVMSG");
+    let body = assemble_body(batch);
+    super::messaging::handle_privmsg(
+        conn,
+        command,
+        &batch.target,
+        &body,
+        &batch.opener_tags,
+        state,
+    );
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -1068,6 +1125,86 @@ mod tests {
             false,
         );
         assert!(matches!(r2, RouteOutcome::Error(BatchError::MaxBytes)));
+    }
+
+    // ── assemble_body (concat rules) ──────────────────────────────
+
+    fn line(body: &str, concat: bool) -> BatchLine {
+        BatchLine {
+            body: body.to_string(),
+            concat_to_previous: concat,
+            command: "PRIVMSG".to_string(),
+        }
+    }
+
+    fn batch_with_lines(lines: Vec<BatchLine>) -> OpenBatch {
+        OpenBatch {
+            batch_id: "x".to_string(),
+            batch_type: "draft/multiline".to_string(),
+            target: "#c".to_string(),
+            opener_tags: HashMap::new(),
+            lines,
+            byte_count: 0,
+            first_command: Some("PRIVMSG".to_string()),
+        }
+    }
+
+    #[test]
+    fn assemble_single_line_yields_just_that_line() {
+        let b = batch_with_lines(vec![line("only", false)]);
+        assert_eq!(assemble_body(&b), "only");
+    }
+
+    #[test]
+    fn assemble_joins_normal_lines_with_newline() {
+        let b = batch_with_lines(vec![
+            line("first", false),
+            line("second", false),
+            line("third", false),
+        ]);
+        assert_eq!(assemble_body(&b), "first\nsecond\nthird");
+    }
+
+    #[test]
+    fn assemble_concat_line_joins_without_separator() {
+        // Splitting one long word across two chunks should rejoin
+        // seamlessly — this is the spec's "splitting long lines" case.
+        let b = batch_with_lines(vec![
+            line("hello ", false),
+            line("everyone", true), // concat-to-previous
+        ]);
+        assert_eq!(assemble_body(&b), "hello everyone");
+    }
+
+    #[test]
+    fn assemble_mixed_concat_and_newline_lines() {
+        // The spec's own example:
+        //   hello
+        //
+        //   how is everyone?
+        // sent as: "hello", "", "how is ", concat:"everyone?"
+        let b = batch_with_lines(vec![
+            line("hello", false),
+            line("", false),
+            line("how is ", false),
+            line("everyone?", true),
+        ]);
+        assert_eq!(assemble_body(&b), "hello\n\nhow is everyone?");
+    }
+
+    #[test]
+    fn assemble_appends_no_trailing_newline() {
+        // Spec: "No line feed is appended to the final line message
+        // of a batch." Belt-and-suspenders test.
+        let b = batch_with_lines(vec![
+            line("first", false),
+            line("second", false),
+        ]);
+        let assembled = assemble_body(&b);
+        assert!(
+            !assembled.ends_with('\n'),
+            "trailing newline leaked: {assembled:?}"
+        );
     }
 
     #[test]

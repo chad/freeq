@@ -1193,6 +1193,7 @@ where
                     continue;
                 }
                 draft_multiline::handle_batch_command(
+                    &conn,
                     &msg,
                     &state,
                     &server_name,
