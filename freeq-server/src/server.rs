@@ -617,6 +617,18 @@ pub struct SharedState {
     /// PRIVMSG/NOTICE lines via BATCH frames. See
     /// https://ircv3.net/specs/extensions/multiline.
     pub cap_draft_multiline: Mutex<HashSet<String>>,
+    /// In-flight BATCH frames per session. Keyed by `(session_id,
+    /// batch_id)`. Populated when a client sends `BATCH +<id> <type>
+    /// <target>`, drained when it sends `BATCH -<id>`. PRIVMSG/NOTICE
+    /// lines tagged `batch=<id>` are routed into the matching entry
+    /// instead of being dispatched as standalone messages. Cleaned up
+    /// on disconnect.
+    pub open_batches: Mutex<
+        HashMap<
+            (String, String),
+            crate::connection::draft_multiline::OpenBatch,
+        >,
+    >,
     pub cap_account_notify: Mutex<HashSet<String>>,
     pub cap_extended_join: Mutex<HashSet<String>>,
     pub cap_away_notify: Mutex<HashSet<String>>,
@@ -1338,6 +1350,7 @@ impl Server {
             cap_server_time: Mutex::new(HashSet::new()),
             cap_batch: Mutex::new(HashSet::new()),
             cap_draft_multiline: Mutex::new(HashSet::new()),
+            open_batches: Mutex::new(HashMap::new()),
             cap_account_notify: Mutex::new(HashSet::new()),
             cap_extended_join: Mutex::new(HashSet::new()),
             cap_away_notify: Mutex::new(HashSet::new()),
@@ -4271,6 +4284,7 @@ mod s2s_adversarial_tests {
             cap_server_time: Mutex::new(HashSet::new()),
             cap_batch: Mutex::new(HashSet::new()),
             cap_draft_multiline: Mutex::new(HashSet::new()),
+            open_batches: Mutex::new(HashMap::new()),
             cap_account_notify: Mutex::new(HashSet::new()),
             cap_extended_join: Mutex::new(HashSet::new()),
             cap_away_notify: Mutex::new(HashSet::new()),

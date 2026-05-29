@@ -1146,8 +1146,59 @@ where
                     } else {
                         target.clone()
                     };
-                    handle_privmsg(&conn, &msg.command, &target, text, &msg.tags, &state);
+                    // First: if this message claims membership in an
+                    // open `draft/multiline` batch on this connection,
+                    // route it into the batch instead of dispatching
+                    // immediately. Phase 2 will plug in the on-close
+                    // assembly + dispatch.
+                    let concat = msg
+                        .tags
+                        .contains_key("draft/multiline-concat");
+                    let routed = draft_multiline::try_route_to_batch(
+                        &state,
+                        &session_id,
+                        &msg.tags,
+                        &msg.command,
+                        &target,
+                        text,
+                        concat,
+                    );
+                    match routed {
+                        draft_multiline::RouteOutcome::Absorbed => continue,
+                        draft_multiline::RouteOutcome::Error(err) => {
+                            draft_multiline::send_batch_error(
+                                &state,
+                                &server_name,
+                                &session_id,
+                                &send,
+                                &err,
+                            );
+                            continue;
+                        }
+                        draft_multiline::RouteOutcome::NotInBatch => {
+                            handle_privmsg(
+                                &conn,
+                                &msg.command,
+                                &target,
+                                text,
+                                &msg.tags,
+                                &state,
+                            );
+                        }
+                    }
                 }
+            }
+            "BATCH" => {
+                if !conn.registered {
+                    continue;
+                }
+                draft_multiline::handle_batch_command(
+                    &msg,
+                    &state,
+                    &server_name,
+                    &session_id,
+                    &send,
+                );
             }
             "TAGMSG" => {
                 if !conn.registered {
@@ -2856,6 +2907,12 @@ fn cleanup_session_state(state: &Arc<SharedState>, session_id: &str) {
     state.cap_server_time.lock().remove(session_id);
     state.cap_batch.lock().remove(session_id);
     state.cap_draft_multiline.lock().remove(session_id);
+    // Drop any open BATCH state for this session — the client is gone,
+    // those batches will never be closed.
+    state
+        .open_batches
+        .lock()
+        .retain(|(sid, _bid), _| sid != session_id);
     state.cap_account_notify.lock().remove(session_id);
     state.cap_extended_join.lock().remove(session_id);
     state.cap_away_notify.lock().remove(session_id);
