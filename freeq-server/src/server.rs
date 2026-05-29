@@ -612,6 +612,11 @@ pub struct SharedState {
     pub cap_server_time: Mutex<HashSet<String>>,
     /// Sessions that have negotiated batch capability.
     pub cap_batch: Mutex<HashSet<String>>,
+    /// Sessions that have negotiated the `draft/multiline` capability —
+    /// they can send and receive logical messages split across multiple
+    /// PRIVMSG/NOTICE lines via BATCH frames. See
+    /// https://ircv3.net/specs/extensions/multiline.
+    pub cap_draft_multiline: Mutex<HashSet<String>>,
     pub cap_account_notify: Mutex<HashSet<String>>,
     pub cap_extended_join: Mutex<HashSet<String>>,
     pub cap_away_notify: Mutex<HashSet<String>>,
@@ -1332,6 +1337,7 @@ impl Server {
             cap_echo_message: Mutex::new(HashSet::new()),
             cap_server_time: Mutex::new(HashSet::new()),
             cap_batch: Mutex::new(HashSet::new()),
+            cap_draft_multiline: Mutex::new(HashSet::new()),
             cap_account_notify: Mutex::new(HashSet::new()),
             cap_extended_join: Mutex::new(HashSet::new()),
             cap_away_notify: Mutex::new(HashSet::new()),
@@ -4264,6 +4270,7 @@ mod s2s_adversarial_tests {
             cap_echo_message: Mutex::new(HashSet::new()),
             cap_server_time: Mutex::new(HashSet::new()),
             cap_batch: Mutex::new(HashSet::new()),
+            cap_draft_multiline: Mutex::new(HashSet::new()),
             cap_account_notify: Mutex::new(HashSet::new()),
             cap_extended_join: Mutex::new(HashSet::new()),
             cap_away_notify: Mutex::new(HashSet::new()),

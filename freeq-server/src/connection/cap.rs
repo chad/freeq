@@ -25,6 +25,14 @@ pub(super) fn handle_cap(
             let mut caps = String::from(
                 "sasl message-tags multi-prefix echo-message server-time batch draft/chathistory account-notify account-tag extended-join away-notify",
             );
+            // Advertise draft/multiline with our policy limits (spec requires
+            // max-bytes; max-lines is recommended). See `draft_multiline` module
+            // for the actual enforcement.
+            caps.push_str(&format!(
+                " draft/multiline=max-bytes={},max-lines={}",
+                crate::connection::draft_multiline::MAX_BYTES,
+                crate::connection::draft_multiline::MAX_LINES,
+            ));
             if let Some(ref iroh_id) = *state.server_iroh_id.lock() {
                 caps.push_str(&format!(" iroh={iroh_id}"));
             }
@@ -68,6 +76,21 @@ pub(super) fn handle_cap(
                             conn.cap_batch = true;
                             state.cap_batch.lock().insert(session_id.to_string());
                             acked.push("batch");
+                        }
+                        "draft/multiline" => {
+                            // Per spec, `draft/multiline` depends on `batch`.
+                            // The spec doesn't strictly require us to enforce
+                            // negotiation order, but we soft-warn: if the client
+                            // hasn't also requested batch in the same REQ
+                            // (or earlier), they can ACK multiline but it
+                            // won't work until batch is also negotiated. We
+                            // still ACK it so the client knows we support it.
+                            conn.cap_draft_multiline = true;
+                            state
+                                .cap_draft_multiline
+                                .lock()
+                                .insert(session_id.to_string());
+                            acked.push("draft/multiline");
                         }
                         "draft/chathistory" => {
                             conn.cap_chathistory = true;
