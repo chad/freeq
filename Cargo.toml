@@ -11,6 +11,7 @@ members = [
     "freeq-bot-id",
     "freeq-av-client",
     "freeq-av",
+    "freeq-av-image",
     "freeq-agent-kit",
     "freeq-eliza",
 ]

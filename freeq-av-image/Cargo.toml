@@ -1,0 +1,23 @@
+[package]
+name = "freeq-av-image"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "freeq-av-image"
+path = "src/main.rs"
+
+[dependencies]
+freeq-av = { path = "../freeq-av" }
+# iroh-live for the VideoSource trait + VideoFrame the H.264 encoder pulls
+# (same spec freeq-eliza uses, so the workspace resolves one copy).
+iroh-live = { git = "https://github.com/n0-computer/iroh-live", default-features = false, features = ["opus", "h264"] }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+url = "2"
+bytes = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
