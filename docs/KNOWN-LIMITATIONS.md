@@ -23,6 +23,16 @@
   rather than the real connected host.
 - **No services integration (NickServ/ChanServ)**: Identity is DID-based,
   not services-based.
+- **Multiline messages degrade for clients that don't negotiate
+  `draft/multiline`**: those clients see N separate PRIVMSGs (one per
+  chunk), and only the first carries the message's msgid. Editing the
+  message replaces only that first row in their UI — the trailing rows
+  of the original chain stay around as orphans. Deletes have the same
+  shape (only row 1 disappears; rows 2-N remain). Reactions are
+  correctly attributed to the right logical message but visually attach
+  to the first row only. Workaround: client negotiates `draft/multiline`
+  during CAP REQ. See [MULTILINE-CLIENT-COMPATIBILITY.md](MULTILINE-CLIENT-COMPATIBILITY.md)
+  for the full wire-shape comparison.
 
 ## S2S Federation
 
