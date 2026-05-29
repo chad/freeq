@@ -520,6 +520,7 @@ pub(super) fn handle_tagmsg(
             target,
             &tag_text,
             super::helpers::s2s_next_event_id(state),
+            None, // TAGMSG carries no body, so multiline never applies here.
         ) {
             RouteResult::Local(ref session) => {
                 // Deliver locally
@@ -945,6 +946,20 @@ pub(super) fn handle_privmsg_with_multiline(
                     // Coordination card tags ride with the message so a
                     // federated peer's clients render the same card.
                     tags: crate::s2s::relay_coordination_tags(&full_tags),
+                    // When this message originated as a draft/multiline
+                    // batch, ship the per-line breakdown so the peer
+                    // can re-emit BATCH frames to its own multiline-
+                    // capable clients. Otherwise None and the peer
+                    // treats it as a normal PRIVMSG.
+                    multiline_lines: multiline_lines.map(|lines| {
+                        lines
+                            .iter()
+                            .map(|l| crate::s2s::MultilineLine {
+                                body: l.body.clone(),
+                                concat: l.concat_to_previous,
+                            })
+                            .collect()
+                    }),
                 },
             );
         }
@@ -1059,7 +1074,14 @@ pub(super) fn handle_privmsg_with_multiline(
         // See routing.rs for why we NEVER gate on remote_members here.
         use super::routing::{RouteResult, relay_to_nick};
         let from_nick = conn.nick.as_deref().unwrap_or("*").to_string();
-        match relay_to_nick(state, &from_nick, target, text, s2s_next_event_id(state)) {
+        match relay_to_nick(
+            state,
+            &from_nick,
+            target,
+            text,
+            s2s_next_event_id(state),
+            multiline_lines,
+        ) {
             RouteResult::Local(ref session) => {
                 // Target is local — deliver to ALL sessions for target's DID (multi-device).
                 // Also relay via S2S so the DM is visible on other federated servers
@@ -1075,6 +1097,15 @@ pub(super) fn handle_privmsg_with_multiline(
                         msgid: Some(pm_msgid.clone()),
                         sig: pm_tags.get("+freeq.at/sig").cloned(),
                         tags: crate::s2s::relay_coordination_tags(&pm_tags),
+                        multiline_lines: multiline_lines.map(|lines| {
+                            lines
+                                .iter()
+                                .map(|l| crate::s2s::MultilineLine {
+                                    body: l.body.clone(),
+                                    concat: l.concat_to_previous,
+                                })
+                                .collect()
+                        }),
                     },
                 );
                 // Send RPL_AWAY if target is away
@@ -1844,6 +1875,11 @@ fn handle_edit(
                 msgid: Some(edit_msgid),
                 sig,
                 tags: crate::s2s::relay_coordination_tags(&full_tags),
+                // Edits don't carry multiline chunking today — the
+                // edit path operates on a single-PRIVMSG body. An
+                // edit applied to an originally-multiline message
+                // is a known shape gap (see KNOWN-LIMITATIONS.md).
+                multiline_lines: None,
             },
         );
     } else {
@@ -1851,7 +1887,16 @@ fn handle_edit(
         use super::routing::{RouteResult, relay_to_nick};
         let from_nick = conn.nick.as_deref().unwrap_or("*").to_string();
 
-        match relay_to_nick(state, &from_nick, target, new_text, s2s_next_event_id(state)) {
+        match relay_to_nick(
+            state,
+            &from_nick,
+            target,
+            new_text,
+            s2s_next_event_id(state),
+            // Edits don't carry multiline chunking today (the edit
+            // path operates on a single-PRIVMSG body).
+            None,
+        ) {
             RouteResult::Local(ref session) => {
                 // Find all sessions for target's DID (multi-device support)
                 let target_sessions: Vec<String> = {

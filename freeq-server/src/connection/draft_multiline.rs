@@ -1,25 +1,11 @@
 //! IRCv3 `draft/multiline` support — the inbound BATCH state machine,
-//! `draft/multiline` assembly per concat rules, and policy limits.
+//! `draft/multiline` assembly per concat rules, policy limits, and the
+//! outbound per-receiver wire formatting that BATCH-wraps for
+//! receivers that negotiated `draft/multiline` and falls back to N
+//! individual PRIVMSGs (msgid + tags on the first only) for receivers
+//! that didn't.
 //!
 //! Spec: <https://ircv3.net/specs/extensions/multiline>
-//!
-//! ## Phase 1 (this file, today)
-//!
-//! - Per-session state for in-flight BATCHes (open_batches).
-//! - Validation rules at BATCH open / message append / BATCH close.
-//! - max-bytes / max-lines policy values + enforcement helpers.
-//! - `FAIL BATCH MULTILINE_*` standard-replies framework codes.
-//!
-//! What's intentionally NOT here yet:
-//!
-//! - Dispatching a closed batch as a single logical message (Phase 2:
-//!   assemble per concat rules and feed back into the normal PRIVMSG/
-//!   NOTICE path).
-//! - Outbound relay (Phase 4): emitting BATCH frames to multiline-
-//!   capable channel members and individual PRIVMSGs to fallback
-//!   members.
-//! - `verify_commit_reveal` extension to use the assembled body when
-//!   the reveal arrived inside a multiline batch (Phase 3).
 
 use std::collections::HashMap;
 
@@ -114,7 +100,7 @@ pub mod fail_code {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// BATCH state machine handlers (Phase 1b)
+// BATCH state machine handlers
 //
 // These functions are intentionally pure-state — they take a
 // `SharedState` and the raw inputs, mutate `state.open_batches`, and
@@ -171,9 +157,9 @@ pub fn handle_batch_open(
     if batch_id.is_empty() {
         return Err(BatchError::Invalid("empty batch id"));
     }
-    // Phase 1: we only recognise `draft/multiline`. Other types (e.g.
-    // future `draft/labeled` batches) would land their own validators
-    // here.
+    // Currently `draft/multiline` is the only inbound batch type the
+    // server accepts; other future types (e.g. `draft/labeled`) would
+    // land their own validators here.
     if batch_type != "draft/multiline" {
         return Err(BatchError::Invalid("unknown batch type"));
     }
@@ -315,10 +301,9 @@ pub fn try_route_to_batch(
 }
 
 /// Close an open BATCH and return its accumulated state to the
-/// caller. The caller is responsible for dispatching the closed
-/// batch — Phase 2 plugs in `draft/multiline` assembly + dispatch as
-/// a single logical PRIVMSG/NOTICE. For now (Phase 1), the caller
-/// just drops the returned batch.
+/// caller. `handle_batch_command`'s success arm calls
+/// `dispatch_assembled_batch` on the returned value to feed the
+/// assembled message back through the normal PRIVMSG/NOTICE pipeline.
 ///
 /// Final validation: an entirely-blank batch (no lines OR every line
 /// has an empty body) is rejected per spec.
@@ -1396,7 +1381,7 @@ mod tests {
         );
     }
 
-    // ── outbound wire formatting (Phase 4a) ──────────────────────
+    // ── outbound wire formatting ──────────────────────────────────
 
     fn test_lines() -> Vec<BatchLine> {
         vec![

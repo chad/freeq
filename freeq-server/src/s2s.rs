@@ -124,6 +124,23 @@ pub fn relay_coordination_tags(full: &HashMap<String, String>) -> HashMap<String
         .collect()
 }
 
+/// One line of a draft/multiline batch, serialized for S2S relay.
+/// Kept minimal so the wire size doesn't balloon for typical agent
+/// turns: just the body and the concat flag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultilineLine {
+    pub body: String,
+    /// True if this line carried `draft/multiline-concat` (join to
+    /// previous with no separator). Serialized only when non-default
+    /// to keep typical-case wire small.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub concat: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// Messages exchanged between servers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -208,6 +225,48 @@ pub enum S2sMessage {
         /// to empty (wire back-compat). See `relay_coordination_tags`.
         #[serde(default)]
         tags: HashMap<String, String>,
+        /// When the relayed message originated as a `draft/multiline`
+        /// batch, the per-line breakdown so the receiving peer can
+        /// re-emit BATCH-wrapped frames to its own multiline-capable
+        /// clients (and N PRIVMSGs to fallback clients) instead of a
+        /// single PRIVMSG with `\n` in the body. Absent for normal
+        /// single-PRIVMSG sends; `text` always carries the assembled
+        /// body so peers without multiline-aware fan-out still get
+        /// the content (even if wire-broken on their own clients).
+        ///
+        /// # Why one event with a per-line breakdown, not N events
+        ///
+        /// An alternative shape would have been to ship a multiline
+        /// message as a sequence of N `S2sMessage::Privmsg` events,
+        /// mirroring the local wire shape (N PRIVMSGs grouped by
+        /// BATCH). That was rejected because:
+        ///
+        /// - **Atomicity**: a logical message is a single delivery
+        ///   unit; receiving peers shouldn't have to wait for N events
+        ///   to arrive (in order, with no drops) before they can fan
+        ///   out to their local channel members.
+        /// - **Dedup**: each event carries an `event_id`. Splitting
+        ///   into N events means N dedup entries and a separate
+        ///   grouping mechanism so a partial re-sync doesn't
+        ///   half-deliver.
+        /// - **Signatures**: `+freeq.at/sig` is signed over the
+        ///   assembled body. One sig per logical message keeps the
+        ///   verification cheap and unambiguous; N separately-signed
+        ///   chunks would either expensive (N sigs) or leak unverified
+        ///   payload (sig on first chunk only).
+        /// - **msgid placement**: a multiline message has one msgid
+        ///   per the IRCv3 spec. Bundling keeps "one event = one
+        ///   msgid" intact; splitting forces a non-obvious choice
+        ///   about which event owns the msgid.
+        ///
+        /// This bundling pattern is consistent with how the rest of
+        /// freeq's S2S layer transmits atomic-application units:
+        /// `SyncResponse` carries `Vec<ChannelInfo>` (the cluster's
+        /// channel view as of now, not N per-channel events);
+        /// `PolicySync` ships the full PolicyDocument JSON in one
+        /// event; `CrdtSync` bundles many CRDT ops into one payload.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        multiline_lines: Option<Vec<MultilineLine>>,
     },
 
     /// A PIN/UNPIN relayed between servers.
@@ -1403,6 +1462,7 @@ mod tests {
             msgid: Some("MSG123".to_string()),
             sig: None,
             tags: HashMap::new(),
+            multiline_lines: None,
         };
 
         let signed = manager.sign_message(&msg);
@@ -1495,6 +1555,7 @@ mod tests {
             msgid: None,
             sig: None,
             tags: HashMap::new(),
+            multiline_lines: None,
         };
 
         let signed = manager.sign_message(&msg);
@@ -1510,6 +1571,7 @@ mod tests {
                     msgid: None,
                     sig: None,
                     tags: HashMap::new(),
+            multiline_lines: None,
                 };
                 let tampered_json = serde_json::to_string(&tampered).unwrap();
                 let tampered_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -1748,6 +1810,7 @@ mod tests {
             msgid: Some("01HZ".to_string()),
             sig: None,
             tags: tags.clone(),
+            multiline_lines: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         match serde_json::from_str::<S2sMessage>(&json).unwrap() {

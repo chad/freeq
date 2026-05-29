@@ -33,15 +33,6 @@
   to the first row only. Workaround: client negotiates `draft/multiline`
   during CAP REQ. See [MULTILINE-CLIENT-COMPATIBILITY.md](MULTILINE-CLIENT-COMPATIBILITY.md)
   for the full wire-shape comparison.
-- **Multiline S2S federation is unsplit**: when a multiline message
-  is relayed to peer servers via the S2S channel, it ships the
-  assembled body in a single S2S Privmsg event. Peer servers
-  receiving it would then fan it out to their own channel members as
-  one PRIVMSG with newlines in the body, breaking the wire on those
-  members. Affects only multi-server deployments (society and the
-  agent debate flow are single-server today). Until S2S multiline
-  ships, federated channels are inadvisable for any flow that uses
-  multiline messages.
 - **CHATHISTORY replay of multiline messages is degraded**: messages
   are stored with the assembled body (one row per logical message);
   replay emits a single PRIVMSG carrying `\n` in the body. A
