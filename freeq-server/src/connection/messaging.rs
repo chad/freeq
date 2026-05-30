@@ -603,7 +603,12 @@ pub(super) fn handle_privmsg_with_multiline(
 
     // ── Message editing (+draft/edit=<msgid>) ──
     if let Some(original_msgid) = tags.get("+draft/edit") {
-        handle_edit(conn, target, text, original_msgid, tags, state);
+        // Carry the sender's pre-chunked breakdown through to handle_edit
+        // when the edit arrived as a BATCH (plaintext multi-line OR
+        // ciphertext-chunked E2EE). handle_edit re-broadcasts using the
+        // same chunking; preserves concat=true semantics for ciphertext
+        // so receivers reassemble the exact AES-GCM blob.
+        handle_edit(conn, target, text, original_msgid, tags, state, multiline_lines);
         return;
     }
 
@@ -1737,6 +1742,14 @@ fn handle_chathistory_targets(
 
 /// Handle a PRIVMSG with +draft/edit=<msgid> tag.
 /// Verifies authorship, stores the edit, and broadcasts to channel or DM recipient.
+///
+/// `inbound_multiline_lines`: when the edit arrived as a draft/multiline
+/// BATCH, the sender's pre-chunked breakdown — used directly for outbound
+/// re-broadcast so the per-chunk shape (and `concat` flags) survive the
+/// hop. Critical for ciphertext-chunked E2EE edits: the receiver needs
+/// the same chunk boundaries to reassemble the AES-GCM blob byte-exact.
+/// When None, falls back to splitting `new_text` on `\n` (plaintext
+/// multi-line edits sent as a single PRIVMSG).
 fn handle_edit(
     conn: &Connection,
     target: &str,
@@ -1744,6 +1757,7 @@ fn handle_edit(
     original_msgid: &str,
     tags: &std::collections::HashMap<String, String>,
     state: &Arc<SharedState>,
+    inbound_multiline_lines: Option<&[super::draft_multiline::BatchLine]>,
 ) {
     let hostmask = conn.hostmask();
     let nick = conn.nick_or_star();
@@ -1847,12 +1861,21 @@ fn handle_edit(
         full_tags.insert("+freeq.at/sig".to_string(), sig);
     }
 
-    // If the edit body has `\n`, split it into per-line chunks so we can
-    // BATCH-wrap multiline-capable receivers (wire-valid) while the
-    // non-multiline fallback shapes below carry only line1 (also
-    // wire-valid; degraded but not malformed).
+    // Multi-line breakdown for BATCH-wrapped outbound. Two sources, in
+    // priority order:
+    //   1. Sender's pre-chunked BATCH (passed in as inbound_multiline_lines)
+    //      — covers ciphertext-chunked E2EE edits where the body has no
+    //      `\n` to split on but the wire frame still exceeds one PRIVMSG.
+    //      Preserves the sender's `concat` flags so receivers reassemble
+    //      the exact AES-GCM blob.
+    //   2. Plaintext fallback: `new_text` contains `\n` — split on it.
+    //      Covers multi-line edits that arrived as a single (malformed)
+    //      PRIVMSG with embedded `\n`, OR were assembled from a sender
+    //      BATCH but the per-chunk breakdown wasn't carried through.
     let multiline_lines: Option<Vec<super::draft_multiline::BatchLine>> =
-        if new_text.contains('\n') {
+        if let Some(lines) = inbound_multiline_lines {
+            Some(lines.to_vec())
+        } else if new_text.contains('\n') {
             Some(
                 new_text
                     .split('\n')

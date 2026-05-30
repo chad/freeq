@@ -604,6 +604,87 @@ async fn multi_line_edit_delivers_batch_to_multiline_capable_receiver() {
 }
 
 #[tokio::test]
+async fn ciphertext_chunked_edit_preserves_chunking_via_batch() {
+    // Edit body shape mirroring E2EE: chunks use `concat=true` and the
+    // assembled body has no `\n` (it would be one base64 ciphertext blob).
+    // Without threading the sender's chunks through handle_edit the
+    // server's `\n`-detection would miss this case and fall back to a
+    // single PRIVMSG that exceeds MTU and corrupts the ciphertext.
+    let resolver = resolver_with(vec![]);
+    let (addr, _h) = start(resolver).await;
+    run(addr, |addr| {
+        let mut alice = C::with_multiline_caps(addr, "cce_a");
+        alice.reg(); alice.drain();
+        let mut bob = C::with_multiline_caps(addr, "cce_b");
+        bob.reg(); bob.drain();
+        alice.tx("JOIN #ccedit"); alice.num("366"); alice.drain();
+        bob.tx("JOIN #ccedit"); bob.num("366"); bob.drain();
+
+        // Original message (single PRIVMSG with `+encrypted` placeholder —
+        // we don't need a real cipher here, just the tag-shape parity).
+        alice.tx("@+encrypted= PRIVMSG #ccedit :ORIG_CIPHERTEXT_BLOB");
+        let orig = bob.rx(
+            |l| l.contains("PRIVMSG #ccedit") && l.contains("ORIG_CIPHERTEXT_BLOB"),
+            "orig single-PRIVMSG E2EE shape",
+        );
+        let orig_msgid = C::extract_msgid(&orig);
+        assert!(!orig_msgid.is_empty(), "orig has msgid: {orig}");
+
+        // Edit via BATCH with concat=true on later chunks (ciphertext-
+        // chunking shape). Assembled body would be "PARTONE" + "PARTTWO" +
+        // "PARTTHREE" with no separators — no `\n` anywhere.
+        alice.tx(&format!(
+            "@+draft/edit={orig_msgid};+encrypted= BATCH +cb draft/multiline #ccedit"
+        ));
+        alice.tx("@batch=cb PRIVMSG #ccedit :PARTONE");
+        alice.tx("@batch=cb;draft/multiline-concat PRIVMSG #ccedit :PARTTWO");
+        alice.tx("@batch=cb;draft/multiline-concat PRIVMSG #ccedit :PARTTHREE");
+        alice.tx("BATCH -cb");
+
+        // Bob (multiline-capable) sees BATCH-wrapped edit preserving the
+        // three chunks AND the `+draft/multiline-concat` flag on chunks
+        // 2 and 3 — so the receiver assembles by concatenation, not by
+        // `\n`-joining.
+        let opener = bob.rx(
+            |l| l.contains("BATCH +")
+                && l.contains("draft/multiline")
+                && l.contains("#ccedit")
+                && l.contains("+draft/edit="),
+            "edit BATCH opener",
+        );
+        assert!(
+            opener.contains(&format!("+draft/edit={orig_msgid}")),
+            "edit opener references orig msgid: {opener}",
+        );
+        let chunk1 = bob.rx(
+            |l| l.contains("PRIVMSG #ccedit") && l.contains("PARTONE"),
+            "PARTONE chunk",
+        );
+        assert!(
+            !chunk1.contains("draft/multiline-concat"),
+            "first chunk must NOT have concat tag: {chunk1}",
+        );
+        let chunk2 = bob.rx(
+            |l| l.contains("PRIVMSG #ccedit") && l.contains("PARTTWO"),
+            "PARTTWO chunk",
+        );
+        assert!(
+            chunk2.contains("draft/multiline-concat"),
+            "second chunk must carry concat flag: {chunk2}",
+        );
+        let chunk3 = bob.rx(
+            |l| l.contains("PRIVMSG #ccedit") && l.contains("PARTTHREE"),
+            "PARTTHREE chunk",
+        );
+        assert!(
+            chunk3.contains("draft/multiline-concat"),
+            "third chunk must carry concat flag: {chunk3}",
+        );
+        bob.rx(|l| l.starts_with("BATCH -"), "edit BATCH closer");
+    }).await;
+}
+
+#[tokio::test]
 async fn multi_line_edit_delivers_line1_only_to_non_multiline_receiver() {
     let resolver = resolver_with(vec![]);
     let (addr, _h) = start(resolver).await;

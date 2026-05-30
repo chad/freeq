@@ -436,6 +436,51 @@ async function tests() {
     expect(concatCount >= 1, `at least one chunk carries +draft/multiline-concat (got ${concatCount})`);
   });
 
+  await runTest('B11: small E2EE edit (single-PRIVMSG ciphertext) round-trip', async () => {
+    // Short E2EE edit body — ciphertext fits in one PRIVMSG, so the wire
+    // shape is a single tagged PRIVMSG with +encrypted + +draft/edit.
+    const orig = `b11-orig-${STAMP}`;
+    sender.sendMessage(ENC1_CHANNEL, orig);
+    const origMsg = await waitForMessage(receiver, ENC1_CHANNEL, (m) => m.text === orig);
+    expect(!!origMsg.id, 'orig E2EE msg has msgid');
+
+    const edited = `b11-edit-${STAMP}`;
+    sender.sendEdit(ENC1_CHANNEL, origMsg.id, edited);
+    const ed = await waitForEdit(receiver, ENC1_CHANNEL, origMsg.id, 4000);
+    expectEq(ed.newText, edited, 'small E2EE edit text arrives decrypted');
+  });
+
+  await runTest('B12: large E2EE edit (ciphertext-chunked BATCH) round-trip', async () => {
+    // Plaintext large enough that the ciphertext exceeds one PRIVMSG MTU
+    // so the sender BATCH-chunks the ciphertext (concat=true). With the
+    // server fix carrying the sender's chunking through handle_edit,
+    // multiline-capable receivers see a BATCH-wrapped edit and decrypt
+    // the assembled ciphertext to recover the full new body.
+    const paragraph = 'Wall of text to force ciphertext-chunking on the edit path. '.repeat(20);
+    const orig = Array.from({ length: 6 }, (_, i) => `b12-orig-${i + 1}: ${paragraph}`).join('\n');
+    sender.sendMessage(ENC1_CHANNEL, orig);
+    const origMsg = await waitForMessage(receiver, ENC1_CHANNEL, (m) => m.text.startsWith('b12-orig-1:'), 12_000);
+    expect(!!origMsg.id, 'orig large E2EE msg has msgid');
+
+    const edited = Array.from({ length: 6 }, (_, i) => `b12-edit-${i + 1}: ${paragraph}`).join('\n');
+    const before = senderWire.length;
+    sender.sendEdit(ENC1_CHANNEL, origMsg.id, edited);
+    const ed = await waitForEdit(receiver, ENC1_CHANNEL, origMsg.id, 12_000);
+    expectEq(ed.newText, edited, 'large E2EE edit body arrives byte-exact');
+
+    // Outbound wire from sender: BATCH +<id> with both +encrypted and
+    // +draft/edit on the opener, chunked ciphertext, BATCH -<id>.
+    const sent = senderWire.slice(before);
+    const opener = sent.find((l) =>
+      l.includes('BATCH +') && l.includes('draft/multiline') && l.includes('+draft/edit='),
+    );
+    expect(!!opener, 'edit BATCH opener carries +draft/edit + draft/multiline');
+    const chunks = sent.filter(
+      (l) => l.includes('PRIVMSG') && l.includes('batch=') && l.includes('+encrypted'),
+    );
+    expect(chunks.length >= 2, `at least 2 ciphertext-chunk PRIVMSGs (got ${chunks.length})`);
+  });
+
   // ── C signing — guest mode skip ──────────────────────────────────
 
   await runTest('C: sig on BATCH opener (skipped in guest mode)', async () => {
