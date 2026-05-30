@@ -18,7 +18,9 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if appState.hasSavedSession {
+            // Show MainTabView for either a persisted session (cold-launch
+            // instant render from cache) or a live registered connection.
+            if appState.hasSavedSession || appState.connectionState == .registered {
                 MainTabView()
                     .safeAreaInset(edge: .top, spacing: 0) {
                         if appState.connectionState != .registered {
