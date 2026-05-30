@@ -252,15 +252,23 @@ export class FreeqClient extends EventEmitter {
   }
 
   /**
-   * Explicit multiline send. Accepts either a string (split on `\n`) or
-   * an array of logical lines. Emits a `draft/multiline` BATCH when the
-   * cap is acked; otherwise emits a single PRIVMSG with
-   * `+freeq.at/multiline` (the freeq inline encoding).
+   * Multi-line send with two affordances `sendMessage` doesn't have:
+   *
+   * - **Array input** — pass `['line1', 'line2', ...]` directly.
+   *   Equivalent to `sendMessage(target, body.join('\n'))`.
+   * - **Opener tags** — pass arbitrary tags via `options.tags` to ride
+   *   on the BATCH opener (e.g. commit-reveal payloads). For common
+   *   tags use the dedicated methods: `sendReply` (+reply), `sendEdit`
+   *   (+draft/edit), `sendTagged` (arbitrary single-PRIVMSG tags).
+   *
+   * For plain multi-line text without custom opener tags, `sendMessage`
+   * is equivalent and simpler — it auto-detects `\n` and routes to a
+   * `draft/multiline` BATCH (when the cap is acked) or the legacy
+   * single-PRIVMSG path otherwise.
    *
    * Returns `null` — the BATCH frames are emitted asynchronously
    * after the assembled body is signed, so the id isn't synchronously
-   * available. Callers that need the batch id can monitor the wire
-   * via the `raw` event.
+   * available.
    */
   sendMultiline(
     target: string,
