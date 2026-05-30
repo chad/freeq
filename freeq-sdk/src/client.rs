@@ -25,6 +25,7 @@
 //! their own reconnect logic with exponential backoff (e.g., 2→4→8→16→30s cap)
 //! to avoid overwhelming the server. Listen for [`Event::Disconnected`] and retry.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -148,11 +149,18 @@ struct InboundMultilineBatch {
     parent_batch_id: Option<String>,
 }
 
+/// Caps the server has ACKed, shared between the read loop (which
+/// populates it on CAP ACK) and the `ClientHandle` (which reads it
+/// to decide e.g. whether a `\n`-bearing `privmsg` should auto-route
+/// to a `draft/multiline` BATCH).
+pub(crate) type CapsAcked = Arc<parking_lot::Mutex<HashSet<String>>>;
+
 /// A handle to a running IRC client connection.
 #[derive(Clone)]
 pub struct ClientHandle {
     cmd_tx: mpsc::Sender<Command>,
     echo_registry: EchoRegistry,
+    caps_acked: CapsAcked,
 }
 
 impl ClientHandle {
@@ -161,13 +169,44 @@ impl ClientHandle {
         Ok(())
     }
 
+    /// Send a PRIVMSG. If `text` contains `\n` and the server acked
+    /// `draft/multiline` + `batch`, the SDK auto-routes the send to a
+    /// `draft/multiline` BATCH (one chunk per source line) so the
+    /// wire stays valid. Single-line text goes out as one PRIVMSG
+    /// unchanged.
+    ///
+    /// `\n`-bearing text against a server that didn't ack the cap
+    /// still goes out as a single (malformed) PRIVMSG — callers
+    /// targeting old servers should pre-encode or call
+    /// `send_multiline_chunks` with explicit chunks.
     pub async fn privmsg(&self, target: &str, text: &str) -> Result<()> {
-        self.cmd_tx
-            .send(Command::Privmsg {
-                target: target.to_string(),
-                text: text.to_string(),
-            })
-            .await?;
+        let multiline_ready = text.contains('\n') && {
+            let caps = self.caps_acked.lock();
+            caps.contains("draft/multiline") && caps.contains("batch")
+        };
+        if multiline_ready {
+            let chunks: Vec<MultilineChunk> = text
+                .split('\n')
+                .map(|line| MultilineChunk {
+                    body: line.to_string(),
+                    concat: false,
+                })
+                .collect();
+            self.cmd_tx
+                .send(Command::SendMultiline {
+                    target: target.to_string(),
+                    chunks,
+                    opener_tags: std::collections::HashMap::new(),
+                })
+                .await?;
+        } else {
+            self.cmd_tx
+                .send(Command::Privmsg {
+                    target: target.to_string(),
+                    text: text.to_string(),
+                })
+                .await?;
+        }
         Ok(())
     }
 
@@ -254,20 +293,45 @@ impl ClientHandle {
         }
     }
 
-    /// Send a message with IRCv3 tags (for rich media).
+    /// Send a message with IRCv3 tags (for rich media). If `text`
+    /// contains `\n` and the server acked `draft/multiline` + `batch`,
+    /// the SDK auto-routes the send to a `draft/multiline` BATCH with
+    /// the given tags on the opener — same auto-routing behavior as
+    /// `privmsg`. Otherwise emits a single tagged PRIVMSG.
     pub async fn send_tagged(
         &self,
         target: &str,
         text: &str,
         tags: std::collections::HashMap<String, String>,
     ) -> Result<()> {
-        let msg = crate::irc::Message {
-            tags,
-            prefix: None,
-            command: "PRIVMSG".to_string(),
-            params: vec![target.to_string(), text.to_string()],
+        let multiline_ready = text.contains('\n') && {
+            let caps = self.caps_acked.lock();
+            caps.contains("draft/multiline") && caps.contains("batch")
         };
-        self.cmd_tx.send(Command::Raw(msg.to_string())).await?;
+        if multiline_ready {
+            let chunks: Vec<MultilineChunk> = text
+                .split('\n')
+                .map(|line| MultilineChunk {
+                    body: line.to_string(),
+                    concat: false,
+                })
+                .collect();
+            self.cmd_tx
+                .send(Command::SendMultiline {
+                    target: target.to_string(),
+                    chunks,
+                    opener_tags: tags,
+                })
+                .await?;
+        } else {
+            let msg = crate::irc::Message {
+                tags,
+                prefix: None,
+                command: "PRIVMSG".to_string(),
+                params: vec![target.to_string(), text.to_string()],
+            };
+            self.cmd_tx.send(Command::Raw(msg.to_string())).await?;
+        }
         Ok(())
     }
 
@@ -1047,13 +1111,16 @@ pub fn connect_with_stream(
     let (event_tx, event_rx) = mpsc::channel(4096);
     let (cmd_tx, cmd_rx) = mpsc::channel(256);
     let echo_registry: EchoRegistry = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new()));
+    let caps_acked: CapsAcked = Arc::new(parking_lot::Mutex::new(HashSet::new()));
 
     let handle = ClientHandle {
         cmd_tx: cmd_tx.clone(),
         echo_registry: echo_registry.clone(),
+        caps_acked: caps_acked.clone(),
     };
 
     let echo_reg = echo_registry.clone();
+    let caps_for_loop = caps_acked.clone();
     tokio::spawn(async move {
         let _ = event_tx.send(Event::Connected).await;
         let result = match conn {
@@ -1067,6 +1134,7 @@ pub fn connect_with_stream(
                     event_tx.clone(),
                     cmd_rx,
                     echo_reg,
+                    caps_for_loop,
                 )
                 .await
             }
@@ -1080,6 +1148,7 @@ pub fn connect_with_stream(
                     event_tx.clone(),
                     cmd_rx,
                     echo_reg,
+                    caps_for_loop,
                 )
                 .await
             }
@@ -1094,6 +1163,7 @@ pub fn connect_with_stream(
                     event_tx.clone(),
                     cmd_rx,
                     echo_reg,
+                    caps_for_loop,
                 )
                 .await
             }
@@ -1108,6 +1178,7 @@ pub fn connect_with_stream(
                     event_tx.clone(),
                     cmd_rx,
                     echo_reg,
+                    caps_for_loop,
                 )
                 .await
             }
@@ -1138,15 +1209,20 @@ pub fn connect(
     let (event_tx, event_rx) = mpsc::channel(4096);
     let (cmd_tx, cmd_rx) = mpsc::channel(256);
     let echo_registry: EchoRegistry = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new()));
+    let caps_acked: CapsAcked = Arc::new(parking_lot::Mutex::new(HashSet::new()));
 
     let handle = ClientHandle {
         cmd_tx: cmd_tx.clone(),
         echo_registry: echo_registry.clone(),
+        caps_acked: caps_acked.clone(),
     };
 
     let echo_reg = echo_registry.clone();
+    let caps_for_loop = caps_acked.clone();
     tokio::spawn(async move {
-        if let Err(e) = run_client(config, signer, event_tx.clone(), cmd_rx, echo_reg).await {
+        if let Err(e) =
+            run_client(config, signer, event_tx.clone(), cmd_rx, echo_reg, caps_for_loop).await
+        {
             let _ = event_tx
                 .send(Event::Disconnected {
                     reason: e.to_string(),
@@ -1164,6 +1240,7 @@ async fn run_client(
     event_tx: mpsc::Sender<Event>,
     cmd_rx: mpsc::Receiver<Command>,
     echo_registry: EchoRegistry,
+    caps_acked: CapsAcked,
 ) -> Result<()> {
     let conn = establish_connection(&config).await?;
     let _ = event_tx.send(Event::Connected).await;
@@ -1178,6 +1255,7 @@ async fn run_client(
                 event_tx,
                 cmd_rx,
                 echo_registry,
+                caps_acked,
             )
             .await
         }
@@ -1191,6 +1269,7 @@ async fn run_client(
                 event_tx,
                 cmd_rx,
                 echo_registry,
+                caps_acked,
             )
             .await
         }
@@ -1205,6 +1284,7 @@ async fn run_client(
                 event_tx,
                 cmd_rx,
                 echo_registry,
+                caps_acked,
             )
             .await
         }
@@ -1219,6 +1299,7 @@ async fn run_client(
                 event_tx,
                 cmd_rx,
                 echo_registry,
+                caps_acked,
             )
             .await
         }
@@ -1453,6 +1534,7 @@ async fn run_irc<R, W>(
     event_tx: mpsc::Sender<Event>,
     mut cmd_rx: mpsc::Receiver<Command>,
     echo_registry: EchoRegistry,
+    caps_acked: CapsAcked,
 ) -> Result<()>
 where
     R: tokio::io::AsyncBufRead + Unpin,
@@ -1523,7 +1605,7 @@ where
                             }
                         }
                         "CAP" => {
-                            handle_cap_response(&msg, &signer, &web_token, &mut writer, &mut sasl_in_progress).await?;
+                            handle_cap_response(&msg, &signer, &web_token, &mut writer, &mut sasl_in_progress, &caps_acked).await?;
                         }
                         "AUTHENTICATE" => {
                             if let Some(ref token) = web_token {
@@ -2172,6 +2254,7 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
     web_token: &Option<String>,
     writer: &mut W,
     sasl_in_progress: &mut bool,
+    caps_acked: &CapsAcked,
 ) -> Result<()> {
     let subcmd = msg.params.get(1).map(|s| s.to_ascii_uppercase());
     match subcmd.as_deref() {
@@ -2210,6 +2293,14 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
         }
         Some("ACK") => {
             let caps = msg.params.last().map(|s| s.as_str()).unwrap_or("");
+            // Record which caps the server ACKed so `ClientHandle::privmsg`
+            // can route `\n`-bearing text to a draft/multiline BATCH.
+            {
+                let mut acked = caps_acked.lock();
+                for cap in caps.split_whitespace() {
+                    acked.insert(cap.to_string());
+                }
+            }
             if caps.contains("sasl") {
                 *sasl_in_progress = true;
                 // Both web-token and ATPROTO-CHALLENGE use the same SASL mechanism;
@@ -2663,5 +2754,124 @@ mod multiline_tests {
         let opener = wire.lines().next().unwrap();
         // No leading "@..." tag block when there are no opener tags
         assert!(opener.starts_with("BATCH +"));
+    }
+
+    /// Auto-routing: `privmsg` with `\n`-bearing text and the
+    /// `draft/multiline` + `batch` caps acked sends `SendMultiline`,
+    /// one chunk per source line.
+    #[tokio::test]
+    async fn privmsg_auto_routes_to_multiline_when_cap_acked() {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+        let caps_acked: CapsAcked = Arc::new(parking_lot::Mutex::new(HashSet::new()));
+        caps_acked.lock().insert("draft/multiline".to_string());
+        caps_acked.lock().insert("batch".to_string());
+        let handle = ClientHandle {
+            cmd_tx,
+            echo_registry: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            caps_acked,
+        };
+        handle.privmsg("#test", "alpha\nbeta\ngamma").await.unwrap();
+        match cmd_rx.recv().await.unwrap() {
+            Command::SendMultiline { target, chunks, opener_tags } => {
+                assert_eq!(target, "#test");
+                assert!(opener_tags.is_empty());
+                assert_eq!(chunks.len(), 3);
+                assert_eq!(chunks[0].body, "alpha");
+                assert_eq!(chunks[1].body, "beta");
+                assert_eq!(chunks[2].body, "gamma");
+                for c in &chunks {
+                    assert!(!c.concat, "auto-routed chunks default to concat=false");
+                }
+            }
+            other => panic!("expected SendMultiline, got {other:?}"),
+        }
+    }
+
+    /// Without the multiline cap, `privmsg` falls back to a single
+    /// `Privmsg` (existing behavior preserved — non-breaking).
+    #[tokio::test]
+    async fn privmsg_falls_back_to_single_when_cap_not_acked() {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+        let caps_acked: CapsAcked = Arc::new(parking_lot::Mutex::new(HashSet::new()));
+        // No caps acked
+        let handle = ClientHandle {
+            cmd_tx,
+            echo_registry: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            caps_acked,
+        };
+        handle.privmsg("#test", "a\nb").await.unwrap();
+        match cmd_rx.recv().await.unwrap() {
+            Command::Privmsg { target, text } => {
+                assert_eq!(target, "#test");
+                assert_eq!(text, "a\nb");
+            }
+            other => panic!("expected Privmsg, got {other:?}"),
+        }
+    }
+
+    /// send_tagged with `\n`-bearing text auto-routes to SendMultiline
+    /// with the caller's tags moved onto the BATCH opener — preserving
+    /// the tag semantics (e.g. commit-reveal payloads) under the
+    /// multiline path.
+    #[tokio::test]
+    async fn send_tagged_auto_routes_to_multiline_with_opener_tags() {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+        let caps_acked: CapsAcked = Arc::new(parking_lot::Mutex::new(HashSet::new()));
+        caps_acked.lock().insert("draft/multiline".to_string());
+        caps_acked.lock().insert("batch".to_string());
+        let handle = ClientHandle {
+            cmd_tx,
+            echo_registry: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            caps_acked,
+        };
+        let mut tags = std::collections::HashMap::new();
+        tags.insert("+freeq.at/event".to_string(), "reveal".to_string());
+        tags.insert("+freeq.at/payload".to_string(), "%7B%7D".to_string());
+        handle
+            .send_tagged("#test", "x\ny\nz", tags)
+            .await
+            .unwrap();
+        match cmd_rx.recv().await.unwrap() {
+            Command::SendMultiline {
+                target,
+                chunks,
+                opener_tags,
+            } => {
+                assert_eq!(target, "#test");
+                assert_eq!(chunks.len(), 3);
+                assert_eq!(
+                    opener_tags.get("+freeq.at/event").map(String::as_str),
+                    Some("reveal")
+                );
+                assert_eq!(
+                    opener_tags.get("+freeq.at/payload").map(String::as_str),
+                    Some("%7B%7D")
+                );
+            }
+            other => panic!("expected SendMultiline, got {other:?}"),
+        }
+    }
+
+    /// Single-line text always uses `Privmsg`, never `SendMultiline`,
+    /// regardless of cap state.
+    #[tokio::test]
+    async fn privmsg_single_line_never_routes_to_multiline() {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+        let caps_acked: CapsAcked = Arc::new(parking_lot::Mutex::new(HashSet::new()));
+        caps_acked.lock().insert("draft/multiline".to_string());
+        caps_acked.lock().insert("batch".to_string());
+        let handle = ClientHandle {
+            cmd_tx,
+            echo_registry: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            caps_acked,
+        };
+        handle.privmsg("#test", "hello world").await.unwrap();
+        match cmd_rx.recv().await.unwrap() {
+            Command::Privmsg { target, text } => {
+                assert_eq!(target, "#test");
+                assert_eq!(text, "hello world");
+            }
+            other => panic!("expected Privmsg, got {other:?}"),
+        }
     }
 }
