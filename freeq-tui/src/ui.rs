@@ -292,35 +292,7 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner_height = inner.height as usize;
     let inner_width = inner.width as usize;
 
-    /// Calculate how many terminal rows a message needs when wrapped.
-    fn wrapped_height(msg: &crate::app::BufferLine, width: usize) -> usize {
-        if width == 0 {
-            return 1;
-        }
-        // Deleted messages render a "[deleted]" placeholder; edited messages
-        // get an " (edited)" suffix. Both affect line-wrap math.
-        let body_len = if msg.is_deleted {
-            "[deleted]".len()
-        } else if msg.is_edited {
-            msg.text.len() + " (edited)".len()
-        } else {
-            msg.text.len()
-        };
-        let text_len = if msg.is_system {
-            // "HH:MM:SS *** message"
-            msg.timestamp.len() + 1 + 4 + body_len
-        } else {
-            // "HH:MM:SS <nick> message"
-            msg.timestamp.len() + 1 + msg.from.len() + 2 + 1 + body_len
-        };
-        let base = text_len.div_ceil(width); // ceil division
-        // Reply indicator gets its own row above the message body.
-        if msg.reply_to.is_some() {
-            base + 1
-        } else {
-            base
-        }
-    }
+    // Use the module-level wrapped_height so layout math is testable.
 
     // Calculate height of each message including wrapping + images
     let msg_heights: Vec<usize> = buffer
@@ -400,16 +372,31 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
             let is_mention = !msg.is_system && crate::app::is_mention(&msg.text, &app.nick);
 
             let text = if msg.is_system {
-                Text::from(Line::from(vec![
-                    Span::styled(
-                        format!("{} ", msg.timestamp),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                    Span::styled(
-                        format!("*** {}", msg.text),
-                        Style::default().fg(Color::Cyan),
-                    ),
-                ]))
+                // System messages may legitimately contain `\n` (MOTD,
+                // some server NOTICEs). Split and render each source
+                // line as its own row, with the prefix on the first
+                // and an aligned indent on continuations.
+                let prefix = format!("{} *** ", msg.timestamp);
+                let indent = " ".repeat(prefix.chars().count());
+                let source_lines: Vec<&str> = if msg.text.is_empty() {
+                    vec![""]
+                } else {
+                    msg.text.split('\n').collect()
+                };
+                let lines: Vec<Line> = source_lines
+                    .iter()
+                    .enumerate()
+                    .map(|(i, line)| {
+                        Line::from(vec![
+                            Span::styled(
+                                if i == 0 { prefix.clone() } else { indent.clone() },
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                            Span::styled((*line).to_string(), Style::default().fg(Color::Cyan)),
+                        ])
+                    })
+                    .collect();
+                Text::from(lines)
             } else {
                 let msg_style = if is_mention {
                     Style::default().fg(Color::White).bg(Color::DarkGray)
@@ -420,19 +407,21 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     .msgid
                     .as_deref()
                     .is_some_and(|id| buffer.pinned.contains(id));
-                let mut spans = vec![
-                    Span::styled(
-                        format!("{} ", msg.timestamp),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ];
+
+                // First-line prefix spans: timestamp + (pin) + <from> ".
+                // Continuation lines use an equal-width indent so the
+                // body of every source line is column-aligned.
+                let mut first_prefix_spans: Vec<Span> = vec![Span::styled(
+                    format!("{} ", msg.timestamp),
+                    Style::default().fg(Color::DarkGray),
+                )];
                 if is_pinned {
-                    spans.push(Span::styled(
+                    first_prefix_spans.push(Span::styled(
                         "📌 ",
                         Style::default().fg(Color::Yellow),
                     ));
                 }
-                spans.push(Span::styled(
+                first_prefix_spans.push(Span::styled(
                     format!("<{}> ", msg.from),
                     if is_mention {
                         Style::default()
@@ -442,27 +431,15 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                         Style::default().fg(Color::Green)
                     },
                 ));
-                if msg.is_deleted {
-                    spans.push(Span::styled(
-                        "[deleted]",
-                        Style::default()
-                            .fg(Color::DarkGray)
-                            .add_modifier(Modifier::ITALIC),
-                    ));
-                } else {
-                    spans.extend(markdown_spans(&msg.text, msg_style));
-                    if msg.is_edited {
-                        spans.push(Span::styled(
-                            " (edited)",
-                            Style::default()
-                                .fg(Color::DarkGray)
-                                .add_modifier(Modifier::ITALIC),
-                        ));
-                    }
-                }
+                let prefix_width: usize = first_prefix_spans
+                    .iter()
+                    .map(|s| s.content.chars().count())
+                    .sum();
+                let continuation_indent = " ".repeat(prefix_width);
+
+                let mut lines: Vec<Line> = Vec::new();
                 // Reply indicator: small row above the message showing the
                 // parent's author + snippet, so threading is legible.
-                let mut lines = Vec::new();
                 if let Some(ref parent_id) = msg.reply_to {
                     let label = reply_indicator_label(buffer, parent_id);
                     lines.push(Line::from(Span::styled(
@@ -472,7 +449,41 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                             .add_modifier(Modifier::ITALIC),
                     )));
                 }
-                lines.push(Line::from(spans));
+
+                if msg.is_deleted {
+                    let mut spans = first_prefix_spans.clone();
+                    spans.push(Span::styled(
+                        "[deleted]",
+                        Style::default()
+                            .fg(Color::DarkGray)
+                            .add_modifier(Modifier::ITALIC),
+                    ));
+                    lines.push(Line::from(spans));
+                } else {
+                    let source_lines: Vec<&str> = if msg.text.is_empty() {
+                        vec![""]
+                    } else {
+                        msg.text.split('\n').collect()
+                    };
+                    let last = source_lines.len() - 1;
+                    for (i, source_line) in source_lines.iter().enumerate() {
+                        let mut spans: Vec<Span> = if i == 0 {
+                            first_prefix_spans.clone()
+                        } else {
+                            vec![Span::raw(continuation_indent.clone())]
+                        };
+                        spans.extend(markdown_spans(source_line, msg_style));
+                        if i == last && msg.is_edited {
+                            spans.push(Span::styled(
+                                " (edited)",
+                                Style::default()
+                                    .fg(Color::DarkGray)
+                                    .add_modifier(Modifier::ITALIC),
+                            ));
+                        }
+                        lines.push(Line::from(spans));
+                    }
+                }
                 Text::from(lines)
             };
 
@@ -592,6 +603,49 @@ fn draw_nicklist(frame: &mut Frame, app: &App, area: Rect) {
 ///   but its body has been deleted — we don't quote empty content.
 /// - `   ↳ replying to (unknown)` when the parent isn't in this buffer
 ///   (evicted from the ring buffer or never received).
+/// How many terminal rows a single message occupies after `\n`-splitting
+/// per source line and wrapping each at `width`. The first line carries
+/// the timestamp + sender prefix; continuation lines are indented to the
+/// same width so the body is column-aligned.
+pub(crate) fn wrapped_height(msg: &crate::app::BufferLine, width: usize) -> usize {
+    if width == 0 {
+        return 1;
+    }
+    let prefix_len = if msg.is_system {
+        // "HH:MM:SS *** "
+        msg.timestamp.len() + 1 + 4
+    } else {
+        // "HH:MM:SS <nick> "
+        msg.timestamp.len() + 1 + msg.from.len() + 2 + 1
+    };
+    let base = if msg.is_deleted {
+        (prefix_len + "[deleted]".len()).div_ceil(width).max(1)
+    } else {
+        let mut lines: Vec<&str> = msg.text.split('\n').collect();
+        if lines.is_empty() {
+            lines.push("");
+        }
+        let last = lines.len() - 1;
+        lines
+            .iter()
+            .enumerate()
+            .map(|(i, line)| {
+                let body_len = if i == last && msg.is_edited {
+                    line.len() + " (edited)".len()
+                } else {
+                    line.len()
+                };
+                (prefix_len + body_len).div_ceil(width).max(1)
+            })
+            .sum()
+    };
+    if msg.reply_to.is_some() {
+        base + 1
+    } else {
+        base
+    }
+}
+
 pub fn reply_indicator_label(buffer: &crate::app::Buffer, parent_id: &str) -> String {
     match buffer.find_by_msgid(parent_id) {
         Some(parent) if parent.is_deleted => {
@@ -935,5 +989,88 @@ mod tests {
         let spans = markdown_spans("hi *résumé* ok 🔥", Style::default());
         assert_eq!(flat(&spans), "hi résumé ok 🔥");
         assert!(spans.iter().any(|s| s.content == "résumé"));
+    }
+
+    // ─── wrapped_height (multi-line layout math) ──────────────────
+
+    fn line(text: &str) -> crate::app::BufferLine {
+        crate::app::BufferLine {
+            timestamp: "12:00:00".into(),
+            from: "alice".into(),
+            text: text.into(),
+            is_system: false,
+            image_url: None,
+            msgid: None,
+            is_edited: false,
+            is_deleted: false,
+            reply_to: None,
+        }
+    }
+
+    /// Single-line text within the width fits on one row. Prefix
+    /// "12:00:00 <alice> " = 17 chars; body "hello" = 5; total 22.
+    #[test]
+    fn wrapped_height_single_line_fits() {
+        let h = super::wrapped_height(&line("hello"), 80);
+        assert_eq!(h, 1);
+    }
+
+    /// Three source lines (`\n`-separated) get three terminal rows
+    /// when each fits within `width`.
+    #[test]
+    fn wrapped_height_three_source_lines() {
+        let h = super::wrapped_height(&line("a\nb\nc"), 80);
+        assert_eq!(h, 3);
+    }
+
+    /// A single source line that exceeds `width` wraps onto extra rows.
+    #[test]
+    fn wrapped_height_long_single_line_wraps() {
+        // prefix 17 chars + 100-char body = 117 total chars at width 40
+        // → ceil(117/40) = 3 rows
+        let body = "x".repeat(100);
+        let h = super::wrapped_height(&line(&body), 40);
+        assert_eq!(h, 3);
+    }
+
+    /// Multi-line where each individual line wraps independently:
+    /// row counts sum, each line gets its own wrap math.
+    #[test]
+    fn wrapped_height_multiline_each_wraps_independently() {
+        // Two source lines, each 50 chars. Width 40, prefix 17.
+        // Per-line: ceil((17+50)/40) = 2 rows. Total: 4.
+        let body = format!("{}\n{}", "a".repeat(50), "b".repeat(50));
+        let h = super::wrapped_height(&line(&body), 40);
+        assert_eq!(h, 4);
+    }
+
+    /// `(edited)` suffix applies only to the LAST source line, not
+    /// every line.
+    #[test]
+    fn wrapped_height_edited_suffix_only_on_last_line() {
+        let mut m = line("a\nb\nc");
+        m.is_edited = true;
+        // First two lines: prefix + 1 char = 18 chars → 1 row each.
+        // Last line: prefix + 1 + " (edited)".len()=9 → 27 chars → 1 row.
+        let h = super::wrapped_height(&m, 80);
+        assert_eq!(h, 3);
+    }
+
+    /// Reply indicator adds one row above the body, regardless of
+    /// how many source lines the body has.
+    #[test]
+    fn wrapped_height_reply_indicator_adds_one_row() {
+        let mut m = line("a\nb");
+        m.reply_to = Some("01PARENT".into());
+        let h = super::wrapped_height(&m, 80);
+        // 2 body rows + 1 reply indicator = 3
+        assert_eq!(h, 3);
+    }
+
+    /// Empty body still occupies one row.
+    #[test]
+    fn wrapped_height_empty_body_one_row() {
+        let h = super::wrapped_height(&line(""), 80);
+        assert_eq!(h, 1);
     }
 }
