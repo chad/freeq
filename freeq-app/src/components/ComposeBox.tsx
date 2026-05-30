@@ -364,20 +364,16 @@ export function ComposeBox() {
       handleCommand(trimmed, activeChannel);
     } else if (activeChannel !== 'server') {
       const target = ch?.name || activeChannel;
-      const isMultiline = trimmed.includes('\n');
       if (markdownMode) {
-        // Markdown mode: send with mime tag (handles multiline internally)
         sendMarkdown(target, trimmed);
       } else if (editingMsg && editingMsg.channel.toLowerCase() === activeChannel.toLowerCase()) {
-        const encoded = isMultiline ? trimmed.replace(/\n/g, '\\n') : trimmed;
-        sendEdit(target, editingMsg.msgId, encoded, isMultiline);
+        sendEdit(target, editingMsg.msgId, trimmed);
         useStore.getState().setEditingMsg(null);
       } else if (replyTo && replyTo.channel.toLowerCase() === activeChannel.toLowerCase()) {
-        const encoded = isMultiline ? trimmed.replace(/\n/g, '\\n') : trimmed;
-        sendReply(target, replyTo.msgId, encoded, isMultiline);
+        sendReply(target, replyTo.msgId, trimmed);
         useStore.getState().setReplyTo(null);
       } else {
-        sendMessage(target, trimmed, isMultiline);
+        sendMessage(target, trimmed);
       }
     }
     setText('');

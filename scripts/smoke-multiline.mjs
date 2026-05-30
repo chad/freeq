@@ -408,6 +408,16 @@ async function tests() {
     expectEq(msg.text.split('\n').length, 3, 'three lines');
   });
 
+  await runTest('B10: codeblock content (```...```) round-trips byte-exact', async () => {
+    // What freeq-app's MessageList parser sees as msg.text after SDK
+    // normalization must contain real `\n` inside the codeblock so
+    // <pre> renders the lines as the agent wrote them.
+    const body = `b10-${STAMP}\n\`\`\`\nfn main() {\n    println!("hello");\n}\n\`\`\``;
+    sender.sendMessage(CHANNEL, body);
+    const msg = await waitForMessage(receiver, CHANNEL, (m) => m.text.startsWith(`b10-${STAMP}`));
+    expectEq(msg.text, body, 'codeblock body round-trips with real \\n');
+  });
+
   // ── B encrypted (ENC1, channel passphrase) ───────────────────────
 
   await runTest('B4: small multi-line in ENC1 channel (single PRIVMSG, no BATCH)', async () => {
