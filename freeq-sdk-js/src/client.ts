@@ -1387,13 +1387,6 @@ export class FreeqClient extends EventEmitter {
           this.emitCoordinationEvent(target, from, msg.tags);
         }
 
-        const editOf = msg.tags['+draft/edit'];
-        if (editOf) {
-          const isStreaming = msg.tags['+freeq.at/streaming'] === '1';
-          this.emit('messageEdited', bufName, editOf, text, msg.tags['msgid'], isStreaming);
-          break;
-        }
-
         let displayText = isAction ? text.slice(8, -1) : text;
         let isEncryptedMsg = false;
 
@@ -1425,6 +1418,17 @@ export class FreeqClient extends EventEmitter {
         // Normalize so consumers always see real `\n`.
         if ('+freeq.at/multiline' in msg.tags) {
           displayText = displayText.replace(/\\n/g, '\n');
+        }
+
+        // Edits dispatch as a dedicated event AFTER decrypt so that
+        // E2EE edits arrive with plaintext, not raw ciphertext. (Prior
+        // bug: edit branched before the decrypt block, so receivers
+        // saw `ENC1:…` in place of the edited body.)
+        const editOf = msg.tags['+draft/edit'];
+        if (editOf) {
+          const isStreaming = msg.tags['+freeq.at/streaming'] === '1';
+          this.emit('messageEdited', bufName, editOf, displayText, msg.tags['msgid'], isStreaming);
+          break;
         }
 
         const message: Message = {

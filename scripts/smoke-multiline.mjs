@@ -46,11 +46,15 @@ const STAMP = Date.now().toString(36);
 // collide and #real-channels don't get polluted. Override via env if
 // you want to watch the run live in a specific channel.
 const CHANNEL = process.env.FREEQ_CHANNEL || `#smoke-${STAMP}`;
-// All E2EE tests share one derived channel + passphrase. Derived from
-// CHANNEL rather than reusing CHANNEL itself because setChannelKey()
-// would silently encrypt the plaintext tests that come before.
-const ENC1_CHANNEL = `${CHANNEL}-e2ee`;
-const ENC1_PASS = `enc1-pass-${STAMP}`;
+// All E2EE tests share one derived channel + passphrase. Default is
+// derived from CHANNEL + per-run STAMP so reruns don't collide AND
+// nobody else can decrypt the test output. Override both via env
+// when you want to inspect the run in a real web/native client: in
+// the client, /encrypt <FREEQ_E2EE_PASS> on the channel, then run
+// the smoke pointed at the same FREEQ_E2EE_CHANNEL/PASS pair so
+// messages land decrypted in your client.
+const ENC1_CHANNEL = process.env.FREEQ_E2EE_CHANNEL || `${CHANNEL}-e2ee`;
+const ENC1_PASS = process.env.FREEQ_E2EE_PASS || `enc1-pass-${STAMP}`;
 const SENDER_NICK = `smoke-tx-${STAMP}`;
 const RECEIVER_NICK = `smoke-rx-${STAMP}`;
 
