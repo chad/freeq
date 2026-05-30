@@ -61,6 +61,19 @@ impl C {
         c.tx("CAP END");
         c
     }
+    fn with_multiline_caps(addr: SocketAddr, nick: &str) -> Self {
+        let s = TcpStream::connect(addr).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        let w = s.try_clone().unwrap();
+        let mut c = Self { reader: BufReader::new(s), writer: w };
+        c.tx("CAP LS 302");
+        c.tx(&format!("NICK {nick}"));
+        c.tx(&format!("USER {nick} 0 * :test"));
+        c.tx("CAP REQ :message-tags server-time echo-message draft/chathistory batch draft/multiline");
+        c.rx(|l| l.contains("ACK"), "CAP ACK");
+        c.tx("CAP END");
+        c
+    }
     fn with_sasl(addr: SocketAddr, nick: &str, did: &str, key: PrivateKey) -> Self {
         let s = TcpStream::connect(addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).ok();
@@ -519,5 +532,133 @@ async fn dm_edit_by_recipient_rejected() {
         // Should be rejected
         let _ = bob.maybe(|l| l.contains("FAIL"), 2000);
         // Either FAIL or silently dropped — either way, alice shouldn't see it
+    }).await;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MULTI-LINE EDITS — BATCH-wrapped on the wire so capable receivers
+// see the full body and fallback receivers see line1 (wire-valid),
+// instead of a malformed PRIVMSG with embedded `\n`.
+// ═══════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn multi_line_edit_delivers_batch_to_multiline_capable_receiver() {
+    let resolver = resolver_with(vec![]);
+    let (addr, _h) = start(resolver).await;
+    run(addr, |addr| {
+        let mut alice = C::with_multiline_caps(addr, "mle_a");
+        alice.reg(); alice.drain();
+        let mut bob = C::with_multiline_caps(addr, "mle_b");
+        bob.reg(); bob.drain();
+        alice.tx("JOIN #mledit"); alice.num("366"); alice.drain();
+        bob.tx("JOIN #mledit"); bob.num("366"); bob.drain();
+
+        // Alice sends original multi-line via BATCH.
+        alice.tx("BATCH +ob draft/multiline #mledit");
+        alice.tx("@batch=ob PRIVMSG #mledit :orig line A");
+        alice.tx("@batch=ob PRIVMSG #mledit :orig line B");
+        alice.tx("BATCH -ob");
+        let orig_opener = bob.rx(
+            |l| l.contains("BATCH +") && l.contains("draft/multiline") && l.contains("#mledit"),
+            "orig BATCH opener",
+        );
+        let orig_msgid = C::extract_msgid(&orig_opener);
+        assert!(!orig_msgid.is_empty(), "orig opener has msgid: {orig_opener}");
+        bob.rx(|l| l.starts_with("BATCH -"), "orig BATCH closer");
+
+        // Alice sends multi-line edit via BATCH with +draft/edit on opener.
+        alice.tx(&format!("@+draft/edit={orig_msgid} BATCH +eb draft/multiline #mledit"));
+        alice.tx("@batch=eb PRIVMSG #mledit :edit line A");
+        alice.tx("@batch=eb PRIVMSG #mledit :edit line B");
+        alice.tx("BATCH -eb");
+
+        // Bob (multiline-capable) sees BATCH-wrapped edit with full body.
+        let edit_opener = bob.rx(
+            |l| l.contains("BATCH +")
+                && l.contains("draft/multiline")
+                && l.contains("#mledit")
+                && l.contains("+draft/edit="),
+            "edit BATCH opener with +draft/edit tag",
+        );
+        assert!(
+            edit_opener.contains(&format!("+draft/edit={orig_msgid}")),
+            "edit opener references orig msgid: {edit_opener}",
+        );
+        let edit_msgid = C::extract_msgid(&edit_opener);
+        assert!(!edit_msgid.is_empty(), "edit opener has fresh msgid: {edit_opener}");
+        assert_ne!(edit_msgid, orig_msgid, "edit gets a new msgid");
+
+        let chunk_a = bob.rx(
+            |l| l.contains("PRIVMSG #mledit") && l.contains("edit line A"),
+            "edit chunk A",
+        );
+        assert!(chunk_a.contains("batch="), "chunk carries batch tag: {chunk_a}");
+        let chunk_b = bob.rx(
+            |l| l.contains("PRIVMSG #mledit") && l.contains("edit line B"),
+            "edit chunk B",
+        );
+        assert!(chunk_b.contains("batch="), "chunk carries batch tag: {chunk_b}");
+        let closer = bob.rx(|l| l.starts_with("BATCH -"), "edit BATCH closer");
+        assert!(closer.starts_with("BATCH -"), "bare BATCH -id closer: {closer}");
+    }).await;
+}
+
+#[tokio::test]
+async fn multi_line_edit_delivers_line1_only_to_non_multiline_receiver() {
+    let resolver = resolver_with(vec![]);
+    let (addr, _h) = start(resolver).await;
+    run(addr, |addr| {
+        // Alice has multiline cap (to send the original BATCH); Bob does not.
+        let mut alice = C::with_multiline_caps(addr, "mlef_a");
+        alice.reg(); alice.drain();
+        let mut bob = C::with_caps(addr, "mlef_b");
+        bob.reg(); bob.drain();
+        alice.tx("JOIN #mleditfb"); alice.num("366"); alice.drain();
+        bob.tx("JOIN #mleditfb"); bob.num("366"); bob.drain();
+
+        // Original multi-line (Bob, no multiline cap, sees the 2 chunks as
+        // individual PRIVMSGs in spec fallback — msgid lands on the first).
+        alice.tx("BATCH +obfb draft/multiline #mleditfb");
+        alice.tx("@batch=obfb PRIVMSG #mleditfb :orig L1");
+        alice.tx("@batch=obfb PRIVMSG #mleditfb :orig L2");
+        alice.tx("BATCH -obfb");
+        let first_orig = bob.rx(
+            |l| l.contains("PRIVMSG #mleditfb") && l.contains("orig L1"),
+            "orig L1",
+        );
+        let orig_msgid = C::extract_msgid(&first_orig);
+        assert!(!orig_msgid.is_empty(), "fallback orig L1 has msgid: {first_orig}");
+        // Drain L2 (no msgid, no BATCH tag for fallback).
+        bob.rx(|l| l.contains("PRIVMSG #mleditfb") && l.contains("orig L2"), "orig L2");
+
+        // Multi-line edit. Bob (no multiline cap) gets a wire-valid single
+        // PRIVMSG with line1 only — not a malformed mid-body newline.
+        alice.tx(&format!("@+draft/edit={orig_msgid} BATCH +ebfb draft/multiline #mleditfb"));
+        alice.tx("@batch=ebfb PRIVMSG #mleditfb :edit L1");
+        alice.tx("@batch=ebfb PRIVMSG #mleditfb :edit L2");
+        alice.tx("BATCH -ebfb");
+
+        // Should receive a tagged PRIVMSG with +draft/edit and only "edit L1".
+        let edit = bob.rx(
+            |l| l.contains("PRIVMSG #mleditfb")
+                && l.contains("+draft/edit=")
+                && l.contains("edit L1"),
+            "fallback edit (line1 only)",
+        );
+        assert!(
+            edit.contains(&format!("+draft/edit={orig_msgid}")),
+            "fallback edit references orig msgid: {edit}",
+        );
+        // Must NOT contain raw newline mid-body or any sign of line2.
+        assert!(
+            !edit.contains("edit L2"),
+            "fallback receiver must not receive line2 of multi-line edit: {edit}",
+        );
+        // No BATCH framing should be sent to fallback receiver for the edit.
+        let stray_batch = bob.maybe(|l| l.starts_with("BATCH"), 500);
+        assert!(
+            stray_batch.is_none(),
+            "fallback receiver got BATCH frame (should be plain PRIVMSG only): {stray_batch:?}",
+        );
     }).await;
 }
