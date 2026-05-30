@@ -454,6 +454,59 @@ async function tests() {
     expectEq(ed.newText, edited, 'small E2EE edit text arrives decrypted');
   });
 
+  await runTest('B13: reply to an E2EE message (single-line)', async () => {
+    const orig = `b13-orig-${STAMP}`;
+    const replyText = `b13-reply-${STAMP}`;
+    sender.sendMessage(ENC1_CHANNEL, orig);
+    const origMsg = await waitForMessage(receiver, ENC1_CHANNEL, (m) => m.text === orig);
+    receiver.sendReply(ENC1_CHANNEL, origMsg.id, replyText);
+    const reply = await waitForMessage(sender, ENC1_CHANNEL, (m) => m.text === replyText);
+    expectEq(reply.text, replyText, 'E2EE reply decrypted on receive');
+    expectEq(reply.replyTo, origMsg.id, 'replyTo points at original');
+    expect(reply.encrypted === true, 'reply flagged encrypted');
+  });
+
+  await runTest('B14: delete own E2EE message', async () => {
+    const text = `b14-delete-${STAMP}`;
+    sender.sendMessage(ENC1_CHANNEL, text);
+    const msg = await waitForMessage(receiver, ENC1_CHANNEL, (m) => m.text === text);
+    expect(!!msg.id, 'orig E2EE msg has msgid');
+    sender.sendDelete(ENC1_CHANNEL, msg.id);
+    let deleted = false;
+    await new Promise((resolve) => {
+      const handler = (ch, msgid) => {
+        if (ch.toLowerCase() === ENC1_CHANNEL.toLowerCase() && msgid === msg.id) {
+          deleted = true;
+          receiver.off('messageDeleted', handler);
+          resolve();
+        }
+      };
+      receiver.on('messageDeleted', handler);
+      setTimeout(() => { receiver.off('messageDeleted', handler); resolve(); }, 3000);
+    });
+    expect(deleted, 'receiver observed delete for E2EE msgid');
+  });
+
+  await runTest('B15: reaction on an E2EE message', async () => {
+    const text = `b15-react-${STAMP}`;
+    sender.sendMessage(ENC1_CHANNEL, text);
+    const msg = await waitForMessage(receiver, ENC1_CHANNEL, (m) => m.text === text);
+    receiver.sendReaction(ENC1_CHANNEL, '🔒', msg.id);
+    let got = false;
+    await new Promise((resolve) => {
+      const handler = (_ch, msgid, emoji) => {
+        if (msgid === msg.id && emoji === '🔒') {
+          got = true;
+          sender.off('reactionAdded', handler);
+          resolve();
+        }
+      };
+      sender.on('reactionAdded', handler);
+      setTimeout(() => { sender.off('reactionAdded', handler); resolve(); }, 3000);
+    });
+    expect(got, 'sender observed reaction on E2EE msg');
+  });
+
   await runTest('B12: large E2EE edit (ciphertext-chunked BATCH) round-trip', async () => {
     // Plaintext large enough that the ciphertext exceeds one PRIVMSG MTU
     // so the sender BATCH-chunks the ciphertext (concat=true). With the
