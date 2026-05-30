@@ -424,15 +424,15 @@ export class FreeqClient extends EventEmitter {
   }
 
   /**
-   * Per-PRIVMSG-chunk byte budget. The IRC line ceiling is 8192 bytes
-   * INCLUDING tags/prefix/command/params/CRLF. Reserve ~600 bytes for
-   * worst-case opener metadata (msgid + freeq tags + sender prefix +
-   * `PRIVMSG <target> :` framing); the rest is body content. The
-   * server-advertised `max-bytes` is the TOTAL across all chunks, not
-   * per-chunk, so it doesn't override this budget directly.
+   * Per-PRIVMSG-chunk byte budget. Caps below the SDK's own
+   * `LINE_SIZE_WARN_THRESHOLD` (7000) so chunked sends don't trigger
+   * an oversize warning. Reserve ~600 bytes for worst-case opener
+   * metadata; the rest is body content. The server-advertised
+   * `max-bytes` is the TOTAL across all chunks, not per-chunk, so it
+   * doesn't override this budget directly.
    */
   private perChunkByteBudget(): number {
-    return 8192 - 600;
+    return 6400;
   }
 
   /** Send a reply to a specific message. Multi-line replies use the
