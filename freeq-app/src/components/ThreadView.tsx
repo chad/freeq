@@ -62,7 +62,7 @@ export function ThreadView({ rootMsgId, channel, onClose }: ThreadViewProps) {
                 {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </span>
             </div>
-            <div className="text-sm text-fg-muted mt-0.5">{msg.text}</div>
+            <div className="text-sm text-fg-muted mt-0.5 whitespace-pre-wrap">{msg.text}</div>
           </div>
         ))}
         <div ref={bottomRef} />
