@@ -559,32 +559,36 @@ class AppState(application: Application) : AndroidViewModel(application) {
         sendRaw("@+typing=done TAGMSG $target")
         lastTypingSent = 0
 
-        val hasCodeBlock = text.contains("```")
+        // Edit + reply paths go through sendRaw because the FFI doesn't
+        // expose typed send_reply/send_edit yet. For those, encode `\n`
+        // as the legacy `+freeq.at/multiline` inline form so multi-line
+        // content survives a single PRIVMSG — receivers (web app, TUI,
+        // freeq-aware mobile) decode the tag on render.
+        val cleaned = text.replace("\r", "")
+        val hasNewline = cleaned.contains("\n")
+        val escaped = if (hasNewline) cleaned.replace("\n", "\\n") else cleaned
+        val multilineTag = if (hasNewline) ";+freeq.at/multiline" else ""
 
-        // Edit mode
         val editing = editingMessage.value
         if (editing != null) {
-            val escaped = if (hasCodeBlock) text.replace("\r", "").replace("\n", "\\n")
-                          else text.replace("\r", "").replace("\n", " ")
-            sendRaw("@+draft/edit=${editing.id} PRIVMSG $target :$escaped")
+            sendRaw("@+draft/edit=${editing.id}$multilineTag PRIVMSG $target :$escaped")
             editingMessage.value = null
             return
         }
 
-        // Reply mode
         val reply = replyingTo.value
         if (reply != null) {
-            val escaped = if (hasCodeBlock) text.replace("\r", "").replace("\n", "\\n")
-                          else text.replace("\r", "").replace("\n", " ")
-            sendRaw("@+reply=${reply.id} PRIVMSG $target :$escaped")
+            sendRaw("@+reply=${reply.id}$multilineTag PRIVMSG $target :$escaped")
             replyingTo.value = null
             return
         }
 
-        // Code block: encode newlines as literal \n and send as one message
-        val sendText = if (hasCodeBlock) text.replace("\r", "").replace("\n", "\\n") else text
+        // Plain send: pass text as-is. The FFI calls Rust SDK's privmsg,
+        // which auto-routes `\n`-bearing text to a draft/multiline BATCH
+        // when the server acked the cap — one logical message, msgid
+        // coherence for edits / reactions / replies.
         try {
-            client?.sendMessage(target, sendText)
+            client?.sendMessage(target, cleaned)
         } catch (_: Exception) {
             errorMessage.value = "Send failed"
         }

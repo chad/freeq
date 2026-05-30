@@ -253,15 +253,13 @@ fun MessageContent(
                     color = MaterialTheme.colorScheme.onBackground
                 )
             } else if (showText.contains("```")) {
-                // Has code blocks — render as column with distinct code block styling
-                val hasEncodedNewlines = showText.contains("\\n")
+                // Has code blocks — render as column with distinct code block styling.
+                // SDK normalizes both wire forms (BATCH and legacy `+freeq.at/multiline`)
+                // into real `\n` before this point, so no decode here.
                 val parts = splitCodeBlocks(showText)
                 Column {
                     for (part in parts) {
                         if (part.isCodeBlock) {
-                            val decoded = if (hasEncodedNewlines)
-                                part.text.replace("\\n", "\n").trim()
-                            else part.text.trim()
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -270,18 +268,15 @@ fun MessageContent(
                                     .padding(8.dp)
                             ) {
                                 Text(
-                                    text = decoded,
+                                    text = part.text.trim(),
                                     fontFamily = FontFamily.Monospace,
                                     fontSize = 13.sp,
                                     color = MaterialTheme.colorScheme.onBackground
                                 )
                             }
                         } else if (part.text.isNotEmpty()) {
-                            val decoded = if (hasEncodedNewlines)
-                                part.text.replace("\\n", "\n")
-                            else part.text
                             Text(
-                                text = formatMarkdown(decoded, codeBg),
+                                text = formatMarkdown(part.text, codeBg),
                                 fontSize = 15.sp,
                                 color = MaterialTheme.colorScheme.onBackground
                             )

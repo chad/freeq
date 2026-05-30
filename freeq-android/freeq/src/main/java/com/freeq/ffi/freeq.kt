@@ -855,6 +855,12 @@ internal open class UniffiVTableCallbackInterfaceP2pEventHandler(
 
 
 
+
+
+
+
+
+
 // For large crates we prevent `MethodTooLargeException` (see #2340)
 // N.B. the name of the extension is very misleading, since it is 
 // rather `InterfaceTooLargeException`, caused by too many methods 
@@ -873,6 +879,12 @@ internal interface IntegrityCheckingUniffiLib : Library {
     fun uniffi_freeq_sdk_ffi_checksum_method_freeqav_is_connected(
 ): Short
 fun uniffi_freeq_sdk_ffi_checksum_method_freeqav_leave(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqav_push_audio_frame(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqav_push_video_frame(
+): Short
+fun uniffi_freeq_sdk_ffi_checksum_method_freeqav_set_camera_enabled(
 ): Short
 fun uniffi_freeq_sdk_ffi_checksum_method_freeqav_set_muted(
 ): Short
@@ -1004,11 +1016,17 @@ internal interface UniffiLib : Library {
 ): Pointer
 fun uniffi_freeq_sdk_ffi_fn_free_freeqav(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
-fun uniffi_freeq_sdk_ffi_fn_constructor_freeqav_new(`serverUrl`: RustBuffer.ByValue,`sessionId`: RustBuffer.ByValue,`nick`: RustBuffer.ByValue,`handler`: Long,uniffi_out_err: UniffiRustCallStatus, 
+fun uniffi_freeq_sdk_ffi_fn_constructor_freeqav_new(`serverUrl`: RustBuffer.ByValue,`sessionId`: RustBuffer.ByValue,`nick`: RustBuffer.ByValue,`instanceId`: RustBuffer.ByValue,`handler`: Long,uniffi_out_err: UniffiRustCallStatus, 
 ): Pointer
 fun uniffi_freeq_sdk_ffi_fn_method_freeqav_is_connected(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
 ): Byte
 fun uniffi_freeq_sdk_ffi_fn_method_freeqav_leave(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_freeq_sdk_ffi_fn_method_freeqav_push_audio_frame(`ptr`: Pointer,`samples`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_freeq_sdk_ffi_fn_method_freeqav_push_video_frame(`ptr`: Pointer,`bgra`: RustBuffer.ByValue,`width`: Int,`height`: Int,`timestampUs`: Long,uniffi_out_err: UniffiRustCallStatus, 
+): Unit
+fun uniffi_freeq_sdk_ffi_fn_method_freeqav_set_camera_enabled(`ptr`: Pointer,`enabled`: Byte,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
 fun uniffi_freeq_sdk_ffi_fn_method_freeqav_set_muted(`ptr`: Pointer,`muted`: Byte,uniffi_out_err: UniffiRustCallStatus, 
 ): Unit
@@ -1226,6 +1244,15 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqav_leave() != 39649.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqav_push_audio_frame() != 55965.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqav_push_video_frame() != 30541.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqav_set_camera_enabled() != 49053.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqav_set_muted() != 7170.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1316,7 +1343,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_freeq_sdk_ffi_checksum_method_freeqp2p_shutdown() != 50660.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_freeq_sdk_ffi_checksum_constructor_freeqav_new() != 34209.toShort()) {
+    if (lib.uniffi_freeq_sdk_ffi_checksum_constructor_freeqav_new() != 1846.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_freeq_sdk_ffi_checksum_constructor_freeqclient_new() != 42979.toShort()) {
@@ -1514,6 +1541,29 @@ private class JavaLangRefCleanable(
 /**
  * @suppress
  */
+public object FfiConverterUByte: FfiConverter<UByte, Byte> {
+    override fun lift(value: Byte): UByte {
+        return value.toUByte()
+    }
+
+    override fun read(buf: ByteBuffer): UByte {
+        return lift(buf.get())
+    }
+
+    override fun lower(value: UByte): Byte {
+        return value.toByte()
+    }
+
+    override fun allocationSize(value: UByte) = 1UL
+
+    override fun write(value: UByte, buf: ByteBuffer) {
+        buf.put(value.toByte())
+    }
+}
+
+/**
+ * @suppress
+ */
 public object FfiConverterUInt: FfiConverter<UInt, Int> {
     override fun lift(value: Int): UInt {
         return value.toUInt()
@@ -1537,6 +1587,29 @@ public object FfiConverterUInt: FfiConverter<UInt, Int> {
 /**
  * @suppress
  */
+public object FfiConverterULong: FfiConverter<ULong, Long> {
+    override fun lift(value: Long): ULong {
+        return value.toULong()
+    }
+
+    override fun read(buf: ByteBuffer): ULong {
+        return lift(buf.getLong())
+    }
+
+    override fun lower(value: ULong): Long {
+        return value.toLong()
+    }
+
+    override fun allocationSize(value: ULong) = 8UL
+
+    override fun write(value: ULong, buf: ByteBuffer) {
+        buf.putLong(value.toLong())
+    }
+}
+
+/**
+ * @suppress
+ */
 public object FfiConverterLong: FfiConverter<Long, Long> {
     override fun lift(value: Long): Long {
         return value
@@ -1554,6 +1627,29 @@ public object FfiConverterLong: FfiConverter<Long, Long> {
 
     override fun write(value: Long, buf: ByteBuffer) {
         buf.putLong(value)
+    }
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterFloat: FfiConverter<Float, Float> {
+    override fun lift(value: Float): Float {
+        return value
+    }
+
+    override fun read(buf: ByteBuffer): Float {
+        return buf.getFloat()
+    }
+
+    override fun lower(value: Float): Float {
+        return value
+    }
+
+    override fun allocationSize(value: Float) = 4UL
+
+    override fun write(value: Float, buf: ByteBuffer) {
+        buf.putFloat(value)
     }
 }
 
@@ -1742,6 +1838,12 @@ public interface FreeqAvInterface {
     
     fun `leave`()
     
+    fun `pushAudioFrame`(`samples`: List<kotlin.Float>)
+    
+    fun `pushVideoFrame`(`bgra`: List<kotlin.UByte>, `width`: kotlin.UInt, `height`: kotlin.UInt, `timestampUs`: kotlin.ULong)
+    
+    fun `setCameraEnabled`(`enabled`: kotlin.Boolean)
+    
     fun `setMuted`(`muted`: kotlin.Boolean)
     
     companion object
@@ -1765,11 +1867,11 @@ open class FreeqAv: Disposable, AutoCloseable, FreeqAvInterface
         this.pointer = null
         this.cleanable = UniffiLib.CLEANER.register(this, UniffiCleanAction(pointer))
     }
-    constructor(`serverUrl`: kotlin.String, `sessionId`: kotlin.String, `nick`: kotlin.String, `handler`: AvEventHandler) :
+    constructor(`serverUrl`: kotlin.String, `sessionId`: kotlin.String, `nick`: kotlin.String, `instanceId`: kotlin.String, `handler`: AvEventHandler) :
         this(
     uniffiRustCallWithError(FreeqException) { _status ->
     UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_constructor_freeqav_new(
-        FfiConverterString.lower(`serverUrl`),FfiConverterString.lower(`sessionId`),FfiConverterString.lower(`nick`),FfiConverterTypeAvEventHandler.lower(`handler`),_status)
+        FfiConverterString.lower(`serverUrl`),FfiConverterString.lower(`sessionId`),FfiConverterString.lower(`nick`),FfiConverterString.lower(`instanceId`),FfiConverterTypeAvEventHandler.lower(`handler`),_status)
 }
     )
 
@@ -1854,6 +1956,40 @@ open class FreeqAv: Disposable, AutoCloseable, FreeqAvInterface
     uniffiRustCall() { _status ->
     UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqav_leave(
         it, _status)
+}
+    }
+    
+    
+
+    override fun `pushAudioFrame`(`samples`: List<kotlin.Float>)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqav_push_audio_frame(
+        it, FfiConverterSequenceFloat.lower(`samples`),_status)
+}
+    }
+    
+    
+
+    override fun `pushVideoFrame`(`bgra`: List<kotlin.UByte>, `width`: kotlin.UInt, `height`: kotlin.UInt, `timestampUs`: kotlin.ULong)
+        = 
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqav_push_video_frame(
+        it, FfiConverterSequenceUByte.lower(`bgra`),FfiConverterUInt.lower(`width`),FfiConverterUInt.lower(`height`),FfiConverterULong.lower(`timestampUs`),_status)
+}
+    }
+    
+    
+
+    
+    @Throws(FreeqException::class)override fun `setCameraEnabled`(`enabled`: kotlin.Boolean)
+        = 
+    callWithPointer {
+    uniffiRustCallWithError(FreeqException) { _status ->
+    UniffiLib.INSTANCE.uniffi_freeq_sdk_ffi_fn_method_freeqav_set_camera_enabled(
+        it, FfiConverterBoolean.lower(`enabled`),_status)
 }
     }
     
@@ -3329,6 +3465,24 @@ sealed class AvEvent {
         companion object
     }
     
+    data class VideoTrackStarted(
+        val `nick`: kotlin.String) : AvEvent() {
+        companion object
+    }
+    
+    data class VideoTrackStopped(
+        val `nick`: kotlin.String) : AvEvent() {
+        companion object
+    }
+    
+    data class VideoFrame(
+        val `nick`: kotlin.String, 
+        val `bgra`: List<kotlin.UByte>, 
+        val `width`: kotlin.UInt, 
+        val `height`: kotlin.UInt) : AvEvent() {
+        companion object
+    }
+    
     data class Error(
         val `message`: kotlin.String) : AvEvent() {
         companion object
@@ -3361,7 +3515,19 @@ public object FfiConverterTypeAvEvent : FfiConverterRustBuffer<AvEvent>{
             6 -> AvEvent.AudioTrackStopped(
                 FfiConverterString.read(buf),
                 )
-            7 -> AvEvent.Error(
+            7 -> AvEvent.VideoTrackStarted(
+                FfiConverterString.read(buf),
+                )
+            8 -> AvEvent.VideoTrackStopped(
+                FfiConverterString.read(buf),
+                )
+            9 -> AvEvent.VideoFrame(
+                FfiConverterString.read(buf),
+                FfiConverterSequenceUByte.read(buf),
+                FfiConverterUInt.read(buf),
+                FfiConverterUInt.read(buf),
+                )
+            10 -> AvEvent.Error(
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid enum value, something is very wrong!!")
@@ -3410,6 +3576,30 @@ public object FfiConverterTypeAvEvent : FfiConverterRustBuffer<AvEvent>{
                 + FfiConverterString.allocationSize(value.`nick`)
             )
         }
+        is AvEvent.VideoTrackStarted -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`nick`)
+            )
+        }
+        is AvEvent.VideoTrackStopped -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`nick`)
+            )
+        }
+        is AvEvent.VideoFrame -> {
+            // Add the size for the Int that specifies the variant plus the size needed for all fields
+            (
+                4UL
+                + FfiConverterString.allocationSize(value.`nick`)
+                + FfiConverterSequenceUByte.allocationSize(value.`bgra`)
+                + FfiConverterUInt.allocationSize(value.`width`)
+                + FfiConverterUInt.allocationSize(value.`height`)
+            )
+        }
         is AvEvent.Error -> {
             // Add the size for the Int that specifies the variant plus the size needed for all fields
             (
@@ -3450,8 +3640,26 @@ public object FfiConverterTypeAvEvent : FfiConverterRustBuffer<AvEvent>{
                 FfiConverterString.write(value.`nick`, buf)
                 Unit
             }
-            is AvEvent.Error -> {
+            is AvEvent.VideoTrackStarted -> {
                 buf.putInt(7)
+                FfiConverterString.write(value.`nick`, buf)
+                Unit
+            }
+            is AvEvent.VideoTrackStopped -> {
+                buf.putInt(8)
+                FfiConverterString.write(value.`nick`, buf)
+                Unit
+            }
+            is AvEvent.VideoFrame -> {
+                buf.putInt(9)
+                FfiConverterString.write(value.`nick`, buf)
+                FfiConverterSequenceUByte.write(value.`bgra`, buf)
+                FfiConverterUInt.write(value.`width`, buf)
+                FfiConverterUInt.write(value.`height`, buf)
+                Unit
+            }
+            is AvEvent.Error -> {
+                buf.putInt(10)
                 FfiConverterString.write(value.`message`, buf)
                 Unit
             }
@@ -4357,6 +4565,62 @@ public object FfiConverterOptionalString: FfiConverterRustBuffer<kotlin.String?>
         } else {
             buf.put(1)
             FfiConverterString.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceUByte: FfiConverterRustBuffer<List<kotlin.UByte>> {
+    override fun read(buf: ByteBuffer): List<kotlin.UByte> {
+        val len = buf.getInt()
+        return List<kotlin.UByte>(len) {
+            FfiConverterUByte.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.UByte>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterUByte.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.UByte>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterUByte.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceFloat: FfiConverterRustBuffer<List<kotlin.Float>> {
+    override fun read(buf: ByteBuffer): List<kotlin.Float> {
+        val len = buf.getInt()
+        return List<kotlin.Float>(len) {
+            FfiConverterFloat.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<kotlin.Float>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterFloat.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<kotlin.Float>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterFloat.write(it, buf)
         }
     }
 }
