@@ -4433,6 +4433,10 @@ mod s2s_adversarial_tests {
         manager.authenticated_peers.lock().await.insert(PEER.to_string());
         manager.peer_trust.lock().await.insert(PEER.to_string(), TrustLevel::Full);
         *state.s2s_manager.lock() = Some(manager.clone());
+        // S2S_RATE_LIMITS is process-static; all tests share PEER, so
+        // parallel-run counters trip the 100/sec cap mid-suite without
+        // this reset.
+        S2S_RATE_LIMITS.lock().remove(PEER);
     }
 
     fn setup_channel(state: &SharedState, name: &str) {
@@ -5110,9 +5114,16 @@ mod s2s_adversarial_tests {
 
     #[tokio::test]
     async fn s2s_rate_limit_at_boundary() {
+        // Isolated peer id: setup_authenticated_peer clears PEER's
+        // rate-limit counter, which races with this test's 101-message
+        // send if other parallel tests re-enter setup mid-way.
+        const RL_PEER: &str = "fake-peer-rate-limit-isolated";
         let state = test_state();
         let mgr = test_manager();
-        setup_authenticated_peer(&state, &mgr).await;
+        mgr.authenticated_peers.lock().await.insert(RL_PEER.to_string());
+        mgr.peer_trust.lock().await.insert(RL_PEER.to_string(), TrustLevel::Full);
+        *state.s2s_manager.lock() = Some(mgr.clone());
+        S2S_RATE_LIMITS.lock().remove(RL_PEER);
         setup_channel(&state, "#ratelimit");
 
         let (tx, mut rx) = mpsc::channel(256);
@@ -5120,14 +5131,13 @@ mod s2s_adversarial_tests {
         state.channels.lock().get_mut("#ratelimit").unwrap()
             .members.insert("rl-sess".to_string());
 
-        // Send 101 messages rapidly (limit is 100/sec)
         for i in 0..101u64 {
-            process_s2s_message(&state, &mgr, PEER, S2sMessage::Privmsg {
-                event_id: format!("{PEER}:{}", 200 + i),
+            process_s2s_message(&state, &mgr, RL_PEER, S2sMessage::Privmsg {
+                event_id: format!("{RL_PEER}:{}", 200 + i),
                 from: "spammer!u@s2s".to_string(),
                 target: "#ratelimit".to_string(),
                 text: format!("spam {i}"),
-                origin: PEER.to_string(),
+                origin: RL_PEER.to_string(),
                 msgid: None,
                 sig: None,
                 tags: HashMap::new(),
