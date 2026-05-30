@@ -347,42 +347,21 @@ async function tests() {
     expectEq(msg.text, text, 'large body round-trips exactly');
   });
 
-  await runTest('B6: edit a multi-line message (known server-side gap)', async () => {
-    // The server's handle_edit broadcasts the edit as a SINGLE PRIVMSG
-    // carrying `+draft/edit` plus the new text. When the new text has
-    // `\n`, that single PRIVMSG embeds a literal newline mid-body and
-    // the wire framing breaks (receivers see only the first line as the
-    // edit, the rest as separate unknown commands). Multi-line edits
-    // would need to be re-broadcast as a BATCH on the server side —
-    // not yet implemented (separate from Phase 4 outbound multiline).
-    //
-    // This is a real gap but doesn't bite the agent debate use case
-    // (agents don't edit walls of text). Tracking as a known limitation
-    // until/unless someone needs it. Single-line edits work fine.
+  await runTest('B6: edit a multi-line message → full body arrives via BATCH', async () => {
+    // Server's handle_edit now BATCH-wraps multi-line edits for
+    // draft/multiline-capable receivers (which the JS SDK negotiates).
+    // The receiver's SDK assembles the BATCH back into a single edit
+    // event with the full multi-line newText. Fallback receivers
+    // (no multiline cap) still see only line1 — they get a degraded
+    // but wire-valid edit instead of malformed framing.
     const orig = `b6-orig-line1-${STAMP}\nb6-orig-line2\nb6-orig-line3`;
     const edited = `b6-edit-line1-${STAMP}\nb6-edit-line2`;
     sender.sendMessage(CHANNEL, orig);
     const origMsg = await waitForMessage(receiver, CHANNEL, (m) => m.text.startsWith('b6-orig-line1'));
     expect(!!origMsg.id, 'original multi-line got a msgid');
     sender.sendEdit(CHANNEL, origMsg.id, edited);
-    // Accept either: (a) edit arrives with the full multi-line body
-    // (means the server-side gap got fixed), or (b) edit arrives with
-    // only the first line (current behavior). Anything else is a regression.
-    let ed = null;
-    try {
-      ed = await waitForEdit(receiver, CHANNEL, origMsg.id, 4000);
-    } catch {
-      currentFails.push('multi-line edit did not arrive at all (worse than the documented gap)');
-      return;
-    }
-    if (ed.newText === edited) {
-      // Server-side fix landed — great
-    } else if (ed.newText === `b6-edit-line1-${STAMP}`) {
-      // Documented gap — single-line truncation. Not a regression.
-      console.log('    note: server broadcast only first line of multi-line edit (known gap)');
-    } else {
-      currentFails.push(`unexpected edit text: ${JSON.stringify(ed.newText)}`);
-    }
+    const ed = await waitForEdit(receiver, CHANNEL, origMsg.id, 4000);
+    expectEq(ed.newText, edited, 'multi-line edit text arrives intact');
   });
 
   await runTest('B7: reply to a multi-line message', async () => {

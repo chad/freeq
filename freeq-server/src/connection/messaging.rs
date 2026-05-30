@@ -1847,15 +1847,44 @@ fn handle_edit(
         full_tags.insert("+freeq.at/sig".to_string(), sig);
     }
 
+    // If the edit body has `\n`, split it into per-line chunks so we can
+    // BATCH-wrap multiline-capable receivers (wire-valid) while the
+    // non-multiline fallback shapes below carry only line1 (also
+    // wire-valid; degraded but not malformed).
+    let multiline_lines: Option<Vec<super::draft_multiline::BatchLine>> =
+        if new_text.contains('\n') {
+            Some(
+                new_text
+                    .split('\n')
+                    .map(|body| super::draft_multiline::BatchLine {
+                        body: body.to_string(),
+                        concat_to_previous: false,
+                        command: "PRIVMSG".to_string(),
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        };
+    let outbound_batch_id = multiline_lines
+        .as_ref()
+        .map(|_| format!("ml{}", crate::msgid::generate()));
+    // Fallback body: receivers without draft/multiline see only line1
+    // of a multi-line edit. Single-line edits use new_text verbatim.
+    let fallback_text: &str = multiline_lines
+        .as_ref()
+        .and_then(|lines| lines.first().map(|l| l.body.as_str()))
+        .unwrap_or(new_text);
+
     // Plain line for non-tag clients (they see it as a new message)
-    let plain_line = format!(":{hostmask} PRIVMSG {target} :{new_text}\r\n");
+    let plain_line = format!(":{hostmask} PRIVMSG {target} :{fallback_text}\r\n");
     // Tagged line with edit reference
     let tagged_line = {
         let tag_msg = irc::Message {
             tags: full_tags.clone(),
             prefix: Some(hostmask.clone()),
             command: "PRIVMSG".to_string(),
-            params: vec![target.to_string(), new_text.to_string()],
+            params: vec![target.to_string(), fallback_text.to_string()],
         };
         format!("{tag_msg}\r\n")
     };
@@ -1869,13 +1898,13 @@ fn handle_edit(
         .format("%Y-%m-%dT%H:%M:%S.000Z")
         .to_string();
     let mut full_tags_with_time = full_tags.clone();
-    full_tags_with_time.insert("time".to_string(), time_tag);
+    full_tags_with_time.insert("time".to_string(), time_tag.clone());
     let tagged_line_with_time = {
         let tag_msg = irc::Message {
             tags: full_tags_with_time,
             prefix: Some(hostmask.clone()),
             command: "PRIVMSG".to_string(),
-            params: vec![target.to_string(), new_text.to_string()],
+            params: vec![target.to_string(), fallback_text.to_string()],
         };
         format!("{tag_msg}\r\n")
     };
@@ -1942,12 +1971,44 @@ fn handle_edit(
         let tag_caps = state.cap_message_tags.lock();
         let time_caps = state.cap_server_time.lock();
         let echo_caps = state.cap_echo_message.lock();
+        let multiline_caps = state.cap_draft_multiline.lock();
         let conns = state.connections.lock();
         for sid in &members {
             if sid == &conn.id && !echo_caps.contains(sid) {
                 continue;
             }
             if let Some(tx) = conns.get(sid) {
+                // Multi-line edit + receiver negotiated draft/multiline →
+                // emit BATCH-wrapped edit (opener carries +draft/edit + msgid).
+                if let (Some(lines), Some(batch_id)) =
+                    (multiline_lines.as_deref(), outbound_batch_id.as_deref())
+                    && multiline_caps.contains(sid)
+                {
+                    let caps = super::draft_multiline::ReceiverCaps {
+                        has_tags: tag_caps.contains(sid),
+                        has_time: time_caps.contains(sid),
+                        has_multiline: true,
+                        wants_account: false,
+                        sender_did: None,
+                    };
+                    let ctx = super::draft_multiline::RelayContext {
+                        hostmask: &hostmask,
+                        command: "PRIVMSG",
+                        target,
+                        msgid: &edit_msgid,
+                        time_tag: &time_tag,
+                        opener_tags: &full_tags,
+                        batch_id,
+                        lines,
+                    };
+                    for frame in
+                        super::draft_multiline::build_outbound_multiline_frames(&ctx, &caps)
+                    {
+                        let _ = tx.try_send(frame);
+                    }
+                    continue;
+                }
+                // Fallback: single PRIVMSG (line1 only for multi-line edits).
                 let line = if tag_caps.contains(sid) {
                     if time_caps.contains(sid) {
                         &tagged_line_with_time
@@ -1979,11 +2040,18 @@ fn handle_edit(
                 msgid: Some(edit_msgid),
                 sig,
                 tags: s2s_tags,
-                // Edits don't carry multiline chunking today — the
-                // edit path operates on a single-PRIVMSG body. An
-                // edit applied to an originally-multiline message
-                // is a known shape gap (see KNOWN-LIMITATIONS.md).
-                multiline_lines: None,
+                // Multi-line edit: pass the per-line breakdown so peer
+                // servers can re-emit BATCH frames to their own
+                // multiline-capable clients.
+                multiline_lines: multiline_lines.as_ref().map(|lines| {
+                    lines
+                        .iter()
+                        .map(|l| crate::s2s::MultilineLine {
+                            body: l.body.clone(),
+                            concat: l.concat_to_previous,
+                        })
+                        .collect()
+                }),
             },
         );
     } else {
@@ -1991,15 +2059,57 @@ fn handle_edit(
         use super::routing::{RouteResult, relay_to_nick};
         let from_nick = conn.nick.as_deref().unwrap_or("*").to_string();
 
+        // Per-session deliver helper: BATCH frames for multiline-capable
+        // receivers, fallback single-PRIVMSG (line1 only) otherwise.
+        let deliver_to_session = |tx: &tokio::sync::mpsc::Sender<String>, sid: &str| {
+            let has_tags = state.cap_message_tags.lock().contains(sid);
+            let has_time = state.cap_server_time.lock().contains(sid);
+            let has_multiline = state.cap_draft_multiline.lock().contains(sid);
+            if let (Some(lines), Some(batch_id)) =
+                (multiline_lines.as_deref(), outbound_batch_id.as_deref())
+                && has_multiline
+            {
+                let caps = super::draft_multiline::ReceiverCaps {
+                    has_tags,
+                    has_time,
+                    has_multiline: true,
+                    wants_account: false,
+                    sender_did: None,
+                };
+                let ctx = super::draft_multiline::RelayContext {
+                    hostmask: &hostmask,
+                    command: "PRIVMSG",
+                    target,
+                    msgid: &edit_msgid,
+                    time_tag: &time_tag,
+                    opener_tags: &full_tags,
+                    batch_id,
+                    lines,
+                };
+                for frame in
+                    super::draft_multiline::build_outbound_multiline_frames(&ctx, &caps)
+                {
+                    let _ = tx.try_send(frame);
+                }
+                return;
+            }
+            let line = if has_tags {
+                if has_time { &tagged_line_with_time } else { &tagged_line }
+            } else {
+                &plain_line
+            };
+            let _ = tx.try_send(line.clone());
+        };
+
+        // Pass multiline_lines to the federated relay so peers see a
+        // multi-line edit and re-emit BATCH frames downstream.
         match relay_to_nick(
             state,
             &from_nick,
             target,
             new_text,
             s2s_next_event_id(state),
-            // Edits don't carry multiline chunking today (the edit
-            // path operates on a single-PRIVMSG body).
-            None,
+            multiline_lines.as_deref(),
         ) {
             RouteResult::Local(ref session) => {
                 // Find all sessions for target's DID (multi-device support)
@@ -2020,29 +2130,15 @@ fn handle_edit(
                 let conns = state.connections.lock();
                 // Deliver to all target sessions
                 for target_session in &target_sessions {
-                    let has_tags = state.cap_message_tags.lock().contains(target_session);
-                    let has_time = state.cap_server_time.lock().contains(target_session);
-                    let line = if has_tags {
-                        if has_time { &tagged_line_with_time } else { &tagged_line }
-                    } else {
-                        &plain_line
-                    };
                     if let Some(tx) = conns.get(target_session) {
-                        let _ = tx.try_send(line.clone());
+                        deliver_to_session(tx, target_session);
                     }
                 }
 
                 // Echo to sender if echo-message enabled
                 if state.cap_echo_message.lock().contains(&conn.id) {
-                    let has_tags = state.cap_message_tags.lock().contains(&conn.id);
-                    let has_time = state.cap_server_time.lock().contains(&conn.id);
-                    let line = if has_tags {
-                        if has_time { &tagged_line_with_time } else { &tagged_line }
-                    } else {
-                        &plain_line
-                    };
                     if let Some(tx) = conns.get(&conn.id) {
-                        let _ = tx.try_send(line.clone());
+                        deliver_to_session(tx, &conn.id);
                     }
                 }
             }
@@ -2050,15 +2146,8 @@ fn handle_edit(
                 // Target is on a federated peer — edit was relayed
                 // Echo to sender
                 if state.cap_echo_message.lock().contains(&conn.id) {
-                    let has_tags = state.cap_message_tags.lock().contains(&conn.id);
-                    let has_time = state.cap_server_time.lock().contains(&conn.id);
-                    let line = if has_tags {
-                        if has_time { &tagged_line_with_time } else { &tagged_line }
-                    } else {
-                        &plain_line
-                    };
                     if let Some(tx) = state.connections.lock().get(&conn.id) {
-                        let _ = tx.try_send(line.clone());
+                        deliver_to_session(tx, &conn.id);
                     }
                 }
             }
