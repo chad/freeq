@@ -4820,11 +4820,21 @@ mod s2s_adversarial_tests {
             S2sMessage::Privmsg {
                 target,
                 text,
+                tags,
                 multiline_lines,
                 ..
             } => {
                 assert_eq!(target, "ghost");
-                assert_eq!(text, "chunk one\nchunk twotail");
+                // The S2S `text` field is dual-encoded: `\n` escaped to
+                // `\\n` + `+freeq.at/multiline` tag, so a peer that
+                // doesn't understand `multiline_lines` still relays
+                // wire-safe content. New peers prefer `multiline_lines`
+                // and ignore the escaped `text`.
+                assert_eq!(text, "chunk one\\nchunk twotail");
+                assert!(
+                    tags.contains_key("+freeq.at/multiline"),
+                    "+freeq.at/multiline tag must be set when text is escaped"
+                );
                 let ml = multiline_lines.expect("multiline_lines absent from broadcast");
                 assert_eq!(ml.len(), 3);
                 assert_eq!(ml[0].body, "chunk one");

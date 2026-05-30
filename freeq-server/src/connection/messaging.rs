@@ -933,19 +933,21 @@ pub(super) fn handle_privmsg_with_multiline(
         if command == "PRIVMSG" {
             let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
             let sig = full_tags.get("+freeq.at/sig").cloned();
+            let (s2s_text, s2s_tags) = crate::s2s::encode_privmsg_text_for_s2s(
+                text,
+                crate::s2s::relay_coordination_tags(&full_tags),
+            );
             s2s_broadcast(
                 state,
                 crate::s2s::S2sMessage::Privmsg {
                     event_id: s2s_next_event_id(state),
                     from: conn.nick.as_deref().unwrap_or("*").to_string(),
                     target: target.to_string(),
-                    text: text.to_string(),
+                    text: s2s_text,
                     origin,
                     msgid: Some(msgid.clone()),
                     sig,
-                    // Coordination card tags ride with the message so a
-                    // federated peer's clients render the same card.
-                    tags: crate::s2s::relay_coordination_tags(&full_tags),
+                    tags: s2s_tags,
                     // When this message originated as a draft/multiline
                     // batch, ship the per-line breakdown so the peer
                     // can re-emit BATCH frames to its own multiline-
@@ -1086,17 +1088,21 @@ pub(super) fn handle_privmsg_with_multiline(
                 // Target is local — deliver to ALL sessions for target's DID (multi-device).
                 // Also relay via S2S so the DM is visible on other federated servers
                 // (e.g. sender logged into multiple servers).
+                let (s2s_text, s2s_tags) = crate::s2s::encode_privmsg_text_for_s2s(
+                    text,
+                    crate::s2s::relay_coordination_tags(&pm_tags),
+                );
                 super::helpers::s2s_broadcast(
                     state,
                     crate::s2s::S2sMessage::Privmsg {
                         event_id: s2s_next_event_id(state),
                         from: conn.hostmask(),
                         target: target.to_string(),
-                        text: text.to_string(),
+                        text: s2s_text,
                         origin: state.server_iroh_id.lock().clone().unwrap_or_default(),
                         msgid: Some(pm_msgid.clone()),
                         sig: pm_tags.get("+freeq.at/sig").cloned(),
-                        tags: crate::s2s::relay_coordination_tags(&pm_tags),
+                        tags: s2s_tags,
                         multiline_lines: multiline_lines.map(|lines| {
                             lines
                                 .iter()
@@ -1958,17 +1964,21 @@ fn handle_edit(
         // Broadcast to S2S peers
         let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
         let sig = full_tags.get("+freeq.at/sig").cloned();
+        let (s2s_text, s2s_tags) = crate::s2s::encode_privmsg_text_for_s2s(
+            new_text,
+            crate::s2s::relay_coordination_tags(&full_tags),
+        );
         s2s_broadcast(
             state,
             crate::s2s::S2sMessage::Privmsg {
                 event_id: s2s_next_event_id(state),
                 from: nick.to_string(),
                 target: target.to_string(),
-                text: new_text.to_string(),
+                text: s2s_text,
                 origin,
                 msgid: Some(edit_msgid),
                 sig,
-                tags: crate::s2s::relay_coordination_tags(&full_tags),
+                tags: s2s_tags,
                 // Edits don't carry multiline chunking today — the
                 // edit path operates on a single-PRIVMSG body. An
                 // edit applied to an originally-multiline message

@@ -81,15 +81,19 @@ pub(crate) fn relay_to_nick(
         let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
         let manager = state.s2s_manager.lock().clone();
         if let Some(m) = manager {
+            let (s2s_text, s2s_tags) = crate::s2s::encode_privmsg_text_for_s2s(
+                text,
+                std::collections::HashMap::new(),
+            );
             m.broadcast(crate::s2s::S2sMessage::Privmsg {
                 event_id,
                 from: from.to_string(),
                 target: target.to_string(),
-                text: text.to_string(),
+                text: s2s_text,
                 origin,
                 msgid: None, // PM relay — no msgid (recipient server assigns)
                 sig: None,   // PM relay — sig not available at routing layer
-                tags: std::collections::HashMap::new(), // no tags at routing layer
+                tags: s2s_tags,
                 multiline_lines: multiline_lines.map(|lines| {
                     lines
                         .iter()

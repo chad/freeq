@@ -124,6 +124,39 @@ pub fn relay_coordination_tags(full: &HashMap<String, String>) -> HashMap<String
         .collect()
 }
 
+/// Encode a PRIVMSG body for the S2S `text` field so that ANY peer
+/// can relay it safely to its local clients, regardless of whether
+/// that peer understands `multiline_lines`. If the body contains `\n`
+/// (i.e., the message is multi-line), `\n` is escaped to the two
+/// literal chars `\\n` and the `+freeq.at/multiline` tag is added —
+/// the freeq inline encoding that's been understood by freeq clients
+/// since before the `draft/multiline` track existed.
+///
+/// **Why:** the S2S wire field is a JSON String and tolerates real
+/// `\n` bytes during transport. But when a peer that doesn't process
+/// `multiline_lines` constructs a PRIVMSG from `text` and writes it
+/// to its local clients' TCP/WS connections, an embedded `\n` ends
+/// the IRC line mid-body and everything after is lost (parsed as
+/// unknown commands). Pre-escaping keeps the wire safe everywhere.
+///
+/// New peers prefer `multiline_lines` for proper BATCH emission and
+/// the escaped `text` is ignored. Old peers ignore `multiline_lines`
+/// and use the escaped `text` — their local freeq clients decode the
+/// tag back to real `\n` on render.
+///
+/// Returns `(text_for_wire, tags_with_multiline_tag_if_set)`.
+pub fn encode_privmsg_text_for_s2s(
+    text: &str,
+    mut tags: HashMap<String, String>,
+) -> (String, HashMap<String, String>) {
+    if text.contains('\n') {
+        tags.insert("+freeq.at/multiline".to_string(), String::new());
+        (text.replace('\n', "\\n"), tags)
+    } else {
+        (text.to_string(), tags)
+    }
+}
+
 /// One line of a draft/multiline batch, serialized for S2S relay.
 /// Kept minimal so the wire size doesn't balloon for typical agent
 /// turns: just the body and the concat flag.
@@ -1765,6 +1798,62 @@ mod tests {
             assert!(dedup.check_and_insert("peer1", "peer1:200").await);  // new
             assert!(dedup.check_and_insert("peer2", "peer2:50").await);   // different peer
         });
+    }
+
+    #[test]
+    fn encode_privmsg_text_for_s2s_passes_single_line_through() {
+        let (text, tags) = encode_privmsg_text_for_s2s("hello world", HashMap::new());
+        assert_eq!(text, "hello world");
+        assert!(!tags.contains_key("+freeq.at/multiline"));
+    }
+
+    #[test]
+    fn encode_privmsg_text_for_s2s_escapes_multiline_and_sets_tag() {
+        let (text, tags) = encode_privmsg_text_for_s2s(
+            "line one\nline two\nline three",
+            HashMap::new(),
+        );
+        // Wire-safe: no literal `\n` after escape
+        assert!(!text.contains('\n'), "escaped text must not contain literal \\n");
+        assert_eq!(text, "line one\\nline two\\nline three");
+        // Tag set so receivers can decode on render
+        assert!(tags.contains_key("+freeq.at/multiline"));
+    }
+
+    #[test]
+    fn encode_privmsg_text_for_s2s_preserves_existing_coordination_tags() {
+        let mut existing = HashMap::new();
+        existing.insert("+freeq.at/event".to_string(), "reveal".to_string());
+        existing.insert("+freeq.at/payload".to_string(), "%7B%7D".to_string());
+        let (_text, tags) = encode_privmsg_text_for_s2s("a\nb", existing);
+        assert_eq!(tags.get("+freeq.at/event").map(String::as_str), Some("reveal"));
+        assert_eq!(tags.get("+freeq.at/payload").map(String::as_str), Some("%7B%7D"));
+        assert!(tags.contains_key("+freeq.at/multiline"));
+    }
+
+    /// The federation skew invariant: a peer that DOESN'T understand
+    /// `multiline_lines` (e.g. pre-Phase-4c) still receives a wire-safe
+    /// `text` field — relaying it to its local clients produces ONE
+    /// PRIVMSG with literal `\\n` and a tag, NOT a broken multi-line
+    /// PRIVMSG that splits across IRC line framing.
+    #[test]
+    fn encode_privmsg_text_for_s2s_keeps_old_peer_safe() {
+        let body = "a\nb\nc";
+        let (text, tags) = encode_privmsg_text_for_s2s(body, HashMap::new());
+        // Simulate the old peer's relay: it ignores any unknown fields,
+        // builds a PRIVMSG with `text`, writes to a TCP socket. The bytes
+        // it writes must NOT contain `\n` mid-body or the IRC parser at
+        // the recipient breaks framing.
+        let bytes = format!(":sender PRIVMSG #room :{text}\r\n");
+        let body_bytes = bytes.strip_prefix(":sender PRIVMSG #room :").unwrap()
+            .strip_suffix("\r\n").unwrap();
+        assert!(
+            !body_bytes.contains('\n'),
+            "old peer's wire bytes would contain literal \\n — wire is broken!"
+        );
+        // And the tag is there so the old peer's freeq-aware clients
+        // know to decode on render.
+        assert!(tags.contains_key("+freeq.at/multiline"));
     }
 
     #[test]
