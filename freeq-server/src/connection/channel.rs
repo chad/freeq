@@ -474,10 +474,37 @@ pub(super) fn handle_join(
             .cap_draft_multiline
             .lock()
             .contains(session_id);
-        let channels = state.channels.lock();
-        if let Some(ch) = channels.get(channel)
-            && !ch.history.is_empty()
-        {
+
+        // Clone the history out so the DB call (reactions lookup) can
+        // happen without holding the channels lock — and so the per-row
+        // emit loop below isn't holding the lock either.
+        let history: Vec<crate::server::HistoryMessage> = {
+            let channels = state.channels.lock();
+            channels
+                .get(channel)
+                .map(|ch| ch.history.iter().cloned().collect())
+                .unwrap_or_default()
+        };
+
+        if !history.is_empty() {
+            // Fetch persisted reactions for this batch so they ride on
+            // the replayed messages — mirrors the explicit CHATHISTORY
+            // emission path (messaging.rs). Without this, joiners see
+            // history with no reaction chips until a live TAGMSG
+            // arrives.
+            let msgids: Vec<&str> =
+                history.iter().filter_map(|h| h.msgid.as_deref()).collect();
+            let reactions: std::collections::HashMap<
+                String,
+                Vec<crate::db::ReactionRow>,
+            > = if has_tags_cap && !msgids.is_empty() {
+                state
+                    .with_db(|db| db.get_reactions_for_messages(&msgids))
+                    .unwrap_or_default()
+            } else {
+                std::collections::HashMap::new()
+            };
+
             // Start batch if client supports it
             let batch_id = format!("hist{}", crate::msgid::generate());
             if has_batch_cap {
@@ -486,7 +513,7 @@ pub(super) fn handle_join(
                 send(state, session_id, batch_start);
             }
 
-            for hist in &ch.history {
+            for hist in &history {
                 let mut msg_tags = if has_tags_cap {
                     hist.tags.clone()
                 } else {
@@ -496,6 +523,27 @@ pub(super) fn handle_join(
                 // Add msgid tag if available
                 if has_tags_cap && let Some(ref mid) = hist.msgid {
                     msg_tags.insert("msgid".to_string(), mid.clone());
+                    // Include persisted reactions as `+freeq.at/reactions`
+                    // (format: `emoji1:nick1,nick2;emoji2:nick3`).
+                    if let Some(reaction_rows) = reactions.get(mid) {
+                        let mut by_emoji: std::collections::HashMap<
+                            &str,
+                            Vec<&str>,
+                        > = std::collections::HashMap::new();
+                        for r in reaction_rows {
+                            by_emoji.entry(&r.emoji).or_default().push(&r.reactor_nick);
+                        }
+                        if !by_emoji.is_empty() {
+                            let encoded: Vec<String> = by_emoji
+                                .iter()
+                                .map(|(emoji, nicks)| format!("{}:{}", emoji, nicks.join(",")))
+                                .collect();
+                            msg_tags.insert(
+                                "+freeq.at/reactions".to_string(),
+                                encoded.join(";"),
+                            );
+                        }
+                    }
                 }
 
                 // Add server-time tag

@@ -815,6 +815,75 @@ async fn join_history_multiline_uses_nested_batch_when_cap_negotiated() {
 }
 
 #[tokio::test]
+async fn join_history_replay_attaches_persisted_reactions_tag() {
+    // Persisted reactions live in the DB (written by the TAGMSG
+    // +react handler). The implicit JOIN-time history replay used to
+    // ignore them entirely — only the explicit CHATHISTORY command
+    // looked them up. Joiners saw history with no reaction chips
+    // until a live TAGMSG arrived. Pin that the JOIN replay now
+    // surfaces them as `+freeq.at/reactions=emoji:nick[,nick];…` on
+    // the message they belong to.
+    let r = resolver(vec![]);
+    let (addr, _h) = start(r).await;
+    run(addr, |addr| {
+        // alice posts a message in #reachist
+        let mut alice = C::with_caps(addr, "rea_alice");
+        alice.tx("JOIN #reachist");
+        alice.num("366");
+        alice.drain();
+        alice.tx("PRIVMSG #reachist :a message worth reacting to");
+        alice.drain();
+        std::thread::sleep(Duration::from_millis(120));
+
+        // bob joins, finds alice's msgid in the JOIN replay, then
+        // reacts via TAGMSG.
+        let mut bob = C::with_caps(addr, "rea_bob");
+        bob.tx("JOIN #reachist");
+        let bob_lines = collect_join_history_batch(&mut bob);
+        let alice_msg_line = bob_lines
+            .iter()
+            .find(|l| l.contains("a message worth reacting to"))
+            .expect("alice's PRIVMSG missing from bob's JOIN replay");
+        let alice_msgid = C::extract_msgid(alice_msg_line);
+        assert!(!alice_msgid.is_empty(), "alice msgid extraction failed: {alice_msg_line}");
+        bob.drain();
+        bob.tx(&format!(
+            "@+react=👍;+reply={alice_msgid} TAGMSG #reachist"
+        ));
+        bob.drain();
+        std::thread::sleep(Duration::from_millis(200));
+
+        // carol joins fresh — JOIN replay must carry alice's message
+        // with `+freeq.at/reactions=👍:rea_bob`.
+        let mut carol = C::with_caps(addr, "rea_carol");
+        carol.tx("JOIN #reachist");
+        let lines = collect_join_history_batch(&mut carol);
+        let alice_replay = lines
+            .iter()
+            .find(|l| l.contains("a message worth reacting to"))
+            .expect("alice's history msg missing from carol's JOIN replay");
+        assert!(
+            alice_replay.contains("+freeq.at/reactions="),
+            "JOIN replay msg lacks reactions tag: {alice_replay}"
+        );
+        // Format is `emoji:nick[,nick][;emoji2:…]`. Confirm both halves.
+        // The tag block is the first whitespace-separated token, prefixed
+        // with `@`. Strip the `@` before splitting on `;`.
+        let reactions_val = alice_replay
+            .split_whitespace()
+            .next()
+            .and_then(|tags| tags.strip_prefix('@'))
+            .and_then(|tags| tags.split(';').find(|t| t.starts_with("+freeq.at/reactions=")))
+            .and_then(|t| t.strip_prefix("+freeq.at/reactions="))
+            .unwrap_or("");
+        assert!(
+            reactions_val.contains("👍") && reactions_val.contains("rea_bob"),
+            "reactions tag value missing emoji/nick: '{reactions_val}' (whole line: {alice_replay})"
+        );
+    }).await;
+}
+
+#[tokio::test]
 async fn join_history_multiline_splits_when_no_multiline_cap() {
     // Without draft/multiline cap, the JOIN replay must split the
     // stored multi-line body into N tagged PRIVMSGs (msgid + account
