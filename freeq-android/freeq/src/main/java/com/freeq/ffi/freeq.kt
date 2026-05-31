@@ -3233,7 +3233,8 @@ data class IrcMessage (
     var `isAction`: kotlin.Boolean, 
     var `isSigned`: kotlin.Boolean, 
     var `timestampMs`: kotlin.Long, 
-    var `account`: kotlin.String?
+    var `account`: kotlin.String?, 
+    var `reactions`: List<ReactionTally>
 ) {
     
     companion object
@@ -3259,6 +3260,7 @@ public object FfiConverterTypeIrcMessage: FfiConverterRustBuffer<IrcMessage> {
             FfiConverterBoolean.read(buf),
             FfiConverterLong.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterSequenceTypeReactionTally.read(buf),
         )
     }
 
@@ -3276,7 +3278,8 @@ public object FfiConverterTypeIrcMessage: FfiConverterRustBuffer<IrcMessage> {
             FfiConverterBoolean.allocationSize(value.`isAction`) +
             FfiConverterBoolean.allocationSize(value.`isSigned`) +
             FfiConverterLong.allocationSize(value.`timestampMs`) +
-            FfiConverterOptionalString.allocationSize(value.`account`)
+            FfiConverterOptionalString.allocationSize(value.`account`) +
+            FfiConverterSequenceTypeReactionTally.allocationSize(value.`reactions`)
     )
 
     override fun write(value: IrcMessage, buf: ByteBuffer) {
@@ -3294,6 +3297,7 @@ public object FfiConverterTypeIrcMessage: FfiConverterRustBuffer<IrcMessage> {
             FfiConverterBoolean.write(value.`isSigned`, buf)
             FfiConverterLong.write(value.`timestampMs`, buf)
             FfiConverterOptionalString.write(value.`account`, buf)
+            FfiConverterSequenceTypeReactionTally.write(value.`reactions`, buf)
     }
 }
 
@@ -3334,6 +3338,38 @@ public object FfiConverterTypePreKeyBundle: FfiConverterRustBuffer<PreKeyBundle>
             FfiConverterString.write(value.`signedPreKey`, buf)
             FfiConverterString.write(value.`spkSignature`, buf)
             FfiConverterUInt.write(value.`spkId`, buf)
+    }
+}
+
+
+
+data class ReactionTally (
+    var `emoji`: kotlin.String, 
+    var `nicks`: List<kotlin.String>
+) {
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeReactionTally: FfiConverterRustBuffer<ReactionTally> {
+    override fun read(buf: ByteBuffer): ReactionTally {
+        return ReactionTally(
+            FfiConverterString.read(buf),
+            FfiConverterSequenceString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: ReactionTally) = (
+            FfiConverterString.allocationSize(value.`emoji`) +
+            FfiConverterSequenceString.allocationSize(value.`nicks`)
+    )
+
+    override fun write(value: ReactionTally, buf: ByteBuffer) {
+            FfiConverterString.write(value.`emoji`, buf)
+            FfiConverterSequenceString.write(value.`nicks`, buf)
     }
 }
 
@@ -4677,6 +4713,34 @@ public object FfiConverterSequenceTypeIrcMember: FfiConverterRustBuffer<List<Irc
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeIrcMember.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeReactionTally: FfiConverterRustBuffer<List<ReactionTally>> {
+    override fun read(buf: ByteBuffer): List<ReactionTally> {
+        val len = buf.getInt()
+        return List<ReactionTally>(len) {
+            FfiConverterTypeReactionTally.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<ReactionTally>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeReactionTally.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<ReactionTally>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeReactionTally.write(it, buf)
         }
     }
 }

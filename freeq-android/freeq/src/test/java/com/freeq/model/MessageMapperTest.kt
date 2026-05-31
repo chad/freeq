@@ -1,6 +1,7 @@
 package com.freeq.model
 
 import com.freeq.ffi.IrcMessage
+import com.freeq.ffi.ReactionTally
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -33,6 +34,7 @@ class MessageMapperTest {
         isSigned: Boolean = false,
         timestampMs: Long = 1_700_000_000_000L,
         account: String? = null,
+        reactions: List<ReactionTally> = emptyList(),
     ) = IrcMessage(
         fromNick = fromNick,
         target = target,
@@ -48,6 +50,7 @@ class MessageMapperTest {
         isSigned = isSigned,
         timestampMs = timestampMs,
         account = account,
+        reactions = reactions,
     )
 
     @Test fun preserves_basic_fields() {
@@ -97,5 +100,29 @@ class MessageMapperTest {
         assertTrue(out.reactions.isEmpty())
         assertFalse(out.isEdited)
         assertFalse(out.isDeleted)
+    }
+
+    @Test fun reactions_persisted_on_history_message_populate_into_chat_message() {
+        // The persisted-reactions tag (+freeq.at/reactions) rides on
+        // history-replay messages. Without this mapping, history msgs
+        // arrive on-screen with no chips even though the FFI surfaced
+        // the tallies. Pin every parsed tally end-to-end.
+        val out = MessageMapper.fromIrc(ircMsg(reactions = listOf(
+            ReactionTally(emoji = "👍", nicks = listOf("alice", "bob")),
+            ReactionTally(emoji = "❤️", nicks = listOf("carol")),
+        )))
+        assertEquals(2, out.reactions.size)
+        assertEquals(setOf("alice", "bob"), out.reactions["👍"])
+        assertEquals(setOf("carol"), out.reactions["❤️"])
+    }
+
+    @Test fun empty_emoji_or_nicks_in_tally_are_dropped() {
+        val out = MessageMapper.fromIrc(ircMsg(reactions = listOf(
+            ReactionTally(emoji = "", nicks = listOf("alice")),
+            ReactionTally(emoji = "🎉", nicks = emptyList()),
+            ReactionTally(emoji = "👍", nicks = listOf("dave")),
+        )))
+        assertEquals(1, out.reactions.size)
+        assertEquals(setOf("dave"), out.reactions["👍"])
     }
 }
