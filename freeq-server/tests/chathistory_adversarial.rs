@@ -712,3 +712,153 @@ async fn chathistory_after_kick_denied() {
         }
     }).await;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// JOIN-time history replay: multi-line entries
+// ═══════════════════════════════════════════════════════════════
+
+/// Helper: collect lines emitted on JOIN until the chathistory BATCH
+/// closes. Returns the lines between the opener (exclusive) and
+/// closer (exclusive). Skips numerics and JOIN echoes.
+fn collect_join_history_batch(c: &mut C) -> Vec<String> {
+    // Wait for the chathistory BATCH opener
+    c.rx(|l| l.contains("BATCH +") && l.contains("chathistory"), "join hist BATCH start");
+    let mut lines = Vec::new();
+    loop {
+        let line = c.rx(|_| true, "join hist line");
+        // The chathistory BATCH closer has no nested batch tag.
+        let trimmed = line.trim_start_matches('@');
+        let after_tags = trimmed.split_once(' ').map(|(_, r)| r).unwrap_or(&line);
+        if after_tags.contains("BATCH -") && !line.starts_with('@') {
+            break;
+        }
+        // Catch the unprefixed-closer form too (no tags).
+        if line.contains("BATCH -") && !line.contains("draft/multiline") {
+            // Could be the nested ml closer (which DOES carry batch=...)
+            // or the outer chathistory closer (no tags). Distinguish by
+            // whether there's a `batch=` tag.
+            let has_batch_tag = line.starts_with('@') && line.contains("batch=");
+            if !has_batch_tag {
+                break;
+            }
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+#[tokio::test]
+async fn join_history_multiline_uses_nested_batch_when_cap_negotiated() {
+    // A multi-line message that landed via a draft/multiline batch is
+    // stored with \n between paragraphs. The implicit JOIN-time
+    // history replay must wrap such entries in a nested
+    // draft/multiline BATCH for receivers that negotiated the cap —
+    // emitting `\n` raw inside a PRIVMSG param is invalid IRC framing
+    // and the receiver's parser truncates at the first newline.
+    let r = resolver(vec![]);
+    let (addr, _h) = start(r).await;
+    run(addr, |addr| {
+        let mut alice = C::with_caps(addr, "joinml_a");
+        alice.tx("CAP REQ :draft/multiline");
+        alice.rx(|l| l.contains("ACK"), "alice draft/multiline ACK");
+        alice.drain();
+        alice.tx("JOIN #joinml");
+        alice.num("366");
+        alice.drain();
+        alice.tx("BATCH +mlx draft/multiline #joinml");
+        alice.tx("@batch=mlx PRIVMSG #joinml :line one of three");
+        alice.tx("@batch=mlx PRIVMSG #joinml :line two of three");
+        alice.tx("@batch=mlx PRIVMSG #joinml :line three of three");
+        alice.tx("BATCH -mlx");
+        alice.drain();
+        std::thread::sleep(Duration::from_millis(150));
+
+        let mut bob = C::with_caps(addr, "joinml_b");
+        bob.tx("CAP REQ :draft/multiline");
+        bob.rx(|l| l.contains("ACK"), "bob draft/multiline ACK");
+        bob.drain();
+        bob.tx("JOIN #joinml");
+        let lines = collect_join_history_batch(&mut bob);
+
+        // Expect a nested `BATCH +<id> draft/multiline #joinml` opener
+        let opener = lines.iter().find(|l| l.contains("BATCH +") && l.contains("draft/multiline"))
+            .unwrap_or_else(|| panic!("nested draft/multiline BATCH opener missing in {lines:?}"));
+        // Extract the nested batch id from the opener's first param
+        let ml_id = opener.split_whitespace()
+            .find(|t| t.starts_with("+ml") || t.starts_with("+"))
+            .and_then(|t| t.strip_prefix('+'))
+            .unwrap()
+            .to_string();
+
+        // Three chunk PRIVMSGs, each carrying `batch=<ml_id>` and no raw `\n`
+        let chunks: Vec<&String> = lines.iter()
+            .filter(|l| l.contains("PRIVMSG #joinml"))
+            .collect();
+        assert_eq!(chunks.len(), 3, "expected 3 chunk PRIVMSGs, got {chunks:?}");
+        for ch in &chunks {
+            assert!(ch.contains(&format!("batch={ml_id}")),
+                "chunk missing batch={ml_id}: {ch}");
+            // The whole wire line obviously has a trailing CRLF, but the
+            // PRIVMSG body must not have an internal `\n`.
+            let body = ch.rsplit(':').next().unwrap_or("");
+            assert!(!body.contains('\n'), "raw \\n in chunk body: {ch}");
+        }
+        assert!(chunks[0].contains("line one of three"), "chunk 0: {}", chunks[0]);
+        assert!(chunks[1].contains("line two of three"), "chunk 1: {}", chunks[1]);
+        assert!(chunks[2].contains("line three of three"), "chunk 2: {}", chunks[2]);
+
+        // Nested BATCH closer with `-<ml_id>`
+        let nested_closer = lines.iter().find(|l| l.contains(&format!("BATCH -{ml_id}")));
+        assert!(nested_closer.is_some(),
+            "nested BATCH -{ml_id} closer missing in {lines:?}");
+    }).await;
+}
+
+#[tokio::test]
+async fn join_history_multiline_splits_when_no_multiline_cap() {
+    // Without draft/multiline cap, the JOIN replay must split the
+    // stored multi-line body into N tagged PRIVMSGs (msgid + account
+    // ride only on the first chunk). Critically, no PRIVMSG may carry
+    // a raw `\n` in its body.
+    let r = resolver(vec![]);
+    let (addr, _h) = start(r).await;
+    run(addr, |addr| {
+        let mut alice = C::with_caps(addr, "splitml_a");
+        alice.tx("CAP REQ :draft/multiline");
+        alice.rx(|l| l.contains("ACK"), "alice draft/multiline ACK");
+        alice.drain();
+        alice.tx("JOIN #splitml");
+        alice.num("366");
+        alice.drain();
+        alice.tx("BATCH +sm1 draft/multiline #splitml");
+        alice.tx("@batch=sm1 PRIVMSG #splitml :alpha line");
+        alice.tx("@batch=sm1 PRIVMSG #splitml :beta line");
+        alice.tx("BATCH -sm1");
+        alice.drain();
+        std::thread::sleep(Duration::from_millis(150));
+
+        // bob does NOT negotiate draft/multiline.
+        let mut bob = C::with_caps(addr, "splitml_b");
+        bob.tx("JOIN #splitml");
+        let lines = collect_join_history_batch(&mut bob);
+
+        // No nested draft/multiline BATCH may appear.
+        assert!(!lines.iter().any(|l| l.contains("draft/multiline")),
+            "unexpected nested draft/multiline BATCH in {lines:?}");
+
+        let chunks: Vec<&String> = lines.iter()
+            .filter(|l| l.contains("PRIVMSG #splitml"))
+            .collect();
+        assert_eq!(chunks.len(), 2, "expected 2 split PRIVMSGs, got {chunks:?}");
+        assert!(chunks[0].contains("alpha line"), "chunk 0: {}", chunks[0]);
+        assert!(chunks[1].contains("beta line"), "chunk 1: {}", chunks[1]);
+        for ch in &chunks {
+            let body = ch.rsplit(':').next().unwrap_or("");
+            assert!(!body.contains('\n'), "raw \\n in chunk body: {ch}");
+        }
+
+        // msgid rides on the first chunk only.
+        assert!(chunks[0].contains("msgid="), "chunk 0 should carry msgid: {}", chunks[0]);
+        assert!(!chunks[1].contains("msgid="), "chunk 1 should NOT carry msgid: {}", chunks[1]);
+    }).await;
+}
