@@ -470,6 +470,10 @@ pub(super) fn handle_join(
         let has_tags_cap = state.cap_message_tags.lock().contains(session_id);
         let has_time_cap = state.cap_server_time.lock().contains(session_id);
         let has_batch_cap = state.cap_batch.lock().contains(session_id);
+        let has_multiline_cap = state
+            .cap_draft_multiline
+            .lock()
+            .contains(session_id);
         let channels = state.channels.lock();
         if let Some(ch) = channels.get(channel)
             && !ch.history.is_empty()
@@ -506,6 +510,84 @@ pub(super) fn handle_join(
                 // Add batch tag
                 if has_batch_cap {
                     msg_tags.insert("batch".to_string(), batch_id.clone());
+                }
+
+                // Multi-line stored bodies: emitting `\n` raw in a
+                // PRIVMSG terminates the IRC line mid-text. Mirror the
+                // explicit CHATHISTORY emission path — nested
+                // `draft/multiline` BATCH for capable receivers, split
+                // PRIVMSGs otherwise.
+                let bodies: Vec<&str> = hist.text.split('\n').collect();
+                let is_multiline = bodies.len() > 1;
+                if is_multiline && has_multiline_cap && has_batch_cap {
+                    let ml_id = format!("ml{}", crate::msgid::generate());
+                    let opener = irc::Message {
+                        tags: msg_tags.clone(),
+                        prefix: Some(hist.from.clone()),
+                        command: "BATCH".to_string(),
+                        params: vec![
+                            format!("+{ml_id}"),
+                            "draft/multiline".to_string(),
+                            channel.to_string(),
+                        ],
+                    };
+                    send(state, session_id, format!("{opener}\r\n"));
+                    for body in &bodies {
+                        let mut chunk_tags = std::collections::HashMap::new();
+                        chunk_tags.insert("batch".to_string(), ml_id.clone());
+                        let chunk = irc::Message {
+                            tags: chunk_tags,
+                            prefix: Some(hist.from.clone()),
+                            command: "PRIVMSG".to_string(),
+                            params: vec![channel.to_string(), body.to_string()],
+                        };
+                        send(state, session_id, format!("{chunk}\r\n"));
+                    }
+                    let mut closer_tags = std::collections::HashMap::new();
+                    if let Some(b) = msg_tags.get("batch") {
+                        closer_tags.insert("batch".to_string(), b.clone());
+                    }
+                    let closer = irc::Message {
+                        tags: closer_tags,
+                        prefix: None,
+                        command: "BATCH".to_string(),
+                        params: vec![format!("-{ml_id}")],
+                    };
+                    send(state, session_id, format!("{closer}\r\n"));
+                    continue;
+                }
+                if is_multiline {
+                    // Fallback: split at \n into N PRIVMSGs. msgid +
+                    // client tags ride on the first chunk; later chunks
+                    // carry only the chathistory batch tag so they stay
+                    // grouped under the same replay unit.
+                    for (i, body) in bodies.iter().enumerate() {
+                        let chunk_tags = if i == 0 {
+                            msg_tags.clone()
+                        } else {
+                            let mut t = std::collections::HashMap::new();
+                            if has_batch_cap {
+                                t.insert("batch".to_string(), batch_id.clone());
+                            }
+                            t
+                        };
+                        if !chunk_tags.is_empty() && has_tags_cap {
+                            let chunk = irc::Message {
+                                tags: chunk_tags,
+                                prefix: Some(hist.from.clone()),
+                                command: "PRIVMSG".to_string(),
+                                params: vec![channel.to_string(), body.to_string()],
+                            };
+                            send(state, session_id, format!("{chunk}\r\n"));
+                        } else {
+                            let line = format!(
+                                ":{} PRIVMSG {} :{}\r\n",
+                                hist.from, channel, body
+                            );
+                            send(state, session_id, line);
+                        }
+                    }
+                    continue;
                 }
 
                 if !msg_tags.is_empty() && has_tags_cap {
