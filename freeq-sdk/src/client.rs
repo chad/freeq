@@ -2874,4 +2874,206 @@ mod multiline_tests {
             other => panic!("expected Privmsg, got {other:?}"),
         }
     }
+
+    /// CHATHISTORY replays multi-line messages as a `draft/multiline`
+    /// BATCH nested inside the outer `chathistory` BATCH. This test
+    /// drives that exact wire shape through `run_irc` and verifies the
+    /// SDK assembles the inner batch into one `Event::Message` with
+    /// the full body — the bug we suspected on Android shows up here
+    /// if it's actually in the SDK rather than the Android UI.
+    #[tokio::test]
+    async fn nested_chathistory_batch_assembles_inner_multiline() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+
+        let (client_side, mut server_side) = tokio::io::duplex(8192);
+        let (event_tx, mut event_rx) = mpsc::channel::<Event>(32);
+        let (_cmd_tx, cmd_rx) = mpsc::channel::<Command>(16);
+        let echo_registry: EchoRegistry =
+            Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let caps_acked: CapsAcked =
+            Arc::new(parking_lot::Mutex::new(HashSet::new()));
+        let config = ConnectConfig {
+            server_addr: "test".to_string(),
+            nick: "tester".to_string(),
+            user: "tester".to_string(),
+            realname: "tester".to_string(),
+            tls: false,
+            tls_insecure: false,
+            web_token: None,
+            websocket_url: None,
+        };
+        let (reader, writer) = tokio::io::split(client_side);
+
+        tokio::spawn(async move {
+            let _ = run_irc(
+                BufReader::new(reader),
+                writer,
+                &config,
+                None,
+                event_tx,
+                cmd_rx,
+                echo_registry,
+                caps_acked,
+            )
+            .await;
+        });
+
+        // Drain whatever run_irc writes on startup (CAP LS / NICK / USER)
+        // so the duplex buffer doesn't fill and block.
+        let mut drain = vec![0u8; 1024];
+        let _ = tokio::time::timeout(
+            tokio::time::Duration::from_millis(150),
+            server_side.read(&mut drain),
+        )
+        .await;
+
+        // Server-side wire: chathistory BATCH containing an inner
+        // draft/multiline BATCH (two chunks) plus a regular PRIVMSG
+        // sibling, then the chathistory closer. Matches what
+        // freeq-server emits for stored multi-line rows during
+        // CHATHISTORY replay (see freeq-server src/connection/messaging.rs
+        // around the "nested BATCH path" comment).
+        let wire = concat!(
+            ":srv BATCH +cht1 chathistory #room\r\n",
+            "@msgid=ML1;time=2026-05-30T18:00:00.000Z;batch=cht1 ",
+            ":alice!a@h BATCH +ml1 draft/multiline #room\r\n",
+            "@batch=ml1 :alice!a@h PRIVMSG #room :first line\r\n",
+            "@batch=ml1 :alice!a@h PRIVMSG #room :second line\r\n",
+            "@batch=cht1 BATCH -ml1\r\n",
+            "@batch=cht1;msgid=R2 :bob!b@h PRIVMSG #room :sibling regular msg\r\n",
+            ":srv BATCH -cht1\r\n",
+        );
+        server_side.write_all(wire.as_bytes()).await.unwrap();
+        server_side.flush().await.unwrap();
+
+        // Collect events until we hit the BatchEnd for cht1, or timeout.
+        let mut events = Vec::new();
+        let _ = tokio::time::timeout(
+            tokio::time::Duration::from_millis(800),
+            async {
+                while let Some(ev) = event_rx.recv().await {
+                    let done = matches!(&ev, Event::BatchEnd { id } if id == "cht1");
+                    events.push(ev);
+                    if done {
+                        break;
+                    }
+                }
+            },
+        )
+        .await;
+
+        // The assembled multi-line should arrive as Event::Message with
+        // text = "first line\nsecond line". Filter out RawLine noise.
+        let assembled: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Message { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            assembled.iter().any(|t| *t == "first line\nsecond line"),
+            "assembled multi-line message not found. messages dispatched: {assembled:#?}\nall events: {events:#?}",
+        );
+        assert!(
+            assembled.iter().any(|t| t.contains("sibling regular msg")),
+            "regular sibling PRIVMSG should also have been dispatched. got: {assembled:#?}",
+        );
+    }
+
+    /// Same as the prior test but with the exact wire shape that smoke
+    /// scenario B10 produces during CHATHISTORY replay: a multi-line
+    /// message whose body is a label + a fenced code block (backticks +
+    /// rust source). If the SDK assembles this with the full text
+    /// preserved byte-exact, any "only line 1 shows" symptom on a
+    /// client is the client's render layer, not the SDK.
+    #[tokio::test]
+    async fn nested_chathistory_batch_assembles_codeblock_byte_exact() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+
+        let (client_side, mut server_side) = tokio::io::duplex(8192);
+        let (event_tx, mut event_rx) = mpsc::channel::<Event>(32);
+        let (_cmd_tx, cmd_rx) = mpsc::channel::<Command>(16);
+        let echo_registry: EchoRegistry =
+            Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let caps_acked: CapsAcked =
+            Arc::new(parking_lot::Mutex::new(HashSet::new()));
+        let config = ConnectConfig {
+            server_addr: "test".to_string(),
+            nick: "tester".to_string(),
+            user: "tester".to_string(),
+            realname: "tester".to_string(),
+            tls: false,
+            tls_insecure: false,
+            web_token: None,
+            websocket_url: None,
+        };
+        let (reader, writer) = tokio::io::split(client_side);
+
+        tokio::spawn(async move {
+            let _ = run_irc(
+                BufReader::new(reader),
+                writer,
+                &config,
+                None,
+                event_tx,
+                cmd_rx,
+                echo_registry,
+                caps_acked,
+            )
+            .await;
+        });
+
+        let mut drain = vec![0u8; 1024];
+        let _ = tokio::time::timeout(
+            tokio::time::Duration::from_millis(150),
+            server_side.read(&mut drain),
+        )
+        .await;
+
+        // Exact b10 body: label + fenced rust block, as the smoke sends.
+        // Six lines = six chunks in CHATHISTORY replay.
+        let wire = concat!(
+            ":srv BATCH +cht1 chathistory #room\r\n",
+            "@msgid=B10;time=2026-05-30T18:00:00.000Z;batch=cht1 ",
+            ":alice!a@h BATCH +ml1 draft/multiline #room\r\n",
+            "@batch=ml1 :alice!a@h PRIVMSG #room :b10-stamp\r\n",
+            "@batch=ml1 :alice!a@h PRIVMSG #room :```\r\n",
+            "@batch=ml1 :alice!a@h PRIVMSG #room :fn main() {\r\n",
+            "@batch=ml1 :alice!a@h PRIVMSG #room :    println!(\"hello\");\r\n",
+            "@batch=ml1 :alice!a@h PRIVMSG #room :}\r\n",
+            "@batch=ml1 :alice!a@h PRIVMSG #room :```\r\n",
+            "@batch=cht1 BATCH -ml1\r\n",
+            ":srv BATCH -cht1\r\n",
+        );
+        server_side.write_all(wire.as_bytes()).await.unwrap();
+        server_side.flush().await.unwrap();
+
+        let mut events = Vec::new();
+        let _ = tokio::time::timeout(
+            tokio::time::Duration::from_millis(800),
+            async {
+                while let Some(ev) = event_rx.recv().await {
+                    let done = matches!(&ev, Event::BatchEnd { id } if id == "cht1");
+                    events.push(ev);
+                    if done {
+                        break;
+                    }
+                }
+            },
+        )
+        .await;
+
+        let expected = "b10-stamp\n```\nfn main() {\n    println!(\"hello\");\n}\n```";
+        let got = events.iter().find_map(|e| match e {
+            Event::Message { text, .. } if text.starts_with("b10-stamp") => Some(text.clone()),
+            _ => None,
+        });
+        assert_eq!(
+            got.as_deref(),
+            Some(expected),
+            "codeblock body should be assembled byte-exact. events: {events:#?}",
+        );
+    }
 }
