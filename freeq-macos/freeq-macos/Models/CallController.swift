@@ -111,6 +111,12 @@ extension AppState {
             )
             startLocalMic()
             sendRaw("@+freeq.at/av-join;+freeq.at/av-id=\(sessionId);+freeq.at/av-instance=\(instance) TAGMSG \(channel)")
+            // Fresh call — don't inherit mute/camera/expand from a prior one.
+            isMuted = false
+            isCameraOn = false
+            isCallExpanded = false
+            participantsWithVideo = []
+            callParticipants = []
             isInCall = true
             currentCallChannel = channel
             currentCallSessionId = sessionId
