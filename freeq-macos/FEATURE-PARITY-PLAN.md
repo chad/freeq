@@ -87,6 +87,23 @@ All substantive cross-platform features of the iOS/web/TUI superset are now
 present; remaining deltas are platform-specific OS integrations or use a
 different (already-present) architecture on macOS.
 
+## Verification status
+- **Build**: clean `xcodebuild` (0 warnings in new code), codesigns, launches.
+- **Live UI (pre-lock screenshots)**: connected as guest; sidebar, channels,
+  messages with avatars + emoji reactions, member list, MOTD, compose toolbar,
+  per-channel call button all render correctly (`/tmp/freeq-shots/02,03`).
+- **Logic unit-checks**: media URL extraction (image/video/audio/youtube/bsky,
+  including no-cross-match) — 15/15 pass (standalone Swift harness).
+- **Expired-token recovery**: confirmed the stored broker token returns 401
+  (revoked); the new path clears it and routes to sign-in.
+- **Blocked tonight**: the full driven screenshot sweep needs an UNLOCKED GUI
+  session (a locked macOS session doesn't run the SwiftUI lifecycle or window
+  server). Run `freeq-macos/scripts/ui-sweep.sh` once unlocked to capture the
+  full per-feature sweep; a watcher auto-runs it on unlock.
+- **Test affordance**: `FREEQ_TEST_NICK=<nick>` guest-connects on launch and
+  starts the DebugBridge, which reads `/tmp/freeq-cmd` and routes each line
+  through the real `AppState.submitInput`.
+
 ---
 
 ## Sequencing
