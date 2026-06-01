@@ -86,6 +86,8 @@ class AppState {
     var showDetailPanel: Bool = true
     var showQuickSwitcher: Bool = false
     var showJoinSheet: Bool = false
+    var showBookmarks: Bool = false
+    var showChannelList: Bool = false
     var errorMessage: String?
 
     // MARK: - Compose state (editing/replying)
@@ -119,6 +121,13 @@ class AppState {
     // MARK: - Typing debounce
     private var lastTypingSent: [String: Date] = [:]
 
+    // MARK: - Compose hooks
+    /// Set by ComposeBar so the `/media` command can open a file picker.
+    /// nil in headless/test contexts.
+    @ObservationIgnored var onComposeMediaRequest: (() -> Void)?
+    /// Test-mode debug command bridge (file-driven). Held so it isn't deinited.
+    @ObservationIgnored var debugBridge: DebugBridge?
+
     // MARK: - Private
     private var client: FreeqClient?
     private var p2p: FreeqP2p?
@@ -150,6 +159,12 @@ class AppState {
     init() {
         loadSavedState()
         requestNotificationPermission()
+        // In test mode the SwiftUI view lifecycle may never run `.onAppear`
+        // (e.g. the screen is locked during automated runs), so kick off the
+        // guest connect + DebugBridge from init, independent of any view.
+        if ProcessInfo.processInfo.environment["FREEQ_TEST_NICK"] != nil {
+            DispatchQueue.main.async { [weak self] in self?.startupConnect() }
+        }
     }
 
     private func loadSavedState() {
@@ -237,6 +252,24 @@ class AppState {
         activeChannel = nil
     }
 
+    /// Called once on launch. Honors a test/guest auto-connect env var, then
+    /// falls back to restoring a saved session.
+    func startupConnect() {
+        if let testNick = ProcessInfo.processInfo.environment["FREEQ_TEST_NICK"],
+           !testNick.isEmpty, connectionState == .disconnected {
+            // Deterministic guest connect + file-driven command bridge for UI
+            // testing against the real server.
+            let bridge = DebugBridge(appState: self)
+            debugBridge = bridge
+            bridge.start()
+            connect(nick: testNick)
+            return
+        }
+        if hasSavedSession && connectionState == .disconnected {
+            reconnectIfSaved()
+        }
+    }
+
     func reconnectIfSaved() {
         guard connectionState == .disconnected, hasSavedSession else { return }
 
@@ -252,8 +285,19 @@ class AppState {
                     KeychainHelper.save(key: "did", value: session.did)
                     self.connect(nick: session.nick)
                 }
+            } catch BrokerError.invalidToken {
+                // The stored broker token has been revoked/expired. Clear it so
+                // the UI drops to the sign-in screen instead of looping forever
+                // on "Disconnected — reconnecting…".
+                await MainActor.run {
+                    self.brokerToken = nil
+                    self.authenticatedDID = nil
+                    KeychainHelper.delete(key: "brokerToken")
+                    self.errorMessage = "Your session expired. Please sign in again."
+                }
             } catch {
-                // Silent — will retry on next attempt
+                // Transient (network/5xx) — leave the saved session in place
+                // and let the reconnect loop try again.
             }
         }
     }

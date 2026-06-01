@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		111A631DD747383DB85200BF /* DebugBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BD56638DA817D921B8F261C /* DebugBridge.swift */; };
 		28FCBBC8CA468049919EADA3 /* CallCameraCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 272F2E7627007A625AE37DA8 /* CallCameraCapture.swift */; };
 		2DE20508FB26A54D6DC4847B /* CallMicCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF84986DB3E316AB54CFA706 /* CallMicCapture.swift */; };
 		304585E2A3DCCB55DD8467D9 /* ComposeBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDCB3DAE1E0BAC641DA22730 /* ComposeBar.swift */; };
@@ -28,6 +29,7 @@
 		9A656A1FED0DA78997CD68B4 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20ABEF839D9D9D42C9D1BF08 /* App.swift */; };
 		9F958D5ED5FB22C5E40774A7 /* ChannelSettingsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7340BE5C80B24DD16B066ABC /* ChannelSettingsSheet.swift */; };
 		A115ABF32733643ACB3F34DF /* UserProfileSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B151A6B667B7AC30647A4811 /* UserProfileSheet.swift */; };
+		A4F9C4AA63982ABFC87031B0 /* ComposeCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = D90D45494AECECE10448CB0E /* ComposeCommands.swift */; };
 		AF76EC565DC3FE7EB618879F /* AutocompletePopup.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B98D35F34492C2C6B3E504F /* AutocompletePopup.swift */; };
 		B0C4859CFAA8548B0B74CFD2 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DD71B67F52DD573EF6080AE /* SettingsView.swift */; };
 		B278B82F0D0C1A1DD292BD90 /* AvatarCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B44CE675043F28160CDE06F /* AvatarCache.swift */; };
@@ -51,6 +53,7 @@
 
 /* Begin PBXFileReference section */
 		04D3AAFE430FB0DC2DA62F57 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		0BD56638DA817D921B8F261C /* DebugBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugBridge.swift; sourceTree = "<group>"; };
 		0F2CEC00295C49A0D1DC34B9 /* PinnedMessagesBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinnedMessagesBar.swift; sourceTree = "<group>"; };
 		16659A05393DA59C0C3AC3C4 /* BrokerAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrokerAuth.swift; sourceTree = "<group>"; };
 		1B11355062BDD7B9062AC22F /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
@@ -86,6 +89,7 @@
 		BF84986DB3E316AB54CFA706 /* CallMicCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallMicCapture.swift; sourceTree = "<group>"; };
 		CECE4CB96A2A81AB72EC2324 /* freeq-macos.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "freeq-macos.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		D1561609D65E3676C79D46E2 /* LinkPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreview.swift; sourceTree = "<group>"; };
+		D90D45494AECECE10448CB0E /* ComposeCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposeCommands.swift; sourceTree = "<group>"; };
 		DA3E838FFB8176761B9DAA50 /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
 		DB1B29BA8601FC220D46B705 /* Logger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logger.swift; sourceTree = "<group>"; };
 		DB6D944E494A3AE591F53C28 /* MediaViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaViews.swift; sourceTree = "<group>"; };
@@ -210,6 +214,8 @@
 				BF84986DB3E316AB54CFA706 /* CallMicCapture.swift */,
 				ED9F5A69D81B1BA80FC4782A /* ChannelState.swift */,
 				DA3E838FFB8176761B9DAA50 /* ChatMessage.swift */,
+				D90D45494AECECE10448CB0E /* ComposeCommands.swift */,
+				0BD56638DA817D921B8F261C /* DebugBridge.swift */,
 				20B3BED9F9A6237942DD0971 /* E2eeManager.swift */,
 				6D0D657E5F637E5EFD232E19 /* KeychainHelper.swift */,
 				DB1B29BA8601FC220D46B705 /* Logger.swift */,
@@ -312,7 +318,9 @@
 				95713207153A9DD7BAB5955A /* ChatMessage.swift in Sources */,
 				C724476B94820275BA16E55F /* ChatView.swift in Sources */,
 				304585E2A3DCCB55DD8467D9 /* ComposeBar.swift in Sources */,
+				A4F9C4AA63982ABFC87031B0 /* ComposeCommands.swift in Sources */,
 				D29F998C6DF599EA13C38C85 /* ConnectView.swift in Sources */,
+				111A631DD747383DB85200BF /* DebugBridge.swift in Sources */,
 				40B19B4620E1FFA3196FBFAD /* DetailPanel.swift in Sources */,
 				E1AB7FC16F690AF9462DBBAC /* E2eeManager.swift in Sources */,
 				3ACCE0099E0E97EC7A321EDC /* FileUpload.swift in Sources */,
