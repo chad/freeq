@@ -117,9 +117,18 @@ struct CallView: View {
         HStack(spacing: 14) {
             HStack(spacing: 6) {
                 Circle().fill(Color.green).frame(width: 8, height: 8)
-                Text("Voice (\(appState.callParticipants.count + 1))")
+                Text("Voice")
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.green)
+                if !channel.isEmpty {
+                    Text(channel)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Text("· \(appState.callParticipants.count + 1)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
             Spacer()
             controlButton(systemName: appState.isCallExpanded
