@@ -56,10 +56,36 @@ Added as typed commands + autocomplete + help:
 - ☑ `/av start|join|leave|mute|camera`
 - (`/encrypt` `/decrypt`: macOS uses DID-based E2EE, not TUI's passphrase model — n/a)
 
-### 4. Smaller gaps
-- ☐ Ban management UI (list/add/remove) in channel settings
-- ☐ Channel join-gates / policy editor (web-unique)
-- ☐ Step-up auth for blob upload (verify macOS path; iOS/web have incremental OAuth)
+### 4. Smaller gaps — assessed
+- ☑ Ban *commands* (`/ban` `/unban`) added. Read-only ban *list* UI is NOT
+      buildable: the SDK's `FreeqEvent` exposes no ban-list case (367/368), so
+      there's nothing to render. Would need an SDK event addition.
+- ☑ Step-up auth: NOT needed on macOS. macOS uploads via the server's own
+      `/api/v1/upload` (DID-based), not direct PDS blob upload, so the
+      incremental-OAuth `blob_upload` scope dance iOS/web do doesn't apply.
+- ☐ Channel join-gates / policy editor — web-unique UX; deferred (niche).
+
+### Already present on macOS (verified, not gaps)
+Image lightbox, Bluesky embeds, YouTube thumbnails, link previews, drag-and-drop
+upload, DID-based E2EE, P2P DMs, pins, in-buffer search, member list / profiles,
+away-notify, bookmarks, quick switcher, notifications, autocomplete, MOTD,
+onboarding, reconnect.
+
+### Superset items intentionally NOT ported (platform-inappropriate / different arch)
+- Live Activity / Dynamic Island, Apple Watch app, CallKit — iOS-only OS surfaces.
+- Siri Intents / Spotlight — iOS integrations; out of scope for parity.
+- Vi-mode line editing, `/net` stats popup, raw-debug toggle — TUI terminal UX.
+- Passphrase channel E2EE (`/encrypt`) — macOS uses DID-based E2EE instead.
+- Voice-message *recording* + on-device transcription — iOS stretch; deferred
+      (playback of received voice messages IS now supported).
+
+---
+
+## Result
+macOS builds clean via `xcodebuild`, codesigns, and launches without crashing.
+All substantive cross-platform features of the iOS/web/TUI superset are now
+present; remaining deltas are platform-specific OS integrations or use a
+different (already-present) architecture on macOS.
 
 ---
 
