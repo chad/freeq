@@ -406,11 +406,43 @@ private let UNIFFI_CALLBACK_UNEXPECTED_ERROR: Int32 = 2
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt8: FfiConverterPrimitive {
+    typealias FfiType = UInt8
+    typealias SwiftType = UInt8
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt8 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: UInt8, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
 
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
+    typealias FfiType = UInt64
+    typealias SwiftType = UInt64
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt64 {
         return try lift(readInt(&buf))
     }
 
@@ -432,6 +464,22 @@ fileprivate struct FfiConverterInt64: FfiConverterPrimitive {
 
     public static func write(_ value: Int64, into buf: inout [UInt8]) {
         writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterFloat: FfiConverterPrimitive {
+    typealias FfiType = Float
+    typealias SwiftType = Float
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Float {
+        return try lift(readFloat(&buf))
+    }
+
+    public static func write(_ value: Float, into buf: inout [UInt8]) {
+        writeFloat(&buf, lower(value))
     }
 }
 
@@ -503,6 +551,187 @@ fileprivate struct FfiConverterString: FfiConverter {
 
 
 
+public protocol FreeqAvProtocol: AnyObject, Sendable {
+    
+    func isConnected()  -> Bool
+    
+    func leave() 
+    
+    func pushAudioFrame(samples: [Float]) 
+    
+    func pushVideoFrame(bgra: [UInt8], width: UInt32, height: UInt32, timestampUs: UInt64) 
+    
+    func setCameraEnabled(enabled: Bool) throws 
+    
+    func setMuted(muted: Bool) 
+    
+}
+open class FreeqAv: FreeqAvProtocol, @unchecked Sendable {
+    fileprivate let pointer: UnsafeMutableRawPointer!
+
+    /// Used to instantiate a [FFIObject] without an actual pointer, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoPointer {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromRawPointer pointer: UnsafeMutableRawPointer) {
+        self.pointer = pointer
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noPointer: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing [Pointer] the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noPointer: NoPointer) {
+        self.pointer = nil
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiClonePointer() -> UnsafeMutableRawPointer {
+        return try! rustCall { uniffi_freeq_sdk_ffi_fn_clone_freeqav(self.pointer, $0) }
+    }
+public convenience init(serverUrl: String, sessionId: String, nick: String, instanceId: String, handler: AvEventHandler)throws  {
+    let pointer =
+        try rustCallWithError(FfiConverterTypeFreeqError_lift) {
+    uniffi_freeq_sdk_ffi_fn_constructor_freeqav_new(
+        FfiConverterString.lower(serverUrl),
+        FfiConverterString.lower(sessionId),
+        FfiConverterString.lower(nick),
+        FfiConverterString.lower(instanceId),
+        FfiConverterCallbackInterfaceAvEventHandler_lower(handler),$0
+    )
+}
+    self.init(unsafeFromRawPointer: pointer)
+}
+
+    deinit {
+        guard let pointer = pointer else {
+            return
+        }
+
+        try! rustCall { uniffi_freeq_sdk_ffi_fn_free_freeqav(pointer, $0) }
+    }
+
+    
+
+    
+open func isConnected() -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_freeq_sdk_ffi_fn_method_freeqav_is_connected(self.uniffiClonePointer(),$0
+    )
+})
+}
+    
+open func leave()  {try! rustCall() {
+    uniffi_freeq_sdk_ffi_fn_method_freeqav_leave(self.uniffiClonePointer(),$0
+    )
+}
+}
+    
+open func pushAudioFrame(samples: [Float])  {try! rustCall() {
+    uniffi_freeq_sdk_ffi_fn_method_freeqav_push_audio_frame(self.uniffiClonePointer(),
+        FfiConverterSequenceFloat.lower(samples),$0
+    )
+}
+}
+    
+open func pushVideoFrame(bgra: [UInt8], width: UInt32, height: UInt32, timestampUs: UInt64)  {try! rustCall() {
+    uniffi_freeq_sdk_ffi_fn_method_freeqav_push_video_frame(self.uniffiClonePointer(),
+        FfiConverterSequenceUInt8.lower(bgra),
+        FfiConverterUInt32.lower(width),
+        FfiConverterUInt32.lower(height),
+        FfiConverterUInt64.lower(timestampUs),$0
+    )
+}
+}
+    
+open func setCameraEnabled(enabled: Bool)throws   {try rustCallWithError(FfiConverterTypeFreeqError_lift) {
+    uniffi_freeq_sdk_ffi_fn_method_freeqav_set_camera_enabled(self.uniffiClonePointer(),
+        FfiConverterBool.lower(enabled),$0
+    )
+}
+}
+    
+open func setMuted(muted: Bool)  {try! rustCall() {
+    uniffi_freeq_sdk_ffi_fn_method_freeqav_set_muted(self.uniffiClonePointer(),
+        FfiConverterBool.lower(muted),$0
+    )
+}
+}
+    
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFreeqAv: FfiConverter {
+
+    typealias FfiType = UnsafeMutableRawPointer
+    typealias SwiftType = FreeqAv
+
+    public static func lift(_ pointer: UnsafeMutableRawPointer) throws -> FreeqAv {
+        return FreeqAv(unsafeFromRawPointer: pointer)
+    }
+
+    public static func lower(_ value: FreeqAv) -> UnsafeMutableRawPointer {
+        return value.uniffiClonePointer()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FreeqAv {
+        let v: UInt64 = try readInt(&buf)
+        // The Rust code won't compile if a pointer won't fit in a UInt64.
+        // We have to go via `UInt` because that's the thing that's the size of a pointer.
+        let ptr = UnsafeMutableRawPointer(bitPattern: UInt(truncatingIfNeeded: v))
+        if (ptr == nil) {
+            throw UniffiInternalError.unexpectedNullPointer
+        }
+        return try lift(ptr!)
+    }
+
+    public static func write(_ value: FreeqAv, into buf: inout [UInt8]) {
+        // This fiddling is because `Int` is the thing that's the same size as a pointer.
+        // The Rust code won't compile if a pointer won't fit in a `UInt64`.
+        writeInt(&buf, UInt64(bitPattern: Int64(Int(bitPattern: lower(value)))))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFreeqAv_lift(_ pointer: UnsafeMutableRawPointer) throws -> FreeqAv {
+    return try FfiConverterTypeFreeqAv.lift(pointer)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFreeqAv_lower(_ value: FreeqAv) -> UnsafeMutableRawPointer {
+    return FfiConverterTypeFreeqAv.lower(value)
+}
+
+
+
+
+
+
 public protocol FreeqClientProtocol: AnyObject, Sendable {
     
     func connect() throws 
@@ -528,6 +757,8 @@ public protocol FreeqClientProtocol: AnyObject, Sendable {
     func setTopic(channel: String, topic: String) throws 
     
     func setWebToken(token: String) throws 
+    
+    func setWebsocketUrl(url: String) throws 
     
 }
 open class FreeqClient: FreeqClientProtocol, @unchecked Sendable {
@@ -672,6 +903,13 @@ open func setTopic(channel: String, topic: String)throws   {try rustCallWithErro
 open func setWebToken(token: String)throws   {try rustCallWithError(FfiConverterTypeFreeqError_lift) {
     uniffi_freeq_sdk_ffi_fn_method_freeqclient_set_web_token(self.uniffiClonePointer(),
         FfiConverterString.lower(token),$0
+    )
+}
+}
+    
+open func setWebsocketUrl(url: String)throws   {try rustCallWithError(FfiConverterTypeFreeqError_lift) {
+    uniffi_freeq_sdk_ffi_fn_method_freeqclient_set_websocket_url(self.uniffiClonePointer(),
+        FfiConverterString.lower(url),$0
     )
 }
 }
@@ -1303,13 +1541,16 @@ public struct IrcMessage {
     public var replacesMsgid: String?
     public var editOf: String?
     public var batchId: String?
+    public var pinMsgid: String?
+    public var unpinMsgid: String?
     public var isAction: Bool
     public var isSigned: Bool
     public var timestampMs: Int64
+    public var account: String?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(fromNick: String, target: String, text: String, msgid: String?, replyTo: String?, replacesMsgid: String?, editOf: String?, batchId: String?, isAction: Bool, isSigned: Bool, timestampMs: Int64) {
+    public init(fromNick: String, target: String, text: String, msgid: String?, replyTo: String?, replacesMsgid: String?, editOf: String?, batchId: String?, pinMsgid: String?, unpinMsgid: String?, isAction: Bool, isSigned: Bool, timestampMs: Int64, account: String?) {
         self.fromNick = fromNick
         self.target = target
         self.text = text
@@ -1318,9 +1559,12 @@ public struct IrcMessage {
         self.replacesMsgid = replacesMsgid
         self.editOf = editOf
         self.batchId = batchId
+        self.pinMsgid = pinMsgid
+        self.unpinMsgid = unpinMsgid
         self.isAction = isAction
         self.isSigned = isSigned
         self.timestampMs = timestampMs
+        self.account = account
     }
 }
 
@@ -1355,6 +1599,12 @@ extension IrcMessage: Equatable, Hashable {
         if lhs.batchId != rhs.batchId {
             return false
         }
+        if lhs.pinMsgid != rhs.pinMsgid {
+            return false
+        }
+        if lhs.unpinMsgid != rhs.unpinMsgid {
+            return false
+        }
         if lhs.isAction != rhs.isAction {
             return false
         }
@@ -1362,6 +1612,9 @@ extension IrcMessage: Equatable, Hashable {
             return false
         }
         if lhs.timestampMs != rhs.timestampMs {
+            return false
+        }
+        if lhs.account != rhs.account {
             return false
         }
         return true
@@ -1376,9 +1629,12 @@ extension IrcMessage: Equatable, Hashable {
         hasher.combine(replacesMsgid)
         hasher.combine(editOf)
         hasher.combine(batchId)
+        hasher.combine(pinMsgid)
+        hasher.combine(unpinMsgid)
         hasher.combine(isAction)
         hasher.combine(isSigned)
         hasher.combine(timestampMs)
+        hasher.combine(account)
     }
 }
 
@@ -1399,9 +1655,12 @@ public struct FfiConverterTypeIrcMessage: FfiConverterRustBuffer {
                 replacesMsgid: FfiConverterOptionString.read(from: &buf), 
                 editOf: FfiConverterOptionString.read(from: &buf), 
                 batchId: FfiConverterOptionString.read(from: &buf), 
+                pinMsgid: FfiConverterOptionString.read(from: &buf), 
+                unpinMsgid: FfiConverterOptionString.read(from: &buf), 
                 isAction: FfiConverterBool.read(from: &buf), 
                 isSigned: FfiConverterBool.read(from: &buf), 
-                timestampMs: FfiConverterInt64.read(from: &buf)
+                timestampMs: FfiConverterInt64.read(from: &buf), 
+                account: FfiConverterOptionString.read(from: &buf)
         )
     }
 
@@ -1414,9 +1673,12 @@ public struct FfiConverterTypeIrcMessage: FfiConverterRustBuffer {
         FfiConverterOptionString.write(value.replacesMsgid, into: &buf)
         FfiConverterOptionString.write(value.editOf, into: &buf)
         FfiConverterOptionString.write(value.batchId, into: &buf)
+        FfiConverterOptionString.write(value.pinMsgid, into: &buf)
+        FfiConverterOptionString.write(value.unpinMsgid, into: &buf)
         FfiConverterBool.write(value.isAction, into: &buf)
         FfiConverterBool.write(value.isSigned, into: &buf)
         FfiConverterInt64.write(value.timestampMs, into: &buf)
+        FfiConverterOptionString.write(value.account, into: &buf)
     }
 }
 
@@ -1730,6 +1992,162 @@ public func FfiConverterTypeTagMessage_lift(_ buf: RustBuffer) throws -> TagMess
 public func FfiConverterTypeTagMessage_lower(_ value: TagMessage) -> RustBuffer {
     return FfiConverterTypeTagMessage.lower(value)
 }
+
+// Note that we don't yet support `indirect` for enums.
+// See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
+
+public enum AvEvent {
+    
+    case connected
+    case disconnected(reason: String
+    )
+    case participantJoined(nick: String
+    )
+    case participantLeft(nick: String
+    )
+    case audioTrackStarted(nick: String
+    )
+    case audioTrackStopped(nick: String
+    )
+    case videoTrackStarted(nick: String
+    )
+    case videoTrackStopped(nick: String
+    )
+    case videoFrame(nick: String, bgra: [UInt8], width: UInt32, height: UInt32
+    )
+    case error(message: String
+    )
+}
+
+
+#if compiler(>=6)
+extension AvEvent: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeAvEvent: FfiConverterRustBuffer {
+    typealias SwiftType = AvEvent
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> AvEvent {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .connected
+        
+        case 2: return .disconnected(reason: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 3: return .participantJoined(nick: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 4: return .participantLeft(nick: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 5: return .audioTrackStarted(nick: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 6: return .audioTrackStopped(nick: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 7: return .videoTrackStarted(nick: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 8: return .videoTrackStopped(nick: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 9: return .videoFrame(nick: try FfiConverterString.read(from: &buf), bgra: try FfiConverterSequenceUInt8.read(from: &buf), width: try FfiConverterUInt32.read(from: &buf), height: try FfiConverterUInt32.read(from: &buf)
+        )
+        
+        case 10: return .error(message: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: AvEvent, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .connected:
+            writeInt(&buf, Int32(1))
+        
+        
+        case let .disconnected(reason):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(reason, into: &buf)
+            
+        
+        case let .participantJoined(nick):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(nick, into: &buf)
+            
+        
+        case let .participantLeft(nick):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(nick, into: &buf)
+            
+        
+        case let .audioTrackStarted(nick):
+            writeInt(&buf, Int32(5))
+            FfiConverterString.write(nick, into: &buf)
+            
+        
+        case let .audioTrackStopped(nick):
+            writeInt(&buf, Int32(6))
+            FfiConverterString.write(nick, into: &buf)
+            
+        
+        case let .videoTrackStarted(nick):
+            writeInt(&buf, Int32(7))
+            FfiConverterString.write(nick, into: &buf)
+            
+        
+        case let .videoTrackStopped(nick):
+            writeInt(&buf, Int32(8))
+            FfiConverterString.write(nick, into: &buf)
+            
+        
+        case let .videoFrame(nick,bgra,width,height):
+            writeInt(&buf, Int32(9))
+            FfiConverterString.write(nick, into: &buf)
+            FfiConverterSequenceUInt8.write(bgra, into: &buf)
+            FfiConverterUInt32.write(width, into: &buf)
+            FfiConverterUInt32.write(height, into: &buf)
+            
+        
+        case let .error(message):
+            writeInt(&buf, Int32(10))
+            FfiConverterString.write(message, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAvEvent_lift(_ buf: RustBuffer) throws -> AvEvent {
+    return try FfiConverterTypeAvEvent.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeAvEvent_lower(_ value: AvEvent) -> RustBuffer {
+    return FfiConverterTypeAvEvent.lower(value)
+}
+
+
+extension AvEvent: Equatable, Hashable {}
+
+
+
+
+
 
 
 public enum FreeqError: Swift.Error {
@@ -2221,6 +2639,122 @@ extension P2pEvent: Equatable, Hashable {}
 
 
 
+public protocol AvEventHandler: AnyObject, Sendable {
+    
+    func onAvEvent(event: AvEvent) 
+    
+}
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceAvEventHandler {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // This creates 1-element array, since this seems to be the only way to construct a const
+    // pointer that we can pass to the Rust code.
+    static let vtable: [UniffiVTableCallbackInterfaceAvEventHandler] = [UniffiVTableCallbackInterfaceAvEventHandler(
+        onAvEvent: { (
+            uniffiHandle: UInt64,
+            event: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterCallbackInterfaceAvEventHandler.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onAvEvent(
+                     event: try FfiConverterTypeAvEvent_lift(event)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        },
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            let result = try? FfiConverterCallbackInterfaceAvEventHandler.handleMap.remove(handle: uniffiHandle)
+            if result == nil {
+                print("Uniffi callback interface AvEventHandler: handle missing in uniffiFree")
+            }
+        }
+    )]
+}
+
+private func uniffiCallbackInitAvEventHandler() {
+    uniffi_freeq_sdk_ffi_fn_init_callback_vtable_aveventhandler(UniffiCallbackInterfaceAvEventHandler.vtable)
+}
+
+// FfiConverter protocol for callback interfaces
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterCallbackInterfaceAvEventHandler {
+    fileprivate static let handleMap = UniffiHandleMap<AvEventHandler>()
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+extension FfiConverterCallbackInterfaceAvEventHandler : FfiConverter {
+    typealias SwiftType = AvEventHandler
+    typealias FfiType = UInt64
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lift(_ handle: UInt64) throws -> SwiftType {
+        try handleMap.get(handle: handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func lower(_ v: SwiftType) -> UInt64 {
+        return handleMap.insert(obj: v)
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public static func write(_ v: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(v))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceAvEventHandler_lift(_ handle: UInt64) throws -> AvEventHandler {
+    return try FfiConverterCallbackInterfaceAvEventHandler.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterCallbackInterfaceAvEventHandler_lower(_ v: AvEventHandler) -> UInt64 {
+    return FfiConverterCallbackInterfaceAvEventHandler.lower(v)
+}
+
+
+
+
 public protocol EventHandler: AnyObject, Sendable {
     
     func onEvent(event: FreeqEvent) 
@@ -2477,6 +3011,56 @@ fileprivate struct FfiConverterOptionString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceUInt8: FfiConverterRustBuffer {
+    typealias SwiftType = [UInt8]
+
+    public static func write(_ value: [UInt8], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterUInt8.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [UInt8] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [UInt8]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterUInt8.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceFloat: FfiConverterRustBuffer {
+    typealias SwiftType = [Float]
+
+    public static func write(_ value: [Float], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterFloat.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [Float] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [Float]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterFloat.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -2564,6 +3148,24 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
+    if (uniffi_freeq_sdk_ffi_checksum_method_freeqav_is_connected() != 41973) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_freeq_sdk_ffi_checksum_method_freeqav_leave() != 39649) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_freeq_sdk_ffi_checksum_method_freeqav_push_audio_frame() != 55965) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_freeq_sdk_ffi_checksum_method_freeqav_push_video_frame() != 30541) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_freeq_sdk_ffi_checksum_method_freeqav_set_camera_enabled() != 49053) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_freeq_sdk_ffi_checksum_method_freeqav_set_muted() != 7170) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_freeq_sdk_ffi_checksum_method_freeqclient_connect() != 3331) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2598,6 +3200,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_freeq_sdk_ffi_checksum_method_freeqclient_set_web_token() != 47149) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_freeq_sdk_ffi_checksum_method_freeqclient_set_websocket_url() != 40379) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_freeq_sdk_ffi_checksum_method_freeqe2ee_decrypt_message() != 42382) {
@@ -2648,6 +3253,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_freeq_sdk_ffi_checksum_method_freeqp2p_shutdown() != 50660) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_freeq_sdk_ffi_checksum_constructor_freeqav_new() != 1846) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_freeq_sdk_ffi_checksum_constructor_freeqclient_new() != 42979) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2657,6 +3265,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_freeq_sdk_ffi_checksum_constructor_freeqp2p_new() != 22044) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_freeq_sdk_ffi_checksum_method_aveventhandler_on_av_event() != 24538) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_freeq_sdk_ffi_checksum_method_eventhandler_on_event() != 8369) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2664,6 +3275,7 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
 
+    uniffiCallbackInitAvEventHandler()
     uniffiCallbackInitEventHandler()
     uniffiCallbackInitP2pEventHandler()
     return InitializationResult.ok

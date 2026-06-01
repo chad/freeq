@@ -1,8 +1,11 @@
 import SwiftUI
+import AVKit
 
 // MARK: - URL pattern detection
 
 private let imageExtensions = Set(["jpg", "jpeg", "png", "gif", "webp"])
+private let videoExtensions = Set(["mp4", "webm", "mov", "m4v"])
+private let audioExtensions = Set(["m4a", "mp3", "ogg", "wav", "opus", "aac"])
 private let cdnImagePattern = try! NSRegularExpression(pattern: "https?://cdn\\.bsky\\.app/img/[^\\s<]+", options: .caseInsensitive)
 private let youtubePattern = try! NSRegularExpression(pattern: "(?:youtube\\.com/watch\\?v=|youtu\\.be/)([a-zA-Z0-9_-]{11})", options: .caseInsensitive)
 private let bskyPostPattern = try! NSRegularExpression(pattern: "https?://bsky\\.app/profile/([^/]+)/post/([a-zA-Z0-9]+)", options: .caseInsensitive)
@@ -35,6 +38,38 @@ func extractImageURLs(from text: String) -> [String] {
     return urls
 }
 
+/// Extract video URLs (.mp4/.webm/.mov) from message text.
+func extractVideoURLs(from text: String) -> [String] {
+    extractURLs(from: text, withExtensions: videoExtensions)
+}
+
+/// Extract audio URLs (.m4a/.mp3/.ogg/.wav) from message text.
+func extractAudioURLs(from text: String) -> [String] {
+    extractURLs(from: text, withExtensions: audioExtensions)
+}
+
+/// Shared URL extractor matching a set of path extensions.
+private func extractURLs(from text: String, withExtensions exts: Set<String>) -> [String] {
+    var urls: [String] = []
+    let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    if let matches = detector?.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+        for match in matches {
+            guard let range = Range(match.range, in: text), let url = match.url else { continue }
+            if exts.contains(url.pathExtension.lowercased()) {
+                let s = String(text[range])
+                if !urls.contains(s) { urls.append(s) }
+            }
+        }
+    }
+    return urls
+}
+
+/// True if the message looks like a voice message (leading 🎤 marker, as emitted
+/// by the iOS/web clients).
+func isVoiceMessage(_ text: String) -> Bool {
+    text.trimmingCharacters(in: .whitespaces).hasPrefix("🎤")
+}
+
 /// Extract YouTube video ID from text.
 func extractYouTubeID(from text: String) -> String? {
     let match = youtubePattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text))
@@ -51,7 +86,7 @@ func extractBskyPost(from text: String) -> (handle: String, rkey: String)? {
     return (String(text[handleRange]), String(text[rkeyRange]))
 }
 
-/// Remove image URLs from text for cleaner display.
+/// Remove media URLs from text for cleaner display.
 func textWithoutImages(_ text: String, imageURLs: [String]) -> String {
     var result = text
     for url in imageURLs {
@@ -60,9 +95,12 @@ func textWithoutImages(_ text: String, imageURLs: [String]) -> String {
     return result
 }
 
-/// Check if text has any media (images, YouTube, Bluesky) that we should show separately.
+/// Check if text has any media (images, video, audio, YouTube, Bluesky) we show separately.
 func hasMedia(in text: String) -> Bool {
-    !extractImageURLs(from: text).isEmpty || extractYouTubeID(from: text) != nil
+    !extractImageURLs(from: text).isEmpty
+        || !extractVideoURLs(from: text).isEmpty
+        || !extractAudioURLs(from: text).isEmpty
+        || extractYouTubeID(from: text) != nil
 }
 
 // MARK: - Inline Image View
@@ -305,5 +343,94 @@ struct YouTubeThumbnail: View {
         }
         .buttonStyle(.plain)
         .padding(.top, 4)
+    }
+}
+
+// MARK: - Inline Video Player
+
+struct InlineVideoView: View {
+    let url: String
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        Group {
+            if let player {
+                VideoPlayer(player: player)
+                    .frame(maxWidth: 400, maxHeight: 300)
+                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    )
+            }
+        }
+        .padding(.top, 4)
+        .onAppear {
+            if player == nil, let u = URL(string: url) {
+                player = AVPlayer(url: u)
+            }
+        }
+        .onDisappear { player?.pause() }
+    }
+}
+
+// MARK: - Inline Audio Player
+
+/// Compact audio player for voice messages and audio file links.
+struct InlineAudioView: View {
+    let url: String
+    var isVoice: Bool = false
+
+    @State private var player: AVPlayer?
+    @State private var isPlaying = false
+    @State private var observer: Any?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button { togglePlayback() } label: {
+                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                    .font(.system(size: 26))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .buttonStyle(.plain)
+
+            Image(systemName: isVoice ? "waveform" : "music.note")
+                .foregroundStyle(.secondary)
+            Text(isVoice ? "Voice message" : (URL(string: url)?.lastPathComponent ?? "Audio"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .padding(8)
+        .frame(maxWidth: 320, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
+        .padding(.top, 4)
+        .onDisappear {
+            player?.pause()
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+        }
+    }
+
+    private func togglePlayback() {
+        if player == nil, let u = URL(string: url) {
+            let p = AVPlayer(url: u)
+            player = p
+            observer = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: p.currentItem, queue: .main
+            ) { _ in
+                p.seek(to: .zero)
+                isPlaying = false
+            }
+        }
+        guard let player else { return }
+        if isPlaying { player.pause() } else { player.play() }
+        isPlaying.toggle()
     }
 }

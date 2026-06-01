@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import UserNotifications
+import AVFoundation
 
 /// Connection transport type.
 enum TransportType: Equatable {
@@ -56,6 +57,30 @@ class AppState {
     var p2pEndpointId: String?
     var p2pConnectedPeers: Set<String> = []
     var p2pDMActive: Set<String> = []
+
+    // MARK: - AV (voice/video calls)
+    var isInCall: Bool = false
+    var isMuted: Bool = false
+    var isCameraOn: Bool = false
+    var isCallExpanded: Bool = false
+    var callParticipants: [String] = []
+    /// channel (lowercased) → active session id, populated from `+freeq.at/av-state` TAGMSGs
+    var activeAvSessions: [String: String] = [:]
+    var currentCallChannel: String? = nil
+    var currentCallSessionId: String? = nil
+    /// Nicks for which at least one video frame has arrived this call.
+    var participantsWithVideo: Set<String> = []
+    @ObservationIgnored var avSession: FreeqAv? = nil
+    /// Channels where we sent `av-start` and are waiting on the server's `started` echo.
+    @ObservationIgnored var pendingAvStart: Set<String> = []
+    /// Per-call instance id sent on av-join/av-leave (`+freeq.at/av-instance`).
+    @ObservationIgnored var currentAvInstance: String? = nil
+    @ObservationIgnored var cameraCapture: CallCameraCapture? = nil
+    @ObservationIgnored var micCapture: CallMicCapture? = nil
+    /// Per-nick remote video display layers (lowercased nick → layer, weakly held).
+    @ObservationIgnored var remoteVideoLayers =
+        NSMapTable<NSString, AVSampleBufferDisplayLayer>.strongToWeakObjects()
+    var localPreviewCapture: CallCameraCapture? { cameraCapture }
 
     // MARK: - UI State
     var showDetailPanel: Bool = true
@@ -764,6 +789,22 @@ extension AppState {
                 ch.applyReaction(msgId: replyId, emoji: emoji, from: from)
             }
 
+            // Reaction removal (toggle off)
+            if let emoji = tags["+freeq.at/unreact"], let replyId = tags["+reply"] {
+                let bufferName = target.hasPrefix("#") ? target : from
+                let ch = bufferName.hasPrefix("#") ? getOrCreateChannel(bufferName) : getOrCreateDM(bufferName)
+                ch.removeReaction(msgId: replyId, emoji: emoji, from: from)
+            }
+
+            // AV session lifecycle (`+freeq.at/av-state`)
+            if let avState = tags["+freeq.at/av-state"],
+               let avId = tags["+freeq.at/av-id"],
+               target.hasPrefix("#") {
+                handleAvState(avState, sessionId: avId,
+                              actor: tags["+freeq.at/av-actor"] ?? from,
+                              channel: target)
+            }
+
         case .names(let channel, let memberList):
             let key = channel.lowercased()
             var existing = pendingNames[key] ?? []
@@ -939,6 +980,12 @@ extension AppState {
 
         case .disconnected(let reason):
             connectionState = .disconnected
+            // If we were in a call when the IRC connection dropped, tear it
+            // down locally — peers only learn we left via the av-leave TAGMSG,
+            // which we can't send on a dead wire.
+            if isInCall {
+                tearDownCallLocallyOnDisconnect()
+            }
             if !reason.contains("intentional") && hasSavedSession {
                 reconnectAttempts += 1
                 let delay = min(Double(1 << min(reconnectAttempts, 5)), 30.0)

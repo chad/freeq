@@ -251,6 +251,13 @@ typedef void (*UniffiForeignFutureCompleteVoid)(uint64_t, UniffiForeignFutureStr
     );
 
 #endif
+#ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_AV_EVENT_HANDLER_METHOD0
+#define UNIFFI_FFIDEF_CALLBACK_INTERFACE_AV_EVENT_HANDLER_METHOD0
+typedef void (*UniffiCallbackInterfaceAvEventHandlerMethod0)(uint64_t, RustBuffer, void* _Nonnull, 
+        RustCallStatus *_Nonnull uniffiCallStatus
+    );
+
+#endif
 #ifndef UNIFFI_FFIDEF_CALLBACK_INTERFACE_EVENT_HANDLER_METHOD0
 #define UNIFFI_FFIDEF_CALLBACK_INTERFACE_EVENT_HANDLER_METHOD0
 typedef void (*UniffiCallbackInterfaceEventHandlerMethod0)(uint64_t, RustBuffer, void* _Nonnull, 
@@ -263,6 +270,14 @@ typedef void (*UniffiCallbackInterfaceEventHandlerMethod0)(uint64_t, RustBuffer,
 typedef void (*UniffiCallbackInterfaceP2pEventHandlerMethod0)(uint64_t, RustBuffer, void* _Nonnull, 
         RustCallStatus *_Nonnull uniffiCallStatus
     );
+
+#endif
+#ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_AV_EVENT_HANDLER
+#define UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_AV_EVENT_HANDLER
+typedef struct UniffiVTableCallbackInterfaceAvEventHandler {
+    UniffiCallbackInterfaceAvEventHandlerMethod0 _Nonnull onAvEvent;
+    UniffiCallbackInterfaceFree _Nonnull uniffiFree;
+} UniffiVTableCallbackInterfaceAvEventHandler;
 
 #endif
 #ifndef UNIFFI_FFIDEF_V_TABLE_CALLBACK_INTERFACE_EVENT_HANDLER
@@ -280,6 +295,51 @@ typedef struct UniffiVTableCallbackInterfaceP2pEventHandler {
     UniffiCallbackInterfaceFree _Nonnull uniffiFree;
 } UniffiVTableCallbackInterfaceP2pEventHandler;
 
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_CLONE_FREEQAV
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_CLONE_FREEQAV
+void*_Nonnull uniffi_freeq_sdk_ffi_fn_clone_freeqav(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_FREE_FREEQAV
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_FREE_FREEQAV
+void uniffi_freeq_sdk_ffi_fn_free_freeqav(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_CONSTRUCTOR_FREEQAV_NEW
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_CONSTRUCTOR_FREEQAV_NEW
+void*_Nonnull uniffi_freeq_sdk_ffi_fn_constructor_freeqav_new(RustBuffer server_url, RustBuffer session_id, RustBuffer nick, RustBuffer instance_id, uint64_t handler, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_IS_CONNECTED
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_IS_CONNECTED
+int8_t uniffi_freeq_sdk_ffi_fn_method_freeqav_is_connected(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_LEAVE
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_LEAVE
+void uniffi_freeq_sdk_ffi_fn_method_freeqav_leave(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_PUSH_AUDIO_FRAME
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_PUSH_AUDIO_FRAME
+void uniffi_freeq_sdk_ffi_fn_method_freeqav_push_audio_frame(void*_Nonnull ptr, RustBuffer samples, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_PUSH_VIDEO_FRAME
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_PUSH_VIDEO_FRAME
+void uniffi_freeq_sdk_ffi_fn_method_freeqav_push_video_frame(void*_Nonnull ptr, RustBuffer bgra, uint32_t width, uint32_t height, uint64_t timestamp_us, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_SET_CAMERA_ENABLED
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_SET_CAMERA_ENABLED
+void uniffi_freeq_sdk_ffi_fn_method_freeqav_set_camera_enabled(void*_Nonnull ptr, int8_t enabled, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_SET_MUTED
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQAV_SET_MUTED
+void uniffi_freeq_sdk_ffi_fn_method_freeqav_set_muted(void*_Nonnull ptr, int8_t muted, RustCallStatus *_Nonnull out_status
+);
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_CLONE_FREEQCLIENT
 #define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_CLONE_FREEQCLIENT
@@ -354,6 +414,11 @@ void uniffi_freeq_sdk_ffi_fn_method_freeqclient_set_topic(void*_Nonnull ptr, Rus
 #ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQCLIENT_SET_WEB_TOKEN
 #define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQCLIENT_SET_WEB_TOKEN
 void uniffi_freeq_sdk_ffi_fn_method_freeqclient_set_web_token(void*_Nonnull ptr, RustBuffer token, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQCLIENT_SET_WEBSOCKET_URL
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQCLIENT_SET_WEBSOCKET_URL
+void uniffi_freeq_sdk_ffi_fn_method_freeqclient_set_websocket_url(void*_Nonnull ptr, RustBuffer url, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_CLONE_FREEQE2EE
@@ -465,6 +530,11 @@ void uniffi_freeq_sdk_ffi_fn_method_freeqp2p_send_message(void*_Nonnull ptr, Rus
 #ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQP2P_SHUTDOWN
 #define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_METHOD_FREEQP2P_SHUTDOWN
 void uniffi_freeq_sdk_ffi_fn_method_freeqp2p_shutdown(void*_Nonnull ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_INIT_CALLBACK_VTABLE_AVEVENTHANDLER
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_INIT_CALLBACK_VTABLE_AVEVENTHANDLER
+void uniffi_freeq_sdk_ffi_fn_init_callback_vtable_aveventhandler(const UniffiVTableCallbackInterfaceAvEventHandler* _Nonnull vtable
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_FN_INIT_CALLBACK_VTABLE_EVENTHANDLER
@@ -757,6 +827,42 @@ void ffi_freeq_sdk_ffi_rust_future_free_void(uint64_t handle
 void ffi_freeq_sdk_ffi_rust_future_complete_void(uint64_t handle, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_IS_CONNECTED
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_IS_CONNECTED
+uint16_t uniffi_freeq_sdk_ffi_checksum_method_freeqav_is_connected(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_LEAVE
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_LEAVE
+uint16_t uniffi_freeq_sdk_ffi_checksum_method_freeqav_leave(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_PUSH_AUDIO_FRAME
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_PUSH_AUDIO_FRAME
+uint16_t uniffi_freeq_sdk_ffi_checksum_method_freeqav_push_audio_frame(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_PUSH_VIDEO_FRAME
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_PUSH_VIDEO_FRAME
+uint16_t uniffi_freeq_sdk_ffi_checksum_method_freeqav_push_video_frame(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_SET_CAMERA_ENABLED
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_SET_CAMERA_ENABLED
+uint16_t uniffi_freeq_sdk_ffi_checksum_method_freeqav_set_camera_enabled(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_SET_MUTED
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQAV_SET_MUTED
+uint16_t uniffi_freeq_sdk_ffi_checksum_method_freeqav_set_muted(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQCLIENT_CONNECT
 #define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQCLIENT_CONNECT
 uint16_t uniffi_freeq_sdk_ffi_checksum_method_freeqclient_connect(void
@@ -826,6 +932,12 @@ uint16_t uniffi_freeq_sdk_ffi_checksum_method_freeqclient_set_topic(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQCLIENT_SET_WEB_TOKEN
 #define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQCLIENT_SET_WEB_TOKEN
 uint16_t uniffi_freeq_sdk_ffi_checksum_method_freeqclient_set_web_token(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQCLIENT_SET_WEBSOCKET_URL
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_FREEQCLIENT_SET_WEBSOCKET_URL
+uint16_t uniffi_freeq_sdk_ffi_checksum_method_freeqclient_set_websocket_url(void
     
 );
 #endif
@@ -925,6 +1037,12 @@ uint16_t uniffi_freeq_sdk_ffi_checksum_method_freeqp2p_shutdown(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_CONSTRUCTOR_FREEQAV_NEW
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_CONSTRUCTOR_FREEQAV_NEW
+uint16_t uniffi_freeq_sdk_ffi_checksum_constructor_freeqav_new(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_CONSTRUCTOR_FREEQCLIENT_NEW
 #define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_CONSTRUCTOR_FREEQCLIENT_NEW
 uint16_t uniffi_freeq_sdk_ffi_checksum_constructor_freeqclient_new(void
@@ -940,6 +1058,12 @@ uint16_t uniffi_freeq_sdk_ffi_checksum_constructor_freeqe2ee_new(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_CONSTRUCTOR_FREEQP2P_NEW
 #define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_CONSTRUCTOR_FREEQP2P_NEW
 uint16_t uniffi_freeq_sdk_ffi_checksum_constructor_freeqp2p_new(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_AVEVENTHANDLER_ON_AV_EVENT
+#define UNIFFI_FFIDEF_UNIFFI_FREEQ_SDK_FFI_CHECKSUM_METHOD_AVEVENTHANDLER_ON_AV_EVENT
+uint16_t uniffi_freeq_sdk_ffi_checksum_method_aveventhandler_on_av_event(void
     
 );
 #endif

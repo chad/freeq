@@ -255,8 +255,12 @@ struct MessageRow: View {
                     .textSelection(.enabled)
             } else {
                 let imageURLs = extractImageURLs(from: message.text)
+                let videoURLs = extractVideoURLs(from: message.text)
+                let audioURLs = extractAudioURLs(from: message.text)
                 let ytId = extractYouTubeID(from: message.text)
-                let cleanText = imageURLs.isEmpty ? message.text : textWithoutImages(message.text, imageURLs: imageURLs)
+                let isVoice = isVoiceMessage(message.text)
+                let mediaURLs = imageURLs + videoURLs + audioURLs
+                let cleanText = mediaURLs.isEmpty ? message.text : textWithoutImages(message.text, imageURLs: mediaURLs)
 
                 if !cleanText.isEmpty {
                     Text(parseMessageText(cleanText))
@@ -270,6 +274,20 @@ struct MessageRow: View {
                     }
                 }
 
+                // Inline video
+                if !videoURLs.isEmpty {
+                    ForEach(videoURLs, id: \.self) { url in
+                        InlineVideoView(url: url)
+                    }
+                }
+
+                // Inline audio / voice messages
+                if !audioURLs.isEmpty {
+                    ForEach(audioURLs, id: \.self) { url in
+                        InlineAudioView(url: url, isVoice: isVoice)
+                    }
+                }
+
                 // Bluesky post embed
                 if let bsky = extractBskyPost(from: message.text) {
                     BlueskyEmbed(handle: bsky.handle, rkey: bsky.rkey)
@@ -280,8 +298,8 @@ struct MessageRow: View {
                     YouTubeThumbnail(videoId: ytId)
                 }
 
-                // Link preview (only if no images/YouTube/Bluesky)
-                if imageURLs.isEmpty && ytId == nil && extractBskyPost(from: message.text) == nil,
+                // Link preview (only if no other media)
+                if mediaURLs.isEmpty && ytId == nil && extractBskyPost(from: message.text) == nil,
                    let url = extractFirstURL(from: message.text) {
                     LinkPreviewView(url: url)
                 }

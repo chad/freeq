@@ -402,14 +402,70 @@ struct ComposeBar: View {
             appState.sendRaw(arg)
         case "p2p":
             handleP2pCommand(arg)
+        case "edit", "e":
+            // /edit <msgid> <text>  or  /edit <text> (edits last own message)
+            let ep = arg.split(separator: " ", maxSplits: 1)
+            if ep.count == 2, appState.activeChannelState?.findMessage(byId: String(ep[0])) != nil {
+                appState.editMessage(target: target, msgId: String(ep[0]), newText: String(ep[1]))
+            } else if !arg.isEmpty, let last = appState.lastOwnMessage(in: target) {
+                appState.editMessage(target: target, msgId: last.id, newText: arg)
+            }
+        case "delete", "del":
+            let mid = arg.isEmpty ? appState.lastOwnMessage(in: target)?.id : arg.trimmingCharacters(in: .whitespaces)
+            if let mid { appState.deleteMessage(target: target, msgId: mid) }
+        case "react":
+            // /react <emoji> [msgid]
+            let rp = arg.split(separator: " ")
+            if let emoji = rp.first {
+                let mid = rp.count > 1 ? String(rp[1]) : appState.activeChannelState?.messages.last?.id
+                if let mid { appState.sendReaction(target: target, msgId: mid, emoji: String(emoji)) }
+            }
+        case "reply", "re":
+            // /reply <msgid> <text>  or  /reply <text> (replies to last message)
+            let rp = arg.split(separator: " ", maxSplits: 1)
+            if rp.count == 2, appState.activeChannelState?.findMessage(byId: String(rp[0])) != nil {
+                appState.sendRaw("@+reply=\(rp[0]) PRIVMSG \(target) :\(rp[1])")
+            } else if !arg.isEmpty, let last = appState.activeChannelState?.messages.last {
+                appState.sendRaw("@+reply=\(last.id) PRIVMSG \(target) :\(arg)")
+            }
+        case "pin":
+            let mid = arg.isEmpty ? appState.activeChannelState?.messages.last?.id : arg.trimmingCharacters(in: .whitespaces)
+            if let mid { appState.sendRaw("PIN \(target) \(mid)") }
+        case "unpin":
+            if !arg.isEmpty { appState.sendRaw("UNPIN \(target) \(arg.trimmingCharacters(in: .whitespaces))") }
+        case "pins":
+            appState.sendRaw("PINS \(target)")
+        case "ban":
+            appState.sendRaw(arg.isEmpty ? "MODE \(target) +b" : "MODE \(target) +b \(arg)")
+        case "unban":
+            if !arg.isEmpty { appState.sendRaw("MODE \(target) -b \(arg)") }
+        case "list":
+            appState.sendRaw(arg.isEmpty ? "LIST" : "LIST \(arg)")
+        case "names":
+            appState.sendRaw("NAMES \(arg.isEmpty ? target : arg)")
+        case "who":
+            appState.sendRaw("WHO \(arg.isEmpty ? target : arg)")
+        case "media", "img", "upload", "crosspost":
+            pickFile()
+        case "oper":
+            if !arg.isEmpty { appState.sendRaw("OPER \(arg)") }
+        case "reconnect":
+            appState.reconnectIfSaved()
+        case "search", "find":
+            runBufferSearch(arg, target: target)
+        case "av":
+            handleAvCommand(arg, target: target)
         case "help":
             let ch = appState.activeChannelState
             let help = [
                 "── Commands ──",
                 "/join #channel · /part · /topic text",
                 "/kick user · /op user · /voice user · /invite user",
-                "/whois user · /away reason · /me action",
+                "/ban mask · /unban mask · /whois user · /away reason · /me action",
                 "/msg user text · /mode +o user · /raw IRC_LINE",
+                "/edit [id] text · /delete [id] · /react emoji · /reply [id] text",
+                "/pin [id] · /unpin id · /pins · /list · /names · /who · /search text",
+                "/media · /av start|join|leave · /oper name pass · /reconnect",
                 "/p2p start|id|connect|peers",
                 "── Shortcuts ──",
                 "⌘K quick switch · ⌘J join · ↑ edit last · Esc cancel edit"
@@ -455,6 +511,48 @@ struct ComposeBar: View {
         default:
             ch?.appendIfNew(ChatMessage(id: UUID().uuidString, from: "system",
                 text: "P2P commands: start, id, connect <endpoint>, peers", isAction: false, timestamp: Date(), replyTo: nil))
+        }
+    }
+
+    private func sysLine(_ text: String) -> ChatMessage {
+        ChatMessage(id: UUID().uuidString, from: "system", text: text,
+                    isAction: false, timestamp: Date(), replyTo: nil)
+    }
+
+    /// `/av start|join|leave|end|mute|camera` — voice/video calls.
+    private func handleAvCommand(_ arg: String, target: String) {
+        guard target.hasPrefix("#") else {
+            appState.activeChannelState?.appendIfNew(sysLine("Voice calls are only available in channels"))
+            return
+        }
+        let sub = arg.split(separator: " ").first.map(String.init)?.lowercased() ?? ""
+        switch sub {
+        case "", "start", "join":
+            appState.startOrJoinVoice(channel: target)
+        case "leave", "end", "hangup":
+            appState.leaveCall()
+        case "mute":
+            appState.toggleMute()
+        case "camera", "video":
+            appState.toggleCamera()
+        default:
+            appState.activeChannelState?.appendIfNew(sysLine("AV: start | join | leave | mute | camera"))
+        }
+    }
+
+    /// `/search <text>` — in-buffer substring search; prints matches as system lines.
+    private func runBufferSearch(_ query: String, target: String) {
+        guard !query.isEmpty, let ch = appState.activeChannelState else { return }
+        let q = query.lowercased()
+        let matches = ch.messages.filter {
+            !$0.isDeleted && ($0.text.lowercased().contains(q) || $0.from.lowercased().contains(q))
+        }
+        let fmt = DateFormatter(); fmt.dateFormat = "HH:mm"
+        ch.appendIfNew(sysLine(matches.isEmpty
+            ? "No matches for \"\(query)\""
+            : "── \(matches.count) match(es) for \"\(query)\" ──"))
+        for m in matches.suffix(20) {
+            ch.appendIfNew(sysLine("[\(fmt.string(from: m.timestamp))] \(m.from): \(m.text)"))
         }
     }
 }

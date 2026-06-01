@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		28FCBBC8CA468049919EADA3 /* CallCameraCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 272F2E7627007A625AE37DA8 /* CallCameraCapture.swift */; };
+		2DE20508FB26A54D6DC4847B /* CallMicCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF84986DB3E316AB54CFA706 /* CallMicCapture.swift */; };
 		304585E2A3DCCB55DD8467D9 /* ComposeBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = FDCB3DAE1E0BAC641DA22730 /* ComposeBar.swift */; };
 		3146DC065B84E88A34D2BD2C /* BookmarksPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49DCC7DD970BA3640B37934D /* BookmarksPanel.swift */; };
 		3ACCE0099E0E97EC7A321EDC /* FileUpload.swift in Sources */ = {isa = PBXBuildFile; fileRef = 878F66C1A9A17E125322D5CF /* FileUpload.swift */; };
@@ -15,6 +17,7 @@
 		49E784D589512E3A936DA345 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A09A2F1C5515211E8D3BE359 /* OnboardingView.swift */; };
 		4CE6EF71CD4C106B03BD914C /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 923CB3DCE2113F08CCB9E8F7 /* SidebarView.swift */; };
 		530E3783C385009D658962CB /* freeq.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD5D672B7A5F1D6E78162DE1 /* freeq.swift */; };
+		53219C77DD566736E0DBD0F1 /* CallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B840984A8780805615D0846A /* CallView.swift */; };
 		58358188E47643126CBEE786 /* MessageListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FEA777B589463007FF478DC /* MessageListView.swift */; };
 		6DDB3CED329F29FC4C691EAD /* FormatToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F95B3DDDA0598080AE7E870C /* FormatToolbar.swift */; };
 		721B0A530115B270B487BF92 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 932AFF9B3AF0BCF257A2DCE2 /* AppState.swift */; };
@@ -34,7 +37,7 @@
 		D0330D3B94FAB33F96D04BE8 /* ThreadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53A3EEB6BC19DB7746A55502 /* ThreadView.swift */; };
 		D29F998C6DF599EA13C38C85 /* ConnectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 313F00E499C37E94C9855F4F /* ConnectView.swift */; };
 		D520A6580822EF5314066E14 /* LinkPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1561609D65E3676C79D46E2 /* LinkPreview.swift */; };
-		DCD9E1807353418B1C9EAFEC /* FreeqSDK.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 4BCCB41ADB5F3934945B6E85 /* FreeqSDK.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		D96E350E7A49137316852CC7 /* CallController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA939865F12BCD7A51A4E5D0 /* CallController.swift */; };
 		DE8F1528542FEB83C2A987CE /* ChannelListBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B238AA9ACDF3723BB74BB45 /* ChannelListBrowser.swift */; };
 		E1AB7FC16F690AF9462DBBAC /* E2eeManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20B3BED9F9A6237942DD0971 /* E2eeManager.swift */; };
 		E7D65B5702985BB69725442A /* MediaViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB6D944E494A3AE591F53C28 /* MediaViews.swift */; };
@@ -46,20 +49,6 @@
 		F804DF96FC5F782461D42394 /* SearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BFC0A0C4F585C97716A8C4B /* SearchView.swift */; };
 /* End PBXBuildFile section */
 
-/* Begin PBXCopyFilesBuildPhase section */
-		C7FD349A46C6B680CB86C83A /* Embed Frameworks */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 10;
-			files = (
-				DCD9E1807353418B1C9EAFEC /* FreeqSDK.xcframework in Embed Frameworks */,
-			);
-			name = "Embed Frameworks";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
-
 /* Begin PBXFileReference section */
 		04D3AAFE430FB0DC2DA62F57 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		0F2CEC00295C49A0D1DC34B9 /* PinnedMessagesBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinnedMessagesBar.swift; sourceTree = "<group>"; };
@@ -68,6 +57,7 @@
 		1DD71B67F52DD573EF6080AE /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		20ABEF839D9D9D42C9D1BF08 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		20B3BED9F9A6237942DD0971 /* E2eeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = E2eeManager.swift; sourceTree = "<group>"; };
+		272F2E7627007A625AE37DA8 /* CallCameraCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallCameraCapture.swift; sourceTree = "<group>"; };
 		2B98D35F34492C2C6B3E504F /* AutocompletePopup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutocompletePopup.swift; sourceTree = "<group>"; };
 		313F00E499C37E94C9855F4F /* ConnectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectView.swift; sourceTree = "<group>"; };
 		41E19D6BE7C80AAE06A5EB97 /* MessageStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageStore.swift; sourceTree = "<group>"; };
@@ -89,8 +79,11 @@
 		9FEA777B589463007FF478DC /* MessageListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageListView.swift; sourceTree = "<group>"; };
 		A09A2F1C5515211E8D3BE359 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		B151A6B667B7AC30647A4811 /* UserProfileSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserProfileSheet.swift; sourceTree = "<group>"; };
+		B840984A8780805615D0846A /* CallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallView.swift; sourceTree = "<group>"; };
+		BA939865F12BCD7A51A4E5D0 /* CallController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallController.swift; sourceTree = "<group>"; };
 		BD5D672B7A5F1D6E78162DE1 /* freeq.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = freeq.swift; sourceTree = "<group>"; };
 		BF68A6E75172FAD9338D574F /* freeq-macos.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "freeq-macos.entitlements"; sourceTree = "<group>"; };
+		BF84986DB3E316AB54CFA706 /* CallMicCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallMicCapture.swift; sourceTree = "<group>"; };
 		CECE4CB96A2A81AB72EC2324 /* freeq-macos.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "freeq-macos.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		D1561609D65E3676C79D46E2 /* LinkPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreview.swift; sourceTree = "<group>"; };
 		DA3E838FFB8176761B9DAA50 /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
@@ -135,6 +128,7 @@
 			isa = PBXGroup;
 			children = (
 				2B98D35F34492C2C6B3E504F /* AutocompletePopup.swift */,
+				B840984A8780805615D0846A /* CallView.swift */,
 				1B11355062BDD7B9062AC22F /* ChatView.swift */,
 				FDCB3DAE1E0BAC641DA22730 /* ComposeBar.swift */,
 				878F66C1A9A17E125322D5CF /* FileUpload.swift */,
@@ -211,6 +205,9 @@
 			children = (
 				932AFF9B3AF0BCF257A2DCE2 /* AppState.swift */,
 				5B44CE675043F28160CDE06F /* AvatarCache.swift */,
+				272F2E7627007A625AE37DA8 /* CallCameraCapture.swift */,
+				BA939865F12BCD7A51A4E5D0 /* CallController.swift */,
+				BF84986DB3E316AB54CFA706 /* CallMicCapture.swift */,
 				ED9F5A69D81B1BA80FC4782A /* ChannelState.swift */,
 				DA3E838FFB8176761B9DAA50 /* ChatMessage.swift */,
 				20B3BED9F9A6237942DD0971 /* E2eeManager.swift */,
@@ -254,7 +251,6 @@
 			buildPhases = (
 				22CCB7671953A8A81BA17172 /* Sources */,
 				8D3B13DF7B9EFA73CB0B28E7 /* Frameworks */,
-				C7FD349A46C6B680CB86C83A /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -306,6 +302,10 @@
 				B278B82F0D0C1A1DD292BD90 /* AvatarCache.swift in Sources */,
 				3146DC065B84E88A34D2BD2C /* BookmarksPanel.swift in Sources */,
 				F221FBCD2F33FDE638027BB4 /* BrokerAuth.swift in Sources */,
+				28FCBBC8CA468049919EADA3 /* CallCameraCapture.swift in Sources */,
+				D96E350E7A49137316852CC7 /* CallController.swift in Sources */,
+				2DE20508FB26A54D6DC4847B /* CallMicCapture.swift in Sources */,
+				53219C77DD566736E0DBD0F1 /* CallView.swift in Sources */,
 				DE8F1528542FEB83C2A987CE /* ChannelListBrowser.swift in Sources */,
 				9F958D5ED5FB22C5E40774A7 /* ChannelSettingsSheet.swift in Sources */,
 				728190EB3B8C571044EBDE73 /* ChannelState.swift in Sources */,
@@ -356,6 +356,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = freeq;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
+				INFOPLIST_KEY_NSCameraUsageDescription = "freeq uses your camera for video calls.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "freeq uses your microphone for voice and video calls.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -368,6 +370,23 @@
 					SystemConfiguration,
 					"-framework",
 					AuthenticationServices,
+					"-framework",
+					AVFoundation,
+					"-framework",
+					AVKit,
+					"-framework",
+					AudioToolbox,
+					"-framework",
+					CoreAudio,
+					"-framework",
+					CoreMedia,
+					"-framework",
+					CoreVideo,
+					"-framework",
+					VideoToolbox,
+					"-framework",
+					Network,
+					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = at.freeq.macos;
 				PRODUCT_NAME = freeq;
@@ -509,6 +528,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = freeq;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
+				INFOPLIST_KEY_NSCameraUsageDescription = "freeq uses your camera for video calls.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "freeq uses your microphone for voice and video calls.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -521,6 +542,23 @@
 					SystemConfiguration,
 					"-framework",
 					AuthenticationServices,
+					"-framework",
+					AVFoundation,
+					"-framework",
+					AVKit,
+					"-framework",
+					AudioToolbox,
+					"-framework",
+					CoreAudio,
+					"-framework",
+					CoreMedia,
+					"-framework",
+					CoreVideo,
+					"-framework",
+					VideoToolbox,
+					"-framework",
+					Network,
+					"-lc++",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = at.freeq.macos;
 				PRODUCT_NAME = freeq;

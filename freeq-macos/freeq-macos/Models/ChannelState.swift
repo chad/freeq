@@ -86,4 +86,17 @@ class ChannelState: Identifiable {
             messages[idx].reactions = reactions
         }
     }
+
+    /// Explicitly remove a reaction (from a `+freeq.at/unreact` tag), as
+    /// opposed to the toggle in `applyReaction`.
+    func removeReaction(msgId: String, emoji: String, from: String) {
+        if let idx = findMessage(byId: msgId) {
+            var reactions = messages[idx].reactions
+            guard var nicks = reactions[emoji] else { return }
+            nicks.remove(from)
+            if nicks.isEmpty { reactions.removeValue(forKey: emoji) }
+            else { reactions[emoji] = nicks }
+            messages[idx].reactions = reactions
+        }
+    }
 }
