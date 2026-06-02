@@ -28,6 +28,7 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.social-networking
         INFOPLIST_KEY_CFBundleDisplayName: freeq
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "freeq uses your microphone for voice and video calls."
         INFOPLIST_KEY_NSCameraUsageDescription: "freeq uses your camera for video calls."
         GENERATE_INFOPLIST_FILE: YES

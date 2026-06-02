@@ -347,7 +347,19 @@ class AppState {
     }
 
     func sendReaction(target: String, msgId: String, emoji: String) {
-        sendRaw("@+react=\(emoji);+reply=\(msgId) TAGMSG \(target)")
+        // Toggle based on our current local state, and apply optimistically —
+        // the server relays the TAGMSG to other members but does not echo it
+        // back to us, so without this our own reaction would never appear.
+        let ch = channels.first { $0.name.lowercased() == target.lowercased() }
+            ?? dmBuffers.first { $0.name.lowercased() == target.lowercased() }
+        let already = ch?.hasReaction(msgId: msgId, emoji: emoji, from: nick) ?? false
+        if already {
+            ch?.removeReaction(msgId: msgId, emoji: emoji, from: nick)
+            sendRaw("@+freeq.at/unreact=\(emoji);+reply=\(msgId) TAGMSG \(target)")
+        } else {
+            ch?.addReaction(msgId: msgId, emoji: emoji, from: nick)
+            sendRaw("@+react=\(emoji);+reply=\(msgId) TAGMSG \(target)")
+        }
     }
 
     func sendTyping(target: String) {
@@ -831,11 +843,11 @@ extension AppState {
                 Task { await MessageStore.shared.markDeleted(msgId: deleteId) }
             }
 
-            // Reactions
+            // Reactions — idempotent add (a self-echo or duplicate is a no-op).
             if let emoji = tags["+react"], let replyId = tags["+reply"] {
                 let bufferName = target.hasPrefix("#") ? target : from
                 let ch = bufferName.hasPrefix("#") ? getOrCreateChannel(bufferName) : getOrCreateDM(bufferName)
-                ch.applyReaction(msgId: replyId, emoji: emoji, from: from)
+                ch.addReaction(msgId: replyId, emoji: emoji, from: from)
             }
 
             // Reaction removal (toggle off)
