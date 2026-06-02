@@ -401,7 +401,8 @@ struct MessageRow: View {
             if let target = appState.activeChannel, target.hasPrefix("#") {
                 let isPinned = appState.activeChannelState?.pinnedMessages.contains(where: { $0.id == message.id }) ?? false
                 Button(isPinned ? "Unpin Message" : "Pin Message") {
-                    appState.sendRaw("\(isPinned ? "UNPIN" : "PIN") \(target) \(message.id)")
+                    if isPinned { appState.unpin(msgId: message.id, in: target) }
+                    else { appState.pin(msgId: message.id, in: target) }
                 }
             }
         }

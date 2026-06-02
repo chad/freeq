@@ -406,6 +406,46 @@ class AppState {
         }
     }
 
+    /// Populate a channel's pinned-messages bar from the server's REST pins
+    /// endpoint. Called on join and after a pin/unpin. (The IRC PIN/UNPIN/PINS
+    /// flow drives the server; the REST list is the source of truth for display.)
+    func fetchPins(channel: String) {
+        guard channel.hasPrefix("#") else { return }
+        let host = serverAddress.split(separator: ":").first.map(String.init) ?? "irc.freeq.at"
+        let encoded = channel.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed) ?? channel
+        guard let url = URL(string: "https://\(host)/api/v1/channels/\(encoded)/pins") else { return }
+        Task {
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let pins = json["pins"] as? [[String: Any]] else { return }
+            let msgs: [ChatMessage] = pins.compactMap { p in
+                guard let msgid = p["msgid"] as? String, let text = p["text"] as? String else { return nil }
+                let fromRaw = (p["from"] as? String) ?? ""
+                let author = fromRaw.split(separator: "!").first.map(String.init) ?? fromRaw
+                let ts = (p["pinned_at"] as? Double).map { Date(timeIntervalSince1970: $0) } ?? Date()
+                return ChatMessage(id: msgid, from: author, text: text,
+                                   isAction: false, timestamp: ts, replyTo: nil)
+            }
+            await MainActor.run {
+                if let ch = self.channels.first(where: { $0.name.lowercased() == channel.lowercased() }) {
+                    ch.pinnedMessages = msgs
+                }
+            }
+        }
+    }
+
+    /// Pin/unpin a message and refresh the pinned bar (the server applies it
+    /// async, so re-fetch shortly after).
+    func pin(msgId: String, in channel: String) { pinAction("PIN", msgId, channel) }
+    func unpin(msgId: String, in channel: String) { pinAction("UNPIN", msgId, channel) }
+
+    private func pinAction(_ verb: String, _ msgId: String, _ channel: String) {
+        sendRaw("\(verb) \(channel) \(msgId)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.fetchPins(channel: channel)
+        }
+    }
+
     func setAway(_ reason: String?) {
         if let reason {
             sendRaw("AWAY :\(reason)")
@@ -704,6 +744,8 @@ extension AppState {
                     autoJoinChannels.append(channel)
                     UserDefaults.standard.set(autoJoinChannels, forKey: "freeq.channels")
                 }
+                // Load any pinned messages for the channel's pinned bar.
+                fetchPins(channel: channel)
             } else {
                 if let ch = channels.first(where: { $0.name.lowercased() == channel.lowercased() }) {
                     if !ch.members.contains(where: { $0.nick.lowercased() == joinNick.lowercased() }) {

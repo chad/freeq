@@ -116,11 +116,11 @@ extension AppState {
             }
         case "pin":
             let mid = arg.isEmpty ? activeChannelState?.messages.last?.id : arg.trimmingCharacters(in: .whitespaces)
-            if let mid { sendRaw("PIN \(target) \(mid)") }
+            if let mid { pin(msgId: mid, in: target) }
         case "unpin":
-            if !arg.isEmpty { sendRaw("UNPIN \(target) \(arg.trimmingCharacters(in: .whitespaces))") }
+            if !arg.isEmpty { unpin(msgId: arg.trimmingCharacters(in: .whitespaces), in: target) }
         case "pins":
-            sendRaw("PINS \(target)")
+            fetchPins(channel: target)
         case "ban":
             sendRaw(arg.isEmpty ? "MODE \(target) +b" : "MODE \(target) +b \(arg)")
         case "unban":
