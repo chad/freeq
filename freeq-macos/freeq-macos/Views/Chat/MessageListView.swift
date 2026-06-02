@@ -422,53 +422,40 @@ struct MessageRow: View {
 
     /// Parse message text into AttributedString with formatting.
     private func parseMessageText(_ text: String) -> AttributedString {
-        var result = AttributedString(text)
+        // Parse inline markdown (**bold**, *italic*, _italic_, `code`,
+        // ~~strike~~, [label](url)) — this STRIPS the delimiters so they don't
+        // show literally, matching the web/iOS clients. Falls back to plain
+        // text if the string isn't valid markdown.
+        var options = AttributedString.MarkdownParsingOptions()
+        options.interpretedSyntax = .inlineOnlyPreservingWhitespace
+        options.failurePolicy = .returnPartiallyParsedIfPossible
+        var result = (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
 
-        // URLs
+        // Give inline code a monospaced look (markdown marks it with an
+        // inlinePresentationIntent but applies no visible style on its own).
+        for run in result.runs where run.inlinePresentationIntent?.contains(.code) == true {
+            result[run.range].font = .system(.body, design: .monospaced)
+            result[run.range].backgroundColor = Color(nsColor: .quaternaryLabelColor)
+        }
+
+        // Markdown only links [label](url) / <url>; detect bare URLs too, on the
+        // delimiter-stripped plain text so indices line up.
+        let plain = String(result.characters)
         let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-        if let matches = detector?.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+        if let matches = detector?.matches(in: plain, range: NSRange(plain.startIndex..., in: plain)) {
             for match in matches.reversed() {
-                guard let range = Range(match.range, in: text),
-                      let attrRange = Range(range, in: result),
+                guard let r = Range(match.range, in: plain),
+                      let attrRange = Range(r, in: result),
                       let url = match.url else { continue }
-                result[attrRange].link = url
-                result[attrRange].foregroundColor = .accentColor
+                if result[attrRange].link == nil { result[attrRange].link = url }
             }
         }
 
-        // Bold: **text**
-        result = applyFormatting(result, pattern: "\\*\\*(.+?)\\*\\*", text: text) { attributed, range in
-            attributed[range].inlinePresentationIntent = .stronglyEmphasized
+        // Color every link with the accent.
+        for run in result.runs where run.link != nil {
+            result[run.range].foregroundColor = .accentColor
         }
 
-        // Italic: *text*
-        result = applyFormatting(result, pattern: "(?<![*])\\*([^*]+?)\\*(?![*])", text: text) { attributed, range in
-            attributed[range].inlinePresentationIntent = .emphasized
-        }
-
-        // Code: `text`
-        result = applyFormatting(result, pattern: "`([^`]+?)`", text: text) { attributed, range in
-            attributed[range].font = .system(.body, design: .monospaced)
-            attributed[range].backgroundColor = Color(nsColor: .quaternaryLabelColor)
-        }
-
-        return result
-    }
-
-    private func applyFormatting(
-        _ attributed: AttributedString,
-        pattern: String,
-        text: String,
-        apply: (inout AttributedString, Range<AttributedString.Index>) -> Void
-    ) -> AttributedString {
-        var result = attributed
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return result }
-        let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
-        for match in matches {
-            guard let range = Range(match.range, in: text),
-                  let attrRange = Range(range, in: result) else { continue }
-            apply(&result, attrRange)
-        }
         return result
     }
 }

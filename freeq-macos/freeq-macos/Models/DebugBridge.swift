@@ -24,8 +24,11 @@ final class DebugBridge {
 
     func start() {
         // Start from the current end of the file so we don't replay stale lines.
+        // Count non-empty lines only — `echo >>` leaves a trailing newline, and
+        // counting the empty final element would make us perpetually one line
+        // behind (every poll would only ever see the trailing blank).
         processedLines = (try? String(contentsOfFile: path, encoding: .utf8))?
-            .split(separator: "\n", omittingEmptySubsequences: false).count ?? 0
+            .split(separator: "\n").count ?? 0
         NSLog("[debug-bridge] watching \(path) (starting at line \(processedLines))")
         timer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
             self?.poll()
@@ -34,7 +37,7 @@ final class DebugBridge {
 
     private func poll() {
         guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return }
-        let lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let lines = content.split(separator: "\n").map(String.init)
         guard lines.count > processedLines else { return }
         let newLines = lines[processedLines...]
         processedLines = lines.count

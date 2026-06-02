@@ -22,13 +22,16 @@ CAFF=$!
 
 shot() { # shot <name>
   osascript -e 'tell application "System Events" to tell process "freeq" to set frontmost to true' >/dev/null 2>&1
-  sleep 0.5
-  local b x y w h
-  b=$(osascript -e 'tell application "System Events" to tell process "freeq" to get {position, size} of window 1' 2>/dev/null)
-  x=$(echo "$b" | cut -d, -f1 | tr -d ' '); y=$(echo "$b" | cut -d, -f2 | tr -d ' ')
-  w=$(echo "$b" | cut -d, -f3 | tr -d ' '); h=$(echo "$b" | cut -d, -f4 | tr -d ' ')
-  if [ -n "$x" ]; then screencapture -x -R"$x,$y,$w,$h" "$OUT/$1.png"; else screencapture -x "$OUT/$1.png"; fi
-  echo "  shot $1.png"
+  sleep 0.4
+  # Capture freeq's window by CGWindowID — robust even if another window
+  # (a permission dialog, the user's terminal) is on top.
+  local id; id=$(/tmp/winid 2>/dev/null)
+  if [ -n "$id" ]; then
+    screencapture -x -o -l"$id" "$OUT/$1.png"
+  else
+    screencapture -x "$OUT/$1.png"
+  fi
+  echo "  shot $1.png (win ${id:-none})"
 }
 cmd() { echo "$1" >> "$CMD"; sleep "${2:-1.3}"; }
 
