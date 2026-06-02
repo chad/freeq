@@ -177,8 +177,13 @@ class AppState {
         if let saved = UserDefaults.standard.stringArray(forKey: "freeq.channels"), !saved.isEmpty {
             autoJoinChannels = saved
         }
-        brokerToken = KeychainHelper.load(key: "brokerToken")
-        authenticatedDID = KeychainHelper.load(key: "did")
+        // In test mode we connect as a guest and don't need the saved
+        // credentials — skip the keychain reads, which on ad-hoc-signed dev
+        // builds pop a blocking "allow keychain access" dialog every rebuild.
+        if ProcessInfo.processInfo.environment["FREEQ_TEST_NICK"] == nil {
+            brokerToken = KeychainHelper.load(key: "brokerToken")
+            authenticatedDID = KeychainHelper.load(key: "did")
+        }
         favorites = Set(UserDefaults.standard.stringArray(forKey: "freeq.favorites") ?? [])
         mutedChannels = Set(UserDefaults.standard.stringArray(forKey: "freeq.muted") ?? [])
         if let data = UserDefaults.standard.data(forKey: "freeq.bookmarks"),
