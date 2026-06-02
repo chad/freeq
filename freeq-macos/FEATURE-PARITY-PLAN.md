@@ -137,3 +137,29 @@ channels (server policy) — messaging verified in a guest-owned channel.
 - **F.** Build/compile verification with xcodebuild.
 
 Each phase committed separately (attributed to Chad Fowler, no Claude co-author).
+
+---
+
+## Post-feedback audit (user reported: reactions broken, logo not used)
+Bugs found & fixed (all verified via screenshots):
+1. **Emoji reactions never appeared** — no optimistic update, and the server
+   doesn't echo reaction TAGMSGs back to the sender. Fixed: optimistic +
+   idempotent add, toggle-off via `+freeq.at/unreact`.
+2. **No app icon** — project had no asset catalog; shipped the blank default.
+   Added AppIcon.appiconset from freeq.png + wired it.
+3. **Pinned-messages bar never showed** — `pinnedMessages` was read but never
+   written. Wired `fetchPins` (REST) on join + after pin/unpin.
+4. **ChatMessage.== compared only id** — reaction/edit/delete could be
+   diff-skipped by SwiftUI. Compare mutable fields.
+5. **/edit, /delete, ↑-edit-last targeted server action notices** (e.g.
+   "pinned a message", attributed to self, no msgid) → MESSAGE_NOT_FOUND.
+   Excluded `isAction` lines from `lastOwnMessage`.
+
+Verified working: formatting, calls, avatars (real for DID users), reply
+threading, /me, edit "(edited)", delete, quick switcher, browse channels,
+bookmarks panel, member list, inline audio, MOTD, help.
+
+Known minor limitations (not bugs): OG link previews depend on the server proxy
+(rejects oversize pages); `/list` `/who` don't render numeric replies as text;
+channel messages have no optimistic append (appear on echo); self-away isn't
+prominently shown; guests can't post to gated channels (server policy).
