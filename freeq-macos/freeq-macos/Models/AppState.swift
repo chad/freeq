@@ -633,7 +633,11 @@ class AppState {
     func lastOwnMessage(in target: String) -> ChatMessage? {
         let ch = channels.first { $0.name.lowercased() == target.lowercased() }
             ?? dmBuffers.first { $0.name.lowercased() == target.lowercased() }
-        return ch?.messages.last { $0.from.lowercased() == nick.lowercased() && !$0.isDeleted }
+        // Exclude action/notice lines (e.g. server-generated "pinned a message"
+        // actions are attributed to our nick but carry no editable msgid).
+        return ch?.messages.last {
+            $0.from.lowercased() == nick.lowercased() && !$0.isDeleted && !$0.isAction
+        }
     }
 
     // MARK: - WHOIS for DID discovery
