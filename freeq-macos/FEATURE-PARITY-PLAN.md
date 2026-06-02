@@ -87,6 +87,28 @@ All substantive cross-platform features of the iOS/web/TUI superset are now
 present; remaining deltas are platform-specific OS integrations or use a
 different (already-present) architecture on macOS.
 
+## Bugs caught by the screenshot sweep (and fixed)
+1. **AV-leave crash (critical, shared SDK — also hit iOS)**: `FreeqAv.leave()`
+   dropped the MoQ/web-transport session from the FFI thread; its `Drop` needs a
+   Tokio reactor → panic → Swift `try!` fatalError → app crash on `/av leave`.
+   Fixed by dropping the session inside `RUNTIME.enter()` (+ a `Drop` backstop).
+2. **Markdown shown literally**: `parseMessageText` styled `**bold**`/`*italic*`/
+   `` `code` `` but never stripped the delimiters, only handled `*italic*` (not
+   the `_italic_` the toolbar inserts), and ignored `~~strike~~`. Rewrote to parse
+   inline markdown (strips delimiters; bold/italic/`_italic_`/code/strike/links)
+   plus bare-URL detection. Now matches web/iOS.
+3. **DebugBridge off-by-one** (test harness): counted the trailing empty line so
+   no command ran. Fixed.
+
+## Full visual verification (post-unlock, driven sweep + targeted tests)
+Confirmed rendering/working from screenshots: connect (guest), channel sidebar &
+navigation, browse-channels, quick switcher, messaging, **markdown formatting**,
+`/me` actions, emoji reactions, reply, edit, delete, pin, in-buffer search,
+inline audio player, image fail-state, member list, topic, detail panel, MOTD,
+help, and the **voice/video call** (start → camera → SFU session+ticket →
+**leave without crashing** → clean UI recovery). Note: guests can't post to gated
+channels (server policy) — messaging verified in a guest-owned channel.
+
 ## Verification status
 - **Build**: clean `xcodebuild` (0 warnings in new code), codesigns, launches.
 - **Live UI (pre-lock screenshots)**: connected as guest; sidebar, channels,
