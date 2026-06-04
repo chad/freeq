@@ -17,8 +17,10 @@ struct LinkPreviewView: View {
 
     var body: some View {
         Group {
-            if let data = ogData, (data.title != nil || data.image != nil) {
-                Link(destination: URL(string: url)!) {
+            if let data = ogData,
+               (data.title != nil || data.image != nil),
+               let target = URL(string: url) {
+                Link(destination: target) {
                     VStack(alignment: .leading, spacing: 0) {
                         // Image
                         if let imageURL = data.image, let imgURL = URL(string: imageURL) {

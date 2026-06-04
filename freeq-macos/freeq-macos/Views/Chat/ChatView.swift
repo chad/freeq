@@ -179,6 +179,7 @@ struct TopBarView: View {
 
 struct TypingDotsView: View {
     @State private var phase = 0
+    @State private var timer: Timer?
 
     var body: some View {
         HStack(spacing: 2) {
@@ -190,9 +191,17 @@ struct TypingDotsView: View {
             }
         }
         .onAppear {
-            Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
+            // Stash the Timer in @State so .onDisappear can invalidate
+            // it. Without this, recreating the view (chat-switch, list
+            // diffing) accumulates phantom timers that keep mutating
+            // the destroyed @State and leak memory across long sessions.
+            timer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { _ in
                 phase = (phase + 1) % 3
             }
+        }
+        .onDisappear {
+            timer?.invalidate()
+            timer = nil
         }
     }
 }

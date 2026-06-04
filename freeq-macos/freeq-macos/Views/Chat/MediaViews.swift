@@ -183,8 +183,9 @@ struct BlueskyEmbed: View {
 
     var body: some View {
         Group {
-            if let post {
-                Link(destination: URL(string: "https://bsky.app/profile/\(handle)/post/\(rkey)")!) {
+            if let post,
+               let postURL = Validation.makeBlueSkyPostURL(handle: handle, rkey: rkey) {
+                Link(destination: postURL) {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(spacing: 6) {
                             if let avatar = post.authorAvatar, let url = URL(string: avatar) {
@@ -260,7 +261,9 @@ struct YouTubeThumbnail: View {
     let videoId: String
 
     var body: some View {
-        Link(destination: URL(string: "https://youtube.com/watch?v=\(videoId)")!) {
+        let url = Validation.makeYouTubeWatchURL(videoId: videoId)
+            ?? URL(string: "https://youtube.com")!
+        return Link(destination: url) {
             VStack(spacing: 0) {
                 AsyncImage(url: URL(string: "https://img.youtube.com/vi/\(videoId)/mqdefault.jpg")) { phase in
                     if case .success(let image) = phase {

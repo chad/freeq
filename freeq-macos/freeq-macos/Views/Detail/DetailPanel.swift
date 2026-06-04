@@ -349,8 +349,9 @@ struct DMProfilePanel: View {
 
                 // Actions
                 VStack(spacing: 8) {
-                    if let handle = profile?.handle {
-                        Link(destination: URL(string: "https://bsky.app/profile/\(handle)")!) {
+                    if let handle = profile?.handle,
+                       let blueSkyURL = Validation.makeBlueSkyProfileURL(handle: handle) {
+                        Link(destination: blueSkyURL) {
                             Label("View on Bluesky", systemImage: "arrow.up.right.square")
                                 .frame(maxWidth: .infinity)
                         }

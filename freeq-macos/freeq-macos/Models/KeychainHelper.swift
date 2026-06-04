@@ -5,8 +5,13 @@ import Security
 enum KeychainHelper {
     private static let service = "at.freeq.macos"
 
-    static func save(key: String, value: String) {
-        guard let data = value.data(using: .utf8) else { return }
+    /// Persist `value` for `key`. Returns true on success. Callers
+    /// MUST check the return — silent failure leaves the user with an
+    /// unauthed restart loop (e.g. locked keychain, quota, sandbox
+    /// permission denial), which the prior implementation hid.
+    @discardableResult
+    static func save(key: String, value: String) -> Bool {
+        guard let data = value.data(using: .utf8) else { return false }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -15,7 +20,12 @@ enum KeychainHelper {
         SecItemDelete(query as CFDictionary)
         var add = query
         add[kSecValueData as String] = data
-        SecItemAdd(add as CFDictionary, nil)
+        let status = SecItemAdd(add as CFDictionary, nil)
+        if status != errSecSuccess {
+            Log.auth.error("KeychainHelper.save failed key=\(key, privacy: .public) status=\(status, privacy: .public)")
+            return false
+        }
+        return true
     }
 
     static func load(key: String) -> String? {
