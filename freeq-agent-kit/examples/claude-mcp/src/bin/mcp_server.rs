@@ -530,11 +530,10 @@ no match.")]
 #[tool_handler]
 impl ServerHandler for FreeqClaudeHandler {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some(
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::from_build_env())
+            .with_protocol_version(ProtocolVersion::default())
+            .with_instructions(
                 "Bridge a Claude Code agent into a freeq AV channel as a voice + \
                  chat + visual participant. Tools: freeq_connect, freeq_listen, \
                  freeq_say (priority=addressed|volunteer), freeq_post, freeq_show, \
@@ -543,10 +542,8 @@ impl ServerHandler for FreeqClaudeHandler {
                  sentence a human would want spoken; freeq_post for artifacts \
                  (links, code, decisions); freeq_show / freeq_show_file for \
                  persistent visual context on your tile. Direct-address replies are \
-                 free; volunteer utterances are cooldowned. Don't narrate tool calls."
-                    .to_string(),
-            ),
-        }
+                 free; volunteer utterances are cooldowned. Don't narrate tool calls.",
+            )
     }
 }
 
