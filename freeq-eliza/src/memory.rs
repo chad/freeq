@@ -104,7 +104,18 @@ impl Memory {
             .chars()
             .map(|c| if c.is_alphanumeric() || c == ' ' { c } else { ' ' })
             .collect();
-        let q = sanitised.trim();
+        // Build an OR query over the content words, each quoted as a literal
+        // term, so recall fires on ANY shared term and `ORDER BY rank` (bm25)
+        // surfaces the most relevant — the intended "top-K relevant" behaviour.
+        // A bare multi-word MATCH is implicit-AND, which required a past
+        // exchange to contain EVERY word of the question and so almost never hit
+        // for natural, paraphrased recall ("remind me what we discussed…").
+        let q: String = sanitised
+            .split_whitespace()
+            .filter(|t| t.len() >= 2)
+            .map(|t| format!("\"{t}\""))
+            .collect::<Vec<_>>()
+            .join(" OR ");
         if q.is_empty() {
             return Ok(Vec::new());
         }
