@@ -127,6 +127,7 @@ use crate::{imagegen, qa, summary, tts, vision};
 pub struct RunConfig {
     pub server: String,
     pub channels: Vec<String>,
+    pub owner: Option<String>,
     pub nick: String,
     pub ident: Identity,
     pub stt: Arc<SttEngine>,
@@ -200,6 +201,8 @@ pub struct RunConfig {
 pub(crate) struct SharedConfig {
     pub(crate) server: String,
     pub(crate) channels: Vec<String>,
+    /// Owner handle/nick — only this identity may issue lifecycle commands.
+    pub(crate) owner: Option<String>,
     pub(crate) nick: String,
     pub(crate) stt: Arc<SttEngine>,
     pub(crate) window_secs: f32,
@@ -332,6 +335,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
     let RunConfig {
         server,
         channels,
+        owner,
         nick,
         ident: Identity { did, private_key },
         stt,
@@ -440,6 +444,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
     let cfg = Arc::new(SharedConfig {
         server,
         channels,
+        owner,
         nick,
         stt,
         window_secs,
@@ -786,11 +791,20 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                     continue;
                 };
                 // Don't answer the burst of channel history the server
-                // replays right after the bot joins — those messages
-                // predate the bot and aren't being asked of it now.
+                // replays right after the bot joins — those messages predate
+                // the bot. (This also stops a replayed "go to sleep" from
+                // re-sleeping us the instant we wake, so it must come first.)
                 if cfg.started_at.elapsed() < STARTUP_GRACE {
                     tracing::info!(%from, "ignoring addressed chat message (startup grace)");
                     continue;
+                }
+                // Owner lifecycle command by text ("go to sleep", "join #x",
+                // "leave") — owner-only.
+                if is_owner(&cfg, &from) {
+                    if let Some(cmd) = parse_owner_command(&question) {
+                        run_owner_command(&handle_arc, Some(&target), cmd).await;
+                        continue;
+                    }
                 }
                 // Multi-agent chatter guard: if the last several
                 // addressers are all peer bots (no human breaking in),
@@ -1870,6 +1884,100 @@ const STARTUP_GRACE: Duration = Duration::from_secs(15);
 /// suppresses live questions after a restart/wake mid-call.
 const CALL_JOIN_GRACE: Duration = Duration::from_secs(3);
 
+// ── Owner lifecycle commands ────────────────────────────────────────
+// The owner can tell the bot to sleep / join / leave by voice or text.
+// We can't suspend the VM from here (the boxd key lives in the watcher,
+// by design) — so on "sleep" the bot leaves cleanly and schedules its own
+// service stop just outside its cgroup; boxd auto-suspend then takes the VM
+// to ~$0, and the always-on watcher resumes it on the next summon.
+
+enum OwnerCmd {
+    Sleep,
+    Join(String),
+    Leave,
+}
+
+/// Is `who` the configured owner? (Nick/handle match, case-insensitive.)
+fn is_owner(cfg: &SharedConfig, who: &str) -> bool {
+    cfg.owner.as_deref().is_some_and(|o| o.eq_ignore_ascii_case(who))
+}
+
+/// Parse an owner lifecycle command from an addressed utterance.
+fn parse_owner_command(text: &str) -> Option<OwnerCmd> {
+    let t = text.to_lowercase();
+    let tt = t.trim();
+    if t.contains("go to sleep")
+        || t.contains("back to sleep")
+        || t.contains("take a nap")
+        || t.contains("go to bed")
+        || t.contains("power down")
+        || t.contains("you can sleep")
+        || t.contains("go rest")
+        || tt == "sleep"
+    {
+        return Some(OwnerCmd::Sleep);
+    }
+    if let Some(i) = t.find('#') {
+        let before = &t[..i];
+        if before.contains("join") || before.contains("come to") || before.contains("go to") {
+            let ch: String = t[i..]
+                .chars()
+                .take_while(|c| !c.is_whitespace() && !matches!(c, '.' | ',' | '!' | '?'))
+                .collect();
+            if ch.len() > 1 {
+                return Some(OwnerCmd::Join(ch));
+            }
+        }
+    }
+    if t.contains("leave this channel")
+        || t.contains("go away")
+        || t.contains("you can leave")
+        || tt == "leave"
+    {
+        return Some(OwnerCmd::Leave);
+    }
+    None
+}
+
+/// Actuate an owner command. Join/leave act directly; sleep acks, then leaves
+/// and schedules a service stop outside our cgroup (so it survives teardown).
+async fn run_owner_command(handle: &ClientHandle, channel: Option<&str>, cmd: OwnerCmd) {
+    match cmd {
+        OwnerCmd::Sleep => {
+            tracing::info!("owner command: sleep");
+            // We can't suspend our own VM (the boxd key lives in the watcher, by
+            // design). Relay via a coordination event — the watcher stops us and
+            // suspends the VM to ~$0, then resumes us on the next summon. The
+            // human_text doubles as the posted/spoken acknowledgement.
+            if let Some(ch) = channel {
+                let _ = handle
+                    .emit_event(
+                        ch,
+                        "revenant_sleep",
+                        "{}",
+                        None,
+                        "Resting now \u{1F4A4} — call my name when you need me.",
+                    )
+                    .await;
+            }
+        }
+        OwnerCmd::Join(c) => {
+            tracing::info!(channel = %c, "owner command: join");
+            let _ = handle.join(&c).await;
+            if let Some(ch) = channel {
+                let _ = handle.privmsg(ch, &format!("On my way to {c}.")).await;
+            }
+        }
+        OwnerCmd::Leave => {
+            tracing::info!("owner command: leave");
+            if let Some(ch) = channel {
+                let _ = handle.privmsg(ch, "Heading out \u{1F44B} — call me back anytime.").await;
+                let _ = handle.raw(&format!("PART {ch}")).await;
+            }
+        }
+    }
+}
+
 /// Consume one participant's decoded-PCM stream (from an [`AvSession`])
 /// and segment it into utterances by voice activity — accumulate while
 /// the speaker is talking, flush to STT on a natural pause. This kills
@@ -2023,6 +2131,22 @@ async fn transcribe_participant(
                     // In a voice call people address the bot by talking,
                     // not typing.
                     if let Some(question) = address_with_aliases(&text, &cfg.nick) {
+                        // Owner lifecycle command by voice ("go to sleep",
+                        // "join #x", "leave") — owner-only, and not during the
+                        // call-join grace (so replayed audio can't re-sleep us).
+                        if is_owner(&cfg, &nick) {
+                            let past_grace = active
+                                .lock()
+                                .await
+                                .as_ref()
+                                .map_or(false, |c| c.joined_at.elapsed() >= CALL_JOIN_GRACE);
+                            if past_grace {
+                                if let Some(cmd) = parse_owner_command(&question) {
+                                    run_owner_command(&handle, Some(&channel), cmd).await;
+                                    return;
+                                }
+                            }
+                        }
                         // Multi-agent chatter guard: see is_address_allowed.
                         if !is_address_allowed(&cfg, &nick) {
                             tracing::info!(

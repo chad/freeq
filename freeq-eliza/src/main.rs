@@ -63,6 +63,11 @@ struct Cli {
     #[arg(long)]
     nick: Option<String>,
 
+    /// Owner handle/nick. Only this identity may issue lifecycle commands
+    /// ("go to sleep", "join #x", "leave") — matched against the speaker's nick.
+    #[arg(long)]
+    owner: Option<String>,
+
     /// Path to a ggml whisper.cpp model — used only by the local STT
     /// backend (the `stt` cargo feature). Ignored when `GROQ_API_KEY`
     /// is set, which is the preferred path.
@@ -262,6 +267,7 @@ async fn main() -> Result<()> {
     irc::run(irc::RunConfig {
         server: cli.server,
         channels: cli.channel,
+        owner: cli.owner,
         nick,
         ident,
         stt,
