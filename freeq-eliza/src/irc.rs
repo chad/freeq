@@ -410,6 +410,10 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
             "version": env!("CARGO_PKG_VERSION"),
             "runtime": "freeq-sdk/rust",
             "capabilities": ["av-transcription", "summary"],
+            // Provenance: who owns this being. (Soft today — a verifiable
+            // owner→bot delegation cert needs the Bluesky-OAuth onboarding.)
+            "owner": owner.clone(),
+            "persona": nick.clone(),
         }))
         .await;
     let _ = handle
@@ -576,8 +580,29 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         }
     }
 
+    // Graceful shutdown. On SIGTERM (systemctl stop — how the watcher puts us to
+    // sleep), explicitly drop the call and PART our channels before exiting. An
+    // abrupt disconnect leaves the server's 30s ghost membership, so the bot
+    // appears to linger in the channel after sleeping; an explicit PART removes
+    // it immediately. This runs BEFORE the watcher suspends the VM, because
+    // `systemctl stop` waits for us to exit.
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("install SIGTERM handler");
     loop {
-        let Some(event) = events.recv().await else {
+        let event = tokio::select! {
+            ev = events.recv() => ev,
+            _ = sigterm.recv() => {
+                tracing::info!("SIGTERM — leaving call + channels cleanly before shutdown");
+                *active.lock().await = None; // drop the call → MoQ teardown (leaves video)
+                for ch in &cfg.channels {
+                    let _ = handle_arc.raw(&format!("PART {ch} :resting")).await;
+                }
+                let _ = handle_arc.quit(Some("resting")).await;
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await; // let it flush
+                return Ok(());
+            }
+        };
+        let Some(event) = event else {
             tracing::warn!("event stream closed");
             return Ok(());
         };
