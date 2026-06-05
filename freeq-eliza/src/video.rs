@@ -22,12 +22,15 @@ use iroh_live::media::traits::VideoSource;
 
 use crate::whiteboard::Step;
 
-/// Tile resolution. 720p — chunkier than the old 360p but with the
-/// new bloom + ember count it reads enormously better, and CPU
-/// rasterizing at 15 fps still leaves headroom.
-pub const VIDEO_W: u32 = 1280;
-pub const VIDEO_H: u32 = 720;
-const FPS: u64 = 15;
+/// Tile resolution. 360p @ 12 fps — deliberately modest so the CPU
+/// rasterizer + H.264 encoder leave real-time headroom for the Opus
+/// audio pipeline on a 2-vCPU VM. At 720p the audio encoder fell
+/// 14–24 ms behind on every frame and the media transport dropped
+/// constantly, glitching the call and starving STT — clean voice beats
+/// a sharper tile.
+pub const VIDEO_W: u32 = 640;
+pub const VIDEO_H: u32 = 360;
+const FPS: u64 = 12;
 /// Most points a scene shows (extras are dropped).
 const MAX_POINTS: usize = 6;
 /// How long a scene stays on the tile after it appears before the tile

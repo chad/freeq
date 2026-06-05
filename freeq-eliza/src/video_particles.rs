@@ -48,11 +48,11 @@ use resvg::usvg;
 
 use crate::video::{overlay_svg_for_particles, VideoTile, VIDEO_H, VIDEO_W};
 
-const FPS: u64 = 15;
-/// Particle count at 1280×720. Roughly 2.3× the 12K we used at 360p
-/// — the field needs more density to read as solid at the higher
-/// resolution. CPU render still hits 15 fps with comfortable headroom.
-const PARTICLES: usize = 28_000;
+const FPS: u64 = 12;
+/// Particle count tuned for 360p. Kept modest so the CPU render stays
+/// cheap and the real-time Opus audio pipeline isn't starved on a
+/// 2-vCPU VM (see the resolution note in `video.rs`).
+const PARTICLES: usize = 12_000;
 /// Emotion-blend intensity — how strongly the mood mood overrides the
 /// character's resting palette. Low so a fully-Joy Eliza still reads as
 /// Eliza, not a generic solar face.

@@ -2223,6 +2223,12 @@ async fn transcribe_participant(
                             None
                         }
                     });
+                    tracing::info!(
+                        %nick, humans,
+                        named = named.is_some(),
+                        addressed = inferred.is_some(),
+                        "voice addressing decision"
+                    );
                     if let Some(question) = inferred {
                         // Owner lifecycle command by voice ("go to sleep",
                         // "join #x", "leave") — owner-only, and not during the
