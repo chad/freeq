@@ -1837,6 +1837,9 @@ async fn start_transcription(
         let mut session =
             AvSession::connect(av_config, push_source, move || video_for_session.source());
         let mut taps: JoinSet<()> = JoinSet::new();
+        // Live count of people we're transcribing — shared across this call's
+        // taps so each can tell one-on-one (no name needed) from a group.
+        let humans = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         while let Some(participant) = session.recv().await {
             taps.spawn(transcribe_participant(
                 cfg_for_task.clone(),
@@ -1845,6 +1848,7 @@ async fn start_transcription(
                 handle_for_task.clone(),
                 active_for_task.clone(),
                 video_for_taps.peer_level_handle(),
+                humans.clone(),
             ));
         }
         tracing::info!("AvSession ended");
@@ -2003,6 +2007,51 @@ async fn run_owner_command(handle: &ClientHandle, channel: Option<&str>, cmd: Ow
     }
 }
 
+/// Decrements a shared tap counter on drop — tracks how many participants we
+/// are currently transcribing (i.e. how many other humans are in the call).
+struct TapGuard(Arc<std::sync::atomic::AtomicUsize>);
+impl Drop for TapGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Worth responding to? Filters empty/backchannel utterances so the bot doesn't
+/// react to "yeah" / "um" when it's listening for real input.
+fn is_substantive(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    if t.is_empty() || !t.chars().any(|c| c.is_alphabetic()) {
+        return false;
+    }
+    let words: Vec<&str> = t.split_whitespace().collect();
+    if words.len() == 1 {
+        const FILLER: [&str; 14] = [
+            "yeah", "yep", "ok", "okay", "mm", "mhm", "uh", "um", "hmm", "right",
+            "sure", "cool", "nice", "what",
+        ];
+        let w = words[0].trim_matches(|c: char| !c.is_alphanumeric());
+        return !FILLER.contains(&w);
+    }
+    true
+}
+
+/// Does this utterance look like a question? STT rarely emits "?", so a leading
+/// question word also counts.
+fn looks_like_question(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    if t.ends_with('?') {
+        return true;
+    }
+    const Q: [&str; 16] = [
+        "what", "why", "how", "when", "where", "who", "which", "can", "could",
+        "would", "should", "is", "are", "do", "does", "did",
+    ];
+    t.split_whitespace()
+        .next()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+        .is_some_and(|w| Q.contains(&w))
+}
+
 /// Consume one participant's decoded-PCM stream (from an [`AvSession`])
 /// and segment it into utterances by voice activity — accumulate while
 /// the speaker is talking, flush to STT on a natural pause. This kills
@@ -2018,9 +2067,14 @@ async fn transcribe_participant(
     // Shared loudness cell — fed the participant's level so the video
     // presence can show a "listening" mood when a human is talking.
     peer_level: Arc<std::sync::atomic::AtomicU32>,
+    // Live count of participants being transcribed (= other humans in the
+    // call). When it's just one of them and us, no name is needed to address us.
+    humans: Arc<std::sync::atomic::AtomicUsize>,
 ) {
     let AvParticipant { path, nick, mut audio, video } = participant;
     let stt = cfg.stt.clone();
+    humans.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let _tap = TapGuard(humans.clone()); // decrement when this tap ends
     tracing::info!(%nick, %path, "participant audio live — transcribing");
 
     // VAD: turn the PCM stream into utterances, cut at natural pauses.
@@ -2068,6 +2122,7 @@ async fn transcribe_participant(
         let handle = handle.clone();
         let active = active.clone();
         let cfg = cfg.clone();
+        let humans = humans.clone();
         // The asker's own video — so a visual question can be answered
         // from what they're showing.
         let asker_video = video.clone();
@@ -2149,13 +2204,26 @@ async fn transcribe_participant(
                         }
                     }
 
-                    // Voice-addressed Q&A: if the utterance starts with
-                    // the bot's name ("eliza, summarize…"), treat
-                    // it as a spoken question — answer + speak back —
-                    // instead of just logging it as a transcript line.
-                    // In a voice call people address the bot by talking,
-                    // not typing.
-                    if let Some(question) = address_with_aliases(&text, &cfg.nick) {
+                    // Voice-addressed Q&A. People don't say someone's name to
+                    // address them, so neither should they have to say ours:
+                    //  • named ("eliza, …")            → always addressed
+                    //  • just one human + us           → everything is to us
+                    //  • a group                       → a question (not filler)
+                    // We're always transcribing regardless; this only decides
+                    // when to *answer*. `humans` is the live count of people in
+                    // the call (1 == one-on-one with us).
+                    let named = address_with_aliases(&text, &cfg.nick);
+                    let humans = humans.load(std::sync::atomic::Ordering::Relaxed);
+                    let inferred: Option<String> = named.clone().or_else(|| {
+                        if !is_substantive(&text) {
+                            None
+                        } else if humans <= 1 || looks_like_question(&text) {
+                            Some(text.trim().to_string())
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(question) = inferred {
                         // Owner lifecycle command by voice ("go to sleep",
                         // "join #x", "leave") — owner-only, and not during the
                         // call-join grace (so replayed audio can't re-sleep us).
