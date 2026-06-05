@@ -524,6 +524,49 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         }
     }
 
+    // On (re)connect, rejoin any call already in progress in one of our channels
+    // — e.g. after a restart or a wake-from-sleep mid-call. The reactive handler
+    // below only fires on a *new* av-state=started, so without this a restarted
+    // bot sits in the text channel while a live call carries on without it. The
+    // --start-session-in path above already handled its own channel. One call max.
+    {
+        let no_active = active.lock().await.is_none();
+        if no_active {
+            for ch in cfg.channels.iter() {
+                if start_session_in
+                    .as_ref()
+                    .is_some_and(|s| s.eq_ignore_ascii_case(ch))
+                {
+                    continue; // already handled above
+                }
+                if let Some(session_id) = discover_active_session(&cfg, ch).await {
+                    tracing::info!(channel = %ch, %session_id, "rejoining active call on connect");
+                    match start_transcription(
+                        cfg.clone(),
+                        handle_arc.clone(),
+                        ch.clone(),
+                        session_id.clone(),
+                        None,
+                        active.clone(),
+                    )
+                    .await
+                    {
+                        Ok(call) => {
+                            spawn_hello_on_join(
+                                &cfg,
+                                call.speaker.clone(),
+                                call.video.peer_level_handle(),
+                            );
+                            *active.lock().await = Some(call);
+                            break; // at most one active call at a time
+                        }
+                        Err(e) => tracing::warn!(error = ?e, "failed to rejoin active call"),
+                    }
+                }
+            }
+        }
+    }
+
     loop {
         let Some(event) = events.recv().await else {
             tracing::warn!("event stream closed");
