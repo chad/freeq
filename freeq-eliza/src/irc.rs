@@ -283,6 +283,10 @@ pub(crate) struct ActiveCall {
     pub(crate) channel: String,
     pub(crate) session_id: String,
     pub(crate) instance_id: String,
+    /// When the bot joined THIS call. The voice grace is relative to this,
+    /// not process start, so a restart/wake mid-call doesn't deafen her to
+    /// live questions — it only skips the brief audio burst right after join.
+    pub(crate) joined_at: Instant,
     /// Lines of `<nick>: <utterance>` heard so far. Buffered as context
     /// for answering questions and the end-of-call summary — never
     /// posted to the channel.
@@ -1838,6 +1842,7 @@ async fn start_transcription(
         channel,
         session_id,
         instance_id,
+        joined_at: Instant::now(),
         transcript: Vec::new(),
         last_answer: None,
         speaker,
@@ -1860,6 +1865,10 @@ const ANSWER_DEBOUNCE: Duration = Duration::from_secs(8);
 /// replay buffered audio) — answering that backlog is an unprompted
 /// "monologue" of stale messages. Live questions come after the burst.
 const STARTUP_GRACE: Duration = Duration::from_secs(15);
+/// Voice version of the join grace — relative to call-join (not process start)
+/// and kept short, so it only skips the post-join audio burst and never
+/// suppresses live questions after a restart/wake mid-call.
+const CALL_JOIN_GRACE: Duration = Duration::from_secs(3);
 
 /// Consume one participant's decoded-PCM stream (from an [`AvSession`])
 /// and segment it into utterances by voice activity — accumulate while
@@ -2032,8 +2041,8 @@ async fn transcribe_participant(
                                 // Startup grace: ignore the backlog of
                                 // audio the SFU can replay right after the
                                 // bot joins (a stale "monologue").
-                                Some(_) if cfg.started_at.elapsed() < STARTUP_GRACE => {
-                                    tracing::info!(%nick, "ignoring addressed question (startup grace)");
+                                Some(call) if call.joined_at.elapsed() < CALL_JOIN_GRACE => {
+                                    tracing::info!(%nick, "ignoring addressed question (call-join grace)");
                                     None
                                 }
                                 // Barge-in: Eliza is mid-answer and a
