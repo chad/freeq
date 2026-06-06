@@ -7,7 +7,7 @@ import {
   BUILTIN_CHARACTERS,
   type PersonaForm,
 } from '../lib/personaRecord';
-import { getLineage, type ForkRow } from '../lib/forks';
+import { getLineage, ingestPersonaRecord, type ForkRow } from '../lib/forks';
 
 const EMPTY: PersonaForm = {
   name: '',
@@ -30,6 +30,8 @@ export function PersonaStudio() {
   const [form, setForm] = useState<PersonaForm>(EMPTY);
   const [lineage, setLineage] = useState<ForkRow[] | null>(null);
   const [copied, setCopied] = useState(false);
+  const [publishUri, setPublishUri] = useState('');
+  const [regResult, setRegResult] = useState<string | null>(null);
 
   // When opened via "Fork this" from the graph, pre-seed the parent.
   useEffect(() => {
@@ -64,6 +66,24 @@ export function PersonaStudio() {
     a.download = `${record.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase() || 'persona'}.json`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const register = async () => {
+    const uri = publishUri.trim();
+    if (!record || !uri.startsWith('at://') || !uri.includes('/at.freeq.persona/')) {
+      setRegResult('Enter the at:// URI of the persona record you published.');
+      return;
+    }
+    try {
+      const r = await ingestPersonaRecord(uri, record);
+      setRegResult(
+        r.fork_recorded
+          ? `Registered ✓ — fork edge recorded (${r.name}).`
+          : `Registered ✓ — ${r.name} (no fork edge; this is an original).`,
+      );
+    } catch (e) {
+      setRegResult(`Failed: ${String(e)}`);
+    }
   };
 
   const loadLineage = async () => {
@@ -188,12 +208,24 @@ export function PersonaStudio() {
             </button>
           </div>
 
-          <p className="text-[11px] text-fg-dim leading-relaxed border-t border-border/50 pt-3">
-            Publishing to your PDS (which signs the record and makes its lineage
-            verifiable) lands with AT-Proto OAuth — coming soon. For now, copy the
-            record into your repo; the server folds its <code>forkedFrom</code> edge
-            into the fork graph on ingest.
-          </p>
+          <div className="border-t border-border/50 pt-3 space-y-2">
+            <label className={label}>Register a published record</label>
+            <p className="text-[11px] text-fg-dim leading-relaxed">
+              Publish the record above to your PDS (one-click via AT-Proto OAuth is
+              coming; for now write it to your repo), then paste its <code>at://</code>
+              URI here so freeq folds its lineage into the fork graph.
+            </p>
+            <div className="flex gap-2">
+              <input className={input} value={publishUri}
+                placeholder="at://did:plc:you/at.freeq.persona/…"
+                onChange={(e) => { setPublishUri(e.target.value); setRegResult(null); }} />
+              <button onClick={register} disabled={!valid || !publishUri.trim()}
+                className="shrink-0 text-sm px-3 rounded-md bg-bg-tertiary hover:bg-surface text-fg-muted disabled:opacity-40">
+                Register
+              </button>
+            </div>
+            {regResult && <div className="text-[11px] text-fg-muted">{regResult}</div>}
+          </div>
         </div>
       </div>
     </>
