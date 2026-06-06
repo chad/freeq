@@ -1527,6 +1527,61 @@ async fn spawned_agents_rest_api() {
     server_handle.abort();
 }
 
+#[tokio::test]
+async fn fork_lineage_rest_api() {
+    start_deadlock_detector();
+    let (_addr, web_addr, server_handle) = start_test_server_with_web_and_db(empty_resolver()).await;
+    let client = reqwest::Client::new();
+
+    let record = |parent: &str, child: &str, note: Option<&str>| {
+        let url = format!("http://{web_addr}/api/v1/forks");
+        let body = serde_json::json!({
+            "kind": "persona", "parent_id": parent, "child_id": child,
+            "forked_by": "did:plc:tester", "note": note,
+        });
+        client.post(url).json(&body).send()
+    };
+
+    // Build eliza → oblivion → cassandra, plus a sibling eliza → utopia.
+    assert_eq!(record("eliza", "oblivion", None).await.unwrap().status(), 200);
+    assert_eq!(record("oblivion", "cassandra", Some("darker")).await.unwrap().status(), 200);
+    assert_eq!(record("eliza", "utopia", None).await.unwrap().status(), 200);
+
+    // Idempotent: re-recording the same child returns the existing fork.
+    let dup: serde_json::Value = record("oblivion", "cassandra", None)
+        .await.unwrap().json().await.unwrap();
+    assert_eq!(dup["already_recorded"], true);
+
+    // Direct forks of eliza + count.
+    let forks: serde_json::Value = client
+        .get(format!("http://{web_addr}/api/v1/forks/persona/eliza"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(forks["fork_count"], 2);
+    let children: Vec<String> = forks["forks"].as_array().unwrap().iter()
+        .map(|f| f["child_id"].as_str().unwrap().to_string()).collect();
+    assert!(children.contains(&"oblivion".to_string()));
+    assert!(children.contains(&"utopia".to_string()));
+
+    // Lineage of a leaf walks up to the root.
+    let lin: serde_json::Value = client
+        .get(format!("http://{web_addr}/api/v1/lineage/persona/cassandra"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(lin["depth"], 2);
+    assert_eq!(lin["root"], "eliza");
+    let chain: Vec<String> = lin["lineage"].as_array().unwrap().iter()
+        .map(|f| f["parent_id"].as_str().unwrap().to_string()).collect();
+    assert_eq!(chain, vec!["oblivion", "eliza"]);
+
+    // Missing required fields → 400.
+    let bad = client
+        .post(format!("http://{web_addr}/api/v1/forks"))
+        .json(&serde_json::json!({ "kind": "persona" }))
+        .send().await.unwrap();
+    assert_eq!(bad.status(), 400);
+
+    server_handle.abort();
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Phase 5: Economic Controls
 // ══════════════════════════════════════════════════════════════════════

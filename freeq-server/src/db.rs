@@ -337,6 +337,28 @@ impl Db {
             ",
         )?;
 
+        // Fork lineage graph — who forked what from whom. `kind`
+        // namespaces the id space ('persona' | 'character' | 'agent')
+        // so personas and characters can share one table without
+        // colliding. `parent_id`/`child_id` are opaque artifact ids
+        // (a name, a DID, later an at:// URI). One recorded fork per
+        // (kind, child) — a child has exactly one parent.
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS forks (
+                fork_id    TEXT PRIMARY KEY,
+                kind       TEXT NOT NULL,
+                parent_id  TEXT NOT NULL,
+                child_id   TEXT NOT NULL,
+                forked_by  TEXT,
+                forked_at  INTEGER NOT NULL,
+                note       TEXT,
+                UNIQUE(kind, child_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_forks_parent ON forks(kind, parent_id);
+            CREATE INDEX IF NOT EXISTS idx_forks_child ON forks(kind, child_id);
+            ",
+        )?;
+
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS agent_spend (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1307,6 +1329,51 @@ mod tests {
     use crate::server::BanEntry;
 
     #[test]
+    fn fork_graph_records_children_count_and_lineage() {
+        let db = Db::open_memory().unwrap();
+        // eliza → oblivion → cassandra → (none)
+        db.record_fork("f1", "persona", "eliza", "oblivion", Some("did:plc:a"), None)
+            .unwrap();
+        db.record_fork("f2", "persona", "oblivion", "cassandra", Some("did:plc:b"), Some("darker"))
+            .unwrap();
+        // A sibling fork of eliza, in a different generation branch.
+        db.record_fork("f3", "persona", "eliza", "utopia", None, None)
+            .unwrap();
+
+        // Direct children + count.
+        assert_eq!(db.fork_count("persona", "eliza"), 2);
+        let children = db.forks_of("persona", "eliza");
+        let mut child_ids: Vec<_> = children.iter().map(|f| f.child_id.clone()).collect();
+        child_ids.sort();
+        assert_eq!(child_ids, vec!["oblivion", "utopia"]);
+
+        // Lineage from a leaf walks up to (but not including) the root.
+        let lineage = db.lineage("persona", "cassandra");
+        let chain: Vec<_> = lineage.iter().map(|f| f.parent_id.clone()).collect();
+        assert_eq!(chain, vec!["oblivion", "eliza"]); // nearest parent first
+        assert_eq!(lineage[0].note.as_deref(), Some("darker"));
+
+        // A root has no lineage and (here) no recorded parent.
+        assert!(db.lineage("persona", "eliza").is_empty());
+        assert!(db.get_fork_by_child("persona", "eliza").is_none());
+
+        // `kind` namespaces the id space — a character named "eliza" is
+        // unrelated to the persona "eliza".
+        assert_eq!(db.fork_count("character", "eliza"), 0);
+    }
+
+    #[test]
+    fn fork_child_is_unique_per_kind() {
+        let db = Db::open_memory().unwrap();
+        db.record_fork("f1", "persona", "eliza", "cassandra", None, None)
+            .unwrap();
+        // A child has exactly one parent — re-recording it errors.
+        assert!(db
+            .record_fork("f2", "persona", "oblivion", "cassandra", None, None)
+            .is_err());
+    }
+
+    #[test]
     fn roundtrip_channel_state() {
         let db = Db::open_memory().unwrap();
 
@@ -2060,6 +2127,32 @@ pub struct SpawnedAgentRow {
     pub spawned_at: i64,
 }
 
+/// A fork relationship: `child_id` was forked from `parent_id` (within
+/// the `kind` namespace) by `forked_by` at `forked_at`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ForkRow {
+    pub fork_id: String,
+    pub kind: String,
+    pub parent_id: String,
+    pub child_id: String,
+    pub forked_by: Option<String>,
+    pub forked_at: i64,
+    pub note: Option<String>,
+}
+
+/// Map a `forks` row (column order matches every fork query's SELECT).
+fn map_fork_row(row: &rusqlite::Row) -> SqlResult<ForkRow> {
+    Ok(ForkRow {
+        fork_id: row.get(0)?,
+        kind: row.get(1)?,
+        parent_id: row.get(2)?,
+        child_id: row.get(3)?,
+        forked_by: row.get(4)?,
+        forked_at: row.get(5)?,
+        note: row.get(6)?,
+    })
+}
+
 // ── Coordination events DB methods ─────────────────────────────────
 
 /// A coordination event row.
@@ -2345,6 +2438,90 @@ impl Db {
                 spawned_at: row.get(8)?,
             }),
         ).ok()
+    }
+
+    // ── Fork lineage graph ─────────────────────────────────────────────
+
+    /// Record a fork: `child_id` was forked from `parent_id`. Returns
+    /// the constraint error if this child is already recorded (a child
+    /// has exactly one parent) — callers that want idempotency should
+    /// check [`get_fork_by_child`](Self::get_fork_by_child) first.
+    pub fn record_fork(
+        &self,
+        fork_id: &str,
+        kind: &str,
+        parent_id: &str,
+        child_id: &str,
+        forked_by: Option<&str>,
+        note: Option<&str>,
+    ) -> SqlResult<()> {
+        let now = chrono::Utc::now().timestamp();
+        self.conn.execute(
+            "INSERT INTO forks (fork_id, kind, parent_id, child_id, forked_by, forked_at, note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![fork_id, kind, parent_id, child_id, forked_by, now, note],
+        )?;
+        Ok(())
+    }
+
+    /// The fork record where `child_id` is the child — i.e. its parent
+    /// link. `None` if this id was never forked from anything (a root).
+    pub fn get_fork_by_child(&self, kind: &str, child_id: &str) -> Option<ForkRow> {
+        self.conn
+            .query_row(
+                "SELECT fork_id, kind, parent_id, child_id, forked_by, forked_at, note
+                 FROM forks WHERE kind = ?1 AND child_id = ?2",
+                params![kind, child_id],
+                map_fork_row,
+            )
+            .ok()
+    }
+
+    /// Direct forks (children) of `parent_id`, newest first.
+    pub fn forks_of(&self, kind: &str, parent_id: &str) -> Vec<ForkRow> {
+        let mut stmt = match self.conn.prepare(
+            "SELECT fork_id, kind, parent_id, child_id, forked_by, forked_at, note
+             FROM forks WHERE kind = ?1 AND parent_id = ?2 ORDER BY forked_at DESC",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        match stmt.query_map(params![kind, parent_id], map_fork_row) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Number of direct forks of `parent_id`.
+    pub fn fork_count(&self, kind: &str, parent_id: &str) -> i64 {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM forks WHERE kind = ?1 AND parent_id = ?2",
+                params![kind, parent_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0)
+    }
+
+    /// Ancestor chain for `id`, from its immediate parent up toward the
+    /// root (nearest first). Capped at 64 hops as a cycle/abuse guard.
+    pub fn lineage(&self, kind: &str, id: &str) -> Vec<ForkRow> {
+        let mut chain = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut current = id.to_string();
+        for _ in 0..64 {
+            if !seen.insert(current.clone()) {
+                break; // cycle guard
+            }
+            match self.get_fork_by_child(kind, &current) {
+                Some(row) => {
+                    current = row.parent_id.clone();
+                    chain.push(row);
+                }
+                None => break,
+            }
+        }
+        chain
     }
 
     // ── Agent spend tracking ──────────────────────────────────────────

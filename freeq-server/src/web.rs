@@ -206,6 +206,11 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/agents/manifests", get(api_list_manifests))
         .route("/api/v1/agents/manifests/{did}", get(api_get_manifest))
         .route("/api/v1/agents/spawned", get(api_spawned_agents))
+        // Fork lineage graph — share/fork personas & characters, track
+        // who forked what and the ancestry of any artifact.
+        .route("/api/v1/forks", post(api_record_fork))
+        .route("/api/v1/forks/{kind}/{id}", get(api_get_forks))
+        .route("/api/v1/lineage/{kind}/{id}", get(api_get_lineage))
         .route("/api/v1/channels/{name}/budget", get(api_channel_budget))
         .route("/api/v1/channels/{name}/spend", get(api_channel_spend))
         // AV call page + assets (served here so it's accessible through Miren's HTTPS)
@@ -727,6 +732,103 @@ async fn api_spawned_agents(
         }))
         .collect();
     Json(serde_json::json!({ "spawned_agents": agents }))
+}
+
+/// POST /api/v1/forks — record that `child_id` was forked from
+/// `parent_id`. Body: `{ kind, parent_id, child_id, forked_by?, note? }`.
+/// `kind` namespaces the id space ("persona" | "character" | "agent").
+/// Idempotent on (kind, child_id): re-posting the same child returns the
+/// existing record instead of erroring (a child has one parent).
+async fn api_record_fork(
+    State(state): State<Arc<SharedState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
+    use axum::http::StatusCode;
+    let kind = body["kind"].as_str().unwrap_or("").trim().to_lowercase();
+    let parent_id = body["parent_id"].as_str().unwrap_or("").trim().to_string();
+    let child_id = body["child_id"].as_str().unwrap_or("").trim().to_string();
+    if kind.is_empty() || parent_id.is_empty() || child_id.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "kind, parent_id, and child_id are required".to_string()));
+    }
+    if parent_id == child_id {
+        return Err((StatusCode::BAD_REQUEST, "a fork's parent and child must differ".to_string()));
+    }
+    let forked_by = body["forked_by"].as_str().map(|s| s.to_string());
+    let note = body["note"].as_str().map(|s| s.to_string());
+
+    // Idempotent: a child has exactly one parent. If it's already
+    // recorded, return that record rather than failing.
+    if let Some(existing) = state
+        .with_db(|db| Ok(db.get_fork_by_child(&kind, &child_id)))
+        .flatten()
+    {
+        return Ok(Json(serde_json::json!({ "fork": existing, "already_recorded": true })));
+    }
+
+    let fork_id = ulid::Ulid::new().to_string();
+    let recorded = state.with_db(|db| {
+        db.record_fork(&fork_id, &kind, &parent_id, &child_id, forked_by.as_deref(), note.as_deref())
+    });
+    if recorded.is_none() {
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "could not record fork".to_string()));
+    }
+    let parent_fork_count = state.with_db(|db| Ok(db.fork_count(&kind, &parent_id))).unwrap_or(0);
+    Ok(Json(serde_json::json!({
+        "fork": {
+            "fork_id": fork_id,
+            "kind": kind,
+            "parent_id": parent_id,
+            "child_id": child_id,
+            "forked_by": forked_by,
+            "note": note,
+        },
+        "parent_fork_count": parent_fork_count,
+        "already_recorded": false,
+    })))
+}
+
+/// GET /api/v1/forks/{kind}/{id} — the direct forks (children) of `id`
+/// with a count, plus the record `id` was itself forked from (if any).
+async fn api_get_forks(
+    State(state): State<Arc<SharedState>>,
+    Path((kind, id)): Path<(String, String)>,
+) -> Json<serde_json::Value> {
+    let kind = kind.to_lowercase();
+    let id = id.replace("%3A", ":").replace("%3a", ":");
+    let forks = state.with_db(|db| Ok(db.forks_of(&kind, &id))).unwrap_or_default();
+    let fork_count = state.with_db(|db| Ok(db.fork_count(&kind, &id))).unwrap_or(0);
+    let forked_from = state.with_db(|db| Ok(db.get_fork_by_child(&kind, &id))).flatten();
+    Json(serde_json::json!({
+        "kind": kind,
+        "id": id,
+        "fork_count": fork_count,
+        "forks": forks,
+        "forked_from": forked_from,
+    }))
+}
+
+/// GET /api/v1/lineage/{kind}/{id} — the ancestor chain from `id`'s
+/// nearest parent up to the root.
+async fn api_get_lineage(
+    State(state): State<Arc<SharedState>>,
+    Path((kind, id)): Path<(String, String)>,
+) -> Json<serde_json::Value> {
+    let kind = kind.to_lowercase();
+    let id = id.replace("%3A", ":").replace("%3a", ":");
+    let lineage = state.with_db(|db| Ok(db.lineage(&kind, &id))).unwrap_or_default();
+    // The root is the parent of the furthest ancestor (or `id` itself if
+    // it was never forked from anything).
+    let root = lineage
+        .last()
+        .map(|f| f.parent_id.clone())
+        .unwrap_or_else(|| id.clone());
+    Json(serde_json::json!({
+        "kind": kind,
+        "id": id,
+        "depth": lineage.len(),
+        "root": root,
+        "lineage": lineage,
+    }))
 }
 
 /// GET /api/v1/channels/{name}/budget — budget status.
