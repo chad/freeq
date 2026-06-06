@@ -210,7 +210,12 @@ pub fn router(state: Arc<SharedState>) -> Router {
         // who forked what and the ancestry of any artifact.
         .route("/api/v1/forks", post(api_record_fork))
         .route("/api/v1/forks/{kind}/{id}", get(api_get_forks))
+        .route("/api/v1/forks/{kind}", get(api_get_forks_q))
         .route("/api/v1/lineage/{kind}/{id}", get(api_get_lineage))
+        .route("/api/v1/lineage/{kind}", get(api_get_lineage_q))
+        // Ingest an at.freeq.persona record (from a PDS) into the fork
+        // graph — the push-based stand-in for firehose aggregation.
+        .route("/api/v1/personas/record", post(api_ingest_persona_record))
         .route("/api/v1/channels/{name}/budget", get(api_channel_budget))
         .route("/api/v1/channels/{name}/spend", get(api_channel_spend))
         // AV call page + assets (served here so it's accessible through Miren's HTTPS)
@@ -787,48 +792,128 @@ async fn api_record_fork(
     })))
 }
 
-/// GET /api/v1/forks/{kind}/{id} — the direct forks (children) of `id`
-/// with a count, plus the record `id` was itself forked from (if any).
-async fn api_get_forks(
-    State(state): State<Arc<SharedState>>,
-    Path((kind, id)): Path<(String, String)>,
-) -> Json<serde_json::Value> {
-    let kind = kind.to_lowercase();
-    let id = id.replace("%3A", ":").replace("%3a", ":");
-    let forks = state.with_db(|db| Ok(db.forks_of(&kind, &id))).unwrap_or_default();
-    let fork_count = state.with_db(|db| Ok(db.fork_count(&kind, &id))).unwrap_or(0);
-    let forked_from = state.with_db(|db| Ok(db.get_fork_by_child(&kind, &id))).flatten();
-    Json(serde_json::json!({
+/// `?id=` for the query-form fork/lineage lookups — needed because an
+/// `at://` URI contains slashes and can't ride in a path segment.
+#[derive(serde::Deserialize)]
+struct IdQuery {
+    id: String,
+}
+
+fn forks_payload(state: &Arc<SharedState>, kind: &str, id: &str) -> serde_json::Value {
+    let forks = state.with_db(|db| Ok(db.forks_of(kind, id))).unwrap_or_default();
+    let fork_count = state.with_db(|db| Ok(db.fork_count(kind, id))).unwrap_or(0);
+    let forked_from = state.with_db(|db| Ok(db.get_fork_by_child(kind, id))).flatten();
+    serde_json::json!({
         "kind": kind,
         "id": id,
         "fork_count": fork_count,
         "forks": forks,
         "forked_from": forked_from,
-    }))
+    })
 }
 
-/// GET /api/v1/lineage/{kind}/{id} — the ancestor chain from `id`'s
-/// nearest parent up to the root.
-async fn api_get_lineage(
-    State(state): State<Arc<SharedState>>,
-    Path((kind, id)): Path<(String, String)>,
-) -> Json<serde_json::Value> {
-    let kind = kind.to_lowercase();
-    let id = id.replace("%3A", ":").replace("%3a", ":");
-    let lineage = state.with_db(|db| Ok(db.lineage(&kind, &id))).unwrap_or_default();
+fn lineage_payload(state: &Arc<SharedState>, kind: &str, id: &str) -> serde_json::Value {
+    let lineage = state.with_db(|db| Ok(db.lineage(kind, id))).unwrap_or_default();
     // The root is the parent of the furthest ancestor (or `id` itself if
     // it was never forked from anything).
     let root = lineage
         .last()
         .map(|f| f.parent_id.clone())
-        .unwrap_or_else(|| id.clone());
-    Json(serde_json::json!({
+        .unwrap_or_else(|| id.to_string());
+    serde_json::json!({
         "kind": kind,
         "id": id,
         "depth": lineage.len(),
         "root": root,
         "lineage": lineage,
-    }))
+    })
+}
+
+/// GET /api/v1/forks/{kind}/{id} — direct forks of `id` + count + what
+/// `id` was forked from. Path form, for slash-free ids (names, DIDs).
+async fn api_get_forks(
+    State(state): State<Arc<SharedState>>,
+    Path((kind, id)): Path<(String, String)>,
+) -> Json<serde_json::Value> {
+    let id = id.replace("%3A", ":").replace("%3a", ":");
+    Json(forks_payload(&state, &kind.to_lowercase(), &id))
+}
+
+/// GET /api/v1/forks/{kind}?id=<at-uri> — query form, for ids with
+/// slashes (`at://` URIs).
+async fn api_get_forks_q(
+    State(state): State<Arc<SharedState>>,
+    Path(kind): Path<String>,
+    Query(q): Query<IdQuery>,
+) -> Json<serde_json::Value> {
+    Json(forks_payload(&state, &kind.to_lowercase(), q.id.trim()))
+}
+
+/// GET /api/v1/lineage/{kind}/{id} — ancestor chain from nearest parent
+/// to root. Path form.
+async fn api_get_lineage(
+    State(state): State<Arc<SharedState>>,
+    Path((kind, id)): Path<(String, String)>,
+) -> Json<serde_json::Value> {
+    let id = id.replace("%3A", ":").replace("%3a", ":");
+    Json(lineage_payload(&state, &kind.to_lowercase(), &id))
+}
+
+/// GET /api/v1/lineage/{kind}?id=<at-uri> — query form.
+async fn api_get_lineage_q(
+    State(state): State<Arc<SharedState>>,
+    Path(kind): Path<String>,
+    Query(q): Query<IdQuery>,
+) -> Json<serde_json::Value> {
+    Json(lineage_payload(&state, &kind.to_lowercase(), q.id.trim()))
+}
+
+/// POST /api/v1/personas/record — ingest an `at.freeq.persona` record as
+/// it lives in a PDS, folding its fork edge into the local graph. Body:
+/// `{ "uri": "at://…/at.freeq.persona/…", "record": { …persona… } }`.
+/// A push-based stand-in for firehose aggregation: we trust only the
+/// signed `forkedFrom` the record carries, never the submitter's claim
+/// about who forked it (the forker is the child URI's own authority).
+async fn api_ingest_persona_record(
+    State(state): State<Arc<SharedState>>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
+    use axum::http::StatusCode;
+    use crate::records::{persona_fork_edge, AtUri, PersonaRecord, PERSONA_NSID};
+
+    let uri = body["uri"].as_str().unwrap_or("").trim().to_string();
+    let parsed = AtUri::parse(&uri).ok_or((
+        StatusCode::BAD_REQUEST,
+        "uri must be a fully-qualified at:// record URI".to_string(),
+    ))?;
+    if parsed.collection != PERSONA_NSID {
+        return Err((StatusCode::BAD_REQUEST, format!("uri collection must be {PERSONA_NSID}")));
+    }
+    let rec: PersonaRecord = serde_json::from_value(body["record"].clone())
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid persona record: {e}")))?;
+
+    let mut fork_recorded = false;
+    if let Some((parent, child, forked_by)) = persona_fork_edge(&uri, &rec) {
+        let already = state
+            .with_db(|db| Ok(db.get_fork_by_child("persona", &child)))
+            .flatten()
+            .is_some();
+        if !already {
+            let fork_id = ulid::Ulid::new().to_string();
+            fork_recorded = state
+                .with_db(|db| {
+                    db.record_fork(&fork_id, "persona", &parent, &child, forked_by.as_deref(), None)
+                })
+                .is_some();
+        }
+    }
+    Ok(Json(serde_json::json!({
+        "ingested": true,
+        "uri": uri,
+        "name": rec.name,
+        "forked_from": rec.forked_from,
+        "fork_recorded": fork_recorded,
+    })))
 }
 
 /// GET /api/v1/channels/{name}/budget — budget status.

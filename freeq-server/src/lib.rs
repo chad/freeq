@@ -17,6 +17,7 @@ pub mod manifest;
 pub mod msgid;
 pub mod plugin;
 pub mod policy;
+pub mod records;
 pub mod s2s;
 pub mod sasl;
 pub mod secrets;

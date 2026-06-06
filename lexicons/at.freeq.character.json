@@ -1,0 +1,36 @@
+{
+  "lexicon": 1,
+  "id": "at.freeq.character",
+  "description": "A forkable ghostly character: face + voice-DSP identity. Inherits structural bits (contours, transition) from a built-in `base` archetype and overrides the tunable fields. The canonical schema for `pack` is the ghostly crate's CharacterPack.",
+  "defs": {
+    "main": {
+      "type": "record",
+      "description": "A character definition in the author's repo. Worn by personas via at.freeq.persona#face.pack.",
+      "key": "tid",
+      "record": {
+        "type": "object",
+        "required": ["name", "base", "createdAt"],
+        "properties": {
+          "name": { "type": "string", "maxLength": 640, "maxGraphemes": 128 },
+          "base": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Built-in ghostly archetype supplying contours + transition (e.g. 'oblivion', 'eliza')."
+          },
+          "defaultEmotion": { "type": "string", "maxLength": 64 },
+          "pack": {
+            "type": "string",
+            "maxLength": 200000,
+            "description": "The ghostly CharacterPack as serialized JSON (geometry, palette, render config, voice profile). ghostly is the canonical schema."
+          },
+          "forkedFrom": {
+            "type": "string",
+            "format": "at-uri",
+            "description": "The character this was forked from (its at:// URI). Absent on an original."
+          },
+          "createdAt": { "type": "string", "format": "datetime" }
+        }
+      }
+    }
+  }
+}

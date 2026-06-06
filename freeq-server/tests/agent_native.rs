@@ -1582,6 +1582,71 @@ async fn fork_lineage_rest_api() {
     server_handle.abort();
 }
 
+#[tokio::test]
+async fn persona_record_ingest_records_fork_edge() {
+    start_deadlock_detector();
+    let (_addr, web_addr, server_handle) = start_test_server_with_web_and_db(empty_resolver()).await;
+    let client = reqwest::Client::new();
+
+    let parent_uri = "at://did:plc:orig/at.freeq.persona/parent1";
+    let child_uri = "at://did:plc:me/at.freeq.persona/child1";
+
+    // Ingest a forked persona record as it would appear in a PDS.
+    let resp = client
+        .post(format!("http://{web_addr}/api/v1/personas/record"))
+        .json(&serde_json::json!({
+            "uri": child_uri,
+            "record": {
+                "$type": "at.freeq.persona",
+                "name": "Cassandra",
+                "systemPrompt": "You foresee and you warn.",
+                "forkedFrom": parent_uri,
+                "createdAt": "2026-06-06T00:00:00Z"
+            }
+        }))
+        .send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["fork_recorded"], true);
+    assert_eq!(v["forked_from"], parent_uri);
+
+    // The fork graph now reflects the record's lineage. at:// ids carry
+    // slashes, so query via the ?id= form.
+    let forks: serde_json::Value = client
+        .get(format!("http://{web_addr}/api/v1/forks/persona"))
+        .query(&[("id", parent_uri)])
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(forks["fork_count"], 1);
+    assert_eq!(forks["forks"][0]["child_id"], child_uri);
+    // The forker is the child URI's own authority — not spoofable by the submitter.
+    assert_eq!(forks["forks"][0]["forked_by"], "did:plc:me");
+
+    // Re-ingesting the same record is idempotent (no double-count).
+    client
+        .post(format!("http://{web_addr}/api/v1/personas/record"))
+        .json(&serde_json::json!({
+            "uri": child_uri,
+            "record": { "$type": "at.freeq.persona", "name": "Cassandra",
+                "systemPrompt": "x", "forkedFrom": parent_uri, "createdAt": "2026-06-06T00:00:00Z" }
+        }))
+        .send().await.unwrap();
+    let forks2: serde_json::Value = client
+        .get(format!("http://{web_addr}/api/v1/forks/persona"))
+        .query(&[("id", parent_uri)])
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(forks2["fork_count"], 1);
+
+    // A non-persona collection URI is rejected.
+    let bad = client
+        .post(format!("http://{web_addr}/api/v1/personas/record"))
+        .json(&serde_json::json!({ "uri": "at://did:plc:x/app.bsky.feed.post/1",
+            "record": { "name": "n", "systemPrompt": "p", "createdAt": "t" } }))
+        .send().await.unwrap();
+    assert_eq!(bad.status(), 400);
+
+    server_handle.abort();
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Phase 5: Economic Controls
 // ══════════════════════════════════════════════════════════════════════
