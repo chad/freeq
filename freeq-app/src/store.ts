@@ -152,6 +152,7 @@ export interface Store {
   mutedChannels: Set<string>; // lowercase channel names
   bookmarks: { channel: string; msgId: string; from: string; text: string; timestamp: Date }[];
   bookmarksPanelOpen: boolean;
+  personaStudioOpen: boolean;
   hiddenDMs: Set<string>; // lowercase nicks — hidden from sidebar but messages preserved
   searchOpen: boolean;
   scrollToMsgId: string | null;
@@ -238,6 +239,7 @@ export interface Store {
   addBookmark: (channel: string, msgId: string, from: string, text: string, timestamp: Date) => void;
   removeBookmark: (msgId: string) => void;
   setBookmarksPanelOpen: (open: boolean) => void;
+  setPersonaStudioOpen: (open: boolean) => void;
   setSearchOpen: (open: boolean) => void;
   setScrollToMsgId: (id: string | null) => void;
   setPins: (channel: string, pins: PinnedMessage[]) => void;
@@ -327,6 +329,7 @@ export const useStore = create<Store>((set, get) => ({
   mutedChannels: new Set(safeJsonParse(localStorage.getItem('freeq-muted'), [])),
   bookmarks: safeJsonParse(localStorage.getItem('freeq-bookmarks'), []).map((b: any) => ({ ...b, timestamp: new Date(b.timestamp) })),
   bookmarksPanelOpen: false,
+  personaStudioOpen: false,
   hiddenDMs: new Set(safeJsonParse(localStorage.getItem('freeq-hidden-dms'), [])),
   searchOpen: false,
   scrollToMsgId: null,
@@ -942,6 +945,7 @@ export const useStore = create<Store>((set, get) => ({
     return { bookmarks };
   }),
   setBookmarksPanelOpen: (open) => set({ bookmarksPanelOpen: open }),
+  setPersonaStudioOpen: (open) => set({ personaStudioOpen: open }),
   setSearchOpen: (open) => set({ searchOpen: open, searchQuery: open ? '' : '' }),
   setScrollToMsgId: (id) => set({ scrollToMsgId: id }),
   setPins: (channel, pins) => set((state) => {
