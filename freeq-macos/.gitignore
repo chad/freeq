@@ -3,6 +3,9 @@
 .swiftpm/
 Package.resolved
 
+# Xcode build output (DerivedData)
+build/
+
 # Xcode user data
 *.xcuserstate
 xcuserdata/

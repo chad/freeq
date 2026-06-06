@@ -217,8 +217,11 @@ class AppState {
         guard let token = brokerToken, !token.isEmpty else {
             // Saved-session bit was set but the token is gone (keychain
             // wiped, etc.). Fall back to fresh login instead of crashing
-            // the way `brokerToken!` did.
-            self.hasSavedSession = false
+            // the way `brokerToken!` did. `hasSavedSession` is computed
+            // from brokerToken + nick, so clearing the token + erasing
+            // the keychain copy flips it false.
+            self.brokerToken = nil
+            KeychainHelper.delete(key: "brokerToken")
             self.errorMessage = "Saved session is no longer valid — please sign in again."
             return
         }
@@ -244,7 +247,8 @@ class AppState {
                 // network down on wake-from-sleep.
                 await MainActor.run {
                     self.errorMessage = "Could not refresh session: \(error.localizedDescription). Please sign in again."
-                    self.hasSavedSession = false
+                    self.brokerToken = nil
+                    KeychainHelper.delete(key: "brokerToken")
                 }
             }
         }
@@ -612,12 +616,27 @@ extension AppState {
             if authenticatedDID != nil {
                 sendRaw("CHATHISTORY TARGETS * * 50")
             }
+            // Self-avatar: prime the profile cache with our own DID so
+            // our avatar resolves immediately, without waiting for one
+            // of our own messages to round-trip the server and come
+            // back with an account-tag.
+            if let did = authenticatedDID {
+                profileCache.setDid(did, for: registeredNick)
+            }
             // Start P2P subsystem
             startP2p()
 
         case .authenticated(let did):
             authenticatedDID = did
-            KeychainHelper.save(key: "did", value: did)
+            if !KeychainHelper.save(key: "did", value: did) {
+                Log.auth.error("Could not persist authenticated DID")
+            }
+            // Once we know our DID, seed the profile cache so our own
+            // avatar shows in the sidebar / member list before any
+            // self-message echoes back.
+            if !nick.isEmpty {
+                profileCache.setDid(did, for: nick)
+            }
 
         case .authFailed(let reason):
             errorMessage = "Auth failed: \(reason)"
@@ -670,6 +689,18 @@ extension AppState {
 
         case .message(let msg):
             let isSelf = msg.fromNick.lowercased() == nick.lowercased()
+
+            // Pipe the server's account-tag DID into the profile cache.
+            // Every PRIVMSG from an authenticated user carries a
+            // `+freeq.at/account=did:plc:...` tag; reading it here means
+            // we don't need to manually WHOIS every speaker just to
+            // learn the DID for the avatar pipeline. This is the path
+            // iOS already takes — macOS was just ignoring `msg.account`
+            // and so no Bluesky avatars ever resolved.
+            if let did = msg.account, did.hasPrefix("did:") {
+                profileCache.setDid(did, for: msg.fromNick)
+            }
+
             let message = ChatMessage(
                 id: msg.msgid ?? UUID().uuidString,
                 from: msg.fromNick,
