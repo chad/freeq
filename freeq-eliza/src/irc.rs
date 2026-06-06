@@ -182,6 +182,10 @@ pub struct RunConfig {
     pub render_backend: String,
     /// Ghostly character name when `render_backend == "particles"`.
     pub ghostly_character: String,
+    /// Optional path to a custom ghostly `CharacterPack` JSON. When set
+    /// (from a `--persona` pack), the face + voice DSP come from this
+    /// pack instead of the built-in `ghostly_character`.
+    pub ghostly_pack: Option<String>,
     /// Per-character system-prompt override (Oblivion / Narrator /
     /// Utopia personality). `None` falls back to the default Eliza
     /// prompt in `qa.rs`.
@@ -236,6 +240,9 @@ pub(crate) struct SharedConfig {
     pub(crate) render_backend: String,
     /// Ghostly character name when `render_backend == "particles"`.
     pub(crate) ghostly_character: String,
+    /// Optional path to a custom ghostly `CharacterPack` JSON (face +
+    /// voice DSP). Overrides `ghostly_character` when set.
+    pub(crate) ghostly_pack: Option<String>,
     /// Per-character system prompt — when present, replaces the
     /// default Eliza prompt in [`qa::answer_streaming`].
     pub(crate) character_system_prompt: Option<String>,
@@ -363,6 +370,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         ambient_enabled,
         render_backend,
         ghostly_character,
+        ghostly_pack,
         character_system_prompt,
         persona_hello_line,
         peer_agents,
@@ -475,6 +483,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         ambient_enabled,
         render_backend,
         ghostly_character,
+        ghostly_pack,
         character_system_prompt,
         persona_hello_line,
         peer_agents: peer_agents
@@ -952,8 +961,10 @@ async fn answer_and_speak(
                 let voice = cfg.elevenlabs_voice_id.clone();
                 let model = cfg.elevenlabs_model.clone();
                 // Per-character voice chain — see proactive.rs for design intent.
-                let voice_profile =
-                    ghostly::audio::profile::for_character(&cfg.ghostly_character);
+                let voice_profile = crate::persona::resolve_voice_profile(
+                    &cfg.ghostly_character,
+                    cfg.ghostly_pack.as_deref(),
+                );
                 // Peer-loudness handle for the don't-talk-over gate.
                 // `peer_level` is the loudest of all OTHER participants
                 // (humans + other agents) on this tile; the bot is
@@ -1476,7 +1487,8 @@ fn spawn_backchannel_loop(
         let model = cfg.elevenlabs_model.clone();
         let http = cfg.http.clone();
         let character = cfg.ghostly_character.clone();
-        let voice_profile = ghostly::audio::profile::for_character(&character);
+        let voice_profile =
+            crate::persona::resolve_voice_profile(&character, cfg.ghostly_pack.as_deref());
 
         let mut chain =
             ghostly::audio::VoiceChain::new(voice_profile, tts::ELEVENLABS_PCM_RATE as f32);
@@ -1592,6 +1604,7 @@ fn spawn_hello_on_join(
     let model = cfg.elevenlabs_model.clone();
     let http = cfg.http.clone();
     let character = cfg.ghostly_character.clone();
+    let ghostly_pack = cfg.ghostly_pack.clone();
     tokio::spawn(async move {
         // Audio-pipeline settle: when the bot has just joined the call,
         // the MoQ broadcast publish has been opened but no subscriber
@@ -1607,7 +1620,8 @@ fn spawn_hello_on_join(
         // one (staggered launch), and they all greet — without this
         // gate they'd talk over each other.
         wait_for_room_quiet(&peer_level).await;
-        let voice_profile = ghostly::audio::profile::for_character(&character);
+        let voice_profile =
+            crate::persona::resolve_voice_profile(&character, ghostly_pack.as_deref());
         let mut chain = ghostly::audio::VoiceChain::new(
             voice_profile,
             tts::ELEVENLABS_PCM_RATE as f32,
@@ -1842,6 +1856,7 @@ async fn start_transcription(
     let backend = match cfg.render_backend.as_str() {
         "particles" => crate::video::Backend::Particles {
             character: cfg.ghostly_character.clone(),
+            ghostly_pack: cfg.ghostly_pack.clone(),
         },
         _ => crate::video::Backend::Svg,
     };

@@ -27,12 +27,19 @@ pub struct PersonaPack {
     /// The agent's own name/identity (what it calls itself and is
     /// addressed as). Independent of the character it wears.
     pub name: String,
-    /// Which ghostly character (face + voice DSP) this persona wears,
-    /// by name (e.g. `"oblivion"`). Resolved by the `ghostly` crate.
-    /// Defaults to [`name`](Self::name) when absent — i.e. a persona
-    /// named after a built-in character wears that character.
+    /// Which built-in ghostly character (face + voice DSP) this persona
+    /// wears, by name (e.g. `"oblivion"`). Resolved by the `ghostly`
+    /// crate. Defaults to [`name`](Self::name) when absent — i.e. a
+    /// persona named after a built-in character wears that character.
+    /// Ignored when [`ghostly_pack`](Self::ghostly_pack) is set.
     #[serde(default)]
     pub ghostly_character: Option<String>,
+    /// Path to a custom ghostly `CharacterPack` JSON (a forkable face +
+    /// voice-DSP definition). When set, the persona wears this fully
+    /// custom character instead of a built-in archetype — this is what
+    /// lets a forked persona carry its own visuals + audio end-to-end.
+    #[serde(default)]
+    pub ghostly_pack: Option<String>,
     /// ElevenLabs voice ID for TTS. This is the *base* voice; ghostly's
     /// per-character DSP chain colours it further.
     pub voice_id: String,
@@ -79,6 +86,7 @@ impl PersonaPack {
         Some(Self {
             name: name.to_string(),
             ghostly_character: Some(name.to_string()),
+            ghostly_pack: None,
             voice_id: p.voice_id.to_string(),
             speed_multiplier: p.speed_multiplier,
             system_prompt: p.system_prompt.to_string(),
@@ -105,6 +113,57 @@ impl PersonaPack {
         Self::from_json_str(&s)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
+}
+
+/// Resolve the ghostly *face* an agent wears: a custom `CharacterPack`
+/// file (`ghostly_pack`) when given and loadable, otherwise the built-in
+/// character by name. `None` only when neither resolves.
+///
+/// This (and [`resolve_voice_profile`]) is the single place that knows
+/// "custom pack or built-in archetype" — the only seam where freeq
+/// reaches into ghostly to materialize a character.
+pub fn resolve_character(
+    ghostly_character: &str,
+    ghostly_pack: Option<&str>,
+) -> Option<ghostly::Character> {
+    if let Some(path) = ghostly_pack {
+        match ghostly::CharacterPack::from_file(path) {
+            Ok(pack) => match pack.to_character() {
+                Some(c) => return Some(c),
+                None => tracing::warn!(
+                    pack = %path,
+                    base = %pack.base,
+                    "persona: ghostly pack has unknown base archetype; falling back to built-in"
+                ),
+            },
+            Err(e) => tracing::warn!(
+                pack = %path,
+                error = %e,
+                "persona: failed to load ghostly pack; falling back to built-in"
+            ),
+        }
+    }
+    ghostly::characters::by_name(ghostly_character)
+}
+
+/// Resolve the ghostly *voice-DSP* profile an agent uses: from a custom
+/// `CharacterPack` file when given, otherwise the built-in character's
+/// default profile.
+pub fn resolve_voice_profile(
+    ghostly_character: &str,
+    ghostly_pack: Option<&str>,
+) -> ghostly::audio::profile::VoiceProfile {
+    if let Some(path) = ghostly_pack {
+        match ghostly::CharacterPack::from_file(path) {
+            Ok(pack) => return pack.voice_profile(),
+            Err(e) => tracing::warn!(
+                pack = %path,
+                error = %e,
+                "persona: failed to load ghostly pack voice; falling back to built-in"
+            ),
+        }
+    }
+    ghostly::audio::profile::for_character(ghostly_character)
 }
 
 #[cfg(test)]
@@ -153,5 +212,35 @@ mod tests {
         let json = r#"{ "name": "eliza", "voice_id": "v", "system_prompt": "hi" }"#;
         let p = PersonaPack::from_json_str(json).unwrap();
         assert_eq!(p.character(), "eliza");
+    }
+
+    #[test]
+    fn resolves_face_and_voice_from_a_ghostly_pack() {
+        // The cross-repo loop end to end: a custom ghostly CharacterPack
+        // file (Oblivion's body, renamed) drives both the face and the
+        // voice DSP a persona uses.
+        let mut pack = ghostly::CharacterPack::from_character("oblivion").unwrap();
+        pack.name = "azure-oblivion".to_string();
+        let path = std::env::temp_dir()
+            .join(format!("freeq-persona-pack-{}.json", std::process::id()));
+        std::fs::write(&path, pack.to_json_string().unwrap()).unwrap();
+        let p = path.to_str().unwrap();
+
+        // Face resolves from the pack — note the custom name is carried.
+        let c = resolve_character("eliza", Some(p)).expect("pack character");
+        assert_eq!(c.name, "azure-oblivion");
+
+        // Voice resolves from the pack — it inherited Oblivion's profile.
+        let v = resolve_voice_profile("eliza", Some(p));
+        assert_eq!(
+            v.formant_shift,
+            ghostly::audio::profile::for_character("oblivion").formant_shift
+        );
+
+        // A bad pack path falls back to the named built-in.
+        let fb = resolve_character("oblivion", Some("/no/such/pack.json")).expect("fallback");
+        assert_eq!(fb.name, "oblivion");
+
+        let _ = std::fs::remove_file(&path);
     }
 }

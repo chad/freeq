@@ -320,6 +320,10 @@ async fn main() -> Result<()> {
             .as_ref()
             .map(|p| p.character().to_string())
             .unwrap_or_else(|| cli.ghostly_character.clone()),
+        // Custom ghostly character pack (face + voice DSP), if the
+        // persona carries one — the end-to-end "forked personality with
+        // its own visuals + audio" path.
+        ghostly_pack: persona.as_ref().and_then(|p| p.ghostly_pack.clone()),
         // Persona-derived voice + system prompt + greeting. With a
         // persona (built-in profile or a `--persona` pack) we swap in
         // its ElevenLabs voice ID and personality; without one (e.g.

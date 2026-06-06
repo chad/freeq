@@ -61,13 +61,14 @@ const EMOTION_INTENSITY: f32 = 0.45;
 /// Particle-backend render loop. Drains the tile's mood/audio cells
 /// each frame, picks an emotion + intensity, asks ghostly to render,
 /// and publishes the frame back to the tile.
-pub(crate) fn render_loop(tile: VideoTile, character_name: &str) {
-    let base_character = match gho_characters::by_name(character_name) {
+pub(crate) fn render_loop(tile: VideoTile, character_name: &str, ghostly_pack: Option<&str>) {
+    let base_character = match crate::persona::resolve_character(character_name, ghostly_pack) {
         Some(c) => c,
         None => {
             tracing::warn!(
                 character = %character_name,
-                "unknown ghostly character; falling back to 'eliza'"
+                pack = ?ghostly_pack,
+                "unknown ghostly character/pack; falling back to 'eliza'"
             );
             gho_characters::by_name("eliza").expect("eliza always exists")
         }

@@ -216,7 +216,13 @@ impl Scene {
 #[derive(Clone, Debug)]
 pub enum Backend {
     Svg,
-    Particles { character: String },
+    Particles {
+        character: String,
+        /// Optional path to a custom ghostly `CharacterPack` JSON. When
+        /// set, the face is built from the pack instead of the built-in
+        /// `character` name.
+        ghostly_pack: Option<String>,
+    },
 }
 
 impl Default for Backend {
@@ -480,8 +486,8 @@ impl VideoTile {
             .name("eliza-video".into())
             .spawn(move || match backend {
                 Backend::Svg => tile.render_loop(),
-                Backend::Particles { character } => {
-                    crate::video_particles::render_loop(tile, &character)
+                Backend::Particles { character, ghostly_pack } => {
+                    crate::video_particles::render_loop(tile, &character, ghostly_pack.as_deref())
                 }
             })
             .expect("spawn video renderer");
