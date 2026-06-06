@@ -297,7 +297,31 @@ async fn main() -> Result<()> {
             .map(|p| p.voice_id.to_string())
             .unwrap_or(cli.elevenlabs_voice),
         character_system_prompt: character_profile::by_name(&cli.ghostly_character)
-            .map(|p| p.system_prompt.to_string()),
+            .map(|p| {
+                let mut prompt = p.system_prompt.to_string();
+                // A persona can WEAR a character (face/voice/manner) under its own
+                // name. The character prompt hardcodes "You are <Character>", so
+                // override the self-identity when the persona is named differently
+                // — otherwise she answers to her name but calls herself the costume.
+                if !identity_name.eq_ignore_ascii_case(&cli.ghostly_character) {
+                    let cap = |s: &str| {
+                        let mut ch = s.chars();
+                        ch.next()
+                            .map(|f| f.to_uppercase().collect::<String>() + ch.as_str())
+                            .unwrap_or_default()
+                    };
+                    prompt.push_str(&format!(
+                        "\n\nIMPORTANT — YOUR IDENTITY: Your name is {name}. You wear \
+                         the voice and manner of the {arche} archetype, but you ARE \
+                         {name}. Always introduce yourself and refer to yourself as \
+                         {name}, never as {arche_cap}.",
+                        name = cap(&identity_name),
+                        arche = cli.ghostly_character,
+                        arche_cap = cap(&cli.ghostly_character),
+                    ));
+                }
+                prompt
+            }),
         peer_agents: cli.peer_agents,
     })
     .await
