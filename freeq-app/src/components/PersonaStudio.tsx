@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useStore } from '../store';
 import {
   validatePersonaForm,
@@ -24,9 +24,20 @@ const EMPTY: PersonaForm = {
 export function PersonaStudio() {
   const open = useStore((s) => s.personaStudioOpen);
   const setOpen = useStore((s) => s.setPersonaStudioOpen);
+  const forkFrom = useStore((s) => s.studioForkFrom);
+  const clearForkFrom = useStore((s) => s.setStudioForkFrom);
+  const openForkGraph = useStore((s) => s.openForkGraph);
   const [form, setForm] = useState<PersonaForm>(EMPTY);
   const [lineage, setLineage] = useState<ForkRow[] | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // When opened via "Fork this" from the graph, pre-seed the parent.
+  useEffect(() => {
+    if (open && forkFrom) {
+      setForm((f) => ({ ...f, forkedFrom: forkFrom }));
+      clearForkFrom(null);
+    }
+  }, [open, forkFrom, clearForkFrom]);
 
   if (!open) return null;
 
@@ -136,6 +147,12 @@ export function PersonaStudio() {
               <button onClick={loadLineage} disabled={!form.forkedFrom?.trim()}
                 className="shrink-0 text-xs px-2 rounded-md bg-bg-tertiary hover:bg-surface text-fg-muted disabled:opacity-40">
                 Lineage
+              </button>
+              <button
+                onClick={() => { const u = form.forkedFrom?.trim(); if (u) { openForkGraph('persona', u); setOpen(false); } }}
+                disabled={!form.forkedFrom?.trim()}
+                className="shrink-0 text-xs px-2 rounded-md bg-bg-tertiary hover:bg-surface text-fg-muted disabled:opacity-40">
+                Graph
               </button>
             </div>
             {lineage && (

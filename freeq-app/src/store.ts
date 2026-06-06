@@ -153,6 +153,11 @@ export interface Store {
   bookmarks: { channel: string; msgId: string; from: string; text: string; timestamp: Date }[];
   bookmarksPanelOpen: boolean;
   personaStudioOpen: boolean;
+  /** When set, Persona Studio pre-fills `forkedFrom` on next open. */
+  studioForkFrom: string | null;
+  forkGraphOpen: boolean;
+  forkGraphKind: string;
+  forkGraphId: string;
   hiddenDMs: Set<string>; // lowercase nicks — hidden from sidebar but messages preserved
   searchOpen: boolean;
   scrollToMsgId: string | null;
@@ -240,6 +245,9 @@ export interface Store {
   removeBookmark: (msgId: string) => void;
   setBookmarksPanelOpen: (open: boolean) => void;
   setPersonaStudioOpen: (open: boolean) => void;
+  setStudioForkFrom: (uri: string | null) => void;
+  setForkGraphOpen: (open: boolean) => void;
+  openForkGraph: (kind: string, id: string) => void;
   setSearchOpen: (open: boolean) => void;
   setScrollToMsgId: (id: string | null) => void;
   setPins: (channel: string, pins: PinnedMessage[]) => void;
@@ -330,6 +338,10 @@ export const useStore = create<Store>((set, get) => ({
   bookmarks: safeJsonParse(localStorage.getItem('freeq-bookmarks'), []).map((b: any) => ({ ...b, timestamp: new Date(b.timestamp) })),
   bookmarksPanelOpen: false,
   personaStudioOpen: false,
+  studioForkFrom: null,
+  forkGraphOpen: false,
+  forkGraphKind: 'persona',
+  forkGraphId: '',
   hiddenDMs: new Set(safeJsonParse(localStorage.getItem('freeq-hidden-dms'), [])),
   searchOpen: false,
   scrollToMsgId: null,
@@ -946,6 +958,9 @@ export const useStore = create<Store>((set, get) => ({
   }),
   setBookmarksPanelOpen: (open) => set({ bookmarksPanelOpen: open }),
   setPersonaStudioOpen: (open) => set({ personaStudioOpen: open }),
+  setStudioForkFrom: (uri) => set({ studioForkFrom: uri }),
+  setForkGraphOpen: (open) => set({ forkGraphOpen: open }),
+  openForkGraph: (kind, id) => set({ forkGraphKind: kind, forkGraphId: id, forkGraphOpen: true }),
   setSearchOpen: (open) => set({ searchOpen: open, searchQuery: open ? '' : '' }),
   setScrollToMsgId: (id) => set({ scrollToMsgId: id }),
   setPins: (channel, pins) => set((state) => {
