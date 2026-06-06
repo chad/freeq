@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getForks, getLineage, recordFork, ingestPersonaRecord } from './forks';
+import { getForks, getLineage, getTopForks, recordFork, ingestPersonaRecord } from './forks';
 
 function mockFetch(body: unknown, ok = true, status = 200) {
   const fn = vi.fn(async () => ({
@@ -49,6 +49,13 @@ describe('forks API client', () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('/api/v1/personas/record');
     expect(JSON.parse(init.body as string).record.name).toBe('n');
+  });
+
+  it('getTopForks hits the leaderboard endpoint', async () => {
+    const fetchMock = mockFetch({ kind: 'persona', top: [{ id: 'eliza', fork_count: 5 }] });
+    const r = await getTopForks('persona', 10);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/forks/top?kind=persona&limit=10');
+    expect(r.top[0].fork_count).toBe(5);
   });
 
   it('throws on a non-ok response', async () => {

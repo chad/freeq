@@ -1579,6 +1579,15 @@ async fn fork_lineage_rest_api() {
         .send().await.unwrap();
     assert_eq!(bad.status(), 400);
 
+    // Leaderboard: eliza (2 forks) leads oblivion (1).
+    let top: serde_json::Value = client
+        .get(format!("http://{web_addr}/api/v1/forks/top"))
+        .query(&[("kind", "persona"), ("limit", "10")])
+        .send().await.unwrap().json().await.unwrap();
+    let board = top["top"].as_array().unwrap();
+    assert_eq!(board[0]["id"], "eliza");
+    assert_eq!(board[0]["fork_count"], 2);
+
     server_handle.abort();
 }
 

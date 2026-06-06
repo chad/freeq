@@ -1360,6 +1360,13 @@ mod tests {
         // `kind` namespaces the id space — a character named "eliza" is
         // unrelated to the persona "eliza".
         assert_eq!(db.fork_count("character", "eliza"), 0);
+
+        // Leaderboard: most-forked first.
+        let top = db.top_forked("persona", 10);
+        assert_eq!(top[0].id, "eliza");
+        assert_eq!(top[0].fork_count, 2);
+        assert_eq!(top[1].id, "oblivion");
+        assert_eq!(top[1].fork_count, 1);
     }
 
     #[test]
@@ -2140,6 +2147,13 @@ pub struct ForkRow {
     pub note: Option<String>,
 }
 
+/// A leaderboard entry — an artifact and its direct-fork count.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ForkLeader {
+    pub id: String,
+    pub fork_count: i64,
+}
+
 /// Map a `forks` row (column order matches every fork query's SELECT).
 fn map_fork_row(row: &rusqlite::Row) -> SqlResult<ForkRow> {
     Ok(ForkRow {
@@ -2501,6 +2515,26 @@ impl Db {
                 |row| row.get(0),
             )
             .unwrap_or(0)
+    }
+
+    /// The most-forked artifacts of a `kind`, by direct-fork count
+    /// (descending; ties broken by most-recent activity). Powers the
+    /// discovery/leaderboard surface. `limit` is clamped by the caller.
+    pub fn top_forked(&self, kind: &str, limit: i64) -> Vec<ForkLeader> {
+        let mut stmt = match self.conn.prepare(
+            "SELECT parent_id, COUNT(*) AS c, MAX(forked_at) AS recent
+             FROM forks WHERE kind = ?1
+             GROUP BY parent_id ORDER BY c DESC, recent DESC LIMIT ?2",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Vec::new(),
+        };
+        match stmt.query_map(params![kind, limit], |row| {
+            Ok(ForkLeader { id: row.get(0)?, fork_count: row.get(1)? })
+        }) {
+            Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Ancestor chain for `id`, from its immediate parent up toward the

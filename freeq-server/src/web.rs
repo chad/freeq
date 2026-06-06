@@ -209,6 +209,7 @@ pub fn router(state: Arc<SharedState>) -> Router {
         // Fork lineage graph — share/fork personas & characters, track
         // who forked what and the ancestry of any artifact.
         .route("/api/v1/forks", post(api_record_fork))
+        .route("/api/v1/forks/top", get(api_top_forks))
         .route("/api/v1/forks/{kind}/{id}", get(api_get_forks))
         .route("/api/v1/forks/{kind}", get(api_get_forks_q))
         .route("/api/v1/lineage/{kind}/{id}", get(api_get_lineage))
@@ -827,6 +828,27 @@ fn lineage_payload(state: &Arc<SharedState>, kind: &str, id: &str) -> serde_json
         "root": root,
         "lineage": lineage,
     })
+}
+
+/// `?kind=&limit=` for the leaderboard.
+#[derive(serde::Deserialize)]
+struct TopQuery {
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+/// GET /api/v1/forks/top?kind=persona&limit=20 — the most-forked
+/// artifacts of a kind (discovery / leaderboard).
+async fn api_top_forks(
+    State(state): State<Arc<SharedState>>,
+    Query(q): Query<TopQuery>,
+) -> Json<serde_json::Value> {
+    let kind = q.kind.unwrap_or_else(|| "persona".to_string()).to_lowercase();
+    let limit = q.limit.unwrap_or(20).clamp(1, 100);
+    let top = state.with_db(|db| Ok(db.top_forked(&kind, limit))).unwrap_or_default();
+    Json(serde_json::json!({ "kind": kind, "top": top }))
 }
 
 /// GET /api/v1/forks/{kind}/{id} — direct forks of `id` + count + what

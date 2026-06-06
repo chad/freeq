@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useStore } from '../store';
-import { getForks, getLineage, type ForkRow, type ForkKind, type ForksResponse } from '../lib/forks';
+import { getForks, getLineage, getTopForks, type ForkRow, type ForkKind, type ForksResponse, type ForkLeader } from '../lib/forks';
 
 /** Tail segment of an at:// URI (or the id itself), for compact display. */
 export function shortId(id: string): string {
@@ -27,6 +27,17 @@ export function ForkGraph() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [input, setInput] = useState('');
+  const [top, setTop] = useState<ForkLeader[]>([]);
+
+  // Discovery: load the leaderboard whenever nothing is focused.
+  useEffect(() => {
+    if (!open || focusId.trim()) return;
+    let cancelled = false;
+    getTopForks(kind, 20)
+      .then((r) => !cancelled && setTop(r.top))
+      .catch(() => !cancelled && setTop([]));
+    return () => { cancelled = true; };
+  }, [open, focusId, kind]);
 
   useEffect(() => {
     if (!open) return;
@@ -91,7 +102,36 @@ export function ForkGraph() {
             </button>
           </form>
 
-          {!id && <div className="text-sm text-fg-dim">Enter a persona id or paste an at:// URI to explore its lineage and forks.</div>}
+          {!id && (
+            <div className="space-y-3">
+              <div className="text-sm text-fg-dim">Enter a persona id or paste an at:// URI — or pick from the most-forked below.</div>
+              <div>
+                <div className="text-xs font-semibold text-fg-dim mb-1.5">🔥 Most forked</div>
+                {top.length > 0 ? (
+                  <ul className="space-y-1">
+                    {top.map((t, i) => (
+                      <li key={t.id}>
+                        <button
+                          onClick={() => recenter(kind, t.id)}
+                          className="w-full text-left px-2.5 py-1.5 rounded-md hover:bg-bg-tertiary flex items-center justify-between group"
+                          title={t.id}
+                        >
+                          <span className="truncate text-sm text-fg-muted group-hover:text-fg">
+                            <span className="text-fg-dim mr-1.5">{i + 1}.</span>{shortId(t.id)}
+                          </span>
+                          <span className="shrink-0 ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-accent/15 text-accent font-semibold">
+                            {t.fork_count}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="text-sm text-fg-dim">No forks recorded yet.</div>
+                )}
+              </div>
+            </div>
+          )}
           {loading && <div className="text-sm text-fg-dim">Loading…</div>}
           {err && <div className="text-sm text-danger">{err}</div>}
 

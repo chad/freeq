@@ -31,6 +31,18 @@ export interface LineageResponse {
   lineage: ForkRow[];
 }
 
+export interface ForkLeader {
+  id: string;
+  fork_count: number;
+}
+
+/** Most-forked artifacts of a kind — the discovery leaderboard. */
+export async function getTopForks(kind: ForkKind, limit = 20): Promise<{ kind: string; top: ForkLeader[] }> {
+  const resp = await fetch(`/api/v1/forks/top?kind=${kind}&limit=${limit}`);
+  if (!resp.ok) throw new Error(`getTopForks failed: ${resp.status}`);
+  return resp.json();
+}
+
 /** Direct forks of `id` + count + what it was forked from. */
 export async function getForks(kind: ForkKind, id: string): Promise<ForksResponse> {
   // Query form (not path) so at:// ids — which contain slashes — work.

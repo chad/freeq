@@ -8,6 +8,7 @@ import * as forks from '../lib/forks';
 vi.mock('../lib/forks', () => ({
   getForks: vi.fn(),
   getLineage: vi.fn(),
+  getTopForks: vi.fn(),
 }));
 
 describe('shortId', () => {
@@ -29,6 +30,10 @@ describe('<ForkGraph>', () => {
       forked_from: null,
     });
     vi.mocked(forks.getLineage).mockResolvedValue({ kind: 'persona', id: 'eliza', depth: 0, root: 'eliza', lineage: [] });
+    vi.mocked(forks.getTopForks).mockResolvedValue({ kind: 'persona', top: [
+      { id: 'eliza', fork_count: 7 },
+      { id: 'oblivion', fork_count: 3 },
+    ] });
   });
   afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
@@ -57,5 +62,15 @@ describe('<ForkGraph>', () => {
     useStore.setState({ forkGraphOpen: false });
     const { container } = render(<ForkGraph />);
     expect(container.firstChild).toBeNull();
+  });
+
+  it('shows the leaderboard for discovery when nothing is focused', async () => {
+    useStore.setState({ forkGraphOpen: true, forkGraphKind: 'persona', forkGraphId: '' });
+    const { getByText, getByTitle } = render(<ForkGraph />);
+    await waitFor(() => expect(getByText('🔥 Most forked')).toBeTruthy());
+    expect(getByText('7')).toBeTruthy(); // eliza's count
+    // Clicking a leader recenters the graph on it.
+    fireEvent.click(getByTitle('eliza'));
+    expect(useStore.getState().forkGraphId).toBe('eliza');
   });
 });
