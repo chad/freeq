@@ -878,6 +878,27 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
     }
 }
 
+/// A brief, varied "thinking" filler spoken the instant she's addressed —
+/// played in parallel with the model call so the wait reads as a person
+/// considering, not dead air. Returns `None` for short utterances (answer
+/// straight away) and skips a fraction of the time so it never tics; gated to
+/// substantial questions, where the model is slow enough that the beat masks
+/// real latency rather than adding it. Deterministic (keyed off the question)
+/// so the phrase rotates without RNG.
+fn thinking_beat(question: &str) -> Option<String> {
+    if question.split_whitespace().count() < 6 {
+        return None;
+    }
+    const BEATS: [&str; 6] = [
+        "Hmm,", "Let me think.", "Okay,", "Let's see.", "Right,", "Good question.",
+    ];
+    let h: usize = question.bytes().map(|b| b as usize).sum();
+    if h % 5 == 0 {
+        return None; // sometimes just answer — keeps the rhythm from feeling canned
+    }
+    Some(BEATS[h % BEATS.len()].to_string())
+}
+
 /// Handle one addressed question: stream the answer from Groq and speak
 /// it sentence-by-sentence as it generates — so Eliza starts talking
 /// almost immediately — then post any links and show a visual card.
@@ -983,6 +1004,15 @@ async fn answer_and_speak(
             }
             _ => None,
         };
+
+    // Thinking beat: the moment she's addressed, send a brief filler to the
+    // speaker so she audibly engages while the model composes. It rides ahead of
+    // the answer sentences in the same queue, after the wait-for-quiet gate.
+    if speak_task.is_some() {
+        if let Some(beat) = thinking_beat(&question) {
+            let _ = tx.send(beat);
+        }
+    }
 
     // Pull relevant past exchanges from memory and prepend to the
     // transcript so the model can reference prior conversations
