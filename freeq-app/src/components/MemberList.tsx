@@ -3,6 +3,7 @@ import { useStore, type Member } from '../store';
 import { fetchProfile, getCachedProfile, type ATProfile } from '../lib/profiles';
 import { UserPopover } from './UserPopover';
 import { sendWhois } from '../irc/client';
+import { SpeakerIcon } from './SessionIndicator';
 import * as e2ee from '../lib/e2ee';
 
 const NICK_COLORS = [
@@ -19,8 +20,15 @@ function nickColor(nick: string): string {
 export function MemberList() {
   const activeChannel = useStore((s) => s.activeChannel);
   const channels = useStore((s) => s.channels);
+  const avSessions = useStore((s) => s.avSessions);
   const ch = channels.get(activeChannel.toLowerCase());
   const [popover, setPopover] = useState<{ nick: string; did?: string; pos: { x: number; y: number } } | null>(null);
+
+  // Nicks (lowercased) currently in this channel's active voice session.
+  const voiceSession = [...avSessions.values()].find(
+    (s) => s.channel?.toLowerCase() === activeChannel.toLowerCase() && s.state === 'active'
+  );
+  const inCall = new Set([...(voiceSession?.participants.values() ?? [])].map((p) => p.nick.toLowerCase()));
 
   if (!ch || activeChannel === 'server') return null;
 
@@ -52,25 +60,25 @@ export function MemberList() {
       <div className="px-3 pt-4 pb-2">
         {ops.length > 0 && (
           <Section label={`Operators — ${ops.length}`}>
-            {ops.map((m) => <MemberItem key={m.nick} member={m} onClick={onMemberClick} />)}
+            {ops.map((m) => <MemberItem key={m.nick} member={m} onClick={onMemberClick} inCall={inCall.has(m.nick.toLowerCase())} />)}
           </Section>
         )}
         {halfops.length > 0 && (
           <Section label={`Moderators — ${halfops.length}`}>
-            {halfops.map((m) => <MemberItem key={m.nick} member={m} onClick={onMemberClick} />)}
+            {halfops.map((m) => <MemberItem key={m.nick} member={m} onClick={onMemberClick} inCall={inCall.has(m.nick.toLowerCase())} />)}
           </Section>
         )}
         {voiced.length > 0 && (
           <Section label={`Voiced — ${voiced.length}`}>
-            {voiced.map((m) => <MemberItem key={m.nick} member={m} onClick={onMemberClick} />)}
+            {voiced.map((m) => <MemberItem key={m.nick} member={m} onClick={onMemberClick} inCall={inCall.has(m.nick.toLowerCase())} />)}
           </Section>
         )}
         <Section label={`${ops.length > 0 || halfops.length > 0 || voiced.length > 0 ? 'Members' : 'Online'} — ${regular.length}`}>
-          {regular.map((m) => <MemberItem key={m.nick} member={m} onClick={onMemberClick} />)}
+          {regular.map((m) => <MemberItem key={m.nick} member={m} onClick={onMemberClick} inCall={inCall.has(m.nick.toLowerCase())} />)}
         </Section>
         {agents.length > 0 && (
           <Section label={`Agents — ${agents.length}`}>
-            {agents.map((m) => <MemberItem key={m.nick} member={m} onClick={onMemberClick} />)}
+            {agents.map((m) => <MemberItem key={m.nick} member={m} onClick={onMemberClick} inCall={inCall.has(m.nick.toLowerCase())} />)}
           </Section>
         )}
       </div>
@@ -346,9 +354,10 @@ interface MemberItemProps {
     actorClass?: 'human' | 'agent' | 'external_agent';
   };
   onClick: (nick: string, did: string | undefined, e: React.MouseEvent) => void;
+  inCall?: boolean;
 }
 
-function MemberItem({ member, onClick }: MemberItemProps) {
+function MemberItem({ member, onClick, inCall }: MemberItemProps) {
   const nick = useStore((s) => s.nick);
   const authDid = useStore((s) => s.authDid);
   const isSelf = member.nick.toLowerCase() === nick.toLowerCase();
@@ -389,6 +398,10 @@ function MemberItem({ member, onClick }: MemberItemProps) {
 
         {effectiveDid && !member.actorClass?.includes('agent') && (
           <span className="text-accent text-xs" title={`Verified AT Protocol identity: ${effectiveDid}`}>✓</span>
+        )}
+
+        {inCall && (
+          <span className="text-success shrink-0" title="In voice call"><SpeakerIcon size={12} /></span>
         )}
 
         {member.typing && (
