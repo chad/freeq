@@ -934,15 +934,16 @@ async fn auth_callback(
         ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {e}")))?;
     }
 
-    // Mint a one-time web-token + web session on the freeq server
+    // Mint a one-time web-token + web session on the freeq server. Optional:
+    // a standalone broker (not trusted by irc.freeq.at's shared secret) just
+    // can't mint one — the verified DID + handle + broker_token are enough for
+    // identity-only consumers, so degrade gracefully instead of failing login.
     let (web_token, nick) = mint_web_token(&state.config, &pending.did, &pending.handle)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_GATEWAY,
-                format!("Broker token mint failed: {e}"),
-            )
-        })?;
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "web-token mint failed — continuing identity-only");
+            (String::new(), pending.handle.clone())
+        });
 
     if let Err(e) = push_web_session(&state.config, &pending, &token_resp, dpop_nonce.clone()).await
     {
@@ -1024,12 +1025,10 @@ async fn session(
 
     let (web_token, nick) = mint_web_token(&state.config, &record.did, &record.handle)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_GATEWAY,
-                format!("Broker token mint failed: {e}"),
-            )
-        })?;
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "web-token mint failed — continuing identity-only");
+            (String::new(), record.handle.clone())
+        });
 
     let pending = PendingAuth {
         handle: record.handle.clone(),
