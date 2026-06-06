@@ -410,7 +410,9 @@ async fn main() {
             CorsLayer::new()
                 .allow_origin(AllowOrigin::list([
                     "https://irc.freeq.at".parse().unwrap(),
+                    "https://revenant-watch.boxd.sh".parse().unwrap(),
                     "http://localhost:5173".parse().unwrap(),
+                    "http://localhost:8000".parse().unwrap(),
                     "http://127.0.0.1:5173".parse().unwrap(),
                 ]))
                 .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
@@ -979,7 +981,9 @@ async fn auth_callback(
 
 const ALLOWED_ORIGINS: &[&str] = &[
     "https://irc.freeq.at",
+    "https://revenant-watch.boxd.sh",
     "http://localhost:5173",
+    "http://localhost:8000",
     "http://127.0.0.1:5173",
 ];
 
@@ -1330,6 +1334,7 @@ fn is_valid_return_to(url: &str) -> bool {
     let allowed = [
         "https://irc.freeq.at",
         "https://staging.freeq.at",
+        "https://revenant-watch.boxd.sh",
         "http://localhost:",
         "http://localhost/",
         "http://127.0.0.1:",
