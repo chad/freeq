@@ -33,7 +33,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use freeq_eliza::{character_profile, identity, imagegen, irc, stt};
+use freeq_eliza::{identity, imagegen, irc, persona, stt};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -166,6 +166,13 @@ struct Cli {
     #[arg(long, default_value = "eliza")]
     ghostly_character: String,
 
+    /// Path to a persona pack (JSON) — a forkable agent definition
+    /// (name, system prompt, TTS voice, greeting, and the ghostly
+    /// character it wears). Overrides the built-in profile lookup and
+    /// `--ghostly-character`. See `freeq_eliza::persona::PersonaPack`.
+    #[arg(long)]
+    persona: Option<PathBuf>,
+
     /// Other agent nicks this bot recognises as peers — e.g.
     /// `--peer-agents oblivion,utopia` when running Eliza alongside
     /// the other two for a multi-agent demo. The bot will respond
@@ -189,13 +196,32 @@ async fn main() -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let cli = Cli::parse();
+
+    // Resolve the agent persona — the forkable brain (system prompt, TTS
+    // voice, greeting) plus the ghostly character it wears. A `--persona`
+    // pack wins; otherwise fall back to a built-in profile keyed by
+    // `--ghostly-character` (Oblivion / Narrator / Utopia), or `None` for
+    // plain Eliza. The persona references its ghostly character by NAME —
+    // the only seam between freeq (the brain) and ghostly (face + voice
+    // DSP); freeq never reaches into ghostly's character internals.
+    let persona = match &cli.persona {
+        Some(path) => Some(
+            persona::PersonaPack::from_file(path)
+                .with_context(|| format!("loading persona pack {}", path.display()))?,
+        ),
+        None => persona::PersonaPack::builtin(&cli.ghostly_character),
+    };
+
     // Identity defaults to the active character — `--render-backend
     // particles --ghostly-character oblivion` lands in
     // `~/.freeq/bots/oblivion/` with a fresh DID and bound nick
     // "oblivion", instead of sharing eliza's identity and getting
-    // server-side rebound to her nick. Explicit `--name` always wins.
+    // server-side rebound to her nick. A `--persona` pack names the
+    // agent after itself. Explicit `--name` always wins.
     let identity_name = cli.name.clone().unwrap_or_else(|| {
-        if cli.render_backend == "particles" && !cli.ghostly_character.is_empty() {
+        if let Some(p) = persona.as_ref().filter(|_| cli.persona.is_some()) {
+            p.name.clone()
+        } else if cli.render_backend == "particles" && !cli.ghostly_character.is_empty() {
             cli.ghostly_character.clone()
         } else {
             "eliza".to_string()
@@ -287,41 +313,49 @@ async fn main() -> Result<()> {
         proactive_enabled: !cli.no_proactive,
         ambient_enabled: !cli.no_ambient,
         render_backend: cli.render_backend.clone(),
-        ghostly_character: cli.ghostly_character.clone(),
-        // Per-character voice + system-prompt overrides. When the
-        // character matches an entry in `character_profile`, swap in
-        // its ElevenLabs voice ID and personality. Without a match
-        // (e.g. `--ghostly-character eliza`) we fall through to the
+        // The ghostly character (face + voice DSP) the persona wears,
+        // by name — falls back to `--ghostly-character` when no persona
+        // is active.
+        ghostly_character: persona
+            .as_ref()
+            .map(|p| p.character().to_string())
+            .unwrap_or_else(|| cli.ghostly_character.clone()),
+        // Persona-derived voice + system prompt + greeting. With a
+        // persona (built-in profile or a `--persona` pack) we swap in
+        // its ElevenLabs voice ID and personality; without one (e.g.
+        // plain `--ghostly-character eliza`) we fall through to the
         // CLI's `--elevenlabs-voice` and the default Eliza prompt.
-        elevenlabs_voice_id: character_profile::by_name(&cli.ghostly_character)
-            .map(|p| p.voice_id.to_string())
+        elevenlabs_voice_id: persona
+            .as_ref()
+            .map(|p| p.voice_id.clone())
             .unwrap_or(cli.elevenlabs_voice),
-        character_system_prompt: character_profile::by_name(&cli.ghostly_character)
-            .map(|p| {
-                let mut prompt = p.system_prompt.to_string();
-                // A persona can WEAR a character (face/voice/manner) under its own
-                // name. The character prompt hardcodes "You are <Character>", so
-                // override the self-identity when the persona is named differently
-                // — otherwise she answers to her name but calls herself the costume.
-                if !identity_name.eq_ignore_ascii_case(&cli.ghostly_character) {
-                    let cap = |s: &str| {
-                        let mut ch = s.chars();
-                        ch.next()
-                            .map(|f| f.to_uppercase().collect::<String>() + ch.as_str())
-                            .unwrap_or_default()
-                    };
-                    prompt.push_str(&format!(
-                        "\n\nIMPORTANT — YOUR IDENTITY: Your name is {name}. You wear \
-                         the voice and manner of the {arche} archetype, but you ARE \
-                         {name}. Always introduce yourself and refer to yourself as \
-                         {name}, never as {arche_cap}.",
-                        name = cap(&identity_name),
-                        arche = cli.ghostly_character,
-                        arche_cap = cap(&cli.ghostly_character),
-                    ));
-                }
-                prompt
-            }),
+        persona_hello_line: persona.as_ref().and_then(|p| p.hello_line.clone()),
+        character_system_prompt: persona.as_ref().map(|p| {
+            let mut prompt = p.system_prompt.clone();
+            // A persona can WEAR a character (face/voice/manner) under its own
+            // name. Built-in character prompts hardcode "You are <Character>",
+            // so override the self-identity when the agent is named differently
+            // — otherwise she answers to her name but calls herself the costume.
+            let arche = p.character();
+            if !identity_name.eq_ignore_ascii_case(arche) {
+                let cap = |s: &str| {
+                    let mut ch = s.chars();
+                    ch.next()
+                        .map(|f| f.to_uppercase().collect::<String>() + ch.as_str())
+                        .unwrap_or_default()
+                };
+                prompt.push_str(&format!(
+                    "\n\nIMPORTANT — YOUR IDENTITY: Your name is {name}. You wear \
+                     the voice and manner of the {arche} archetype, but you ARE \
+                     {name}. Always introduce yourself and refer to yourself as \
+                     {name}, never as {arche_cap}.",
+                    name = cap(&identity_name),
+                    arche = arche,
+                    arche_cap = cap(arche),
+                ));
+            }
+            prompt
+        }),
         peer_agents: cli.peer_agents,
     })
     .await

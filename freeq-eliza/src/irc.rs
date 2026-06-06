@@ -186,6 +186,10 @@ pub struct RunConfig {
     /// Utopia personality). `None` falls back to the default Eliza
     /// prompt in `qa.rs`.
     pub character_system_prompt: Option<String>,
+    /// Line spoken aloud on joining a call — the persona's greeting.
+    /// Resolved once in `main` (from a built-in profile or a loaded
+    /// `--persona` pack). `None` = silent on arrival.
+    pub persona_hello_line: Option<String>,
     /// Other agent nicks in the channel. When set, the bot can hold a
     /// bounded multi-agent dialogue (e.g. Oblivion + Utopia debating)
     /// but won't run away: after a streak of bot-to-bot exchanges
@@ -235,6 +239,8 @@ pub(crate) struct SharedConfig {
     /// Per-character system prompt — when present, replaces the
     /// default Eliza prompt in [`qa::answer_streaming`].
     pub(crate) character_system_prompt: Option<String>,
+    /// Greeting spoken on joining a call. `None` = silent on arrival.
+    pub(crate) persona_hello_line: Option<String>,
     /// Lowercased nicks of OTHER agents in the channel — peers this
     /// bot recognises by name. Used to prevent multi-agent runaway: a
     /// bot can engage with another bot when called, but won't keep
@@ -358,6 +364,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         render_backend,
         ghostly_character,
         character_system_prompt,
+        persona_hello_line,
         peer_agents,
     } = cfg;
 
@@ -469,6 +476,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         render_backend,
         ghostly_character,
         character_system_prompt,
+        persona_hello_line,
         peer_agents: peer_agents
             .iter()
             .map(|n| n.to_ascii_lowercase())
@@ -1458,17 +1466,16 @@ fn spawn_backchannel_loop(
         let Some(el_key) = cfg.elevenlabs_api_key.clone() else {
             return;
         };
-        // Skip backchannels for characters without a profile (e.g.
-        // plain "eliza"); the rest map to TTS voices we know.
-        let Some(profile) = crate::character_profile::by_name(&cfg.ghostly_character)
-        else {
+        // Skip backchannels for agents without a persona (e.g. plain
+        // "eliza", whose `character_system_prompt` is None); personas
+        // map to TTS voices + a ghostly voice-DSP character we know.
+        if cfg.character_system_prompt.is_none() {
             return;
-        };
+        }
         let voice_id = cfg.elevenlabs_voice_id.clone();
         let model = cfg.elevenlabs_model.clone();
         let http = cfg.http.clone();
         let character = cfg.ghostly_character.clone();
-        let _ = profile; // voice_id is already pulled from cfg
         let voice_profile = ghostly::audio::profile::for_character(&character);
 
         let mut chain =
@@ -1563,7 +1570,7 @@ fn spawn_hello_on_join(
         tracing::info!("hello-on-join skipped — no ELEVENLABS_API_KEY");
         return;
     };
-    let Some(profile) = crate::character_profile::by_name(&cfg.ghostly_character) else {
+    let Some(hello_line) = cfg.persona_hello_line.clone() else {
         return;
     };
     // Session recall: prepend a one-line "I remember…" hook drawn
@@ -1571,7 +1578,7 @@ fn spawn_hello_on_join(
     // call with continuity instead of a cold restart. Best-effort —
     // when memory is unavailable or empty, fall through to the
     // plain hello-line.
-    let mut text = profile.hello_line.to_string();
+    let mut text = hello_line;
     if let Some(mem) = cfg.memory.as_ref() {
         // Cross-channel: we want the bot's last memorable exchange
         // wherever it happened, not necessarily this room.
