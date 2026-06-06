@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useStore } from '../store';
 import { joinChannel, partChannel, disconnect, startAvSession, endAvSession, leaveAvSession, getNick } from '../irc/client';
 import { SpeakerIcon } from './SessionIndicator';
+import { MicIcon, MicOffIcon, CameraOnIcon, CameraOffIcon, PhoneOffIcon } from './CallPanel';
 import { fetchProfile, getCachedProfile } from '../lib/profiles';
 
 interface SidebarProps {
@@ -24,6 +25,31 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
   const favorites = useStore((s) => s.favorites);
   useStore((s) => s.mutedChannels); // subscribe for re-render
   const hiddenDMs = useStore((s) => s.hiddenDMs);
+
+  const navRef = useRef<HTMLElement>(null);
+  const revealChannel = useStore((s) => s.sidebarRevealChannel);
+
+  // When something (e.g. hitting the speaker button) asks to surface a channel,
+  // scroll its row into view so the inline voice controls are visible. Expand
+  // the Channels section first if it's collapsed, otherwise the row isn't in
+  // the DOM to scroll to.
+  useEffect(() => {
+    if (!revealChannel) return;
+    const isChan = revealChannel.startsWith('#') || revealChannel.startsWith('&');
+    if (isChan && channelsCollapsed) {
+      setChannelsCollapsed(false);
+      localStorage.setItem('freeq-channels-collapsed', 'false');
+    }
+    const key = revealChannel.toLowerCase();
+    // Defer to the next frame so a just-expanded section has rendered.
+    const raf = requestAnimationFrame(() => {
+      const sel = `[data-channel-key="${CSS.escape(key)}"]`;
+      navRef.current?.querySelector(sel)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      useStore.getState().setSidebarRevealChannel(null);
+    });
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealChannel]);
 
   const allJoined = [...channels.values()].filter((ch) => ch.isJoined);
   const allChans = allJoined.filter((ch) => ch.name.startsWith('#') || ch.name.startsWith('&')).sort((a, b) => a.name.localeCompare(b.name));
@@ -55,7 +81,7 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
         }`} />
       </div>
 
-      <nav className="flex-1 overflow-y-auto py-2 px-2">
+      <nav ref={navRef} className="flex-1 overflow-y-auto py-2 px-2">
         {/* Server */}
         <button
           onClick={() => setActive('server')}
@@ -163,6 +189,9 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
         })()}
       </nav>
 
+      {/* Persistent voice-connected panel — always visible while in a call */}
+      <CallConnectedPanel />
+
       {/* User footer */}
       <div className="border-t border-border px-3 py-4 shrink-0">
         <div className="flex items-center gap-2.5">
@@ -264,7 +293,7 @@ function ChannelButton({ ch, isActive, onSelect, icon, showPreview }: {
   const lastTime = lastMsg ? formatSidebarTime(new Date(lastMsg.timestamp)) : null;
 
   return (
-    <>
+    <div data-channel-key={ch.name.toLowerCase()}>
     <button
       onClick={() => onSelect(ch.name)}
       onContextMenu={(e) => { e.preventDefault(); setCtxMenu({ x: e.clientX, y: e.clientY }); }}
@@ -323,13 +352,15 @@ function ChannelButton({ ch, isActive, onSelect, icon, showPreview }: {
       position={ctxMenu}
       onClose={() => setCtxMenu(null)}
     />}
-    {ch.name.startsWith('#') && <VoiceStatus channel={ch.name} />}
-    </>
+    {ch.name.startsWith('#') && <ChannelVoiceParticipants channel={ch.name} />}
+    </div>
   );
 }
 
-/** Shows active voice session status inline under a channel in the sidebar. */
-function VoiceStatus({ channel }: { channel: string }) {
+/** Compact Discord-style list of voice participants shown inline under a channel
+ *  that has a live session. Controls for *your own* call live in the persistent
+ *  CallConnectedPanel, not here — so they can never scroll out of view. */
+function ChannelVoiceParticipants({ channel }: { channel: string }) {
   const avSessions = useStore((s) => s.avSessions);
   const activeAvSession = useStore((s) => s.activeAvSession);
   const avAudioActive = useStore((s) => s.avAudioActive);
@@ -337,66 +368,113 @@ function VoiceStatus({ channel }: { channel: string }) {
   const session = [...avSessions.values()].find(
     (s) => s.channel?.toLowerCase() === channel.toLowerCase() && s.state === 'active'
   );
-
   if (!session) return null;
 
   const isConnected = activeAvSession === session.id && avAudioActive;
   const participants = [...session.participants.values()];
 
   return (
-    <div className="mx-2 mb-1 px-2.5 py-2 rounded-lg bg-bg-tertiary/60 border border-border/50">
-      <div className="flex items-center gap-1.5 text-[11px] text-success font-medium mb-1.5">
-        <SpeakerIcon size={11} />
-        <span>Voice</span>
-        <span className="text-fg-dim font-normal">· {participants.length} in call</span>
-      </div>
-      <div className="flex flex-wrap gap-1 mb-2">
-        {participants.map((p) => (
-          <div
-            key={p.nick}
-            className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-bg-secondary text-[10px] text-fg-muted"
-            title={p.nick}
-          >
-            <span className="w-4 h-4 rounded-full bg-accent/20 flex items-center justify-center text-accent text-[8px] font-bold shrink-0">
-              {p.nick.slice(0, 1).toUpperCase()}
-            </span>
-            <span className="truncate max-w-[60px]">{p.nick}</span>
-          </div>
-        ))}
-      </div>
-      {isConnected ? (
-        <div className="flex items-center justify-between">
-          <div className="text-[10px] text-success font-medium flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
-            Connected
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={(e) => { e.stopPropagation(); useStore.getState().setAvAudioActive(false); useStore.getState().setAvCameraOn(false); leaveAvSession(channel, session.id); }}
-              className="text-[10px] text-fg-muted hover:text-fg"
-              title="Leave voice"
-            >
-              Leave
-            </button>
-            {session.createdByNick.toLowerCase() === getNick().toLowerCase() && (
-              <button
-                onClick={(e) => { e.stopPropagation(); useStore.getState().setAvAudioActive(false); useStore.getState().setAvCameraOn(false); endAvSession(channel, session.id); }}
-                className="text-[10px] text-danger hover:text-danger/80"
-                title="End session for everyone"
-              >
-                End
-              </button>
-            )}
-          </div>
+    <div className="ml-7 mr-2 mb-1 mt-0.5">
+      {participants.map((p) => (
+        <div key={p.nick} className="flex items-center gap-1.5 px-1 py-0.5 text-[12px] text-fg-dim" title={p.nick}>
+          <span className="w-4 h-4 rounded-full bg-accent/20 flex items-center justify-center text-accent text-[8px] font-bold shrink-0">
+            {p.nick.slice(0, 1).toUpperCase()}
+          </span>
+          <span className="truncate">{p.nick}</span>
+          <span className="text-success shrink-0"><SpeakerIcon size={10} /></span>
         </div>
-      ) : (
+      ))}
+      {!isConnected && (
         <button
           onClick={(e) => { e.stopPropagation(); startAvSession(channel); }}
-          className="w-full text-[11px] py-1.5 rounded-md bg-accent text-white hover:bg-accent/90 font-medium transition-colors"
+          className="mt-1 px-1 text-[11px] text-accent hover:text-accent/80 font-medium"
         >
-          Join Voice
+          Join voice
         </button>
       )}
+    </div>
+  );
+}
+
+/** Persistent "Voice Connected" panel pinned above the user footer. Always on
+ *  screen while in a call, so leave/mute/camera never scroll away. */
+function CallConnectedPanel() {
+  const avAudioActive = useStore((s) => s.avAudioActive);
+  const activeAvSession = useStore((s) => s.activeAvSession);
+  const avSessions = useStore((s) => s.avSessions);
+  const avMuted = useStore((s) => s.avMuted);
+  const avCameraOn = useStore((s) => s.avCameraOn);
+  const setActive = useStore((s) => s.setActiveChannel);
+
+  if (!avAudioActive || !activeAvSession) return null;
+  const session = avSessions.get(activeAvSession);
+  if (!session) return null;
+
+  const channel = session.channel || '';
+  const participantCount = session.participants.size;
+  const isHost = session.createdByNick.toLowerCase() === getNick().toLowerCase();
+
+  const leave = () => {
+    useStore.getState().setAvAudioActive(false);
+    useStore.getState().setAvCameraOn(false);
+    if (channel) leaveAvSession(channel, session.id);
+  };
+  const endForAll = () => {
+    useStore.getState().setAvAudioActive(false);
+    useStore.getState().setAvCameraOn(false);
+    if (channel) endAvSession(channel, session.id);
+  };
+
+  return (
+    <div className="border-t border-border px-3 pt-2.5 pb-2 shrink-0 bg-bg-tertiary/40">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <span className="w-2 h-2 rounded-full bg-success animate-pulse shrink-0" />
+        <span className="text-[11px] font-semibold text-success">Voice Connected</span>
+        <button
+          onClick={leave}
+          className="ml-auto p-1 rounded-md bg-danger text-white hover:bg-danger/80 transition-colors"
+          title="Disconnect"
+        >
+          <PhoneOffIcon size={13} />
+        </button>
+      </div>
+      <button
+        onClick={() => { if (channel) { setActive(channel); useStore.getState().setSidebarRevealChannel(channel); } }}
+        className="w-full text-left flex items-center gap-1.5 mb-2 group"
+        title={`Go to ${channel}`}
+      >
+        <span className="text-[13px] text-fg-muted group-hover:text-fg truncate">{channel}</span>
+        <span className="text-[11px] text-fg-dim shrink-0">· {participantCount}</span>
+      </button>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => useStore.getState().setAvMuted(!avMuted)}
+          className={`p-1.5 rounded-full transition-colors ${
+            avMuted ? 'bg-danger text-white hover:bg-danger/80' : 'bg-bg-tertiary text-fg hover:bg-bg-tertiary/80'
+          }`}
+          title={avMuted ? 'Unmute' : 'Mute'}
+        >
+          {avMuted ? <MicOffIcon size={15} /> : <MicIcon size={15} />}
+        </button>
+        <button
+          onClick={() => useStore.getState().setAvCameraOn(!avCameraOn)}
+          className={`p-1.5 rounded-full transition-colors ${
+            avCameraOn ? 'bg-accent text-white hover:bg-accent/80' : 'bg-bg-tertiary text-fg hover:bg-bg-tertiary/80'
+          }`}
+          title={avCameraOn ? 'Turn off camera' : 'Turn on camera'}
+        >
+          {avCameraOn ? <CameraOnIcon size={15} /> : <CameraOffIcon size={15} />}
+        </button>
+        {isHost && (
+          <button
+            onClick={endForAll}
+            className="ml-auto text-[10px] text-danger hover:text-danger/80 font-medium"
+            title="End session for everyone"
+          >
+            End
+          </button>
+        )}
+      </div>
     </div>
   );
 }
