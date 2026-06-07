@@ -920,6 +920,46 @@ fn thinking_beat(question: &str) -> Option<String> {
 /// it sentence-by-sentence as it generates — so Eliza starts talking
 /// almost immediately — then post any links and show a visual card.
 #[allow(clippy::too_many_arguments)]
+/// Best-effort feed-aware context: if `actor` (the asker's nick) is an AT-Proto
+/// handle, pull their recent public Bluesky posts via the public AppView so the
+/// being can open personally. Returns None on any miss — a nick that isn't a
+/// handle, a private/empty feed, or a network blip. Handles are URL-safe
+/// (lowercase, digits, dots, hyphens) so no escaping is needed.
+async fn fetch_bsky_context(http: &reqwest::Client, actor: &str) -> Option<String> {
+    // Skip plain nicks ("alice") — only handles (with a dot) are worth a lookup.
+    if !actor.contains('.') || actor.len() > 64 {
+        return None;
+    }
+    let url = format!(
+        "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed?actor={actor}&limit=4&filter=posts_no_replies"
+    );
+    let fut = http.get(&url).send();
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(3), fut)
+        .await
+        .ok()?
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let json: serde_json::Value = resp.json().await.ok()?;
+    let feed = json.get("feed")?.as_array()?;
+    let lines: Vec<String> = feed
+        .iter()
+        .filter_map(|item| item.pointer("/post/record/text").and_then(|t| t.as_str()))
+        .map(|t| t.trim().replace('\n', " "))
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("- {}", t.chars().take(220).collect::<String>()))
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    tracing::info!(%actor, posts = lines.len(), "folded asker's Bluesky feed into context");
+    Some(format!(
+        "Recent public Bluesky posts by {actor} — use these to be personal and specific (react, don't recite):\n{}",
+        lines.join("\n"),
+    ))
+}
+
 async fn answer_and_speak(
     cfg: Arc<SharedConfig>,
     handle: Arc<ClientHandle>,
@@ -1051,6 +1091,15 @@ async fn answer_and_speak(
         }
     } else {
         transcript
+    };
+
+    // Feed-aware cold open: best-effort. If the asker's nick resolves to a
+    // Bluesky account, fold their recent public posts into context so the being
+    // can react to who it's actually talking to ("saw you shipped X"). Folds in
+    // alongside memory; gracefully no-ops when the nick isn't a handle.
+    let transcript = match fetch_bsky_context(&cfg.http, &asker).await {
+        Some(block) => format!("{block}\n{transcript}"),
+        None => transcript,
     };
 
     // A visual question we can actually see → the vision model with the
