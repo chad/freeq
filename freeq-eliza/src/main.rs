@@ -333,7 +333,16 @@ async fn main() -> Result<()> {
             .as_ref()
             .map(|p| p.voice_id.clone())
             .unwrap_or(cli.elevenlabs_voice),
-        persona_hello_line: persona.as_ref().and_then(|p| p.hello_line.clone()),
+        // A renamed persona's archetype greeting names the costume
+        // ("Narrator here."), not her — so skip the canned hello rather
+        // than announce the wrong name on join.
+        persona_hello_line: persona.as_ref().and_then(|p| {
+            if identity_name.eq_ignore_ascii_case(p.character()) {
+                p.hello_line.clone()
+            } else {
+                None
+            }
+        }),
         character_system_prompt: persona.as_ref().map(|p| {
             let mut prompt = p.system_prompt.clone();
             // A persona can WEAR a character (face/voice/manner) under its own
@@ -351,8 +360,10 @@ async fn main() -> Result<()> {
                 prompt.push_str(&format!(
                     "\n\nIMPORTANT — YOUR IDENTITY: Your name is {name}. You wear \
                      the voice and manner of the {arche} archetype, but you ARE \
-                     {name}. Always introduce yourself and refer to yourself as \
-                     {name}, never as {arche_cap}.",
+                     {name}, never {arche_cap} — if someone asks who you are, say \
+                     {name}. But do NOT announce or repeat your name unprompted: \
+                     never open a reply with \"I'm {name}\", \"{name} here\", or \
+                     any self-introduction. You're already in the room; just speak.",
                     name = cap(&identity_name),
                     arche = arche,
                     arche_cap = cap(arche),
