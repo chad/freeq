@@ -2036,14 +2036,16 @@ fn is_owner(cfg: &SharedConfig, who: &str) -> bool {
 fn parse_owner_command(text: &str) -> Option<OwnerCmd> {
     let t = text.to_lowercase();
     let tt = t.trim();
-    if t.contains("go to sleep")
-        || t.contains("back to sleep")
-        || t.contains("take a nap")
-        || t.contains("go to bed")
+    let words = tt.split_whitespace().count();
+    let has_word = |w: &str| tt.split(|c: char| !c.is_alphanumeric()).any(|x| x == w);
+    // Sleep is owner-gated and the intent is unambiguous, so be STT-tolerant:
+    // Whisper mangles "go to sleep" into "goes to sleep" / "all the sleep" /
+    // even "all of god's sleep". Treat any SHORT owner utterance that mentions
+    // sleep/nap (or the old explicit phrases) as the sleep command — the length
+    // cap keeps a real sentence ("I couldn't sleep last night") from matching.
+    if t.contains("go to bed")
         || t.contains("power down")
-        || t.contains("you can sleep")
-        || t.contains("go rest")
-        || tt == "sleep"
+        || ((has_word("sleep") || has_word("nap") || has_word("asleep")) && words <= 8)
     {
         return Some(OwnerCmd::Sleep);
     }
@@ -2059,10 +2061,10 @@ fn parse_owner_command(text: &str) -> Option<OwnerCmd> {
             }
         }
     }
-    if t.contains("leave this channel")
-        || t.contains("go away")
-        || t.contains("you can leave")
-        || tt == "leave"
+    // Leave: same tolerance — a short owner utterance with "leave"/"go away".
+    if t.contains("go away")
+        || (has_word("leave") && words <= 6)
+        || tt == "dismiss"
     {
         return Some(OwnerCmd::Leave);
     }
@@ -2151,6 +2153,24 @@ fn looks_like_question(text: &str) -> bool {
         .next()
         .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
         .is_some_and(|w| Q.contains(&w))
+}
+
+/// Whether `text` reads like a request/imperative directed at the agent
+/// ("tell me…", "make a plan", "play something"). In a 1:1 call this lets
+/// natural requests through without saying the name, while bare ambient
+/// declaratives ("all of us are down", "I'm sorry") are left alone.
+fn looks_like_request(text: &str) -> bool {
+    const VERBS: [&str; 26] = [
+        "tell", "give", "show", "make", "help", "explain", "write", "draw", "find", "search",
+        "play", "sing", "list", "summarize", "summarise", "describe", "build", "create",
+        "suggest", "recommend", "remind", "let", "lets", "gimme", "teach", "pitch",
+    ];
+    text.trim()
+        .to_lowercase()
+        .split_whitespace()
+        .next()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+        .is_some_and(|w| VERBS.contains(&w))
 }
 
 /// Consume one participant's decoded-PCM stream (from an [`AvSession`])
@@ -2306,19 +2326,47 @@ async fn transcribe_participant(
                     }
 
                     // Voice-addressed Q&A. People don't say someone's name to
-                    // address them, so neither should they have to say ours:
-                    //  • named ("eliza, …")            → always addressed
-                    //  • just one human + us           → everything is to us
-                    //  • a group                       → a question (not filler)
+                    // address them, so neither should they have to say ours —
+                    // but we must NOT answer every ambient line either (in a 1:1
+                    // that made her reply to "I'm sorry" / room noise). So:
+                    //  • named ("eliza, …")  → always addressed
+                    //  • a question          → addressed (any call size)
+                    //  • 1:1 + a request     → addressed ("tell me…", "play…")
+                    //  • bare declaratives   → ignored (ambient / self-talk)
                     // We're always transcribing regardless; this only decides
                     // when to *answer*. `humans` is the live count of people in
                     // the call (1 == one-on-one with us).
                     let named = address_with_aliases(&text, &cfg.nick);
                     let humans = humans.load(std::sync::atomic::Ordering::Relaxed);
+
+                    // Owner lifecycle command by voice ("go to sleep", "join #x",
+                    // "leave") — owner-only, past the call-join grace (so replayed
+                    // audio can't re-sleep us). Checked BEFORE the Q&A gate: a
+                    // command isn't a question/request, so it must not depend on
+                    // being "addressed". Match on the name-stripped remainder when
+                    // named, else the raw line ("olive, go to sleep" / "go to sleep").
+                    if is_owner(&cfg, &nick) {
+                        let past_grace = active
+                            .lock()
+                            .await
+                            .as_ref()
+                            .map_or(false, |c| c.joined_at.elapsed() >= CALL_JOIN_GRACE);
+                        if past_grace {
+                            let cmd_text = named.as_deref().unwrap_or(&text);
+                            if let Some(cmd) = parse_owner_command(cmd_text) {
+                                tracing::info!(%nick, "owner lifecycle command by voice");
+                                run_owner_command(&handle, Some(&channel), cmd).await;
+                                return;
+                            }
+                        }
+                    }
+
                     let inferred: Option<String> = named.clone().or_else(|| {
                         if !is_substantive(&text) {
                             None
-                        } else if humans <= 1 || looks_like_question(&text) {
+                        } else if looks_like_question(&text)
+                            || (humans <= 1 && looks_like_request(&text))
+                        {
                             Some(text.trim().to_string())
                         } else {
                             None
@@ -2331,22 +2379,6 @@ async fn transcribe_participant(
                         "voice addressing decision"
                     );
                     if let Some(question) = inferred {
-                        // Owner lifecycle command by voice ("go to sleep",
-                        // "join #x", "leave") — owner-only, and not during the
-                        // call-join grace (so replayed audio can't re-sleep us).
-                        if is_owner(&cfg, &nick) {
-                            let past_grace = active
-                                .lock()
-                                .await
-                                .as_ref()
-                                .map_or(false, |c| c.joined_at.elapsed() >= CALL_JOIN_GRACE);
-                            if past_grace {
-                                if let Some(cmd) = parse_owner_command(&question) {
-                                    run_owner_command(&handle, Some(&channel), cmd).await;
-                                    return;
-                                }
-                            }
-                        }
                         // Multi-agent chatter guard: see is_address_allowed.
                         if !is_address_allowed(&cfg, &nick) {
                             tracing::info!(
@@ -2687,6 +2719,64 @@ fn _pathbuf_marker() -> PathBuf {
 mod tests {
     use super::*;
     use tokio::sync::mpsc;
+
+    // ---------- owner lifecycle command (STT-tolerant) ----------
+
+    #[test]
+    fn sleep_command_survives_stt_mangling() {
+        // The real "go to sleep", plus the ways Whisper actually rendered it
+        // in the live demo, must all sleep her.
+        for s in [
+            "go to sleep",
+            "goes to sleep",
+            "all the sleep",
+            "all of god's sleep",
+            "time to sleep now",
+            "olive, go to sleep",
+            "sleep",
+            "take a nap",
+        ] {
+            assert!(
+                matches!(parse_owner_command(s), Some(OwnerCmd::Sleep)),
+                "should sleep on {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sleep_command_ignores_long_incidental_mentions() {
+        // A real sentence that merely mentions sleep must NOT sleep her.
+        assert!(parse_owner_command(
+            "honestly I could not sleep at all last night and now my brain is mush"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn leave_command_is_tolerant_but_bounded() {
+        assert!(matches!(parse_owner_command("leave"), Some(OwnerCmd::Leave)));
+        assert!(matches!(parse_owner_command("ok you can leave now"), Some(OwnerCmd::Leave)));
+        assert!(parse_owner_command("don't leave the door open or the cat gets out tonight").is_none());
+    }
+
+    // ---------- voice addressing gate ----------
+
+    #[test]
+    fn request_detector_separates_asks_from_ambient() {
+        assert!(looks_like_request("tell me a story"));
+        assert!(looks_like_request("play something upbeat"));
+        // The ambient/garbled lines that wrongly triggered her in 1:1:
+        assert!(!looks_like_request("all of us are down"));
+        assert!(!looks_like_request("hello, I didn't say anything"));
+        assert!(!looks_like_request("I'm sorry"));
+    }
+
+    #[test]
+    fn questions_still_recognized() {
+        assert!(looks_like_question("what should I build?"));
+        assert!(looks_like_question("how does this work"));
+        assert!(!looks_like_question("all of us are down"));
+    }
 
     // ---------- sfu_url_from_server ----------
 
