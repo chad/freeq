@@ -46,7 +46,6 @@
 //! # Ok(()) }
 //! ```
 
-use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -310,9 +309,14 @@ where
         "MoQ connected — publishing agent broadcast, watching participants"
     );
 
-    // Tap tasks live here — dropping the JoinSet on return aborts them.
+    // Tap tasks live here — dropping the JoinSet on return aborts them all.
+    // `tap_handles` maps each tapped path → its AbortHandle so a single
+    // participant's tap can be torn down the instant they leave (rather than
+    // spinning forever on a now-dead subscription). It doubles as the
+    // dedup set (the SFU can announce the same path twice).
     let mut taps: JoinSet<()> = JoinSet::new();
-    let mut tapped: HashSet<String> = HashSet::new();
+    let mut tap_handles: std::collections::HashMap<String, tokio::task::AbortHandle> =
+        std::collections::HashMap::new();
 
     loop {
         tokio::select! {
@@ -330,17 +334,34 @@ where
                             None => continue,
                         };
                         // The SFU can announce the same path twice — tap once.
-                        if !tapped.insert(path.clone()) {
+                        if tap_handles.contains_key(&path) {
                             continue;
                         }
                         tracing::info!(%nick, %path, "new participant — subscribing");
-                        taps.spawn(run_tap(tx.clone(), path, nick, broadcast_consumer));
+                        let ah = taps.spawn(run_tap(tx.clone(), path.clone(), nick, broadcast_consumer));
+                        tap_handles.insert(path, ah);
                     }
                     Some((path, None)) => {
-                        tracing::info!(path = %path.to_string(), "participant broadcast removed");
+                        // A participant left (clean leave, or the SFU reaped a
+                        // dropped/ghosted publisher). Abort their tap so we stop
+                        // pumping a dead subscription, and free the path so a
+                        // rejoin re-taps cleanly.
+                        let path = path.to_string();
+                        if let Some(ah) = tap_handles.remove(&path) {
+                            ah.abort();
+                            tracing::info!(%path, "participant left — tap aborted");
+                        } else {
+                            tracing::info!(%path, "participant broadcast removed (no active tap)");
+                        }
                     }
                     None => return Ok(()), // subscription stream closed
                 }
+            }
+            // Reap finished taps (natural track-stop) so their paths free up and
+            // a rejoin re-taps. We can't map a JoinSet result back to its path,
+            // so drop any handle whose task is no longer running.
+            Some(_res) = taps.join_next() => {
+                tap_handles.retain(|_, ah| !ah.is_finished());
             }
             res = session_handle.closed() => {
                 anyhow::bail!("MoQ transport closed: {res:?}");
