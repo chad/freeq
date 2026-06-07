@@ -76,6 +76,14 @@ launched Claude Code, or in `~/.claude/settings.json` under `env`):
 - **`freeq_show_file`** — read a file slice from your working tree and render
   it as the tile (syntax-highlighted code or markdown). Use this when
   discussing code with the room.
+- **`freeq_show_status_grid`** — a service/health grid; cells colour-code by
+  state (ok=green, warn=amber, down=red). For deploys, VMs, CI, services.
+- **`freeq_show_chart`** — a line chart of a numeric series with the latest
+  value called out (green up / red down). For markets, metrics, trends.
+- **`freeq_show_diff`** — a unified diff (added green / removed red). Show the
+  change you made before committing it.
+- **`freeq_show_agenda`** — a day agenda (time + event rows). For schedules and
+  meeting line-ups.
 - **`freeq_set_status`** — flip your visual state: `listening` (quiet),
   `thinking` (LLM call in flight), `presenting` (mid-utterance),
   `idle`.

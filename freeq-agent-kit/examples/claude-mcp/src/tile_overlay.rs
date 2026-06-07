@@ -25,6 +25,20 @@ pub enum TileOverlay {
     /// Live whiteboard — pre-laid-out nodes + arrows from the
     /// orchestrator's accumulated SVO triples.
     Graph { steps: Vec<Step> },
+    /// Service/health grid — labelled cells colour-coded by state
+    /// ("ok" green, "warn" amber, "down" red, else neutral). For the
+    /// ops/on-call role (Sentinel).
+    StatusGrid { title: String, items: Vec<(String, String)> },
+    /// Line chart / sparkline of a numeric series, with the latest
+    /// value called out (rises green, falls red). For the markets role
+    /// (Quant).
+    Chart { title: String, points: Vec<f64>, caption: Option<String> },
+    /// Unified-diff view — lines prefixed `+`/`-`/` ` rendered green/
+    /// red/grey in monospace. For the programmer role (Ada).
+    Diff { path: String, lines: Vec<String> },
+    /// Day agenda — time + event rows, fills the lower half. For the
+    /// productivity role (Otto).
+    Agenda { title: String, items: Vec<(String, String)> },
 }
 
 /// Shared, thread-safe overlay slot. The MCP tools write to it; the
@@ -79,6 +93,253 @@ fn overlay_svg(overlay: &TileOverlay, w: u32, h: u32) -> Option<String> {
                 Some(graph_svg(steps, w, h))
             }
         }
+        TileOverlay::StatusGrid { title, items } => Some(status_grid_svg(title, items, w, h)),
+        TileOverlay::Chart { title, points, caption } => {
+            Some(chart_svg(title, points, caption.as_deref(), w, h))
+        }
+        TileOverlay::Diff { path, lines } => Some(diff_svg(path, lines, w, h)),
+        TileOverlay::Agenda { title, items } => Some(agenda_svg(title, items, w, h)),
+    }
+}
+
+/// Colour for a status state keyword.
+fn state_color(state: &str) -> &'static str {
+    match state.to_ascii_lowercase().as_str() {
+        "ok" | "up" | "green" | "healthy" | "pass" | "passed" => "#7cf3a0",
+        "warn" | "warning" | "amber" | "degraded" | "slow" => "#ffd34d",
+        "down" | "red" | "fail" | "failed" | "error" | "critical" => "#ff6b6b",
+        _ => "#7cb5ff",
+    }
+}
+
+/// Service/health grid — a row of labelled cells, each a coloured dot +
+/// label + state. Wraps into a 2-column layout for longer lists.
+fn status_grid_svg(title: &str, items: &[(String, String)], w: u32, h: u32) -> String {
+    let title = escape(title);
+    let card_top = h / 2;
+    let card_h = h - card_top - 16;
+    let cols = if items.len() > 4 { 2 } else { 1 };
+    let col_w = (w - 64) / cols;
+    let mut body = String::new();
+    for (i, (label, state)) in items.iter().take(8).enumerate() {
+        let col = (i as u32) % cols;
+        let row = (i as u32) / cols;
+        let x = 32 + col * col_w;
+        let y = card_top + 56 + row * 30;
+        body.push_str(&format!(
+            r##"<circle cx="{dx}" cy="{dy}" r="5" fill="{c}" />
+<text x="{tx}" y="{ty}" font-family="-apple-system, Helvetica, sans-serif" font-size="15" fill="#e6f3ff">{label}</text>
+<text x="{sx}" y="{ty}" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="{c}" text-anchor="end">{state}</text>"##,
+            dx = x,
+            dy = y - 5,
+            c = state_color(state),
+            tx = x + 14,
+            ty = y,
+            sx = x + col_w - 24,
+            label = escape(label),
+            state = escape(state),
+        ));
+    }
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">
+  <rect x="16" y="{ct}" width="{cw}" height="{ch}" rx="14" fill="#000d" stroke="#7cb5ff44" stroke-width="1.5" />
+  <text x="32" y="{tt}" font-family="-apple-system, Helvetica, sans-serif" font-size="18" font-weight="600" fill="#7cb5ff">{title}</text>
+  {body}
+</svg>"##,
+        ct = card_top,
+        cw = w - 32,
+        ch = card_h,
+        tt = card_top + 32,
+    )
+}
+
+/// Line chart of `points`, scaled to the lower-half card. The latest
+/// value is called out and the line is tinted by overall direction.
+fn chart_svg(title: &str, points: &[f64], caption: Option<&str>, w: u32, h: u32) -> String {
+    let title = escape(title);
+    let card_top = h / 2;
+    let card_h = h - card_top - 16;
+    let plot_x = 32.0;
+    let plot_w = (w - 64) as f64;
+    let plot_top = (card_top + 44) as f64;
+    let plot_h = (card_h - 60) as f64;
+
+    let (lo, hi) = points.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &p| {
+        (lo.min(p), hi.max(p))
+    });
+    let span = if (hi - lo).abs() < f64::EPSILON { 1.0 } else { hi - lo };
+    let rising = points.len() >= 2 && points[points.len() - 1] >= points[0];
+    let line_color = if rising { "#7cf3a0" } else { "#ff6b6b" };
+
+    let mut pts = String::new();
+    if points.len() >= 2 {
+        let step = plot_w / (points.len() - 1) as f64;
+        for (i, &p) in points.iter().enumerate() {
+            let x = plot_x + i as f64 * step;
+            let y = plot_top + plot_h - ((p - lo) / span) * plot_h;
+            pts.push_str(&format!("{x:.1},{y:.1} "));
+        }
+    }
+    let last = points.last().copied().unwrap_or(0.0);
+    let caption_block = caption
+        .map(|c| {
+            format!(
+                r##"<text x="32" y="{cy}" font-family="-apple-system, Helvetica, sans-serif" font-size="13" fill="#8aa">{}</text>"##,
+                escape(c),
+                cy = card_top as i32 + card_h as i32 - 16,
+            )
+        })
+        .unwrap_or_default();
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">
+  <rect x="16" y="{ct}" width="{cw}" height="{ch}" rx="14" fill="#000d" stroke="#7cb5ff44" stroke-width="1.5" />
+  <text x="32" y="{tt}" font-family="-apple-system, Helvetica, sans-serif" font-size="18" font-weight="600" fill="#7cb5ff">{title}</text>
+  <text x="{lvx}" y="{tt}" font-family="ui-monospace, Menlo, monospace" font-size="18" font-weight="600" fill="{lc}" text-anchor="end">{last:.2}</text>
+  <polyline points="{pts}" fill="none" stroke="{lc}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" />
+  {caption_block}
+</svg>"##,
+        ct = card_top,
+        cw = w - 32,
+        ch = card_h,
+        tt = card_top + 32,
+        lvx = w - 32,
+        lc = line_color,
+    )
+}
+
+/// Unified-diff view: `+`/`-`/` ` prefixed lines coloured green/red/grey.
+fn diff_svg(path: &str, lines: &[String], w: u32, h: u32) -> String {
+    let path = escape(path);
+    let inner_h = h - 32;
+    let max_lines = ((inner_h - 36) / 16) as usize;
+    let mut body = String::new();
+    let mut y = 52;
+    for line in lines.iter().take(max_lines) {
+        let (fill, bg) = match line.chars().next() {
+            Some('+') => ("#7cf3a0", "#10341e88"),
+            Some('-') => ("#ff8a8a", "#3a121288"),
+            _ => ("#d6e3f3", "#0000"),
+        };
+        let trimmed = if line.chars().count() > 84 {
+            line.chars().take(81).collect::<String>() + "…"
+        } else {
+            line.clone()
+        };
+        body.push_str(&format!(
+            r##"<rect x="0" y="{ry}" width="{w}" height="16" fill="{bg}" />
+<text x="16" y="{y}" font-family="ui-monospace, Menlo, monospace" font-size="11" fill="{fill}">{}</text>"##,
+            escape(&trimmed),
+            ry = y - 12,
+        ));
+        y += 16;
+    }
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">
+  <rect x="0" y="0" width="{w}" height="{h}" fill="#0a0e15ee" />
+  <text x="16" y="22" font-family="ui-monospace, Menlo, monospace" font-size="12" fill="#7cb5ff">{path}</text>
+  <line x1="0" y1="32" x2="{w}" y2="32" stroke="#7cb5ff33" stroke-width="1" />
+  {body}
+</svg>"##,
+    )
+}
+
+/// Day agenda — time + event rows in the lower-half card.
+fn agenda_svg(title: &str, items: &[(String, String)], w: u32, h: u32) -> String {
+    let title = escape(title);
+    let card_top = h / 2;
+    let card_h = h - card_top - 16;
+    let mut body = String::new();
+    let mut y = (card_top + 58) as i32;
+    for (time, text) in items.iter().take(6) {
+        body.push_str(&format!(
+            r##"<text x="32" y="{y}" font-family="ui-monospace, Menlo, monospace" font-size="14" fill="#7cb5ff">{time}</text>
+<text x="120" y="{y}" font-family="-apple-system, Helvetica, sans-serif" font-size="15" fill="#e6f3ff">{text}</text>"##,
+            time = escape(time),
+            text = escape(text),
+        ));
+        y += 30;
+    }
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">
+  <rect x="16" y="{ct}" width="{cw}" height="{ch}" rx="14" fill="#000d" stroke="#7cb5ff44" stroke-width="1.5" />
+  <text x="32" y="{tt}" font-family="-apple-system, Helvetica, sans-serif" font-size="18" font-weight="600" fill="#7cb5ff">{title}</text>
+  {body}
+</svg>"##,
+        ct = card_top,
+        cw = w - 32,
+        ch = card_h,
+        tt = card_top + 32,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn renders(o: &TileOverlay) -> String {
+        overlay_svg(o, 640, 360).expect("overlay should render")
+    }
+
+    #[test]
+    fn status_grid_colors_by_state() {
+        let svg = renders(&TileOverlay::StatusGrid {
+            title: "fleet".into(),
+            items: vec![
+                ("freeq".into(), "up".into()),
+                ("reth".into(), "warn".into()),
+                ("ci".into(), "failed".into()),
+            ],
+        });
+        assert!(svg.contains("fleet") && svg.contains("freeq"));
+        assert!(svg.contains("#7cf3a0")); // up → green
+        assert!(svg.contains("#ffd34d")); // warn → amber
+        assert!(svg.contains("#ff6b6b")); // failed → red
+    }
+
+    #[test]
+    fn chart_tints_by_direction_and_calls_out_last() {
+        let up = renders(&TileOverlay::Chart {
+            title: "BTC".into(),
+            points: vec![100.0, 105.0, 110.0],
+            caption: Some("+10%".into()),
+        });
+        assert!(up.contains("BTC") && up.contains("110.00") && up.contains("+10%"));
+        assert!(up.contains("#7cf3a0")); // rising → green
+        let down = renders(&TileOverlay::Chart {
+            title: "x".into(),
+            points: vec![10.0, 5.0],
+            caption: None,
+        });
+        assert!(down.contains("#ff6b6b")); // falling → red
+        // Degenerate inputs don't panic.
+        let _ = renders(&TileOverlay::Chart { title: "f".into(), points: vec![1.0], caption: None });
+    }
+
+    #[test]
+    fn diff_colors_added_and_removed() {
+        let svg = renders(&TileOverlay::Diff {
+            path: "src/x.rs".into(),
+            lines: vec!["+ added".into(), "- removed".into(), "  context".into()],
+        });
+        assert!(svg.contains("src/x.rs"));
+        assert!(svg.contains("#7cf3a0")); // + green
+        assert!(svg.contains("#ff8a8a")); // - red
+    }
+
+    #[test]
+    fn agenda_lists_time_and_event() {
+        let svg = renders(&TileOverlay::Agenda {
+            title: "Today".into(),
+            items: vec![("09:00".into(), "Standup".into()), ("11:30".into(), "1:1".into())],
+        });
+        assert!(svg.contains("Today") && svg.contains("09:00") && svg.contains("Standup"));
+    }
+
+    #[test]
+    fn empty_collections_dont_panic() {
+        let _ = renders(&TileOverlay::StatusGrid { title: "e".into(), items: vec![] });
+        let _ = renders(&TileOverlay::Agenda { title: "e".into(), items: vec![] });
+        let _ = renders(&TileOverlay::Diff { path: "e".into(), lines: vec![] });
     }
 }
 
