@@ -1083,12 +1083,21 @@ fn spawn_join_greeting(cfg: Arc<SharedConfig>, handle: Arc<ClientHandle>, channe
     tracing::info!(%nick, %channel, "join greeting: considering");
     tokio::spawn(async move {
         // Memory of this person (by nick) — works even without a Bluesky handle.
-        let memory_block = cfg
-            .memory
-            .as_ref()
-            .and_then(|m| m.recall_by_asker(&nick, 3).ok())
-            .filter(|r| !r.is_empty())
-            .and_then(|r| crate::memory::Memory::format_for_prompt(&r));
+        let mem_recs = match cfg.memory.as_ref() {
+            Some(m) => match m.recall_by_asker(&nick, 3) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(%nick, error = ?e, "join greeting: memory recall errored");
+                    Vec::new()
+                }
+            },
+            None => {
+                tracing::info!(%nick, "join greeting: no memory store");
+                Vec::new()
+            }
+        };
+        tracing::info!(%nick, mem_recs = mem_recs.len(), "join greeting: memory recall");
+        let memory_block = crate::memory::Memory::format_for_prompt(&mem_recs);
         // Feed (needs a resolvable handle).
         let handle_opt = resolve_handle(&cfg, &nick).await;
         let posts = match &handle_opt {
