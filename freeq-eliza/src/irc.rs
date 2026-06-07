@@ -900,6 +900,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                 });
             }
             Event::Joined { channel, nick, account } => {
+                tracing::info!(%nick, %channel, has_account = account.is_some(), "Event::Joined");
                 // Learn the joiner's real identity (extended-join DID) so
                 // personalization keys off identity, not their freeq nick.
                 if let Some(did) = account {
@@ -1046,13 +1047,22 @@ fn spawn_join_greeting(cfg: Arc<SharedConfig>, handle: Arc<ClientHandle>, channe
             return;
         }
     }
+    tracing::info!(%nick, %channel, "join greeting: considering");
     tokio::spawn(async move {
-        let Some(h) = resolve_handle(&cfg, &nick).await else { return };
+        let Some(h) = resolve_handle(&cfg, &nick).await else {
+            tracing::info!(%nick, "join greeting: no handle resolved — skip");
+            return;
+        };
         let posts = crate::social_feed::recent_posts(&cfg.http, &h, 4).await;
         if posts.is_empty() {
+            tracing::info!(%nick, handle = %h, "join greeting: no public posts — skip");
             return;
         }
-        let Some(line) = generate_greeting(&cfg, &h, &posts).await else { return };
+        let Some(line) = generate_greeting(&cfg, &h, &posts).await else {
+            tracing::warn!(%nick, handle = %h, posts = posts.len(),
+                "join greeting: model produced nothing — skip");
+            return;
+        };
         tracing::info!(%nick, handle = %h, "proactive personalized greeting on join");
         let _ = handle.privmsg(&channel, &line).await;
     });
