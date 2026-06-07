@@ -86,28 +86,26 @@ pub struct PostArgs {
     pub text: String,
 }
 
+// A flat struct, NOT a tagged enum: schemars emits a top-level `oneOf` for an
+// enum, and the Anthropic API rejects any tool whose input_schema has oneOf/
+// allOf/anyOf at the top level ("400 ... does not support oneOf"). A plain
+// object with a `kind` discriminator keeps the schema API-safe.
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-// schemars emits a bare `oneOf` for an internally-tagged enum; Claude Code's
-// MCP client rejects any tool whose inputSchema lacks `"type": "object"`,
-// which drops the *entire* tools/list. Force the object type alongside the
-// variant `oneOf`.
-#[schemars(extend("type" = "object"))]
-pub enum ShowArgs {
-    /// A scene card — title at the top, up to 6 bullets below.
-    Card {
-        title: String,
-        #[serde(default)]
-        bullets: Vec<String>,
-    },
-    /// A quote — pulled-out italic text with optional attribution.
-    Quote {
-        text: String,
-        #[serde(default)]
-        source: Option<String>,
-    },
-    /// Clear the overlay and return to plain face.
-    Clear,
+pub struct ShowArgs {
+    /// What to show: "card", "quote", or "clear".
+    pub kind: String,
+    /// Card title (when kind = "card").
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Card bullets (when kind = "card"), up to 6.
+    #[serde(default)]
+    pub bullets: Vec<String>,
+    /// Quote text (when kind = "quote").
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Quote attribution (when kind = "quote", optional).
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -380,10 +378,16 @@ surface key points without speaking — humans glance, don't read in full.")]
         let Some(orc) = orc else {
             return Ok(error_text("not connected — call freeq_connect first"));
         };
-        let overlay = match args {
-            ShowArgs::Card { title, bullets } => TileOverlay::Card { title, bullets },
-            ShowArgs::Quote { text, source } => TileOverlay::Quote { text, source },
-            ShowArgs::Clear => TileOverlay::None,
+        let overlay = match args.kind.as_str() {
+            "card" => TileOverlay::Card {
+                title: args.title.unwrap_or_default(),
+                bullets: args.bullets,
+            },
+            "quote" => TileOverlay::Quote {
+                text: args.text.unwrap_or_default(),
+                source: args.source,
+            },
+            _ => TileOverlay::None,
         };
         orc.control.set_overlay(overlay);
         Ok(success_json(serde_json::json!({ "shown": true })))
