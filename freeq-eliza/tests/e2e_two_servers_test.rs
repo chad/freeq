@@ -205,7 +205,7 @@ impl Witness {
                 .checked_duration_since(Instant::now())
                 .unwrap_or(Duration::ZERO);
             match tokio::time::timeout(remaining, events.recv()).await {
-                Ok(Some(Event::Joined { channel: c, nick: n }))
+                Ok(Some(Event::Joined { channel: c, nick: n, .. }))
                     if c.eq_ignore_ascii_case(channel) && n.eq_ignore_ascii_case(nick) =>
                 {
                     break;
@@ -392,7 +392,7 @@ async fn scenario_1_idle_no_call() {
     // Witness should see the bot join the channel.
     let saw_bot = witness
         .wait_for(SETTLE, |ev| match ev {
-            Event::Joined { nick, channel } if channel.eq_ignore_ascii_case("#avtest") => {
+            Event::Joined { nick, channel, .. } if channel.eq_ignore_ascii_case("#avtest") => {
                 if nick.eq_ignore_ascii_case("idlebot") {
                     Some(())
                 } else {

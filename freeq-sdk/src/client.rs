@@ -1763,7 +1763,12 @@ where
                                 .and_then(|p| p.split('!').next())
                                 .unwrap_or("")
                                 .to_string();
-                            let _ = event_tx.send(Event::Joined { channel, nick }).await;
+                            // extended-join: `JOIN <chan> <account> :<realname>`.
+                            // account is "*" when the joiner isn't authenticated.
+                            let account = msg.params.get(1)
+                                .filter(|a| !a.is_empty() && a.as_str() != "*")
+                                .cloned();
+                            let _ = event_tx.send(Event::Joined { channel, nick, account }).await;
                         }
                         "PART" => {
                             let channel = msg.params.first().cloned().unwrap_or_default();

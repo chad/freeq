@@ -289,6 +289,16 @@ pub(crate) struct SharedConfig {
     /// this", …) pushes this 90 s into the future; otherwise it
     /// stays in the past and the strict policy applies.
     pub(crate) discussion_until: std::sync::Arc<std::sync::Mutex<Instant>>,
+    /// Lowercased nick → DID, learned from extended-join. Lets a being key
+    /// personalization off real identity (DID → Bluesky handle) instead of the
+    /// fragile assumption that the nick *is* the handle.
+    pub(crate) nick_dids: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
+    /// DID → Bluesky handle cache (None = looked up, no handle, e.g. did:key).
+    pub(crate) did_handles:
+        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Option<String>>>>,
+    /// Lowercased nicks already greeted this session — proactive greeting fires
+    /// at most once per person.
+    pub(crate) greeted: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
 }
 
 /// Active-call state. Held inside an `Arc<AsyncMutex<Option<...>>>`
@@ -503,6 +513,9 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         discussion_until: std::sync::Arc::new(std::sync::Mutex::new(
             Instant::now() - Duration::from_secs(3600),
         )),
+        nick_dids: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        did_handles: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        greeted: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         http: reqwest::Client::new(),
         started_at: Instant::now(),
     });
@@ -886,6 +899,22 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                     .await;
                 });
             }
+            Event::Joined { channel, nick, account } => {
+                // Learn the joiner's real identity (extended-join DID) so
+                // personalization keys off identity, not their freeq nick.
+                if let Some(did) = account {
+                    if let Ok(mut m) = cfg.nick_dids.lock() {
+                        m.insert(nick.to_ascii_lowercase(), did);
+                    }
+                }
+                // Proactive "it knows me" greeting — only in our channels, and
+                // past the startup grace so we don't greet a reconnect backlog.
+                if cfg.channels.iter().any(|c| c.eq_ignore_ascii_case(&channel))
+                    && cfg.started_at.elapsed() > Duration::from_secs(8)
+                {
+                    spawn_join_greeting(cfg.clone(), handle_arc.clone(), channel, nick);
+                }
+            }
             Event::Disconnected { reason } => {
                 tracing::warn!(%reason, "disconnected");
                 return Ok(());
@@ -920,44 +949,113 @@ fn thinking_beat(question: &str) -> Option<String> {
 /// it sentence-by-sentence as it generates — so Eliza starts talking
 /// almost immediately — then post any links and show a visual card.
 #[allow(clippy::too_many_arguments)]
-/// Best-effort feed-aware context: if `actor` (the asker's nick) is an AT-Proto
-/// handle, pull their recent public Bluesky posts via the public AppView so the
-/// being can open personally. Returns None on any miss — a nick that isn't a
-/// handle, a private/empty feed, or a network blip. Handles are URL-safe
-/// (lowercase, digits, dots, hyphens) so no escaping is needed.
-async fn fetch_bsky_context(http: &reqwest::Client, actor: &str) -> Option<String> {
-    // Skip plain nicks ("alice") — only handles (with a dot) are worth a lookup.
-    if !actor.contains('.') || actor.len() > 64 {
-        return None;
+/// Resolve a freeq nick to a Bluesky handle for personalization. Prefers the
+/// joiner's real identity: nick → DID (from extended-join) → handle. Falls back
+/// to treating the nick itself as a handle when it's handle-shaped. `None` for
+/// guests / plain nicks. This is what makes the feed-aware features robust — a
+/// user no longer has to set their nick to their handle.
+async fn resolve_handle(cfg: &SharedConfig, nick: &str) -> Option<String> {
+    let key = nick.to_ascii_lowercase();
+    let did = cfg.nick_dids.lock().ok().and_then(|m| m.get(&key).cloned());
+    if let Some(did) = did {
+        if let Some(cached) = cfg.did_handles.lock().ok().and_then(|m| m.get(&did).cloned()) {
+            return cached;
+        }
+        let handle = crate::social_feed::handle_for_did(&cfg.http, &did).await;
+        if let Ok(mut m) = cfg.did_handles.lock() {
+            m.insert(did, handle.clone());
+        }
+        if handle.is_some() {
+            return handle;
+        }
     }
-    let url = format!(
-        "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed?actor={actor}&limit=4&filter=posts_no_replies"
+    // Fallback: the nick already looks like a handle ("chadfowler.com").
+    if nick.contains('.') && nick.len() <= 64 && !nick.starts_with("did:") {
+        return Some(nick.to_string());
+    }
+    None
+}
+
+/// Best-effort feed-aware context block for `nick` — resolves their handle and
+/// folds their recent public posts in so the being can be personal. `None` on
+/// any miss (guest, empty feed, network blip).
+async fn fetch_bsky_context(cfg: &SharedConfig, nick: &str) -> Option<String> {
+    let handle = resolve_handle(cfg, nick).await?;
+    let posts = crate::social_feed::recent_posts(&cfg.http, &handle, 4).await;
+    let block = crate::social_feed::context_block(&handle, &posts);
+    if block.is_some() {
+        tracing::info!(actor = %nick, handle = %handle, posts = posts.len(),
+            "folded asker's Bluesky feed into context");
+    }
+    block
+}
+
+/// Generate a one-line, in-character personalized greeting from someone's recent
+/// Bluesky posts — the proactive "it knows me" open. `None` when there's nothing
+/// to personalize on or no answer model is configured.
+async fn generate_greeting(cfg: &SharedConfig, handle: &str, posts: &[String]) -> Option<String> {
+    let block = crate::social_feed::context_block(handle, posts)?;
+    let question = format!(
+        "{handle} just walked into the room. Greet them by name with ONE short, \
+specific line that reacts to their recent posts above — like a friend who \
+actually follows them. No preamble, no question, under 30 words."
     );
-    let fut = http.get(&url).send();
-    let resp = tokio::time::timeout(std::time::Duration::from_secs(3), fut)
+    let system = cfg.character_system_prompt.as_deref();
+    let ans = if qa::is_anthropic_model(&cfg.groq_answer_model) {
+        let akey = cfg.anthropic_key.as_deref()?;
+        qa::anthropic_answer_streaming(
+            &cfg.http, akey, &cfg.groq_answer_model, &block, &question, system, |_| {},
+        )
         .await
         .ok()?
-        .ok()?;
-    if !resp.status().is_success() {
-        return None;
+    } else {
+        let gkey = cfg.groq_api_key.as_deref()?;
+        qa::answer_streaming(
+            &cfg.http, gkey, &cfg.groq_answer_model, &block, &question, system, |_| {},
+        )
+        .await
+        .ok()?
+    };
+    let t = ans.text.trim().trim_matches('"').trim().to_string();
+    (!t.is_empty()).then_some(t)
+}
+
+/// On a human joining a channel, fire a one-time proactive personalized greeting
+/// (reads their public Bluesky, opens with something specific). Spawned so it
+/// never blocks the event loop; self-guards on once-per-nick, humans only, and
+/// only posts when personalization actually succeeds (no generic "hello").
+fn spawn_join_greeting(cfg: Arc<SharedConfig>, handle: Arc<ClientHandle>, channel: String, nick: String) {
+    let key = nick.to_ascii_lowercase();
+    // Skip self and known peer agents.
+    let self_canonical = cfg
+        .nick
+        .split_once('-')
+        .map(|(p, _)| p)
+        .unwrap_or(cfg.nick.as_str())
+        .to_ascii_lowercase();
+    if key == cfg.nick.to_ascii_lowercase()
+        || key == self_canonical
+        || cfg.peer_agents.contains(&key)
+    {
+        return;
     }
-    let json: serde_json::Value = resp.json().await.ok()?;
-    let feed = json.get("feed")?.as_array()?;
-    let lines: Vec<String> = feed
-        .iter()
-        .filter_map(|item| item.pointer("/post/record/text").and_then(|t| t.as_str()))
-        .map(|t| t.trim().replace('\n', " "))
-        .filter(|t| !t.is_empty())
-        .map(|t| format!("- {}", t.chars().take(220).collect::<String>()))
-        .collect();
-    if lines.is_empty() {
-        return None;
+    // Once per nick per session.
+    {
+        let Ok(mut g) = cfg.greeted.lock() else { return };
+        if !g.insert(key.clone()) {
+            return;
+        }
     }
-    tracing::info!(%actor, posts = lines.len(), "folded asker's Bluesky feed into context");
-    Some(format!(
-        "Recent public Bluesky posts by {actor} — use these to be personal and specific (react, don't recite):\n{}",
-        lines.join("\n"),
-    ))
+    tokio::spawn(async move {
+        let Some(h) = resolve_handle(&cfg, &nick).await else { return };
+        let posts = crate::social_feed::recent_posts(&cfg.http, &h, 4).await;
+        if posts.is_empty() {
+            return;
+        }
+        let Some(line) = generate_greeting(&cfg, &h, &posts).await else { return };
+        tracing::info!(%nick, handle = %h, "proactive personalized greeting on join");
+        let _ = handle.privmsg(&channel, &line).await;
+    });
 }
 
 async fn answer_and_speak(
@@ -1097,7 +1195,7 @@ async fn answer_and_speak(
     // Bluesky account, fold their recent public posts into context so the being
     // can react to who it's actually talking to ("saw you shipped X"). Folds in
     // alongside memory; gracefully no-ops when the nick isn't a handle.
-    let transcript = match fetch_bsky_context(&cfg.http, &asker).await {
+    let transcript = match fetch_bsky_context(&cfg, &asker).await {
         Some(block) => format!("{block}\n{transcript}"),
         None => transcript,
     };

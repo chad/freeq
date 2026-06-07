@@ -9,6 +9,7 @@ pub mod character_profile;
 pub mod decisions;
 pub mod diagram;
 pub mod social;
+pub mod social_feed;
 pub mod identity;
 pub mod imagegen;
 pub mod irc;
