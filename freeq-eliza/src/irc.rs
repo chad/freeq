@@ -299,6 +299,9 @@ pub(crate) struct SharedConfig {
     /// Lowercased nicks already greeted this session — proactive greeting fires
     /// at most once per person.
     pub(crate) greeted: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    /// Revenant console base URL — when set, notable answers are auto-captured
+    /// as shareable "moment" cards there (the self-propagating viral loop).
+    pub(crate) console_url: Option<String>,
 }
 
 /// Active-call state. Held inside an `Arc<AsyncMutex<Option<...>>>`
@@ -516,6 +519,10 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         nick_dids: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         did_handles: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         greeted: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        console_url: std::env::var("REVENANT_CONSOLE_URL")
+            .ok()
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty()),
         http: reqwest::Client::new(),
         started_at: Instant::now(),
     });
@@ -991,28 +998,53 @@ async fn fetch_bsky_context(cfg: &SharedConfig, nick: &str) -> Option<String> {
     block
 }
 
-/// Generate a one-line, in-character personalized greeting from someone's recent
-/// Bluesky posts — the proactive "it knows me" open. `None` when there's nothing
-/// to personalize on or no answer model is configured.
-async fn generate_greeting(cfg: &SharedConfig, handle: &str, posts: &[String]) -> Option<String> {
-    let block = crate::social_feed::context_block(handle, posts)?;
-    let question = format!(
-        "{handle} just walked into the room. Greet them by name with ONE short, \
-specific line that reacts to their recent posts above — like a friend who \
-actually follows them. No preamble, no question, under 30 words."
-    );
+/// Generate a one-line, in-character personalized greeting from what the being
+/// remembers about the person (memory) and/or their recent Bluesky posts (feed).
+/// `None` when there's nothing to personalize on or no answer model is set.
+async fn generate_greeting(
+    cfg: &SharedConfig,
+    label: &str,
+    memory_block: Option<&str>,
+    feed_block: Option<&str>,
+) -> Option<String> {
+    // Combined context: memory first (continuity beats novelty), then feed.
+    let mut ctx = String::new();
+    if let Some(m) = memory_block {
+        ctx.push_str(m);
+        ctx.push('\n');
+    }
+    if let Some(f) = feed_block {
+        ctx.push_str(f);
+    }
+    if ctx.trim().is_empty() {
+        return None;
+    }
+    let returning = memory_block.is_some();
+    let question = if returning {
+        format!(
+            "{label} just came back. Greet them by name in ONE short line that shows \
+you remember them — reference a past conversation above (or their recent posts if \
+more apt). Warm, specific, no preamble, no question, under 30 words."
+        )
+    } else {
+        format!(
+            "{label} just walked into the room. Greet them by name with ONE short, \
+specific line that reacts to their recent posts above — like a friend who actually \
+follows them. No preamble, no question, under 30 words."
+        )
+    };
     let system = cfg.character_system_prompt.as_deref();
     let ans = if qa::is_anthropic_model(&cfg.groq_answer_model) {
         let akey = cfg.anthropic_key.as_deref()?;
         qa::anthropic_answer_streaming(
-            &cfg.http, akey, &cfg.groq_answer_model, &block, &question, system, |_| {},
+            &cfg.http, akey, &cfg.groq_answer_model, &ctx, &question, system, |_| {},
         )
         .await
         .ok()?
     } else {
         let gkey = cfg.groq_api_key.as_deref()?;
         qa::answer_streaming(
-            &cfg.http, gkey, &cfg.groq_answer_model, &block, &question, system, |_| {},
+            &cfg.http, gkey, &cfg.groq_answer_model, &ctx, &question, system, |_| {},
         )
         .await
         .ok()?
@@ -1021,10 +1053,11 @@ actually follows them. No preamble, no question, under 30 words."
     (!t.is_empty()).then_some(t)
 }
 
-/// On a human joining a channel, fire a one-time proactive personalized greeting
-/// (reads their public Bluesky, opens with something specific). Spawned so it
-/// never blocks the event loop; self-guards on once-per-nick, humans only, and
-/// only posts when personalization actually succeeds (no generic "hello").
+/// On a human joining a channel, fire a one-time proactive personalized greeting.
+/// It opens with what the being REMEMBERS about them (continuity across sessions)
+/// and/or their recent public Bluesky posts. Spawned so it never blocks the event
+/// loop; self-guards on once-per-nick, humans only; stays silent if there's
+/// nothing to personalize on (no generic "hello").
 fn spawn_join_greeting(cfg: Arc<SharedConfig>, handle: Arc<ClientHandle>, channel: String, nick: String) {
     let key = nick.to_ascii_lowercase();
     // Skip self and known peer agents.
@@ -1049,21 +1082,35 @@ fn spawn_join_greeting(cfg: Arc<SharedConfig>, handle: Arc<ClientHandle>, channe
     }
     tracing::info!(%nick, %channel, "join greeting: considering");
     tokio::spawn(async move {
-        let Some(h) = resolve_handle(&cfg, &nick).await else {
-            tracing::info!(%nick, "join greeting: no handle resolved — skip");
-            return;
+        // Memory of this person (by nick) — works even without a Bluesky handle.
+        let memory_block = cfg
+            .memory
+            .as_ref()
+            .and_then(|m| m.recall_by_asker(&nick, 3).ok())
+            .filter(|r| !r.is_empty())
+            .and_then(|r| crate::memory::Memory::format_for_prompt(&r));
+        // Feed (needs a resolvable handle).
+        let handle_opt = resolve_handle(&cfg, &nick).await;
+        let posts = match &handle_opt {
+            Some(h) => crate::social_feed::recent_posts(&cfg.http, h, 4).await,
+            None => Vec::new(),
         };
-        let posts = crate::social_feed::recent_posts(&cfg.http, &h, 4).await;
-        if posts.is_empty() {
-            tracing::info!(%nick, handle = %h, "join greeting: no public posts — skip");
+        let feed_block = handle_opt
+            .as_ref()
+            .and_then(|h| crate::social_feed::context_block(h, &posts));
+        if memory_block.is_none() && feed_block.is_none() {
+            tracing::info!(%nick, "join greeting: nothing to personalize on — skip");
             return;
         }
-        let Some(line) = generate_greeting(&cfg, &h, &posts).await else {
-            tracing::warn!(%nick, handle = %h, posts = posts.len(),
-                "join greeting: model produced nothing — skip");
+        let label = handle_opt.clone().unwrap_or_else(|| nick.clone());
+        let Some(line) =
+            generate_greeting(&cfg, &label, memory_block.as_deref(), feed_block.as_deref()).await
+        else {
+            tracing::warn!(%nick, "join greeting: model produced nothing — skip");
             return;
         };
-        tracing::info!(%nick, handle = %h, "proactive personalized greeting on join");
+        tracing::info!(%nick, handle = ?handle_opt, remembered = memory_block.is_some(),
+            "proactive personalized greeting on join");
         let _ = handle.privmsg(&channel, &line).await;
     });
 }
@@ -1378,6 +1425,25 @@ sharpen the thread. Do NOT address yourself."
     // Log the full answer text — invaluable for debugging when she's
     // saying something weird (e.g. reading image alt attributes).
     tracing::info!(text = %answer.text, "answer text (sent to TTS)");
+
+    // Auto-capture a notable line as a shareable "moment" card on the console
+    // (silent — feeds the /moments gallery so the viral loop closes without a
+    // human step). Best-effort, fire-and-forget.
+    if let Some(console) = cfg.console_url.clone() {
+        if is_moment_worthy(&answer.text) {
+            let http = cfg.http.clone();
+            let being = cfg.nick.split_once('-').map(|(p, _)| p).unwrap_or(&cfg.nick).to_string();
+            let quote = answer.text.clone();
+            let to = asker.clone();
+            tokio::spawn(async move {
+                if let Some(id) =
+                    crate::social_feed::post_moment(&http, &console, &being, &quote, Some(&to)).await
+                {
+                    tracing::info!(%id, %being, "captured moment card");
+                }
+            });
+        }
+    }
 
     // Deterministic peer hand-off (discussion mode). The LLM's
     // answer often ends with addressing a peer ("Utopia, your
@@ -2281,6 +2347,20 @@ fn looks_like_request(text: &str) -> bool {
         .is_some_and(|w| VERBS.contains(&w))
 }
 
+/// Whether an answer is worth freezing into a shareable "moment" card: a tight,
+/// quotable line (not a stub, not an apology/error, not a wall of text).
+fn is_moment_worthy(text: &str) -> bool {
+    let t = text.trim();
+    let len = t.chars().count();
+    if !(25..=280).contains(&len) || !t.chars().any(|c| c.is_alphabetic()) {
+        return false;
+    }
+    let lc = t.to_lowercase();
+    !["sorry", "i couldn't", "i could not", "i can't", "i cannot", "i'm not able"]
+        .iter()
+        .any(|p| lc.starts_with(p))
+}
+
 /// Consume one participant's decoded-PCM stream (from an [`AvSession`])
 /// and segment it into utterances by voice activity — accumulate while
 /// the speaker is talking, flush to STT on a natural pause. This kills
@@ -2884,6 +2964,15 @@ mod tests {
         assert!(looks_like_question("what should I build?"));
         assert!(looks_like_question("how does this work"));
         assert!(!looks_like_question("all of us are down"));
+    }
+
+    #[test]
+    fn moment_worthiness_filters_stubs_and_apologies() {
+        assert!(is_moment_worthy("You're not shipping features, you're shipping a whole atmosphere."));
+        assert!(!is_moment_worthy("yeah"), "too short");
+        assert!(!is_moment_worthy("sorry — I couldn't answer that (timeout)."), "apology/error");
+        assert!(!is_moment_worthy(&"x".repeat(400)), "wall of text");
+        assert!(!is_moment_worthy("   "), "blank");
     }
 
     // ---------- sfu_url_from_server ----------

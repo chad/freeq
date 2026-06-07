@@ -76,6 +76,29 @@ pub fn context_block(label: &str, posts: &[String]) -> Option<String> {
     ))
 }
 
+/// Auto-capture a line a being said as a shareable "moment" card on the revenant
+/// console (`POST {console}/api/moments`). Returns the moment id on success.
+/// Best-effort — a console blip never affects the conversation.
+pub async fn post_moment(
+    http: &reqwest::Client,
+    console_url: &str,
+    being: &str,
+    quote: &str,
+    to: Option<&str>,
+) -> Option<String> {
+    let body = serde_json::json!({ "being": being, "quote": quote, "to": to });
+    let url = format!("{}/api/moments", console_url.trim_end_matches('/'));
+    let resp = tokio::time::timeout(TIMEOUT, http.post(&url).json(&body).send())
+        .await
+        .ok()?
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let json: serde_json::Value = resp.json().await.ok()?;
+    json.get("id")?.as_str().map(|s| s.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

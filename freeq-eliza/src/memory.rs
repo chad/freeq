@@ -163,6 +163,34 @@ impl Memory {
         Ok(recs)
     }
 
+    /// Most recent exchanges with a specific person (by their nick/asker),
+    /// newest first — "what we last talked about". Powers the memory-aware
+    /// greeting: a returning visitor is met with continuity, not a cold open.
+    /// Case-insensitive on asker; cross-channel (memory of the person, anywhere).
+    pub fn recall_by_asker(&self, asker: &str, limit: usize) -> Result<Vec<Recollection>> {
+        let conn = self.conn.lock().expect("memory conn poisoned");
+        // `exchanges` is an FTS5 virtual table — COLLATE NOCASE isn't honored on
+        // its columns, so lowercase both sides; ts is stored as text so cast it.
+        let mut stmt = conn
+            .prepare(
+                "SELECT asker, question, answer, ts FROM exchanges \
+                 WHERE lower(asker) = lower(?1) ORDER BY CAST(ts AS INTEGER) DESC LIMIT ?2",
+            )
+            .context("preparing recall_by_asker query")?;
+        let rows = stmt
+            .query_map(params![asker, limit as i64], |row| {
+                Ok(Recollection {
+                    asker: row.get(0)?,
+                    question: row.get(1)?,
+                    answer: row.get(2)?,
+                    ts: row.get(3)?,
+                })
+            })
+            .context("executing recall_by_asker query")?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("decoding recall_by_asker rows")
+    }
+
     /// Format a list of recollections as a prose block for injection
     /// into an LLM prompt. Returns `None` if the list is empty.
     pub fn format_for_prompt(recs: &[Recollection]) -> Option<String> {
@@ -202,6 +230,27 @@ mod tests {
         let hits = m.recall("voronoi", Some("#x"), 3).unwrap();
         assert_eq!(hits.len(), 1);
         assert!(hits[0].answer.contains("partition"));
+    }
+
+    #[test]
+    fn recall_by_asker_survives_a_new_session() {
+        // The memory-aware greeting moat: a person's history must come back when
+        // the being is reopened (a fresh process / a wake-from-sleep).
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("test.db");
+        {
+            let m = Memory::open(&db).unwrap();
+            m.record("#a", "chad", "i'm building a persona studio", "ship it").unwrap();
+            m.record("#b", "chad", "my band plays avant-blues", "respect").unwrap();
+            m.record("#a", "someone-else", "unrelated", "ok").unwrap();
+        }
+        // New session: reopen the DB from scratch.
+        let m2 = Memory::open(&db).unwrap();
+        let recs = m2.recall_by_asker("CHAD", 5).unwrap(); // case-insensitive
+        assert_eq!(recs.len(), 2, "both of chad's exchanges, none of someone-else's");
+        assert!(recs.iter().all(|r| r.asker.eq_ignore_ascii_case("chad")));
+        let block = Memory::format_for_prompt(&recs).unwrap();
+        assert!(block.contains("persona studio") && block.contains("avant-blues"));
     }
 
     #[test]
