@@ -163,13 +163,6 @@ pub struct ServerConfig {
     /// Hard ceiling on each LLM HTTP call, in seconds. Default 8.
     #[arg(long, env = "FREEQ_LLM_TIMEOUT_SECS", default_value = "8")]
     pub llm_timeout_secs: u64,
-
-    /// Jetstream firehose URL to index `at.freeq.*` records from (e.g.
-    /// `wss://jetstream2.us-east.bsky.network/subscribe`). When set, the
-    /// server subscribes and folds fork edges into the graph. Unset =
-    /// no indexing (records still arrive via the push endpoint).
-    #[arg(long, env = "FREEQ_FIREHOSE_JETSTREAM_URL")]
-    pub firehose_jetstream_url: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -207,7 +200,6 @@ impl Default for ServerConfig {
             llm_api_key: None,
             llm_model: None,
             llm_timeout_secs: 8,
-            firehose_jetstream_url: None,
         }
     }
 }

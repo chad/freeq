@@ -1449,16 +1449,6 @@ impl Server {
         let web_addr = self.config.web_addr.clone();
         let state = self.build_state()?;
 
-        // Firehose indexer — opt-in aggregation of at.freeq.* records
-        // from Jetstream into the fork graph (lineage/counts reflect the
-        // network, not just locally-pushed records).
-        if let Some(url) = self.config.firehose_jetstream_url.clone() {
-            let fh_state = Arc::clone(&state);
-            tokio::spawn(async move {
-                crate::firehose::run_indexer(fh_state, url).await;
-            });
-        }
-
         // Recover active AV sessions from DB (survive server restarts)
         {
             let recovered = state.with_db(|db| db.load_active_av_sessions()).unwrap_or_default();

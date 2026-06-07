@@ -24,8 +24,6 @@ import { FileDropOverlay } from './components/FileDropOverlay';
 import { InstallPrompt } from './components/InstallPrompt';
 import { OnboardingTour } from './components/OnboardingTour';
 import { BookmarksPanel } from './components/BookmarksPanel';
-import { PersonaStudio } from './components/PersonaStudio';
-import { ForkGraph } from './components/ForkGraph';
 import { MotdBanner } from './components/MotdBanner';
 import { CallPanel } from './components/CallPanel';
 
@@ -262,8 +260,6 @@ export default function App() {
       <InstallPrompt />
       <OnboardingTour />
       <BookmarksPanel />
-      <PersonaStudio />
-      <ForkGraph />
     </div>
   );
 }

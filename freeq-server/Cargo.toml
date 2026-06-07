@@ -55,10 +55,6 @@ qmux = { version = "0.0.5", default-features = false, features = ["ws"], optiona
 futures = { version = "0.3", optional = true }
 rustls = { version = "0.23", features = ["aws-lc-rs"], default-features = false, optional = true }
 toml = "0.8"
-# Firehose indexer — a WebSocket client for the Jetstream feed, to fold
-# at.freeq.* records into the fork graph.
-futures-util = "0.3"
-tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 
 [features]
 default = []

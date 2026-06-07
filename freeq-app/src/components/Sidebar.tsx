@@ -218,20 +218,6 @@ export function Sidebar({ onOpenSettings }: SidebarProps) {
             )}
           </div>
           <button
-            onClick={() => useStore.getState().setPersonaStudioOpen(true)}
-            className="text-fg-dim hover:text-accent p-1"
-            title="Persona Studio — create & fork agents"
-          >
-            ✦
-          </button>
-          <button
-            onClick={() => useStore.getState().setForkGraphOpen(true)}
-            className="text-fg-dim hover:text-accent p-1"
-            title="Fork graph — explore persona lineage"
-          >
-            ⑂
-          </button>
-          <button
             onClick={() => useStore.getState().setBookmarksPanelOpen(true)}
             className="text-fg-dim hover:text-fg-muted p-1"
             title="Bookmarks (⌘B)"
