@@ -234,6 +234,12 @@ pub enum Backend {
     /// Digital-rain ASCII — a Matrix-style falling-glyph face. Weirder
     /// sibling of `Ascii`; same single-layer face, overlays are NO-OPS.
     AsciiRain,
+    /// Glitch ASCII — a cursed, corrupted terminal face (chromatic split,
+    /// row-tearing, corruption). Single-layer; overlays are NO-OPS.
+    AsciiGlitch,
+    /// Belligerent South Park-style cartoon — an angry construction-paper
+    /// kid that screams. Single-layer; overlays are NO-OPS.
+    SouthPark,
 }
 
 impl Default for Backend {
@@ -502,7 +508,9 @@ impl VideoTile {
                 }
                 Backend::Ascii => crate::video_ascii::render_loop(tile),
                 Backend::AsciiRain => crate::video_ascii::render_loop_rain(tile),
+                Backend::AsciiGlitch => crate::video_ascii::render_loop_glitch(tile),
                 Backend::Vector => crate::video_vector::render_loop(tile),
+                Backend::SouthPark => crate::video_southpark::render_loop(tile),
             })
             .expect("spawn video renderer");
     }

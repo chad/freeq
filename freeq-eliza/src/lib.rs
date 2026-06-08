@@ -23,6 +23,7 @@ pub mod tts;
 pub mod video;
 pub mod video_ascii;
 pub mod video_particles;
+pub mod video_southpark;
 pub mod video_vector;
 pub mod vision;
 pub mod whiteboard;

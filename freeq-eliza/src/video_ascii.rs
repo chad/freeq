@@ -231,23 +231,29 @@ impl AsciiRenderer {
 /// Alpha-blit a glyph coverage mask at pixel origin `(x0,y0)`, tinted
 /// `(r,g,b)` and scaled by `bright`, over an opaque background. Max-blends
 /// so overlapping cells don't darken each other.
-fn blit_mask(buf: &mut [u8], mask: &[u8], x0: u32, y0: u32, (r, g, b): (u8, u8, u8), bright: f32) {
-    for cy in 0..CELL_H {
+fn blit_mask(buf: &mut [u8], mask: &[u8], x0: u32, y0: u32, color: (u8, u8, u8), bright: f32) {
+    blit_mask_i(buf, mask, x0 as i32, y0 as i32, color, bright);
+}
+
+/// Signed-origin variant — clips on all four edges so glitch displacement
+/// and per-channel offsets can push a glyph partly (or fully) off-frame.
+fn blit_mask_i(buf: &mut [u8], mask: &[u8], x0: i32, y0: i32, (r, g, b): (u8, u8, u8), bright: f32) {
+    for cy in 0..CELL_H as i32 {
         let fy = y0 + cy;
-        if fy >= VIDEO_H {
-            break;
+        if fy < 0 || fy >= VIDEO_H as i32 {
+            continue;
         }
-        for cx in 0..CELL_W {
+        for cx in 0..CELL_W as i32 {
             let fx = x0 + cx;
-            if fx >= VIDEO_W {
-                break;
+            if fx < 0 || fx >= VIDEO_W as i32 {
+                continue;
             }
-            let cov = mask[(cy * CELL_W + cx) as usize] as f32 / 255.0;
+            let cov = mask[(cy as u32 * CELL_W + cx as u32) as usize] as f32 / 255.0;
             if cov <= 0.0 {
                 continue;
             }
             let a = (cov * bright).clamp(0.0, 1.0);
-            let idx = ((fy * VIDEO_W + fx) * 4) as usize;
+            let idx = ((fy as u32 * VIDEO_W + fx as u32) * 4) as usize;
             buf[idx] = buf[idx].max((r as f32 * a) as u8);
             buf[idx + 1] = buf[idx + 1].max((g as f32 * a) as u8);
             buf[idx + 2] = buf[idx + 2].max((b as f32 * a) as u8);
@@ -516,6 +522,161 @@ pub(crate) fn render_loop_rain(tile: VideoTile) {
         }
     }
     tracing::info!("eliza ascii-rain renderer stopped");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Glitch variant — a cursed, corrupted terminal face.
+// ─────────────────────────────────────────────────────────────────────
+
+/// "Cursed terminal": the glyph face, but unstable — chromatic channel
+/// split (RGB fringing), datamosh row-tearing, random cell corruption,
+/// and glitch bursts that spike on her speech. Same lip-sync + blink
+/// underneath; it just won't hold still.
+pub struct AsciiGlitchRenderer {
+    atlas: GlyphAtlas,
+    cols: u32,
+    rows: u32,
+    ox: u32,
+    oy: u32,
+}
+
+impl AsciiGlitchRenderer {
+    pub fn new() -> Option<Self> {
+        let atlas = GlyphAtlas::build()?; // density ramp
+        let cols = VIDEO_W / CELL_W;
+        let rows = VIDEO_H / CELL_H;
+        Some(Self {
+            atlas,
+            cols,
+            rows,
+            ox: (VIDEO_W - cols * CELL_W) / 2,
+            oy: (VIDEO_H - rows * CELL_H) / 2,
+        })
+    }
+
+    pub fn frame_rgba(&self, t: f32, level: f32, peer: f32) -> Vec<u8> {
+        let level = level.clamp(0.0, 1.0);
+        let peer = peer.clamp(0.0, 1.0);
+        let listening = level <= 0.03 && peer > 0.03;
+        let blnk = {
+            let phase = (t % 3.6) / 3.6;
+            if phase > 0.96 {
+                let p = (phase - 0.96) / 0.04;
+                (1.0 - (p * std::f32::consts::PI).sin()).clamp(0.05, 1.0)
+            } else {
+                1.0
+            }
+        };
+
+        // Global instability: a steady floor, more while speaking, plus
+        // periodic bursts (every ~0.4s, ~1-in-3 windows go loud).
+        let burst_win = (t * 2.5) as u32;
+        let burst = if hash32(burst_win.wrapping_mul(2_246_822_519)) % 3 == 0 {
+            0.5 + (hash32(burst_win) % 100) as f32 / 100.0 * 0.5
+        } else {
+            0.0
+        };
+        let g = (0.12 + 0.3 * level + burst).clamp(0.0, 1.0);
+        let chan = (2.0 + 12.0 * g) as i32; // chromatic split, px
+
+        let mut buf = vec![0u8; (VIDEO_W * VIDEO_H * 4) as usize];
+        for px in buf.chunks_exact_mut(4) {
+            px[3] = 255;
+        }
+
+        let half_h = VIDEO_H as f32 / 2.0;
+        let cx = VIDEO_W as f32 / 2.0;
+
+        for row in 0..self.rows {
+            // Per-row tear: some rows slip sideways when g is high.
+            let rseed = hash32(row.wrapping_mul(374_761_393) ^ (burst_win.wrapping_mul(668_265_263)));
+            let disp = if (rseed % 1000) as f32 / 1000.0 < g * 0.45 {
+                ((((rseed >> 10) % 80) as i32) - 40) as f32 * g
+            } else {
+                0.0
+            } as i32;
+
+            for col in 0..self.cols {
+                let px = self.ox as f32 + (col as f32 + 0.5) * CELL_W as f32;
+                let py = self.oy as f32 + (row as f32 + 0.5) * CELL_H as f32;
+                let nx = (px - cx) / half_h;
+                let ny = (py - half_h) / half_h;
+                let mut i = face_intensity(nx, ny, t, level, blnk);
+                i *= 0.86 + 0.14 * (py * 0.2 + t * 6.0).sin();
+                i = i.clamp(0.0, 1.0);
+
+                // Corruption — random cells flare magenta with a wrong glyph.
+                let cseed = hash32(
+                    col.wrapping_mul(2_654_435_761)
+                        ^ row.wrapping_mul(40_503)
+                        ^ (t * 12.0) as u32,
+                );
+                let corrupt = (cseed % 1000) as f32 / 1000.0 < g * 0.12;
+
+                if i <= 0.04 && !corrupt {
+                    continue;
+                }
+
+                let (gi, color, bright) = if corrupt {
+                    let gi = (cseed >> 12) as usize % RAMP.len();
+                    (gi.max(1), (255u8, 40, 230), 1.0)
+                } else {
+                    let gi = ((i * (RAMP.len() - 1) as f32).round() as usize).min(RAMP.len() - 1);
+                    if RAMP[gi] == b' ' {
+                        continue;
+                    }
+                    // Base sickly green→cyan; hottest cells whiten. Shifts
+                    // bluer (cyan) while listening.
+                    let hi = i.powi(3) * 0.6;
+                    let b_base = if listening { 0xe0 } else { 0x99 } as f32;
+                    let r = (0x20 as f32 + (255.0 - 0x20 as f32) * hi) as u8;
+                    let gc = 0xff_u8;
+                    let b = (b_base + (255.0 - b_base) * hi) as u8;
+                    (gi, (r, gc, b), i)
+                };
+
+                let mask = &self.atlas.masks[gi];
+                let x0 = self.ox as i32 + col as i32 * CELL_W as i32 + disp;
+                let y0 = self.oy as i32 + row as i32 * CELL_H as i32;
+                // Chromatic split: R shifted +chan, B shifted -chan, G centred.
+                blit_mask_i(&mut buf, mask, x0 + chan, y0, (color.0, 0, 0), bright);
+                blit_mask_i(&mut buf, mask, x0 - chan, y0, (0, 0, color.2), bright);
+                blit_mask_i(&mut buf, mask, x0, y0, (0, color.1, 0), bright);
+            }
+        }
+        buf
+    }
+}
+
+/// Glitch render loop.
+pub(crate) fn render_loop_glitch(tile: VideoTile) {
+    let renderer = match AsciiGlitchRenderer::new() {
+        Some(r) => r,
+        None => {
+            tracing::error!("ascii-glitch video: could not build glyph atlas");
+            return;
+        }
+    };
+    let frame_dt = Duration::from_millis(1000 / FPS);
+    let started = Instant::now();
+    tracing::info!("eliza ascii-glitch renderer started ({VIDEO_W}x{VIDEO_H} @ {FPS}fps)");
+
+    while tile.running.load(Ordering::Relaxed) {
+        let tick = Instant::now();
+        let t = started.elapsed().as_secs_f32();
+        let level = f32::from_bits(tile.level.load(Ordering::Relaxed));
+        let peer = f32::from_bits(tile.peer_level.load(Ordering::Relaxed));
+        let rgba = renderer.frame_rgba(t, level, peer);
+        let frame =
+            VideoFrame::new_rgba(bytes::Bytes::from(rgba), VIDEO_W, VIDEO_H, Duration::ZERO);
+        if let Ok(mut g) = tile.latest.lock() {
+            *g = Some(frame);
+        }
+        if let Some(rest) = frame_dt.checked_sub(tick.elapsed()) {
+            std::thread::sleep(rest);
+        }
+    }
+    tracing::info!("eliza ascii-glitch renderer stopped");
 }
 
 #[cfg(test)]
