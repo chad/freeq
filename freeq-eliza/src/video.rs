@@ -227,6 +227,10 @@ pub enum Backend {
     /// to her speech level. Like `Particles`, it's a single-layer face:
     /// scene cards, whiteboards, and the ambient HUD are NO-OPS here.
     Ascii,
+    /// Rigged vector character — a hand-drawn blob-headed face with
+    /// blinking eyes, expressive brows, and a lip-syncing mouth. Single
+    /// layer like `Particles`/`Ascii`; overlays are NO-OPS.
+    Vector,
 }
 
 impl Default for Backend {
@@ -494,6 +498,7 @@ impl VideoTile {
                     crate::video_particles::render_loop(tile, &character, ghostly_pack.as_deref())
                 }
                 Backend::Ascii => crate::video_ascii::render_loop(tile),
+                Backend::Vector => crate::video_vector::render_loop(tile),
             })
             .expect("spawn video renderer");
     }
