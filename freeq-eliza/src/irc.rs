@@ -963,31 +963,30 @@ fn thinking_beat(question: &str) -> Option<String> {
 /// it sentence-by-sentence as it generates — so Eliza starts talking
 /// almost immediately — then post any links and show a visual card.
 #[allow(clippy::too_many_arguments)]
-/// Resolve a freeq nick to a Bluesky handle for personalization. Prefers the
-/// joiner's real identity: nick → DID (from extended-join) → handle. Falls back
-/// to treating the nick itself as a handle when it's handle-shaped. `None` for
-/// guests / plain nicks. This is what makes the feed-aware features robust — a
-/// user no longer has to set their nick to their handle.
+/// Resolve a freeq nick to a Bluesky handle for personalization, by the
+/// joiner's *verified* identity only: nick → DID (the extended-join account the
+/// server bound at SASL) → handle. `None` when we have no verified DID.
+///
+/// We deliberately do NOT fall back to treating a handle-shaped nick as a real
+/// handle. Nicks are self-asserted and freely chosen, so trusting one would let
+/// anyone who nicks themselves `someone.bsky.social` make the being pull and
+/// speak that stranger's real feed back as if it were them — impersonation. A
+/// `did:key` DID (guests, AI beings) also has no Bluesky profile, so it
+/// resolves to `None`.
 async fn resolve_handle(cfg: &SharedConfig, nick: &str) -> Option<String> {
     let key = nick.to_ascii_lowercase();
-    let did = cfg.nick_dids.lock().ok().and_then(|m| m.get(&key).cloned());
-    if let Some(did) = did {
-        if let Some(cached) = cfg.did_handles.lock().ok().and_then(|m| m.get(&did).cloned()) {
-            return cached;
-        }
-        let handle = crate::social_feed::handle_for_did(&cfg.http, &did).await;
-        if let Ok(mut m) = cfg.did_handles.lock() {
-            m.insert(did, handle.clone());
-        }
-        if handle.is_some() {
-            return handle;
-        }
+    let did = cfg.nick_dids.lock().ok().and_then(|m| m.get(&key).cloned())?;
+    if did.starts_with("did:key:") {
+        return None;
     }
-    // Fallback: the nick already looks like a handle ("chadfowler.com").
-    if nick.contains('.') && nick.len() <= 64 && !nick.starts_with("did:") {
-        return Some(nick.to_string());
+    if let Some(cached) = cfg.did_handles.lock().ok().and_then(|m| m.get(&did).cloned()) {
+        return cached;
     }
-    None
+    let handle = crate::social_feed::handle_for_did(&cfg.http, &did).await;
+    if let Ok(mut m) = cfg.did_handles.lock() {
+        m.insert(did, handle.clone());
+    }
+    handle
 }
 
 /// Best-effort feed-aware context block for `nick` — resolves their handle and
