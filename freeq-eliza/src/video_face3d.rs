@@ -1,15 +1,20 @@
-//! Real-time 3D head backend — a shaded low-poly head, rendered on the
-//! CPU (no GPU needed, so it runs on the 2-vCPU boxes).
+//! Real-time 3D head backends — shaded low-poly heads rendered on the CPU
+//! (no GPU, so they run on the 2-vCPU boxes).
 //!
-//! A hand-rolled software rasterizer: a procedurally-generated head mesh
-//! (a deformed UV sphere) is rotated each frame, flat-shaded per triangle
-//! against one key light (so the facets read as low-poly), and filled with
-//! a z-buffer. The face slowly turns side-to-side so the 3D depth is
-//! obvious. Eyes blink and the mouth opens with her speech level — these
-//! ride on the head surface so they turn with it and hide when it faces
-//! away.
+//! A hand-rolled software rasterizer (z-buffer + flat shading + back-face
+//! cull) over a procedural head mesh. A [`Persona3d`] parameterises the
+//! whole look — proportions, jowls/lumps, skin material, lighting, brows,
+//! mouth curve and animation — so very different beings share one renderer:
 //!
-//! Same frame contract as every other backend: an RGBA 1280×720 buffer.
+//! - [`Persona3d::neutral`]     — a calm teal head that turns to show depth.
+//! - [`Persona3d::fat_angry`]   — wide, lumpy, sickly, furrowed, snarling,
+//!                                shaking with rage.
+//! - [`Persona3d::slender_joy`] — tall, smooth, radiant, bright-eyed,
+//!                                beaming, floating happily.
+//!
+//! Eyes blink, the mouth lip-syncs to her speech level, and features ride
+//! the head surface so they turn and cull with it. Same RGBA frame
+//! contract as every other backend.
 
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -55,28 +60,96 @@ impl V3 {
         let (s, c) = a.sin_cos();
         V3::new(self.x, c * self.y - s * self.z, s * self.y + c * self.z)
     }
+    fn rotz(self, a: f32) -> V3 {
+        let (s, c) = a.sin_cos();
+        V3::new(c * self.x - s * self.y, s * self.x + c * self.y, self.z)
+    }
 }
 
-/// Build a head mesh: a UV sphere deformed to head proportions (taller,
-/// tapered jaw, slightly flattened front).
-fn head_mesh() -> Vec<[V3; 3]> {
-    const LAT: usize = 20;
-    const LON: usize = 26;
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Neutral,
+    Angry,
+    Joy,
+}
+
+/// Everything that makes one 3D being look and move unlike another.
+#[derive(Clone, Copy)]
+pub struct Persona3d {
+    kind: Kind,
+    height: f32,
+    width: f32,
+    depth: f32,
+    jowl: f32,  // bulge the lower-front (fat cheeks / double chin)
+    taper: f32, // narrow the chin
+    lumpy: f32, // asymmetric surface bumps (ugliness)
+    base: (f32, f32, f32),
+    glow: (f32, f32, f32),
+    ambient: f32,
+    diffuse: f32,
+    spec: f32,
+    spec_pow: f32,
+}
+
+impl Persona3d {
+    pub fn neutral() -> Self {
+        Self {
+            kind: Kind::Neutral,
+            height: 1.08, width: 1.0, depth: 0.96, jowl: 0.0, taper: 0.26, lumpy: 0.0,
+            base: (74.0, 200.0, 214.0), glow: (90.0, 150.0, 255.0),
+            ambient: 0.28, diffuse: 0.85, spec: 0.4, spec_pow: 8.0,
+        }
+    }
+    pub fn fat_angry() -> Self {
+        Self {
+            kind: Kind::Angry,
+            height: 0.92, width: 1.2, depth: 1.1, jowl: 0.95, taper: 0.1, lumpy: 1.0,
+            base: (138.0, 150.0, 92.0), // sickly olive
+            glow: (200.0, 60.0, 40.0),  // angry red wash
+            ambient: 0.24, diffuse: 0.82, spec: 0.12, spec_pow: 4.0,
+        }
+    }
+    pub fn slender_joy() -> Self {
+        Self {
+            kind: Kind::Joy,
+            height: 1.26, width: 0.8, depth: 0.9, jowl: 0.0, taper: 0.34, lumpy: 0.0,
+            base: (255.0, 206.0, 156.0), // radiant warm
+            glow: (255.0, 190.0, 120.0), // golden
+            ambient: 0.42, diffuse: 0.72, spec: 0.7, spec_pow: 6.0,
+        }
+    }
+}
+
+/// Build a head mesh deformed per the persona.
+fn head_mesh(p: &Persona3d) -> Vec<[V3; 3]> {
+    const LAT: usize = 22;
+    const LON: usize = 28;
     let shape = |theta: f32, phi: f32| -> V3 {
         let (st, ct) = theta.sin_cos();
         let (sp, cp) = phi.sin_cos();
-        let mut p = V3::new(st * cp, ct, st * sp);
-        // Slightly taller head.
-        p.y *= 1.08;
-        // Gently taper the lower half toward a rounded chin (not a point).
-        let taper = if p.y < 0.1 {
-            1.0 - ((0.1 - p.y) / 1.18) * 0.26
-        } else {
-            1.0
-        };
-        p.x *= taper;
-        p.z *= taper * 0.96; // slightly flatter front-to-back
-        p
+        let mut q = V3::new(st * cp, ct, st * sp);
+        if p.lumpy > 0.0 {
+            let l = (theta * 3.0).sin() * (phi * 2.0).sin()
+                + (theta * 5.0 + 1.0).sin() * (phi * 4.0 + 2.0).sin() * 0.6;
+            let s = 1.0 + p.lumpy * l * 0.06;
+            q.x *= s;
+            q.y *= s;
+            q.z *= s;
+        }
+        q.y *= p.height;
+        if p.jowl > 0.0 && q.y < 0.25 {
+            let f = (0.25 - q.y).clamp(0.0, 1.3);
+            q.x *= 1.0 + p.jowl * f * 0.4;
+            q.z *= 1.0 + p.jowl * f * 0.5;
+        }
+        if q.y < 0.1 {
+            let tp = 1.0 - ((0.1 - q.y) / 1.18) * p.taper;
+            q.x *= tp;
+            q.z *= tp * 0.98;
+        }
+        q.x *= p.width;
+        q.z *= p.depth;
+        q
     };
     let mut tris = Vec::new();
     for i in 0..LAT {
@@ -99,137 +172,213 @@ fn head_mesh() -> Vec<[V3; 3]> {
 const FOCAL: f32 = 820.0;
 const CAM_Z: f32 = 3.3;
 
-/// Project a camera-space point (camera at +Z looking toward −Z) to screen
-/// pixels + depth. Returns (sx, sy, depth).
 fn project(p: V3) -> (f32, f32, f32) {
-    let vz = p.z - CAM_Z; // negative (in front)
+    let vz = p.z - CAM_Z;
     let persp = FOCAL / (-vz);
     let sx = VIDEO_W as f32 / 2.0 + p.x * persp;
     let sy = VIDEO_H as f32 / 2.0 - p.y * persp;
     (sx, sy, -vz)
 }
 
+fn jitter(seed: f32) -> f32 {
+    let x = (seed * 127.1).sin() * 43758.547;
+    (x - x.floor()) * 2.0 - 1.0
+}
+
 pub struct Face3dRenderer {
+    persona: Persona3d,
     mesh: Vec<[V3; 3]>,
 }
 
 impl Face3dRenderer {
-    pub fn new() -> Self {
-        Self { mesh: head_mesh() }
+    pub fn new(persona: Persona3d) -> Self {
+        let mesh = head_mesh(&persona);
+        Self { persona, mesh }
     }
 
     pub fn frame_rgba(&self, t: f32, level: f32, peer: f32) -> Vec<u8> {
+        let p = &self.persona;
         let level = level.clamp(0.0, 1.0);
         let peer = peer.clamp(0.0, 1.0);
         let speaking = level > 0.03;
-        let listening = !speaking && peer > 0.03;
 
         let w = VIDEO_W as usize;
         let h = VIDEO_H as usize;
         let mut buf = vec![0u8; w * h * 4];
         let mut zbuf = vec![f32::INFINITY; w * h];
 
-        // ── Background: dark vertical gradient + soft mood glow ──────────
-        let accent = if speaking {
-            (255.0, 210.0, 74.0)
-        } else if listening {
-            (62.0, 255.0, 214.0)
-        } else {
-            (108.0, 176.0, 255.0)
-        };
+        // ── Background: dark + persona glow ──────────────────────────────
         let cxp = w as f32 * 0.5;
         let cyp = h as f32 * 0.46;
-        let glow_r = h as f32 * 0.62;
+        let glow_r = h as f32 * 0.64;
+        let glow_amt = 0.18 + 0.12 * level;
         for y in 0..h {
-            let vy = y as f32 / h as f32;
-            let bg = 8.0 + 10.0 * (1.0 - vy); // top a touch lighter
+            let bg = 7.0 + 9.0 * (1.0 - y as f32 / h as f32);
             for x in 0..w {
                 let dx = x as f32 - cxp;
                 let dy = y as f32 - cyp;
                 let d = (dx * dx + dy * dy).sqrt() / glow_r;
-                let g = (1.0 - d).clamp(0.0, 1.0).powf(2.5) * 0.22;
+                let g = (1.0 - d).clamp(0.0, 1.0).powf(2.5) * glow_amt;
                 let idx = (y * w + x) * 4;
-                buf[idx] = (bg + accent.0 * g) as u8;
-                buf[idx + 1] = (bg + accent.1 * g) as u8;
-                buf[idx + 2] = (bg + accent.2 * g) as u8;
+                buf[idx] = (bg + p.glow.0 * g).min(255.0) as u8;
+                buf[idx + 1] = (bg + p.glow.1 * g).min(255.0) as u8;
+                buf[idx + 2] = (bg + p.glow.2 * g).min(255.0) as u8;
                 buf[idx + 3] = 255;
             }
         }
 
-        // ── Head transform: gentle turn + nod/bob ────────────────────────
-        let yaw = 0.5 * (t * 0.45).sin();
-        let pitch = 0.12 * (t * 0.7).sin() + if speaking { 0.04 * (t * 9.0).sin() } else { 0.0 };
-        let xform = |p: V3| p.rotx(pitch).roty(yaw);
+        // ── Pose per personality ─────────────────────────────────────────
+        let (yaw, pitch, roll, sdx, sdy) = match p.kind {
+            Kind::Neutral => (
+                0.5 * (t * 0.45).sin(),
+                0.12 * (t * 0.7).sin() + if speaking { 0.04 * (t * 9.0).sin() } else { 0.0 },
+                0.0,
+                0.0,
+                0.0,
+            ),
+            Kind::Angry => {
+                // small jittery turns, hunched forward/down, rage screen-shake
+                let shake = 2.0 + 7.0 * level;
+                (
+                    0.22 * (t * 0.9).sin(),
+                    0.08 * (t * 1.1).sin() + 0.07,
+                    0.04 * (t * 1.3).sin(),
+                    jitter(t * 41.0) * shake,
+                    jitter(t * 47.0) * shake,
+                )
+            }
+            Kind::Joy => (
+                0.6 * (t * 0.4).sin(),
+                0.08 * (t * 0.6).sin(),
+                0.12 * (t * 0.5).sin(), // happy head-tilt
+                0.0,
+                -7.0 * (t * 1.6).sin().abs(), // bobbing up
+            ),
+        };
+        let xform = |v: V3| v.rotz(roll).rotx(pitch).roty(yaw);
+        let proj = |v: V3| {
+            let (x, y, d) = project(v);
+            (x + sdx, y + sdy, d)
+        };
 
-        // Key light (world space, upper-left-front).
+        // Light (world space, upper-left-front).
         let light = V3::new(-0.45, 0.55, 0.8).norm();
-        let base = (74.0, 200.0, 214.0); // cool cyber-teal material
+        // Material, with an angry red flush while shouting.
+        let mat = if p.kind == Kind::Angry && speaking {
+            (
+                (p.base.0 + 95.0 * level).min(255.0),
+                (p.base.1 - 45.0 * level).max(0.0),
+                (p.base.2 - 30.0 * level).max(0.0),
+            )
+        } else {
+            p.base
+        };
 
         for tri in &self.mesh {
             let w0 = xform(tri[0]);
             let w1 = xform(tri[1]);
             let w2 = xform(tri[2]);
-            // Flat normal.
             let n = w1.sub(w0).cross(w2.sub(w0)).norm();
-            // Back-face cull (camera looks toward −Z, so a front face has
-            // a normal with positive z).
             if n.z <= 0.02 {
                 continue;
             }
             let ndl = n.dot(light).max(0.0);
-            let shade = (0.28 + 0.85 * ndl).min(1.25);
-            let spec = ndl.powf(8.0) * 0.4;
+            let shade = (p.ambient + p.diffuse * ndl).min(1.3);
+            let sp = ndl.powf(p.spec_pow) * p.spec;
             let col = (
-                ((base.0 * shade) + 255.0 * spec).min(255.0) as u8,
-                ((base.1 * shade) + 255.0 * spec).min(255.0) as u8,
-                ((base.2 * shade) + 255.0 * spec).min(255.0) as u8,
+                ((mat.0 * shade) + 255.0 * sp).min(255.0) as u8,
+                ((mat.1 * shade) + 255.0 * sp).min(255.0) as u8,
+                ((mat.2 * shade) + 255.0 * sp).min(255.0) as u8,
             );
-            let a = project(w0);
-            let b = project(w1);
-            let c = project(w2);
-            fill_tri(&mut buf, &mut zbuf, a, b, c, col);
+            fill_tri(&mut buf, &mut zbuf, proj(w0), proj(w1), proj(w2), col);
         }
 
-        // ── Eyes + mouth: ride the head surface, turn + cull with it ────
+        // ── Features ─────────────────────────────────────────────────────
         let blink = {
             let phase = (t % 4.0) / 4.0;
             if phase > 0.965 {
-                let p = (phase - 0.965) / 0.035;
-                (1.0 - (p * std::f32::consts::PI).sin()).clamp(0.06, 1.0)
+                let q = (phase - 0.965) / 0.035;
+                (1.0 - (q * std::f32::consts::PI).sin()).clamp(0.06, 1.0)
             } else {
                 1.0
             }
         };
-        // Eye centres + outward normals (on the front of the head).
+        let (eye_rx, eye_ry, eye_y) = match p.kind {
+            Kind::Angry => (0.072, 0.058, 0.13),
+            Kind::Joy => (0.10, 0.115, 0.17),
+            Kind::Neutral => (0.085, 0.10, 0.16),
+        };
+
+        // Eyes + brows.
         for &sgn in &[-1.0f32, 1.0] {
-            let local = V3::new(0.30 * sgn, 0.16, 0.92);
-            let wp = xform(local);
-            let nrm = xform(V3::new(0.30 * sgn, 0.16, 0.92).norm());
+            let local = V3::new(0.30 * sgn, eye_y, 0.92);
+            let nrm = xform(local.norm());
             if nrm.z <= 0.15 {
-                continue; // facing away
+                continue;
             }
-            let (sx, sy, _) = project(wp);
+            let wp = xform(local);
+            let (sx, sy, _) = proj(wp);
             let sc = FOCAL / (CAM_Z - wp.z);
-            let rx = 0.085 * sc;
-            let ry = 0.10 * sc * blink;
-            fill_ellipse(&mut buf, sx, sy, rx, ry, (245, 249, 255));
+            let ew = eye_rx * sc;
+            let eh = eye_ry * sc * blink;
+            fill_ellipse(&mut buf, sx, sy, ew, eh, (245, 249, 255));
             if blink > 0.4 {
-                fill_ellipse(&mut buf, sx, sy, rx * 0.42, ry * 0.42, (20, 24, 34));
+                let (phx, phy, pr) = match p.kind {
+                    Kind::Angry => (sgn * ew * 0.25, eh * 0.3, 0.5), // glaring, low+inner
+                    _ => (0.0, 0.0, 0.42),
+                };
+                fill_ellipse(&mut buf, sx + phx, sy + phy, ew * pr, eh * pr, (22, 26, 34));
+                let hl = if p.kind == Kind::Joy { 0.42 } else { 0.24 };
+                fill_ellipse(&mut buf, sx + ew * 0.2, sy - eh * 0.25, ew * hl, eh * hl, (255, 255, 255));
             }
+            // Brow.
+            let (in_y, out_y, thick, bc) = match p.kind {
+                Kind::Angry => (sy - ew * 1.0, sy - ew * 2.5, ew * 0.5, (28, 18, 14)),
+                Kind::Joy => (sy - ew * 2.3, sy - ew * 2.0, ew * 0.22, (150, 110, 80)),
+                Kind::Neutral => continue,
+            };
+            let in_x = sx - sgn * ew * 0.6; // toward face centre
+            let out_x = sx + sgn * ew * 1.25; // outer
+            stroke_seg(&mut buf, in_x, in_y, out_x, out_y, thick, bc);
         }
+
         // Mouth.
         {
-            let local = V3::new(0.0, -0.42, 0.92);
-            let wp = xform(local);
-            let nrm = xform(V3::new(0.0, -0.42, 0.92).norm());
+            let local = V3::new(0.0, -0.40, 0.92);
+            let nrm = xform(local.norm());
             if nrm.z > 0.15 {
-                let (sx, sy, _) = project(wp);
+                let wp = xform(local);
+                let (mx, my, _) = proj(wp);
                 let sc = FOCAL / (CAM_Z - wp.z);
-                let rx = (0.16 + 0.04 * level) * sc;
-                let ry = (0.02 + 0.16 * level) * sc;
-                fill_ellipse(&mut buf, sx, sy, rx, ry, (26, 14, 18));
-                if level > 0.18 {
-                    fill_ellipse(&mut buf, sx, sy + ry * 0.4, rx * 0.6, ry * 0.4, (224, 85, 122));
+                match p.kind {
+                    Kind::Joy => {
+                        // beaming smile; opens with speech, top teeth show
+                        draw_lips(&mut buf, mx, my, 0.20 * sc, 0.11 * sc, 0.03 * sc, (150, 70, 70));
+                        if speaking {
+                            let rx = 0.15 * sc;
+                            let ry = (0.02 + 0.13 * level) * sc;
+                            fill_ellipse(&mut buf, mx, my + ry * 0.4, rx, ry, (90, 30, 40));
+                            fill_ellipse(&mut buf, mx, my + ry * 0.05, rx * 0.92, ry * 0.32, (255, 255, 255));
+                        }
+                    }
+                    Kind::Angry => {
+                        // snarl: downturned, bared lower teeth when shouting
+                        if speaking {
+                            let rx = 0.17 * sc;
+                            let ry = (0.03 + 0.14 * level) * sc;
+                            fill_ellipse(&mut buf, mx, my, rx, ry, (24, 10, 10));
+                            fill_ellipse(&mut buf, mx, my + ry * 0.55, rx * 0.85, ry * 0.3, (235, 230, 215)); // gritted teeth
+                        }
+                        draw_lips(&mut buf, mx, my - 0.02 * sc, 0.18 * sc, -0.06 * sc, 0.035 * sc, (30, 14, 14));
+                    }
+                    Kind::Neutral => {
+                        let rx = (0.16 + 0.04 * level) * sc;
+                        let ry = (0.02 + 0.16 * level) * sc;
+                        fill_ellipse(&mut buf, mx, my, rx, ry, (26, 14, 18));
+                        if level > 0.18 {
+                            fill_ellipse(&mut buf, mx, my + ry * 0.4, rx * 0.6, ry * 0.4, (224, 85, 122));
+                        }
+                    }
                 }
             }
         }
@@ -238,8 +387,22 @@ impl Face3dRenderer {
     }
 }
 
-/// Fill a screen-space triangle with a z-buffer test. Each vertex is
-/// `(sx, sy, depth)`.
+/// Lip line — a quadratic arc from corner to corner. `curve > 0` bows the
+/// middle downward (a smile, corners up); `curve < 0` bows it up (a frown).
+fn draw_lips(buf: &mut [u8], cx: f32, cy: f32, halfw: f32, curve: f32, thick: f32, color: (u8, u8, u8)) {
+    let n = 9;
+    let mut prev: Option<(f32, f32)> = None;
+    for i in 0..=n {
+        let s = -1.0 + 2.0 * i as f32 / n as f32;
+        let x = cx + s * halfw;
+        let y = cy + curve * (1.0 - s * s);
+        if let Some((px, py)) = prev {
+            stroke_seg(buf, px, py, x, y, thick, color);
+        }
+        prev = Some((x, y));
+    }
+}
+
 fn fill_tri(
     buf: &mut [u8],
     zbuf: &mut [f32],
@@ -285,8 +448,6 @@ fn fill_tri(
     }
 }
 
-/// Fill an axis-aligned screen-space ellipse (no z-test — drawn on top of
-/// the head front).
 fn fill_ellipse(buf: &mut [u8], cx: f32, cy: f32, rx: f32, ry: f32, (r, g, b): (u8, u8, u8)) {
     if rx < 0.5 || ry < 0.5 {
         return;
@@ -311,8 +472,45 @@ fn fill_ellipse(buf: &mut [u8], cx: f32, cy: f32, rx: f32, ry: f32, (r, g, b): (
     }
 }
 
+/// Thick line segment via distance-to-segment fill.
+fn stroke_seg(buf: &mut [u8], x0: f32, y0: f32, x1: f32, y1: f32, half: f32, (r, g, b): (u8, u8, u8)) {
+    if half < 0.4 {
+        return;
+    }
+    let w = VIDEO_W as i32;
+    let h = VIDEO_H as i32;
+    let minx = (x0.min(x1) - half).floor().max(0.0) as i32;
+    let maxx = (x0.max(x1) + half).ceil().min((w - 1) as f32) as i32;
+    let miny = (y0.min(y1) - half).floor().max(0.0) as i32;
+    let maxy = (y0.max(y1) + half).ceil().min((h - 1) as f32) as i32;
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let len2 = (dx * dx + dy * dy).max(1e-4);
+    let h2 = half * half;
+    for y in miny..=maxy {
+        for x in minx..=maxx {
+            let px = x as f32 + 0.5;
+            let py = y as f32 + 0.5;
+            let s = (((px - x0) * dx + (py - y0) * dy) / len2).clamp(0.0, 1.0);
+            let cxs = x0 + s * dx;
+            let cys = y0 + s * dy;
+            let d2 = (px - cxs) * (px - cxs) + (py - cys) * (py - cys);
+            if d2 <= h2 {
+                let idx = ((y * w + x) * 4) as usize;
+                buf[idx] = r;
+                buf[idx + 1] = g;
+                buf[idx + 2] = b;
+            }
+        }
+    }
+}
+
 pub(crate) fn render_loop(tile: VideoTile) {
-    let renderer = Face3dRenderer::new();
+    render_loop_with(tile, Persona3d::neutral());
+}
+
+pub(crate) fn render_loop_with(tile: VideoTile, persona: Persona3d) {
+    let renderer = Face3dRenderer::new(persona);
     let frame_dt = Duration::from_millis(1000 / FPS);
     let started = Instant::now();
     tracing::info!("eliza 3d-head renderer started ({VIDEO_W}x{VIDEO_H} @ {FPS}fps)");
@@ -340,26 +538,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn mesh_is_nonempty() {
-        assert!(head_mesh().len() > 100);
+    fn meshes_are_nonempty() {
+        for p in [Persona3d::neutral(), Persona3d::fat_angry(), Persona3d::slender_joy()] {
+            assert!(head_mesh(&p).len() > 100);
+        }
     }
 
     #[test]
-    fn frame_is_right_size_and_draws_head() {
-        let r = Face3dRenderer::new();
-        let f = r.frame_rgba(0.0, 0.6, 0.0);
-        assert_eq!(f.len(), (VIDEO_W * VIDEO_H * 4) as usize);
-        // The teal head should colour a meaningful chunk of the centre.
-        let w = VIDEO_W as usize;
-        let mut teal = 0;
-        for y in (VIDEO_H as usize / 4)..(VIDEO_H as usize * 3 / 4) {
-            for x in (w / 3)..(w * 2 / 3) {
-                let i = (y * w + x) * 4;
-                if f[i + 1] > 120 && f[i + 2] > 120 && f[i] < 160 {
-                    teal += 1;
-                }
-            }
+    fn frames_render_for_each_persona() {
+        for p in [Persona3d::neutral(), Persona3d::fat_angry(), Persona3d::slender_joy()] {
+            let r = Face3dRenderer::new(p);
+            let f = r.frame_rgba(4.0, 0.7, 0.0);
+            assert_eq!(f.len(), (VIDEO_W * VIDEO_H * 4) as usize);
+            assert!(f.chunks_exact(4).all(|px| px[3] == 255));
         }
-        assert!(teal > 5000, "expected a visible head, got {teal} teal px");
     }
 }

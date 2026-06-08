@@ -245,6 +245,10 @@ pub enum Backend {
     SouthPark,
     /// Real-time CPU-rendered low-poly 3D head. Single-layer; overlays NO-OP.
     Face3d,
+    /// 3D head — fat, ugly, angry personality.
+    Face3dAngry,
+    /// 3D head — slender, beautiful, joyful personality.
+    Face3dJoy,
 }
 
 impl Default for Backend {
@@ -518,6 +522,14 @@ impl VideoTile {
                 Backend::Vector => crate::video_vector::render_loop(tile),
                 Backend::SouthPark => crate::video_southpark::render_loop(tile),
                 Backend::Face3d => crate::video_face3d::render_loop(tile),
+                Backend::Face3dAngry => crate::video_face3d::render_loop_with(
+                    tile,
+                    crate::video_face3d::Persona3d::fat_angry(),
+                ),
+                Backend::Face3dJoy => crate::video_face3d::render_loop_with(
+                    tile,
+                    crate::video_face3d::Persona3d::slender_joy(),
+                ),
             })
             .expect("spawn video renderer");
     }

@@ -1,18 +1,26 @@
-//! Offline render of the 3D-head backend → PNG frame sequence.
+//! Offline render of a 3D-head backend → PNG frame sequence.
 //!
-//!   cargo run --release --example face3d_demo -- /tmp/face3d_frames
-//!   ffmpeg -y -framerate 15 -i /tmp/face3d_frames/f%04d.png \
-//!     -c:v libx264 -pix_fmt yuv420p -movflags +faststart face3d.mp4
+//!   cargo run --release --example face3d_demo -- /tmp/face3d_frames neutral
+//!   cargo run --release --example face3d_demo -- /tmp/angry_frames angry
+//!   cargo run --release --example face3d_demo -- /tmp/joy_frames joy
+//!   ffmpeg -y -framerate 15 -i /tmp/<dir>/f%04d.png \
+//!     -c:v libx264 -pix_fmt yuv420p -movflags +faststart out.mp4
 
 use freeq_eliza::video::{VIDEO_H, VIDEO_W};
-use freeq_eliza::video_face3d::Face3dRenderer;
+use freeq_eliza::video_face3d::{Face3dRenderer, Persona3d};
 
 fn main() {
-    let out = std::env::args().nth(1).unwrap_or_else(|| "/tmp/face3d_frames".into());
+    let mut args = std::env::args().skip(1);
+    let out = args.next().unwrap_or_else(|| "/tmp/face3d_frames".into());
+    let persona = match args.next().as_deref() {
+        Some("angry") => Persona3d::fat_angry(),
+        Some("joy") => Persona3d::slender_joy(),
+        _ => Persona3d::neutral(),
+    };
     std::fs::create_dir_all(&out).expect("create out dir");
     let (fps, secs) = (15.0f32, 14.0f32);
     let frames = (fps * secs) as usize;
-    let r = Face3dRenderer::new();
+    let r = Face3dRenderer::new(persona);
     println!("rendering {frames} frames → {out}");
     for f in 0..frames {
         let t = f as f32 / fps;
