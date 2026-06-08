@@ -73,16 +73,25 @@ enum Kind {
     Joy,
 }
 
+/// The 3D *form* — what kind of being it is, not just its proportions.
+#[derive(Clone, Copy, PartialEq)]
+enum Form {
+    Head,
+    Eye,   // a single floating eyeball
+    Shard, // a spinning crystal with a glowing slit-eye
+}
+
 /// Everything that makes one 3D being look and move unlike another.
 #[derive(Clone, Copy)]
 pub struct Persona3d {
     kind: Kind,
+    form: Form,
     height: f32,
     width: f32,
     depth: f32,
     jowl: f32,  // bulge the lower-front (fat cheeks / double chin)
     taper: f32, // narrow the chin
-    lumpy: f32, // asymmetric surface bumps (ugliness)
+    lumpy: f32, // asymmetric surface bumps (ugliness / spikes)
     base: (f32, f32, f32),
     glow: (f32, f32, f32),
     ambient: f32,
@@ -94,7 +103,7 @@ pub struct Persona3d {
 impl Persona3d {
     pub fn neutral() -> Self {
         Self {
-            kind: Kind::Neutral,
+            kind: Kind::Neutral, form: Form::Head,
             height: 1.08, width: 1.0, depth: 0.96, jowl: 0.0, taper: 0.26, lumpy: 0.0,
             base: (74.0, 200.0, 214.0), glow: (90.0, 150.0, 255.0),
             ambient: 0.28, diffuse: 0.85, spec: 0.4, spec_pow: 8.0,
@@ -102,7 +111,7 @@ impl Persona3d {
     }
     pub fn fat_angry() -> Self {
         Self {
-            kind: Kind::Angry,
+            kind: Kind::Angry, form: Form::Head,
             height: 0.92, width: 1.2, depth: 1.1, jowl: 0.95, taper: 0.1, lumpy: 1.0,
             base: (138.0, 150.0, 92.0), // sickly olive
             glow: (200.0, 60.0, 40.0),  // angry red wash
@@ -111,23 +120,66 @@ impl Persona3d {
     }
     pub fn slender_joy() -> Self {
         Self {
-            kind: Kind::Joy,
+            kind: Kind::Joy, form: Form::Head,
             height: 1.26, width: 0.8, depth: 0.9, jowl: 0.0, taper: 0.34, lumpy: 0.0,
             base: (255.0, 206.0, 156.0), // radiant warm
             glow: (255.0, 190.0, 120.0), // golden
             ambient: 0.42, diffuse: 0.72, spec: 0.7, spec_pow: 6.0,
         }
     }
+    /// A giant floating eyeball — glossy white sclera, a darting iris that
+    /// dilates with her voice, red veins, and no blink (extra unsettling).
+    pub fn cyclops() -> Self {
+        Self {
+            kind: Kind::Neutral, form: Form::Eye,
+            height: 0.96, width: 1.06, depth: 1.0, jowl: 0.0, taper: 0.0, lumpy: 0.0,
+            base: (232.0, 230.0, 236.0), // sclera
+            glow: (80.0, 255.0, 170.0),  // acid-green aura
+            ambient: 0.5, diffuse: 0.6, spec: 0.6, spec_pow: 20.0,
+        }
+    }
+    /// A spinning crystal shard with a glowing slit-eye that opens when she
+    /// speaks — an eldritch geometric being.
+    pub fn shard() -> Self {
+        Self {
+            kind: Kind::Neutral, form: Form::Shard,
+            height: 1.1, width: 1.0, depth: 1.0, jowl: 0.0, taper: 0.0, lumpy: 1.0,
+            base: (78.0, 58.0, 120.0),   // dark amethyst facets
+            glow: (255.0, 50.0, 230.0),  // magenta core
+            ambient: 0.18, diffuse: 0.95, spec: 0.6, spec_pow: 10.0,
+        }
+    }
 }
 
-/// Build a head mesh deformed per the persona.
-fn head_mesh(p: &Persona3d) -> Vec<[V3; 3]> {
-    const LAT: usize = 22;
-    const LON: usize = 28;
+/// Build the mesh for the persona's form (head / eyeball / crystal shard).
+fn mesh_for(p: &Persona3d) -> Vec<[V3; 3]> {
+    let (lat, lon) = match p.form {
+        Form::Shard => (11, 13), // chunky, faceted
+        _ => (22, 28),
+    };
     let shape = |theta: f32, phi: f32| -> V3 {
         let (st, ct) = theta.sin_cos();
         let (sp, cp) = phi.sin_cos();
         let mut q = V3::new(st * cp, ct, st * sp);
+        match p.form {
+            Form::Eye => {
+                // A clean sphere, lightly stretched.
+                q.x *= p.width;
+                q.y *= p.height;
+                q.z *= p.depth;
+                return q;
+            }
+            Form::Shard => {
+                // Jagged radial spikes → a crystal.
+                let n = (theta * 6.0).sin() * (phi * 4.0).sin();
+                let r = 1.0 + 0.55 * n.abs().powf(0.45);
+                q.x *= r * p.width;
+                q.y *= r * p.height;
+                q.z *= r * p.depth;
+                return q;
+            }
+            Form::Head => {}
+        }
         if p.lumpy > 0.0 {
             let l = (theta * 3.0).sin() * (phi * 2.0).sin()
                 + (theta * 5.0 + 1.0).sin() * (phi * 4.0 + 2.0).sin() * 0.6;
@@ -152,12 +204,12 @@ fn head_mesh(p: &Persona3d) -> Vec<[V3; 3]> {
         q
     };
     let mut tris = Vec::new();
-    for i in 0..LAT {
-        let t0 = std::f32::consts::PI * i as f32 / LAT as f32;
-        let t1 = std::f32::consts::PI * (i + 1) as f32 / LAT as f32;
-        for j in 0..LON {
-            let p0 = 2.0 * std::f32::consts::PI * j as f32 / LON as f32;
-            let p1 = 2.0 * std::f32::consts::PI * (j + 1) as f32 / LON as f32;
+    for i in 0..lat {
+        let t0 = std::f32::consts::PI * i as f32 / lat as f32;
+        let t1 = std::f32::consts::PI * (i + 1) as f32 / lat as f32;
+        for j in 0..lon {
+            let p0 = 2.0 * std::f32::consts::PI * j as f32 / lon as f32;
+            let p1 = 2.0 * std::f32::consts::PI * (j + 1) as f32 / lon as f32;
             let a = shape(t0, p0);
             let b = shape(t1, p0);
             let c = shape(t1, p1);
@@ -192,14 +244,14 @@ pub struct Face3dRenderer {
 
 impl Face3dRenderer {
     pub fn new(persona: Persona3d) -> Self {
-        let mesh = head_mesh(&persona);
+        let mesh = mesh_for(&persona);
         Self { persona, mesh }
     }
 
     pub fn frame_rgba(&self, t: f32, level: f32, peer: f32) -> Vec<u8> {
         let p = &self.persona;
         let level = level.clamp(0.0, 1.0);
-        let peer = peer.clamp(0.0, 1.0);
+        let _ = peer; // these forms react to her own voice, not the listener
         let speaking = level > 0.03;
 
         let w = VIDEO_W as usize;
@@ -227,35 +279,55 @@ impl Face3dRenderer {
             }
         }
 
-        // ── Pose per personality ─────────────────────────────────────────
-        let (yaw, pitch, roll, sdx, sdy) = match p.kind {
-            Kind::Neutral => (
-                0.5 * (t * 0.45).sin(),
-                0.12 * (t * 0.7).sin() + if speaking { 0.04 * (t * 9.0).sin() } else { 0.0 },
+        // ── Pose ─────────────────────────────────────────────────────────
+        let (yaw, pitch, roll, sdx, sdy, scale) = match p.form {
+            Form::Eye => (
+                0.16 * (t * 0.5).sin(),
+                0.1 * (t * 0.8).sin(),
                 0.0,
                 0.0,
                 0.0,
+                1.0,
             ),
-            Kind::Angry => {
-                // small jittery turns, hunched forward/down, rage screen-shake
-                let shake = 2.0 + 7.0 * level;
-                (
-                    0.22 * (t * 0.9).sin(),
-                    0.08 * (t * 1.1).sin() + 0.07,
-                    0.04 * (t * 1.3).sin(),
-                    jitter(t * 41.0) * shake,
-                    jitter(t * 47.0) * shake,
-                )
-            }
-            Kind::Joy => (
-                0.6 * (t * 0.4).sin(),
-                0.08 * (t * 0.6).sin(),
-                0.12 * (t * 0.5).sin(), // happy head-tilt
+            Form::Shard => (
+                t * 0.7, // continuous spin
+                0.3 + 0.4 * (t * 0.5).sin(),
+                t * 0.3,
                 0.0,
-                -7.0 * (t * 1.6).sin().abs(), // bobbing up
+                0.0,
+                1.0 + 0.07 * level + 0.03 * (t * 4.0).sin(), // pulse
             ),
+            Form::Head => match p.kind {
+                Kind::Neutral => (
+                    0.5 * (t * 0.45).sin(),
+                    0.12 * (t * 0.7).sin() + if speaking { 0.04 * (t * 9.0).sin() } else { 0.0 },
+                    0.0, 0.0, 0.0, 1.0,
+                ),
+                Kind::Angry => {
+                    let shake = 2.0 + 7.0 * level;
+                    (
+                        0.22 * (t * 0.9).sin(),
+                        0.08 * (t * 1.1).sin() + 0.07,
+                        0.04 * (t * 1.3).sin(),
+                        jitter(t * 41.0) * shake,
+                        jitter(t * 47.0) * shake,
+                        1.0,
+                    )
+                }
+                Kind::Joy => (
+                    0.6 * (t * 0.4).sin(),
+                    0.08 * (t * 0.6).sin(),
+                    0.12 * (t * 0.5).sin(),
+                    0.0,
+                    -7.0 * (t * 1.6).sin().abs(),
+                    1.0,
+                ),
+            },
         };
-        let xform = |v: V3| v.rotz(roll).rotx(pitch).roty(yaw);
+        let xform = |v: V3| {
+            let v = V3::new(v.x * scale, v.y * scale, v.z * scale);
+            v.rotz(roll).rotx(pitch).roty(yaw)
+        };
         let proj = |v: V3| {
             let (x, y, d) = project(v);
             (x + sdx, y + sdy, d)
@@ -303,6 +375,45 @@ impl Face3dRenderer {
                 1.0
             }
         };
+        match p.form {
+            Form::Eye => {
+                // Darting iris on the sclera sphere; pupil dilates with voice.
+                let gx = 0.34 * (t * 0.9).sin();
+                let gy = 0.24 * (t * 1.7).sin();
+                let gz = (1.0 - gx * gx - gy * gy).max(0.05).sqrt();
+                let wp = xform(V3::new(gx, gy, gz));
+                let (sx, sy, _) = proj(wp);
+                let sc = FOCAL / (CAM_Z - wp.z);
+                // Bloodshot veins radiating in toward the iris.
+                for k in 0..8 {
+                    let a = k as f32 * 0.82;
+                    let vl = V3::new(0.82 * a.cos(), 0.82 * a.sin(), 0.57);
+                    let vn = xform(vl);
+                    if vn.z <= 0.2 {
+                        continue;
+                    }
+                    let (vx, vy, _) = proj(vn);
+                    stroke_seg(&mut buf, vx, vy, sx + (vx - sx) * 0.5, sy + (vy - sy) * 0.5, 2.4, (192, 64, 58));
+                }
+                let ir = 0.34 * sc;
+                fill_ellipse(&mut buf, sx, sy, ir, ir, (74, 196, 138));
+                fill_ellipse(&mut buf, sx, sy, ir * 0.64, ir * 0.64, (30, 92, 66));
+                let pr = ir * (0.30 + 0.32 * level);
+                fill_ellipse(&mut buf, sx, sy, pr, pr, (8, 10, 12));
+                fill_ellipse(&mut buf, sx - ir * 0.3, sy - ir * 0.3, ir * 0.18, ir * 0.18, (255, 255, 255));
+            }
+            Form::Shard => {
+                // A glowing slit-eye at the centre, camera-facing, opening
+                // with her voice — the only stable point on the spinning crystal.
+                let cx = VIDEO_W as f32 / 2.0;
+                let cy = VIDEO_H as f32 / 2.0;
+                let g = p.glow;
+                let sx = 22.0 + 9.0 * level;
+                let sy = 11.0 + 74.0 * level;
+                fill_ellipse(&mut buf, cx, cy, sx, sy, (g.0 as u8, g.1 as u8, g.2 as u8));
+                fill_ellipse(&mut buf, cx, cy, sx * 0.52, sy * 0.72, (255, 255, 255));
+            }
+            Form::Head => {
         let (eye_rx, eye_ry, eye_y) = match p.kind {
             Kind::Angry => (0.072, 0.058, 0.13),
             Kind::Joy => (0.10, 0.115, 0.17),
@@ -380,6 +491,8 @@ impl Face3dRenderer {
                         }
                     }
                 }
+            }
+        }
             }
         }
 
@@ -537,16 +650,26 @@ pub(crate) fn render_loop_with(tile: VideoTile, persona: Persona3d) {
 mod tests {
     use super::*;
 
+    fn all_personas() -> [Persona3d; 5] {
+        [
+            Persona3d::neutral(),
+            Persona3d::fat_angry(),
+            Persona3d::slender_joy(),
+            Persona3d::cyclops(),
+            Persona3d::shard(),
+        ]
+    }
+
     #[test]
     fn meshes_are_nonempty() {
-        for p in [Persona3d::neutral(), Persona3d::fat_angry(), Persona3d::slender_joy()] {
-            assert!(head_mesh(&p).len() > 100);
+        for p in all_personas() {
+            assert!(mesh_for(&p).len() > 100);
         }
     }
 
     #[test]
     fn frames_render_for_each_persona() {
-        for p in [Persona3d::neutral(), Persona3d::fat_angry(), Persona3d::slender_joy()] {
+        for p in all_personas() {
             let r = Face3dRenderer::new(p);
             let f = r.frame_rgba(4.0, 0.7, 0.0);
             assert_eq!(f.len(), (VIDEO_W * VIDEO_H * 4) as usize);

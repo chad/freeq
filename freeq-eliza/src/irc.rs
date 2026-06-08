@@ -2102,10 +2102,12 @@ async fn start_transcription(
         "vector" => crate::video::Backend::Vector,
         "southpark" => crate::video::Backend::SouthPark,
         "southpark-goofy" => crate::video::Backend::SouthParkGoofy,
-        "southpark-stoner" => crate::video::Backend::SouthParkStoner,
+        "southpark-stoner" | "southpark-burnout" => crate::video::Backend::SouthParkStoner,
         "3d" | "face3d" => crate::video::Backend::Face3d,
         "3d-angry" => crate::video::Backend::Face3dAngry,
         "3d-joy" => crate::video::Backend::Face3dJoy,
+        "3d-eye" => crate::video::Backend::Face3dEye,
+        "3d-shard" => crate::video::Backend::Face3dShard,
         _ => crate::video::Backend::Svg,
     };
     let video = VideoTile::with_backend(backend);

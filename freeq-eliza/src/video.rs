@@ -253,6 +253,10 @@ pub enum Backend {
     Face3dAngry,
     /// 3D head — slender, beautiful, joyful personality.
     Face3dJoy,
+    /// 3D — a giant floating cyclops eyeball.
+    Face3dEye,
+    /// 3D — a spinning crystal shard with a glowing slit-eye.
+    Face3dShard,
 }
 
 impl Default for Backend {
@@ -541,6 +545,14 @@ impl VideoTile {
                 Backend::Face3dJoy => crate::video_face3d::render_loop_with(
                     tile,
                     crate::video_face3d::Persona3d::slender_joy(),
+                ),
+                Backend::Face3dEye => crate::video_face3d::render_loop_with(
+                    tile,
+                    crate::video_face3d::Persona3d::cyclops(),
+                ),
+                Backend::Face3dShard => crate::video_face3d::render_loop_with(
+                    tile,
+                    crate::video_face3d::Persona3d::shard(),
                 ),
             })
             .expect("spawn video renderer");

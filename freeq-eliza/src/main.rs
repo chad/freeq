@@ -164,8 +164,9 @@ struct Cli {
     /// no round face), `vector` (rigged hand-drawn character),
     /// `southpark`/`southpark-goofy`/`southpark-stoner` (whacky cartoon
     /// kids), or a real-time
-    /// CPU-rendered low-poly 3D head — `3d` (neutral), `3d-angry`
-    /// (fat/ugly/angry), `3d-joy` (slender/beautiful/joyful).
+    /// CPU-rendered 3D being — `3d` (neutral head), `3d-angry`
+    /// (fat/ugly), `3d-joy` (slender/beautiful), `3d-eye` (floating
+    /// eyeball), `3d-shard` (spinning crystal with a glowing slit-eye).
     #[arg(long, default_value = "svg")]
     render_backend: String,
 

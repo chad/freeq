@@ -15,6 +15,8 @@ fn main() {
     let persona = match args.next().as_deref() {
         Some("angry") => Persona3d::fat_angry(),
         Some("joy") => Persona3d::slender_joy(),
+        Some("eye") => Persona3d::cyclops(),
+        Some("shard") => Persona3d::shard(),
         _ => Persona3d::neutral(),
     };
     std::fs::create_dir_all(&out).expect("create out dir");
