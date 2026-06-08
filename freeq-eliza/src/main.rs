@@ -156,8 +156,9 @@ struct Cli {
     no_ambient: bool,
 
     /// Video tile renderer: `svg` (default — full freeq cyberpunk
-    /// presence with EQ strip, scene cards, ambient HUD, vision PiP) or
-    /// `particles` (ghostly particle face — face only, no overlays).
+    /// presence with EQ strip, scene cards, ambient HUD, vision PiP),
+    /// `particles` (ghostly particle face — face only, no overlays), or
+    /// `ascii` (text-mode "terminal being" — glyph face that lip-syncs).
     #[arg(long, default_value = "svg")]
     render_backend: String,
 

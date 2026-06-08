@@ -223,6 +223,10 @@ pub enum Backend {
         /// `character` name.
         ghostly_pack: Option<String>,
     },
+    /// Text-mode "terminal being" — a glyph-rendered face that lip-syncs
+    /// to her speech level. Like `Particles`, it's a single-layer face:
+    /// scene cards, whiteboards, and the ambient HUD are NO-OPS here.
+    Ascii,
 }
 
 impl Default for Backend {
@@ -489,6 +493,7 @@ impl VideoTile {
                 Backend::Particles { character, ghostly_pack } => {
                     crate::video_particles::render_loop(tile, &character, ghostly_pack.as_deref())
                 }
+                Backend::Ascii => crate::video_ascii::render_loop(tile),
             })
             .expect("spawn video renderer");
     }

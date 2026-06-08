@@ -21,6 +21,7 @@ pub mod stt;
 pub mod summary;
 pub mod tts;
 pub mod video;
+pub mod video_ascii;
 pub mod video_particles;
 pub mod vision;
 pub mod whiteboard;

@@ -2095,6 +2095,7 @@ async fn start_transcription(
             character: cfg.ghostly_character.clone(),
             ghostly_pack: cfg.ghostly_pack.clone(),
         },
+        "ascii" => crate::video::Backend::Ascii,
         _ => crate::video::Backend::Svg,
     };
     let video = VideoTile::with_backend(backend);
