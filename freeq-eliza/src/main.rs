@@ -321,7 +321,13 @@ async fn main() -> Result<()> {
         image_ai,
         proactive_enabled: !cli.no_proactive,
         ambient_enabled: !cli.no_ambient,
-        render_backend: cli.render_backend.clone(),
+        // A `--persona` pack's `render_backend` wins over the launch flag,
+        // so a forked being carries its own visual style end-to-end.
+        render_backend: persona
+            .as_ref()
+            .and_then(|p| p.render_backend.clone())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| cli.render_backend.clone()),
         // The ghostly character (face + voice DSP) the persona wears,
         // by name — falls back to `--ghostly-character` when no persona
         // is active.

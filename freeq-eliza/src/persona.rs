@@ -65,6 +65,14 @@ pub struct PersonaPack {
     /// Creator identity (DID/handle) — attribution that survives forks.
     #[serde(default)]
     pub author: Option<String>,
+    /// Which video renderer this persona wears (the `--render-backend`
+    /// value: `particles`, `svg`, `ascii`, `ascii-rain`, `ascii-glitch`,
+    /// `ascii-bot`, `vector`, `southpark*`, `3d*`, …). When set it
+    /// overrides the launch flag, so a forked being carries its own visual
+    /// style end-to-end. For `particles`, the face is chosen by
+    /// [`ghostly_character`](Self::ghostly_character).
+    #[serde(default)]
+    pub render_backend: Option<String>,
 }
 
 fn default_speed() -> f32 {
@@ -94,6 +102,7 @@ impl PersonaPack {
             hello_line: Some(p.hello_line.to_string()),
             forked_from: None,
             author: None,
+            render_backend: None,
         })
     }
 
