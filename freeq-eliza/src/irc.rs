@@ -2098,6 +2098,7 @@ async fn start_transcription(
         "ascii" => crate::video::Backend::Ascii,
         "ascii-rain" => crate::video::Backend::AsciiRain,
         "ascii-glitch" => crate::video::Backend::AsciiGlitch,
+        "ascii-bot" => crate::video::Backend::AsciiBot,
         "vector" => crate::video::Backend::Vector,
         "southpark" => crate::video::Backend::SouthPark,
         _ => crate::video::Backend::Svg,

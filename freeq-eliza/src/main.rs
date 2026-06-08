@@ -160,8 +160,9 @@ struct Cli {
     /// `particles` (ghostly particle face — face only, no overlays),
     /// `ascii` (text-mode "terminal being" — glyph face that lip-syncs),
     /// `ascii-rain` (Matrix-style digital-rain face), `ascii-glitch`
-    /// (cursed/corrupted terminal face), `vector` (rigged hand-drawn
-    /// character), or `southpark` (belligerent cartoon that screams).
+    /// (cursed/corrupted terminal face), `ascii-bot` (boxy robot head —
+    /// no round face), `vector` (rigged hand-drawn character), or
+    /// `southpark` (belligerent cartoon that screams).
     #[arg(long, default_value = "svg")]
     render_backend: String,
 

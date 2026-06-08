@@ -237,6 +237,9 @@ pub enum Backend {
     /// Glitch ASCII — a cursed, corrupted terminal face (chromatic split,
     /// row-tearing, corruption). Single-layer; overlays are NO-OPS.
     AsciiGlitch,
+    /// Boxy-robot ASCII — a rectangular head with antenna, LED eyes, and an
+    /// equalizer-bar mouth (no round face). Single-layer; overlays NO-OP.
+    AsciiBot,
     /// Belligerent South Park-style cartoon — an angry construction-paper
     /// kid that screams. Single-layer; overlays are NO-OPS.
     SouthPark,
@@ -509,6 +512,7 @@ impl VideoTile {
                 Backend::Ascii => crate::video_ascii::render_loop(tile),
                 Backend::AsciiRain => crate::video_ascii::render_loop_rain(tile),
                 Backend::AsciiGlitch => crate::video_ascii::render_loop_glitch(tile),
+                Backend::AsciiBot => crate::video_ascii::render_loop_bot(tile),
                 Backend::Vector => crate::video_vector::render_loop(tile),
                 Backend::SouthPark => crate::video_southpark::render_loop(tile),
             })

@@ -679,6 +679,167 @@ pub(crate) fn render_loop_glitch(tile: VideoTile) {
     tracing::info!("eliza ascii-glitch renderer stopped");
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Bot variant — a boxy robot head (no round face at all).
+// ─────────────────────────────────────────────────────────────────────
+
+/// Intensity field for a rectangular "robot" head: a box outline with an
+/// antenna, two rectangular LED eyes that blink, and an equalizer-bar
+/// mouth whose bars bounce with `level` (instead of a round aperture).
+/// `ny` in `[-1,1]`, origin centre.
+fn box_face_intensity(nx: f32, ny: f32, t: f32, level: f32, blink: f32) -> f32 {
+    let bw = 1.02; // half-width  (wide, boxy)
+    let bh = 0.82; // half-height (leaves room for an antenna above)
+    let q = (nx.abs() / bw).max(ny.abs() / bh);
+
+    // Box outline (Chebyshev shell) + faint interior fill.
+    let ring = gauss(q - 1.0, 0.035) * 0.95;
+    let glow = (0.97 - q).clamp(0.0, 1.0).powf(2.0) * 0.07;
+
+    // Antenna: a thin stalk above the top edge with a blob at the tip.
+    let stalk = if nx.abs() < 0.03 && ny < -bh && ny > -bh - 0.26 { 0.8 } else { 0.0 };
+    let tip = gauss2(nx, ny - (-bh - 0.30), 0.055) * 0.95;
+
+    // Rectangular LED eyes; blink squashes their height.
+    let eye_y = -0.24;
+    let eye_h = 0.07 * (0.18 + 0.82 * blink);
+    let eye = if (ny - eye_y).abs() < eye_h
+        && ((nx - 0.40).abs() < 0.17 || (nx + 0.40).abs() < 0.17)
+    {
+        1.0
+    } else {
+        0.0
+    };
+
+    // Equalizer mouth: ~8 vertical bars across the lower face; each bar's
+    // half-height jumps with speech level (a flat slit when quiet).
+    let my = 0.42;
+    let mouth = if nx.abs() < 0.56 {
+        let col = ((nx + 0.56) / 0.14).floor();
+        let bar = 0.025 + level * (0.10 + 0.16 * ((col * 1.7 + t * 9.0).sin() * 0.5 + 0.5));
+        if (ny - my).abs() < bar { 1.0 } else { 0.0 }
+    } else {
+        0.0
+    };
+
+    (ring + glow + stalk + tip + eye + mouth).clamp(0.0, 1.2)
+}
+
+/// Boxy amber-CRT robot face.
+pub struct AsciiBotRenderer {
+    atlas: GlyphAtlas,
+    cols: u32,
+    rows: u32,
+    ox: u32,
+    oy: u32,
+}
+
+impl AsciiBotRenderer {
+    pub fn new() -> Option<Self> {
+        let atlas = GlyphAtlas::build()?;
+        let cols = VIDEO_W / CELL_W;
+        let rows = VIDEO_H / CELL_H;
+        Some(Self {
+            atlas,
+            cols,
+            rows,
+            ox: (VIDEO_W - cols * CELL_W) / 2,
+            oy: (VIDEO_H - rows * CELL_H) / 2,
+        })
+    }
+
+    pub fn frame_rgba(&self, t: f32, level: f32, peer: f32) -> Vec<u8> {
+        let level = level.clamp(0.0, 1.0);
+        let peer = peer.clamp(0.0, 1.0);
+        let listening = level <= 0.03 && peer > 0.03;
+        let blnk = {
+            let phase = (t % 4.2) / 4.2;
+            if phase > 0.97 {
+                let p = (phase - 0.97) / 0.03;
+                (1.0 - (p * std::f32::consts::PI).sin()).clamp(0.05, 1.0)
+            } else {
+                1.0
+            }
+        };
+
+        let mut buf = vec![0u8; (VIDEO_W * VIDEO_H * 4) as usize];
+        for px in buf.chunks_exact_mut(4) {
+            px[3] = 255;
+        }
+
+        let half_h = VIDEO_H as f32 / 2.0;
+        let cx = VIDEO_W as f32 / 2.0;
+        for row in 0..self.rows {
+            for col in 0..self.cols {
+                let px = self.ox as f32 + (col as f32 + 0.5) * CELL_W as f32;
+                let py = self.oy as f32 + (row as f32 + 0.5) * CELL_H as f32;
+                let nx = (px - cx) / half_h;
+                let ny = (py - half_h) / half_h;
+                let mut i = box_face_intensity(nx, ny, t, level, blnk);
+                i *= 0.88 + 0.12 * (py * 0.18 + t * 5.0).sin();
+                i = i.clamp(0.0, 1.0);
+                if i <= 0.05 {
+                    continue;
+                }
+                let gi = ((i * (RAMP.len() - 1) as f32).round() as usize).min(RAMP.len() - 1);
+                if RAMP[gi] == b' ' {
+                    continue;
+                }
+                // Amber CRT; greens-shift while listening; hot cells whiten.
+                let (br, bg, bb) = if listening {
+                    (0x33u16, 0xff, 0x99)
+                } else {
+                    (0xffu16, 0xb0, 0x18)
+                };
+                let hi = i.powi(3) * 0.6;
+                let r = (br as f32 + (255.0 - br as f32) * hi) as u8;
+                let g = (bg as f32 + (255.0 - bg as f32) * hi) as u8;
+                let b = (bb as f32 + (255.0 - bb as f32) * hi) as u8;
+                blit_mask(
+                    &mut buf,
+                    &self.atlas.masks[gi],
+                    self.ox + col * CELL_W,
+                    self.oy + row * CELL_H,
+                    (r, g, b),
+                    i,
+                );
+            }
+        }
+        buf
+    }
+}
+
+/// Boxy-robot render loop.
+pub(crate) fn render_loop_bot(tile: VideoTile) {
+    let renderer = match AsciiBotRenderer::new() {
+        Some(r) => r,
+        None => {
+            tracing::error!("ascii-bot video: could not build glyph atlas");
+            return;
+        }
+    };
+    let frame_dt = Duration::from_millis(1000 / FPS);
+    let started = Instant::now();
+    tracing::info!("eliza ascii-bot renderer started ({VIDEO_W}x{VIDEO_H} @ {FPS}fps)");
+
+    while tile.running.load(Ordering::Relaxed) {
+        let tick = Instant::now();
+        let t = started.elapsed().as_secs_f32();
+        let level = f32::from_bits(tile.level.load(Ordering::Relaxed));
+        let peer = f32::from_bits(tile.peer_level.load(Ordering::Relaxed));
+        let rgba = renderer.frame_rgba(t, level, peer);
+        let frame =
+            VideoFrame::new_rgba(bytes::Bytes::from(rgba), VIDEO_W, VIDEO_H, Duration::ZERO);
+        if let Ok(mut g) = tile.latest.lock() {
+            *g = Some(frame);
+        }
+        if let Some(rest) = frame_dt.checked_sub(tick.elapsed()) {
+            std::thread::sleep(rest);
+        }
+    }
+    tracing::info!("eliza ascii-bot renderer stopped");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -710,6 +871,16 @@ mod tests {
         let lit = |buf: &[u8]| buf.chunks_exact(4).filter(|p| p[0] as u16 + p[1] as u16 + p[2] as u16 > 24).count();
         let loud = r.frame_rgba(0.0, 0.8, 0.0);
         assert!(lit(&loud) > lit(&quiet), "speaking frame should be brighter");
+    }
+
+    #[test]
+    fn bot_renders_a_frame() {
+        let r = AsciiBotRenderer::new().expect("bot renderer");
+        let f = r.frame_rgba(1.0, 0.6, 0.0);
+        assert_eq!(f.len(), (VIDEO_W * VIDEO_H * 4) as usize);
+        assert!(f.chunks_exact(4).all(|p| p[3] == 255));
+        let lit = f.chunks_exact(4).filter(|p| p[0] as u16 + p[1] as u16 + p[2] as u16 > 24).count();
+        assert!(lit > 500, "bot should light up cells");
     }
 
     #[test]
