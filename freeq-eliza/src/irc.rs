@@ -2101,6 +2101,7 @@ async fn start_transcription(
         "ascii-bot" => crate::video::Backend::AsciiBot,
         "vector" => crate::video::Backend::Vector,
         "southpark" => crate::video::Backend::SouthPark,
+        "3d" | "face3d" => crate::video::Backend::Face3d,
         _ => crate::video::Backend::Svg,
     };
     let video = VideoTile::with_backend(backend);

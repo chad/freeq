@@ -243,6 +243,8 @@ pub enum Backend {
     /// Belligerent South Park-style cartoon — an angry construction-paper
     /// kid that screams. Single-layer; overlays are NO-OPS.
     SouthPark,
+    /// Real-time CPU-rendered low-poly 3D head. Single-layer; overlays NO-OP.
+    Face3d,
 }
 
 impl Default for Backend {
@@ -515,6 +517,7 @@ impl VideoTile {
                 Backend::AsciiBot => crate::video_ascii::render_loop_bot(tile),
                 Backend::Vector => crate::video_vector::render_loop(tile),
                 Backend::SouthPark => crate::video_southpark::render_loop(tile),
+                Backend::Face3d => crate::video_face3d::render_loop(tile),
             })
             .expect("spawn video renderer");
     }
