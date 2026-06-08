@@ -243,6 +243,10 @@ pub enum Backend {
     /// Belligerent South Park-style cartoon — an angry construction-paper
     /// kid that screams. Single-layer; overlays are NO-OPS.
     SouthPark,
+    /// Goofy buck-toothed South Park derp (propeller beanie, googly eyes).
+    SouthParkGoofy,
+    /// Spaced-out South Park stoner (half-lidded eyes, lazy grin).
+    SouthParkStoner,
     /// Real-time CPU-rendered low-poly 3D head. Single-layer; overlays NO-OP.
     Face3d,
     /// 3D head — fat, ugly, angry personality.
@@ -521,6 +525,14 @@ impl VideoTile {
                 Backend::AsciiBot => crate::video_ascii::render_loop_bot(tile),
                 Backend::Vector => crate::video_vector::render_loop(tile),
                 Backend::SouthPark => crate::video_southpark::render_loop(tile),
+                Backend::SouthParkGoofy => crate::video_southpark::render_loop_with(
+                    tile,
+                    crate::video_southpark::SpStyle::Goofy,
+                ),
+                Backend::SouthParkStoner => crate::video_southpark::render_loop_with(
+                    tile,
+                    crate::video_southpark::SpStyle::Stoner,
+                ),
                 Backend::Face3d => crate::video_face3d::render_loop(tile),
                 Backend::Face3dAngry => crate::video_face3d::render_loop_with(
                     tile,

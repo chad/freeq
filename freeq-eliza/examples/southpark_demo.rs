@@ -9,14 +9,20 @@
 //! suspicious glare → grumble.
 
 use freeq_eliza::video::{VIDEO_H, VIDEO_W};
-use freeq_eliza::video_southpark::SouthParkRenderer;
+use freeq_eliza::video_southpark::{SouthParkRenderer, SpStyle};
 
 fn main() {
-    let out = std::env::args().nth(1).unwrap_or_else(|| "/tmp/sp_frames".into());
+    let mut args = std::env::args().skip(1);
+    let out = args.next().unwrap_or_else(|| "/tmp/sp_frames".into());
+    let style = match args.next().as_deref() {
+        Some("goofy") => SpStyle::Goofy,
+        Some("stoner") => SpStyle::Stoner,
+        _ => SpStyle::Belligerent,
+    };
     std::fs::create_dir_all(&out).expect("create out dir");
     let (fps, secs) = (15.0f32, 14.0f32);
     let frames = (fps * secs) as usize;
-    let mut r = SouthParkRenderer::new().expect("renderer");
+    let mut r = SouthParkRenderer::new(style).expect("renderer");
     println!("rendering {frames} frames → {out}");
     for f in 0..frames {
         let t = f as f32 / fps;

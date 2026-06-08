@@ -162,7 +162,8 @@ struct Cli {
     /// `ascii-rain` (Matrix-style digital-rain face), `ascii-glitch`
     /// (cursed/corrupted terminal face), `ascii-bot` (boxy robot head —
     /// no round face), `vector` (rigged hand-drawn character),
-    /// `southpark` (belligerent cartoon that screams), or a real-time
+    /// `southpark`/`southpark-goofy`/`southpark-stoner` (whacky cartoon
+    /// kids), or a real-time
     /// CPU-rendered low-poly 3D head — `3d` (neutral), `3d-angry`
     /// (fat/ugly/angry), `3d-joy` (slender/beautiful/joyful).
     #[arg(long, default_value = "svg")]

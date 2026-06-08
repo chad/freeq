@@ -248,21 +248,167 @@ pub fn face_svg_with(t: f32, level: f32, peer: f32, thinking: bool) -> String {
     )
 }
 
+/// Which whacky South Park-style kid to render.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SpStyle {
+    /// Angry loudmouth (the original) — furrowed, screaming.
+    Belligerent,
+    /// Buck-toothed derp — propeller beanie, googly cross-eyes, dopey grin,
+    /// bouncing.
+    Goofy,
+    /// Spaced-out stoner — knit cap, droopy half-lidded red eyes, lazy
+    /// lopsided grin, slow sway.
+    Stoner,
+}
+
+fn face_svg_style(style: SpStyle, t: f32, level: f32, peer: f32, thinking: bool) -> String {
+    match style {
+        SpStyle::Belligerent => face_svg_with(t, level, peer, thinking),
+        SpStyle::Goofy => face_svg_goofy(t, level, peer),
+        SpStyle::Stoner => face_svg_stoner(t, level, peer),
+    }
+}
+
+/// Buck-toothed derp with a spinning propeller beanie and googly cross-eyes.
+fn face_svg_goofy(t: f32, level: f32, _peer: f32) -> String {
+    let level = level.clamp(0.0, 1.0);
+    let cx = 320.0;
+    let cy = 206.0;
+    let bounce = -9.0 * (t * 3.0).sin().abs(); // perky bounce
+    let prop = t * 720.0; // propeller spin (deg)
+    let hub_y = cy - 150.0;
+    let eye_y = cy - 16.0;
+    let lx = cx - 36.0;
+    let rx = cx + 36.0;
+    let wob = 4.0 * (t * 7.0).sin();
+    let mouth_y = cy + 60.0;
+    let mh = 18.0 + 26.0 * level;
+
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice">
+<defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0%" stop-color="#8fd4ec"/><stop offset="62%" stop-color="#a8def0"/>
+<stop offset="62%" stop-color="#a6cf63"/><stop offset="100%" stop-color="#86b94c"/></linearGradient></defs>
+<rect width="640" height="360" fill="url(#sky)"/>
+<g transform="translate(0 {bounce:.2})">
+<path d="M 170 360 L 170 322 Q 320 296 470 322 L 470 360 Z" fill="#3fae54" stroke="#2a1410" stroke-width="4"/>
+<ellipse cx="{cx:.1}" cy="{cy:.1}" rx="128" ry="120" fill="#f1c79c" stroke="#2a1410" stroke-width="4"/>
+<!-- propeller cap -->
+<path d="M {capl:.1} {capb:.1} Q {cx:.1} {capt:.1} {capr:.1} {capb:.1} Z" fill="#e23b2e" stroke="#2a1410" stroke-width="4"/>
+<rect x="{cx_:.1}" y="{capb2:.1}" width="14" height="44" fill="#3a86ff"/>
+<g transform="rotate({prop:.1} {cx:.1} {hub_y:.1})">
+<rect x="{blx:.1}" y="{bly:.1}" width="118" height="14" rx="7" fill="#f2c14e" stroke="#2a1410" stroke-width="3"/>
+<rect x="{blx2:.1}" y="{bly2:.1}" width="14" height="86" rx="7" fill="#e23b2e" stroke="#2a1410" stroke-width="3"/>
+</g>
+<circle cx="{cx:.1}" cy="{hub_y:.1}" r="9" fill="#2a1410"/>
+<!-- raised happy brows -->
+<path d="M {lbl:.1} {by:.1} Q {lx:.1} {bya:.1} {lbr:.1} {by:.1}" fill="none" stroke="#5a3d28" stroke-width="7" stroke-linecap="round"/>
+<path d="M {rbl:.1} {by:.1} Q {rx:.1} {bya:.1} {rbr:.1} {by:.1}" fill="none" stroke="#5a3d28" stroke-width="7" stroke-linecap="round"/>
+<!-- googly cross-eyes -->
+<ellipse cx="{lx:.1}" cy="{eye_y:.1}" rx="42" ry="46" fill="#fbfbf5" stroke="#2a1410" stroke-width="3"/>
+<ellipse cx="{rx:.1}" cy="{eye_y:.1}" rx="42" ry="46" fill="#fbfbf5" stroke="#2a1410" stroke-width="3"/>
+<circle cx="{plx:.1}" cy="{ply:.1}" r="13" fill="#101010"/>
+<circle cx="{prx:.1}" cy="{pry:.1}" r="13" fill="#101010"/>
+<!-- dopey grin + buck teeth -->
+<ellipse cx="{cx:.1}" cy="{mouth_y:.1}" rx="60" ry="{mh:.1}" fill="#3a1c1c" stroke="#2a1410" stroke-width="3"/>
+<rect x="{t1x:.1}" y="{ty:.1}" width="26" height="32" rx="4" fill="#fbfbf5" stroke="#2a1410" stroke-width="2"/>
+<rect x="{t2x:.1}" y="{ty:.1}" width="26" height="32" rx="4" fill="#fbfbf5" stroke="#2a1410" stroke-width="2"/>
+</g>
+</svg>"##,
+        w = VIDEO_W, h = VIDEO_H, bounce = bounce, cx = cx, cy = cy,
+        capl = cx - 96.0, capr = cx + 96.0, capb = cy - 104.0, capt = cy - 210.0,
+        cx_ = cx - 7.0, capb2 = cy - 146.0,
+        prop = prop, hub_y = hub_y,
+        blx = cx - 59.0, bly = hub_y - 7.0, blx2 = cx - 7.0, bly2 = hub_y - 43.0,
+        lbl = lx - 30.0, lbr = lx + 30.0, rbl = rx - 30.0, rbr = rx + 30.0,
+        by = eye_y - 58.0, bya = eye_y - 74.0,
+        lx = lx, rx = rx, eye_y = eye_y,
+        plx = lx + 16.0 + wob, ply = eye_y - 10.0, prx = rx - 20.0 + wob, pry = eye_y + 12.0,
+        mouth_y = mouth_y, mh = mh,
+        t1x = cx - 27.0, t2x = cx + 1.0, ty = mouth_y - 18.0,
+    )
+}
+
+/// Spaced-out stoner — droopy half-lidded red eyes, lazy lopsided grin, a
+/// slow mellow sway, in a knit cap.
+fn face_svg_stoner(t: f32, level: f32, _peer: f32) -> String {
+    let level = level.clamp(0.0, 1.0);
+    let cx = 320.0;
+    let cy = 204.0;
+    let sway = 4.5 * (t * 0.8).sin(); // mellow wobble (deg)
+    let drift = 4.0 * (t * 0.5).sin();
+    let eye_y = cy - 12.0;
+    let lx = cx - 32.0;
+    let rx = cx + 32.0;
+    let mouth_y = cy + 58.0;
+    let open = 3.0 + 16.0 * level;
+
+    // Half-lidded eye: white oval, a skin lid covering the top, a red
+    // bloodshot rim beneath, and a low lazy pupil.
+    let eye = |ex: f32| {
+        format!(
+            r##"<ellipse cx="{ex:.1}" cy="{ey:.1}" rx="35" ry="39" fill="#fbf6ee" stroke="#2a1410" stroke-width="3"/>
+<circle cx="{px:.1}" cy="{py:.1}" r="9" fill="#171008"/>
+<rect x="{lidx:.1}" y="{lidy:.1}" width="72" height="34" fill="#f1c79c"/>
+<line x1="{lidx:.1}" y1="{lidb:.1}" x2="{lidr:.1}" y2="{lidb:.1}" stroke="#2a1410" stroke-width="4"/>
+<path d="M {rimx:.1} {rimy:.1} Q {ex:.1} {rimq:.1} {rimr:.1} {rimy:.1}" fill="none" stroke="#d8513f" stroke-width="4" stroke-linecap="round"/>"##,
+            ex = ex, ey = eye_y,
+            px = ex - 3.0, py = eye_y + 16.0,
+            lidx = ex - 36.0, lidy = eye_y - 40.0, lidb = eye_y + 1.0, lidr = ex + 36.0,
+            rimx = ex - 26.0, rimy = eye_y + 30.0, rimq = eye_y + 40.0, rimr = ex + 26.0,
+        )
+    };
+
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid slice">
+<defs><linearGradient id="dusk" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0%" stop-color="#5b4b86"/><stop offset="55%" stop-color="#8a6a8e"/>
+<stop offset="100%" stop-color="#caa15a"/></linearGradient></defs>
+<rect width="640" height="360" fill="url(#dusk)"/>
+<g transform="rotate({sway:.2} {cx:.1} {cy:.1}) translate(0 {drift:.2})">
+<path d="M 168 360 L 168 322 Q 320 298 472 322 L 472 360 Z" fill="#6b5b95" stroke="#2a1410" stroke-width="4"/>
+<ellipse cx="{cx:.1}" cy="{cy:.1}" rx="128" ry="120" fill="#eec6a0" stroke="#2a1410" stroke-width="4"/>
+<!-- knit cap: droopy dome + folded brim + a pom flopped to one side -->
+<path d="M {capl:.1} {capb:.1} Q {cx:.1} {capt:.1} {capr:.1} {capb:.1} Z" fill="#5a7d3c" stroke="#2a1410" stroke-width="4"/>
+<rect x="{brimx:.1}" y="{brimy:.1}" width="268" height="28" rx="14" fill="#3f5a28" stroke="#2a1410" stroke-width="4"/>
+<circle cx="{pomx:.1}" cy="{pomy:.1}" r="16" fill="#9ab36a" stroke="#2a1410" stroke-width="3"/>
+<!-- chill brows: flat, slightly raised outer -->
+<line x1="{lbl:.1}" y1="{lby:.1}" x2="{lbr:.1}" y2="{lby2:.1}" stroke="#4a3422" stroke-width="6" stroke-linecap="round"/>
+<line x1="{rbl:.1}" y1="{rby2:.1}" x2="{rbr:.1}" y2="{lby:.1}" stroke="#4a3422" stroke-width="6" stroke-linecap="round"/>
+{eye_l}{eye_r}
+<!-- lazy lopsided grin -->
+<path d="M {ml:.1} {mly:.1} Q {cx:.1} {mq:.1} {mr:.1} {mry:.1}" fill="none" stroke="#3a1c18" stroke-width="8" stroke-linecap="round"/>
+<ellipse cx="{cx:.1}" cy="{mouth_y:.1}" rx="26" ry="{open:.1}" fill="#2a1011"/>
+</g>
+</svg>"##,
+        w = VIDEO_W, h = VIDEO_H, sway = sway, drift = drift, cx = cx, cy = cy,
+        capl = cx - 130.0, capr = cx + 130.0, capb = cy - 96.0, capt = cy - 220.0,
+        brimx = cx - 134.0, brimy = cy - 108.0,
+        pomx = cx + 96.0, pomy = cy - 150.0,
+        lbl = lx - 30.0, lbr = lx + 28.0, lby = eye_y - 50.0, lby2 = eye_y - 44.0,
+        rbl = rx - 28.0, rbr = rx + 30.0, rby2 = eye_y - 44.0,
+        eye_l = eye(lx), eye_r = eye(rx),
+        ml = cx - 46.0, mly = mouth_y + 2.0, mq = mouth_y + 16.0, mr = cx + 46.0, mry = mouth_y - 10.0,
+        mouth_y = mouth_y, open = open,
+    )
+}
+
 pub struct SouthParkRenderer {
+    style: SpStyle,
     opt: resvg::usvg::Options<'static>,
     pixmap: resvg::tiny_skia::Pixmap,
 }
 
 impl SouthParkRenderer {
-    pub fn new() -> Option<Self> {
+    pub fn new(style: SpStyle) -> Option<Self> {
         let mut opt = resvg::usvg::Options::default();
         opt.fontdb_mut().load_system_fonts();
         let pixmap = resvg::tiny_skia::Pixmap::new(VIDEO_W, VIDEO_H)?;
-        Some(Self { opt, pixmap })
+        Some(Self { style, opt, pixmap })
     }
 
     pub fn frame_rgba(&mut self, t: f32, level: f32, peer: f32) -> Vec<u8> {
-        let svg = face_svg(t, level, peer);
+        let svg = face_svg_style(self.style, t, level, peer, false);
         self.pixmap.fill(resvg::tiny_skia::Color::BLACK);
         if let Ok(tree) = resvg::usvg::Tree::from_str(&svg, &self.opt) {
             resvg::render(
@@ -276,7 +422,11 @@ impl SouthParkRenderer {
 }
 
 pub(crate) fn render_loop(tile: VideoTile) {
-    let mut renderer = match SouthParkRenderer::new() {
+    render_loop_with(tile, SpStyle::Belligerent);
+}
+
+pub(crate) fn render_loop_with(tile: VideoTile, style: SpStyle) {
+    let mut renderer = match SouthParkRenderer::new(style) {
         Some(r) => r,
         None => {
             tracing::error!("southpark video: could not allocate pixmap");
@@ -294,7 +444,7 @@ pub(crate) fn render_loop(tile: VideoTile) {
         let peer = f32::from_bits(tile.peer_level.load(Ordering::Relaxed));
         let thinking = tile.thinking.load(Ordering::Relaxed);
 
-        let svg = face_svg_with(t, level, peer, thinking);
+        let svg = face_svg_style(style, t, level, peer, thinking);
         renderer.pixmap.fill(resvg::tiny_skia::Color::BLACK);
         if let Ok(tree) = resvg::usvg::Tree::from_str(&svg, &renderer.opt) {
             resvg::render(
@@ -327,19 +477,22 @@ mod tests {
     #[test]
     fn svg_parses_in_every_state() {
         let opt = resvg::usvg::Options::default();
-        for &(l, p) in &[(0.0, 0.0), (0.9, 0.0), (0.0, 0.5)] {
-            for &th in &[false, true] {
-                let svg = face_svg_with(0.3, l, p, th);
+        let styles = [SpStyle::Belligerent, SpStyle::Goofy, SpStyle::Stoner];
+        for &style in &styles {
+            for &(l, p) in &[(0.0, 0.0), (0.9, 0.0), (0.0, 0.5)] {
+                let svg = face_svg_style(style, 0.3, l, p, false);
                 resvg::usvg::Tree::from_str(&svg, &opt)
-                    .unwrap_or_else(|e| panic!("svg parse failed (l={l} p={p} th={th}): {e}"));
+                    .unwrap_or_else(|e| panic!("svg parse failed (l={l} p={p}): {e}"));
             }
         }
     }
 
     #[test]
-    fn frame_is_right_size() {
-        let mut r = SouthParkRenderer::new().expect("renderer");
-        let f = r.frame_rgba(0.3, 0.9, 0.0);
-        assert_eq!(f.len(), (VIDEO_W * VIDEO_H * 4) as usize);
+    fn frame_is_right_size_for_each_style() {
+        for style in [SpStyle::Belligerent, SpStyle::Goofy, SpStyle::Stoner] {
+            let mut r = SouthParkRenderer::new(style).expect("renderer");
+            let f = r.frame_rgba(0.3, 0.9, 0.0);
+            assert_eq!(f.len(), (VIDEO_W * VIDEO_H * 4) as usize);
+        }
     }
 }

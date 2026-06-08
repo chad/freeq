@@ -2101,6 +2101,8 @@ async fn start_transcription(
         "ascii-bot" => crate::video::Backend::AsciiBot,
         "vector" => crate::video::Backend::Vector,
         "southpark" => crate::video::Backend::SouthPark,
+        "southpark-goofy" => crate::video::Backend::SouthParkGoofy,
+        "southpark-stoner" => crate::video::Backend::SouthParkStoner,
         "3d" | "face3d" => crate::video::Backend::Face3d,
         "3d-angry" => crate::video::Backend::Face3dAngry,
         "3d-joy" => crate::video::Backend::Face3dJoy,
