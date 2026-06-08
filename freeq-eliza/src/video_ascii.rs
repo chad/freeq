@@ -47,13 +47,19 @@ pub struct GlyphAtlas {
 }
 
 impl GlyphAtlas {
-    /// Rasterize every ramp glyph (white, centred) into its own cell-sized
-    /// alpha mask using resvg. `None` only if a pixmap can't be allocated.
+    /// Rasterize the density ramp. See [`build_set`](Self::build_set).
     pub fn build() -> Option<Self> {
+        Self::build_set(RAMP)
+    }
+
+    /// Rasterize every glyph in `chars` (white, centred) into its own
+    /// cell-sized alpha mask using resvg. `None` only if a pixmap can't be
+    /// allocated. The returned masks are indexed parallel to `chars`.
+    pub fn build_set(chars: &[u8]) -> Option<Self> {
         let mut opt = resvg::usvg::Options::default();
         opt.fontdb_mut().load_system_fonts();
-        let mut masks = Vec::with_capacity(RAMP.len());
-        for &ch in RAMP {
+        let mut masks = Vec::with_capacity(chars.len());
+        for &ch in chars {
             let mut pixmap = resvg::tiny_skia::Pixmap::new(CELL_W, CELL_H)?;
             if ch != b' ' {
                 let svg = format!(
@@ -208,37 +214,43 @@ impl AsciiRenderer {
         col: u32,
         row: u32,
         glyph: usize,
-        (r, g, b): (u8, u8, u8),
+        color: (u8, u8, u8),
         bright: f32,
     ) {
-        let mask = &self.atlas.masks[glyph];
-        let x0 = self.ox + col * CELL_W;
-        let y0 = self.oy + row * CELL_H;
-        for cy in 0..CELL_H {
-            let fy = y0 + cy;
-            if fy >= VIDEO_H {
+        blit_mask(
+            buf,
+            &self.atlas.masks[glyph],
+            self.ox + col * CELL_W,
+            self.oy + row * CELL_H,
+            color,
+            bright,
+        );
+    }
+}
+
+/// Alpha-blit a glyph coverage mask at pixel origin `(x0,y0)`, tinted
+/// `(r,g,b)` and scaled by `bright`, over an opaque background. Max-blends
+/// so overlapping cells don't darken each other.
+fn blit_mask(buf: &mut [u8], mask: &[u8], x0: u32, y0: u32, (r, g, b): (u8, u8, u8), bright: f32) {
+    for cy in 0..CELL_H {
+        let fy = y0 + cy;
+        if fy >= VIDEO_H {
+            break;
+        }
+        for cx in 0..CELL_W {
+            let fx = x0 + cx;
+            if fx >= VIDEO_W {
                 break;
             }
-            for cx in 0..CELL_W {
-                let fx = x0 + cx;
-                if fx >= VIDEO_W {
-                    break;
-                }
-                let cov = mask[(cy * CELL_W + cx) as usize] as f32 / 255.0;
-                if cov <= 0.0 {
-                    continue;
-                }
-                let a = (cov * bright).clamp(0.0, 1.0);
-                let idx = ((fy * VIDEO_W + fx) * 4) as usize;
-                // Over opaque black → just scale the tint by coverage, max-blend
-                // so overlapping glyph cells don't darken each other.
-                let nr = (r as f32 * a) as u8;
-                let ng = (g as f32 * a) as u8;
-                let nb = (b as f32 * a) as u8;
-                buf[idx] = buf[idx].max(nr);
-                buf[idx + 1] = buf[idx + 1].max(ng);
-                buf[idx + 2] = buf[idx + 2].max(nb);
+            let cov = mask[(cy * CELL_W + cx) as usize] as f32 / 255.0;
+            if cov <= 0.0 {
+                continue;
             }
+            let a = (cov * bright).clamp(0.0, 1.0);
+            let idx = ((fy * VIDEO_W + fx) * 4) as usize;
+            buf[idx] = buf[idx].max((r as f32 * a) as u8);
+            buf[idx + 1] = buf[idx + 1].max((g as f32 * a) as u8);
+            buf[idx + 2] = buf[idx + 2].max((b as f32 * a) as u8);
         }
     }
 }
@@ -334,6 +346,178 @@ pub(crate) fn render_loop(tile: VideoTile) {
     tracing::info!("eliza ascii renderer stopped");
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Digital-rain variant — a weirder ASCII style.
+// ─────────────────────────────────────────────────────────────────────
+
+/// Glyph set for the rain — digits, hex letters, and symbols (no XML
+/// specials). Cells flicker through these like Matrix code.
+const RAIN_CHARS: &[u8] = b"0123456789ABCDEFXYZ:=+*#$%abcdefkmnz";
+
+/// "Digital rain" face: columns of falling glyphs (bright head, fading
+/// tail) over black; the face emerges where the rain is brightened by the
+/// face intensity field, and the eyes/mouth glow through. A weirder,
+/// busier counterpart to the clean glyph face — same lip-sync + mood.
+pub struct AsciiRainRenderer {
+    atlas: GlyphAtlas,
+    cols: u32,
+    rows: u32,
+    ox: u32,
+    oy: u32,
+}
+
+impl AsciiRainRenderer {
+    pub fn new() -> Option<Self> {
+        let atlas = GlyphAtlas::build_set(RAIN_CHARS)?;
+        let cols = VIDEO_W / CELL_W;
+        let rows = VIDEO_H / CELL_H;
+        Some(Self {
+            atlas,
+            cols,
+            rows,
+            ox: (VIDEO_W - cols * CELL_W) / 2,
+            oy: (VIDEO_H - rows * CELL_H) / 2,
+        })
+    }
+
+    pub fn frame_rgba(&self, t: f32, level: f32, peer: f32) -> Vec<u8> {
+        let level = level.clamp(0.0, 1.0);
+        let peer = peer.clamp(0.0, 1.0);
+        let listening = level <= 0.03 && peer > 0.03;
+        let blnk = {
+            let phase = (t % 3.6) / 3.6;
+            if phase > 0.96 {
+                let p = (phase - 0.96) / 0.04;
+                (1.0 - (p * std::f32::consts::PI).sin()).clamp(0.05, 1.0)
+            } else {
+                1.0
+            }
+        };
+
+        let mut buf = vec![0u8; (VIDEO_W * VIDEO_H * 4) as usize];
+        for px in buf.chunks_exact_mut(4) {
+            px[3] = 255;
+        }
+
+        let half_h = VIDEO_H as f32 / 2.0;
+        let cx = VIDEO_W as f32 / 2.0;
+        let rows_f = self.rows as f32;
+
+        for col in 0..self.cols {
+            // Per-column drop: speed + phase from a hash so columns differ.
+            let h = hash32(col.wrapping_mul(2_654_435_761));
+            let speed = 5.0 + (h % 1000) as f32 / 1000.0 * 13.0; // rows/sec
+            let tail = rows_f * (0.35 + (h >> 10 & 0xff) as f32 / 255.0 * 0.5);
+            let span = rows_f + tail;
+            let phase = (h >> 18 & 0xfff) as f32 / 4096.0;
+            let head = (t * speed + phase * span) % span; // current head row
+
+            for row in 0..self.rows {
+                let r = row as f32;
+                let dist = head - r; // >0 → head has passed (tail trails up)
+                let rain = if dist >= 0.0 && dist < tail {
+                    1.0 - dist / tail
+                } else {
+                    0.0
+                };
+                let is_head = dist >= 0.0 && dist < 1.0;
+
+                // Face field at this cell.
+                let px = self.ox as f32 + (col as f32 + 0.5) * CELL_W as f32;
+                let py = self.oy as f32 + (row as f32 + 0.5) * CELL_H as f32;
+                let nx = (px - cx) / half_h;
+                let ny = (py - half_h) / half_h;
+                let fi = face_intensity(nx, ny, t, level, blnk);
+
+                // Rain reads dim off the face; the face is always at least
+                // faintly lit (so it persists between drops) and the rain
+                // brightens it further as drops sweep through. High contrast
+                // so the face clearly emerges from the code.
+                let bright = (0.15 * rain + 0.52 * fi + 0.5 * rain * fi).clamp(0.0, 1.0);
+                if bright <= 0.09 {
+                    continue;
+                }
+
+                // Flickering glyph — changes a few times a second; heads
+                // churn faster.
+                let k = (t * if is_head { 18.0 } else { 7.0 }) as u32;
+                let gi = (hash32(
+                    col.wrapping_mul(73_856_093)
+                        ^ row.wrapping_mul(19_349_663)
+                        ^ k.wrapping_mul(83_492_791),
+                ) as usize)
+                    % RAIN_CHARS.len();
+
+                // Colour: green base; bright cells + heads whiten; listening
+                // shifts toward cyan.
+                let (br, bg, bb) = if listening {
+                    (0x2eu16, 0xff, 0xe0)
+                } else {
+                    (0x33u16, 0xff, 0x66)
+                };
+                // Face cells whiten (so the face reads brighter than the
+                // surrounding code); drop heads always flash white.
+                let white = (fi * 0.6 + bright * bright * 0.25 + if is_head { 0.5 } else { 0.0 })
+                    .clamp(0.0, 1.0);
+                let r8 = (br as f32 + (255.0 - br as f32) * white) as u8;
+                let g8 = (bg as f32 + (255.0 - bg as f32) * white) as u8;
+                let b8 = (bb as f32 + (255.0 - bb as f32) * white) as u8;
+
+                blit_mask(
+                    &mut buf,
+                    &self.atlas.masks[gi],
+                    self.ox + col * CELL_W,
+                    self.oy + row * CELL_H,
+                    (r8, g8, b8),
+                    bright,
+                );
+            }
+        }
+        buf
+    }
+}
+
+/// Fast integer hash (fmix32-ish) for deterministic per-cell randomness.
+fn hash32(mut x: u32) -> u32 {
+    x ^= x >> 16;
+    x = x.wrapping_mul(0x7feb_352d);
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x846c_a68b);
+    x ^= x >> 16;
+    x
+}
+
+/// Digital-rain render loop.
+pub(crate) fn render_loop_rain(tile: VideoTile) {
+    let renderer = match AsciiRainRenderer::new() {
+        Some(r) => r,
+        None => {
+            tracing::error!("ascii-rain video: could not build glyph atlas");
+            return;
+        }
+    };
+    let frame_dt = Duration::from_millis(1000 / FPS);
+    let started = Instant::now();
+    tracing::info!("eliza ascii-rain renderer started ({VIDEO_W}x{VIDEO_H} @ {FPS}fps)");
+
+    while tile.running.load(Ordering::Relaxed) {
+        let tick = Instant::now();
+        let t = started.elapsed().as_secs_f32();
+        let level = f32::from_bits(tile.level.load(Ordering::Relaxed));
+        let peer = f32::from_bits(tile.peer_level.load(Ordering::Relaxed));
+        let rgba = renderer.frame_rgba(t, level, peer);
+        let frame =
+            VideoFrame::new_rgba(bytes::Bytes::from(rgba), VIDEO_W, VIDEO_H, Duration::ZERO);
+        if let Ok(mut g) = tile.latest.lock() {
+            *g = Some(frame);
+        }
+        if let Some(rest) = frame_dt.checked_sub(tick.elapsed()) {
+            std::thread::sleep(rest);
+        }
+    }
+    tracing::info!("eliza ascii-rain renderer stopped");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -365,5 +549,15 @@ mod tests {
         let lit = |buf: &[u8]| buf.chunks_exact(4).filter(|p| p[0] as u16 + p[1] as u16 + p[2] as u16 > 24).count();
         let loud = r.frame_rgba(0.0, 0.8, 0.0);
         assert!(lit(&loud) > lit(&quiet), "speaking frame should be brighter");
+    }
+
+    #[test]
+    fn rain_renders_a_frame() {
+        let r = AsciiRainRenderer::new().expect("rain renderer");
+        let f = r.frame_rgba(1.0, 0.5, 0.0);
+        assert_eq!(f.len(), (VIDEO_W * VIDEO_H * 4) as usize);
+        assert!(f.chunks_exact(4).all(|p| p[3] == 255));
+        let lit = f.chunks_exact(4).filter(|p| p[0] as u16 + p[1] as u16 + p[2] as u16 > 24).count();
+        assert!(lit > 500, "rain should light up cells");
     }
 }

@@ -2096,6 +2096,7 @@ async fn start_transcription(
             ghostly_pack: cfg.ghostly_pack.clone(),
         },
         "ascii" => crate::video::Backend::Ascii,
+        "ascii-rain" => crate::video::Backend::AsciiRain,
         "vector" => crate::video::Backend::Vector,
         _ => crate::video::Backend::Svg,
     };

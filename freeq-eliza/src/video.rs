@@ -231,6 +231,9 @@ pub enum Backend {
     /// blinking eyes, expressive brows, and a lip-syncing mouth. Single
     /// layer like `Particles`/`Ascii`; overlays are NO-OPS.
     Vector,
+    /// Digital-rain ASCII — a Matrix-style falling-glyph face. Weirder
+    /// sibling of `Ascii`; same single-layer face, overlays are NO-OPS.
+    AsciiRain,
 }
 
 impl Default for Backend {
@@ -498,6 +501,7 @@ impl VideoTile {
                     crate::video_particles::render_loop(tile, &character, ghostly_pack.as_deref())
                 }
                 Backend::Ascii => crate::video_ascii::render_loop(tile),
+                Backend::AsciiRain => crate::video_ascii::render_loop_rain(tile),
                 Backend::Vector => crate::video_vector::render_loop(tile),
             })
             .expect("spawn video renderer");
