@@ -339,6 +339,9 @@ pub(crate) struct ActiveCall {
     proactive_task: Option<JoinHandle<()>>,
     /// The ambient-monitor task (if enabled). Same drop story.
     ambient_task: Option<JoinHandle<()>>,
+    /// Watchdog that leaves the call once we've been alone in it too long, so a
+    /// lingering empty call doesn't burn CPU or block auto-sleep. Same drop story.
+    lonely_task: Option<JoinHandle<()>>,
 }
 
 impl Drop for ActiveCall {
@@ -348,6 +351,9 @@ impl Drop for ActiveCall {
             t.abort();
         }
         if let Some(t) = &self.ambient_task {
+            t.abort();
+        }
+        if let Some(t) = &self.lonely_task {
             t.abort();
         }
         self.video.stop();
@@ -2117,13 +2123,14 @@ async fn start_transcription(
     let active_for_task = active.clone();
     let video_for_session = video.clone();
     let video_for_taps = video.clone();
+    // Live count of people we're transcribing — shared across this call's taps
+    // (so each can tell one-on-one from a group) AND the lonely watchdog below.
+    let humans = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let humans_for_task = humans.clone();
     let task = tokio::spawn(async move {
         let mut session =
             AvSession::connect(av_config, push_source, move || video_for_session.source());
         let mut taps: JoinSet<()> = JoinSet::new();
-        // Live count of people we're transcribing — shared across this call's
-        // taps so each can tell one-on-one (no name needed) from a group.
-        let humans = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         while let Some(participant) = session.recv().await {
             taps.spawn(transcribe_participant(
                 cfg_for_task.clone(),
@@ -2132,7 +2139,7 @@ async fn start_transcription(
                 handle_for_task.clone(),
                 active_for_task.clone(),
                 video_for_taps.peer_level_handle(),
-                humans.clone(),
+                humans_for_task.clone(),
             ));
         }
         tracing::info!("AvSession ended");
@@ -2165,6 +2172,16 @@ async fn start_transcription(
         None
     };
 
+    // Lonely watchdog — leave the call once we've been alone in it for a
+    // while, so the being returns to idle (and the box can sleep to ~$0)
+    // instead of holding a tap open on an empty room. Aborts via
+    // ActiveCall::drop when the call ends for any other reason.
+    let lonely_task = Some(tokio::spawn(lonely_watchdog(
+        active.clone(),
+        humans.clone(),
+        session_id.clone(),
+    )));
+
     Ok(ActiveCall {
         channel,
         session_id,
@@ -2177,7 +2194,46 @@ async fn start_transcription(
         moq_task: task,
         proactive_task,
         ambient_task,
+        lonely_task,
     })
+}
+
+/// Watchdog that leaves the current call once the being has been alone in
+/// it (no humans being transcribed) for `ALONE_LEAVE`. Polls every
+/// `CHECK`; exits quietly if the call is replaced or already gone, so a new
+/// call's watchdog never tears down a different session.
+async fn lonely_watchdog(
+    active: Arc<AsyncMutex<Option<ActiveCall>>>,
+    humans: Arc<std::sync::atomic::AtomicUsize>,
+    session_id: String,
+) {
+    use std::sync::atomic::Ordering;
+    const ALONE_LEAVE: Duration = Duration::from_secs(60);
+    const CHECK: Duration = Duration::from_secs(10);
+    let mut alone_since: Option<Instant> = None;
+    loop {
+        tokio::time::sleep(CHECK).await;
+        // Bail if this is no longer the live call.
+        {
+            let g = active.lock().await;
+            if !matches!(g.as_ref(), Some(c) if c.session_id == session_id) {
+                return;
+            }
+        }
+        if humans.load(Ordering::Relaxed) == 0 {
+            let since = *alone_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= ALONE_LEAVE {
+                let mut g = active.lock().await;
+                if matches!(g.as_ref(), Some(c) if c.session_id == session_id) {
+                    tracing::info!(%session_id, "alone in the call too long — leaving");
+                    *g = None; // ActiveCall::drop tears down taps + tasks
+                }
+                return;
+            }
+        } else {
+            alone_since = None;
+        }
+    }
 }
 
 // ── Addressed-question dispatch timing ──────────────────────────────
