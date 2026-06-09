@@ -2220,7 +2220,18 @@ async fn lonely_watchdog(
     session_id: String,
 ) {
     use std::sync::atomic::Ordering;
-    const ALONE_LEAVE: Duration = Duration::from_secs(60);
+    // Seconds alone before leaving. Override with `ELIZA_ALONE_LEAVE_SECS`;
+    // set it to 0 to never auto-leave (e.g. parking a being in a call for a
+    // demo / kiosk).
+    let alone_secs = std::env::var("ELIZA_ALONE_LEAVE_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(60);
+    if alone_secs == 0 {
+        tracing::info!("lonely watchdog disabled (ELIZA_ALONE_LEAVE_SECS=0)");
+        return;
+    }
+    let alone_leave = Duration::from_secs(alone_secs);
     const CHECK: Duration = Duration::from_secs(10);
     let mut alone_since: Option<Instant> = None;
     loop {
@@ -2234,7 +2245,7 @@ async fn lonely_watchdog(
         }
         if humans.load(Ordering::Relaxed) == 0 {
             let since = *alone_since.get_or_insert_with(Instant::now);
-            if since.elapsed() >= ALONE_LEAVE {
+            if since.elapsed() >= alone_leave {
                 let mut g = active.lock().await;
                 if matches!(g.as_ref(), Some(c) if c.session_id == session_id) {
                     tracing::info!(%session_id, "alone in the call too long — leaving");
