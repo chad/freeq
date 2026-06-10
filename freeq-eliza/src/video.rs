@@ -257,6 +257,12 @@ pub enum Backend {
     Face3dEye,
     /// 3D — a spinning crystal shard with a glowing slit-eye.
     Face3dShard,
+    /// Ancient bronze coin with a Pharos-lighthouse relief and circuit
+    /// traces. State is told in light: cyan pulses flow inward while
+    /// hearing, amber pulses circulate while thinking, the beacon flares
+    /// and pulses flow outward while speaking. Single-layer; overlays
+    /// are NO-OPS.
+    Alexandria,
 }
 
 impl Default for Backend {
@@ -518,7 +524,21 @@ impl VideoTile {
         let backend = tile.backend.clone();
         std::thread::Builder::new()
             .name("eliza-video".into())
-            .spawn(move || match backend {
+            .spawn(move || {
+                // Yield CPU to the audio path. On the 2-core agent VMs
+                // the 15fps raster + H264 encode starves the Opus
+                // encoder's 20ms ticks during long answers — the voice
+                // arrives later and later until the receiver's playout
+                // gives up ("trailed off to silence"). A repeated video
+                // frame is invisible; late audio is not. nice(+10) on
+                // Linux applies to just this thread, so the renderer
+                // only runs when the audio pipeline doesn't need the
+                // core.
+                #[cfg(target_os = "linux")]
+                unsafe {
+                    libc::nice(10);
+                }
+                match backend {
                 Backend::Svg => tile.render_loop(),
                 Backend::Particles { character, ghostly_pack } => {
                     crate::video_particles::render_loop(tile, &character, ghostly_pack.as_deref())
@@ -554,6 +574,8 @@ impl VideoTile {
                     tile,
                     crate::video_face3d::Persona3d::shard(),
                 ),
+                Backend::Alexandria => crate::video_alexandria::render_loop(tile),
+            }
             })
             .expect("spawn video renderer");
     }

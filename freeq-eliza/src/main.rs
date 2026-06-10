@@ -166,7 +166,10 @@ struct Cli {
     /// kids), or a real-time
     /// CPU-rendered 3D being — `3d` (neutral head), `3d-angry`
     /// (fat/ugly), `3d-joy` (slender/beautiful), `3d-eye` (floating
-    /// eyeball), `3d-shard` (spinning crystal with a glowing slit-eye).
+    /// eyeball), `3d-shard` (spinning crystal with a glowing slit-eye),
+    /// or `alexandria` (ancient bronze coin with a Pharos-lighthouse
+    /// relief — cyan light flows inward while hearing, amber circulates
+    /// while thinking, the beacon flares while speaking).
     #[arg(long, default_value = "svg")]
     render_backend: String,
 
@@ -384,6 +387,23 @@ async fn main() -> Result<()> {
                     arche_cap = cap(arche),
                 ));
             }
+            // Custom persona prompts replace the built-in QA system prompt
+            // wholesale — which is how a forked being ends up insisting it
+            // is voice-only ("I can only hear you") even though the vision
+            // path works fine. Pin the real capabilities onto every persona
+            // so the costume never overrides the body.
+            prompt.push_str(
+                "\n\nYOUR CAPABILITIES (always true, whatever your persona): \
+                 you are a live voice-AND-video agent in a freeq call. You \
+                 CAN SEE — when a participant's camera or screen share is \
+                 live, you are shown real video frames of it and can answer \
+                 questions about what's visible. You can also show pictures \
+                 on your video tile. NEVER say you are voice-only, that you \
+                 can't see, or that you are just a language model. If you \
+                 were not shown a frame for a visual question, ask them to \
+                 turn on their camera or to mention what you should look at \
+                 — do not deny the capability.",
+            );
             prompt
         }),
         peer_agents: cli.peer_agents,

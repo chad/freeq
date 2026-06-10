@@ -1291,12 +1291,16 @@ async fn answer_and_speak(
     // → the normal streaming QA. Completed sentences always go to the
     // speaker task.
     let mut chunker = qa::SentenceChunker::new();
-    let visual = vision::is_visual_question(&question);
-    let frame = if visual {
-        asker_video.as_ref().and_then(|vh| vh.latest())
+    // When the asker has a live frame, route on the looser cue set too
+    // ("how many fingers am I holding up") — a missed route sends a
+    // visual question to the text model, which can't see and says so.
+    let candidate_frame = asker_video.as_ref().and_then(|vh| vh.latest());
+    let visual = if candidate_frame.is_some() {
+        vision::is_visual_question_with_frame(&question)
     } else {
-        None
+        vision::is_visual_question(&question)
     };
+    let frame = if visual { candidate_frame } else { None };
 
     // Race a whiteboard plan in parallel with the answer call. For
     // "explain it" questions the model returns drawing steps and the
@@ -2122,6 +2126,7 @@ async fn start_transcription(
         "3d-joy" => crate::video::Backend::Face3dJoy,
         "3d-eye" => crate::video::Backend::Face3dEye,
         "3d-shard" => crate::video::Backend::Face3dShard,
+        "alexandria" => crate::video::Backend::Alexandria,
         _ => crate::video::Backend::Svg,
     };
     let video = VideoTile::with_backend(backend);

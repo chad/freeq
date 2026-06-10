@@ -22,6 +22,7 @@ pub mod stt;
 pub mod summary;
 pub mod tts;
 pub mod video;
+pub mod video_alexandria;
 pub mod video_ascii;
 pub mod video_face3d;
 pub mod video_particles;

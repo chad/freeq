@@ -2404,6 +2404,7 @@ dependencies = [
  "ghostly",
  "image",
  "iroh-live",
+ "libc",
  "rand 0.8.6",
  "reqwest 0.12.28",
  "resvg",
