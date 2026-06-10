@@ -870,7 +870,21 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                 // "leave") — owner-only.
                 if is_owner(&cfg, &from) {
                     if let Some(cmd) = parse_owner_command(&question) {
-                        run_owner_command(&handle_arc, Some(&target), cmd).await;
+                        if let OwnerCmd::Fork(utt) = cmd {
+                            // Mitosis runs in its own task (slow: VM fork +
+                            // boot) and speaks its progress when on a call.
+                            let speaker =
+                                active.lock().await.as_ref().map(|c| c.speaker.clone());
+                            crate::mitosis::spawn(
+                                cfg.clone(),
+                                handle_arc.clone(),
+                                target.clone(),
+                                utt,
+                                speaker,
+                            );
+                        } else {
+                            run_owner_command(&handle_arc, Some(&target), cmd).await;
+                        }
                         continue;
                     }
                 }
@@ -2283,10 +2297,15 @@ const CALL_JOIN_GRACE: Duration = Duration::from_secs(3);
 // service stop just outside its cgroup; boxd auto-suspend then takes the VM
 // to ~$0, and the always-on watcher resumes it on the next summon.
 
+#[derive(Debug)]
 enum OwnerCmd {
     Sleep,
     Join(String),
     Leave,
+    /// Mitosis: fork this being into a new one. Carries the owner's full
+    /// utterance — the mutation ("…but make her an optimist") rides along
+    /// for the child-composition model. See [`crate::mitosis`].
+    Fork(String),
 }
 
 /// Is `who` the configured owner? (Nick/handle match, case-insensitive.)
@@ -2300,6 +2319,20 @@ fn parse_owner_command(text: &str) -> Option<OwnerCmd> {
     let tt = t.trim();
     let words = tt.split_whitespace().count();
     let has_word = |w: &str| tt.split(|c: char| !c.is_alphanumeric()).any(|x| x == w);
+    // Mitosis: "fork yourself", "clone yourself", "split yourself", "make a
+    // copy of yourself" — the rest of the line rides along as the mutation
+    // ("…but make her an optimist"). Checked FIRST: a fork utterance can be
+    // long and could otherwise trip the looser sleep/leave matchers.
+    let about_self = t.contains("yourself") || t.contains("your self") || t.contains("of you");
+    if about_self
+        && (has_word("fork")
+            || has_word("clone")
+            || has_word("split")
+            || has_word("duplicate")
+            || has_word("copy"))
+    {
+        return Some(OwnerCmd::Fork(text.trim().to_string()));
+    }
     // Sleep is owner-gated and the intent is unambiguous, so be STT-tolerant:
     // Whisper mangles "go to sleep" into "goes to sleep" / "all the sleep" /
     // even "all of god's sleep". Treat any SHORT owner utterance that mentions
@@ -2368,6 +2401,12 @@ async fn run_owner_command(handle: &ClientHandle, channel: Option<&str>, cmd: Ow
                 let _ = handle.privmsg(ch, "Heading out \u{1F44B} — call me back anytime.").await;
                 let _ = handle.raw(&format!("PART {ch}")).await;
             }
+        }
+        // Fork is dispatched to `crate::mitosis::spawn` at the call sites
+        // (it needs the shared config + the call speaker); it never lands
+        // here. Kept exhaustive on purpose.
+        OwnerCmd::Fork(_) => {
+            tracing::warn!("owner command: fork reached run_owner_command (dispatch bug)");
         }
     }
 }
@@ -2631,7 +2670,23 @@ async fn transcribe_participant(
                             let cmd_text = named.as_deref().unwrap_or(&text);
                             if let Some(cmd) = parse_owner_command(cmd_text) {
                                 tracing::info!(%nick, "owner lifecycle command by voice");
-                                run_owner_command(&handle, Some(&channel), cmd).await;
+                                if let OwnerCmd::Fork(utt) = cmd {
+                                    // Mitosis: own task + spoken progress.
+                                    let speaker = active
+                                        .lock()
+                                        .await
+                                        .as_ref()
+                                        .map(|c| c.speaker.clone());
+                                    crate::mitosis::spawn(
+                                        cfg.clone(),
+                                        handle.clone(),
+                                        channel.clone(),
+                                        utt,
+                                        speaker,
+                                    );
+                                } else {
+                                    run_owner_command(&handle, Some(&channel), cmd).await;
+                                }
                                 return;
                             }
                         }
@@ -3033,6 +3088,35 @@ mod tests {
         assert!(matches!(parse_owner_command("leave"), Some(OwnerCmd::Leave)));
         assert!(matches!(parse_owner_command("ok you can leave now"), Some(OwnerCmd::Leave)));
         assert!(parse_owner_command("don't leave the door open or the cat gets out tonight").is_none());
+    }
+
+    #[test]
+    fn owner_command_fork_mitosis() {
+        // The mutation rides along verbatim for the child-composition model.
+        for s in [
+            "fork yourself",
+            "fork yourself but make her an optimist",
+            "clone yourself and make him obsessed with gardening",
+            "split yourself in two",
+            "make a copy of yourself",
+            "could you duplicate yourself please",
+        ] {
+            match parse_owner_command(s) {
+                Some(OwnerCmd::Fork(utt)) => assert_eq!(utt, s),
+                other => panic!("{s:?} → {other:?}, expected Fork"),
+            }
+        }
+        // Mentions of forks/splits that aren't about the being stay inert —
+        // and a long fork-ish sentence about something else doesn't trip it.
+        assert!(parse_owner_command("the road forks ahead").is_none());
+        assert!(parse_owner_command("let's split the bill").is_none());
+        assert!(parse_owner_command("I forked the repo yesterday").is_none());
+        // "fork yourself" must win over the looser sleep matcher even when
+        // the mutation mentions sleep.
+        assert!(matches!(
+            parse_owner_command("fork yourself but make her sleepy"),
+            Some(OwnerCmd::Fork(_))
+        ));
     }
 
     // ---------- voice addressing gate ----------
