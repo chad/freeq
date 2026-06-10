@@ -835,19 +835,27 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                     if is_peer_nick(&cfg.peer_agents, &from) {
                         let parts: Vec<&str> = rest.splitn(3, '|').collect();
                         if parts.len() == 3 {
-                            if let Ok(mut log) = cfg.diagrams.lock() {
-                                let d = log.entry(target.clone()).or_default();
-                                let sentence =
-                                    format!("{} {} {}", parts[0], parts[1], parts[2]);
-                                if d.ingest(&sentence) > 0 {
-                                    let steps = d.to_steps();
-                                    if !steps.is_empty() {
-                                        if let Some(call) = active.lock().await.as_ref() {
-                                            call.video.show_board(
-                                                steps,
-                                                "#7FE7CB".into(),
-                                            );
-                                        }
+                            // Ingest under the sync lock, then DROP the
+                            // guard before awaiting — holding it across
+                            // `active.lock().await` makes `run`'s future
+                            // non-Send (it can't be tokio::spawn'ed).
+                            let steps = match cfg.diagrams.lock() {
+                                Ok(mut log) => {
+                                    let d = log.entry(target.clone()).or_default();
+                                    let sentence =
+                                        format!("{} {} {}", parts[0], parts[1], parts[2]);
+                                    if d.ingest(&sentence) > 0 {
+                                        Some(d.to_steps())
+                                    } else {
+                                        None
+                                    }
+                                }
+                                Err(_) => None,
+                            };
+                            if let Some(steps) = steps {
+                                if !steps.is_empty() {
+                                    if let Some(call) = active.lock().await.as_ref() {
+                                        call.video.show_board(steps, "#7FE7CB".into());
                                     }
                                 }
                             }

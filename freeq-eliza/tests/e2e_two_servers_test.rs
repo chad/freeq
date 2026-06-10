@@ -293,6 +293,19 @@ fn spawn_bot(
         elevenlabs_voice_id: "aj0fZfXTBc7E3By4X8L2".to_string(),
         elevenlabs_model: "eleven_turbo_v2_5".to_string(),
         image_ai: None,
+        owner: None,
+        summary_enabled: false,
+        vision_model: "meta-llama/llama-4-scout-17b-16e-instruct".to_string(),
+        // Proactive/ambient monitors poll LLMs — keep them off so these
+        // control-plane tests stay deterministic and offline.
+        proactive_enabled: false,
+        ambient_enabled: false,
+        render_backend: "svg".to_string(),
+        ghostly_character: "eliza".to_string(),
+        ghostly_pack: None,
+        character_system_prompt: None,
+        persona_hello_line: None,
+        peer_agents: Vec::new(),
     };
     let handle = tokio::spawn(run(cfg));
     (handle, tmp)
