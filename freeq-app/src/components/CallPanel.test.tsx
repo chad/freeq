@@ -554,6 +554,60 @@ describe('CallPanel — camera', () => {
     expect(sawVideoFromCallPanel).toBe(false);
   });
 
+  it('wires the local preview from a video signal that was set BEFORE camera-on (subscribe does not replay)', async () => {
+    // Regression: the local tile rendered black while the camera LED was
+    // on. Real moq Signals only fire subscribers on *future* changes —
+    // the current value is never replayed — and the element's `video`
+    // signal is assigned exactly once, when `source="camera"` is set at
+    // call start. So a bare subscribe made later, when the user toggles
+    // the camera on, never fired and the preview <video> never got a
+    // srcObject. CallPanel must replay the current value (peek) in
+    // addition to subscribing.
+    setupSession();
+    mockSessionsApi([]);
+
+    // Signal with real moq semantics: peek() + change-only subscribe.
+    function makeSignal<T>(initial: T) {
+      let value = initial;
+      const subs = new Set<(v: T) => void>();
+      return {
+        peek: () => value,
+        subscribe(fn: (v: T) => void) { subs.add(fn); return () => subs.delete(fn); },
+        set(v: T) { value = v; subs.forEach((fn) => fn(v)); },
+      };
+    }
+
+    class FakeMediaStream { tracks: unknown[]; constructor(tracks: unknown[]) { this.tracks = tracks; } }
+    vi.stubGlobal('MediaStream', FakeMediaStream);
+
+    const trackSig = makeSignal<MediaStreamTrack | undefined>(undefined);
+    const cameraSource = { source: trackSig };
+    const videoSig = makeSignal<typeof cameraSource | undefined>(undefined);
+
+    const { container } = render(<CallPanel />);
+    await flush();
+
+    const pub = container.querySelector('moq-publish') as HTMLElement & { video?: unknown };
+    // Like the real element: the video signal already holds the camera
+    // source object before the user ever touches the camera button.
+    videoSig.set(cameraSource);
+    pub.video = videoSig;
+
+    await act(async () => { useStore.getState().setAvCameraOn(true); });
+    await flush();
+
+    // moq-publish's internal getUserMedia resolves after camera-on and
+    // lands the captured track on the inner source signal.
+    const fakeTrack = { kind: 'video' } as MediaStreamTrack;
+    await act(async () => { trackSig.set(fakeTrack); });
+    await flush();
+
+    const video = container.querySelector('video') as HTMLVideoElement;
+    expect(video).not.toBeNull();
+    expect(video.srcObject).toBeTruthy();
+    expect((video.srcObject as unknown as FakeMediaStream).tracks).toEqual([fakeTrack]);
+  });
+
   it('toggling camera while NOT in a call does not crash or send anything', async () => {
     // No session active.
     useStore.setState({ avAudioActive: false, activeAvSession: null });
