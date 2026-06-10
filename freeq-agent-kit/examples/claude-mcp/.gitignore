@@ -1,0 +1,5 @@
+# The workspace root .gitignore has a `[Bb]in/` rule (from a generic
+# Visual-Studio-style template) that hides our Cargo `[[bin]]` sources
+# at src/bin/*.rs. Un-ignore them here.
+!src/bin/
+!src/bin/*.rs

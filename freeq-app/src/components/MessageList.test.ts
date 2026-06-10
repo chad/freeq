@@ -295,3 +295,53 @@ describe('edge cases', () => {
     expect(code?.content).toContain('**with bold**');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════
+// MULTILINE: real \n preserved through tokenization
+// ═══════════════════════════════════════════════════════════════
+//
+// The SDK normalizes both wire forms (`draft/multiline` BATCH and
+// the legacy `+freeq.at/multiline` tag) into `message.text` with
+// REAL `\n` characters. The app's prior `\\n` → `\n` decode was
+// removed. These tests lock in that the parser preserves real
+// newlines inside codeblocks and other segments — anything that
+// silently rewrote `\\n` would surface here.
+
+describe('multiline content with real newlines', () => {
+  it('codeblock with multi-line body preserves real \\n inside content', () => {
+    const text = '```\nline one\nline two\nline three\n```';
+    const s = parseTextSegments(text);
+    expect(s.length).toBe(1);
+    expect(s[0].type).toBe('codeblock');
+    expect(s[0].content).toContain('line one\nline two\nline three');
+  });
+
+  it('codeblock with literal \\\\n in content is NOT silently rewritten', () => {
+    // User types `echo "a\\n b"` inside a codeblock — the two-char
+    // `\n` escape sequence stays literal so it round-trips for shell
+    // / language interpreters that act on it later.
+    const text = '```\necho "a\\nb"\n```';
+    const s = parseTextSegments(text);
+    expect(s[0].type).toBe('codeblock');
+    expect(s[0].content).toContain('echo "a\\nb"');
+    expect(s[0].content).not.toContain('echo "a\nb"');
+  });
+
+  it('plain text with real \\n preserved as one text segment', () => {
+    const s = parseTextSegments('line one\nline two\nline three');
+    expect(s.length).toBe(1);
+    expect(s[0].type).toBe('text');
+    expect(s[0].content).toBe('line one\nline two\nline three');
+  });
+
+  it('codeblock with leading and trailing newlines (typical agent output)', () => {
+    // Agents often produce ```\ncontent\n``` — the codeblock content
+    // starts and ends with \n. The rendering layer trims those leading/
+    // trailing newlines via .replace(/^\n|\n$/g, '') in the <pre>;
+    // the captured content here still includes them.
+    const text = '```\nfn main() {\n    println!("hi");\n}\n```';
+    const s = parseTextSegments(text);
+    expect(s[0].type).toBe('codeblock');
+    expect(s[0].content).toBe('\nfn main() {\n    println!("hi");\n}\n');
+  });
+});

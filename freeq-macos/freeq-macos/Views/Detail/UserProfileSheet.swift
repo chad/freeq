@@ -131,8 +131,9 @@ struct UserProfileSheet: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
 
-                if let handle = profile?.handle ?? did.map({ _ in nick }) {
-                    Link("View on Bluesky", destination: URL(string: "https://bsky.app/profile/\(handle)")!)
+                if let handle = profile?.handle ?? did.map({ _ in nick }),
+                   let blueSkyURL = Validation.makeBlueSkyProfileURL(handle: handle) {
+                    Link("View on Bluesky", destination: blueSkyURL)
                         .font(.body)
                 }
             }

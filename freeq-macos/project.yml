@@ -2,14 +2,14 @@ name: freeq-macos
 options:
   bundleIdPrefix: at.freeq
   deploymentTarget:
-    macOS: "14.0"
+    macOS: "14.4"
   xcodeVersion: "16.0"
   createIntermediateGroups: true
 
 settings:
   base:
     SWIFT_VERSION: "5.10"
-    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.4"
 
 targets:
   freeq-macos:

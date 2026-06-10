@@ -1,0 +1,66 @@
+[package]
+name = "freeq-claude-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MCP server that lets a Claude Code agent join a freeq AV channel as a voice participant."
+
+[lib]
+name = "freeq_claude_mcp"
+path = "src/lib.rs"
+
+[[bin]]
+name = "freeq-claude-mcp"
+path = "src/bin/mcp_server.rs"
+
+# Manual-test driver: stdin = JSON commands, stdout = JSON events.
+# Run while you sit in #avtest to exercise the orchestrator without an
+# MCP client.
+[[bin]]
+name = "claude-bot-stdio"
+path = "src/bin/stdio_driver.rs"
+
+[dependencies]
+# Reused: the AV transport and the voice agent helpers.
+freeq-sdk = { path = "../../../freeq-sdk", default-features = false, features = ["ring", "rustls-tls", "websocket"] }
+freeq-av = { path = "../../../freeq-av" }
+freeq-agent-kit = { path = "../.." }
+# Reused: the bot identity loader, the Groq/ElevenLabs STT/TTS modules.
+freeq-eliza = { path = "../../../freeq-eliza" }
+# Iroh-live's media traits (VideoSource, etc.) — kept aligned with the
+# rest of the workspace via the workspace patch on iroh.
+iroh-live = { git = "https://github.com/n0-computer/iroh-live", default-features = false, features = ["opus", "h264"] }
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
+# Ghostly particle face — same git dep freeq-eliza pins for the
+# particles backend, used here for our video tile.
+ghostly = { git = "https://github.com/chad/ghostly", branch = "main" }
+bytes = "1"
+# Same SVG rasterizer freeq-eliza uses for overlays. We re-rasterize
+# overlay SVG onto each face frame.
+resvg = "0.45"
+# Locate ~/.freeq/bots/<name>/memory.db across platforms.
+dirs = "6"
+# Streaming STT — websocket to Deepgram. Same crate freeq-sdk uses for
+# WS transport, so the workspace already builds it.
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+
+# Standard async + utility kit.
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+reqwest = { workspace = true }
+url = "2"
+chrono = { workspace = true }
+
+# MCP server — only consumed by `bin/mcp_server.rs`. Stdio transport
+# over JSON-RPC, talks straight to Claude Code over its stdin/stdout.
+rmcp = { version = "1.4", features = ["server", "transport-io", "macros", "schemars"] }
+schemars = "1"
+
+[lints]
+workspace = true

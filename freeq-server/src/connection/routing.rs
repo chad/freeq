@@ -50,12 +50,20 @@ pub(crate) enum RouteResult {
 /// Route a PRIVMSG/NOTICE to a nick. Checks local first, then relays
 /// to all S2S peers if federation is active. Never gates on
 /// `remote_members` — that's a display cache, not a routing table.
+///
+/// When `multiline_lines` is `Some`, the message originated as a
+/// `draft/multiline` BATCH and the breakdown is included in the S2S
+/// relay event so the peer can re-emit BATCH frames to its own
+/// multiline-capable channel members. For local-target delivery,
+/// `multiline_lines` is unused — the caller (messaging.rs DM branch)
+/// does its own per-receiver wire formatting via `build_dm_frames`.
 pub(crate) fn relay_to_nick(
     state: &Arc<SharedState>,
     from: &str,
     target: &str,
     text: &str,
     event_id: String,
+    multiline_lines: Option<&[crate::connection::draft_multiline::BatchLine]>,
 ) -> RouteResult {
     // 1. Local delivery (case-insensitive nick lookup)
     let _target_lower = target.to_lowercase();
@@ -73,15 +81,28 @@ pub(crate) fn relay_to_nick(
         let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
         let manager = state.s2s_manager.lock().clone();
         if let Some(m) = manager {
+            let (s2s_text, s2s_tags) = crate::s2s::encode_privmsg_text_for_s2s(
+                text,
+                std::collections::HashMap::new(),
+            );
             m.broadcast(crate::s2s::S2sMessage::Privmsg {
                 event_id,
                 from: from.to_string(),
                 target: target.to_string(),
-                text: text.to_string(),
+                text: s2s_text,
                 origin,
                 msgid: None, // PM relay — no msgid (recipient server assigns)
                 sig: None,   // PM relay — sig not available at routing layer
-                tags: std::collections::HashMap::new(), // no tags at routing layer
+                tags: s2s_tags,
+                multiline_lines: multiline_lines.map(|lines| {
+                    lines
+                        .iter()
+                        .map(|l| crate::s2s::MultilineLine {
+                            body: l.body.clone(),
+                            concat: l.concat_to_previous,
+                        })
+                        .collect()
+                }),
             });
         }
         return RouteResult::Relayed;

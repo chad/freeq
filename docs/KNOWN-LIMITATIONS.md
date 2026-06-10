@@ -23,6 +23,27 @@
   rather than the real connected host.
 - **No services integration (NickServ/ChanServ)**: Identity is DID-based,
   not services-based.
+- **Multiline messages degrade for clients that don't negotiate
+  `draft/multiline`**: those clients see N separate PRIVMSGs (one per
+  chunk), and only the first carries the message's msgid. Editing the
+  message replaces only that first row in their UI — the trailing rows
+  of the original chain stay around as orphans. Deletes have the same
+  shape (only row 1 disappears; rows 2-N remain). Reactions are
+  correctly attributed to the right logical message but visually attach
+  to the first row only. Workaround: client negotiates `draft/multiline`
+  during CAP REQ. See [MULTILINE-CLIENT-COMPATIBILITY.md](MULTILINE-CLIENT-COMPATIBILITY.md)
+  for the full wire-shape comparison.
+- **Multiline in `+E` channels requires the receiver to negotiate
+  `draft/multiline` for messages larger than a single line of
+  ciphertext** (~5.6 KB plaintext / ~7.5 KB ciphertext). Smaller
+  messages ride in a single `+encrypted` PRIVMSG and are unaffected.
+  Larger messages are sent as ciphertext-chunked across a multiline
+  BATCH with `+draft/multiline-concat`; fallback receivers see the
+  fragments as separate PRIVMSGs, none of which decrypt individually
+  (they're slices of one AES-GCM ciphertext). Note that vanilla IRC
+  clients in `+E` channels have no useful UX regardless — they can't
+  decrypt any `ENC1` blob, multiline or not. See
+  [MULTILINE-CLIENT-COMPATIBILITY.md](MULTILINE-CLIENT-COMPATIBILITY.md#multiline-in-e-encrypted-channels).
 
 ## S2S Federation
 

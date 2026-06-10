@@ -25,6 +25,7 @@
 //! their own reconnect logic with exponential backoff (e.g., 2→4→8→16→30s cap)
 //! to avoid overwhelming the server. Listen for [`Event::Disconnected`] and retry.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -111,15 +112,55 @@ impl ConnectConfig {
 pub enum Command {
     Join(String),
     Privmsg { target: String, text: String },
+    /// Send a `draft/multiline` BATCH. Used when the assembled body
+    /// either contains `\n` (one chunk per logical line, concat=false)
+    /// or exceeds a single line and needs ciphertext-style chunking
+    /// (concat=true on every chunk after the first). Opener tags ride
+    /// on the BATCH opener; the SDK reuses the consumer-supplied chunks
+    /// verbatim — no internal line-splitting — so the wire shape is
+    /// fully controlled by the caller.
+    SendMultiline {
+        target: String,
+        chunks: Vec<MultilineChunk>,
+        opener_tags: std::collections::HashMap<String, String>,
+    },
     Raw(String),
     Quit(Option<String>),
 }
+
+/// One chunk of a `draft/multiline` send. `concat=true` translates to
+/// `+draft/multiline-concat` on the wire — receivers join with no
+/// separator. The first chunk's `concat` is conventionally `false`.
+#[derive(Debug, Clone)]
+pub struct MultilineChunk {
+    pub body: String,
+    pub concat: bool,
+}
+
+/// State for one in-flight inbound `draft/multiline` batch — the
+/// opener-derived metadata plus the accumulated chunks. Cleared when
+/// the BATCH closer fires.
+#[derive(Debug)]
+struct InboundMultilineBatch {
+    target: String,
+    from: String,
+    opener_tags: std::collections::HashMap<String, String>,
+    lines: Vec<MultilineChunk>,
+    parent_batch_id: Option<String>,
+}
+
+/// Caps the server has ACKed, shared between the read loop (which
+/// populates it on CAP ACK) and the `ClientHandle` (which reads it
+/// to decide e.g. whether a `\n`-bearing `privmsg` should auto-route
+/// to a `draft/multiline` BATCH).
+pub(crate) type CapsAcked = Arc<parking_lot::Mutex<HashSet<String>>>;
 
 /// A handle to a running IRC client connection.
 #[derive(Clone)]
 pub struct ClientHandle {
     cmd_tx: mpsc::Sender<Command>,
     echo_registry: EchoRegistry,
+    caps_acked: CapsAcked,
 }
 
 impl ClientHandle {
@@ -128,11 +169,86 @@ impl ClientHandle {
         Ok(())
     }
 
+    /// Send a PRIVMSG. If `text` contains `\n` and the server acked
+    /// `draft/multiline` + `batch`, the SDK auto-routes the send to a
+    /// `draft/multiline` BATCH (one chunk per source line) so the
+    /// wire stays valid. Single-line text goes out as one PRIVMSG
+    /// unchanged.
+    ///
+    /// `\n`-bearing text against a server that didn't ack the cap
+    /// still goes out as a single (malformed) PRIVMSG — callers
+    /// targeting old servers should pre-encode or call
+    /// `send_multiline_chunks` with explicit chunks.
     pub async fn privmsg(&self, target: &str, text: &str) -> Result<()> {
+        let multiline_ready = text.contains('\n') && {
+            let caps = self.caps_acked.lock();
+            caps.contains("draft/multiline") && caps.contains("batch")
+        };
+        if multiline_ready {
+            let chunks: Vec<MultilineChunk> = text
+                .split('\n')
+                .map(|line| MultilineChunk {
+                    body: line.to_string(),
+                    concat: false,
+                })
+                .collect();
+            self.cmd_tx
+                .send(Command::SendMultiline {
+                    target: target.to_string(),
+                    chunks,
+                    opener_tags: std::collections::HashMap::new(),
+                })
+                .await?;
+        } else {
+            self.cmd_tx
+                .send(Command::Privmsg {
+                    target: target.to_string(),
+                    text: text.to_string(),
+                })
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Send a multi-line message via `draft/multiline` BATCH. Splits
+    /// `text` on `\n` boundaries by default — each logical line becomes
+    /// one wire chunk with `concat=false` so receivers reassemble with
+    /// `\n` separators. Pass `opener_tags` for client-only tags that
+    /// should ride on the BATCH opener (e.g. commit-reveal payloads).
+    ///
+    /// For ciphertext-style chunking (one assembled blob split into
+    /// fixed-size pieces with concat=true), construct the `Vec<MultilineChunk>`
+    /// directly and use `send_multiline_chunks`.
+    pub async fn send_multiline(
+        &self,
+        target: &str,
+        text: &str,
+        opener_tags: std::collections::HashMap<String, String>,
+    ) -> Result<()> {
+        let chunks: Vec<MultilineChunk> = text
+            .split('\n')
+            .map(|line| MultilineChunk {
+                body: line.to_string(),
+                concat: false,
+            })
+            .collect();
+        self.send_multiline_chunks(target, chunks, opener_tags).await
+    }
+
+    /// Lower-level multiline send: caller supplies the wire chunks
+    /// directly. Use this when you need control over `concat` flags
+    /// (e.g. splitting a single-line ciphertext into byte-sized pieces).
+    pub async fn send_multiline_chunks(
+        &self,
+        target: &str,
+        chunks: Vec<MultilineChunk>,
+        opener_tags: std::collections::HashMap<String, String>,
+    ) -> Result<()> {
         self.cmd_tx
-            .send(Command::Privmsg {
+            .send(Command::SendMultiline {
                 target: target.to_string(),
-                text: text.to_string(),
+                chunks,
+                opener_tags,
             })
             .await?;
         Ok(())
@@ -177,20 +293,45 @@ impl ClientHandle {
         }
     }
 
-    /// Send a message with IRCv3 tags (for rich media).
+    /// Send a message with IRCv3 tags (for rich media). If `text`
+    /// contains `\n` and the server acked `draft/multiline` + `batch`,
+    /// the SDK auto-routes the send to a `draft/multiline` BATCH with
+    /// the given tags on the opener — same auto-routing behavior as
+    /// `privmsg`. Otherwise emits a single tagged PRIVMSG.
     pub async fn send_tagged(
         &self,
         target: &str,
         text: &str,
         tags: std::collections::HashMap<String, String>,
     ) -> Result<()> {
-        let msg = crate::irc::Message {
-            tags,
-            prefix: None,
-            command: "PRIVMSG".to_string(),
-            params: vec![target.to_string(), text.to_string()],
+        let multiline_ready = text.contains('\n') && {
+            let caps = self.caps_acked.lock();
+            caps.contains("draft/multiline") && caps.contains("batch")
         };
-        self.cmd_tx.send(Command::Raw(msg.to_string())).await?;
+        if multiline_ready {
+            let chunks: Vec<MultilineChunk> = text
+                .split('\n')
+                .map(|line| MultilineChunk {
+                    body: line.to_string(),
+                    concat: false,
+                })
+                .collect();
+            self.cmd_tx
+                .send(Command::SendMultiline {
+                    target: target.to_string(),
+                    chunks,
+                    opener_tags: tags,
+                })
+                .await?;
+        } else {
+            let msg = crate::irc::Message {
+                tags,
+                prefix: None,
+                command: "PRIVMSG".to_string(),
+                params: vec![target.to_string(), text.to_string()],
+            };
+            self.cmd_tx.send(Command::Raw(msg.to_string())).await?;
+        }
         Ok(())
     }
 
@@ -970,13 +1111,16 @@ pub fn connect_with_stream(
     let (event_tx, event_rx) = mpsc::channel(4096);
     let (cmd_tx, cmd_rx) = mpsc::channel(256);
     let echo_registry: EchoRegistry = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new()));
+    let caps_acked: CapsAcked = Arc::new(parking_lot::Mutex::new(HashSet::new()));
 
     let handle = ClientHandle {
         cmd_tx: cmd_tx.clone(),
         echo_registry: echo_registry.clone(),
+        caps_acked: caps_acked.clone(),
     };
 
     let echo_reg = echo_registry.clone();
+    let caps_for_loop = caps_acked.clone();
     tokio::spawn(async move {
         let _ = event_tx.send(Event::Connected).await;
         let result = match conn {
@@ -990,6 +1134,7 @@ pub fn connect_with_stream(
                     event_tx.clone(),
                     cmd_rx,
                     echo_reg,
+                    caps_for_loop,
                 )
                 .await
             }
@@ -1003,6 +1148,7 @@ pub fn connect_with_stream(
                     event_tx.clone(),
                     cmd_rx,
                     echo_reg,
+                    caps_for_loop,
                 )
                 .await
             }
@@ -1017,6 +1163,7 @@ pub fn connect_with_stream(
                     event_tx.clone(),
                     cmd_rx,
                     echo_reg,
+                    caps_for_loop,
                 )
                 .await
             }
@@ -1031,6 +1178,7 @@ pub fn connect_with_stream(
                     event_tx.clone(),
                     cmd_rx,
                     echo_reg,
+                    caps_for_loop,
                 )
                 .await
             }
@@ -1061,15 +1209,20 @@ pub fn connect(
     let (event_tx, event_rx) = mpsc::channel(4096);
     let (cmd_tx, cmd_rx) = mpsc::channel(256);
     let echo_registry: EchoRegistry = std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new()));
+    let caps_acked: CapsAcked = Arc::new(parking_lot::Mutex::new(HashSet::new()));
 
     let handle = ClientHandle {
         cmd_tx: cmd_tx.clone(),
         echo_registry: echo_registry.clone(),
+        caps_acked: caps_acked.clone(),
     };
 
     let echo_reg = echo_registry.clone();
+    let caps_for_loop = caps_acked.clone();
     tokio::spawn(async move {
-        if let Err(e) = run_client(config, signer, event_tx.clone(), cmd_rx, echo_reg).await {
+        if let Err(e) =
+            run_client(config, signer, event_tx.clone(), cmd_rx, echo_reg, caps_for_loop).await
+        {
             let _ = event_tx
                 .send(Event::Disconnected {
                     reason: e.to_string(),
@@ -1087,6 +1240,7 @@ async fn run_client(
     event_tx: mpsc::Sender<Event>,
     cmd_rx: mpsc::Receiver<Command>,
     echo_registry: EchoRegistry,
+    caps_acked: CapsAcked,
 ) -> Result<()> {
     let conn = establish_connection(&config).await?;
     let _ = event_tx.send(Event::Connected).await;
@@ -1101,6 +1255,7 @@ async fn run_client(
                 event_tx,
                 cmd_rx,
                 echo_registry,
+                caps_acked,
             )
             .await
         }
@@ -1114,6 +1269,7 @@ async fn run_client(
                 event_tx,
                 cmd_rx,
                 echo_registry,
+                caps_acked,
             )
             .await
         }
@@ -1128,6 +1284,7 @@ async fn run_client(
                 event_tx,
                 cmd_rx,
                 echo_registry,
+                caps_acked,
             )
             .await
         }
@@ -1142,6 +1299,7 @@ async fn run_client(
                 event_tx,
                 cmd_rx,
                 echo_registry,
+                caps_acked,
             )
             .await
         }
@@ -1376,6 +1534,7 @@ async fn run_irc<R, W>(
     event_tx: mpsc::Sender<Event>,
     mut cmd_rx: mpsc::Receiver<Command>,
     echo_registry: EchoRegistry,
+    caps_acked: CapsAcked,
 ) -> Result<()>
 where
     R: tokio::io::AsyncBufRead + Unpin,
@@ -1400,6 +1559,11 @@ where
     // Session message-signing keypair (generated after SASL success)
     let mut msg_signing_key: Option<ed25519_dalek::SigningKey> = None;
     let mut msg_signing_did: Option<String> = None;
+    // Open `draft/multiline` batches keyed by batch id. Chunks
+    // accumulate here while the batch is open; the BATCH closer drains
+    // and emits a single Event::Message with the assembled body.
+    let mut multiline_batches: std::collections::HashMap<String, InboundMultilineBatch> =
+        std::collections::HashMap::new();
     let mut line_buf = String::new();
     let mut last_activity = tokio::time::Instant::now();
     let ping_interval = tokio::time::Duration::from_secs(60);
@@ -1441,7 +1605,7 @@ where
                             }
                         }
                         "CAP" => {
-                            handle_cap_response(&msg, &signer, &web_token, &mut writer, &mut sasl_in_progress).await?;
+                            handle_cap_response(&msg, &signer, &web_token, &mut writer, &mut sasl_in_progress, &caps_acked).await?;
                         }
                         "AUTHENTICATE" => {
                             if let Some(ref token) = web_token {
@@ -1521,13 +1685,48 @@ where
                                 if let Some(id) = ref_id.strip_prefix('+') {
                                     let batch_type = msg.params.get(1).cloned().unwrap_or_default();
                                     let target = msg.params.get(2).cloned().unwrap_or_default();
-                                    let _ = event_tx.send(Event::BatchStart {
-                                        id: id.to_string(),
-                                        batch_type,
-                                        target,
-                                    }).await;
+                                    if batch_type == "draft/multiline" {
+                                        // Capture opener metadata so the
+                                        // assembled message inherits the
+                                        // right identity (msgid, time,
+                                        // sender, client-only tags).
+                                        let from = msg
+                                            .prefix
+                                            .as_deref()
+                                            .and_then(|p| p.split('!').next())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        let mut opener_tags = msg.tags.clone();
+                                        // The `batch` tag on the opener
+                                        // is the PARENT batch (nesting).
+                                        let parent_batch_id =
+                                            opener_tags.remove("batch");
+                                        multiline_batches.insert(
+                                            id.to_string(),
+                                            InboundMultilineBatch {
+                                                target: target.clone(),
+                                                from,
+                                                opener_tags,
+                                                lines: Vec::new(),
+                                                parent_batch_id,
+                                            },
+                                        );
+                                        // Suppress BatchStart for multiline
+                                        // — the consumer gets a single
+                                        // Message at close time instead.
+                                    } else {
+                                        let _ = event_tx.send(Event::BatchStart {
+                                            id: id.to_string(),
+                                            batch_type,
+                                            target,
+                                        }).await;
+                                    }
                                 } else if let Some(id) = ref_id.strip_prefix('-') {
-                                    let _ = event_tx.send(Event::BatchEnd { id: id.to_string() }).await;
+                                    if let Some(batch) = multiline_batches.remove(id) {
+                                        dispatch_assembled_multiline(&event_tx, batch).await;
+                                    } else {
+                                        let _ = event_tx.send(Event::BatchEnd { id: id.to_string() }).await;
+                                    }
                                 }
                             }
                         }
@@ -1745,20 +1944,51 @@ where
                                     let text = msg.params[1].clone();
                                     let _ = event_tx.send(Event::ServerNotice { text }).await;
                                 } else {
+                                    // If this PRIVMSG is a chunk of an
+                                    // open `draft/multiline` batch,
+                                    // accumulate it raw and defer the
+                                    // Event::Message emission until the
+                                    // closer fires. Decoding per-chunk
+                                    // would corrupt ciphertext-chunked
+                                    // bodies (each fragment is part of
+                                    // one AES-GCM blob).
+                                    if let Some(batch_id) = msg.tags.get("batch")
+                                        && let Some(batch) =
+                                            multiline_batches.get_mut(batch_id)
+                                    {
+                                        batch.lines.push(MultilineChunk {
+                                            body: msg.params[1].clone(),
+                                            concat: msg
+                                                .tags
+                                                .contains_key("+draft/multiline-concat"),
+                                        });
+                                        line_buf.clear();
+                                        continue;
+                                    }
+
                                     let from = prefix.split('!').next()
                                         .unwrap_or("")
                                         .to_string();
                                     let target = msg.params[0].clone();
-                                    let text = msg.params[1].clone();
+                                    let mut text = msg.params[1].clone();
                                     let tags = msg.tags.clone();
 
+                                    // Legacy `+freeq.at/multiline`: pre-spec
+                                    // wire encoded `\n` as the literal two
+                                    // chars `\\n`. New senders use the BATCH
+                                    // path; the tag remains in use by older
+                                    // senders. Normalize here so consumers
+                                    // always see real `\n`.
+                                    if tags.contains_key("+freeq.at/multiline") {
+                                        text = text.replace("\\n", "\n");
+                                    }
+
                                     // Check for echo-nonce match (for send_and_await_echo)
-                                    if let Some(nonce) = tags.get("+freeq.at/echo-nonce") {
-                                        if let Some(tx) = echo_registry.lock().remove(nonce) {
-                                            if let Some(msgid) = tags.get("msgid") {
-                                                let _ = tx.send(msgid.clone());
-                                            }
-                                        }
+                                    if let Some(nonce) = tags.get("+freeq.at/echo-nonce")
+                                        && let Some(tx) = echo_registry.lock().remove(nonce)
+                                        && let Some(msgid) = tags.get("msgid")
+                                    {
+                                        let _ = tx.send(msgid.clone());
                                     }
 
                                     let _ = event_tx.send(Event::Message { from, target, text, tags }).await;
@@ -1855,7 +2085,37 @@ where
     Ok(())
 }
 
-/// Execute a single IRC command on the wire.
+/// Assemble a closed `draft/multiline` batch into a single
+/// `Event::Message` per the spec's concat rules — a chunk with
+/// `+draft/multiline-concat` joins its predecessor with no separator;
+/// otherwise the join is `\n`. The opener's tags become the assembled
+/// message's tags (msgid, time, sender's account, etc.).
+async fn dispatch_assembled_multiline(
+    event_tx: &mpsc::Sender<Event>,
+    batch: InboundMultilineBatch,
+) {
+    let mut text = String::new();
+    for (i, line) in batch.lines.iter().enumerate() {
+        if i > 0 && !line.concat {
+            text.push('\n');
+        }
+        text.push_str(&line.body);
+    }
+    let _ = event_tx
+        .send(Event::Message {
+            from: batch.from,
+            target: batch.target,
+            text,
+            tags: batch.opener_tags,
+        })
+        .await;
+    // Nested-batch parent (e.g. multiline inside CHATHISTORY) is
+    // exposed to the consumer via the `batch` tag in `opener_tags`;
+    // assembled multiline events fire at top-level regardless of
+    // nesting depth.
+    let _ = batch.parent_batch_id;
+}
+
 /// Execute a single IRC command on the wire.
 /// If `signing_key` and `signing_did` are set, PRIVMSG gets a `+freeq.at/sig` tag.
 async fn execute_command<W: AsyncWrite + Unpin>(
@@ -1894,6 +2154,82 @@ async fn execute_command<W: AsyncWrite + Unpin>(
                     .await?;
             }
         }
+        Command::SendMultiline { target, chunks, mut opener_tags } => {
+            // Mint a batch id with a random suffix; collision-free
+            // within a single connection at one nanosecond + random id.
+            let batch_id = format!(
+                "ml{:x}{:x}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u32,
+                rand::random::<u32>(),
+            );
+            // Reassemble the body per concat rules and sign it. The
+            // signature rides on the BATCH opener — the server's
+            // signature verification reads `+freeq.at/sig` from the
+            // assembled message's tags (which are the opener tags
+            // after multiline dispatch), so per-chunk sigs would not
+            // verify against the canonical `{did}\0{target}\0{body}\0{ts}`.
+            if let (Some(key), Some(did)) = (signing_key, signing_did) {
+                let mut body = String::new();
+                for (i, chunk) in chunks.iter().enumerate() {
+                    if i > 0 && !chunk.concat {
+                        body.push('\n');
+                    }
+                    body.push_str(&chunk.body);
+                }
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let canonical = format!("{did}\0{target}\0{body}\0{timestamp}");
+                use ed25519_dalek::Signer;
+                let sig = key.sign(canonical.as_bytes());
+                use base64::Engine;
+                let sig_b64 =
+                    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes());
+                opener_tags.insert("+freeq.at/sig".to_string(), sig_b64);
+            }
+            let opener_tags_str = if opener_tags.is_empty() {
+                String::new()
+            } else {
+                let s = opener_tags
+                    .iter()
+                    .map(|(k, v)| {
+                        if v.is_empty() {
+                            k.clone()
+                        } else {
+                            format!("{k}={v}")
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(";");
+                format!("@{s} ")
+            };
+            writer
+                .write_all(
+                    format!("{opener_tags_str}BATCH +{batch_id} draft/multiline {target}\r\n")
+                        .as_bytes(),
+                )
+                .await?;
+            // Per-chunk PRIVMSGs carry `batch=<id>` and, if applicable,
+            // `+draft/multiline-concat`. Sigs are on the opener, not here.
+            for chunk in &chunks {
+                let mut chunk_tags = format!("batch={batch_id}");
+                if chunk.concat {
+                    chunk_tags.push_str(";+draft/multiline-concat");
+                }
+                writer
+                    .write_all(
+                        format!("@{chunk_tags} PRIVMSG {target} :{}\r\n", chunk.body).as_bytes(),
+                    )
+                    .await?;
+            }
+            writer
+                .write_all(format!("BATCH -{batch_id}\r\n").as_bytes())
+                .await?;
+        }
         Command::Raw(line) => {
             // Strip CRLF/NUL to prevent protocol injection via raw commands
             let safe: String = line.chars().filter(|c| *c != '\r' && *c != '\n' && *c != '\0').collect();
@@ -1918,6 +2254,7 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
     web_token: &Option<String>,
     writer: &mut W,
     sasl_in_progress: &mut bool,
+    caps_acked: &CapsAcked,
 ) -> Result<()> {
     let subcmd = msg.params.get(1).map(|s| s.to_ascii_uppercase());
     match subcmd.as_deref() {
@@ -1936,6 +2273,7 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
                 "account-tag",
                 "extended-join",
                 "draft/chathistory",
+                "draft/multiline",
             ] {
                 if caps_str.contains(cap) {
                     req_caps.push(cap);
@@ -1955,6 +2293,14 @@ async fn handle_cap_response<W: AsyncWrite + Unpin>(
         }
         Some("ACK") => {
             let caps = msg.params.last().map(|s| s.as_str()).unwrap_or("");
+            // Record which caps the server ACKed so `ClientHandle::privmsg`
+            // can route `\n`-bearing text to a draft/multiline BATCH.
+            {
+                let mut acked = caps_acked.lock();
+                for cap in caps.split_whitespace() {
+                    acked.insert(cap.to_string());
+                }
+            }
             if caps.contains("sasl") {
                 *sasl_in_progress = true;
                 // Both web-token and ATPROTO-CHALLENGE use the same SASL mechanism;
@@ -2136,4 +2482,598 @@ fn rand_jitter(max: u64) -> u64 {
         return 0;
     }
     rand::random::<u64>() % max
+}
+
+#[cfg(test)]
+mod multiline_tests {
+    use super::*;
+
+    /// Assemble per concat rules — concat=true joins with no separator,
+    /// concat=false joins with `\n`. The first chunk's `concat` is
+    /// irrelevant (no predecessor).
+    #[tokio::test]
+    async fn assemble_no_concat_joins_with_newline() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let batch = InboundMultilineBatch {
+            target: "#room".to_string(),
+            from: "bob".to_string(),
+            opener_tags: std::collections::HashMap::new(),
+            lines: vec![
+                MultilineChunk { body: "hello".into(), concat: false },
+                MultilineChunk { body: "world".into(), concat: false },
+                MultilineChunk { body: "foo".into(), concat: false },
+            ],
+            parent_batch_id: None,
+        };
+        dispatch_assembled_multiline(&tx, batch).await;
+        match rx.recv().await.unwrap() {
+            Event::Message { from, target, text, .. } => {
+                assert_eq!(from, "bob");
+                assert_eq!(target, "#room");
+                assert_eq!(text, "hello\nworld\nfoo");
+            }
+            other => panic!("expected Message, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn assemble_concat_joins_without_separator() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let batch = InboundMultilineBatch {
+            target: "#room".to_string(),
+            from: "bob".to_string(),
+            opener_tags: std::collections::HashMap::new(),
+            lines: vec![
+                MultilineChunk { body: "alpha".into(), concat: false },
+                MultilineChunk { body: "beta".into(), concat: true },
+                MultilineChunk { body: "gamma".into(), concat: false },
+            ],
+            parent_batch_id: None,
+        };
+        dispatch_assembled_multiline(&tx, batch).await;
+        match rx.recv().await.unwrap() {
+            Event::Message { text, .. } => assert_eq!(text, "alphabeta\ngamma"),
+            other => panic!("expected Message, got {other:?}"),
+        }
+    }
+
+    /// Opener tags carry through to the assembled Message — receivers
+    /// see msgid, time, etc. on the one synthetic event, not on the
+    /// individual chunks.
+    #[tokio::test]
+    async fn assemble_threads_opener_tags() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut opener_tags = std::collections::HashMap::new();
+        opener_tags.insert("msgid".to_string(), "01XYZ".to_string());
+        opener_tags.insert("time".to_string(), "2026-05-29T17:00:00.000Z".to_string());
+        opener_tags.insert("+freeq.at/payload".to_string(), "{}".to_string());
+        let batch = InboundMultilineBatch {
+            target: "#room".to_string(),
+            from: "bob".to_string(),
+            opener_tags,
+            lines: vec![
+                MultilineChunk { body: "x".into(), concat: false },
+                MultilineChunk { body: "y".into(), concat: false },
+            ],
+            parent_batch_id: None,
+        };
+        dispatch_assembled_multiline(&tx, batch).await;
+        match rx.recv().await.unwrap() {
+            Event::Message { tags, .. } => {
+                assert_eq!(tags.get("msgid").map(String::as_str), Some("01XYZ"));
+                assert_eq!(
+                    tags.get("time").map(String::as_str),
+                    Some("2026-05-29T17:00:00.000Z")
+                );
+                assert_eq!(tags.get("+freeq.at/payload").map(String::as_str), Some("{}"));
+            }
+            other => panic!("expected Message, got {other:?}"),
+        }
+    }
+
+    /// Outbound: Command::SendMultiline writes BATCH + N PRIVMSGs + BATCH-
+    /// to the wire, with the batch tag on each chunk and concat tags
+    /// passed through.
+    #[tokio::test]
+    async fn send_multiline_emits_batch_frames() {
+        let mut buf: Vec<u8> = Vec::new();
+        let cmd = Command::SendMultiline {
+            target: "#room".into(),
+            chunks: vec![
+                MultilineChunk { body: "one".into(), concat: false },
+                MultilineChunk { body: "two".into(), concat: false },
+                MultilineChunk { body: "three".into(), concat: false },
+            ],
+            opener_tags: std::collections::HashMap::new(),
+        };
+        execute_command(&mut buf, cmd, &None, &None).await.unwrap();
+        let wire = String::from_utf8(buf).unwrap();
+        // Find the batch id from the opener
+        let opener_line = wire.lines().next().unwrap();
+        assert!(opener_line.starts_with("BATCH +"));
+        assert!(opener_line.contains("draft/multiline #room"));
+        let batch_id = opener_line
+            .strip_prefix("BATCH +")
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap();
+        // 3 chunks, all with batch=<id>
+        for line in &["one", "two", "three"] {
+            let pat = format!("@batch={batch_id} PRIVMSG #room :{line}");
+            assert!(
+                wire.contains(&pat),
+                "expected line `{pat}` in wire:\n{wire}"
+            );
+        }
+        // Closer
+        assert!(wire.contains(&format!("BATCH -{batch_id}")));
+    }
+
+    #[tokio::test]
+    async fn send_multiline_concat_tag_on_chunks() {
+        let mut buf: Vec<u8> = Vec::new();
+        let cmd = Command::SendMultiline {
+            target: "#room".into(),
+            chunks: vec![
+                MultilineChunk { body: "ENC1:abc".into(), concat: false },
+                MultilineChunk { body: "def".into(), concat: true },
+                MultilineChunk { body: "ghi".into(), concat: true },
+            ],
+            opener_tags: std::collections::HashMap::new(),
+        };
+        execute_command(&mut buf, cmd, &None, &None).await.unwrap();
+        let wire = String::from_utf8(buf).unwrap();
+        // First chunk: no concat tag
+        assert!(wire.contains(":ENC1:abc"));
+        let first_chunk_line = wire
+            .lines()
+            .find(|l| l.contains(":ENC1:abc"))
+            .unwrap();
+        assert!(!first_chunk_line.contains("+draft/multiline-concat"));
+        // Second + third chunks: concat tag present
+        let def_line = wire.lines().find(|l| l.ends_with(":def")).unwrap();
+        let ghi_line = wire.lines().find(|l| l.ends_with(":ghi")).unwrap();
+        assert!(def_line.contains("+draft/multiline-concat"));
+        assert!(ghi_line.contains("+draft/multiline-concat"));
+    }
+
+    #[tokio::test]
+    async fn send_multiline_opener_tags_on_opener_only() {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut opener_tags = std::collections::HashMap::new();
+        opener_tags.insert("+reply".to_string(), "01ORIG".to_string());
+        let cmd = Command::SendMultiline {
+            target: "#room".into(),
+            chunks: vec![
+                MultilineChunk { body: "a".into(), concat: false },
+                MultilineChunk { body: "b".into(), concat: false },
+            ],
+            opener_tags,
+        };
+        execute_command(&mut buf, cmd, &None, &None).await.unwrap();
+        let wire = String::from_utf8(buf).unwrap();
+        let opener = wire.lines().find(|l| l.contains("BATCH +")).unwrap();
+        let chunk_a = wire.lines().find(|l| l.ends_with(":a")).unwrap();
+        let chunk_b = wire.lines().find(|l| l.ends_with(":b")).unwrap();
+        assert!(opener.contains("+reply=01ORIG"));
+        assert!(!chunk_a.contains("+reply=01ORIG"));
+        assert!(!chunk_b.contains("+reply=01ORIG"));
+    }
+
+    /// When a signing key is present, the BATCH opener carries a
+    /// `+freeq.at/sig` tag computed over the ASSEMBLED body (not any
+    /// single chunk). The server's verification reads the sig from
+    /// the assembled-message tags after multiline dispatch, so this
+    /// is the only placement that lets client sigs verify.
+    #[tokio::test]
+    async fn send_multiline_signs_assembled_body_on_opener() {
+        use ed25519_dalek::SigningKey;
+        // ed25519-dalek 2.x re-exports the rand_core trait it needs.
+        use ed25519_dalek::ed25519::signature::rand_core::OsRng;
+        let mut rng = OsRng;
+        let key = SigningKey::generate(&mut rng);
+        let did = "did:plc:testkey".to_string();
+        let mut buf: Vec<u8> = Vec::new();
+        let cmd = Command::SendMultiline {
+            target: "#room".into(),
+            chunks: vec![
+                MultilineChunk { body: "hello".into(), concat: false },
+                MultilineChunk { body: "world".into(), concat: false },
+                MultilineChunk { body: "foo".into(), concat: false },
+            ],
+            opener_tags: std::collections::HashMap::new(),
+        };
+        execute_command(&mut buf, cmd, &Some(key.clone()), &Some(did.clone()))
+            .await
+            .unwrap();
+        let wire = String::from_utf8(buf).unwrap();
+        let opener = wire.lines().find(|l| l.contains("BATCH +")).unwrap();
+        // Sig present on opener
+        assert!(opener.contains("+freeq.at/sig="), "opener: {opener}");
+        // NOT on any chunk
+        for line in &["hello", "world", "foo"] {
+            let chunk_line = wire
+                .lines()
+                .find(|l| l.ends_with(&format!(":{line}")))
+                .unwrap();
+            assert!(
+                !chunk_line.contains("+freeq.at/sig"),
+                "chunk should not carry sig: {chunk_line}"
+            );
+        }
+        // The sig MUST verify over the assembled body — extract and check.
+        let sig_b64 = opener
+            .split_whitespace()
+            .find(|tok| tok.contains("+freeq.at/sig="))
+            .unwrap()
+            .split("+freeq.at/sig=")
+            .nth(1)
+            .unwrap()
+            .trim_end_matches(';');
+        // The opener tag block may pack multiple tags; pull the sig
+        // value out cleanly by splitting on ; first.
+        let sig_b64 = sig_b64.split(';').next().unwrap();
+        use base64::Engine;
+        let sig_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(sig_b64)
+            .unwrap();
+        let sig_array: [u8; 64] = sig_bytes.try_into().unwrap();
+        let sig = ed25519_dalek::Signature::from_bytes(&sig_array);
+        // Try every plausible timestamp around now — the test runs in
+        // <1s so the timestamp written by execute_command is within a
+        // narrow window. We accept any second in the last 5.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        use ed25519_dalek::Verifier;
+        let vk = key.verifying_key();
+        let mut verified = false;
+        for delta in 0..=5 {
+            let ts = now - delta;
+            let canonical = format!("{did}\0#room\0hello\nworld\nfoo\0{ts}");
+            if vk.verify(canonical.as_bytes(), &sig).is_ok() {
+                verified = true;
+                break;
+            }
+        }
+        assert!(verified, "sig did not verify over assembled body");
+    }
+
+    #[tokio::test]
+    async fn send_multiline_empty_opener_tags_omits_tag_block() {
+        let mut buf: Vec<u8> = Vec::new();
+        let cmd = Command::SendMultiline {
+            target: "#room".into(),
+            chunks: vec![MultilineChunk { body: "x".into(), concat: false }],
+            opener_tags: std::collections::HashMap::new(),
+        };
+        execute_command(&mut buf, cmd, &None, &None).await.unwrap();
+        let wire = String::from_utf8(buf).unwrap();
+        let opener = wire.lines().next().unwrap();
+        // No leading "@..." tag block when there are no opener tags
+        assert!(opener.starts_with("BATCH +"));
+    }
+
+    /// Auto-routing: `privmsg` with `\n`-bearing text and the
+    /// `draft/multiline` + `batch` caps acked sends `SendMultiline`,
+    /// one chunk per source line.
+    #[tokio::test]
+    async fn privmsg_auto_routes_to_multiline_when_cap_acked() {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+        let caps_acked: CapsAcked = Arc::new(parking_lot::Mutex::new(HashSet::new()));
+        caps_acked.lock().insert("draft/multiline".to_string());
+        caps_acked.lock().insert("batch".to_string());
+        let handle = ClientHandle {
+            cmd_tx,
+            echo_registry: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            caps_acked,
+        };
+        handle.privmsg("#test", "alpha\nbeta\ngamma").await.unwrap();
+        match cmd_rx.recv().await.unwrap() {
+            Command::SendMultiline { target, chunks, opener_tags } => {
+                assert_eq!(target, "#test");
+                assert!(opener_tags.is_empty());
+                assert_eq!(chunks.len(), 3);
+                assert_eq!(chunks[0].body, "alpha");
+                assert_eq!(chunks[1].body, "beta");
+                assert_eq!(chunks[2].body, "gamma");
+                for c in &chunks {
+                    assert!(!c.concat, "auto-routed chunks default to concat=false");
+                }
+            }
+            other => panic!("expected SendMultiline, got {other:?}"),
+        }
+    }
+
+    /// Without the multiline cap, `privmsg` falls back to a single
+    /// `Privmsg` (existing behavior preserved — non-breaking).
+    #[tokio::test]
+    async fn privmsg_falls_back_to_single_when_cap_not_acked() {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+        let caps_acked: CapsAcked = Arc::new(parking_lot::Mutex::new(HashSet::new()));
+        // No caps acked
+        let handle = ClientHandle {
+            cmd_tx,
+            echo_registry: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            caps_acked,
+        };
+        handle.privmsg("#test", "a\nb").await.unwrap();
+        match cmd_rx.recv().await.unwrap() {
+            Command::Privmsg { target, text } => {
+                assert_eq!(target, "#test");
+                assert_eq!(text, "a\nb");
+            }
+            other => panic!("expected Privmsg, got {other:?}"),
+        }
+    }
+
+    /// send_tagged with `\n`-bearing text auto-routes to SendMultiline
+    /// with the caller's tags moved onto the BATCH opener — preserving
+    /// the tag semantics (e.g. commit-reveal payloads) under the
+    /// multiline path.
+    #[tokio::test]
+    async fn send_tagged_auto_routes_to_multiline_with_opener_tags() {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+        let caps_acked: CapsAcked = Arc::new(parking_lot::Mutex::new(HashSet::new()));
+        caps_acked.lock().insert("draft/multiline".to_string());
+        caps_acked.lock().insert("batch".to_string());
+        let handle = ClientHandle {
+            cmd_tx,
+            echo_registry: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            caps_acked,
+        };
+        let mut tags = std::collections::HashMap::new();
+        tags.insert("+freeq.at/event".to_string(), "reveal".to_string());
+        tags.insert("+freeq.at/payload".to_string(), "%7B%7D".to_string());
+        handle
+            .send_tagged("#test", "x\ny\nz", tags)
+            .await
+            .unwrap();
+        match cmd_rx.recv().await.unwrap() {
+            Command::SendMultiline {
+                target,
+                chunks,
+                opener_tags,
+            } => {
+                assert_eq!(target, "#test");
+                assert_eq!(chunks.len(), 3);
+                assert_eq!(
+                    opener_tags.get("+freeq.at/event").map(String::as_str),
+                    Some("reveal")
+                );
+                assert_eq!(
+                    opener_tags.get("+freeq.at/payload").map(String::as_str),
+                    Some("%7B%7D")
+                );
+            }
+            other => panic!("expected SendMultiline, got {other:?}"),
+        }
+    }
+
+    /// Single-line text always uses `Privmsg`, never `SendMultiline`,
+    /// regardless of cap state.
+    #[tokio::test]
+    async fn privmsg_single_line_never_routes_to_multiline() {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+        let caps_acked: CapsAcked = Arc::new(parking_lot::Mutex::new(HashSet::new()));
+        caps_acked.lock().insert("draft/multiline".to_string());
+        caps_acked.lock().insert("batch".to_string());
+        let handle = ClientHandle {
+            cmd_tx,
+            echo_registry: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            caps_acked,
+        };
+        handle.privmsg("#test", "hello world").await.unwrap();
+        match cmd_rx.recv().await.unwrap() {
+            Command::Privmsg { target, text } => {
+                assert_eq!(target, "#test");
+                assert_eq!(text, "hello world");
+            }
+            other => panic!("expected Privmsg, got {other:?}"),
+        }
+    }
+
+    /// CHATHISTORY replays multi-line messages as a `draft/multiline`
+    /// BATCH nested inside the outer `chathistory` BATCH. This test
+    /// drives that exact wire shape through `run_irc` and verifies the
+    /// SDK assembles the inner batch into one `Event::Message` with
+    /// the full body — the bug we suspected on Android shows up here
+    /// if it's actually in the SDK rather than the Android UI.
+    #[tokio::test]
+    async fn nested_chathistory_batch_assembles_inner_multiline() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+
+        let (client_side, mut server_side) = tokio::io::duplex(8192);
+        let (event_tx, mut event_rx) = mpsc::channel::<Event>(32);
+        let (_cmd_tx, cmd_rx) = mpsc::channel::<Command>(16);
+        let echo_registry: EchoRegistry =
+            Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let caps_acked: CapsAcked =
+            Arc::new(parking_lot::Mutex::new(HashSet::new()));
+        let config = ConnectConfig {
+            server_addr: "test".to_string(),
+            nick: "tester".to_string(),
+            user: "tester".to_string(),
+            realname: "tester".to_string(),
+            tls: false,
+            tls_insecure: false,
+            web_token: None,
+            websocket_url: None,
+        };
+        let (reader, writer) = tokio::io::split(client_side);
+
+        tokio::spawn(async move {
+            let _ = run_irc(
+                BufReader::new(reader),
+                writer,
+                &config,
+                None,
+                event_tx,
+                cmd_rx,
+                echo_registry,
+                caps_acked,
+            )
+            .await;
+        });
+
+        // Drain whatever run_irc writes on startup (CAP LS / NICK / USER)
+        // so the duplex buffer doesn't fill and block.
+        let mut drain = vec![0u8; 1024];
+        let _ = tokio::time::timeout(
+            tokio::time::Duration::from_millis(150),
+            server_side.read(&mut drain),
+        )
+        .await;
+
+        // Server-side wire: chathistory BATCH containing an inner
+        // draft/multiline BATCH (two chunks) plus a regular PRIVMSG
+        // sibling, then the chathistory closer. Matches what
+        // freeq-server emits for stored multi-line rows during
+        // CHATHISTORY replay (see freeq-server src/connection/messaging.rs
+        // around the "nested BATCH path" comment).
+        let wire = concat!(
+            ":srv BATCH +cht1 chathistory #room\r\n",
+            "@msgid=ML1;time=2026-05-30T18:00:00.000Z;batch=cht1 ",
+            ":alice!a@h BATCH +ml1 draft/multiline #room\r\n",
+            "@batch=ml1 :alice!a@h PRIVMSG #room :first line\r\n",
+            "@batch=ml1 :alice!a@h PRIVMSG #room :second line\r\n",
+            "@batch=cht1 BATCH -ml1\r\n",
+            "@batch=cht1;msgid=R2 :bob!b@h PRIVMSG #room :sibling regular msg\r\n",
+            ":srv BATCH -cht1\r\n",
+        );
+        server_side.write_all(wire.as_bytes()).await.unwrap();
+        server_side.flush().await.unwrap();
+
+        // Collect events until we hit the BatchEnd for cht1, or timeout.
+        let mut events = Vec::new();
+        let _ = tokio::time::timeout(
+            tokio::time::Duration::from_millis(800),
+            async {
+                while let Some(ev) = event_rx.recv().await {
+                    let done = matches!(&ev, Event::BatchEnd { id } if id == "cht1");
+                    events.push(ev);
+                    if done {
+                        break;
+                    }
+                }
+            },
+        )
+        .await;
+
+        // The assembled multi-line should arrive as Event::Message with
+        // text = "first line\nsecond line". Filter out RawLine noise.
+        let assembled: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Message { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            assembled.iter().any(|t| *t == "first line\nsecond line"),
+            "assembled multi-line message not found. messages dispatched: {assembled:#?}\nall events: {events:#?}",
+        );
+        assert!(
+            assembled.iter().any(|t| t.contains("sibling regular msg")),
+            "regular sibling PRIVMSG should also have been dispatched. got: {assembled:#?}",
+        );
+    }
+
+    /// Same as the prior test but with the exact wire shape that smoke
+    /// scenario B10 produces during CHATHISTORY replay: a multi-line
+    /// message whose body is a label + a fenced code block (backticks +
+    /// rust source). If the SDK assembles this with the full text
+    /// preserved byte-exact, any "only line 1 shows" symptom on a
+    /// client is the client's render layer, not the SDK.
+    #[tokio::test]
+    async fn nested_chathistory_batch_assembles_codeblock_byte_exact() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+
+        let (client_side, mut server_side) = tokio::io::duplex(8192);
+        let (event_tx, mut event_rx) = mpsc::channel::<Event>(32);
+        let (_cmd_tx, cmd_rx) = mpsc::channel::<Command>(16);
+        let echo_registry: EchoRegistry =
+            Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let caps_acked: CapsAcked =
+            Arc::new(parking_lot::Mutex::new(HashSet::new()));
+        let config = ConnectConfig {
+            server_addr: "test".to_string(),
+            nick: "tester".to_string(),
+            user: "tester".to_string(),
+            realname: "tester".to_string(),
+            tls: false,
+            tls_insecure: false,
+            web_token: None,
+            websocket_url: None,
+        };
+        let (reader, writer) = tokio::io::split(client_side);
+
+        tokio::spawn(async move {
+            let _ = run_irc(
+                BufReader::new(reader),
+                writer,
+                &config,
+                None,
+                event_tx,
+                cmd_rx,
+                echo_registry,
+                caps_acked,
+            )
+            .await;
+        });
+
+        let mut drain = vec![0u8; 1024];
+        let _ = tokio::time::timeout(
+            tokio::time::Duration::from_millis(150),
+            server_side.read(&mut drain),
+        )
+        .await;
+
+        // Exact b10 body: label + fenced rust block, as the smoke sends.
+        // Six lines = six chunks in CHATHISTORY replay.
+        let wire = concat!(
+            ":srv BATCH +cht1 chathistory #room\r\n",
+            "@msgid=B10;time=2026-05-30T18:00:00.000Z;batch=cht1 ",
+            ":alice!a@h BATCH +ml1 draft/multiline #room\r\n",
+            "@batch=ml1 :alice!a@h PRIVMSG #room :b10-stamp\r\n",
+            "@batch=ml1 :alice!a@h PRIVMSG #room :```\r\n",
+            "@batch=ml1 :alice!a@h PRIVMSG #room :fn main() {\r\n",
+            "@batch=ml1 :alice!a@h PRIVMSG #room :    println!(\"hello\");\r\n",
+            "@batch=ml1 :alice!a@h PRIVMSG #room :}\r\n",
+            "@batch=ml1 :alice!a@h PRIVMSG #room :```\r\n",
+            "@batch=cht1 BATCH -ml1\r\n",
+            ":srv BATCH -cht1\r\n",
+        );
+        server_side.write_all(wire.as_bytes()).await.unwrap();
+        server_side.flush().await.unwrap();
+
+        let mut events = Vec::new();
+        let _ = tokio::time::timeout(
+            tokio::time::Duration::from_millis(800),
+            async {
+                while let Some(ev) = event_rx.recv().await {
+                    let done = matches!(&ev, Event::BatchEnd { id } if id == "cht1");
+                    events.push(ev);
+                    if done {
+                        break;
+                    }
+                }
+            },
+        )
+        .await;
+
+        let expected = "b10-stamp\n```\nfn main() {\n    println!(\"hello\");\n}\n```";
+        let got = events.iter().find_map(|e| match e {
+            Event::Message { text, .. } if text.starts_with("b10-stamp") => Some(text.clone()),
+            _ => None,
+        });
+        assert_eq!(
+            got.as_deref(),
+            Some(expected),
+            "codeblock body should be assembled byte-exact. events: {events:#?}",
+        );
+    }
 }

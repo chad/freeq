@@ -277,17 +277,27 @@ class AppState {
 
     func reconnectIfSaved() {
         guard connectionState == .disconnected, hasSavedSession else { return }
+        guard let token = brokerToken, !token.isEmpty else {
+            // Saved-session bit was set but the token is gone (keychain
+            // wiped, etc.). Fall back to fresh login instead of crashing
+            // the way `brokerToken!` did.
+            self.hasSavedSession = false
+            self.errorMessage = "Saved session is no longer valid — please sign in again."
+            return
+        }
 
         Task {
             do {
                 let session = try await BrokerAuth.fetchSession(
                     brokerBase: authBrokerBase,
-                    brokerToken: brokerToken!
+                    brokerToken: token
                 )
                 await MainActor.run {
                     self.pendingWebToken = session.token
                     self.authenticatedDID = session.did
-                    KeychainHelper.save(key: "did", value: session.did)
+                    if !KeychainHelper.save(key: "did", value: session.did) {
+                        self.errorMessage = "Could not store credentials in Keychain — login will not persist across restarts."
+                    }
                     self.connect(nick: session.nick)
                 }
             } catch BrokerError.invalidToken {

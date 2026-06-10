@@ -83,7 +83,7 @@ function CardFrame({ icon, label, children, msg, className }: {
 function TaskRequestCard({ msg }: { msg: Message }) {
   return (
     <CardFrame icon="📋" label="New Task" msg={msg} className="border-accent/30">
-      <div className="text-fg">{msg.text}</div>
+      <div className="text-fg whitespace-pre-wrap">{msg.text}</div>
     </CardFrame>
   );
 }
@@ -91,7 +91,7 @@ function TaskRequestCard({ msg }: { msg: Message }) {
 function TaskAcceptCard({ msg }: { msg: Message }) {
   return (
     <CardFrame icon="👍" label="Task Accepted" msg={msg}>
-      <div className="text-fg-muted">{msg.text}</div>
+      <div className="text-fg-muted whitespace-pre-wrap">{msg.text}</div>
     </CardFrame>
   );
 }
@@ -112,7 +112,7 @@ function TaskUpdateCard({ msg }: { msg: Message }) {
 function TaskCompleteCard({ msg }: { msg: Message }) {
   return (
     <CardFrame icon="🎉" label="Task Complete" msg={msg} className="border-success/30">
-      <div className="text-success">{msg.text}</div>
+      <div className="text-success whitespace-pre-wrap">{msg.text}</div>
     </CardFrame>
   );
 }
@@ -120,7 +120,7 @@ function TaskCompleteCard({ msg }: { msg: Message }) {
 function TaskFailedCard({ msg }: { msg: Message }) {
   return (
     <CardFrame icon="❌" label="Task Failed" msg={msg} className="border-error/30">
-      <div className="text-error">{msg.text}</div>
+      <div className="text-error whitespace-pre-wrap">{msg.text}</div>
     </CardFrame>
   );
 }
@@ -160,7 +160,7 @@ function EvidenceCard({ msg }: { msg: Message }) {
 function DelegationCard({ msg }: { msg: Message }) {
   return (
     <CardFrame icon="🔀" label="Delegation" msg={msg}>
-      <div className="text-fg-muted">{msg.text}</div>
+      <div className="text-fg-muted whitespace-pre-wrap">{msg.text}</div>
     </CardFrame>
   );
 }
@@ -168,7 +168,7 @@ function DelegationCard({ msg }: { msg: Message }) {
 function StatusUpdateCard({ msg }: { msg: Message }) {
   return (
     <CardFrame icon="💬" label="Status" msg={msg}>
-      <div className="text-fg-muted">{msg.text}</div>
+      <div className="text-fg-muted whitespace-pre-wrap">{msg.text}</div>
     </CardFrame>
   );
 }
@@ -204,7 +204,7 @@ export function CoordinationEventCard({ msg }: { msg: Message }): React.ReactEle
       // Unknown event type — show as a generic card
       return (
         <CardFrame icon="📌" label={eventType} msg={msg}>
-          <div className="text-fg-muted">{msg.text}</div>
+          <div className="text-fg-muted whitespace-pre-wrap">{msg.text}</div>
         </CardFrame>
       );
   }

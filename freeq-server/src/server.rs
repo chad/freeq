@@ -612,6 +612,23 @@ pub struct SharedState {
     pub cap_server_time: Mutex<HashSet<String>>,
     /// Sessions that have negotiated batch capability.
     pub cap_batch: Mutex<HashSet<String>>,
+    /// Sessions that have negotiated the `draft/multiline` capability —
+    /// they can send and receive logical messages split across multiple
+    /// PRIVMSG/NOTICE lines via BATCH frames. See
+    /// https://ircv3.net/specs/extensions/multiline.
+    pub cap_draft_multiline: Mutex<HashSet<String>>,
+    /// In-flight BATCH frames per session. Keyed by `(session_id,
+    /// batch_id)`. Populated when a client sends `BATCH +<id> <type>
+    /// <target>`, drained when it sends `BATCH -<id>`. PRIVMSG/NOTICE
+    /// lines tagged `batch=<id>` are routed into the matching entry
+    /// instead of being dispatched as standalone messages. Cleaned up
+    /// on disconnect.
+    pub open_batches: Mutex<
+        HashMap<
+            (String, String),
+            crate::connection::draft_multiline::OpenBatch,
+        >,
+    >,
     pub cap_account_notify: Mutex<HashSet<String>>,
     pub cap_extended_join: Mutex<HashSet<String>>,
     pub cap_away_notify: Mutex<HashSet<String>>,
@@ -1332,6 +1349,8 @@ impl Server {
             cap_echo_message: Mutex::new(HashSet::new()),
             cap_server_time: Mutex::new(HashSet::new()),
             cap_batch: Mutex::new(HashSet::new()),
+            cap_draft_multiline: Mutex::new(HashSet::new()),
+            open_batches: Mutex::new(HashMap::new()),
             cap_account_notify: Mutex::new(HashSet::new()),
             cap_extended_join: Mutex::new(HashSet::new()),
             cap_away_notify: Mutex::new(HashSet::new()),
@@ -2617,6 +2636,7 @@ pub(crate) async fn process_s2s_message(
             msgid,
             sig,
             tags: relayed_tags,
+            multiline_lines,
             ..
         } => {
             // Sanitize all peer-provided strings to prevent IRC protocol injection.
@@ -2737,15 +2757,85 @@ pub(crate) async fn process_s2s_message(
                     .map(|ch| ch.members.iter().cloned().collect())
                     .unwrap_or_default();
                 let tag_caps = state.cap_message_tags.lock();
+                let time_caps = state.cap_server_time.lock();
+                let account_caps = state.cap_account_tag.lock();
+                let multiline_caps = state.cap_draft_multiline.lock();
                 let conns = state.connections.lock();
+                // If the peer told us this is a draft/multiline batch,
+                // re-emit per-receiver wire frames (BATCH for capable
+                // receivers, individual PRIVMSGs for fallback) just
+                // like the local-origin channel broadcast does.
+                // Without this branch, a federated multiline message
+                // would arrive at local clients as one PRIVMSG with
+                // `\n` in its body, breaking the IRC wire.
+                let local_lines: Option<Vec<crate::connection::draft_multiline::BatchLine>> =
+                    multiline_lines.as_ref().map(|lines| {
+                        lines
+                            .iter()
+                            .map(|l| crate::connection::draft_multiline::BatchLine {
+                                body: l.body.clone(),
+                                concat_to_previous: l.concat,
+                                command: "PRIVMSG".to_string(),
+                            })
+                            .collect()
+                    });
+                let outbound_batch_id = local_lines
+                    .as_ref()
+                    .map(|_| format!("ml{}", crate::msgid::generate()));
+                let time_tag = chrono::Utc::now()
+                    .format("%Y-%m-%dT%H:%M:%S.000Z")
+                    .to_string();
+                // Federated relays don't inject account-tag — matches
+                // the single-PRIVMSG S2S path's existing behavior.
+                // Whether to start attributing federated messages is a
+                // server-wide policy question, not a multiline one.
                 for sid in &members {
                     if let Some(tx) = conns.get(sid) {
-                        let line = if tag_caps.contains(sid) {
-                            &tagged_line
+                        if let (Some(lines), Some(batch_id)) =
+                            (local_lines.as_ref(), outbound_batch_id.as_deref())
+                        {
+                            let caps = crate::connection::draft_multiline::ReceiverCaps {
+                                has_tags: tag_caps.contains(sid),
+                                has_time: time_caps.contains(sid),
+                                has_multiline: multiline_caps.contains(sid),
+                                wants_account: false,
+                                sender_did: None,
+                            };
+                            // Opener tags here are the relayed
+                            // coordination tags + sig (msgid is
+                            // managed by the builder).
+                            let mut opener_tags: HashMap<String, String> =
+                                relay_tags.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                            if let Some(ref sig) = sig {
+                                opener_tags.insert(
+                                    "+freeq.at/sig".to_string(),
+                                    sig.clone(),
+                                );
+                            }
+                            let _ = account_caps; // silence unused — wants_account stays false for S2S relay
+                            let ctx = crate::connection::draft_multiline::RelayContext {
+                                hostmask: &from,
+                                command: "PRIVMSG",
+                                target: &target,
+                                msgid: &msgid,
+                                time_tag: &time_tag,
+                                opener_tags: &opener_tags,
+                                batch_id,
+                                lines,
+                            };
+                            for frame in crate::connection::draft_multiline::build_outbound_multiline_frames(
+                                &ctx, &caps,
+                            ) {
+                                let _ = tx.try_send(frame);
+                            }
                         } else {
-                            &plain_line
-                        };
-                        let _ = tx.try_send(line.clone());
+                            let line = if tag_caps.contains(sid) {
+                                &tagged_line
+                            } else {
+                                &plain_line
+                            };
+                            let _ = tx.try_send(line.clone());
+                        }
                     }
                 }
             } else {
@@ -4264,6 +4354,8 @@ mod s2s_adversarial_tests {
             cap_echo_message: Mutex::new(HashSet::new()),
             cap_server_time: Mutex::new(HashSet::new()),
             cap_batch: Mutex::new(HashSet::new()),
+            cap_draft_multiline: Mutex::new(HashSet::new()),
+            open_batches: Mutex::new(HashMap::new()),
             cap_account_notify: Mutex::new(HashSet::new()),
             cap_extended_join: Mutex::new(HashSet::new()),
             cap_away_notify: Mutex::new(HashSet::new()),
@@ -4341,6 +4433,10 @@ mod s2s_adversarial_tests {
         manager.authenticated_peers.lock().await.insert(PEER.to_string());
         manager.peer_trust.lock().await.insert(PEER.to_string(), TrustLevel::Full);
         *state.s2s_manager.lock() = Some(manager.clone());
+        // S2S_RATE_LIMITS is process-static; all tests share PEER, so
+        // parallel-run counters trip the 100/sec cap mid-suite without
+        // this reset.
+        S2S_RATE_LIMITS.lock().remove(PEER);
     }
 
     fn setup_channel(state: &SharedState, name: &str) {
@@ -4459,6 +4555,7 @@ mod s2s_adversarial_tests {
             msgid: None,
             sig: None,
             tags: HashMap::new(),
+            multiline_lines: None,
         }).await;
 
         // The message should have been delivered to local alice.
@@ -4496,6 +4593,7 @@ mod s2s_adversarial_tests {
                 msgid: None,
                 sig: None,
                 tags: HashMap::new(),
+            multiline_lines: None,
             }).await;
 
             // Check what the local member received
@@ -4509,6 +4607,327 @@ mod s2s_adversarial_tests {
                 }
             }
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // S2S PRIVMSG: draft/multiline relay
+    // ═══════════════════════════════════════════════════════════
+
+    fn s2s_multiline_lines(bodies: &[&str]) -> Vec<crate::s2s::MultilineLine> {
+        bodies
+            .iter()
+            .map(|b| crate::s2s::MultilineLine {
+                body: (*b).to_string(),
+                concat: false,
+            })
+            .collect()
+    }
+
+    /// Drain the receiver mailbox after a small wait so all the frames
+    /// the handler tried to send have a chance to land. Returns the
+    /// collected frames in order. The deadline is generous enough that
+    /// we don't false-fail on slow CI but short enough that test
+    /// time stays small.
+    async fn drain_mailbox(rx: &mut mpsc::Receiver<String>) -> Vec<String> {
+        let mut frames = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
+        while std::time::Instant::now() < deadline {
+            match tokio::time::timeout(
+                std::time::Duration::from_millis(50),
+                rx.recv(),
+            )
+            .await
+            {
+                Ok(Some(line)) => frames.push(line),
+                _ => break,
+            }
+        }
+        frames
+    }
+
+    #[tokio::test]
+    async fn s2s_multiline_capable_local_member_receives_batch_frames() {
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        setup_channel(&state, "#mlchan");
+
+        let (tx, mut rx) = mpsc::channel(16);
+        state.connections.lock().insert("ml-recv".to_string(), tx);
+        state.channels.lock().get_mut("#mlchan").unwrap()
+            .members.insert("ml-recv".to_string());
+        state.cap_message_tags.lock().insert("ml-recv".to_string());
+        state.cap_draft_multiline.lock().insert("ml-recv".to_string());
+
+        process_s2s_message(&state, &mgr, PEER, S2sMessage::Privmsg {
+            event_id: format!("{PEER}:ml-cap"),
+            from: "alice!a@remote".to_string(),
+            target: "#mlchan".to_string(),
+            text: "first\nsecond\nthird".to_string(),
+            origin: PEER.to_string(),
+            msgid: Some("ML-MSG-1".to_string()),
+            sig: None,
+            tags: HashMap::new(),
+            multiline_lines: Some(s2s_multiline_lines(&["first", "second", "third"])),
+        }).await;
+
+        let frames = drain_mailbox(&mut rx).await;
+        // Opener + 3 chunk PRIVMSGs + closer = 5 frames.
+        assert_eq!(frames.len(), 5, "got frames: {frames:#?}");
+        assert!(frames[0].contains("BATCH +ml"));
+        assert!(frames[0].contains("draft/multiline"));
+        assert!(frames[0].contains("#mlchan"));
+        assert!(frames[0].contains("msgid=ML-MSG-1"));
+        assert!(frames[1].contains("batch=ml"));
+        assert!(frames[1].contains("first"));
+        assert!(frames[2].contains("second"));
+        assert!(frames[3].contains("third"));
+        assert!(frames[4].starts_with("BATCH -ml"));
+    }
+
+    #[tokio::test]
+    async fn s2s_multiline_fallback_local_member_receives_n_privmsgs() {
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        setup_channel(&state, "#mlchan2");
+
+        let (tx, mut rx) = mpsc::channel(16);
+        state.connections.lock().insert("fb-recv".to_string(), tx);
+        state.channels.lock().get_mut("#mlchan2").unwrap()
+            .members.insert("fb-recv".to_string());
+        state.cap_message_tags.lock().insert("fb-recv".to_string());
+        // Deliberately do NOT add to cap_draft_multiline.
+
+        process_s2s_message(&state, &mgr, PEER, S2sMessage::Privmsg {
+            event_id: format!("{PEER}:ml-fb"),
+            from: "alice!a@remote".to_string(),
+            target: "#mlchan2".to_string(),
+            text: "first\nsecond".to_string(),
+            origin: PEER.to_string(),
+            msgid: Some("ML-MSG-2".to_string()),
+            sig: None,
+            tags: HashMap::new(),
+            multiline_lines: Some(s2s_multiline_lines(&["first", "second"])),
+        }).await;
+
+        let frames = drain_mailbox(&mut rx).await;
+        // Fallback receiver: 2 PRIVMSGs, no BATCH frames.
+        assert_eq!(frames.len(), 2, "got frames: {frames:#?}");
+        for frame in &frames {
+            assert!(!frame.contains("BATCH"), "BATCH leaked to fallback: {frame}");
+            assert!(!frame.contains("batch="), "batch tag leaked to fallback: {frame}");
+        }
+        // msgid only on first.
+        assert!(frames[0].contains("msgid=ML-MSG-2"));
+        assert!(!frames[1].contains("msgid"));
+        // The IRC formatter only prefixes `:` on the trailing param when
+        // it contains spaces or starts with `:`; "first" / "second" have
+        // neither, so they land without the colon.
+        assert!(
+            frames[0].ends_with("first\r\n"),
+            "first chunk content not at end: {}", frames[0],
+        );
+        assert!(
+            frames[1].ends_with("second\r\n"),
+            "second chunk content not at end: {}", frames[1],
+        );
+    }
+
+    /// Build a manager with a broadcast channel we can drain, so a
+    /// test can capture what relay_to_nick / s2s_broadcast actually
+    /// emits onto the wire. Distinct from `test_manager()`, which
+    /// drops the receiver — that's fine when the test only cares
+    /// about effects on local state, but we need to inspect the
+    /// broadcasted S2sMessage here.
+    fn test_manager_with_broadcast_rx() -> (Arc<S2sManager>, mpsc::Receiver<S2sMessage>) {
+        let (event_tx, _event_rx) = mpsc::channel(1024);
+        let (broadcast_tx, broadcast_rx) = mpsc::channel(1024);
+        let mut key_bytes = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut key_bytes);
+        let secret_key = iroh::SecretKey::from_bytes(&key_bytes);
+        let manager = Arc::new(S2sManager {
+            server_id: "test-local-server".to_string(),
+            server_name: "test-s2s".to_string(),
+            peers: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            peer_names: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            event_tx,
+            event_counter: AtomicU64::new(1000),
+            dedup: Arc::new(DedupSet::new()),
+            broadcast_tx,
+            conn_gen: Arc::new(AtomicU64::new(0)),
+            signing_key: Arc::new(secret_key),
+            trust_config: HashMap::new(),
+            peer_trust: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            pending_rotations: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            authenticated_peers: Arc::new(tokio::sync::Mutex::new(HashSet::new())),
+        });
+        (manager, broadcast_rx)
+    }
+
+    #[tokio::test]
+    async fn dm_to_federated_user_via_relay_to_nick_carries_multiline_lines() {
+        // The narrow real-world case the routing-layer fix targets:
+        // a multiline DM whose target nick has no local session and
+        // gets relayed via S2S. Before the fix, the assembled body
+        // shipped over the wire as-is and the receiving peer had no
+        // way to split it back into BATCH-wrappable chunks. Now the
+        // breakdown rides along on the relayed Privmsg event.
+        use crate::connection::draft_multiline::BatchLine;
+        use crate::connection::routing::{relay_to_nick, RouteResult};
+
+        let state = test_state();
+        let (mgr, mut broadcast_rx) = test_manager_with_broadcast_rx();
+        *state.s2s_manager.lock() = Some(mgr.clone());
+
+        let lines = vec![
+            BatchLine {
+                body: "chunk one".to_string(),
+                concat_to_previous: false,
+                command: "PRIVMSG".to_string(),
+            },
+            BatchLine {
+                body: "chunk two".to_string(),
+                concat_to_previous: false,
+                command: "PRIVMSG".to_string(),
+            },
+            BatchLine {
+                body: "tail".to_string(),
+                concat_to_previous: true,
+                command: "PRIVMSG".to_string(),
+            },
+        ];
+
+        // Target "ghost" has no local session — relay_to_nick will
+        // fall through to the S2S branch since the test manager is
+        // installed.
+        let outcome = relay_to_nick(
+            &state,
+            "sender!u@h",
+            "ghost",
+            "chunk one\nchunk twotail",
+            "evt-1".to_string(),
+            Some(&lines),
+        );
+        assert!(matches!(outcome, RouteResult::Relayed));
+
+        // Drain the broadcast channel and assert the Privmsg has the
+        // expected multiline_lines populated.
+        let captured = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            broadcast_rx.recv(),
+        )
+        .await
+        .expect("broadcast deadline")
+        .expect("broadcast channel closed before receive");
+        match captured {
+            S2sMessage::Privmsg {
+                target,
+                text,
+                tags,
+                multiline_lines,
+                ..
+            } => {
+                assert_eq!(target, "ghost");
+                // The S2S `text` field is dual-encoded: `\n` escaped to
+                // `\\n` + `+freeq.at/multiline` tag, so a peer that
+                // doesn't understand `multiline_lines` still relays
+                // wire-safe content. New peers prefer `multiline_lines`
+                // and ignore the escaped `text`.
+                assert_eq!(text, "chunk one\\nchunk twotail");
+                assert!(
+                    tags.contains_key("+freeq.at/multiline"),
+                    "+freeq.at/multiline tag must be set when text is escaped"
+                );
+                let ml = multiline_lines.expect("multiline_lines absent from broadcast");
+                assert_eq!(ml.len(), 3);
+                assert_eq!(ml[0].body, "chunk one");
+                assert!(!ml[0].concat);
+                assert_eq!(ml[1].body, "chunk two");
+                assert!(!ml[1].concat);
+                assert_eq!(ml[2].body, "tail");
+                assert!(ml[2].concat, "third line should carry concat=true");
+            }
+            other => panic!("expected Privmsg variant, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn dm_to_federated_user_without_multiline_lines_relays_none() {
+        // Regression guard: non-multiline DMs (the existing single-
+        // PRIVMSG path) must still relay with multiline_lines = None
+        // so peer servers go through their existing single-PRIVMSG
+        // broadcast (no synthetic chunking).
+        use crate::connection::routing::{relay_to_nick, RouteResult};
+
+        let state = test_state();
+        let (mgr, mut broadcast_rx) = test_manager_with_broadcast_rx();
+        *state.s2s_manager.lock() = Some(mgr.clone());
+
+        let outcome = relay_to_nick(
+            &state,
+            "sender!u@h",
+            "ghost",
+            "ordinary text",
+            "evt-2".to_string(),
+            None,
+        );
+        assert!(matches!(outcome, RouteResult::Relayed));
+
+        let captured = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            broadcast_rx.recv(),
+        )
+        .await
+        .expect("broadcast deadline")
+        .expect("broadcast channel closed before receive");
+        match captured {
+            S2sMessage::Privmsg {
+                multiline_lines, ..
+            } => {
+                assert!(
+                    multiline_lines.is_none(),
+                    "non-multiline DM should not carry multiline_lines",
+                );
+            }
+            other => panic!("expected Privmsg variant, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn s2s_privmsg_without_multiline_field_unchanged() {
+        // Belt-and-suspenders: peer servers that don't know about
+        // multiline still relay regular PRIVMSGs; the receive handler
+        // should fall through to the existing single-PRIVMSG path.
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        setup_channel(&state, "#plain");
+
+        let (tx, mut rx) = mpsc::channel(16);
+        state.connections.lock().insert("plain-recv".to_string(), tx);
+        state.channels.lock().get_mut("#plain").unwrap()
+            .members.insert("plain-recv".to_string());
+        state.cap_message_tags.lock().insert("plain-recv".to_string());
+        state.cap_draft_multiline.lock().insert("plain-recv".to_string());
+
+        process_s2s_message(&state, &mgr, PEER, S2sMessage::Privmsg {
+            event_id: format!("{PEER}:plain"),
+            from: "alice!a@remote".to_string(),
+            target: "#plain".to_string(),
+            text: "just a normal line".to_string(),
+            origin: PEER.to_string(),
+            msgid: Some("PLAIN-MSG".to_string()),
+            sig: None,
+            tags: HashMap::new(),
+            multiline_lines: None,
+        }).await;
+
+        let frames = drain_mailbox(&mut rx).await;
+        assert_eq!(frames.len(), 1, "got frames: {frames:#?}");
+        assert!(!frames[0].contains("BATCH"));
+        assert!(frames[0].contains("msgid=PLAIN-MSG"));
+        assert!(frames[0].contains(":just a normal line"));
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -4644,6 +5063,7 @@ mod s2s_adversarial_tests {
                 msgid: None,
                 sig: None,
                 tags: HashMap::new(),
+            multiline_lines: None,
             }).await;
         }
 
@@ -4694,9 +5114,16 @@ mod s2s_adversarial_tests {
 
     #[tokio::test]
     async fn s2s_rate_limit_at_boundary() {
+        // Isolated peer id: setup_authenticated_peer clears PEER's
+        // rate-limit counter, which races with this test's 101-message
+        // send if other parallel tests re-enter setup mid-way.
+        const RL_PEER: &str = "fake-peer-rate-limit-isolated";
         let state = test_state();
         let mgr = test_manager();
-        setup_authenticated_peer(&state, &mgr).await;
+        mgr.authenticated_peers.lock().await.insert(RL_PEER.to_string());
+        mgr.peer_trust.lock().await.insert(RL_PEER.to_string(), TrustLevel::Full);
+        *state.s2s_manager.lock() = Some(mgr.clone());
+        S2S_RATE_LIMITS.lock().remove(RL_PEER);
         setup_channel(&state, "#ratelimit");
 
         let (tx, mut rx) = mpsc::channel(256);
@@ -4704,17 +5131,17 @@ mod s2s_adversarial_tests {
         state.channels.lock().get_mut("#ratelimit").unwrap()
             .members.insert("rl-sess".to_string());
 
-        // Send 101 messages rapidly (limit is 100/sec)
         for i in 0..101u64 {
-            process_s2s_message(&state, &mgr, PEER, S2sMessage::Privmsg {
-                event_id: format!("{PEER}:{}", 200 + i),
+            process_s2s_message(&state, &mgr, RL_PEER, S2sMessage::Privmsg {
+                event_id: format!("{RL_PEER}:{}", 200 + i),
                 from: "spammer!u@s2s".to_string(),
                 target: "#ratelimit".to_string(),
                 text: format!("spam {i}"),
-                origin: PEER.to_string(),
+                origin: RL_PEER.to_string(),
                 msgid: None,
                 sig: None,
                 tags: HashMap::new(),
+            multiline_lines: None,
             }).await;
         }
 
@@ -4903,6 +5330,7 @@ mod s2s_adversarial_tests {
             msgid: Some("dm-msg-001".to_string()),
             sig: None,
             tags: HashMap::new(),
+            multiline_lines: None,
         }).await;
 
         // Bob should receive the DM
@@ -5231,6 +5659,155 @@ mod s2s_adversarial_tests {
             "{not json", "anything",
         );
         assert_eq!(r, Err("bad_payload"));
+    }
+
+    // ── Multiline reveal round-trip ───────────────────────────────────
+    //
+    // These tests prove that a reveal sent via a draft/multiline batch
+    // verifies correctly after Phase 2's `dispatch_assembled_batch` re-
+    // feeds the assembled body through the normal PRIVMSG path. The
+    // committer hashes plaintext; the sender chunks it across multiple
+    // PRIVMSGs inside a BATCH; the server reassembles per concat rules;
+    // verify_commit_reveal hashes the assembled body — same bytes, same
+    // hash. So Phase 3's "extend verify_commit_reveal" is a no-op at
+    // the verifier level; the work is in Phase 2's assembly. These tests
+    // pin that behavior so a future change to assembly or dispatch
+    // can't silently break commit-reveal.
+
+    /// Reproduce the spec's join rules in tests without coupling to
+    /// the production `assemble_body` (so a regression there shows up
+    /// as a hash mismatch rather than as both halves agreeing on a
+    /// broken assembly).
+    fn assemble_for_test(lines: &[(&str, bool)]) -> String {
+        let mut out = String::new();
+        for (i, (body, concat)) in lines.iter().enumerate() {
+            if i > 0 && !concat {
+                out.push('\n');
+            }
+            out.push_str(body);
+        }
+        out
+    }
+
+    #[test]
+    fn commit_reveal_verifies_multiline_assembled_body() {
+        // The committer locally assembled three paragraphs joined by
+        // newlines and hashed that, then sent the reveal in 3 chunks.
+        let state = test_state_with_db();
+        let did = "did:key:zPANEL_MULTILINE";
+        let salt: &[u8] = b"saltforthemultiline";
+
+        let chunks: Vec<(&str, bool)> = vec![
+            ("Paragraph one — the opening claim.", false),
+            ("Paragraph two — supporting evidence.", false),
+            ("Paragraph three — the conclusion.", false),
+        ];
+        let assembled = assemble_for_test(&chunks);
+        // Sanity: the spec's join rule produces "a\nb\nc".
+        assert!(assembled.contains('\n'));
+        assert!(!assembled.ends_with('\n'));
+
+        stage_commit(
+            &state,
+            "01J...COMMIT_MULTI",
+            did,
+            "#debate",
+            Some("01J...DEBATE_MULTI"),
+            salt,
+            &assembled,
+            "sha256",
+        );
+
+        let payload = reveal_payload("01J...COMMIT_MULTI", salt);
+        let r = crate::connection::messaging::verify_commit_reveal(
+            &state,
+            Some(did),
+            "#debate",
+            Some("01J...DEBATE_MULTI"),
+            &payload,
+            &assembled,
+        );
+        assert_eq!(r, Ok(()));
+    }
+
+    #[test]
+    fn commit_reveal_verifies_assembled_body_with_concat_chunks() {
+        // Splits a long single line across two PRIVMSGs via the
+        // `draft/multiline-concat` mechanism. The second chunk
+        // appends to the first with no separator — verifying the
+        // server's assembler agrees with the committer about the
+        // joined bytes.
+        let state = test_state_with_db();
+        let did = "did:key:zPANEL_CONCAT";
+        let salt: &[u8] = b"saltforconcatcase";
+
+        let chunks: Vec<(&str, bool)> = vec![
+            ("hello ", false),
+            ("everyone", true), // concat-to-previous
+        ];
+        let assembled = assemble_for_test(&chunks);
+        assert_eq!(assembled, "hello everyone");
+
+        stage_commit(
+            &state,
+            "01J...COMMIT_CONCAT",
+            did,
+            "#debate",
+            Some("01J...DEBATE_CONCAT"),
+            salt,
+            &assembled,
+            "sha256",
+        );
+
+        let payload = reveal_payload("01J...COMMIT_CONCAT", salt);
+        let r = crate::connection::messaging::verify_commit_reveal(
+            &state,
+            Some(did),
+            "#debate",
+            Some("01J...DEBATE_CONCAT"),
+            &payload,
+            &assembled,
+        );
+        assert_eq!(r, Ok(()));
+    }
+
+    #[test]
+    fn commit_reveal_assemble_for_test_matches_production_assemble_body() {
+        // Belt-and-suspenders: the assembly helper used in the tests
+        // above MUST agree byte-for-byte with the production
+        // `connection::draft_multiline::assemble_body`. If the spec
+        // join rules ever drift between the two, the multiline reveal
+        // round-trip tests would silently pass while production
+        // verification fails.
+        use crate::connection::draft_multiline as dm;
+        let chunks: Vec<(&str, bool)> = vec![
+            ("hello", false),
+            ("", false),
+            ("how is ", false),
+            ("everyone?", true),
+        ];
+        let from_test = assemble_for_test(&chunks);
+
+        let prod_batch = dm::OpenBatch {
+            batch_id: "x".to_string(),
+            batch_type: "draft/multiline".to_string(),
+            target: "#c".to_string(),
+            opener_tags: HashMap::new(),
+            lines: chunks
+                .iter()
+                .map(|(body, concat)| dm::BatchLine {
+                    body: (*body).to_string(),
+                    concat_to_previous: *concat,
+                    command: "PRIVMSG".to_string(),
+                })
+                .collect(),
+            byte_count: 0,
+            first_command: Some("PRIVMSG".to_string()),
+        };
+        let from_prod = dm::assemble_body(&prod_batch);
+
+        assert_eq!(from_test, from_prod);
+        assert_eq!(from_test, "hello\n\nhow is everyone?");
     }
 
     #[test]

@@ -65,7 +65,10 @@ actor MessageStore {
         sqlite3_bind_int(stmt, 8, msg.isEdited ? 1 : 0)
         sqlite3_bind_int(stmt, 9, msg.isDeleted ? 1 : 0)
         sqlite3_bind_text(stmt, 10, ((msg.replyTo ?? "") as NSString).utf8String, -1, nil)
-        sqlite3_step(stmt)
+        let rc = sqlite3_step(stmt)
+        if rc != SQLITE_DONE {
+            Log.ui.error("MessageStore.save sqlite3_step rc=\(rc, privacy: .public) channel=\(channel, privacy: .public)")
+        }
     }
 
     /// Load recent messages for a channel.
@@ -113,7 +116,10 @@ actor MessageStore {
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_text(stmt, 1, (msgId as NSString).utf8String, -1, nil)
-        sqlite3_step(stmt)
+        let rc = sqlite3_step(stmt)
+        if rc != SQLITE_DONE {
+            Log.ui.error("MessageStore.markDeleted sqlite3_step rc=\(rc, privacy: .public)")
+        }
     }
 
     /// Update edited message.
@@ -124,7 +130,10 @@ actor MessageStore {
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_text(stmt, 1, (newText as NSString).utf8String, -1, nil)
         sqlite3_bind_text(stmt, 2, (msgId as NSString).utf8String, -1, nil)
-        sqlite3_step(stmt)
+        let rc = sqlite3_step(stmt)
+        if rc != SQLITE_DONE {
+            Log.ui.error("MessageStore.markEdited sqlite3_step rc=\(rc, privacy: .public)")
+        }
     }
 
     /// Search messages.

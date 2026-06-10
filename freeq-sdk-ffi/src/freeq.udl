@@ -15,6 +15,12 @@ dictionary IrcMessage {
     boolean is_signed;
     i64 timestamp_ms;
     string? account;
+    sequence<ReactionTally> reactions;
+};
+
+dictionary ReactionTally {
+    string emoji;
+    sequence<string> nicks;
 };
 
 dictionary IrcMember {

@@ -17,21 +17,19 @@ pub struct AgentId {
     pub color: Option<u8>,
 }
 
-/// Post a message to a channel with agent role prefix.
+/// Post a message to a channel with agent role prefix. The SDK
+/// auto-routes `\n`-bearing text through a `draft/multiline` BATCH
+/// when the cap is acked, so a long agent response arrives as ONE
+/// logical message (msgid coherence for edits/reactions) instead of
+/// the N per-line PRIVMSGs the old wrap-and-sleep workaround produced.
 pub async fn say(
     handle: &ClientHandle,
     channel: &str,
     agent: &AgentId,
     text: &str,
 ) -> anyhow::Result<()> {
-    // Split long messages across multiple IRC lines (max ~400 chars for safety)
-    for line in wrap_lines(text, 400) {
-        let msg = format!("[{}] {}", agent.role, line);
-        handle.privmsg(channel, &msg).await?;
-        // Small delay between multi-line messages to avoid flood
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    Ok(())
+    let msg = format!("[{}] {}", agent.role, text);
+    handle.privmsg(channel, &msg).await
 }
 
 /// Post a status update (brief, one-line).
@@ -46,7 +44,10 @@ pub async fn status(
     handle.privmsg(channel, &msg).await
 }
 
-/// Post a code block (multi-line, formatted for readability).
+/// Post a code block (multi-line, formatted for readability). Sends
+/// a status header PRIVMSG, then ONE multi-line PRIVMSG carrying the
+/// indented body — the SDK BATCH-routes the body so it stays one
+/// logical message rather than N flood-rate-limited per-line PRIVMSGs.
 pub async fn code(
     handle: &ClientHandle,
     channel: &str,
@@ -68,24 +69,18 @@ pub async fn code(
     )
     .await?;
 
-    for line in &lines[..show_lines] {
-        handle.privmsg(channel, &format!("  {line}")).await?;
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-
+    let mut body = lines[..show_lines]
+        .iter()
+        .map(|l| format!("  {l}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     if truncated {
-        handle
-            .privmsg(
-                channel,
-                &format!("  ... ({} more lines)", lines.len() - max_lines),
-            )
-            .await?;
+        body.push_str(&format!("\n  ... ({} more lines)", lines.len() - max_lines));
     }
-
-    Ok(())
+    handle.privmsg(channel, &body).await
 }
 
-/// Post a file listing.
+/// Post a file listing — status header + one multi-line body PRIVMSG.
 pub async fn file_tree(
     handle: &ClientHandle,
     channel: &str,
@@ -100,16 +95,17 @@ pub async fn file_tree(
         &format!("Project files ({})", files.len()),
     )
     .await?;
-    for f in files.iter().take(20) {
-        handle.privmsg(channel, &format!("  {f}")).await?;
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
+
+    let mut body = files
+        .iter()
+        .take(20)
+        .map(|f| format!("  {f}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     if files.len() > 20 {
-        handle
-            .privmsg(channel, &format!("  ... and {} more", files.len() - 20))
-            .await?;
+        body.push_str(&format!("\n  ... and {} more", files.len() - 20));
     }
-    Ok(())
+    handle.privmsg(channel, &body).await
 }
 
 /// Post a deploy result with the URL highlighted.
@@ -173,31 +169,3 @@ pub async fn stream_response(
     Ok((full_text, msgid))
 }
 
-/// Wrap text into lines of max_len, breaking on word boundaries.
-fn wrap_lines(text: &str, max_len: usize) -> Vec<String> {
-    let mut result = Vec::new();
-    for line in text.lines() {
-        if line.len() <= max_len {
-            result.push(line.to_string());
-        } else {
-            let mut current = String::new();
-            for word in line.split_whitespace() {
-                if current.len() + word.len() + 1 > max_len {
-                    if !current.is_empty() {
-                        result.push(current);
-                    }
-                    current = word.to_string();
-                } else {
-                    if !current.is_empty() {
-                        current.push(' ');
-                    }
-                    current.push_str(word);
-                }
-            }
-            if !current.is_empty() {
-                result.push(current);
-            }
-        }
-    }
-    result
-}

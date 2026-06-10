@@ -1346,33 +1346,34 @@ class AppState: ObservableObject {
         sendRaw("@+typing=done TAGMSG \(target)")
         lastTypingSent = .distantPast
 
-        let isMultiline = text.contains("\n")
         let wireText = text.replacingOccurrences(of: "\r", with: "")
+        let isMultiline = wireText.contains("\n")
         let encoded = isMultiline ? wireText.replacingOccurrences(of: "\n", with: "\\n") : wireText
         let multilineTag = isMultiline ? ";+freeq.at/multiline" : ""
 
-        // Check for edit mode
+        // Edit + reply paths go through sendRaw because the FFI doesn't
+        // expose typed send_reply/send_edit yet. For those, encode `\n`
+        // as the legacy `+freeq.at/multiline` inline form so multi-line
+        // content survives a single PRIVMSG — receivers (web app, TUI,
+        // freeq-aware mobile) decode the tag on render.
         if let editing = editingMessage {
             sendRaw("@+draft/edit=\(editing.id)\(multilineTag) PRIVMSG \(target) :\(encoded)")
             editingMessage = nil
             return true
         }
 
-        // Check for reply mode
         if let reply = replyingTo {
             sendRaw("@+reply=\(reply.id)\(multilineTag) PRIVMSG \(target) :\(encoded)")
             replyingTo = nil
             return true
         }
 
-        if isMultiline {
-            // Send via raw to include multiline tag
-            sendRaw("@+freeq.at/multiline PRIVMSG \(target) :\(encoded)")
-            return true
-        }
-
+        // Plain send: pass text as-is. The FFI calls Rust SDK's privmsg,
+        // which auto-routes `\n`-bearing text to a draft/multiline BATCH
+        // when the server acked the cap — one logical message, msgid
+        // coherence for edits / reactions / replies.
         do {
-            try client?.sendMessage(target: target, text: text)
+            try client?.sendMessage(target: target, text: wireText)
             return true
         } catch {
             DispatchQueue.main.async { self.errorMessage = "Send failed" }
@@ -1934,13 +1935,13 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 }
             }
 
-            // Decode multiline: \\n → newline (server encodes newlines as literal \n)
-            let decodedText = ircMsg.text.replacingOccurrences(of: "\\n", with: "\n")
-
+            // SDK normalizes both wire forms (draft/multiline BATCH and
+            // legacy +freeq.at/multiline) into real `\n` before this
+            // point; no decode here. SwiftUI Text renders `\n` natively.
             let msg = ChatMessage(
                 id: ircMsg.msgid ?? UUID().uuidString,
                 from: from,
-                text: decodedText,
+                text: ircMsg.text,
                 isAction: ircMsg.isAction,
                 timestamp: Date(timeIntervalSince1970: Double(ircMsg.timestampMs) / 1000.0),
                 replyTo: ircMsg.replyTo,

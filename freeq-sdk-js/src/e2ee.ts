@@ -409,7 +409,19 @@ export async function decryptChannel(channel: string, wire: string): Promise<str
     );
     return new TextDecoder().decode(plain);
   } catch (e) {
-    console.warn('[e2ee] ENC1 decrypt failed:', e);
+    // AES-GCM auth-tag mismatch (wrong key) raises DOMException with
+    // name 'OperationError' — that's the expected case for chathistory
+    // replay across key rotations / joining a channel with a different
+    // pass. Demote to debug so the trail is there but stderr stays
+    // clean. Other errors (corrupt frame, missing SubtleCrypto, etc.)
+    // are real and still warn.
+    const isWrongKey =
+      e instanceof Error && (e as any).name === 'OperationError';
+    if (isWrongKey) {
+      console.debug('[e2ee] ENC1 decrypt failed (wrong key):', e);
+    } else {
+      console.warn('[e2ee] ENC1 decrypt failed:', e);
+    }
     return null;
   }
 }

@@ -520,6 +520,7 @@ pub(super) fn handle_tagmsg(
             target,
             &tag_text,
             super::helpers::s2s_next_event_id(state),
+            None, // TAGMSG carries no body, so multiline never applies here.
         ) {
             RouteResult::Local(ref session) => {
                 // Deliver locally
@@ -565,6 +566,30 @@ pub(super) fn handle_privmsg(
     tags: &std::collections::HashMap<String, String>,
     state: &Arc<SharedState>,
 ) {
+    // Non-multiline entry — preserves the existing call-shape for every
+    // caller that didn't come from a draft/multiline batch.
+    handle_privmsg_with_multiline(conn, command, target, text, tags, state, None);
+}
+
+/// Same as `handle_privmsg`, but when `multiline_lines` is Some, the
+/// channel-broadcast path emits per-receiver wire frames (BATCH-
+/// wrapped for `draft/multiline`-capable receivers, individual
+/// PRIVMSGs for fallback receivers) instead of a single line.
+///
+/// `handle_privmsg` is the wrapper for the normal single-PRIVMSG case;
+/// `dispatch_assembled_batch` in connection::draft_multiline calls
+/// this directly with `Some(batch.lines)` so the channel broadcast
+/// produces wire-valid output (a single PRIVMSG with `\n` in its body
+/// would corrupt the IRC line on the receiving side).
+pub(super) fn handle_privmsg_with_multiline(
+    conn: &Connection,
+    command: &str,
+    target: &str,
+    text: &str,
+    tags: &std::collections::HashMap<String, String>,
+    state: &Arc<SharedState>,
+    multiline_lines: Option<&[super::draft_multiline::BatchLine]>,
+) {
     let hostmask = conn.hostmask();
 
     let timestamp = std::time::SystemTime::now()
@@ -578,7 +603,12 @@ pub(super) fn handle_privmsg(
 
     // ── Message editing (+draft/edit=<msgid>) ──
     if let Some(original_msgid) = tags.get("+draft/edit") {
-        handle_edit(conn, target, text, original_msgid, tags, state);
+        // Carry the sender's pre-chunked breakdown through to handle_edit
+        // when the edit arrived as a BATCH (plaintext multi-line OR
+        // ciphertext-chunked E2EE). handle_edit re-broadcasts using the
+        // same chunking; preserves concat=true semantics for ciphertext
+        // so receivers reassemble the exact AES-GCM blob.
+        handle_edit(conn, target, text, original_msgid, tags, state, multiline_lines);
         return;
     }
 
@@ -828,8 +858,16 @@ pub(super) fn handle_privmsg(
         let time_caps = state.cap_server_time.lock();
         let account_caps = state.cap_account_tag.lock();
         let echo_caps = state.cap_echo_message.lock();
+        let multiline_caps = state.cap_draft_multiline.lock();
         let conns = state.connections.lock();
         let sender_did = conn.authenticated_did.as_deref();
+        // When the logical message arrived as a draft/multiline batch
+        // we already have its per-line breakdown; reuse the same
+        // outbound batch id for every receiver. Receivers that
+        // negotiated draft/multiline see BATCH frames; everyone else
+        // sees the constituent PRIVMSGs (msgid on the first only).
+        let outbound_batch_id = multiline_lines
+            .map(|_| format!("ml{}", crate::msgid::generate()));
         for member_session in &members {
             // echo-message: include sender if they requested it
             if member_session == &conn.id && !echo_caps.contains(member_session) {
@@ -840,6 +878,33 @@ pub(super) fn handle_privmsg(
                 let has_time = time_caps.contains(member_session);
                 let wants_account =
                     sender_did.is_some() && account_caps.contains(member_session);
+                if let (Some(lines), Some(batch_id)) =
+                    (multiline_lines, outbound_batch_id.as_deref())
+                {
+                    let caps = super::draft_multiline::ReceiverCaps {
+                        has_tags,
+                        has_time,
+                        has_multiline: multiline_caps.contains(member_session),
+                        wants_account,
+                        sender_did,
+                    };
+                    let ctx = super::draft_multiline::RelayContext {
+                        hostmask: &hostmask,
+                        command,
+                        target,
+                        msgid: &msgid,
+                        time_tag: &time_tag,
+                        opener_tags: &full_tags,
+                        batch_id,
+                        lines,
+                    };
+                    for frame in super::draft_multiline::build_outbound_multiline_frames(
+                        &ctx, &caps,
+                    ) {
+                        let _ = tx.try_send(frame);
+                    }
+                    continue;
+                }
                 let line: String = if !has_tags {
                     plain_line.clone()
                 } else if !wants_account {
@@ -873,19 +938,35 @@ pub(super) fn handle_privmsg(
         if command == "PRIVMSG" {
             let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
             let sig = full_tags.get("+freeq.at/sig").cloned();
+            let (s2s_text, s2s_tags) = crate::s2s::encode_privmsg_text_for_s2s(
+                text,
+                crate::s2s::relay_coordination_tags(&full_tags),
+            );
             s2s_broadcast(
                 state,
                 crate::s2s::S2sMessage::Privmsg {
                     event_id: s2s_next_event_id(state),
                     from: conn.nick.as_deref().unwrap_or("*").to_string(),
                     target: target.to_string(),
-                    text: text.to_string(),
+                    text: s2s_text,
                     origin,
                     msgid: Some(msgid.clone()),
                     sig,
-                    // Coordination card tags ride with the message so a
-                    // federated peer's clients render the same card.
-                    tags: crate::s2s::relay_coordination_tags(&full_tags),
+                    tags: s2s_tags,
+                    // When this message originated as a draft/multiline
+                    // batch, ship the per-line breakdown so the peer
+                    // can re-emit BATCH frames to its own multiline-
+                    // capable clients. Otherwise None and the peer
+                    // treats it as a normal PRIVMSG.
+                    multiline_lines: multiline_lines.map(|lines| {
+                        lines
+                            .iter()
+                            .map(|l| crate::s2s::MultilineLine {
+                                body: l.body.clone(),
+                                concat: l.concat_to_previous,
+                            })
+                            .collect()
+                    }),
                 },
             );
         }
@@ -924,23 +1005,59 @@ pub(super) fn handle_privmsg(
             format!("{tag_msg}\r\n")
         };
 
-        // Build the line for a recipient based on their negotiated caps.
-        // Honors message-tags, server-time, and account-tag (per IRCv3 spec).
+        // Build the wire frames for a recipient based on their
+        // negotiated caps. Honors message-tags, server-time, and
+        // account-tag (per IRCv3 spec). When the logical message
+        // arrived as a draft/multiline batch, emits BATCH-wrapped
+        // frames for receivers that negotiated draft/multiline and
+        // N PRIVMSGs (msgid + tags on first only) for fallback
+        // receivers. Without this branch a multiline DM would relay
+        // as a single PRIVMSG with `\n` in its body, breaking the
+        // IRC wire on the recipient side.
         let sender_did_for_dm = conn.authenticated_did.clone();
-        let build_dm_line = |recipient_session: &str| -> String {
+        let dm_outbound_batch_id = multiline_lines
+            .map(|_| format!("ml{}", crate::msgid::generate()));
+        let build_dm_frames = |recipient_session: &str| -> Vec<String> {
             let has_tags = state.cap_message_tags.lock().contains(recipient_session);
-            if !has_tags {
-                return plain_line.clone();
-            }
             let has_time = state.cap_server_time.lock().contains(recipient_session);
             let wants_account = sender_did_for_dm.is_some()
                 && state.cap_account_tag.lock().contains(recipient_session);
+            if let (Some(lines), Some(batch_id)) =
+                (multiline_lines, dm_outbound_batch_id.as_deref())
+            {
+                let caps = super::draft_multiline::ReceiverCaps {
+                    has_tags,
+                    has_time,
+                    has_multiline: state
+                        .cap_draft_multiline
+                        .lock()
+                        .contains(recipient_session),
+                    wants_account,
+                    sender_did: sender_did_for_dm.as_deref(),
+                };
+                let ctx = super::draft_multiline::RelayContext {
+                    hostmask: &hostmask,
+                    command,
+                    target,
+                    msgid: &pm_msgid,
+                    time_tag: &time_tag,
+                    opener_tags: &pm_tags,
+                    batch_id,
+                    lines,
+                };
+                return super::draft_multiline::build_outbound_multiline_frames(
+                    &ctx, &caps,
+                );
+            }
+            if !has_tags {
+                return vec![plain_line.clone()];
+            }
             if !wants_account {
-                return if has_time {
+                return vec![if has_time {
                     tagged_line_with_time.clone()
                 } else {
                     tagged_line.clone()
-                };
+                }];
             }
             let mut recip_tags = if has_time {
                 pm_tags_with_time.clone()
@@ -957,29 +1074,49 @@ pub(super) fn handle_privmsg(
                 command: command.to_string(),
                 params: vec![target.to_string(), text.to_string()],
             };
-            format!("{tag_msg}\r\n")
+            vec![format!("{tag_msg}\r\n")]
         };
 
         // Route through the federation routing layer.
         // See routing.rs for why we NEVER gate on remote_members here.
         use super::routing::{RouteResult, relay_to_nick};
         let from_nick = conn.nick.as_deref().unwrap_or("*").to_string();
-        match relay_to_nick(state, &from_nick, target, text, s2s_next_event_id(state)) {
+        match relay_to_nick(
+            state,
+            &from_nick,
+            target,
+            text,
+            s2s_next_event_id(state),
+            multiline_lines,
+        ) {
             RouteResult::Local(ref session) => {
                 // Target is local — deliver to ALL sessions for target's DID (multi-device).
                 // Also relay via S2S so the DM is visible on other federated servers
                 // (e.g. sender logged into multiple servers).
+                let (s2s_text, s2s_tags) = crate::s2s::encode_privmsg_text_for_s2s(
+                    text,
+                    crate::s2s::relay_coordination_tags(&pm_tags),
+                );
                 super::helpers::s2s_broadcast(
                     state,
                     crate::s2s::S2sMessage::Privmsg {
                         event_id: s2s_next_event_id(state),
                         from: conn.hostmask(),
                         target: target.to_string(),
-                        text: text.to_string(),
+                        text: s2s_text,
                         origin: state.server_iroh_id.lock().clone().unwrap_or_default(),
                         msgid: Some(pm_msgid.clone()),
                         sig: pm_tags.get("+freeq.at/sig").cloned(),
-                        tags: crate::s2s::relay_coordination_tags(&pm_tags),
+                        tags: s2s_tags,
+                        multiline_lines: multiline_lines.map(|lines| {
+                            lines
+                                .iter()
+                                .map(|l| crate::s2s::MultilineLine {
+                                    body: l.body.clone(),
+                                    concat: l.concat_to_previous,
+                                })
+                                .collect()
+                        }),
                     },
                 );
                 // Send RPL_AWAY if target is away
@@ -1013,16 +1150,19 @@ pub(super) fn handle_privmsg(
                 let conns = state.connections.lock();
                 // Deliver to all target sessions
                 for target_session in &target_sessions {
-                    let line = build_dm_line(target_session);
+                    let frames = build_dm_frames(target_session);
                     if let Some(tx) = conns.get(target_session) {
-                        if let Err(_e) = tx.try_send(line) {
-                            let target_nick = state.nick_to_session.lock().get_nick(target_session).map(|s| s.to_string()).unwrap_or_default();
-                            tracing::warn!(
-                                from = %conn.nick.as_deref().unwrap_or("?"),
-                                to = %target_nick,
-                                session = %target_session,
-                                "DM dropped: target send buffer full"
-                            );
+                        for frame in frames {
+                            if let Err(_e) = tx.try_send(frame) {
+                                let target_nick = state.nick_to_session.lock().get_nick(target_session).map(|s| s.to_string()).unwrap_or_default();
+                                tracing::warn!(
+                                    from = %conn.nick.as_deref().unwrap_or("?"),
+                                    to = %target_nick,
+                                    session = %target_session,
+                                    "DM dropped: target send buffer full"
+                                );
+                                break;
+                            }
                         }
                     }
                 }
@@ -1045,16 +1185,20 @@ pub(super) fn handle_privmsg(
                         // Original sender — use echo-message cap
                         let sender_has_echo = state.cap_echo_message.lock().contains(&conn.id);
                         if sender_has_echo {
-                            let echo_line = build_dm_line(&conn.id);
+                            let frames = build_dm_frames(&conn.id);
                             if let Some(tx) = conns.get(&conn.id) {
-                                let _ = tx.try_send(echo_line);
+                                for frame in frames {
+                                    let _ = tx.try_send(frame);
+                                }
                             }
                         }
                     } else {
                         // Other sessions of sender — deliver as if they received it
-                        let line = build_dm_line(sender_session);
+                        let frames = build_dm_frames(sender_session);
                         if let Some(tx) = conns.get(sender_session) {
-                            let _ = tx.try_send(line);
+                            for frame in frames {
+                                let _ = tx.try_send(frame);
+                            }
                         }
                     }
                 }
@@ -1065,9 +1209,11 @@ pub(super) fn handle_privmsg(
                 // echo-message: echo DM back to sender even for relayed messages
                 let sender_has_echo = state.cap_echo_message.lock().contains(&conn.id);
                 if sender_has_echo {
-                    let echo_line = build_dm_line(&conn.id);
+                    let frames = build_dm_frames(&conn.id);
                     if let Some(tx) = state.connections.lock().get(&conn.id) {
-                        let _ = tx.try_send(echo_line);
+                        for frame in frames {
+                            let _ = tx.try_send(frame);
+                        }
                     }
                 }
             }
@@ -1228,6 +1374,7 @@ pub(super) fn handle_chathistory(
     let has_tags = state.cap_message_tags.lock().contains(session_id);
     let has_time = state.cap_server_time.lock().contains(session_id);
     let has_batch = state.cap_batch.lock().contains(session_id);
+    let has_multiline = state.cap_draft_multiline.lock().contains(session_id);
 
     // Fetch messages from DB based on subcommand
     let messages: Vec<crate::db::MessageRow> = match subcmd.as_str() {
@@ -1345,6 +1492,99 @@ pub(super) fn handle_chathistory(
             tags.insert("batch".to_string(), batch_id.clone());
         }
 
+        // If the stored body has internal newlines, the message
+        // originated as a multiline batch. Re-emitting it as one
+        // PRIVMSG would put `\n` on the wire, which terminates an
+        // IRC line — the receiver's parser would split mid-line and
+        // produce malformed input. Two emission shapes here, matching
+        // the live broadcast path:
+        //
+        // - Capable receivers (negotiated draft/multiline): emit a
+        //   nested `draft/multiline` BATCH inside the chathistory
+        //   BATCH. They see history rows grouped as logical messages,
+        //   the same way live broadcast presents them.
+        // - Fallback receivers (no draft/multiline cap): split at \n
+        //   and emit N tagged PRIVMSGs, msgid + client-only tags on
+        //   the first only (per spec § "Message ids" + § "Fallback").
+        let bodies: Vec<&str> = row.text.split('\n').collect();
+        let is_multiline = bodies.len() > 1;
+        if is_multiline && has_multiline && has_batch {
+            // Nested BATCH path: emit `BATCH +<ml_id> draft/multiline
+            // <target>` carrying the assembled-message tags (msgid,
+            // sig, account, reactions, etc.) + batch=<chathistory_id>
+            // for nesting, then per-chunk PRIVMSGs carrying only
+            // batch=<ml_id>, then `BATCH -<ml_id>` carrying
+            // batch=<chathistory_id>.
+            let ml_id = format!("ml{}", crate::msgid::generate());
+            let opener_msg = irc::Message {
+                tags: tags.clone(),
+                prefix: Some(row.sender.clone()),
+                command: "BATCH".to_string(),
+                params: vec![
+                    format!("+{ml_id}"),
+                    "draft/multiline".to_string(),
+                    target.clone(),
+                ],
+            };
+            send(state, session_id, format!("{opener_msg}\r\n"));
+            for body in &bodies {
+                let mut chunk_tags = std::collections::HashMap::new();
+                chunk_tags.insert("batch".to_string(), ml_id.clone());
+                let chunk_msg = irc::Message {
+                    tags: chunk_tags,
+                    prefix: Some(row.sender.clone()),
+                    command: "PRIVMSG".to_string(),
+                    params: vec![target.clone(), body.to_string()],
+                };
+                send(state, session_id, format!("{chunk_msg}\r\n"));
+            }
+            let mut closer_tags = std::collections::HashMap::new();
+            if let Some(b) = tags.get("batch") {
+                closer_tags.insert("batch".to_string(), b.clone());
+            }
+            let closer_msg = irc::Message {
+                tags: closer_tags,
+                prefix: None,
+                command: "BATCH".to_string(),
+                params: vec![format!("-{ml_id}")],
+            };
+            send(state, session_id, format!("{closer_msg}\r\n"));
+            continue;
+        }
+        if is_multiline {
+            // Fallback path: split at \n and emit N PRIVMSGs. msgid
+            // and every client-only tag ride on the first chunk;
+            // subsequent chunks carry only the chathistory batch tag
+            // so they stay grouped under the same history-replay
+            // unit.
+            for (i, body) in bodies.iter().enumerate() {
+                let chunk_tags = if i == 0 {
+                    tags.clone()
+                } else {
+                    let mut t = std::collections::HashMap::new();
+                    if let Some(b) = tags.get("batch") {
+                        t.insert("batch".to_string(), b.clone());
+                    }
+                    t
+                };
+                if !chunk_tags.is_empty() && has_tags {
+                    let tag_msg = irc::Message {
+                        tags: chunk_tags,
+                        prefix: Some(row.sender.clone()),
+                        command: "PRIVMSG".to_string(),
+                        params: vec![target.clone(), body.to_string()],
+                    };
+                    send(state, session_id, format!("{tag_msg}\r\n"));
+                } else {
+                    send(
+                        state,
+                        session_id,
+                        format!(":{} PRIVMSG {} :{}\r\n", row.sender, target, body),
+                    );
+                }
+            }
+            continue;
+        }
         if !tags.is_empty() && has_tags {
             let tag_msg = irc::Message {
                 tags,
@@ -1502,6 +1742,14 @@ fn handle_chathistory_targets(
 
 /// Handle a PRIVMSG with +draft/edit=<msgid> tag.
 /// Verifies authorship, stores the edit, and broadcasts to channel or DM recipient.
+///
+/// `inbound_multiline_lines`: when the edit arrived as a draft/multiline
+/// BATCH, the sender's pre-chunked breakdown — used directly for outbound
+/// re-broadcast so the per-chunk shape (and `concat` flags) survive the
+/// hop. Critical for ciphertext-chunked E2EE edits: the receiver needs
+/// the same chunk boundaries to reassemble the AES-GCM blob byte-exact.
+/// When None, falls back to splitting `new_text` on `\n` (plaintext
+/// multi-line edits sent as a single PRIVMSG).
 fn handle_edit(
     conn: &Connection,
     target: &str,
@@ -1509,6 +1757,7 @@ fn handle_edit(
     original_msgid: &str,
     tags: &std::collections::HashMap<String, String>,
     state: &Arc<SharedState>,
+    inbound_multiline_lines: Option<&[super::draft_multiline::BatchLine]>,
 ) {
     let hostmask = conn.hostmask();
     let nick = conn.nick_or_star();
@@ -1612,15 +1861,53 @@ fn handle_edit(
         full_tags.insert("+freeq.at/sig".to_string(), sig);
     }
 
+    // Multi-line breakdown for BATCH-wrapped outbound. Two sources, in
+    // priority order:
+    //   1. Sender's pre-chunked BATCH (passed in as inbound_multiline_lines)
+    //      — covers ciphertext-chunked E2EE edits where the body has no
+    //      `\n` to split on but the wire frame still exceeds one PRIVMSG.
+    //      Preserves the sender's `concat` flags so receivers reassemble
+    //      the exact AES-GCM blob.
+    //   2. Plaintext fallback: `new_text` contains `\n` — split on it.
+    //      Covers multi-line edits that arrived as a single (malformed)
+    //      PRIVMSG with embedded `\n`, OR were assembled from a sender
+    //      BATCH but the per-chunk breakdown wasn't carried through.
+    let multiline_lines: Option<Vec<super::draft_multiline::BatchLine>> =
+        if let Some(lines) = inbound_multiline_lines {
+            Some(lines.to_vec())
+        } else if new_text.contains('\n') {
+            Some(
+                new_text
+                    .split('\n')
+                    .map(|body| super::draft_multiline::BatchLine {
+                        body: body.to_string(),
+                        concat_to_previous: false,
+                        command: "PRIVMSG".to_string(),
+                    })
+                    .collect(),
+            )
+        } else {
+            None
+        };
+    let outbound_batch_id = multiline_lines
+        .as_ref()
+        .map(|_| format!("ml{}", crate::msgid::generate()));
+    // Fallback body: receivers without draft/multiline see only line1
+    // of a multi-line edit. Single-line edits use new_text verbatim.
+    let fallback_text: &str = multiline_lines
+        .as_ref()
+        .and_then(|lines| lines.first().map(|l| l.body.as_str()))
+        .unwrap_or(new_text);
+
     // Plain line for non-tag clients (they see it as a new message)
-    let plain_line = format!(":{hostmask} PRIVMSG {target} :{new_text}\r\n");
+    let plain_line = format!(":{hostmask} PRIVMSG {target} :{fallback_text}\r\n");
     // Tagged line with edit reference
     let tagged_line = {
         let tag_msg = irc::Message {
             tags: full_tags.clone(),
             prefix: Some(hostmask.clone()),
             command: "PRIVMSG".to_string(),
-            params: vec![target.to_string(), new_text.to_string()],
+            params: vec![target.to_string(), fallback_text.to_string()],
         };
         format!("{tag_msg}\r\n")
     };
@@ -1634,13 +1921,13 @@ fn handle_edit(
         .format("%Y-%m-%dT%H:%M:%S.000Z")
         .to_string();
     let mut full_tags_with_time = full_tags.clone();
-    full_tags_with_time.insert("time".to_string(), time_tag);
+    full_tags_with_time.insert("time".to_string(), time_tag.clone());
     let tagged_line_with_time = {
         let tag_msg = irc::Message {
             tags: full_tags_with_time,
             prefix: Some(hostmask.clone()),
             command: "PRIVMSG".to_string(),
-            params: vec![target.to_string(), new_text.to_string()],
+            params: vec![target.to_string(), fallback_text.to_string()],
         };
         format!("{tag_msg}\r\n")
     };
@@ -1707,12 +1994,44 @@ fn handle_edit(
         let tag_caps = state.cap_message_tags.lock();
         let time_caps = state.cap_server_time.lock();
         let echo_caps = state.cap_echo_message.lock();
+        let multiline_caps = state.cap_draft_multiline.lock();
         let conns = state.connections.lock();
         for sid in &members {
             if sid == &conn.id && !echo_caps.contains(sid) {
                 continue;
             }
             if let Some(tx) = conns.get(sid) {
+                // Multi-line edit + receiver negotiated draft/multiline →
+                // emit BATCH-wrapped edit (opener carries +draft/edit + msgid).
+                if let (Some(lines), Some(batch_id)) =
+                    (multiline_lines.as_deref(), outbound_batch_id.as_deref())
+                    && multiline_caps.contains(sid)
+                {
+                    let caps = super::draft_multiline::ReceiverCaps {
+                        has_tags: tag_caps.contains(sid),
+                        has_time: time_caps.contains(sid),
+                        has_multiline: true,
+                        wants_account: false,
+                        sender_did: None,
+                    };
+                    let ctx = super::draft_multiline::RelayContext {
+                        hostmask: &hostmask,
+                        command: "PRIVMSG",
+                        target,
+                        msgid: &edit_msgid,
+                        time_tag: &time_tag,
+                        opener_tags: &full_tags,
+                        batch_id,
+                        lines,
+                    };
+                    for frame in
+                        super::draft_multiline::build_outbound_multiline_frames(&ctx, &caps)
+                    {
+                        let _ = tx.try_send(frame);
+                    }
+                    continue;
+                }
+                // Fallback: single PRIVMSG (line1 only for multi-line edits).
                 let line = if tag_caps.contains(sid) {
                     if time_caps.contains(sid) {
                         &tagged_line_with_time
@@ -1729,17 +2048,33 @@ fn handle_edit(
         // Broadcast to S2S peers
         let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
         let sig = full_tags.get("+freeq.at/sig").cloned();
+        let (s2s_text, s2s_tags) = crate::s2s::encode_privmsg_text_for_s2s(
+            new_text,
+            crate::s2s::relay_coordination_tags(&full_tags),
+        );
         s2s_broadcast(
             state,
             crate::s2s::S2sMessage::Privmsg {
                 event_id: s2s_next_event_id(state),
                 from: nick.to_string(),
                 target: target.to_string(),
-                text: new_text.to_string(),
+                text: s2s_text,
                 origin,
                 msgid: Some(edit_msgid),
                 sig,
-                tags: crate::s2s::relay_coordination_tags(&full_tags),
+                tags: s2s_tags,
+                // Multi-line edit: pass the per-line breakdown so peer
+                // servers can re-emit BATCH frames to their own
+                // multiline-capable clients.
+                multiline_lines: multiline_lines.as_ref().map(|lines| {
+                    lines
+                        .iter()
+                        .map(|l| crate::s2s::MultilineLine {
+                            body: l.body.clone(),
+                            concat: l.concat_to_previous,
+                        })
+                        .collect()
+                }),
             },
         );
     } else {
@@ -1747,7 +2082,58 @@ fn handle_edit(
         use super::routing::{RouteResult, relay_to_nick};
         let from_nick = conn.nick.as_deref().unwrap_or("*").to_string();
 
-        match relay_to_nick(state, &from_nick, target, new_text, s2s_next_event_id(state)) {
+        // Per-session deliver helper: BATCH frames for multiline-capable
+        // receivers, fallback single-PRIVMSG (line1 only) otherwise.
+        let deliver_to_session = |tx: &tokio::sync::mpsc::Sender<String>, sid: &str| {
+            let has_tags = state.cap_message_tags.lock().contains(sid);
+            let has_time = state.cap_server_time.lock().contains(sid);
+            let has_multiline = state.cap_draft_multiline.lock().contains(sid);
+            if let (Some(lines), Some(batch_id)) =
+                (multiline_lines.as_deref(), outbound_batch_id.as_deref())
+                && has_multiline
+            {
+                let caps = super::draft_multiline::ReceiverCaps {
+                    has_tags,
+                    has_time,
+                    has_multiline: true,
+                    wants_account: false,
+                    sender_did: None,
+                };
+                let ctx = super::draft_multiline::RelayContext {
+                    hostmask: &hostmask,
+                    command: "PRIVMSG",
+                    target,
+                    msgid: &edit_msgid,
+                    time_tag: &time_tag,
+                    opener_tags: &full_tags,
+                    batch_id,
+                    lines,
+                };
+                for frame in
+                    super::draft_multiline::build_outbound_multiline_frames(&ctx, &caps)
+                {
+                    let _ = tx.try_send(frame);
+                }
+                return;
+            }
+            let line = if has_tags {
+                if has_time { &tagged_line_with_time } else { &tagged_line }
+            } else {
+                &plain_line
+            };
+            let _ = tx.try_send(line.clone());
+        };
+
+        // Pass multiline_lines to the federated relay so peers see a
+        // multi-line edit and re-emit BATCH frames downstream.
+        match relay_to_nick(
+            state,
+            &from_nick,
+            target,
+            new_text,
+            s2s_next_event_id(state),
+            multiline_lines.as_deref(),
+        ) {
             RouteResult::Local(ref session) => {
                 // Find all sessions for target's DID (multi-device support)
                 let target_sessions: Vec<String> = {
@@ -1767,29 +2153,15 @@ fn handle_edit(
                 let conns = state.connections.lock();
                 // Deliver to all target sessions
                 for target_session in &target_sessions {
-                    let has_tags = state.cap_message_tags.lock().contains(target_session);
-                    let has_time = state.cap_server_time.lock().contains(target_session);
-                    let line = if has_tags {
-                        if has_time { &tagged_line_with_time } else { &tagged_line }
-                    } else {
-                        &plain_line
-                    };
                     if let Some(tx) = conns.get(target_session) {
-                        let _ = tx.try_send(line.clone());
+                        deliver_to_session(tx, target_session);
                     }
                 }
 
                 // Echo to sender if echo-message enabled
                 if state.cap_echo_message.lock().contains(&conn.id) {
-                    let has_tags = state.cap_message_tags.lock().contains(&conn.id);
-                    let has_time = state.cap_server_time.lock().contains(&conn.id);
-                    let line = if has_tags {
-                        if has_time { &tagged_line_with_time } else { &tagged_line }
-                    } else {
-                        &plain_line
-                    };
                     if let Some(tx) = conns.get(&conn.id) {
-                        let _ = tx.try_send(line.clone());
+                        deliver_to_session(tx, &conn.id);
                     }
                 }
             }
@@ -1797,15 +2169,8 @@ fn handle_edit(
                 // Target is on a federated peer — edit was relayed
                 // Echo to sender
                 if state.cap_echo_message.lock().contains(&conn.id) {
-                    let has_tags = state.cap_message_tags.lock().contains(&conn.id);
-                    let has_time = state.cap_server_time.lock().contains(&conn.id);
-                    let line = if has_tags {
-                        if has_time { &tagged_line_with_time } else { &tagged_line }
-                    } else {
-                        &plain_line
-                    };
                     if let Some(tx) = state.connections.lock().get(&conn.id) {
-                        let _ = tx.try_send(line.clone());
+                        deliver_to_session(tx, &conn.id);
                     }
                 }
             }

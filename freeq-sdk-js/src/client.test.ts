@@ -234,20 +234,26 @@ describe('messaging methods', () => {
   it('sendReply() sets +reply tag', async () => {
     const { client, ws } = await makeRegistered();
     client.sendReply('#foo', 'msg123', 'replying');
-    expect(ws.sent[0]).toContain('+reply=msg123');
+    await flushAsync(); // routes through async signedPrivmsg
+    const line = ws.sent.find((l) => l.includes('PRIVMSG #foo'));
+    expect(line).toContain('+reply=msg123');
   });
 
   it('sendReplyInThread() sets +reply tag', async () => {
     const { client, ws } = await makeRegistered();
     client.sendReplyInThread('#foo', 'msg123', 'replying');
-    expect(ws.sent[0]).toContain('+reply=msg123');
-    expect(ws.sent[0]).toContain('PRIVMSG #foo');
+    await flushAsync();
+    const line = ws.sent.find((l) => l.includes('PRIVMSG #foo'));
+    expect(line).toContain('+reply=msg123');
+    expect(line).toContain('PRIVMSG #foo');
   });
 
   it('sendEdit() sets +draft/edit tag', async () => {
     const { client, ws } = await makeRegistered();
     client.sendEdit('#foo', 'msg123', 'corrected');
-    expect(ws.sent[0]).toContain('+draft/edit=msg123');
+    await flushAsync();
+    const line = ws.sent.find((l) => l.includes('PRIVMSG #foo'));
+    expect(line).toContain('+draft/edit=msg123');
   });
 
   it('sendDelete() sends TAGMSG with +draft/delete', async () => {

@@ -124,6 +124,56 @@ pub fn relay_coordination_tags(full: &HashMap<String, String>) -> HashMap<String
         .collect()
 }
 
+/// Encode a PRIVMSG body for the S2S `text` field so that ANY peer
+/// can relay it safely to its local clients, regardless of whether
+/// that peer understands `multiline_lines`. If the body contains `\n`
+/// (i.e., the message is multi-line), `\n` is escaped to the two
+/// literal chars `\\n` and the `+freeq.at/multiline` tag is added —
+/// the freeq inline encoding that's been understood by freeq clients
+/// since before the `draft/multiline` track existed.
+///
+/// **Why:** the S2S wire field is a JSON String and tolerates real
+/// `\n` bytes during transport. But when a peer that doesn't process
+/// `multiline_lines` constructs a PRIVMSG from `text` and writes it
+/// to its local clients' TCP/WS connections, an embedded `\n` ends
+/// the IRC line mid-body and everything after is lost (parsed as
+/// unknown commands). Pre-escaping keeps the wire safe everywhere.
+///
+/// New peers prefer `multiline_lines` for proper BATCH emission and
+/// the escaped `text` is ignored. Old peers ignore `multiline_lines`
+/// and use the escaped `text` — their local freeq clients decode the
+/// tag back to real `\n` on render.
+///
+/// Returns `(text_for_wire, tags_with_multiline_tag_if_set)`.
+pub fn encode_privmsg_text_for_s2s(
+    text: &str,
+    mut tags: HashMap<String, String>,
+) -> (String, HashMap<String, String>) {
+    if text.contains('\n') {
+        tags.insert("+freeq.at/multiline".to_string(), String::new());
+        (text.replace('\n', "\\n"), tags)
+    } else {
+        (text.to_string(), tags)
+    }
+}
+
+/// One line of a draft/multiline batch, serialized for S2S relay.
+/// Kept minimal so the wire size doesn't balloon for typical agent
+/// turns: just the body and the concat flag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultilineLine {
+    pub body: String,
+    /// True if this line carried `draft/multiline-concat` (join to
+    /// previous with no separator). Serialized only when non-default
+    /// to keep typical-case wire small.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub concat: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// Messages exchanged between servers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -208,6 +258,48 @@ pub enum S2sMessage {
         /// to empty (wire back-compat). See `relay_coordination_tags`.
         #[serde(default)]
         tags: HashMap<String, String>,
+        /// When the relayed message originated as a `draft/multiline`
+        /// batch, the per-line breakdown so the receiving peer can
+        /// re-emit BATCH-wrapped frames to its own multiline-capable
+        /// clients (and N PRIVMSGs to fallback clients) instead of a
+        /// single PRIVMSG with `\n` in the body. Absent for normal
+        /// single-PRIVMSG sends; `text` always carries the assembled
+        /// body so peers without multiline-aware fan-out still get
+        /// the content (even if wire-broken on their own clients).
+        ///
+        /// # Why one event with a per-line breakdown, not N events
+        ///
+        /// An alternative shape would have been to ship a multiline
+        /// message as a sequence of N `S2sMessage::Privmsg` events,
+        /// mirroring the local wire shape (N PRIVMSGs grouped by
+        /// BATCH). That was rejected because:
+        ///
+        /// - **Atomicity**: a logical message is a single delivery
+        ///   unit; receiving peers shouldn't have to wait for N events
+        ///   to arrive (in order, with no drops) before they can fan
+        ///   out to their local channel members.
+        /// - **Dedup**: each event carries an `event_id`. Splitting
+        ///   into N events means N dedup entries and a separate
+        ///   grouping mechanism so a partial re-sync doesn't
+        ///   half-deliver.
+        /// - **Signatures**: `+freeq.at/sig` is signed over the
+        ///   assembled body. One sig per logical message keeps the
+        ///   verification cheap and unambiguous; N separately-signed
+        ///   chunks would either expensive (N sigs) or leak unverified
+        ///   payload (sig on first chunk only).
+        /// - **msgid placement**: a multiline message has one msgid
+        ///   per the IRCv3 spec. Bundling keeps "one event = one
+        ///   msgid" intact; splitting forces a non-obvious choice
+        ///   about which event owns the msgid.
+        ///
+        /// This bundling pattern is consistent with how the rest of
+        /// freeq's S2S layer transmits atomic-application units:
+        /// `SyncResponse` carries `Vec<ChannelInfo>` (the cluster's
+        /// channel view as of now, not N per-channel events);
+        /// `PolicySync` ships the full PolicyDocument JSON in one
+        /// event; `CrdtSync` bundles many CRDT ops into one payload.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        multiline_lines: Option<Vec<MultilineLine>>,
     },
 
     /// A PIN/UNPIN relayed between servers.
@@ -1403,6 +1495,7 @@ mod tests {
             msgid: Some("MSG123".to_string()),
             sig: None,
             tags: HashMap::new(),
+            multiline_lines: None,
         };
 
         let signed = manager.sign_message(&msg);
@@ -1495,6 +1588,7 @@ mod tests {
             msgid: None,
             sig: None,
             tags: HashMap::new(),
+            multiline_lines: None,
         };
 
         let signed = manager.sign_message(&msg);
@@ -1510,6 +1604,7 @@ mod tests {
                     msgid: None,
                     sig: None,
                     tags: HashMap::new(),
+            multiline_lines: None,
                 };
                 let tampered_json = serde_json::to_string(&tampered).unwrap();
                 let tampered_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -1706,6 +1801,62 @@ mod tests {
     }
 
     #[test]
+    fn encode_privmsg_text_for_s2s_passes_single_line_through() {
+        let (text, tags) = encode_privmsg_text_for_s2s("hello world", HashMap::new());
+        assert_eq!(text, "hello world");
+        assert!(!tags.contains_key("+freeq.at/multiline"));
+    }
+
+    #[test]
+    fn encode_privmsg_text_for_s2s_escapes_multiline_and_sets_tag() {
+        let (text, tags) = encode_privmsg_text_for_s2s(
+            "line one\nline two\nline three",
+            HashMap::new(),
+        );
+        // Wire-safe: no literal `\n` after escape
+        assert!(!text.contains('\n'), "escaped text must not contain literal \\n");
+        assert_eq!(text, "line one\\nline two\\nline three");
+        // Tag set so receivers can decode on render
+        assert!(tags.contains_key("+freeq.at/multiline"));
+    }
+
+    #[test]
+    fn encode_privmsg_text_for_s2s_preserves_existing_coordination_tags() {
+        let mut existing = HashMap::new();
+        existing.insert("+freeq.at/event".to_string(), "reveal".to_string());
+        existing.insert("+freeq.at/payload".to_string(), "%7B%7D".to_string());
+        let (_text, tags) = encode_privmsg_text_for_s2s("a\nb", existing);
+        assert_eq!(tags.get("+freeq.at/event").map(String::as_str), Some("reveal"));
+        assert_eq!(tags.get("+freeq.at/payload").map(String::as_str), Some("%7B%7D"));
+        assert!(tags.contains_key("+freeq.at/multiline"));
+    }
+
+    /// The federation skew invariant: a peer that DOESN'T understand
+    /// `multiline_lines` (e.g. pre-Phase-4c) still receives a wire-safe
+    /// `text` field — relaying it to its local clients produces ONE
+    /// PRIVMSG with literal `\\n` and a tag, NOT a broken multi-line
+    /// PRIVMSG that splits across IRC line framing.
+    #[test]
+    fn encode_privmsg_text_for_s2s_keeps_old_peer_safe() {
+        let body = "a\nb\nc";
+        let (text, tags) = encode_privmsg_text_for_s2s(body, HashMap::new());
+        // Simulate the old peer's relay: it ignores any unknown fields,
+        // builds a PRIVMSG with `text`, writes to a TCP socket. The bytes
+        // it writes must NOT contain `\n` mid-body or the IRC parser at
+        // the recipient breaks framing.
+        let bytes = format!(":sender PRIVMSG #room :{text}\r\n");
+        let body_bytes = bytes.strip_prefix(":sender PRIVMSG #room :").unwrap()
+            .strip_suffix("\r\n").unwrap();
+        assert!(
+            !body_bytes.contains('\n'),
+            "old peer's wire bytes would contain literal \\n — wire is broken!"
+        );
+        // And the tag is there so the old peer's freeq-aware clients
+        // know to decode on render.
+        assert!(tags.contains_key("+freeq.at/multiline"));
+    }
+
+    #[test]
     fn relay_coordination_tags_keeps_app_drops_server_controlled() {
         let mut full = HashMap::new();
         full.insert("+freeq.at/event".to_string(), "task_request".to_string());
@@ -1748,6 +1899,7 @@ mod tests {
             msgid: Some("01HZ".to_string()),
             sig: None,
             tags: tags.clone(),
+            multiline_lines: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         match serde_json::from_str::<S2sMessage>(&json).unwrap() {

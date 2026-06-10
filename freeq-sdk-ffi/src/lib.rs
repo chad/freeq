@@ -51,6 +51,43 @@ pub struct IrcMessage {
     pub is_signed: bool,
     pub timestamp_ms: i64,
     pub account: Option<String>,
+    /// Persisted reactions delivered on the message itself via the
+    /// server's `+freeq.at/reactions` tag (CHATHISTORY / JOIN replay).
+    /// Live reactions still arrive as separate `TagMsg` events.
+    pub reactions: Vec<ReactionTally>,
+}
+
+pub struct ReactionTally {
+    pub emoji: String,
+    pub nicks: Vec<String>,
+}
+
+/// Parse the server's `+freeq.at/reactions` value
+/// (`emoji1:nick1,nick2;emoji2:nick3`) into structured tallies.
+/// Malformed segments are skipped.
+fn parse_reactions_tag(raw: &str) -> Vec<ReactionTally> {
+    raw.split(';')
+        .filter_map(|seg| {
+            let (emoji, nicks) = seg.split_once(':')?;
+            let emoji = emoji.trim();
+            if emoji.is_empty() {
+                return None;
+            }
+            let nicks: Vec<String> = nicks
+                .split(',')
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .map(str::to_string)
+                .collect();
+            if nicks.is_empty() {
+                return None;
+            }
+            Some(ReactionTally {
+                emoji: emoji.to_string(),
+                nicks,
+            })
+        })
+        .collect()
 }
 
 pub struct TagEntry {
@@ -444,6 +481,10 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
                 .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
                 .map(|dt: chrono::DateTime<chrono::FixedOffset>| dt.timestamp_millis())
                 .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+            let reactions = tags
+                .get("+freeq.at/reactions")
+                .map(|raw| parse_reactions_tag(raw))
+                .unwrap_or_default();
             FreeqEvent::Message {
                 msg: IrcMessage {
                     from_nick: from.clone(),
@@ -460,6 +501,7 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
                     is_signed: tags.contains_key("+freeq.at/sig"),
                     timestamp_ms: ts,
                     account: tags.get("account").cloned(),
+                    reactions,
                 },
             }
         }
@@ -1701,5 +1743,66 @@ mod tests {
     fn av_leave_sets_disconnected() {
         // Can't create without a server, but we can test the stub path
         // by verifying the non-av build returns error
+    }
+
+    #[test]
+    fn parse_reactions_tag_handles_canonical_format() {
+        let tallies = parse_reactions_tag("👍:alice,bob;❤️:carol");
+        assert_eq!(tallies.len(), 2);
+        assert_eq!(tallies[0].emoji, "👍");
+        assert_eq!(tallies[0].nicks, vec!["alice".to_string(), "bob".to_string()]);
+        assert_eq!(tallies[1].emoji, "❤️");
+        assert_eq!(tallies[1].nicks, vec!["carol".to_string()]);
+    }
+
+    #[test]
+    fn parse_reactions_tag_skips_malformed_segments() {
+        // missing colon, empty emoji, empty nicks, stray ; — all dropped silently
+        let tallies = parse_reactions_tag("notacolon;:no_emoji;👍:;👎:dave");
+        assert_eq!(tallies.len(), 1);
+        assert_eq!(tallies[0].emoji, "👎");
+        assert_eq!(tallies[0].nicks, vec!["dave".to_string()]);
+    }
+
+    #[test]
+    fn parse_reactions_tag_empty_input() {
+        assert!(parse_reactions_tag("").is_empty());
+    }
+
+    #[test]
+    fn convert_event_message_populates_reactions_from_tag() {
+        let mut tags = std::collections::HashMap::new();
+        tags.insert("msgid".to_string(), "01ABC".to_string());
+        tags.insert("+freeq.at/reactions".to_string(), "👍:alice,bob;🎉:carol".to_string());
+        let ev = freeq_sdk::event::Event::Message {
+            from: "smoke-tx".to_string(),
+            target: "#naptest".to_string(),
+            text: "hi".to_string(),
+            tags,
+        };
+        let out = convert_event(&ev);
+        let FreeqEvent::Message { msg } = out else {
+            panic!("expected Message variant");
+        };
+        assert_eq!(msg.reactions.len(), 2);
+        assert!(msg.reactions.iter().any(|r| r.emoji == "👍" && r.nicks == vec!["alice".to_string(), "bob".to_string()]));
+        assert!(msg.reactions.iter().any(|r| r.emoji == "🎉" && r.nicks == vec!["carol".to_string()]));
+    }
+
+    #[test]
+    fn convert_event_message_no_reactions_tag_yields_empty() {
+        let mut tags = std::collections::HashMap::new();
+        tags.insert("msgid".to_string(), "01XYZ".to_string());
+        let ev = freeq_sdk::event::Event::Message {
+            from: "alice".to_string(),
+            target: "#x".to_string(),
+            text: "no reactions here".to_string(),
+            tags,
+        };
+        let out = convert_event(&ev);
+        let FreeqEvent::Message { msg } = out else {
+            panic!("expected Message variant");
+        };
+        assert!(msg.reactions.is_empty());
     }
 }

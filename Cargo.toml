@@ -14,6 +14,7 @@ members = [
     "freeq-av-image",
     "freeq-agent-kit",
     "freeq-eliza",
+    "freeq-agent-kit/examples/claude-mcp",
 ]
 exclude = [
     "freeq-app/src-tauri",
