@@ -2867,7 +2867,7 @@ dependencies = [
 [[package]]
 name = "ghostly"
 version = "0.1.0"
-source = "git+https://github.com/chad/ghostly?branch=main#47d0128f820d9c48d9702c88a7dedb6147b9d581"
+source = "git+https://github.com/chad/ghostly?branch=main#10430f6881a39df31c0de6010cf9307ea563fd58"
 dependencies = [
  "fastrand",
  "fundsp",
