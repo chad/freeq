@@ -2340,6 +2340,11 @@ async fn start_transcription(
     // (so each can tell one-on-one from a group) AND the lonely watchdog below.
     let humans = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let humans_for_task = humans.clone();
+    // Live nick roster across this call's taps — lets the addressing
+    // gate see when a question opens by naming a different participant.
+    let roster: CallRoster =
+        Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+    let roster_for_task = roster.clone();
     let task = tokio::spawn(async move {
         let mut session =
             AvSession::connect(av_config, push_source, move || video_for_session.source());
@@ -2353,6 +2358,7 @@ async fn start_transcription(
                 active_for_task.clone(),
                 video_for_taps.peer_level_handle(),
                 humans_for_task.clone(),
+                roster_for_task.clone(),
             ));
         }
         tracing::info!("AvSession ended");
@@ -2599,12 +2605,45 @@ async fn run_owner_command(handle: &ClientHandle, channel: Option<&str>, cmd: Ow
 }
 
 /// Decrements a shared tap counter on drop — tracks how many participants we
-/// are currently transcribing (i.e. how many other humans are in the call).
-struct TapGuard(Arc<std::sync::atomic::AtomicUsize>);
+/// are currently transcribing (i.e. how many other humans are in the call) —
+/// and removes the participant's nick from the live call roster.
+struct TapGuard {
+    humans: Arc<std::sync::atomic::AtomicUsize>,
+    roster: CallRoster,
+    nick: String,
+}
 impl Drop for TapGuard {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        self.humans.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut r) = self.roster.lock() {
+            r.remove(&self.nick);
+        }
     }
+}
+
+/// Live set of participant nicks we're currently tapping (lowercased,
+/// as-published). Shared across a call's tap tasks so the addressing
+/// gate can tell when a question opens by naming someone *else*.
+pub(crate) type CallRoster = Arc<std::sync::Mutex<std::collections::HashSet<String>>>;
+
+/// True when `text` opens by addressing some OTHER named participant or
+/// peer agent — "Yokota, what is two plus two?" is Yokota's question,
+/// and an agent named anything else must not answer it just because it
+/// is a question. `others` are candidate names (roster nicks + the
+/// configured peer agents); the agent's own name is filtered out so a
+/// genuine address to us never matches here.
+pub(crate) fn addressed_to_other(text: &str, self_nick: &str, others: &[String]) -> bool {
+    let self_canonical = self_nick
+        .split_once('-')
+        .map(|(p, _)| p)
+        .unwrap_or(self_nick)
+        .to_ascii_lowercase();
+    let refs: Vec<&str> = others
+        .iter()
+        .map(|s| s.as_str())
+        .filter(|n| !n.eq_ignore_ascii_case(&self_canonical))
+        .collect();
+    crate::social::extract_addressee(text, &refs).is_some()
 }
 
 /// Worth responding to? Filters empty/backchannel utterances so the bot doesn't
@@ -2693,11 +2732,21 @@ async fn transcribe_participant(
     // Live count of participants being transcribed (= other humans in the
     // call). When it's just one of them and us, no name is needed to address us.
     humans: Arc<std::sync::atomic::AtomicUsize>,
+    // Shared nick roster for the call — see [`CallRoster`].
+    roster: CallRoster,
 ) {
     let AvParticipant { path, nick, mut audio, video } = participant;
     let stt = cfg.stt.clone();
     humans.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let _tap = TapGuard(humans.clone()); // decrement when this tap ends
+    if let Ok(mut r) = roster.lock() {
+        r.insert(nick.to_ascii_lowercase());
+    }
+    let _tap = TapGuard {
+        // decrement + de-roster when this tap ends
+        humans: humans.clone(),
+        roster: roster.clone(),
+        nick: nick.to_ascii_lowercase(),
+    };
     tracing::info!(%nick, %path, "participant audio live — transcribing");
 
     // VAD: turn the PCM stream into utterances, cut at natural pauses.
@@ -2746,6 +2795,7 @@ async fn transcribe_participant(
         let active = active.clone();
         let cfg = cfg.clone();
         let humans = humans.clone();
+        let roster = roster.clone();
         // The asker's own video — so a visual question can be answered
         // from what they're showing.
         let asker_video = video.clone();
@@ -2896,8 +2946,34 @@ async fn transcribe_participant(
                         }
                     }
 
+                    // A question that opens by naming a DIFFERENT
+                    // participant or peer agent is theirs, not ours —
+                    // "Yokota, what is two plus two?" must not be
+                    // answered by Olive just because it's a question.
+                    // Candidates come from the live call roster (so
+                    // this works even when --peer-agents wasn't
+                    // configured) plus the configured peer list.
+                    let to_other = named.is_none() && {
+                        let mut others: Vec<String> = roster
+                            .lock()
+                            .map(|r| {
+                                r.iter()
+                                    .map(|n| {
+                                        n.split_once('-')
+                                            .map(|(p, _)| p)
+                                            .unwrap_or(n)
+                                            .to_string()
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        others.extend(cfg.peer_agents.iter().cloned());
+                        others.sort();
+                        others.dedup();
+                        addressed_to_other(&text, &cfg.nick, &others)
+                    };
                     let inferred: Option<String> = named.clone().or_else(|| {
-                        if !is_substantive(&text) {
+                        if !is_substantive(&text) || to_other {
                             None
                         } else if looks_like_question(&text)
                             || (humans <= 1 && looks_like_request(&text))
@@ -2910,6 +2986,7 @@ async fn transcribe_participant(
                     tracing::info!(
                         %nick, humans,
                         named = named.is_some(),
+                        to_other,
                         addressed = inferred.is_some(),
                         "voice addressing decision"
                     );
@@ -3263,6 +3340,62 @@ mod tests {
             note_spoken(&log, s);
         }
         log
+    }
+
+    // ---------- addressed-to-other gate ----------
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn question_naming_another_agent_is_theirs() {
+        // Olive must not answer "Yokota, what is two plus two?"
+        assert!(addressed_to_other(
+            "Yokota, what is two plus two?",
+            "olive",
+            &names(&["yokota", "claude"]),
+        ));
+    }
+
+    #[test]
+    fn question_naming_me_is_mine() {
+        // Yokota's own name filtered from the candidate list — a
+        // genuine address to us never reads as "someone else's".
+        assert!(!addressed_to_other(
+            "Yokota, what is two plus two?",
+            "yokota-z6mkqxh7",
+            &names(&["yokota", "olive", "claude"]),
+        ));
+    }
+
+    #[test]
+    fn bare_question_is_nobody_elses() {
+        assert!(!addressed_to_other(
+            "What time is it?",
+            "yokota",
+            &names(&["olive", "claude"]),
+        ));
+    }
+
+    #[test]
+    fn suffixed_roster_nick_still_matches() {
+        // The roster carries the server-suffixed nick; the gate is fed
+        // pre-dash prefixes, so the spoken character name matches.
+        assert!(addressed_to_other(
+            "Olive, are you kidding me?",
+            "yokota",
+            &names(&["olive", "claude"]),
+        ));
+    }
+
+    #[test]
+    fn empty_candidates_never_match() {
+        assert!(!addressed_to_other(
+            "Yokota, what is two plus two?",
+            "yokota",
+            &[],
+        ));
     }
 
     #[test]

@@ -426,7 +426,13 @@ async fn main() -> Result<()> {
 fn build_stt(cli: &Cli) -> Result<stt::SttEngine> {
     if let Ok(key) = std::env::var("GROQ_API_KEY") {
         if !key.trim().is_empty() {
-            return Ok(stt::SttEngine::groq(key, cli.groq_model.clone()));
+            // Whisper must recognise the agent's own name (and its
+            // peers') or addressed utterances come back mangled and
+            // the addressing gate never fires.
+            let mut vocab: Vec<String> =
+                vec![cli.name.clone().unwrap_or_else(|| "Eliza".to_string())];
+            vocab.extend(cli.peer_agents.iter().cloned());
+            return Ok(stt::SttEngine::groq(key, cli.groq_model.clone(), &vocab));
         }
     }
     #[cfg(feature = "stt")]
