@@ -52,6 +52,65 @@ name + peers; live `CallRoster` + `addressed_to_other()` so a question naming a
 different participant is never inferred as ours; static `PEER_AGENTS` env
 merged with the registry; registry only trusted when it returns JSON.
 
+**2026-06-11 round 2** (after the round-1 fix deploy):
+
+- ✅ **STT vocab prompt live**: "Yokota, what time is it?" transcribed
+  verbatim, `named=true` — the round-1 mangle is gone.
+- ✅ **A1/A5 latency**: full chain STT 251 ms → context 0 ms → first model
+  token 141 ms → first sentence at TTS 1044 ms → first TTS audio enqueued
+  **1346 ms**. Under the 2 s bar.
+- ✅ **Wrong-bot fix**: "Olive, what is 2 plus 2?" → yokota `to_other=true`,
+  stayed silent; olive answered.
+- ✅ **Peer guard**: yokota logged "suppressing voice reply — recent
+  addressers all peer agents" for olive's rhetorical questions. No loop.
+- ✅ **B4**: "I had pasta for lunch" ignored (`addressed=false`), still
+  transcribed; ambient tile picked the concept up.
+- ❌ **D-proxy (vision)**: "what do you see on my tile?" → `got_frame=false`
+  after the 2 s warm-up despite subscribe + decoder + encoder all live.
+  Root cause found: the **MCP tile renderer dies on subscriber loss** —
+  `ParticleVideoSource::stop()` killed the render thread permanently; the
+  encode pipeline stop/starts the source as subscriber count crosses 0, so
+  the resubscribed track carried zero frames forever.
+
+**2026-06-11 round 3** (after the renderer fix, new MCP binary):
+
+- ✅ **Vision voice path**: same question → `answering as a visual question`,
+  yokota described the live frame ("bright light in the center of a circle …
+  dark background" — the particle face; the card hadn't been shown due to a
+  bad freeq_show arg). First-sentence latency 870 ms.
+- ❌ **Vision text path (D7)**: the same question TYPED in the channel
+  answered "no frame coming through" — the PRIVMSG path passed
+  `asker_video=None` by design, so typed visual questions were always blind.
+- ⚠️ **VAD split**: "Yokota. — Read me the title…" split into two segments;
+  the second arrived `named=false` and was dropped. Known issue, still open.
+
+Fixes shipped (freeq `53248ae`): MCP `stop()` no-op (render thread lives as
+long as the source; killed only on Drop at AV reconnect) + regression test;
+eliza calls keep a `CallVideoTaps` nick → `VideoHandle` map so typed
+questions find the asker's camera (suffix-tolerant lookup, unit-tested).
+
+**2026-06-11 round 4**: "please read the title shown on my video tile" didn't
+route as visual at *all* — no cue matched ("tile"/"feed"/"read the title"
+weren't in either list); the text model improvised a "no frame is reaching me"
+denial from transcript context. Fix (`7110b51`): `my video`/`video tile`/`my
+tile`/`my feed` added as strong cues; read-me/read-my/the-title/sharing
+phrasings added to the with-frame list, with verbatim-miss regression tests.
+
+**2026-06-11 round 5** (after the round-4 deploy + revenant restart; restart
+itself re-exercised the resubscribe cycle — tap re-established, MCP renderer
+survived): "Yokota, please read the title shown on my video tile." with a
+BANANA TEST 42 card up on claude's tile —
+
+- ✅ **Typed path (D7)**: the PRIVMSG mirror answered first —
+  `answering as a visual question` (claude-opus-4-7, voice=false) →
+  "The title shown on your video tile is BANANA TEST 42." Proof that
+  `CallVideoTaps` routes typed visual questions to the asker's live camera.
+- ✅ **Voice path (D1)**: STT 247 ms verbatim, `named=true` →
+  `answering as a visual question` (llama-3.3-70b) → same exact answer;
+  first sentence at TTS 1177 ms, first TTS audio enqueued **1411 ms**.
+- Both paths read the precise card title off the live frame. The "bot can
+  always see your video" contract now holds for voice AND typed questions.
+
 ## Grid
 
 Legend: ✅ pass · ❌ fail · ⚠️ partial · ☐ not yet run
@@ -60,11 +119,11 @@ Legend: ✅ pass · ❌ fail · ⚠️ partial · ☐ not yet run
 
 | # | Provocation | Expected | Result |
 |---|---|---|---|
-| A1 | Short question ("yokota, what time is it?") | First word ≤ ~1.5 s after I stop | ☐ |
+| A1 | Short question ("yokota, what time is it?") | First word ≤ ~1.5 s after I stop | ✅ r2: first TTS audio 1346 ms |
 | A2 | Long question (20+ words) | Thinking-beat fires, then streamed answer | ☐ |
 | A3 | Rapid follow-up right after answer ends | Answers again, no debounce swallow | ☐ |
-| A4 | Question while log shows `audio encoder too slow` | Should no longer appear at 360p at all | ☐ |
-| A5 | Check stage logs for one answer | All 5 latency lines present, first-audio < 2000 ms | ☐ |
+| A4 | Question while log shows `audio encoder too slow` | Should no longer appear at 360p at all | ✅ r2/r3: none seen at 360p (laptop MCP only, audio-side) |
+| A5 | Check stage logs for one answer | All 5 latency lines present, first-audio < 2000 ms | ✅ r2: 251/0/141/1044/1346 ms |
 
 ### B. Addressing gate
 
@@ -73,7 +132,7 @@ Legend: ✅ pass · ❌ fail · ⚠️ partial · ☐ not yet run
 | B1 | "yokota, hello" (named, not a question) | Answers | ☐ |
 | B2 | Unnamed question, 1:1 | Answers | ☐ |
 | B3 | Unnamed request 1:1 ("tell me a joke") | Answers | ☐ |
-| B4 | Bare declarative ("I had pasta for lunch") | Ignored (`addressed=false`), still transcribed | ☐ |
+| B4 | Bare declarative ("I had pasta for lunch") | Ignored (`addressed=false`), still transcribed | ✅ r2 |
 | B5 | "I'm sorry." / sigh / filler | Ignored | ☐ |
 | B6 | Mention without address ("I think yokota would like this") | Hand-raise halo, no speech | ☐ |
 
@@ -81,7 +140,7 @@ Legend: ✅ pass · ❌ fail · ⚠️ partial · ☐ not yet run
 
 | # | Provocation | Expected | Result |
 |---|---|---|---|
-| C1 | Play the bot's answer back into the mic (speaker loop, no AEC) | `dropped own-TTS echo`, no self-answer | ☐ |
+| C1 | Play the bot's answer back into the mic (speaker loop, no AEC) | `dropped own-TTS echo`, no self-answer | ⚠️ guard verified live in r1 (×2 drops); scripted replay in r2 missed the 45 s window |
 | C2 | Echo of a *fragment* of a long answer | Dropped | ☐ |
 | C3 | Human deliberately quotes one bot phrase + own words ("you said X but why?") | Answered (own words break the bag threshold) | ☐ |
 | C4 | Human short ack ("okay", "right") just after bot spoke | NOT dropped, NOT answered (declarative) | ☐ |
@@ -91,13 +150,13 @@ Legend: ✅ pass · ❌ fail · ⚠️ partial · ☐ not yet run
 
 | # | Provocation | Expected | Result |
 |---|---|---|---|
-| D1 | Camera on for 10 s, then "what do you see?" | Describes current frame | ☐ |
+| D1 | Camera on for 10 s, then "what do you see?" | Describes current frame | ✅ r3 (face described) + r5 (card title read verbatim, 1411 ms) |
 | D2 | "Can you see this?" in the same breath as camera-on | Waits ≤ 2 s for first frame, then describes | ☐ |
 | D3 | Camera OFF, then visual question | "I can't see anything" — NOT a stale-frame description | ☐ |
 | D4 | Camera off → on → off → on (rapid toggles) | Audio never drops; describes when on | ☐ |
 | D5 | Visual question 30 s after camera off | Refuses (frame expired), not the old frame | ☐ |
 | D6 | Screenshare instead of camera | Describes the screen | ☐ |
-| D7 | Type a message in the channel during the call | Bot responds in text/voice appropriately | ☐ |
+| D7 | Type a message in the channel during the call | Bot responds in text/voice appropriately | ✅ r5: typed visual question routed to vision via CallVideoTaps, correct answer in text |
 | D8 | Hold up N fingers ("how many fingers?") | Looser cue routes to vision when tap exists | ☐ |
 
 ### E. Turn-taking & barge-in
