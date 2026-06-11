@@ -111,6 +111,20 @@ BANANA TEST 42 card up on claude's tile —
 - Both paths read the precise card title off the live frame. The "bot can
   always see your video" contract now holds for voice AND typed questions.
 
+**2026-06-11 round 6** (fresh MCP session, full reconnect — tap re-established
+at 22:18:36, card re-shown with new bullets "round six" / "fresh session
+verify"):
+
+- ✅ **Typed (D7)** ×2: both the say-mirror and a typed-only "what do you see
+  on my video tile right now?" routed visual and described the card
+  *including the just-set bullets* — proof of a live fresh frame, not stale.
+- ⚠️ **VAD split reproduced**: "Yokota, please read…" TTS'd with a comma
+  pause split into "Yokota." + the question, both `named=false` → voice path
+  silent (known open bug, now reproduced on demand).
+- ✅ **Voice (D1)**: comma-free retry arrived as one segment, `named=true` →
+  visual → "The title written on your video tile is BANANA TEST 42." First
+  TTS audio **1443 ms**.
+
 ## Grid
 
 Legend: ✅ pass · ❌ fail · ⚠️ partial · ☐ not yet run
