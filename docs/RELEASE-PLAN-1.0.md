@@ -76,7 +76,7 @@ Suggested sequence: **Beta blockers → public beta announcement → fast-follow
 ## Phase 1 — Public beta blockers
 
 ### Product credibility (Slack/Discord-replacement table stakes)
-- [ ] **Search (FTS5)** — the #1 functional gap. Wire SQLite FTS5 to a SEARCH command + REST `/api/v1/search`; surface in web/macOS/iOS. Also fixes agent memory recall (revenant hit this; `fix/eliza-recall-or-semantics` branch exists — land it)
+- [x] **Search (FTS5) — server side DONE** (2026-06-11). FTS5 index + IRC SEARCH command + REST /api/v1/search, CHATHISTORY-grade authorization, 15 new tests. Remaining: surface in web/macOS/iOS clients; land `fix/eliza-recall-or-semantics` for agent memory recall
 - [ ] **Real push notifications** — web push via service worker (currently only while tab open); APNs for iOS/macOS; FCM for Android. A team chat tool without notifications when closed is unusable as a daily driver
 - [ ] **Message permalinks + export** — msgid-addressable URLs and a conversation export format. This is the "conversation is the commit" proof point; minimum viable: permalink + JSON/markdown export of a thread/channel range
 - [ ] Web client offline/reconnect resilience pass (it has IndexedDB + SW; verify the disconnect/resume path under real network churn)

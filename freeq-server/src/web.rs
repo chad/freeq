@@ -185,6 +185,7 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/health", get(api_health))
         .route("/api/v1/channels", get(api_channels))
         .route("/api/v1/channels/{name}/history", get(api_channel_history))
+        .route("/api/v1/search", get(api_search))
         .route("/api/v1/channels/{name}/topic", get(api_channel_topic))
         .route("/api/v1/channels/{name}/pins", get(api_channel_pins))
         .route("/api/v1/users/{nick}", get(api_user))
@@ -389,6 +390,14 @@ struct MessageResponse {
 
 #[derive(Deserialize)]
 struct HistoryQuery {
+    limit: Option<usize>,
+    before: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    channel: String,
+    q: String,
     limit: Option<usize>,
     before: Option<u64>,
 }
@@ -1201,6 +1210,55 @@ async fn api_channel_history(
             }
         }
     }
+}
+
+/// GET /api/v1/search?channel=#name&q=terms — full-text history search.
+/// Channels only: DM search requires DID auth and goes through the IRC
+/// SEARCH command. Access rules mirror /channels/{name}/history: channels
+/// with +i or +k return 403.
+async fn api_search(
+    Query(params): Query<SearchQuery>,
+    State(state): State<Arc<SharedState>>,
+) -> Result<Json<Vec<MessageResponse>>, StatusCode> {
+    let channel = if params.channel.starts_with('#') {
+        params.channel.clone()
+    } else {
+        format!("#{}", params.channel)
+    };
+    // Never expose DM history through the unauthenticated REST surface.
+    if channel.to_lowercase().contains("dm:") {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    {
+        let channels = state.channels.lock();
+        match channels.get(&channel.to_lowercase()) {
+            Some(ch) => {
+                if ch.invite_only || ch.key.is_some() {
+                    return Err(StatusCode::FORBIDDEN);
+                }
+            }
+            None => return Err(StatusCode::NOT_FOUND),
+        }
+    }
+
+    let limit = params.limit.unwrap_or(25).min(100);
+    let rows = state
+        .with_db(|db| db.search_messages(&channel, &params.q, limit, params.before))
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| MessageResponse {
+                id: r.id,
+                sender: r.sender,
+                text: r.text,
+                timestamp: r.timestamp,
+                msgid: r.msgid,
+                tags: r.tags,
+            })
+            .collect(),
+    ))
 }
 
 async fn api_channel_topic(

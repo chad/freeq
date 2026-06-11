@@ -45,7 +45,7 @@ use channel::{
     handle_topic,
 };
 use helpers::{normalize_channel, s2s_broadcast, s2s_next_event_id};
-use messaging::{handle_chathistory, handle_privmsg, handle_tagmsg};
+use messaging::{handle_chathistory, handle_privmsg, handle_search, handle_tagmsg};
 use policy_cmd::handle_policy;
 use queries::{handle_away, handle_lusers, handle_who, handle_whois};
 use registration::try_complete_registration;
@@ -1275,6 +1275,12 @@ where
                     continue;
                 }
                 handle_chathistory(&conn, &msg, &state, &server_name, &session_id, &send);
+            }
+            "SEARCH" => {
+                if !conn.registered {
+                    continue;
+                }
+                handle_search(&conn, &msg, &state, &server_name, &session_id, &send);
             }
             "VERSION" => {
                 if !conn.registered {
