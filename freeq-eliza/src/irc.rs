@@ -346,6 +346,9 @@ pub(crate) struct ActiveCall {
     /// The agent's video tile (audio-reactive presence + visual-aid
     /// cards). `show_card` puts up an LLM-drawn visual.
     pub(crate) video: VideoTile,
+    /// Live nick → video-handle map across this call's taps, so a typed
+    /// question can find the asker's camera (see [`CallVideoTaps`]).
+    pub(crate) video_taps: CallVideoTaps,
     /// The MoQ subscriber/publisher task. Aborted by `Drop` on call
     /// end — a plain `JoinHandle` drop only *detaches*, which would
     /// leave the reconnect loop running forever after the call ends.
@@ -935,13 +938,19 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                 }
                 // A typed question gets a typed answer — pass no speaker
                 // or video so `answer_and_speak` posts text rather than
-                // speaking it. The call transcript is still useful context.
-                let transcript = {
+                // speaking it. The call transcript is still useful context,
+                // and if the asker is on the call with a camera, their
+                // video handle rides along so "what do you see?" typed in
+                // the channel works the same as asked by voice.
+                let (transcript, asker_video) = {
                     let guard = active.lock().await;
-                    guard
-                        .as_ref()
-                        .map(|c| c.transcript.join("\n"))
-                        .unwrap_or_default()
+                    match guard.as_ref() {
+                        Some(c) => (
+                            c.transcript.join("\n"),
+                            lookup_tap_video(&c.video_taps, &from),
+                        ),
+                        None => (String::new(), None),
+                    }
                 };
                 let cfg = cfg.clone();
                 let handle = handle_arc.clone();
@@ -949,7 +958,8 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                 let asker = from.clone();
                 tokio::spawn(async move {
                     answer_and_speak(
-                        cfg, handle, channel, asker, question, transcript, None, None, None,
+                        cfg, handle, channel, asker, question, transcript, None, None,
+                        asker_video,
                     )
                     .await;
                 });
@@ -2345,6 +2355,11 @@ async fn start_transcription(
     let roster: CallRoster =
         Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
     let roster_for_task = roster.clone();
+    // Nick → video handle across this call's taps — lets a TYPED visual
+    // question find the asker's camera (see [`CallVideoTaps`]).
+    let video_taps: CallVideoTaps =
+        Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let video_taps_for_task = video_taps.clone();
     let task = tokio::spawn(async move {
         let mut session =
             AvSession::connect(av_config, push_source, move || video_for_session.source());
@@ -2359,6 +2374,7 @@ async fn start_transcription(
                 video_for_taps.peer_level_handle(),
                 humans_for_task.clone(),
                 roster_for_task.clone(),
+                video_taps_for_task.clone(),
             ));
         }
         tracing::info!("AvSession ended");
@@ -2410,6 +2426,7 @@ async fn start_transcription(
         last_answer: None,
         speaker,
         video,
+        video_taps,
         moq_task: task,
         proactive_task,
         ambient_task,
@@ -2610,6 +2627,7 @@ async fn run_owner_command(handle: &ClientHandle, channel: Option<&str>, cmd: Ow
 struct TapGuard {
     humans: Arc<std::sync::atomic::AtomicUsize>,
     roster: CallRoster,
+    video_taps: CallVideoTaps,
     nick: String,
 }
 impl Drop for TapGuard {
@@ -2618,6 +2636,9 @@ impl Drop for TapGuard {
         if let Ok(mut r) = self.roster.lock() {
             r.remove(&self.nick);
         }
+        if let Ok(mut v) = self.video_taps.lock() {
+            v.remove(&self.nick);
+        }
     }
 }
 
@@ -2625,6 +2646,31 @@ impl Drop for TapGuard {
 /// as-published). Shared across a call's tap tasks so the addressing
 /// gate can tell when a question opens by naming someone *else*.
 pub(crate) type CallRoster = Arc<std::sync::Mutex<std::collections::HashSet<String>>>;
+
+/// Live map of tapped participant nick (lowercased) → their video handle.
+/// Shared across a call's tap tasks so a question TYPED in the channel can
+/// still see the asker's camera — the voice path gets the handle with the
+/// utterance, but the PRIVMSG path has only a nick (observed live: "read me
+/// the title on my tile" typed mid-call answered "no frame coming through"
+/// while the same question by voice described the frame).
+pub(crate) type CallVideoTaps =
+    Arc<std::sync::Mutex<std::collections::HashMap<String, VideoHandle>>>;
+
+/// The asker's video handle, by nick. Exact lowercase match first; a
+/// server-suffixed variant ("olive-3qkx…") still matches its base name in
+/// either direction, since IRC nick and broadcast nick can disagree on the
+/// suffix.
+pub(crate) fn lookup_tap_video(taps: &CallVideoTaps, asker: &str) -> Option<VideoHandle> {
+    let want = asker.to_ascii_lowercase();
+    let m = taps.lock().ok()?;
+    if let Some(vh) = m.get(&want) {
+        return Some(vh.clone());
+    }
+    let base = |s: &str| s.split_once('-').map(|(p, _)| p.to_string()).unwrap_or_else(|| s.to_string());
+    let want_base = base(&want);
+    m.iter()
+        .find_map(|(k, vh)| (base(k) == want_base).then(|| vh.clone()))
+}
 
 /// True when `text` opens by addressing some OTHER named participant or
 /// peer agent — "Yokota, what is two plus two?" is Yokota's question,
@@ -2734,6 +2780,8 @@ async fn transcribe_participant(
     humans: Arc<std::sync::atomic::AtomicUsize>,
     // Shared nick roster for the call — see [`CallRoster`].
     roster: CallRoster,
+    // Shared nick → video map — see [`CallVideoTaps`].
+    video_taps: CallVideoTaps,
 ) {
     let AvParticipant { path, nick, mut audio, video } = participant;
     let stt = cfg.stt.clone();
@@ -2741,10 +2789,14 @@ async fn transcribe_participant(
     if let Ok(mut r) = roster.lock() {
         r.insert(nick.to_ascii_lowercase());
     }
+    if let Ok(mut v) = video_taps.lock() {
+        v.insert(nick.to_ascii_lowercase(), video.clone());
+    }
     let _tap = TapGuard {
-        // decrement + de-roster when this tap ends
+        // decrement + de-roster + de-map when this tap ends
         humans: humans.clone(),
         roster: roster.clone(),
+        video_taps: video_taps.clone(),
         nick: nick.to_ascii_lowercase(),
     };
     tracing::info!(%nick, %path, "participant audio live — transcribing");
@@ -3396,6 +3448,39 @@ mod tests {
             "yokota",
             &[],
         ));
+    }
+
+    // ---------- lookup_tap_video ----------
+
+    fn taps_of(nicks: &[&str]) -> CallVideoTaps {
+        let m: std::collections::HashMap<String, VideoHandle> = nicks
+            .iter()
+            .map(|n| (n.to_string(), VideoHandle::default()))
+            .collect();
+        Arc::new(std::sync::Mutex::new(m))
+    }
+
+    #[test]
+    fn typed_asker_finds_their_tap_exactly() {
+        let taps = taps_of(&["claude", "olive"]);
+        assert!(lookup_tap_video(&taps, "Claude").is_some());
+    }
+
+    #[test]
+    fn typed_asker_matches_suffixed_broadcast_nick() {
+        // IRC nick "yokota" typed the question; the broadcast tap was
+        // registered under the server-suffixed "yokota-z6mkqxh7".
+        let taps = taps_of(&["yokota-z6mkqxh7"]);
+        assert!(lookup_tap_video(&taps, "yokota").is_some());
+        // …and the reverse: suffixed IRC nick, plain broadcast nick.
+        let taps = taps_of(&["yokota"]);
+        assert!(lookup_tap_video(&taps, "yokota-z6mkqxh7").is_some());
+    }
+
+    #[test]
+    fn typed_asker_not_on_call_has_no_tap() {
+        let taps = taps_of(&["olive"]);
+        assert!(lookup_tap_video(&taps, "claude").is_none());
     }
 
     #[test]

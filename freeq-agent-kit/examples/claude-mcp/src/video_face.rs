@@ -148,7 +148,15 @@ impl VideoSource for ParticleVideoSource {
         Ok(())
     }
     fn stop(&mut self) -> anyhow::Result<()> {
-        self.running.store(false, Ordering::Relaxed);
+        // No-op, deliberately. The encode pipeline calls stop() whenever the
+        // last subscriber drops ("stopping track … (all subscribers
+        // disconnected)") and start() when a new one arrives — but a killed
+        // render thread can't be restarted, so flipping `running` here left
+        // every later subscriber a frameless track: they logged "video track
+        // live — watching" and then decoded nothing, ever (observed live:
+        // yokota answered "I can't see anything" while our tile showed a
+        // card). The thread dies with the source itself (Drop), i.e. once
+        // per AV (re)connect, matching eliza's PushVideoSource.
         Ok(())
     }
 }
@@ -273,4 +281,36 @@ fn render_loop(
         }
     }
     tracing::info!("claude face renderer stopped");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The encode pipeline stops the source whenever the last subscriber
+    /// drops and starts it again on the next subscribe. stop() must NOT
+    /// kill the render thread — a dead thread can't be restarted, and
+    /// every later subscriber gets a track that decodes zero frames.
+    #[test]
+    fn encoder_stop_start_cycle_keeps_the_render_thread_alive() {
+        let mut src = ParticleVideoSource::spawn("eliza".into(), ParticleControl::new());
+        src.stop().expect("stop is infallible");
+        src.start().expect("start is infallible");
+        assert!(
+            src.running.load(Ordering::Relaxed),
+            "stop() killed the render thread — next subscriber sees a frameless track"
+        );
+        // Frames should keep flowing after the cycle.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if src.pop_frame().expect("pop is infallible").is_some() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no frame within 5s after a stop/start cycle"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 }
