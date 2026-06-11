@@ -29,6 +29,10 @@ const VISUAL_CUES: &[&str] = &[
     "what do you see",
     "look at",
     "looking at",
+    "my video",
+    "video tile",
+    "my tile",
+    "my feed",
     "this slide",
     "this image",
     "this picture",
@@ -87,6 +91,23 @@ const VISUAL_CUES_WITH_FRAME: &[&str] = &[
     "count these",
     "count them",
     "count my",
+    // Reading something off the asker's feed — "read me the title on my
+    // tile", "can you read this/that/it". With a live frame in hand a
+    // false positive ("read the room") costs little; a missed route
+    // costs the answer.
+    "read me",
+    "read my",
+    "read it",
+    "read that",
+    "read what",
+    "can you read",
+    "the title",
+    "what's on my",
+    "what is on my",
+    "showing you",
+    "sharing my",
+    "i'm sharing",
+    "im sharing",
 ];
 
 /// Whether `question` is asking Eliza about something visual — so it
@@ -209,6 +230,10 @@ mod tests {
             "describe this picture",
             "read this for me",
             "what am i showing you",
+            // The round-4 miss: tile/feed phrasings are strong cues too.
+            "what do you think of my video tile",
+            "describe my feed",
+            "is my video coming through",
         ] {
             assert!(is_visual_question(q), "should be visual: {q:?}");
         }
@@ -237,6 +262,11 @@ mod tests {
             "do I look tired",
             "what's behind me",
             "what color is my shirt",
+            // The round-4 live miss, verbatim.
+            "please read the title shown on my video tile.",
+            "read me the title written on my video tile",
+            "can you read this",
+            "what's on my whiteboard",
         ] {
             assert!(is_visual_question_with_frame(q), "frame-visual: {q:?}");
         }
