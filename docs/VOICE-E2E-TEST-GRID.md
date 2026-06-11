@@ -26,6 +26,32 @@ Run against a live agent (yokota in #bots) after the 2026-06-11 fix set
 7. **Lifecycle**: owner-only voice commands (go to sleep / join #x / leave / fork)
    past the call-join grace.
 
+## Run log
+
+**2026-06-11 round 1** (claude-mcp as participant "claude" in #bots, yokota +
+olive live): exposed two addressing holes *before* the grid proper could run —
+
+- ❌ **Wrong-bot answers**: olive answered "Yokota, what is two plus two?" —
+  "any question is addressed" had no notion of someone *else* being named.
+- ❌ **Bot↔bot loop**: yokota answered olive's rhetorical questions and the two
+  looped for 3+ minutes. Root cause: `--peer-agents` was never passed — the
+  revenant launcher's only peer source (revenant-watch `/api/personas`)
+  idle-suspends and serves an HTML placeholder, so discovery silently failed.
+- ❌ **STT name mangling**: "Yokota, what time is it?" transcribed as "You
+  could tell what time is it." (whisper doesn't know the name) → `named=false`,
+  no `?` → not a question → not addressed. Likely THE "bot can't hear me" bug.
+- ✅ Echo guard observed live: `dropped own-TTS echo` ×2.
+- ✅ Stage latency in the fast path: STT 140–315 ms, context 0–1 ms, first
+  model token 100–138 ms (llama-3.3-70b voice default working).
+- ⚠️ "First sentence reached TTS" pegged at 6.8–8.2 s every time — the
+  room-quiet gate's 8 s cap, because two bots never stopped talking. Needs a
+  quiet-room re-measure after the loop fixes.
+
+Fixes shipped (freeq `e02ca28`, revenant `e3df621`): STT vocab prompt with own
+name + peers; live `CallRoster` + `addressed_to_other()` so a question naming a
+different participant is never inferred as ours; static `PEER_AGENTS` env
+merged with the registry; registry only trusted when it returns JSON.
+
 ## Grid
 
 Legend: ✅ pass · ❌ fail · ⚠️ partial · ☐ not yet run
