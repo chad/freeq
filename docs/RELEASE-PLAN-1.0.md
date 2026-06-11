@@ -100,11 +100,13 @@ Suggested sequence: **Beta blockers → public beta announcement → fast-follow
 - [ ] Typing-indicator auto-timeout; backgroundWhois size cap; ConnectConfig validation (open audit items)
 - [ ] Agent developer quickstart: "bot in 5 minutes" + "governed agent in 30" using bot-kit/agent-kit; publish freeqcc as the reference
 
-### Self-hosting story
-- [ ] 10-minute quickstart: `docker compose up` → working server with TLS guidance
-- [ ] **Backup/restore documentation** (none exists; SQLite + WAL specifics)
+### Self-hosting story — **miren.dev is the default path**
+- [ ] Publish a Miren template/recipe for freeq: one command (or one click) → server + web client + auth broker + persistent volume for SQLite + TLS on your domain. Generalize `deploy/irc/deploy.sh` (today it's our bespoke tarball build) into something any Miren user can run against a release tag, not a source checkout
+- [ ] Rewrite `docs/self-hosting.md` to lead with Miren; Docker Compose becomes the documented fallback, from-source last
+- [ ] Smoke-test the Miren path end to end as a stranger would (fresh account, fresh domain, federate with irc.freeq.at)
+- [ ] **Backup/restore documentation** (none exists; SQLite + WAL specifics — including what that means on Miren volumes)
 - [ ] Prometheus `/metrics` endpoint (connections, messages, S2S peers, auth failures) — minimum viable observability
-- [ ] Upgrade procedure doc tied to the migration story in Phase 0
+- [ ] Upgrade procedure doc tied to the migration story in Phase 0 (Miren redeploy + migration path included)
 
 ### Security posture
 - [ ] SECURITY.md + responsible disclosure policy
@@ -124,7 +126,7 @@ Suggested sequence: **Beta blockers → public beta announcement → fast-follow
 ## Phase 3 — 1.0 gate (after beta feedback)
 
 - [ ] App Store / Play Store submissions (iOS, macOS; Android after small-screen polish)
-- [ ] ATPROTO-CHALLENGE written up as an IRCv3 WG draft (credibility + the original acceptance criterion)
+- [ ] ATPROTO-CHALLENGE written up as an IRCv3 WG draft (credibility + the original acceptance criterion). Plan: extract a standalone normative spec from docs/PROTOCOL.md (crypto method normative; broker/PDS methods informative), reconcile spec-vs-implementation divergences (curve requirements, AUTHENTICATE 400-byte chunking, error numerics), open an ircv3-specifications issue → PR, offer a second implementation (e.g. Ergo extension) to satisfy the running-code norm, IANA SASL mechanism registration as a later step
 - [ ] Second security review (external if possible) focused on federation + agent surfaces
 - [ ] Conversation↔artifact linking: msgid trailers in git commits / freeqcc emitting commit↔conversation links (thesis feature, scope after beta learnings)
 - [ ] TUI auto-reconnect
