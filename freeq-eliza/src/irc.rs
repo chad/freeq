@@ -154,9 +154,12 @@ pub struct RunConfig {
     pub groq_api_key: Option<String>,
     /// Groq chat model for the visual board (scene generation).
     pub groq_chat_model: String,
-    /// Groq model for answering addressed questions. Defaults to an
-    /// agentic model (`groq/compound`) so eliza can search the web.
+    /// Model for answering addressed questions in *text* (channel
+    /// messages). `claude-*` routes to Anthropic, anything else to Groq.
     pub groq_answer_model: String,
+    /// Model for answering *spoken* questions in a live call — fast by
+    /// default, because time-to-first-word is the whole experience.
+    pub voice_answer_model: String,
     /// Groq vision model for questions about a participant's shared
     /// screen or camera.
     pub vision_model: String,
@@ -221,6 +224,8 @@ pub(crate) struct SharedConfig {
     pub(crate) groq_api_key: Option<String>,
     pub(crate) groq_chat_model: String,
     pub(crate) groq_answer_model: String,
+    /// Voice-path answer model (see [`RunConfig::voice_answer_model`]).
+    pub(crate) voice_answer_model: String,
     pub(crate) vision_model: String,
     pub(crate) elevenlabs_api_key: Option<String>,
     pub(crate) elevenlabs_voice_id: String,
@@ -302,6 +307,16 @@ pub(crate) struct SharedConfig {
     /// Revenant console base URL — when set, notable answers are auto-captured
     /// as shareable "moment" cards there (the self-propagating viral loop).
     pub(crate) console_url: Option<String>,
+    /// Rolling log of text the bot itself spoke through TTS recently
+    /// (`(spoken_at, normalized_text)`). A participant whose client has
+    /// no echo cancellation leaks the bot's voice from their speakers
+    /// back into their mic; the SFU attributes it to THEM, STT
+    /// transcribes it, and the addressing gate can fire on it — the bot
+    /// then answers its own words, sometimes in a sustained loop.
+    /// Every transcript is checked against this log (see
+    /// [`is_own_echo`]) before being treated as human speech.
+    pub(crate) recent_tts:
+        std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(Instant, String)>>>,
 }
 
 /// Active-call state. Held inside an `Arc<AsyncMutex<Option<...>>>`
@@ -380,6 +395,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         groq_api_key,
         groq_chat_model,
         groq_answer_model,
+        voice_answer_model,
         vision_model,
         elevenlabs_api_key,
         elevenlabs_voice_id,
@@ -493,6 +509,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         groq_api_key,
         groq_chat_model,
         groq_answer_model,
+        voice_answer_model,
         vision_model,
         elevenlabs_api_key,
         elevenlabs_voice_id,
@@ -531,6 +548,9 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
             .filter(|s| !s.is_empty()),
         http: reqwest::Client::new(),
         started_at: Instant::now(),
+        recent_tts: std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::VecDeque::new(),
+        )),
     });
     let handle_arc = Arc::new(handle);
 
@@ -981,6 +1001,84 @@ fn thinking_beat(question: &str) -> Option<String> {
     Some(BEATS[h % BEATS.len()].to_string())
 }
 
+/// How long a spoken sentence stays in the echo log. Long enough to
+/// cover the full acoustic round-trip (TTS synth → playout → the
+/// participant's speakers → their mic → SFU → our STT) plus a long
+/// answer still being spoken; short enough that a human legitimately
+/// *quoting* the bot a minute later isn't suppressed.
+const ECHO_WINDOW: Duration = Duration::from_secs(45);
+/// Most entries kept — a runaway answer can't grow the log unbounded.
+const ECHO_LOG_CAP: usize = 64;
+
+pub(crate) type RecentTts =
+    std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(Instant, String)>>>;
+
+/// Lowercased alphanumeric words — the normalization both sides of the
+/// echo comparison go through, so punctuation/casing drift from the
+/// STT round-trip doesn't defeat the match.
+fn echo_words(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+/// Record a sentence the bot is about to speak. Called from every TTS
+/// site that speaks full sentences: answers, hello-on-join, proactive
+/// comments, mitosis progress. Backchannels ("mm", "right") are
+/// deliberately NOT recorded — they're short, heavily attenuated, and
+/// logging them would make the guard eat a human's own "right"/"okay".
+pub(crate) fn note_spoken(recent: &RecentTts, text: &str) {
+    let Ok(mut log) = recent.lock() else { return };
+    let now = Instant::now();
+    log.push_back((now, text.to_string()));
+    while log.len() > ECHO_LOG_CAP {
+        log.pop_front();
+    }
+    while log
+        .front()
+        .is_some_and(|(at, _)| at.elapsed() > ECHO_WINDOW)
+    {
+        log.pop_front();
+    }
+}
+
+/// Does a transcript look like the bot's own recent TTS leaking back
+/// through a participant's mic? Word-bag containment against everything
+/// spoken inside [`ECHO_WINDOW`]: an echo transcript is (a fragment of)
+/// our own words, so nearly all of its words appear in the log — while
+/// a real reply *about* our answer brings its own words ("no", "wrong",
+/// "what about…") and falls under the threshold.
+///
+/// Utterances under 4 words are exempt from the bag test (too easy to
+/// false-positive on "yes" / "okay") and only match as an exact
+/// substring of a logged sentence.
+fn is_own_echo(recent: &RecentTts, heard: &str) -> bool {
+    let heard_words = echo_words(heard);
+    if heard_words.is_empty() {
+        return false;
+    }
+    let Ok(log) = recent.lock() else { return false };
+    let fresh: Vec<&String> = log
+        .iter()
+        .filter(|(at, _)| at.elapsed() <= ECHO_WINDOW)
+        .map(|(_, t)| t)
+        .collect();
+    if fresh.is_empty() {
+        return false;
+    }
+    if heard_words.len() < 4 {
+        let needle = heard_words.join(" ");
+        return fresh
+            .iter()
+            .any(|t| echo_words(t).join(" ").contains(&needle));
+    }
+    let bag: std::collections::HashSet<String> =
+        fresh.iter().flat_map(|t| echo_words(t)).collect();
+    let hits = heard_words.iter().filter(|w| bag.contains(*w)).count();
+    (hits as f32 / heard_words.len() as f32) >= 0.8
+}
+
 /// Handle one addressed question: stream the answer from Groq and speak
 /// it sentence-by-sentence as it generates — so Eliza starts talking
 /// almost immediately — then post any links and show a visual card.
@@ -1164,7 +1262,19 @@ async fn answer_and_speak(
     asker_video: Option<VideoHandle>,
 ) {
     let Some(key) = cfg.groq_api_key.as_deref() else { return };
-    tracing::info!(%asker, %question, "answering addressed question");
+    // Per-stage latency clock — every stage below logs elapsed_ms off
+    // this so a slow answer can be blamed on its actual stage (recall /
+    // feed / first token / first TTS audio) instead of guessed at.
+    let t0 = Instant::now();
+    // Voice answers use the fast model: time-to-first-word IS the
+    // experience in a call. Text answers keep the heavyweight default.
+    let is_voice = speaker.is_some();
+    let answer_model: &str = if is_voice {
+        &cfg.voice_answer_model
+    } else {
+        &cfg.groq_answer_model
+    };
+    tracing::info!(%asker, %question, model = %answer_model, voice = is_voice, "answering addressed question");
 
     // Show the "thinking" mood on the tile while the LLM call runs.
     // The guard clears it on every exit path.
@@ -1202,6 +1312,7 @@ async fn answer_and_speak(
                 // filtered out of its own subscription so its own TTS
                 // does not drive this signal.
                 let peer_level = video.as_ref().map(|v| v.peer_level_handle());
+                let recent_tts = cfg.recent_tts.clone();
                 Some(tokio::spawn(async move {
                     let mut chain = ghostly::audio::VoiceChain::new(
                         voice_profile,
@@ -1209,6 +1320,7 @@ async fn answer_and_speak(
                     );
                     let mut work: Vec<f32> = Vec::with_capacity(4096);
                     let mut first = true;
+                    let mut first_audio_logged = false;
                     while let Some(sentence) = rx.recv().await {
                         // URLs are unpronounceable — strip them from
                         // speech; the channel gets them as text instead.
@@ -1227,11 +1339,20 @@ async fn answer_and_speak(
                             if let Some(pl) = &peer_level {
                                 wait_for_room_quiet(pl).await;
                             }
+                            tracing::info!(
+                                elapsed_ms = t0.elapsed().as_millis() as u64,
+                                "latency: first sentence reached TTS"
+                            );
                             first = false;
                         }
+                        // Log what we're about to say so a participant's
+                        // speaker→mic leak (no AEC) transcribed back at us
+                        // can be recognized and dropped (see is_own_echo).
+                        note_spoken(&recent_tts, &spoken);
                         let chain_ref = &mut chain;
                         let work_ref = &mut work;
                         let sp_ref = &sp;
+                        let first_audio_ref = &mut first_audio_logged;
                         if let Err(e) = tts::synthesize_streaming(
                             &http,
                             &el_key,
@@ -1239,6 +1360,13 @@ async fn answer_and_speak(
                             &model,
                             &spoken,
                             |pcm| {
+                                if !*first_audio_ref {
+                                    *first_audio_ref = true;
+                                    tracing::info!(
+                                        elapsed_ms = t0.elapsed().as_millis() as u64,
+                                        "latency: first TTS audio enqueued"
+                                    );
+                                }
                                 work_ref.clear();
                                 work_ref.extend_from_slice(pcm);
                                 chain_ref.process(work_ref);
@@ -1288,10 +1416,29 @@ async fn answer_and_speak(
     // Bluesky account, fold their recent public posts into context so the being
     // can react to who it's actually talking to ("saw you shipped X"). Folds in
     // alongside memory; gracefully no-ops when the nick isn't a handle.
-    let transcript = match fetch_bsky_context(&cfg, &asker).await {
-        Some(block) => format!("{block}\n{transcript}"),
-        None => transcript,
+    //
+    // Timeboxed: this is 1-2 public HTTP round-trips sitting directly in
+    // front of the LLM call, on EVERY answer. A slow Bluesky response was
+    // adding whole seconds before the model even started — flavor context
+    // is not worth dead air, so past the deadline we answer without it.
+    let bsky_deadline = if is_voice {
+        Duration::from_millis(800)
+    } else {
+        Duration::from_millis(2500)
     };
+    let transcript =
+        match tokio::time::timeout(bsky_deadline, fetch_bsky_context(&cfg, &asker)).await {
+            Ok(Some(block)) => format!("{block}\n{transcript}"),
+            Ok(None) => transcript,
+            Err(_) => {
+                tracing::info!("bsky context fetch timed out — answering without it");
+                transcript
+            }
+        };
+    tracing::info!(
+        elapsed_ms = t0.elapsed().as_millis() as u64,
+        "latency: context assembled (memory + feed), dispatching model"
+    );
 
     // A visual question we can actually see → the vision model with the
     // asker's latest frame. A visual question with no frame → a useful
@@ -1299,15 +1446,34 @@ async fn answer_and_speak(
     // → the normal streaming QA. Completed sentences always go to the
     // speaker task.
     let mut chunker = qa::SentenceChunker::new();
-    // When the asker has a live frame, route on the looser cue set too
+    // When the asker HAS a video tap, route on the looser cue set too
     // ("how many fingers am I holding up") — a missed route sends a
     // visual question to the text model, which can't see and says so.
-    let candidate_frame = asker_video.as_ref().and_then(|vh| vh.latest());
-    let visual = if candidate_frame.is_some() {
+    // Keyed off the tap existing, not off a frame already decoded:
+    // "can you see this?" usually arrives in the same breath as the
+    // camera coming on, before the first frame lands.
+    let mut candidate_frame = asker_video.as_ref().and_then(|vh| vh.latest());
+    let visual = if asker_video.is_some() {
         vision::is_visual_question_with_frame(&question)
     } else {
         vision::is_visual_question(&question)
     };
+    // Camera warm-up: a visual question with a tap but no frame yet —
+    // poll briefly for the first decode instead of claiming blindness.
+    if visual && candidate_frame.is_none() {
+        if let Some(vh) = asker_video.as_ref() {
+            let warmup = Instant::now();
+            while candidate_frame.is_none() && warmup.elapsed() < Duration::from_secs(2) {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                candidate_frame = vh.latest();
+            }
+            tracing::info!(
+                got_frame = candidate_frame.is_some(),
+                waited_ms = warmup.elapsed().as_millis() as u64,
+                "visual question — waited for camera warm-up"
+            );
+        }
+    }
     let frame = if visual { candidate_frame } else { None };
 
     // Race a whiteboard plan in parallel with the answer call. For
@@ -1400,43 +1566,49 @@ sharpen the thread. Do NOT address yourself."
         // Dispatch: a `claude-*` model goes to Anthropic Messages
         // (uses ANTHROPIC_API_KEY); anything else stays on the Groq
         // OpenAI-compatible endpoint (uses GROQ_API_KEY). Per-call
-        // streaming, same `Answer` shape returned either way.
-        if qa::is_anthropic_model(&cfg.groq_answer_model) {
+        // streaming, same `Answer` shape returned either way. First
+        // delta is logged so slow answers can be split into "model was
+        // slow to start" vs "everything after".
+        let mut first_delta_logged = false;
+        let mut on_delta = |delta: &str| {
+            if !first_delta_logged {
+                first_delta_logged = true;
+                tracing::info!(
+                    elapsed_ms = t0.elapsed().as_millis() as u64,
+                    "latency: first model token"
+                );
+            }
+            for sentence in chunker.push(delta) {
+                let _ = tx.send(sentence);
+            }
+        };
+        if qa::is_anthropic_model(answer_model) {
             match cfg.anthropic_key.as_deref() {
                 Some(akey) => {
                     qa::anthropic_answer_streaming(
                         &cfg.http,
                         akey,
-                        &cfg.groq_answer_model,
+                        answer_model,
                         &transcript,
                         &question,
                         effective_system_prompt,
-                        |delta| {
-                            for sentence in chunker.push(delta) {
-                                let _ = tx.send(sentence);
-                            }
-                        },
+                        |delta| on_delta(delta),
                     )
                     .await
                 }
                 None => Err(anyhow::anyhow!(
-                    "model {} requires ANTHROPIC_API_KEY",
-                    cfg.groq_answer_model
+                    "model {answer_model} requires ANTHROPIC_API_KEY"
                 )),
             }
         } else {
             qa::answer_streaming(
                 &cfg.http,
                 key,
-                &cfg.groq_answer_model,
+                answer_model,
                 &transcript,
                 &question,
                 effective_system_prompt,
-                |delta| {
-                    for sentence in chunker.push(delta) {
-                        let _ = tx.send(sentence);
-                    }
-                },
+                |delta| on_delta(delta),
             )
             .await
         }
@@ -1868,6 +2040,7 @@ fn spawn_hello_on_join(
     let http = cfg.http.clone();
     let character = cfg.ghostly_character.clone();
     let ghostly_pack = cfg.ghostly_pack.clone();
+    let recent_tts = cfg.recent_tts.clone();
     tokio::spawn(async move {
         // Audio-pipeline settle: when the bot has just joined the call,
         // the MoQ broadcast publish has been opened but no subscriber
@@ -1883,6 +2056,7 @@ fn spawn_hello_on_join(
         // one (staggered launch), and they all greet — without this
         // gate they'd talk over each other.
         wait_for_room_quiet(&peer_level).await;
+        note_spoken(&recent_tts, &text);
         let voice_profile =
             crate::persona::resolve_voice_profile(&character, ghostly_pack.as_deref());
         let mut chain = ghostly::audio::VoiceChain::new(
@@ -2579,10 +2753,27 @@ async fn transcribe_participant(
         // local whisper does its own spawn_blocking internally. One task
         // per utterance so a slow STT call doesn't stall the tap loop.
         tokio::spawn(async move {
-            match stt.transcribe(&chunk).await {
+            let t_stt = Instant::now();
+            let stt_result = stt.transcribe(&chunk).await;
+            tracing::info!(
+                %nick,
+                elapsed_ms = t_stt.elapsed().as_millis() as u64,
+                "latency: STT round-trip"
+            );
+            match stt_result {
                 Ok(text) => {
                     if text.is_empty() || is_hallucination(&text) {
                         tracing::info!(%nick, %text, "dropped empty/hallucinated utterance");
+                        return;
+                    }
+                    // Own-TTS echo: a participant without echo
+                    // cancellation plays our voice out their speakers,
+                    // their mic picks it up, and it comes back
+                    // transcribed under their nick. Answering it = the
+                    // bot talking to itself in a loop. Drop it before
+                    // it reaches the transcript or the addressing gate.
+                    if is_own_echo(&cfg.recent_tts, &text) {
+                        tracing::info!(%nick, %text, "dropped own-TTS echo");
                         return;
                     }
                     tracing::info!(%nick, %text, "transcribed utterance");
@@ -3063,6 +3254,68 @@ fn _pathbuf_marker() -> PathBuf {
 mod tests {
     use super::*;
     use tokio::sync::mpsc;
+
+    // ---------- own-TTS echo guard ----------
+
+    fn echo_log(sentences: &[&str]) -> RecentTts {
+        let log: RecentTts = Default::default();
+        for s in sentences {
+            note_spoken(&log, s);
+        }
+        log
+    }
+
+    #[test]
+    fn echo_exact_comes_back_dropped() {
+        let log = echo_log(&["The patterns are already moving across the field."]);
+        assert!(is_own_echo(&log, "The patterns are already moving across the field."));
+    }
+
+    #[test]
+    fn echo_stt_mangled_still_dropped() {
+        // STT round-trips are lossy: casing, punctuation, a dropped word.
+        let log = echo_log(&["A live voice call with the assistant Eliza is in progress."]);
+        assert!(is_own_echo(&log, "a live voice call with the assistant eliza in progress"));
+    }
+
+    #[test]
+    fn echo_fragment_of_long_answer_dropped() {
+        // Speaker leak often clips to a fragment of one sentence.
+        let log = echo_log(&[
+            "Rust's borrow checker enforces memory safety at compile time.",
+            "That means no garbage collector and no data races.",
+        ]);
+        assert!(is_own_echo(&log, "no garbage collector and no data races"));
+    }
+
+    #[test]
+    fn real_reply_about_answer_not_dropped() {
+        // A human responding brings their own words — under threshold.
+        let log = echo_log(&["Rust's borrow checker enforces memory safety at compile time."]);
+        assert!(!is_own_echo(&log, "okay but what about unsafe blocks in the borrow checker"));
+    }
+
+    #[test]
+    fn short_human_ack_not_dropped() {
+        // "yes", "okay then" — too short for the bag test, and not a
+        // substring of anything spoken.
+        let log = echo_log(&["Let me think about the deployment order for a second."]);
+        assert!(!is_own_echo(&log, "okay sure"));
+        assert!(!is_own_echo(&log, "yes"));
+    }
+
+    #[test]
+    fn short_exact_fragment_dropped() {
+        // A short utterance that IS a verbatim slice of recent TTS.
+        let log = echo_log(&["Let me think about the deployment order."]);
+        assert!(is_own_echo(&log, "the deployment order"));
+    }
+
+    #[test]
+    fn empty_log_never_matches() {
+        let log: RecentTts = Default::default();
+        assert!(!is_own_echo(&log, "anything at all here"));
+    }
 
     // ---------- owner lifecycle command (STT-tolerant) ----------
 

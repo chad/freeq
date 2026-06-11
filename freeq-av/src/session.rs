@@ -101,20 +101,40 @@ pub struct AvParticipant {
 /// (audio-only). Cheap to clone.
 #[derive(Clone, Default)]
 pub struct VideoHandle {
-    latest: Arc<Mutex<Option<VideoFrame>>>,
+    latest: Arc<Mutex<Option<(Instant, VideoFrame)>>>,
 }
+
+/// How long a stored frame stays servable. Without this, a participant
+/// who turns their camera off (or whose track freezes) leaves the last
+/// frame in the handle forever — the agent then "sees" and describes a
+/// minutes-old image as if it were live. Generous enough for low-fps
+/// static screenshares, short enough that a dead feed reads as dead.
+const FRAME_FRESHNESS: Duration = Duration::from_secs(10);
 
 impl VideoHandle {
     /// The most recent frame, cloned out — frame pixel data is
-    /// reference-counted, so the clone is shallow.
+    /// reference-counted, so the clone is shallow. Returns `None` when
+    /// no frame has arrived within [`FRAME_FRESHNESS`].
     pub fn latest(&self) -> Option<VideoFrame> {
-        self.latest.lock().ok().and_then(|g| g.clone())
+        self.latest.lock().ok().and_then(|g| {
+            g.as_ref().and_then(|(at, frame)| {
+                (at.elapsed() < FRAME_FRESHNESS).then(|| frame.clone())
+            })
+        })
     }
 
     /// Replace the stored frame (called by the video pump).
     fn set(&self, frame: VideoFrame) {
         if let Ok(mut g) = self.latest.lock() {
-            *g = Some(frame);
+            *g = Some((Instant::now(), frame));
+        }
+    }
+
+    /// Drop the stored frame — called when the video track ends so a
+    /// toggled-off camera can't serve its final frame as "current".
+    fn clear(&self) {
+        if let Ok(mut g) = self.latest.lock() {
+            *g = None;
         }
     }
 }
@@ -460,19 +480,38 @@ async fn run_tap(
 
         // Pump the participant's video into the shared latest-frame cell —
         // best-effort, since many participants are audio-only (`video_ready`
-        // then just never resolves). Park on whichever ends first: the audio
-        // track stopping, or the video pump finishing. `remote` + `track`
-        // drop at the end of this iteration → pipelines tear down → the PCM
-        // receiver closes (ending the consumer's transcribe task cleanly).
+        // then just never resolves). The pump LOOPS: a camera toggled off
+        // ends the video track, and the next `video_ready` blocks until the
+        // camera comes back — same handle, no tap teardown. (The old
+        // one-shot pump completed on camera-off, which made the select!
+        // below tear down the AUDIO tap too: every camera toggle deafened
+        // the agent for the 1 s re-tap pause, and a `video_ready` error
+        // did the same permanently.) The pump never finishes on its own,
+        // so only the audio track stopping ends this iteration. `remote` +
+        // `track` drop at the end of the iteration → pipelines tear down →
+        // the PCM receiver closes (ending the consumer's transcribe task
+        // cleanly).
         let video_pump = async {
-            match remote.video_ready().await {
-                Ok(mut vtrack) => {
-                    tracing::info!(%nick, "video track live — watching");
-                    while let Some(frame) = vtrack.next_frame().await {
-                        video.set(frame);
+            loop {
+                match remote.video_ready().await {
+                    Ok(mut vtrack) => {
+                        tracing::info!(%nick, "video track live — watching");
+                        while let Some(frame) = vtrack.next_frame().await {
+                            video.set(frame);
+                        }
+                        // Camera off / track restart — stop serving the
+                        // final frame as "current" and wait for the next.
+                        video.clear();
+                        tracing::info!(%nick, "video track ended — awaiting restart");
+                    }
+                    Err(e) => {
+                        video.clear();
+                        tracing::warn!(%nick, error = ?e, "video subscribe failed — retrying");
                     }
                 }
-                Err(e) => tracing::warn!(%nick, error = ?e, "video subscribe failed"),
+                // A track that dies (or errors) instantly on subscribe
+                // must not spin this loop hot.
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
         };
         tokio::select! {

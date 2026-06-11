@@ -93,6 +93,16 @@ struct Cli {
     #[arg(long, default_value = "claude-opus-4-7")]
     groq_answer_model: String,
 
+    /// Model for answering *spoken* questions in a live call. Voice is
+    /// latency-critical: the gap between the asker finishing and the
+    /// first audible word is the whole experience, so this defaults to
+    /// a fast Groq model (~100-200 ms to first token) rather than the
+    /// text-channel default above (Opus quality is wasted on an answer
+    /// that arrives three seconds late). `claude-*` values route to
+    /// Anthropic Messages, same as `--groq-answer-model`.
+    #[arg(long, default_value = "llama-3.3-70b-versatile")]
+    voice_answer_model: String,
+
     /// Groq vision model for questions about a participant's shared
     /// screen or camera (e.g. "Eliza, what's on my screen?").
     #[arg(long, default_value = "meta-llama/llama-4-scout-17b-16e-instruct")]
@@ -318,6 +328,7 @@ async fn main() -> Result<()> {
         groq_api_key,
         groq_chat_model: cli.groq_chat_model,
         groq_answer_model: cli.groq_answer_model,
+        voice_answer_model: cli.voice_answer_model,
         vision_model: cli.vision_model,
         elevenlabs_api_key,
         elevenlabs_model: cli.elevenlabs_model,
