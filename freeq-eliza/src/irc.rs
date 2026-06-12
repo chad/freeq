@@ -842,6 +842,56 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                             }
                         });
                     }
+                    AvAction::Joined { channel, session_id } => {
+                        // A human (re)joined a call we may not be in.
+                        // The classifier already filtered self-joins;
+                        // peer-agent joins must not summon us either —
+                        // two bots re-joining on each other's joins
+                        // would ping-pong forever.
+                        if is_peer_nick(&cfg.peer_agents, &actor) {
+                            tracing::debug!(channel = %channel, %actor, "peer agent joined a call — not following");
+                            continue;
+                        }
+                        let mut active_guard = active.lock().await;
+                        if active_guard.is_some() {
+                            // Already in a call (this one or another) —
+                            // nothing to do.
+                            continue;
+                        }
+                        tracing::info!(
+                            channel = %channel,
+                            session_id = %session_id,
+                            %actor,
+                            "human joined a call we're not in — joining"
+                        );
+                        match start_transcription(
+                            cfg.clone(),
+                            handle_arc.clone(),
+                            channel.clone(),
+                            session_id.clone(),
+                            None,
+                            active.clone(),
+                        )
+                        .await
+                        {
+                            Ok(call) => {
+                                spawn_hello_on_join(
+                                    &cfg,
+                                    call.speaker.clone(),
+                                    call.video.peer_level_handle(),
+                                );
+                                let _ = spawn_backchannel_loop(
+                                    cfg.clone(),
+                                    call.speaker.clone(),
+                                    call.video.peer_level_handle(),
+                                );
+                                *active_guard = Some(call);
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = ?e, "failed to join call on human join");
+                            }
+                        }
+                    }
                     AvAction::Noop => {
                         tracing::debug!(channel = %target, %actor, "av-state");
                     }
@@ -2280,7 +2330,12 @@ pub(crate) enum AvAction {
     Start { channel: String, session_id: String },
     /// End transcription for `(channel, session_id)`.
     End { channel: String, session_id: String },
-    /// Anything else we don't act on (joined/left/unknown state) but
+    /// A HUMAN joined a call in one of our channels. If we're not in
+    /// it, we should be — the lonely watchdog may have walked us out
+    /// of this very session while the room was empty, and without
+    /// this the human sits in a call no being ever returns to.
+    Joined { channel: String, session_id: String },
+    /// Anything else we don't act on (left/unknown state) but
     /// shouldn't surface as a hard skip — useful for tracing.
     Noop,
 }
@@ -2290,21 +2345,22 @@ pub(crate) enum AvAction {
 ///   - required tags must be present,
 ///   - `started` is acted on only for one of our joined channels.
 ///
-/// We deliberately do NOT skip events whose `+freeq.at/av-actor` is the
-/// bot's own nick. The bot must react to a session *it* started (the
-/// `--start-session-in` flow) — that `av-state=started` is attributed
-/// to the bot. There's no self-recursion risk: the bot's own av-join
-/// produces an `av-state=joined` broadcast, which maps to `Noop`
-/// below (only `started`/`ended` are actioned), and the run loop's
-/// `already in a call` guard absorbs any duplicate `started`.
+/// We deliberately do NOT skip `started` events whose
+/// `+freeq.at/av-actor` is the bot's own nick. The bot must react to a
+/// session *it* started (the `--start-session-in` flow) — that
+/// `av-state=started` is attributed to the bot.
 ///
-/// `my_nick` is retained in the signature for callers/tests; it is no
-/// longer used for filtering.
+/// `joined` IS actor-filtered: the bot's own av-join echoes back as an
+/// `av-state=joined` attributed to the bot — acting on it would
+/// re-trigger a join loop, so self-joined maps to `Noop`. A missing
+/// actor also maps to `Noop` (we can't tell human from bot). Peer-agent
+/// joins are filtered in the run loop (the classifier doesn't know the
+/// peer set).
 pub(crate) fn classify_av_event(
     target: &str,
     tags: &std::collections::HashMap<String, String>,
     my_channels: &[String],
-    _my_nick: &str,
+    my_nick: &str,
 ) -> AvAction {
     if !target.starts_with('#') && !target.starts_with('&') {
         return AvAction::Skip;
@@ -2326,6 +2382,26 @@ pub(crate) fn classify_av_event(
             channel: target.to_string(),
             session_id: av_id.clone(),
         },
+        "joined" => {
+            if !my_channels.iter().any(|c| c.eq_ignore_ascii_case(target)) {
+                return AvAction::Skip;
+            }
+            // Self-join echo (our own av-join broadcast back at us) —
+            // never act on it. Missing actor → can't attribute → Noop.
+            let actor = tags
+                .get("+freeq.at/av-actor")
+                .map(String::as_str)
+                .unwrap_or("");
+            if actor.is_empty()
+                || canonical_name(actor).eq_ignore_ascii_case(canonical_name(my_nick))
+            {
+                return AvAction::Noop;
+            }
+            AvAction::Joined {
+                channel: target.to_string(),
+                session_id: av_id.clone(),
+            }
+        }
         _ => AvAction::Noop,
     }
 }
@@ -2443,6 +2519,11 @@ async fn start_transcription(
     // (so each can tell one-on-one from a group) AND the lonely watchdog below.
     let humans = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let humans_for_task = humans.clone();
+    // When the last human left — drives the stale-transcript fence so a
+    // human joining a long-empty call gets a fresh conversation, not the
+    // tail of a dead one. See [`STALE_TRANSCRIPT_GAP`].
+    let last_human_left: LastHumanLeft = Arc::new(std::sync::Mutex::new(None));
+    let last_human_left_for_task = last_human_left.clone();
     // Live nick roster across this call's taps — lets the addressing
     // gate see when a question opens by naming a different participant.
     let roster: CallRoster =
@@ -2468,6 +2549,7 @@ async fn start_transcription(
                 humans_for_task.clone(),
                 roster_for_task.clone(),
                 video_taps_for_task.clone(),
+                last_human_left_for_task.clone(),
             ));
         }
         tracing::info!("AvSession ended");
@@ -2725,11 +2807,23 @@ struct TapGuard {
     roster: CallRoster,
     video_taps: CallVideoTaps,
     nick: String,
+    /// Stamped when this drop takes the human count to ZERO — the
+    /// stale-transcript fence reads it when the next human arrives.
+    /// See [`STALE_TRANSCRIPT_GAP`].
+    last_human_left: LastHumanLeft,
 }
 impl Drop for TapGuard {
     fn drop(&mut self) {
         if self.counted {
-            self.humans.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            let prev = self
+                .humans
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            if prev == 1 {
+                // Room just went human-empty.
+                if let Ok(mut g) = self.last_human_left.lock() {
+                    *g = Some(Instant::now());
+                }
+            }
         }
         if let Ok(mut r) = self.roster.lock() {
             r.remove(&self.nick);
@@ -2739,6 +2833,18 @@ impl Drop for TapGuard {
         }
     }
 }
+
+/// When the call has been human-empty for at least this long, whatever
+/// is in the in-call transcript is a DEAD conversation — the next human
+/// to walk in starts a new one, and feeding them someone else's context
+/// makes the being answer a conversation they weren't in ("it felt like
+/// Olive's conversation was not the one I was having"). Kept above the
+/// network-blip scale so a brief rejoin keeps its context.
+const STALE_TRANSCRIPT_GAP: Duration = Duration::from_secs(60);
+
+/// Shared per-call cell: when did the last human leave? `None` while
+/// humans are present (or before any ever joined).
+type LastHumanLeft = Arc<std::sync::Mutex<Option<Instant>>>;
 
 /// Live set of participant nicks we're currently tapping (lowercased,
 /// as-published). Shared across a call's tap tasks so the addressing
@@ -2901,6 +3007,8 @@ async fn transcribe_participant(
     roster: CallRoster,
     // Shared nick → video map — see [`CallVideoTaps`].
     video_taps: CallVideoTaps,
+    // When the last human left the call — see [`STALE_TRANSCRIPT_GAP`].
+    last_human_left: LastHumanLeft,
 ) {
     let AvParticipant { path, nick, mut audio, video } = participant;
     let stt = cfg.stt.clone();
@@ -2910,7 +3018,32 @@ async fn transcribe_participant(
     // and the bot goes name-only.
     let counted = !is_peer_nick(&cfg.peer_agents, &nick);
     if counted {
-        humans.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let prev = humans.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if prev == 0 {
+            // First human in the room. If it's been human-empty past the
+            // fence, the in-call transcript is a dead conversation —
+            // clear it so the being doesn't answer from someone else's
+            // context. `take()` re-arms the fence either way; the marker
+            // is only meaningful across a humans==0 stretch.
+            let stale = last_human_left
+                .lock()
+                .ok()
+                .and_then(|mut g| g.take())
+                .is_some_and(|t| t.elapsed() >= STALE_TRANSCRIPT_GAP);
+            if stale {
+                if let Some(call) = active.lock().await.as_mut() {
+                    if !call.transcript.is_empty() {
+                        tracing::info!(
+                            %nick,
+                            lines = call.transcript.len(),
+                            "stale call transcript cleared — new conversation"
+                        );
+                        call.transcript.clear();
+                        call.last_answer = None;
+                    }
+                }
+            }
+        }
     }
     if let Ok(mut r) = roster.lock() {
         r.insert(nick.to_ascii_lowercase());
@@ -2925,6 +3058,7 @@ async fn transcribe_participant(
         roster: roster.clone(),
         video_taps: video_taps.clone(),
         nick: nick.to_ascii_lowercase(),
+        last_human_left,
     };
     tracing::info!(%nick, %path, "participant audio live — transcribing");
 
@@ -4169,9 +4303,9 @@ mod tests {
 
     #[test]
     fn classify_emits_noop_for_unknown_state() {
-        // `joined`, `left`, or anything else — we log but don't act.
-        // Pin so a careless `_ => AvAction::Start` regression is caught.
-        for state in ["joined", "left", "weird"] {
+        // `left` or anything unknown — we log but don't act. Pin so a
+        // careless `_ => AvAction::Start` regression is caught.
+        for state in ["left", "weird"] {
             let t = tags(&[
                 ("+freeq.at/av-state", state),
                 ("+freeq.at/av-id", "s"),
@@ -4182,6 +4316,69 @@ mod tests {
                 "state {state:?}"
             );
         }
+    }
+
+    #[test]
+    fn classify_human_joined_is_actioned() {
+        // A human joining a call in our channel must summon us — the
+        // lonely watchdog may have walked us out of this very session
+        // while the room was empty.
+        let t = tags(&[
+            ("+freeq.at/av-state", "joined"),
+            ("+freeq.at/av-id", "s1"),
+            ("+freeq.at/av-actor", "chadfowler.com"),
+        ]);
+        assert_eq!(
+            classify_av_event("#room", &t, &["#room".into()], "tbot"),
+            AvAction::Joined {
+                channel: "#room".into(),
+                session_id: "s1".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn classify_joined_in_unknown_channel_is_skipped() {
+        // Same trust boundary as `started`: a joined event must not
+        // drag the bot into a channel it isn't a member of.
+        let t = tags(&[
+            ("+freeq.at/av-state", "joined"),
+            ("+freeq.at/av-id", "s1"),
+            ("+freeq.at/av-actor", "alice"),
+        ]);
+        assert_eq!(
+            classify_av_event("#elsewhere", &t, &["#room".into()], "tbot"),
+            AvAction::Skip
+        );
+    }
+
+    #[test]
+    fn classify_joined_missing_actor_is_noop() {
+        // No actor → can't tell human from bot → don't act.
+        let t = tags(&[
+            ("+freeq.at/av-state", "joined"),
+            ("+freeq.at/av-id", "s1"),
+        ]);
+        assert_eq!(
+            classify_av_event("#room", &t, &["#room".into()], "tbot"),
+            AvAction::Noop
+        );
+    }
+
+    #[test]
+    fn classify_self_joined_with_did_suffix_is_noop() {
+        // The bot's registered nick can carry a DID suffix
+        // (`tbot-z6mkfa8x`); the self-join check compares canonical
+        // (pre-dash) names so the echo never re-triggers a join.
+        let t = tags(&[
+            ("+freeq.at/av-state", "joined"),
+            ("+freeq.at/av-id", "s1"),
+            ("+freeq.at/av-actor", "TBot-z6mkfa8x"),
+        ]);
+        assert_eq!(
+            classify_av_event("#room", &t, &["#room".into()], "tbot"),
+            AvAction::Noop
+        );
     }
 
     #[test]
