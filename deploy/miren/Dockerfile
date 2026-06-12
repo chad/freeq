@@ -8,18 +8,11 @@
 FROM rust:1.89-slim AS builder
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /build
-COPY Cargo.toml Cargo.lock ./
-# Cargo must resolve every workspace member referenced by Cargo.toml even
-# though only freeq-server is compiled. The deploy script copies whichever exist.
-COPY freeq-sdk/ freeq-sdk/
-COPY freeq-server/ freeq-server/
-COPY freeq-tui/ freeq-tui/
-COPY freeq-auth-broker/ freeq-auth-broker/
-COPY freeq-bots/ freeq-bots/
-COPY freeq-bot-id/ freeq-bot-id/
-COPY freeq-sdk-ffi/ freeq-sdk-ffi/
-COPY freeq-windows-core/ freeq-windows-core/
-COPY freeq-av-client/ freeq-av-client/
+# The deploy script stages exactly the workspace members Cargo.toml
+# references (derived from the members block, so it can't go stale).
+# Copy the whole staged context rather than enumerating members here —
+# a hardcoded list silently breaks the build whenever a crate is added.
+COPY . .
 RUN cargo build --release --package freeq-server
 
 # ── Web client build ──
