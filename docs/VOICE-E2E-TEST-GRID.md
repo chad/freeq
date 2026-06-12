@@ -178,6 +178,34 @@ is the weather right now in New York City?" (arrived as one segment this time) �
   say-mirror still produces a duplicate text answer (known), and the opus
   typed answer degenerated to a bare stage direction ("*leans in*").
 
+**2026-06-12 incident** (owner's live session, before round 9): "Olive and
+Yokota both joined, only Olive responded, Olive could never see me, and
+Olive's conversation wasn't the one I was having." Diagnosis from captured
+logs (`/tmp/diag-rev-{yokota-l1qn,olive-ibl5}.log`):
+
+- **Both joined**: my round-8 MCP test call was never ended (the bridge's
+  disconnect failed silently) — both bots correctly rejoined the still-live
+  session on reconnect. Stale input, not a bug.
+- **Yokota silent**: lonely watchdog left at 02:30:41 — 55 s BEFORE the owner
+  joined at 02:31:36 — and `av-state=joined` was a Noop, so nothing ever
+  re-summoned it. **Fixed in `0c8dd68`**: a HUMAN joining a call in one of
+  our channels now actions `AvAction::Joined` → join (self-join echoes and
+  missing actors stay Noop; peer-agent joins don't summon — no bot↔bot
+  follow ping-pong; `already in a call` guard intact). 5 new classifier
+  tests.
+- **Olive blind**: the owner's client published NO video track — participant
+  catalog `video=[] audio=["audio/data"]`. Bot-side behaved correctly
+  (`visual question — waited for camera warm-up got_frame=false` ×3).
+  Client-side bug, NOT bot-side. Open question: which client was the owner
+  on? (Suspect the macOS app with its uncommitted AV changes.)
+- **Wrong conversation**: olive stayed in the call across the humanless gap,
+  so its in-call transcript still carried my whole MCP test session — the
+  owner inherited a dead conversation as LLM context. **Fixed in `0c8dd68`**:
+  stale-transcript fence — `TapGuard` stamps when the human count hits zero;
+  when the next human arrives ≥60 s later, transcript + last_answer are
+  cleared (`stale call transcript cleared — new conversation`). Brief
+  network-blip rejoins (<60 s) keep their context.
+
 ## Grid
 
 Legend: ✅ pass · ❌ fail · ⚠️ partial · ☐ not yet run
