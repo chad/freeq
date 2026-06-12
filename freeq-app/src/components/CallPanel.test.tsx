@@ -39,6 +39,10 @@ vi.mock('../lib/profiles', () => ({
   fetchProfile: vi.fn(),
 }));
 
+// Toasts: the camera watchdog reports through showToast; capture the calls.
+vi.mock('./Toast', () => ({ showToast: vi.fn() }));
+import { showToast } from './Toast';
+
 // ── DOM fakes for moq-publish / moq-watch ───────────────────────
 // These are bare custom elements that just record attributes/properties.
 // We can't import the real ones (they need a network) so we stub them.
@@ -146,7 +150,7 @@ afterEach(() => {
 });
 
 // We import CallPanel *after* the mocks above are registered.
-import { CallPanel } from './CallPanel';
+import { CallPanel, CAMERA_WATCHDOG_MS } from './CallPanel';
 
 // flush microtasks + small timers so async effects run
 async function flush(times = 3) {
@@ -606,6 +610,124 @@ describe('CallPanel — camera', () => {
     expect(video).not.toBeNull();
     expect(video.srcObject).toBeTruthy();
     expect((video.srcObject as unknown as FakeMediaStream).tracks).toEqual([fakeTrack]);
+  });
+
+  it('warns when camera-on lands no track within the watchdog window', async () => {
+    // moq-publish swallows getUserMedia failures (`.catch(() => {})`) —
+    // camera busy / permission blocked yields an audio-only publish with
+    // the camera button lit and no feedback ("the bot can't see me").
+    setupSession();
+    mockSessionsApi([]);
+    vi.mocked(showToast).mockClear();
+    vi.useFakeTimers();
+    try {
+      function makeSignal<T>(initial: T) {
+        let value = initial;
+        const subs = new Set<(v: T) => void>();
+        return {
+          peek: () => value,
+          subscribe(fn: (v: T) => void) { subs.add(fn); return () => subs.delete(fn); },
+          set(v: T) { value = v; subs.forEach((fn) => fn(v)); },
+        };
+      }
+      const trackSig = makeSignal<MediaStreamTrack | undefined>(undefined);
+      const videoSig = makeSignal<{ source: typeof trackSig } | undefined>({ source: trackSig });
+
+      const { container } = render(<CallPanel />);
+      await flush();
+      const pub = container.querySelector('moq-publish') as HTMLElement & { video?: unknown };
+      pub.video = videoSig;
+
+      await act(async () => { useStore.getState().setAvCameraOn(true); });
+      await flush();
+      expect(showToast).not.toHaveBeenCalled();
+
+      // The track never arrives — watchdog fires.
+      await act(async () => { vi.advanceTimersByTime(CAMERA_WATCHDOG_MS); });
+      expect(showToast).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(showToast).mock.calls[0][1]).toBe('warning');
+
+      // A late grant (user finally clicks Allow) closes the loop.
+      class FakeMediaStream { tracks: unknown[]; constructor(t: unknown[]) { this.tracks = t; } }
+      vi.stubGlobal('MediaStream', FakeMediaStream);
+      await act(async () => { trackSig.set({ kind: 'video' } as MediaStreamTrack); });
+      expect(showToast).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(showToast).mock.calls[1][1]).toBe('success');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not warn when the camera track arrives in time', async () => {
+    setupSession();
+    mockSessionsApi([]);
+    vi.mocked(showToast).mockClear();
+    vi.useFakeTimers();
+    try {
+      function makeSignal<T>(initial: T) {
+        let value = initial;
+        const subs = new Set<(v: T) => void>();
+        return {
+          peek: () => value,
+          subscribe(fn: (v: T) => void) { subs.add(fn); return () => subs.delete(fn); },
+          set(v: T) { value = v; subs.forEach((fn) => fn(v)); },
+        };
+      }
+      class FakeMediaStream { tracks: unknown[]; constructor(t: unknown[]) { this.tracks = t; } }
+      vi.stubGlobal('MediaStream', FakeMediaStream);
+      const trackSig = makeSignal<MediaStreamTrack | undefined>(undefined);
+      const videoSig = makeSignal<{ source: typeof trackSig } | undefined>({ source: trackSig });
+
+      const { container } = render(<CallPanel />);
+      await flush();
+      const pub = container.querySelector('moq-publish') as HTMLElement & { video?: unknown };
+      pub.video = videoSig;
+
+      await act(async () => { useStore.getState().setAvCameraOn(true); });
+      await flush();
+      await act(async () => { trackSig.set({ kind: 'video' } as MediaStreamTrack); });
+
+      await act(async () => { vi.advanceTimersByTime(CAMERA_WATCHDOG_MS * 2); });
+      expect(showToast).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels the watchdog when the camera is toggled back off in time', async () => {
+    // Toggling off re-runs the effect; the cleanup must clear the timer —
+    // otherwise the user gets scolded for a camera they already turned off.
+    setupSession();
+    mockSessionsApi([]);
+    vi.mocked(showToast).mockClear();
+    vi.useFakeTimers();
+    try {
+      function makeSignal<T>(initial: T) {
+        let value = initial;
+        const subs = new Set<(v: T) => void>();
+        return {
+          peek: () => value,
+          subscribe(fn: (v: T) => void) { subs.add(fn); return () => subs.delete(fn); },
+          set(v: T) { value = v; subs.forEach((fn) => fn(v)); },
+        };
+      }
+      const trackSig = makeSignal<MediaStreamTrack | undefined>(undefined);
+      const videoSig = makeSignal<{ source: typeof trackSig } | undefined>({ source: trackSig });
+
+      const { container } = render(<CallPanel />);
+      await flush();
+      const pub = container.querySelector('moq-publish') as HTMLElement & { video?: unknown };
+      pub.video = videoSig;
+
+      await act(async () => { useStore.getState().setAvCameraOn(true); });
+      await flush();
+      await act(async () => { useStore.getState().setAvCameraOn(false); });
+      await flush();
+      await act(async () => { vi.advanceTimersByTime(CAMERA_WATCHDOG_MS * 2); });
+      expect(showToast).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('toggling camera while NOT in a call does not crash or send anything', async () => {

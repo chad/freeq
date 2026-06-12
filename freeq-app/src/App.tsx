@@ -20,6 +20,7 @@ import { JoinGateModal } from './components/JoinGateModal';
 import { ChannelSettingsPanel } from './components/ChannelSettingsPanel';
 import { KeyboardShortcuts } from './components/KeyboardShortcuts';
 import { ToastContainer } from './components/Toast';
+import { startUpdateCheck } from './lib/update-check';
 import { FileDropOverlay } from './components/FileDropOverlay';
 import { InstallPrompt } from './components/InstallPrompt';
 import { OnboardingTour } from './components/OnboardingTour';
@@ -39,6 +40,8 @@ export default function App() {
   useEffect(() => {
     if (registered && !wasRegistered) setWasRegistered(true);
   }, [registered, wasRegistered, setWasRegistered]);
+  // Stale-tab detector: prompt to reload when a new build is deployed.
+  useEffect(() => startUpdateCheck(), []);
   const showApp = registered || wasRegistered;
   const [quickSwitcher, setQuickSwitcher] = useState(false);
   const [settings, setSettings] = useState(false);

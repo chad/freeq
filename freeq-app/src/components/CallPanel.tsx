@@ -3,6 +3,7 @@ import { useStore } from '../store';
 import { getAvInstanceId, getNick, leaveAvSession } from '../irc/client';
 import { loadMoqComponents } from '../lib/moq-loader';
 import { getCachedProfile } from '../lib/profiles';
+import { showToast } from './Toast';
 
 /**
  * Inline call panel with audio + video support.
@@ -61,6 +62,11 @@ function watchSignal<T>(sig: MoqSignal<T>, fn: (value: T) => void): () => void {
   fn(sig.peek());
   return unsub;
 }
+
+// How long after camera-on we wait for moq-publish to land a captured
+// track before warning the user. Generous enough for device spin-up, but
+// a permission prompt left unanswered will (correctly) trip it.
+export const CAMERA_WATCHDOG_MS = 5000;
 
 export function CallPanel() {
   const activeAvSession = useStore((s) => s.activeAvSession);
@@ -277,6 +283,25 @@ export function CallPanel() {
     // happy local preview but no video rendition in the catalog.
     const videoSig = pub.video;
     if (!videoSig) return;
+
+    // Camera watchdog: moq-publish swallows getUserMedia failures
+    // (`.catch(() => {})` around its camera grab) — a busy camera, a
+    // blocked permission, or an ignored prompt leaves an audio-only
+    // publish with the camera button lit and ZERO feedback. The bots
+    // then "can't see you" with nothing wrong on their end. If no track
+    // lands within the window, say so; if one lands late, close the loop.
+    let gotTrack = false;
+    let warned = false;
+    const watchdog = window.setTimeout(() => {
+      if (gotTrack) return;
+      warned = true;
+      showToast(
+        'Camera is not publishing — check the permission prompt, or whether another app is using it.',
+        'warning',
+        10000,
+      );
+    }, CAMERA_WATCHDOG_MS);
+
     let unsubInner: (() => void) | null = null;
     // watchSignal (not bare subscribe): pub.video already holds the
     // camera source by the time the camera is toggled on, and the signal
@@ -287,6 +312,13 @@ export function CallPanel() {
       unsubInner = null;
       if (!camera?.source) return;
       unsubInner = watchSignal(camera.source, (track) => {
+        if (track) {
+          gotTrack = true;
+          if (warned) {
+            warned = false;
+            showToast('Camera connected — video is publishing now.', 'success');
+          }
+        }
         if (!localVideoRef.current) return;
         if (track) {
           localVideoRef.current.srcObject = new MediaStream([track]);
@@ -299,6 +331,7 @@ export function CallPanel() {
       });
     });
     return () => {
+      window.clearTimeout(watchdog);
       unsubInner?.();
       unsubOuter();
     };

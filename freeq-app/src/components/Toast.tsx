@@ -5,6 +5,8 @@ export interface ToastData {
   message: string;
   type: 'info' | 'success' | 'error' | 'warning';
   duration?: number;
+  /** Optional action button (e.g. "Reload"). Clicking it runs onClick, then dismisses. */
+  action?: { label: string; onClick: () => void };
 }
 
 let toastListeners: ((toasts: ToastData[]) => void)[] = [];
@@ -14,14 +16,20 @@ function emit() {
   toastListeners.forEach((fn) => fn([...currentToasts]));
 }
 
-export function showToast(message: string, type: ToastData['type'] = 'info', duration = 4000) {
+export function showToast(
+  message: string,
+  type: ToastData['type'] = 'info',
+  duration = 4000,
+  action?: ToastData['action'],
+) {
   const id = Math.random().toString(36).slice(2);
-  const toast: ToastData = { id, message, type, duration };
+  const toast: ToastData = { id, message, type, duration, action };
   currentToasts = [...currentToasts, toast];
   emit();
   if (duration > 0) {
     setTimeout(() => dismissToast(id), duration);
   }
+  return id;
 }
 
 export function dismissToast(id: string) {
@@ -65,6 +73,18 @@ export function ToastContainer() {
         >
           <span className="text-sm">{TYPE_ICONS[toast.type]}</span>
           <span className="text-sm font-medium flex-1">{toast.message}</span>
+          {toast.action && (
+            <button
+              className="text-xs font-semibold px-2 py-1 rounded-lg border border-current/30 hover:bg-current/10 ml-1"
+              onClick={(e) => {
+                e.stopPropagation();
+                toast.action!.onClick();
+                dismissToast(toast.id);
+              }}
+            >
+              {toast.action.label}
+            </button>
+          )}
           <button className="text-xs opacity-60 hover:opacity-100 ml-2" onClick={() => dismissToast(toast.id)}>✕</button>
         </div>
       ))}
