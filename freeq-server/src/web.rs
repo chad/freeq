@@ -183,6 +183,7 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/client-metadata.json", get(client_metadata))
         // REST API (read-only, v1)
         .route("/api/v1/health", get(api_health))
+        .route("/metrics", get(api_metrics))
         .route("/api/v1/channels", get(api_channels))
         .route("/api/v1/channels/{name}/history", get(api_channel_history))
         .route("/api/v1/search", get(api_search))
@@ -1210,6 +1211,69 @@ async fn api_channel_history(
             }
         }
     }
+}
+
+/// Render Prometheus text exposition format (version 0.0.4).
+fn format_metrics(
+    connections: usize,
+    channels: usize,
+    s2s_peers: usize,
+    messages_total: u64,
+    sasl_success_total: u64,
+    sasl_failure_total: u64,
+    uptime_seconds: u64,
+) -> String {
+    format!(
+        "# HELP freeq_connections Currently connected sessions\n\
+         # TYPE freeq_connections gauge\n\
+         freeq_connections {connections}\n\
+         # HELP freeq_channels Channels known to this server\n\
+         # TYPE freeq_channels gauge\n\
+         freeq_channels {channels}\n\
+         # HELP freeq_s2s_peers Authenticated federation peers\n\
+         # TYPE freeq_s2s_peers gauge\n\
+         freeq_s2s_peers {s2s_peers}\n\
+         # HELP freeq_messages_total PRIVMSG/NOTICE handled since start\n\
+         # TYPE freeq_messages_total counter\n\
+         freeq_messages_total {messages_total}\n\
+         # HELP freeq_sasl_success_total Successful SASL authentications since start\n\
+         # TYPE freeq_sasl_success_total counter\n\
+         freeq_sasl_success_total {sasl_success_total}\n\
+         # HELP freeq_sasl_failure_total Failed SASL authentications since start\n\
+         # TYPE freeq_sasl_failure_total counter\n\
+         freeq_sasl_failure_total {sasl_failure_total}\n\
+         # HELP freeq_uptime_seconds Seconds since process start\n\
+         # TYPE freeq_uptime_seconds gauge\n\
+         freeq_uptime_seconds {uptime_seconds}\n"
+    )
+}
+
+/// GET /metrics — Prometheus scrape endpoint.
+async fn api_metrics(State(state): State<Arc<SharedState>>) -> impl axum::response::IntoResponse {
+    use std::sync::atomic::Ordering::Relaxed;
+    let connections = state.connections.lock().len();
+    let channels = state.channels.lock().len();
+    let s2s = state.s2s_manager.lock().clone();
+    let s2s_peers = match s2s {
+        Some(mgr) => mgr.authenticated_peers.lock().await.len(),
+        None => 0,
+    };
+    let body = format_metrics(
+        connections,
+        channels,
+        s2s_peers,
+        state.metrics.messages_total.load(Relaxed),
+        state.metrics.sasl_success_total.load(Relaxed),
+        state.metrics.sasl_failure_total.load(Relaxed),
+        state.metrics.started_at.elapsed().as_secs(),
+    );
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        body,
+    )
 }
 
 /// GET /api/v1/search?channel=#name&q=terms — full-text history search.
@@ -3816,4 +3880,35 @@ fn session_to_json(s: &crate::av::AvSession, mgr: &crate::av::AvSessionManager) 
         "recording_enabled": s.recording_enabled,
         "iroh_ticket": s.iroh_ticket,
     })
+}
+
+#[cfg(test)]
+mod metrics_tests {
+    use super::format_metrics;
+
+    #[test]
+    fn exposition_format_is_well_formed() {
+        let out = format_metrics(3, 7, 2, 100, 5, 1, 42);
+        assert!(out.contains("freeq_connections 3\n"));
+        assert!(out.contains("freeq_channels 7\n"));
+        assert!(out.contains("freeq_s2s_peers 2\n"));
+        assert!(out.contains("freeq_messages_total 100\n"));
+        assert!(out.contains("freeq_sasl_success_total 5\n"));
+        assert!(out.contains("freeq_sasl_failure_total 1\n"));
+        assert!(out.contains("freeq_uptime_seconds 42\n"));
+        // Every metric line is preceded by HELP + TYPE comments.
+        for name in [
+            "freeq_connections",
+            "freeq_channels",
+            "freeq_s2s_peers",
+            "freeq_messages_total",
+            "freeq_sasl_success_total",
+            "freeq_sasl_failure_total",
+            "freeq_uptime_seconds",
+        ] {
+            assert!(out.contains(&format!("# HELP {name} ")), "missing HELP for {name}");
+            assert!(out.contains(&format!("# TYPE {name} ")), "missing TYPE for {name}");
+        }
+        assert!(out.ends_with('\n'));
+    }
 }

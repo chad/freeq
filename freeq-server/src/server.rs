@@ -747,6 +747,35 @@ pub struct SharedState {
     /// Per-session eviction signal. Notifying it makes the session's read
     /// loop exit and run its normal disconnect cleanup path.
     pub session_kill: Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
+    /// Process-lifetime counters exposed at /metrics.
+    pub metrics: Metrics,
+}
+
+/// Process-lifetime counters for the Prometheus /metrics endpoint.
+/// Gauges (connections, channels, peers) are computed live; only
+/// monotonic counters live here.
+pub struct Metrics {
+    pub messages_total: std::sync::atomic::AtomicU64,
+    pub sasl_success_total: std::sync::atomic::AtomicU64,
+    pub sasl_failure_total: std::sync::atomic::AtomicU64,
+    pub started_at: std::time::Instant,
+}
+
+impl Default for Metrics {
+    fn default() -> Self {
+        Self {
+            messages_total: std::sync::atomic::AtomicU64::new(0),
+            sasl_success_total: std::sync::atomic::AtomicU64::new(0),
+            sasl_failure_total: std::sync::atomic::AtomicU64::new(0),
+            started_at: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Metrics {
+    pub fn bump(counter: &std::sync::atomic::AtomicU64) {
+        counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// A spawned virtual agent (child of a real agent session).
@@ -1431,6 +1460,7 @@ impl Server {
             rest_rate_limiter: crate::web::IpRateLimiter::new(30, 60),
             liveness_probes: Mutex::new(HashMap::new()),
             session_kill: Mutex::new(HashMap::new()),
+            metrics: Metrics::default(),
         }))
     }
 
@@ -4444,6 +4474,7 @@ mod s2s_adversarial_tests {
             rest_rate_limiter: crate::web::IpRateLimiter::new(30, 60),
             liveness_probes: Mutex::new(HashMap::new()),
             session_kill: Mutex::new(HashMap::new()),
+            metrics: Metrics::default(),
         })
     }
 

@@ -590,6 +590,7 @@ pub(super) fn handle_privmsg_with_multiline(
     state: &Arc<SharedState>,
     multiline_lines: Option<&[super::draft_multiline::BatchLine]>,
 ) {
+    crate::server::Metrics::bump(&state.metrics.messages_total);
     let hostmask = conn.hostmask();
 
     let timestamp = std::time::SystemTime::now()
