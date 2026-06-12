@@ -345,12 +345,14 @@ export function ConnectScreen() {
   const doGuestLogin = () => {
     if (!nick.trim()) { setError('Enter a nickname'); return; }
     setError('');
+    // Persist the channel input for next visit (doAtLogin does the same).
+    localStorage.setItem(LS_CHANNELS, channels);
     // Use saved joined channels if available (reflects actual PART/JOIN state),
-    // otherwise fall back to the saved channels from connect screen input.
+    // otherwise fall back to what's typed in the connect screen input.
     const savedJoined = localStorage.getItem('freeq-joined-channels');
     const ch = savedJoined
       ? JSON.parse(savedJoined)
-      : (localStorage.getItem(LS_CHANNELS) || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
+      : (channels || '#freeq').split(',').map(s => s.trim()).filter(Boolean);
     connect(server, nick.trim(), ch);
   };
 

@@ -106,7 +106,14 @@ class FakeMoqPublish extends HTMLElement {
     if (value === 'camera' || value === 'screen' || value === 'file') {
       const track = makeFakeTrack();
       this.videoTrack = track;
-      this.#sourceSig.set(track as unknown as MediaStreamTrack);
+      // Faithful to the real bundle: the camera source signal holds the raw
+      // MediaStreamTrack, but the *screen* source holds a {video, audio}
+      // wrapper (getDisplayMedia returns both surfaces).
+      this.#sourceSig.set(
+        (value === 'screen'
+          ? { video: track }
+          : track) as unknown as MediaStreamTrack,
+      );
       this.video.set({ source: this.#sourceSig });
     } else if (value === null) {
       // removeAttribute('source') → close capture (the only correct teardown)
@@ -120,9 +127,10 @@ class FakeMoqPublish extends HTMLElement {
   }
 }
 
-// ── <moq-watch> stub exposing a settable `status` Signal ─────────
+// ── <moq-watch> stub: like the real element, `status` lives on the
+// `broadcast` object, NOT on the element itself ─────────
 class FakeMoqWatch extends HTMLElement {
-  status = makeSignal<string>('offline');
+  broadcast = { status: makeSignal<string>('offline') };
 }
 
 if (!customElements.get('moq-publish')) customElements.define('moq-publish', FakeMoqPublish);
@@ -341,22 +349,25 @@ describe('CallPanel — screen sharing', () => {
       'moq-watch[name="sess-1/bob~b1/screen"]',
     ) as FakeMoqWatch | null;
     expect(watch).toBeTruthy(); // mounted up-front to detect the announce
-    // Hidden while offline.
-    expect(watch!.closest('.hidden')).toBeTruthy();
+    // Collapsed (but still intersecting — moq-watch's IntersectionObserver
+    // gates its pipeline, so the canvas must never be display:none) while
+    // the broadcast is offline.
+    expect(watch!.closest('[data-live]')).toBeNull();
+    expect(watch!.closest('.opacity-0')).toBeTruthy();
 
     // Broadcast goes live → tile revealed, label shown.
     await act(async () => {
-      watch!.status.set('live');
+      watch!.broadcast.status.set('live');
     });
     await flush();
-    expect(watch!.closest('.hidden')).toBeNull();
+    expect(watch!.closest('[data-live]')).toBeTruthy();
     expect(container.textContent).toContain('bob — screen');
 
-    // Stops → hidden again.
+    // Stops → collapsed again.
     await act(async () => {
-      watch!.status.set('offline');
+      watch!.broadcast.status.set('offline');
     });
     await flush();
-    expect(watch!.closest('.hidden')).toBeTruthy();
+    expect(watch!.closest('[data-live]')).toBeNull();
   });
 });
