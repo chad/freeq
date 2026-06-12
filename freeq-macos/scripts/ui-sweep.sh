@@ -46,8 +46,9 @@ sleep 1
 shot 00-connected
 
 echo "==> channels & messaging"
-cmd "#join #freeq"
-shot 01-join-freeq
+# A fresh guest-owned channel (guests can't post to gated channels like #freeq).
+cmd "#join #chadsweep-demo"
+shot 01-join-channel
 cmd "hello from the macOS client — automated sweep"
 cmd "**bold** _italic_ \`code\` and a link https://bsky.app"
 shot 02-messages
