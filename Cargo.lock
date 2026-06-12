@@ -3762,7 +3762,7 @@ dependencies = [
 [[package]]
 name = "iroh-live"
 version = "0.1.0"
-source = "git+https://github.com/n0-computer/iroh-live#edd9bcc530a615f3ab3a6919e96790a077905376"
+source = "git+https://github.com/n0-computer/iroh-live?rev=edd9bcc530a615f3ab3a6919e96790a077905376#edd9bcc530a615f3ab3a6919e96790a077905376"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3820,7 +3820,7 @@ dependencies = [
 [[package]]
 name = "iroh-moq"
 version = "0.1.0"
-source = "git+https://github.com/n0-computer/iroh-live#edd9bcc530a615f3ab3a6919e96790a077905376"
+source = "git+https://github.com/n0-computer/iroh-live?rev=edd9bcc530a615f3ab3a6919e96790a077905376#edd9bcc530a615f3ab3a6919e96790a077905376"
 dependencies = [
  "iroh",
  "moq-lite",
@@ -4521,7 +4521,7 @@ dependencies = [
 [[package]]
 name = "moq-media"
 version = "0.1.0"
-source = "git+https://github.com/n0-computer/iroh-live#edd9bcc530a615f3ab3a6919e96790a077905376"
+source = "git+https://github.com/n0-computer/iroh-live?rev=edd9bcc530a615f3ab3a6919e96790a077905376#edd9bcc530a615f3ab3a6919e96790a077905376"
 dependencies = [
  "anyhow",
  "audioadapter-buffers",
@@ -7063,7 +7063,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 [[package]]
 name = "rusty-codecs"
 version = "0.1.0"
-source = "git+https://github.com/n0-computer/iroh-live#edd9bcc530a615f3ab3a6919e96790a077905376"
+source = "git+https://github.com/n0-computer/iroh-live?rev=edd9bcc530a615f3ab3a6919e96790a077905376#edd9bcc530a615f3ab3a6919e96790a077905376"
 dependencies = [
  "anyhow",
  "audioadapter-buffers",

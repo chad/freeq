@@ -22,16 +22,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Check
-        run: cargo check --workspace --exclude freeq-av-client --exclude freeq-eliza --exclude freeq-av --exclude freeq-av-image
+        run: cargo check --workspace --exclude freeq-av-client --exclude freeq-eliza --exclude freeq-av --exclude freeq-av-image --exclude freeq-claude-mcp
 
       - name: Test
-        run: cargo test --workspace --exclude freeq-av-client --exclude freeq-eliza --exclude freeq-av --exclude freeq-av-image
+        run: cargo test --workspace --exclude freeq-av-client --exclude freeq-eliza --exclude freeq-av --exclude freeq-av-image --exclude freeq-claude-mcp
 
   clippy:
     name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -40,20 +42,48 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Clippy
-        run: cargo clippy --workspace --exclude freeq-av-client --exclude freeq-eliza --exclude freeq-av --exclude freeq-av-image -- -D warnings
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+            mapfile -t rust_files < <(git diff --name-only --diff-filter=ACMRT "$base" "$head" -- '*.rs')
+            if [ "${#rust_files[@]}" -eq 0 ]; then
+              echo "No Rust files changed."
+              exit 0
+            fi
+          fi
+
+          cargo clippy --workspace --exclude freeq-av-client --exclude freeq-eliza --exclude freeq-av --exclude freeq-av-image --exclude freeq-claude-mcp -- -D warnings
 
   fmt:
     name: Format
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+
+          mapfile -t rust_files < <(git diff --name-only --diff-filter=ACMRT "$base" "$head" -- '*.rs')
+          if [ "${#rust_files[@]}" -eq 0 ]; then
+            echo "No Rust files changed."
+            exit 0
+          fi
+
+          rustfmt --check --edition 2024 "${rust_files[@]}"
 
   audit:
     name: Dependency Audit
