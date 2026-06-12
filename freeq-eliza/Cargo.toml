@@ -29,7 +29,7 @@ freeq-agent-kit = { path = "../freeq-agent-kit" }
 # iroh-live stays a direct dep: the video tile renders into its
 # VideoSource / VideoFrame types, and `to_whisper_pcm` reads its
 # AudioFormat.
-iroh-live = { git = "https://github.com/n0-computer/iroh-live", default-features = false, features = ["opus", "h264"] }
+iroh-live = { git = "https://github.com/n0-computer/iroh-live", rev = "edd9bcc530a615f3ab3a6919e96790a077905376", default-features = false, features = ["opus", "h264"] }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
 url = "2"
 
