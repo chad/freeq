@@ -35,12 +35,13 @@ type MoqPublishEl = HTMLElement & {
   audio?: MoqSignal<MoqDeviceSource | undefined>;
   video?: MoqSignal<MoqDeviceSource | undefined>;
 };
-// moq-watch exposes a `status` Signal whose value transitions
+// moq-watch exposes a `broadcast` object whose `status` Signal transitions
 // offline → loading → live as a broadcast announces and its catalog
 // arrives. We use it to reveal a screen-share tile only once the
-// presenter's `…/screen` broadcast is actually live.
+// presenter's `…/screen` broadcast is actually live. (The signal lives on
+// `el.broadcast`, NOT on the element itself.)
 type MoqWatchEl = HTMLElement & {
-  status?: MoqSignal<string>;
+  broadcast?: { status?: MoqSignal<string> };
 };
 
 /** True when this browser can capture a screen (getDisplayMedia present). */
@@ -126,7 +127,13 @@ export function CallPanel() {
   // WS-via-nginx route is the only working transport.
   //
   // Original WebTransport URL: `https://${location.hostname}:8080/av/moq`
-  const moqOrigin = `wss://${location.hostname}/av/moq`;
+  //
+  // `location.host` (not hostname) + protocol-matched scheme so local dev
+  // works too: on http://127.0.0.1:5173 the vite proxy forwards
+  // ws://…:5173/av/moq to the freeq server; the old hardcoded
+  // `wss://${hostname}` dropped the port and refused to connect, which
+  // silently killed ALL local-dev AV.
+  const moqOrigin = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/av/moq`;
 
   // ── Device enumeration ──────────────────────────────────────
   // Device labels are blank until the matching permission is granted, so
@@ -339,7 +346,14 @@ export function CallPanel() {
       unsubInner?.();
       unsubInner = null;
       if (!screen?.source) return;
-      unsubInner = screen.source.subscribe((track) => {
+      unsubInner = screen.source.subscribe((value) => {
+        // For `source="screen"` moq-publish stores a `{video, audio}`
+        // wrapper (getDisplayMedia returns both surfaces); the camera
+        // source stores the raw MediaStreamTrack. Accept either shape.
+        const track =
+          typeof MediaStreamTrack !== 'undefined' && value instanceof MediaStreamTrack
+            ? value
+            : ((value as { video?: MediaStreamTrack } | undefined)?.video ?? null);
         if (endedTrack) {
           endedTrack.removeEventListener('ended', onEnded);
           endedTrack = null;
@@ -788,12 +802,24 @@ function ScreenTile({
 
     // Reveal the tile only once the screen broadcast announces + its catalog
     // arrives (status → 'live'); hide again when it stops.
-    const statusSig = watchEl.status;
-    const apply = (s: string | undefined) => setLive(s === 'live');
-    apply(statusSig?.peek());
-    const unsub = statusSig?.subscribe(apply);
+    //
+    // `el.broadcast` only exists once the moq bundle has defined the custom
+    // element. If this tile mounts before the (lazy) bundle loads, the
+    // element starts as an unknown element and upgrades in place later — a
+    // synchronous read here would see `broadcast === undefined` and the tile
+    // would never reveal. So wait for the loader before subscribing.
+    let cancelled = false;
+    let unsub: (() => void) | undefined;
+    loadMoqComponents().then(() => {
+      if (cancelled) return;
+      const statusSig = watchEl.broadcast?.status;
+      const apply = (s: string | undefined) => setLive(s === 'live');
+      apply(statusSig?.peek());
+      unsub = statusSig?.subscribe(apply);
+    });
 
     return () => {
+      cancelled = true;
       unsub?.();
       (watchEl as HTMLElement & { paused?: boolean }).paused = true;
       watchEl.setAttribute('url', '');
@@ -809,7 +835,18 @@ function ScreenTile({
   }, [live, slot.broadcastKey, onLiveChange]);
 
   return (
-    <div className={live ? spotlightTileClasses(fullscreen) : 'hidden'}>
+    // While offline the tile must stay *intersecting* (1px, opacity-0) rather
+    // than display:none — moq-watch gates its whole pipeline on an
+    // IntersectionObserver over its canvas, so a hidden canvas would never
+    // enable the watch and `status` could never reach 'live'.
+    <div
+      data-live={live || undefined}
+      className={
+        live
+          ? spotlightTileClasses(fullscreen)
+          : 'relative w-px h-px opacity-0 overflow-hidden pointer-events-none'
+      }
+    >
       <div ref={mountRef} className="absolute inset-0" />
       {live && (
         <span className="absolute bottom-1 left-1 text-[10px] bg-black/60 text-white px-1 rounded z-10">
