@@ -187,6 +187,8 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/channels", get(api_channels))
         .route("/api/v1/channels/{name}/history", get(api_channel_history))
         .route("/api/v1/search", get(api_search))
+        .route("/api/v1/messages/{msgid}", get(api_message_by_id))
+        .route("/api/v1/channels/{name}/export", get(api_channel_export))
         .route("/api/v1/channels/{name}/topic", get(api_channel_topic))
         .route("/api/v1/channels/{name}/pins", get(api_channel_pins))
         .route("/api/v1/users/{nick}", get(api_user))
@@ -1209,6 +1211,117 @@ async fn api_channel_history(
                 }
                 None => Err(StatusCode::NOT_FOUND),
             }
+        }
+    }
+}
+
+/// True when REST may serve this channel's history: real channel (not a DM
+/// key) with no +i/+k access controls. Restricted content goes through the
+/// membership-checked IRC commands instead.
+fn rest_readable_channel(state: &SharedState, channel: &str) -> Result<(), StatusCode> {
+    if channel.to_lowercase().starts_with("dm:") || channel.contains("dm:") {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let channels = state.channels.lock();
+    match channels.get(&channel.to_lowercase()) {
+        Some(ch) => {
+            if ch.invite_only || ch.key.is_some() {
+                Err(StatusCode::FORBIDDEN)
+            } else {
+                Ok(())
+            }
+        }
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+/// GET /api/v1/messages/{msgid} — permalink resolution. Returns the message
+/// plus its channel so clients can deep-link `irc.example.org/#/{channel}`
+/// scrolled to the msgid. Same access rules as channel history.
+async fn api_message_by_id(
+    Path(msgid): Path<String>,
+    State(state): State<Arc<SharedState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let row = state
+        .with_db(|db| db.find_message_by_msgid(&msgid))
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    rest_readable_channel(&state, &row.channel)?;
+    Ok(Json(serde_json::json!({
+        "channel": row.channel,
+        "msgid": row.msgid,
+        "sender": row.sender,
+        "sender_did": row.sender_did,
+        "text": row.text,
+        "timestamp": row.timestamp,
+        "tags": row.tags,
+        "replaces_msgid": row.replaces_msgid,
+    })))
+}
+
+#[derive(Deserialize)]
+struct ExportQuery {
+    format: Option<String>,
+    limit: Option<usize>,
+    before: Option<u64>,
+}
+
+/// Render messages as a readable markdown transcript.
+fn format_export_markdown(channel: &str, rows: &[crate::db::MessageRow]) -> String {
+    let mut out = format!("# {channel} — exported transcript\n\n");
+    for r in rows {
+        let ts = chrono::DateTime::from_timestamp(r.timestamp as i64, 0)
+            .unwrap_or_default()
+            .format("%Y-%m-%d %H:%M:%S UTC");
+        let sender = r.sender.split('!').next().unwrap_or(&r.sender);
+        let msgid = r.msgid.as_deref().unwrap_or("-");
+        // Indent continuation lines so multiline messages stay readable.
+        let body = r.text.replace('\n', "\n    ");
+        out.push_str(&format!("- `{ts}` **{sender}** ({msgid}): {body}\n"));
+    }
+    out
+}
+
+/// GET /api/v1/channels/{name}/export?format=json|markdown — bulk export of
+/// a public channel's stored history, oldest-first. "The conversation is the
+/// commit": conversations must be extractable, not trapped in the database.
+async fn api_channel_export(
+    Path(name): Path<String>,
+    Query(params): Query<ExportQuery>,
+    State(state): State<Arc<SharedState>>,
+) -> Result<axum::response::Response, StatusCode> {
+    use axum::response::IntoResponse as _;
+    let channel = if name.starts_with('#') {
+        name
+    } else {
+        format!("#{name}")
+    };
+    rest_readable_channel(&state, &channel)?;
+
+    let limit = params.limit.unwrap_or(1000).min(10_000);
+    let rows = state
+        .with_db(|db| db.get_messages(&channel, limit, params.before))
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+
+    match params.format.as_deref().unwrap_or("json") {
+        "markdown" | "md" => Ok((
+            [(axum::http::header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+            format_export_markdown(&channel, &rows),
+        )
+            .into_response()),
+        _ => {
+            let resp: Vec<MessageResponse> = rows
+                .into_iter()
+                .map(|r| MessageResponse {
+                    id: r.id,
+                    sender: r.sender,
+                    text: r.text,
+                    timestamp: r.timestamp,
+                    msgid: r.msgid,
+                    tags: r.tags,
+                })
+                .collect();
+            Ok(Json(resp).into_response())
         }
     }
 }
@@ -3880,6 +3993,41 @@ fn session_to_json(s: &crate::av::AvSession, mgr: &crate::av::AvSessionManager) 
         "recording_enabled": s.recording_enabled,
         "iroh_ticket": s.iroh_ticket,
     })
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::format_export_markdown;
+    use std::collections::HashMap;
+
+    fn row(sender: &str, text: &str, ts: u64, msgid: &str) -> crate::db::MessageRow {
+        crate::db::MessageRow {
+            id: 1,
+            channel: "#x".into(),
+            sender: sender.into(),
+            text: text.into(),
+            timestamp: ts,
+            tags: HashMap::new(),
+            msgid: Some(msgid.into()),
+            replaces_msgid: None,
+            deleted_at: None,
+            sender_did: None,
+        }
+    }
+
+    #[test]
+    fn markdown_export_renders_transcript() {
+        let rows = vec![
+            row("alice!a@h", "hello world", 1750000000, "01A"),
+            row("bob!b@h", "line one\nline two", 1750000060, "01B"),
+        ];
+        let md = format_export_markdown("#dev", &rows);
+        assert!(md.starts_with("# #dev — exported transcript\n"));
+        assert!(md.contains("**alice** (01A): hello world\n"));
+        // Hostmask stripped to nick; multiline bodies indented, not split
+        // into separate top-level entries.
+        assert!(md.contains("**bob** (01B): line one\n    line two\n"));
+    }
 }
 
 #[cfg(test)]
