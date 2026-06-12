@@ -366,6 +366,12 @@ pub(crate) struct ActiveCall {
     /// Watchdog that leaves the call once we've been alone in it too long, so a
     /// lingering empty call doesn't burn CPU or block auto-sleep. Same drop story.
     lonely_task: Option<JoinHandle<()>>,
+    /// IRC handle — Drop uses it to send av-leave. Without that, the
+    /// server keeps counting us as an active participant after the MoQ
+    /// teardown, and a session everyone has silently abandoned can never
+    /// reach zero participants and auto-end — it haunts the channel
+    /// forever, re-summoning every bot on each reconnect.
+    handle: Arc<ClientHandle>,
 }
 
 impl Drop for ActiveCall {
@@ -381,6 +387,21 @@ impl Drop for ActiveCall {
             t.abort();
         }
         self.video.stop();
+        // Tell the server we left. Idempotent when the session already
+        // ended (the server re-marks an already-left participant), so
+        // every drop path — lonely watchdog, owner "leave", replaced
+        // call, session end — can share it. Drop can't await; spawn the
+        // send if a runtime is still up (at shutdown the QUIT/connection
+        // teardown cleans our slot server-side instead).
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let handle = self.handle.clone();
+            let channel = self.channel.clone();
+            let session_id = self.session_id.clone();
+            let instance_id = self.instance_id.clone();
+            rt.spawn(async move {
+                let _ = handle.av_leave(&channel, &session_id, &instance_id).await;
+            });
+        }
     }
 }
 
@@ -2606,6 +2627,7 @@ async fn start_transcription(
         proactive_task,
         ambient_task,
         lonely_task,
+        handle,
     })
 }
 
