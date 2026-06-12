@@ -227,8 +227,9 @@ When modifying a high-gamma file, write tests FIRST.
 
 ### P2 — Important
 
-- [ ] **Topic merge consistency** — SyncResponse ignores remote topic if local is set, but CRDT reconciliation overwrites. Two systems with different merge strategies cause flapping.
-- [ ] **Channel key removal propagation** — `-k` can't propagate via SyncResponse (only additive). Needs protocol change or CRDT-backed key state.
+- [x] **Topic merge consistency** — ✅ DONE. Sync-adopted topics now seed the CRDT (only when CRDT has none), making the CRDT the single topic authority. No more dual merge strategies.
+- [x] **Channel key removal propagation** — ✅ DONE. With no local members, SyncResponse adopts the full mode snapshot including `key: None` (-k propagates). With locals present, snapshots still never weaken local protections (live S2S Mode events handle -k there).
+- [x] **SyncResponse invite authority** — ✅ DONE. Synced invites are only merged when the peer's snapshot names the same founder we have (or we have none); mismatches are rejected + logged. Closes the +i bypass.
 - [ ] **S2S authentication (allowlist enforcement)** — `--s2s-allowed-peers` only checks incoming. Formalize mutual auth.
 - [x] **Ban sync + enforcement** — ✅ DONE. S2sMessage::Ban variant, authorized set/remove, SyncResponse carries bans, additive merge.
 - [x] **S2S Join enforcement** — ✅ DONE. Incoming S2S Joins check bans (nick + DID) and +i (invite only). Blocked joins logged.

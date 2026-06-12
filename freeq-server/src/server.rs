@@ -3398,6 +3398,10 @@ pub(crate) async fn process_s2s_message(
                 remote_channels.len()
             );
             let mut updated_channels = Vec::new();
+            // Topics adopted from this snapshot get seeded into the CRDT
+            // (after the lock drops) so topic state has exactly one
+            // authority. (channel, topic, set_by)
+            let mut adopted_topics: Vec<(String, String, String)> = Vec::new();
             {
                 let mut channels = state.channels.lock();
 
@@ -3502,10 +3506,14 @@ pub(crate) async fn process_s2s_message(
                     if ch.topic.is_none()
                         && let Some(ref topic) = info.topic
                     {
-                        ch.topic = Some(TopicInfo::new(
-                            topic.clone(),
-                            info.founder_did.as_deref().unwrap_or("unknown").to_string(),
-                        ));
+                        let set_by = info.founder_did.as_deref().unwrap_or("unknown").to_string();
+                        ch.topic = Some(TopicInfo::new(topic.clone(), set_by.clone()));
+                        // Seed the CRDT too (below, outside the lock). Without
+                        // this, sync-adopted topics live only in local state
+                        // while CRDT reconciliation treats the CRDT as
+                        // authoritative — two merge strategies that disagree
+                        // and flap. CRDT is the single source of truth.
+                        adopted_topics.push((info.name.clone(), topic.clone(), set_by));
                     }
 
                     // Only adopt remote channel modes if channel has no local
@@ -3517,9 +3525,11 @@ pub(crate) async fn process_s2s_message(
                         ch.invite_only = info.invite_only;
                         ch.no_ext_msg = info.no_ext_msg;
                         ch.moderated = info.moderated;
-                        if info.key.is_some() {
-                            ch.key = info.key.clone();
-                        }
+                        // Full snapshot adoption includes key REMOVAL: with no
+                        // local members there is no local authority to protect,
+                        // and refusing None here is what made -k unable to
+                        // propagate between syncs.
+                        ch.key = info.key.clone();
                     } else {
                         // Merge: only adopt modes that are MORE restrictive
                         // (remote turns ON a protection the local doesn't have).
@@ -3569,11 +3579,25 @@ pub(crate) async fn process_s2s_message(
                         }
                     }
 
-                    // Merge invites from remote (additive — don't remove local invites)
+                    // Merge invites from remote (additive — don't remove local
+                    // invites). Only accept when the peer demonstrates authority
+                    // over the channel: its snapshot must name the founder we
+                    // know (or we know none). Without this gate any peer could
+                    // inject invites and walk straight through +i.
                     // Cap at 500 to prevent resource exhaustion from malicious peers.
-                    for invite in &info.invites {
-                        if ch.invites.len() >= 500 { break; }
-                        ch.invites.insert(invite.clone());
+                    let peer_knows_founder =
+                        ch.founder_did.is_none() || info.founder_did == ch.founder_did;
+                    if peer_knows_founder {
+                        for invite in &info.invites {
+                            if ch.invites.len() >= 500 { break; }
+                            ch.invites.insert(invite.clone());
+                        }
+                    } else if !info.invites.is_empty() {
+                        tracing::warn!(
+                            channel = %info.name, peer = %peer_id,
+                            "Rejecting {} synced invite(s): peer's founder {:?} does not match local {:?}",
+                            info.invites.len(), info.founder_did, ch.founder_did
+                        );
                     }
 
                     let dids = state.session_dids.lock();
@@ -3618,6 +3642,14 @@ pub(crate) async fn process_s2s_message(
                         ch.did_ops.len(),
                         ch.topic.as_ref().map(|t| &t.text),
                     );
+                }
+            }
+
+            // Seed sync-adopted topics into the CRDT — but never compete with
+            // an existing CRDT topic (reconciliation will adopt that one).
+            for (channel, topic, set_by) in adopted_topics {
+                if state.cluster_doc.channel_topic(&channel).await.is_none() {
+                    state.crdt_set_topic(&channel, &topic, &set_by, None).await;
                 }
             }
 
@@ -5847,4 +5879,150 @@ mod s2s_adversarial_tests {
         );
     }
 
+    // ═══════════════════════════════════════════════════════════
+    // SyncResponse merge: key removal, invite authority, topic→CRDT
+    // ═══════════════════════════════════════════════════════════
+
+    fn sync_info(name: &str) -> crate::s2s::ChannelInfo {
+        crate::s2s::ChannelInfo {
+            name: name.to_string(),
+            topic: None,
+            nicks: vec![],
+            nick_info: vec![],
+            founder_did: None,
+            did_ops: vec![],
+            created_at: 0,
+            topic_locked: false,
+            invite_only: false,
+            no_ext_msg: false,
+            moderated: false,
+            key: None,
+            bans: vec![],
+            invites: vec![],
+            invite_exceptions: vec![],
+        }
+    }
+
+    async fn sync(state: &Arc<SharedState>, mgr: &Arc<S2sManager>, info: crate::s2s::ChannelInfo) {
+        process_s2s_message(
+            state,
+            mgr,
+            PEER,
+            S2sMessage::SyncResponse {
+                server_id: PEER.to_string(),
+                channels: vec![info],
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn sync_key_removal_adopted_when_no_local_members() {
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        setup_channel(&state, "#kchan");
+        state.channels.lock().get_mut("#kchan").unwrap().key = Some("sekrit".to_string());
+
+        // Peer snapshot says the key was removed (-k). No local members →
+        // adopt the full snapshot, including removal.
+        sync(&state, &mgr, sync_info("#kchan")).await;
+        assert_eq!(state.channels.lock().get("#kchan").unwrap().key, None);
+    }
+
+    #[tokio::test]
+    async fn sync_key_not_removed_while_locals_present() {
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        setup_channel(&state, "#kchan2");
+        {
+            let mut channels = state.channels.lock();
+            let ch = channels.get_mut("#kchan2").unwrap();
+            ch.key = Some("sekrit".to_string());
+            ch.members.insert("local-session".to_string());
+        }
+
+        // Locals set modes authoritatively — a snapshot must never weaken them.
+        sync(&state, &mgr, sync_info("#kchan2")).await;
+        assert_eq!(
+            state.channels.lock().get("#kchan2").unwrap().key.as_deref(),
+            Some("sekrit")
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_invites_rejected_on_founder_mismatch() {
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        setup_channel(&state, "#ichan");
+        state.channels.lock().get_mut("#ichan").unwrap().founder_did =
+            Some("did:plc:realfounder".to_string());
+
+        let mut info = sync_info("#ichan");
+        info.founder_did = Some("did:plc:imposter".to_string());
+        info.invites = vec!["did:plc:mallory".to_string()];
+        sync(&state, &mgr, info).await;
+
+        assert!(
+            state.channels.lock().get("#ichan").unwrap().invites.is_empty(),
+            "invites from a peer with the wrong founder must be rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_invites_accepted_when_founder_matches() {
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        setup_channel(&state, "#ichan2");
+        state.channels.lock().get_mut("#ichan2").unwrap().founder_did =
+            Some("did:plc:realfounder".to_string());
+
+        let mut info = sync_info("#ichan2");
+        info.founder_did = Some("did:plc:realfounder".to_string());
+        info.invites = vec!["did:plc:friend".to_string()];
+        sync(&state, &mgr, info).await;
+
+        assert!(state
+            .channels
+            .lock()
+            .get("#ichan2")
+            .unwrap()
+            .invites
+            .contains("did:plc:friend"));
+    }
+
+    #[tokio::test]
+    async fn sync_adopted_topic_is_seeded_into_crdt() {
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        setup_channel(&state, "#tchan");
+
+        let mut info = sync_info("#tchan");
+        info.topic = Some("welcome to tchan".to_string());
+        sync(&state, &mgr, info).await;
+
+        // Local adopted it…
+        assert_eq!(
+            state
+                .channels
+                .lock()
+                .get("#tchan")
+                .unwrap()
+                .topic
+                .as_ref()
+                .map(|t| t.text.clone()),
+            Some("welcome to tchan".to_string())
+        );
+        // …and the CRDT agrees, so reconciliation can never flap it back.
+        let crdt = state.cluster_doc.channel_topic("#tchan").await;
+        assert_eq!(
+            crdt.map(|(t, _)| t),
+            Some("welcome to tchan".to_string()),
+            "sync-adopted topic must be seeded into the CRDT"
+        );
+    }
 }
