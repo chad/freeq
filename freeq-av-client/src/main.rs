@@ -9,9 +9,12 @@ mod sfu;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use iroh_live::{
-    rooms::{Room, RoomEvent, RoomTicket},
     Live,
-    media::{audio_backend::AudioBackend, codec::AudioCodec, format::AudioPreset, publish::LocalBroadcast},
+    media::{
+        audio_backend::AudioBackend, codec::AudioCodec, format::AudioPreset,
+        publish::LocalBroadcast,
+    },
+    rooms::{Room, RoomEvent, RoomTicket},
 };
 
 #[derive(Parser)]
@@ -85,16 +88,26 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Room { name } => run_room(name, None, None).await,
         Command::Join { ticket, name } => {
-            let ticket: RoomTicket = ticket.parse()
+            let ticket: RoomTicket = ticket
+                .parse()
                 .map_err(|e| anyhow::anyhow!("Invalid room ticket: {e}"))?;
             run_room(name, Some(ticket), None).await
         }
-        Command::Server { url, channel, name, join } => run_server_session(&url, &channel, &name, join).await,
+        Command::Server {
+            url,
+            channel,
+            name,
+            join,
+        } => run_server_session(&url, &channel, &name, join).await,
         Command::Sfu { url, session, name } => sfu::run_sfu(&url, &session, &name).await,
     }
 }
 
-async fn run_room(display_name: String, existing_ticket: Option<RoomTicket>, browser_url: Option<String>) -> Result<()> {
+async fn run_room(
+    display_name: String,
+    existing_ticket: Option<RoomTicket>,
+    browser_url: Option<String>,
+) -> Result<()> {
     tracing::info!("Starting iroh-live audio client...");
 
     let live = Live::from_env().await?.with_router().with_gossip().spawn();
@@ -123,14 +136,24 @@ async fn run_room(display_name: String, existing_ticket: Option<RoomTicket>, bro
     let inputs = AudioBackend::list_inputs();
     let outputs = AudioBackend::list_outputs();
     println!("  Audio devices:");
-    for d in &inputs { println!("    Input:  {}", d.name); }
-    for d in &outputs { println!("    Output: {}", d.name); }
-    if inputs.is_empty() { println!("    WARNING: No input devices!"); }
-    if outputs.is_empty() { println!("    WARNING: No output devices!"); }
+    for d in &inputs {
+        println!("    Input:  {}", d.name);
+    }
+    for d in &outputs {
+        println!("    Output: {}", d.name);
+    }
+    if inputs.is_empty() {
+        println!("    WARNING: No input devices!");
+    }
+    if outputs.is_empty() {
+        println!("    WARNING: No output devices!");
+    }
 
     // Publish microphone
     let mic = audio_backend.default_input().await?;
-    broadcast.audio().set(mic, AudioCodec::Opus, [AudioPreset::Hq])?;
+    broadcast
+        .audio()
+        .set(mic, AudioCodec::Opus, [AudioPreset::Hq])?;
     // Use display name as broadcast name — matches browser convention where
     // broadcast name = nick (browsers subscribe to {session}/{nick})
     handle.publish(&display_name, &broadcast).await?;
@@ -188,8 +211,16 @@ async fn run_room(display_name: String, existing_ticket: Option<RoomTicket>, bro
 }
 
 /// Connect to a freeq server via IRC (WebSocket or TCP), join AV session, get iroh-live ticket.
-async fn run_server_session(url: &str, channel: &str, nick: &str, join_existing: bool) -> Result<()> {
-    let use_websocket = url.starts_with("https://") || url.starts_with("http://") || url.starts_with("wss://") || url.starts_with("ws://");
+async fn run_server_session(
+    url: &str,
+    channel: &str,
+    nick: &str,
+    join_existing: bool,
+) -> Result<()> {
+    let use_websocket = url.starts_with("https://")
+        || url.starts_with("http://")
+        || url.starts_with("wss://")
+        || url.starts_with("ws://");
 
     if use_websocket {
         run_server_session_ws(url, channel, nick, join_existing).await
@@ -199,12 +230,21 @@ async fn run_server_session(url: &str, channel: &str, nick: &str, join_existing:
 }
 
 /// IRC session over raw TCP (for local dev or direct port access).
-async fn run_server_session_tcp(url: &str, channel: &str, nick: &str, join_existing: bool) -> Result<()> {
+async fn run_server_session_tcp(
+    url: &str,
+    channel: &str,
+    nick: &str,
+    join_existing: bool,
+) -> Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::TcpStream;
 
     let addr = url.trim_end_matches('/');
-    let addr = if addr.contains(':') { addr.to_string() } else { format!("{addr}:6667") };
+    let addr = if addr.contains(':') {
+        addr.to_string()
+    } else {
+        format!("{addr}:6667")
+    };
 
     println!("  Connecting to {addr} (TCP)...");
     let stream = TcpStream::connect(&addr).await?;
@@ -217,11 +257,15 @@ async fn run_server_session_tcp(url: &str, channel: &str, nick: &str, join_exist
         // Build the browser call URL if we have a session ID
         let browser_url = result.session_id.as_ref().map(|sid| {
             // Derive the web origin from the server address
-            format!("http://{}/av/call.html?session={sid}", addr.split(':').next().unwrap_or("localhost"))
+            format!(
+                "http://{}/av/call.html?session={sid}",
+                addr.split(':').next().unwrap_or("localhost")
+            )
         });
 
         println!("  Joining iroh-live room...\n");
-        let room_ticket: RoomTicket = ticket_str.parse()
+        let room_ticket: RoomTicket = ticket_str
+            .parse()
             .map_err(|e| anyhow::anyhow!("Invalid room ticket from server: {e}"))?;
 
         // Keep IRC alive in background
@@ -241,27 +285,41 @@ async fn run_server_session_tcp(url: &str, channel: &str, nick: &str, join_exist
 }
 
 /// IRC session over WebSocket (for servers behind reverse proxy like Miren).
-async fn run_server_session_ws(url: &str, channel: &str, nick: &str, join_existing: bool) -> Result<()> {
+async fn run_server_session_ws(
+    url: &str,
+    channel: &str,
+    nick: &str,
+    join_existing: bool,
+) -> Result<()> {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::{connect_async, tungstenite::Message};
 
     // Build WebSocket URL: https://host → wss://host/irc
     let ws_url = if url.starts_with("https://") {
-        format!("wss://{}/irc", url.trim_start_matches("https://").trim_end_matches('/'))
+        format!(
+            "wss://{}/irc",
+            url.trim_start_matches("https://").trim_end_matches('/')
+        )
     } else if url.starts_with("http://") {
-        format!("ws://{}/irc", url.trim_start_matches("http://").trim_end_matches('/'))
+        format!(
+            "ws://{}/irc",
+            url.trim_start_matches("http://").trim_end_matches('/')
+        )
     } else {
         url.trim_end_matches('/').to_string()
     };
 
     println!("  Connecting to {ws_url} (WebSocket)...");
-    let (ws_stream, _) = connect_async(&ws_url).await
+    let (ws_stream, _) = connect_async(&ws_url)
+        .await
         .map_err(|e| anyhow::anyhow!("WebSocket connect failed: {e}"))?;
     let (mut ws_write, mut ws_read) = ws_stream.split();
 
     macro_rules! ws_send {
         ($line:expr) => {
-            ws_write.send(Message::Text($line.into())).await
+            ws_write
+                .send(Message::Text($line.into()))
+                .await
                 .map_err(|e| anyhow::anyhow!("WS send: {e}"))?
         };
     }
@@ -285,7 +343,9 @@ async fn run_server_session_ws(url: &str, channel: &str, nick: &str, join_existi
         // WebSocket may deliver multiple IRC lines in one message
         for line in text.lines() {
             let line = line.trim();
-            if line.is_empty() { continue; }
+            if line.is_empty() {
+                continue;
+            }
             tracing::debug!("< {line}");
 
             if line.starts_with("PING") {
@@ -332,21 +392,33 @@ async fn run_server_session_ws(url: &str, channel: &str, nick: &str, join_existi
             }
 
             // Break out once we have the ticket
-            if ticket.is_some() { break; }
+            if ticket.is_some() {
+                break;
+            }
         }
-        if ticket.is_some() { break; }
+        if ticket.is_some() {
+            break;
+        }
     }
 
     if let Some(ticket_str) = ticket {
         // Build browser call URL from the server URL and session ID
         let browser_url = session_id.as_ref().map(|sid| {
-            let host = url.trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/');
-            let scheme = if url.starts_with("https://") { "https" } else { "http" };
+            let host = url
+                .trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .trim_end_matches('/');
+            let scheme = if url.starts_with("https://") {
+                "https"
+            } else {
+                "http"
+            };
             format!("{scheme}://{host}/av/call.html?session={sid}")
         });
 
         println!("  Joining iroh-live room...\n");
-        let room_ticket: RoomTicket = ticket_str.parse()
+        let room_ticket: RoomTicket = ticket_str
+            .parse()
             .map_err(|e| anyhow::anyhow!("Invalid room ticket from server: {e}"))?;
 
         // Keep WebSocket IRC alive in background
@@ -354,7 +426,11 @@ async fn run_server_session_ws(url: &str, channel: &str, nick: &str, join_existi
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
             loop {
                 interval.tick().await;
-                if ws_write.send(Message::Text("PING :keepalive\r\n".into())).await.is_err() {
+                if ws_write
+                    .send(Message::Text("PING :keepalive\r\n".into()))
+                    .await
+                    .is_err()
+                {
                     break;
                 }
             }
@@ -387,8 +463,12 @@ where
 {
     use tokio::io::AsyncWriteExt;
 
-    writer.write_all(format!("NICK {nick}\r\n").as_bytes()).await?;
-    writer.write_all(format!("USER {nick} 0 * :freeq-av\r\n").as_bytes()).await?;
+    writer
+        .write_all(format!("NICK {nick}\r\n").as_bytes())
+        .await?;
+    writer
+        .write_all(format!("USER {nick} 0 * :freeq-av\r\n").as_bytes())
+        .await?;
 
     let mut registered = false;
     let mut ticket: Option<String> = None;
@@ -406,15 +486,23 @@ where
         if !registered && line.contains(" 001 ") {
             registered = true;
             println!("  Connected as {nick}");
-            writer.write_all(format!("CAP REQ :message-tags\r\n").as_bytes()).await?;
-            writer.write_all(format!("JOIN {channel}\r\n").as_bytes()).await?;
+            writer
+                .write_all(format!("CAP REQ :message-tags\r\n").as_bytes())
+                .await?;
+            writer
+                .write_all(format!("JOIN {channel}\r\n").as_bytes())
+                .await?;
             println!("  Joined {channel}");
 
             if join_existing {
-                writer.write_all(format!("@+freeq.at/av-join TAGMSG {channel}\r\n").as_bytes()).await?;
+                writer
+                    .write_all(format!("@+freeq.at/av-join TAGMSG {channel}\r\n").as_bytes())
+                    .await?;
                 println!("  Joining AV session (waiting for ticket)...");
             } else {
-                writer.write_all(format!("@+freeq.at/av-start TAGMSG {channel}\r\n").as_bytes()).await?;
+                writer
+                    .write_all(format!("@+freeq.at/av-start TAGMSG {channel}\r\n").as_bytes())
+                    .await?;
                 println!("  Starting AV session...");
             }
         }

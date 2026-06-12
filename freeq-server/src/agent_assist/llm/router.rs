@@ -20,9 +20,7 @@
 //! fallback for callers and is also what happens when the LLM is not
 //! configured at all.
 
-use super::{
-    ClassificationContext, LlmError, ToolDescriptor, ToolIntent, global,
-};
+use super::{ClassificationContext, LlmError, ToolDescriptor, ToolIntent, global};
 use crate::agent_assist::tools;
 use crate::agent_assist::types::{
     Caller, Confidence, DiagnoseDisconnectInput, DiagnoseJoinFailureInput,
@@ -72,14 +70,10 @@ pub async fn handle_session(input: SessionInput<'_>) -> RoutedResponse {
 
     let intent_result = provider.classify_intent(input.message, &ctx).await;
     match intent_result {
-        Ok(Some(intent)) => execute_intent(intent, &provider.name().to_string(), input),
+        Ok(Some(intent)) => execute_intent(intent, provider.name(), input),
         Ok(None) => intent_unclear(provider.name(), &ctx, "model could not classify"),
         Err(LlmError::NotConfigured) => not_configured_response(),
-        Err(e) => intent_unclear(
-            provider.name(),
-            &ctx,
-            &format!("provider error: {e}"),
-        ),
+        Err(e) => intent_unclear(provider.name(), &ctx, &format!("provider error: {e}")),
     }
 }
 
@@ -214,7 +208,10 @@ fn execute_intent(
         Ok(b) => b,
         Err(reason) => bad_args_bundle(&intent.tool, &reason),
     };
-    RoutedResponse { bundle, classification }
+    RoutedResponse {
+        bundle,
+        classification,
+    }
 }
 
 /// Decode args into the tool's typed input and dispatch. Returns `Err`
@@ -301,7 +298,11 @@ pub(crate) fn scrub_for_display(s: &str) -> String {
 
 /// "I tried but couldn't classify confidently" — surface the available
 /// tools so the agent can call one directly.
-fn intent_unclear(provider_name: &str, ctx: &ClassificationContext, reason: &str) -> RoutedResponse {
+fn intent_unclear(
+    provider_name: &str,
+    ctx: &ClassificationContext,
+    reason: &str,
+) -> RoutedResponse {
     let safe_facts: Vec<String> = ctx
         .available_tools
         .iter()
@@ -419,7 +420,10 @@ mod tests {
         // through the validator branch which doesn't touch state.
         let args = serde_json::json!({"client_name": "x", "supports": {}});
         let result = ValidateClientConfigInput::deserialize_via_value(args.clone());
-        assert!(result.is_ok(), "the unknown-tool path is exercised in the integration test");
+        assert!(
+            result.is_ok(),
+            "the unknown-tool path is exercised in the integration test"
+        );
         // Just confirm the error string is informative for the unknown branch.
         let err = bad_args_bundle("nope", "decode error: x");
         assert_eq!(err.code, "BAD_TOOL_ARGS");

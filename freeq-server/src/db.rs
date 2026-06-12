@@ -42,7 +42,9 @@ fn decrypt_at_rest(key: &[u8; 32], stored: &str) -> String {
         // Legacy plaintext data — return as-is but log so operators can identify
         // unencrypted records during migration.
         if !stored.is_empty() {
-            tracing::debug!("Returning unencrypted legacy message — consider re-encrypting historical data");
+            tracing::debug!(
+                "Returning unencrypted legacy message — consider re-encrypting historical data"
+            );
         }
         return stored.to_string();
     }
@@ -520,9 +522,8 @@ impl Db {
                 .execute_batch("DROP TABLE IF EXISTS messages_fts;")?;
             return Ok(());
         }
-        self.conn.execute_batch(
-            "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(text);",
-        )?;
+        self.conn
+            .execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(text);")?;
         // Backfill: index any messages that predate the FTS table (upgrade
         // path, or a database previously run with encryption enabled).
         self.conn.execute(
@@ -583,10 +584,7 @@ impl Db {
 
         // Encrypted at rest: bounded decrypt-and-scan, newest-first.
         let key = self.encryption_key.as_ref().expect("encrypted branch");
-        let terms: Vec<String> = query
-            .split_whitespace()
-            .map(|t| t.to_lowercase())
-            .collect();
+        let terms: Vec<String> = query.split_whitespace().map(|t| t.to_lowercase()).collect();
         if terms.is_empty() {
             return Ok(vec![]);
         }
@@ -661,8 +659,10 @@ impl Db {
             .execute("DELETE FROM channels WHERE name = ?1", params![name])?;
         self.conn
             .execute("DELETE FROM bans WHERE channel = ?1", params![name])?;
-        self.conn
-            .execute("DELETE FROM invite_exceptions WHERE channel = ?1", params![name])?;
+        self.conn.execute(
+            "DELETE FROM invite_exceptions WHERE channel = ?1",
+            params![name],
+        )?;
         Ok(())
     }
 
@@ -774,9 +774,9 @@ impl Db {
         }
 
         // Load pins
-        let mut stmt = self
-            .conn
-            .prepare("SELECT channel, msgid, pinned_by, pinned_at FROM pins ORDER BY pinned_at DESC")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT channel, msgid, pinned_by, pinned_at FROM pins ORDER BY pinned_at DESC",
+        )?;
         let pin_rows = stmt.query_map([], |row| {
             let channel: String = row.get(0)?;
             let msgid: String = row.get(1)?;
@@ -1219,7 +1219,11 @@ impl Db {
         if msgids.is_empty() {
             return Ok(HashMap::new());
         }
-        let placeholders: Vec<String> = msgids.iter().enumerate().map(|(i, _)| format!("?{}", i + 1)).collect();
+        let placeholders: Vec<String> = msgids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect();
         let sql = format!(
             "SELECT target_msgid, channel, reactor_nick, reactor_did, emoji, timestamp
              FROM reactions WHERE target_msgid IN ({})
@@ -1227,7 +1231,8 @@ impl Db {
             placeholders.join(", ")
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let params: Vec<&dyn rusqlite::ToSql> = msgids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+        let params: Vec<&dyn rusqlite::ToSql> =
+            msgids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
         let rows = stmt.query_map(params.as_slice(), |row| {
             Ok(ReactionRow {
                 target_msgid: row.get(0)?,
@@ -1241,7 +1246,10 @@ impl Db {
         let mut result: HashMap<String, Vec<ReactionRow>> = HashMap::new();
         for row in rows {
             let row = row?;
-            result.entry(row.target_msgid.clone()).or_default().push(row);
+            result
+                .entry(row.target_msgid.clone())
+                .or_default()
+                .push(row);
         }
         Ok(result)
     }
@@ -1278,7 +1286,7 @@ impl Db {
         let mut stmt = self.conn.prepare(
             "SELECT msgid, pinned_by, pinned_at FROM pins
              WHERE channel = ?1
-             ORDER BY pinned_at DESC"
+             ORDER BY pinned_at DESC",
         )?;
         let rows = stmt.query_map(params![channel], |row| {
             Ok(crate::server::PinnedMessage {
@@ -1302,11 +1310,7 @@ impl Db {
 
     /// List DM conversations for a given DID, ordered by most recent message.
     /// Returns (canonical_dm_key, last_message_timestamp) pairs.
-    pub fn dm_conversations(
-        &self,
-        did: &str,
-        limit: usize,
-    ) -> SqlResult<Vec<(String, u64)>> {
+    pub fn dm_conversations(&self, did: &str, limit: usize) -> SqlResult<Vec<(String, u64)>> {
         let pattern = format!("%{did}%");
         let mut stmt = self.conn.prepare(
             "SELECT channel, MAX(timestamp) AS last_ts
@@ -1602,7 +1606,9 @@ mod tests {
         msg(&db, "#ops", "deploy failed", 110, "m2");
         msg(&db, "#dev", "deploy succeeded", 120, "m3");
 
-        let hits = db.search_messages("#dev", "deploy failed", 50, None).unwrap();
+        let hits = db
+            .search_messages("#dev", "deploy failed", 50, None)
+            .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].msgid.as_deref(), Some("m1"));
     }
@@ -1615,11 +1621,24 @@ mod tests {
         msg(&db, "#dev", "cherry", 300, "m3");
 
         db.soft_delete_message("#dev", "m1").unwrap();
-        assert!(db.search_messages("#dev", "apple", 50, None).unwrap().is_empty());
+        assert!(
+            db.search_messages("#dev", "apple", 50, None)
+                .unwrap()
+                .is_empty()
+        );
 
         db.prune_messages("#dev", 1).unwrap();
-        assert!(db.search_messages("#dev", "banana", 50, None).unwrap().is_empty());
-        assert_eq!(db.search_messages("#dev", "cherry", 50, None).unwrap().len(), 1);
+        assert!(
+            db.search_messages("#dev", "banana", 50, None)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            db.search_messages("#dev", "cherry", 50, None)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1653,7 +1672,11 @@ mod tests {
         let hits = db.search_messages("#dev", "OR", 50, None).unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].msgid.as_deref(), Some("m1"));
-        assert!(db.search_messages("#dev", "   ", 50, None).unwrap().is_empty());
+        assert!(
+            db.search_messages("#dev", "   ", 50, None)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1663,7 +1686,11 @@ mod tests {
         db.edit_message("m1", "alice!a@host", "revised phrasing", Some("m2"))
             .unwrap();
 
-        assert!(db.search_messages("#dev", "original", 50, None).unwrap().is_empty());
+        assert!(
+            db.search_messages("#dev", "original", 50, None)
+                .unwrap()
+                .is_empty()
+        );
         let hits = db.search_messages("#dev", "revised", 50, None).unwrap();
         assert_eq!(hits.len(), 1);
     }
@@ -1676,10 +1703,16 @@ mod tests {
         db.soft_delete_message("#dev", "m2").unwrap();
 
         // Case-insensitive match on decrypted text; no FTS table involved.
-        let hits = db.search_messages("#dev", "deploy failed", 50, None).unwrap();
+        let hits = db
+            .search_messages("#dev", "deploy failed", 50, None)
+            .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].text, "Deploy Failed Loudly");
-        assert!(db.search_messages("#dev", "quiet", 50, None).unwrap().is_empty());
+        assert!(
+            db.search_messages("#dev", "quiet", 50, None)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1689,7 +1722,12 @@ mod tests {
         {
             let db = Db::open(&path).unwrap();
             msg(&db, "#dev", "plaintext indexed", 100, "m1");
-            assert_eq!(db.search_messages("#dev", "plaintext", 50, None).unwrap().len(), 1);
+            assert_eq!(
+                db.search_messages("#dev", "plaintext", 50, None)
+                    .unwrap()
+                    .len(),
+                1
+            );
         }
         let db = Db::open_encrypted(&path, [9u8; 32]).unwrap();
         let fts_exists: i64 = db
@@ -1700,7 +1738,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(fts_exists, 0, "plaintext FTS index must not survive encryption");
+        assert_eq!(
+            fts_exists, 0,
+            "plaintext FTS index must not survive encryption"
+        );
     }
 
     #[test]
@@ -2054,9 +2095,26 @@ mod tests {
     #[test]
     fn store_and_get_reactions() {
         let db = Db::open_memory().unwrap();
-        db.store_reaction("msg001", "#test", "alice", Some("did:plc:alice"), "👍", 1000).unwrap();
-        db.store_reaction("msg001", "#test", "bob", None, "👍", 1001).unwrap();
-        db.store_reaction("msg001", "#test", "alice", Some("did:plc:alice"), "❤️", 1002).unwrap();
+        db.store_reaction(
+            "msg001",
+            "#test",
+            "alice",
+            Some("did:plc:alice"),
+            "👍",
+            1000,
+        )
+        .unwrap();
+        db.store_reaction("msg001", "#test", "bob", None, "👍", 1001)
+            .unwrap();
+        db.store_reaction(
+            "msg001",
+            "#test",
+            "alice",
+            Some("did:plc:alice"),
+            "❤️",
+            1002,
+        )
+        .unwrap();
 
         let reactions = db.get_reactions_for_messages(&["msg001"]).unwrap();
         let msg_reactions = reactions.get("msg001").unwrap();
@@ -2070,8 +2128,10 @@ mod tests {
     #[test]
     fn duplicate_reaction_ignored() {
         let db = Db::open_memory().unwrap();
-        db.store_reaction("msg001", "#test", "alice", None, "👍", 1000).unwrap();
-        db.store_reaction("msg001", "#test", "alice", None, "👍", 1001).unwrap(); // duplicate
+        db.store_reaction("msg001", "#test", "alice", None, "👍", 1000)
+            .unwrap();
+        db.store_reaction("msg001", "#test", "alice", None, "👍", 1001)
+            .unwrap(); // duplicate
 
         let reactions = db.get_reactions_for_messages(&["msg001"]).unwrap();
         assert_eq!(reactions.get("msg001").unwrap().len(), 1);
@@ -2080,8 +2140,10 @@ mod tests {
     #[test]
     fn remove_reaction() {
         let db = Db::open_memory().unwrap();
-        db.store_reaction("msg001", "#test", "alice", None, "👍", 1000).unwrap();
-        db.store_reaction("msg001", "#test", "alice", None, "❤️", 1001).unwrap();
+        db.store_reaction("msg001", "#test", "alice", None, "👍", 1000)
+            .unwrap();
+        db.store_reaction("msg001", "#test", "alice", None, "❤️", 1001)
+            .unwrap();
 
         let removed = db.remove_reaction("msg001", "alice", "👍").unwrap();
         assert_eq!(removed, 1);
@@ -2095,11 +2157,16 @@ mod tests {
     #[test]
     fn get_reactions_multiple_messages() {
         let db = Db::open_memory().unwrap();
-        db.store_reaction("msg001", "#test", "alice", None, "👍", 1000).unwrap();
-        db.store_reaction("msg002", "#test", "bob", None, "🎉", 1001).unwrap();
-        db.store_reaction("msg003", "#test", "carol", None, "❤️", 1002).unwrap();
+        db.store_reaction("msg001", "#test", "alice", None, "👍", 1000)
+            .unwrap();
+        db.store_reaction("msg002", "#test", "bob", None, "🎉", 1001)
+            .unwrap();
+        db.store_reaction("msg003", "#test", "carol", None, "❤️", 1002)
+            .unwrap();
 
-        let reactions = db.get_reactions_for_messages(&["msg001", "msg002", "msg003"]).unwrap();
+        let reactions = db
+            .get_reactions_for_messages(&["msg001", "msg002", "msg003"])
+            .unwrap();
         assert!(reactions.contains_key("msg001"));
         assert!(reactions.contains_key("msg002"));
         assert!(reactions.contains_key("msg003"));
@@ -2427,7 +2494,12 @@ impl Db {
         Ok(count > 0)
     }
 
-    pub fn deny_approval(&self, id: &str, denied_by: &str, reason: Option<&str>) -> SqlResult<bool> {
+    pub fn deny_approval(
+        &self,
+        id: &str,
+        denied_by: &str,
+        reason: Option<&str>,
+    ) -> SqlResult<bool> {
         let now = chrono::Utc::now().timestamp();
         let count = self.conn.execute(
             "UPDATE pending_approvals SET denied_by = ?1, denied_at = ?2, deny_reason = ?3
@@ -2438,14 +2510,15 @@ impl Db {
     }
 
     pub fn get_pending_approvals(&self, channel: &str) -> Vec<PendingApprovalRow> {
-        let mut stmt = self.conn
+        let mut stmt = self
+            .conn
             .prepare(
                 "SELECT id, channel, agent_did, capability, resource, requested_at,
                         granted_by, granted_at, denied_by, denied_at, deny_reason, expires_at
                  FROM pending_approvals
                  WHERE channel = ?1 AND granted_by IS NULL AND denied_by IS NULL
                    AND (expires_at IS NULL OR expires_at > ?2)
-                 ORDER BY requested_at ASC"
+                 ORDER BY requested_at ASC",
             )
             .unwrap();
         let now = chrono::Utc::now().timestamp();
@@ -2559,7 +2632,8 @@ impl Db {
              FROM coordination_events WHERE channel = ?1"
         );
         let mut param_idx = 2;
-        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(channel.to_string())];
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(channel.to_string())];
 
         if let Some(et) = event_type {
             sql.push_str(&format!(" AND event_type = ?{param_idx}"));
@@ -2584,7 +2658,8 @@ impl Db {
         let _ = param_idx; // suppress unused warning
         sql.push_str(&format!(" ORDER BY timestamp ASC LIMIT {limit}"));
 
-        let params_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|b| b.as_ref()).collect();
         let mut stmt = match self.conn.prepare(&sql) {
             Ok(s) => s,
             Err(e) => {
@@ -2626,7 +2701,8 @@ impl Db {
                 signature: row.get(6)?,
                 timestamp: row.get(7)?,
             })
-        }).ok()
+        })
+        .ok()
     }
 
     /// Get all events referencing a task ID.
@@ -2821,17 +2897,31 @@ impl Db {
         let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match agent_did {
             Some(did) => (
                 "SELECT COALESCE(SUM(amount), 0.0) FROM agent_spend
-                 WHERE channel = ?1 AND agent_did = ?2 AND unit = ?3 AND timestamp >= ?4".to_string(),
-                vec![Box::new(channel.to_string()), Box::new(did.to_string()), Box::new(unit.to_string()), Box::new(since)],
+                 WHERE channel = ?1 AND agent_did = ?2 AND unit = ?3 AND timestamp >= ?4"
+                    .to_string(),
+                vec![
+                    Box::new(channel.to_string()),
+                    Box::new(did.to_string()),
+                    Box::new(unit.to_string()),
+                    Box::new(since),
+                ],
             ),
             None => (
                 "SELECT COALESCE(SUM(amount), 0.0) FROM agent_spend
-                 WHERE channel = ?1 AND unit = ?2 AND timestamp >= ?3".to_string(),
-                vec![Box::new(channel.to_string()), Box::new(unit.to_string()), Box::new(since)],
+                 WHERE channel = ?1 AND unit = ?2 AND timestamp >= ?3"
+                    .to_string(),
+                vec![
+                    Box::new(channel.to_string()),
+                    Box::new(unit.to_string()),
+                    Box::new(since),
+                ],
             ),
         };
-        let refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
-        self.conn.query_row(&sql, refs.as_slice(), |row| row.get(0)).unwrap_or(0.0)
+        let refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|b| b.as_ref()).collect();
+        self.conn
+            .query_row(&sql, refs.as_slice(), |row| row.get(0))
+            .unwrap_or(0.0)
     }
 
     /// Query spend records with optional filters.
@@ -2844,9 +2934,10 @@ impl Db {
     ) -> Vec<SpendRecord> {
         let mut sql = String::from(
             "SELECT id, channel, agent_did, amount, unit, description, task_ref, timestamp
-             FROM agent_spend WHERE channel = ?1"
+             FROM agent_spend WHERE channel = ?1",
         );
-        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(channel.to_string())];
+        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(channel.to_string())];
         let mut idx = 2;
         if let Some(did) = agent_did {
             sql.push_str(&format!(" AND agent_did = ?{idx}"));
@@ -2860,7 +2951,8 @@ impl Db {
         }
         let _ = idx;
         sql.push_str(&format!(" ORDER BY timestamp DESC LIMIT {limit}"));
-        let refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
+        let refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|b| b.as_ref()).collect();
         let mut stmt = match self.conn.prepare(&sql) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
@@ -2887,13 +2979,17 @@ impl Db {
         let mut stmt = match self.conn.prepare(
             "SELECT agent_did, SUM(amount), COUNT(*) FROM agent_spend
              WHERE channel = ?1 AND unit = ?2 AND timestamp >= ?3
-             GROUP BY agent_did ORDER BY SUM(amount) DESC"
+             GROUP BY agent_did ORDER BY SUM(amount) DESC",
         ) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
         match stmt.query_map(params![channel, unit, since], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?, row.get::<_, i64>(2)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, f64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
         }) {
             Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
             Err(_) => Vec::new(),
@@ -2940,20 +3036,27 @@ impl Db {
     }
 
     /// Query governance log entries for a channel.
-    pub fn query_governance_log(&self, channel: Option<&str>, limit: usize) -> Vec<GovernanceLogEntry> {
+    pub fn query_governance_log(
+        &self,
+        channel: Option<&str>,
+        limit: usize,
+    ) -> Vec<GovernanceLogEntry> {
         let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match channel {
             Some(ch) => (
                 "SELECT id, channel, target_did, action, issued_by, reason, timestamp
-                 FROM governance_log WHERE channel = ?1 ORDER BY timestamp ASC LIMIT ?2".to_string(),
+                 FROM governance_log WHERE channel = ?1 ORDER BY timestamp ASC LIMIT ?2"
+                    .to_string(),
                 vec![Box::new(ch.to_string()), Box::new(limit as i64)],
             ),
             None => (
                 "SELECT id, channel, target_did, action, issued_by, reason, timestamp
-                 FROM governance_log ORDER BY timestamp ASC LIMIT ?1".to_string(),
+                 FROM governance_log ORDER BY timestamp ASC LIMIT ?1"
+                    .to_string(),
                 vec![Box::new(limit as i64)],
             ),
         };
-        let params_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|b| b.as_ref()).collect();
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params_vec.iter().map(|b| b.as_ref()).collect();
         let mut stmt = match self.conn.prepare(&sql) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
@@ -2980,9 +3083,7 @@ impl Db {
         use crate::av::AvSessionState;
         let (ended_at, ended_by) = match &session.state {
             AvSessionState::Active => (None, None),
-            AvSessionState::Ended { ended_at, ended_by } => {
-                (Some(*ended_at), ended_by.clone())
-            }
+            AvSessionState::Ended { ended_at, ended_by } => (Some(*ended_at), ended_by.clone()),
         };
         self.conn.execute(
             "INSERT INTO av_sessions (id, channel, created_by, created_at, ended_at, ended_by, title, iroh_ticket, backend, recording, max_participants)
@@ -3011,7 +3112,11 @@ impl Db {
                  ON CONFLICT(session_id, did) DO UPDATE SET
                     left_at=excluded.left_at, role=excluded.role",
                 params![
-                    session.id, p.did, p.nick, p.joined_at, p.left_at,
+                    session.id,
+                    p.did,
+                    p.nick,
+                    p.joined_at,
+                    p.left_at,
                     serde_json::to_string(&p.role).unwrap_or_default(),
                 ],
             )?;
@@ -3036,7 +3141,7 @@ impl Db {
     }
 
     pub fn list_av_artifacts(&self, session_id: &str) -> SqlResult<Vec<crate::av::AvArtifact>> {
-        use crate::av::{AvArtifact, ArtifactKind, ArtifactVisibility};
+        use crate::av::{ArtifactKind, ArtifactVisibility, AvArtifact};
         let mut stmt = self.conn.prepare(
             "SELECT id, session_id, kind, created_at, created_by, content_ref, content_type, visibility, title
              FROM av_artifacts WHERE session_id = ?1 ORDER BY created_at",
@@ -3052,7 +3157,8 @@ impl Db {
                 created_by: row.get(4)?,
                 content_ref: row.get(5)?,
                 content_type: row.get(6)?,
-                visibility: serde_json::from_str(&vis_str).unwrap_or(ArtifactVisibility::Participants),
+                visibility: serde_json::from_str(&vis_str)
+                    .unwrap_or(ArtifactVisibility::Participants),
                 title: row.get(8)?,
             })
         })?;
@@ -3061,49 +3167,58 @@ impl Db {
 
     /// Load all active (non-ended) AV sessions with their participants. Used on server restart.
     pub fn load_active_av_sessions(&self) -> SqlResult<Vec<crate::av::AvSession>> {
-        use crate::av::{AvSession, AvSessionState, AvParticipant, ParticipantRole, MediaBackendType};
+        use crate::av::{
+            AvParticipant, AvSession, AvSessionState, MediaBackendType, ParticipantRole,
+        };
         use std::collections::HashMap;
         let mut stmt = self.conn.prepare(
             "SELECT id, channel, created_by, created_at, title, iroh_ticket, backend, recording, max_participants
              FROM av_sessions WHERE ended_at IS NULL",
         )?;
-        let mut sessions: Vec<AvSession> = stmt.query_map([], |row: &rusqlite::Row| {
-            let backend_str: String = row.get(6)?;
-            Ok(AvSession {
-                id: row.get(0)?,
-                channel: row.get(1)?,
-                created_by: row.get(2)?,
-                created_by_nick: String::new(),
-                created_at: row.get(3)?,
-                state: AvSessionState::Active,
-                participants: HashMap::new(),
-                title: row.get(4)?,
-                iroh_ticket: row.get(5)?,
-                media_backend: serde_json::from_str(&backend_str).unwrap_or(MediaBackendType::IrohLive),
-                recording_enabled: row.get(7)?,
-                max_participants: row.get(8)?,
-            })
-        })?.filter_map(|r| r.ok()).collect();
+        let mut sessions: Vec<AvSession> = stmt
+            .query_map([], |row: &rusqlite::Row| {
+                let backend_str: String = row.get(6)?;
+                Ok(AvSession {
+                    id: row.get(0)?,
+                    channel: row.get(1)?,
+                    created_by: row.get(2)?,
+                    created_by_nick: String::new(),
+                    created_at: row.get(3)?,
+                    state: AvSessionState::Active,
+                    participants: HashMap::new(),
+                    title: row.get(4)?,
+                    iroh_ticket: row.get(5)?,
+                    media_backend: serde_json::from_str(&backend_str)
+                        .unwrap_or(MediaBackendType::IrohLive),
+                    recording_enabled: row.get(7)?,
+                    max_participants: row.get(8)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
 
         // Load participants for each session
         for session in &mut sessions {
             let mut pstmt = self.conn.prepare(
                 "SELECT did, nick, joined_at, left_at, role FROM av_participants WHERE session_id = ?1",
             )?;
-            let participants: Vec<AvParticipant> = pstmt.query_map([&session.id], |row: &rusqlite::Row| {
-                let role_str: String = row.get(4)?;
-                Ok(AvParticipant {
-                    did: row.get(0)?,
-                    nick: row.get(1)?,
-                    joined_at: row.get(2)?,
-                    left_at: row.get(3)?,
-                    role: serde_json::from_str(&role_str).unwrap_or(ParticipantRole::Speaker),
-                    tracks: vec![],
-                    // Pre-instance-id sessions in the DB: hydrate as None.
-                    // New sessions write/read via the DB schema separately.
-                    instance_id: None,
-                })
-            })?.filter_map(|r| r.ok()).collect();
+            let participants: Vec<AvParticipant> = pstmt
+                .query_map([&session.id], |row: &rusqlite::Row| {
+                    let role_str: String = row.get(4)?;
+                    Ok(AvParticipant {
+                        did: row.get(0)?,
+                        nick: row.get(1)?,
+                        joined_at: row.get(2)?,
+                        left_at: row.get(3)?,
+                        role: serde_json::from_str(&role_str).unwrap_or(ParticipantRole::Speaker),
+                        tracks: vec![],
+                        // Pre-instance-id sessions in the DB: hydrate as None.
+                        // New sessions write/read via the DB schema separately.
+                        instance_id: None,
+                    })
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
             for p in participants {
                 // Also recover created_by_nick from the host participant
                 if p.did == session.created_by {
@@ -3115,7 +3230,11 @@ impl Db {
         Ok(sessions)
     }
 
-    pub fn list_channel_av_sessions(&self, channel: &str, limit: u32) -> SqlResult<Vec<crate::av::AvSession>> {
+    pub fn list_channel_av_sessions(
+        &self,
+        channel: &str,
+        limit: u32,
+    ) -> SqlResult<Vec<crate::av::AvSession>> {
         use crate::av::{AvSession, AvSessionState, MediaBackendType};
         use std::collections::HashMap;
         let mut stmt = self.conn.prepare(
@@ -3127,7 +3246,10 @@ impl Db {
             let ended_by: Option<String> = row.get(5)?;
             let backend_str: String = row.get(8)?;
             let state = match ended_at {
-                Some(ea) => AvSessionState::Ended { ended_at: ea, ended_by },
+                Some(ea) => AvSessionState::Ended {
+                    ended_at: ea,
+                    ended_by,
+                },
                 None => AvSessionState::Active,
             };
             Ok(AvSession {
@@ -3140,7 +3262,8 @@ impl Db {
                 participants: HashMap::new(),
                 title: row.get(6)?,
                 iroh_ticket: row.get(7)?,
-                media_backend: serde_json::from_str(&backend_str).unwrap_or(MediaBackendType::IrohLive),
+                media_backend: serde_json::from_str(&backend_str)
+                    .unwrap_or(MediaBackendType::IrohLive),
                 recording_enabled: row.get(9)?,
                 max_participants: row.get(10)?,
             })

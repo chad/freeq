@@ -56,7 +56,10 @@ impl C {
         let s = TcpStream::connect(addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).ok();
         let w = s.try_clone().unwrap();
-        let mut c = Self { reader: BufReader::new(s), writer: w };
+        let mut c = Self {
+            reader: BufReader::new(s),
+            writer: w,
+        };
         c.tx("CAP LS 302");
         c.tx(&format!("NICK {nick}"));
         c.tx(&format!("USER {nick} 0 * :test"));
@@ -183,7 +186,10 @@ async fn zombie_same_did_session_is_evicted_quickly() {
 
         // The fresh session is unaffected and fully functional.
         fresh.tx("WHOIS agent");
-        fresh.rx(|l| l.split_whitespace().nth(1) == Some("318"), "end of WHOIS");
+        fresh.rx(
+            |l| l.split_whitespace().nth(1) == Some("318"),
+            "end of WHOIS",
+        );
     })
     .await;
 }
@@ -203,9 +209,15 @@ async fn healthy_sibling_survives_probe() {
 
         // Both sessions still work.
         phone.tx("WHOIS agent");
-        phone.rx(|l| l.split_whitespace().nth(1) == Some("318"), "phone WHOIS");
+        phone.rx(
+            |l| l.split_whitespace().nth(1) == Some("318"),
+            "phone WHOIS",
+        );
         laptop.tx("WHOIS agent");
-        laptop.rx(|l| l.split_whitespace().nth(1) == Some("318"), "laptop WHOIS");
+        laptop.rx(
+            |l| l.split_whitespace().nth(1) == Some("318"),
+            "laptop WHOIS",
+        );
     })
     .await;
 }

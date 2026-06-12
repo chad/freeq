@@ -120,8 +120,7 @@ async fn ctf_07_step_up_refuses_loopback_pds_url() {
     // on localhost). Without an SSRF block the server tries to fetch
     // it, gets a connection error, and the response leaks the
     // internal address back to the attacker.
-    let (http, _state, _h) =
-        start_server_with_malicious_pds("http://127.0.0.1:1/").await;
+    let (http, _state, _h) = start_server_with_malicious_pds("http://127.0.0.1:1/").await;
 
     let started = Instant::now();
     let resp = reqwest::Client::new()
@@ -154,8 +153,7 @@ async fn ctf_07_step_up_refuses_loopback_pds_url() {
 
 #[tokio::test]
 async fn ctf_07_step_up_refuses_rfc1918_pds_url() {
-    let (http, _state, _h) =
-        start_server_with_malicious_pds("http://10.0.0.1/").await;
+    let (http, _state, _h) = start_server_with_malicious_pds("http://10.0.0.1/").await;
 
     let resp = reqwest::Client::new()
         .get(url(
@@ -183,8 +181,7 @@ async fn ctf_07_step_up_refuses_localhost_hostname() {
     // Even when the URL uses the literal `localhost` hostname (DNS
     // would resolve to 127.0.0.1), the SSRF check must catch it
     // before any DNS lookup or connect.
-    let (http, _state, _h) =
-        start_server_with_malicious_pds("http://localhost:9999/").await;
+    let (http, _state, _h) = start_server_with_malicious_pds("http://localhost:9999/").await;
 
     let resp = reqwest::Client::new()
         .get(url(
@@ -212,8 +209,7 @@ async fn ctf_07_step_up_refuses_link_local() {
     // 169.254.169.254 is the AWS / GCP metadata service. Any cloud-
     // hosted freeq with this unblocked is one DID document away from
     // having its instance credentials exfiltrated.
-    let (http, _state, _h) =
-        start_server_with_malicious_pds("http://169.254.169.254/").await;
+    let (http, _state, _h) = start_server_with_malicious_pds("http://169.254.169.254/").await;
 
     let resp = reqwest::Client::new()
         .get(url(
@@ -252,8 +248,7 @@ async fn ctf_12_oauth_login_host_header_with_attacker_value() {
     // non-loopback Host because the resolver path needs network; we
     // settle for confirming that Host="evil.example" doesn't crash
     // and doesn't get reflected into a Location pointing at evil.
-    let (http, _state, _h) =
-        start_server_with_malicious_pds("https://example.com/").await;
+    let (http, _state, _h) = start_server_with_malicious_pds("https://example.com/").await;
     let resp = reqwest::Client::new()
         .get(url(http, "/auth/login?handle=victim.example"))
         .header("Host", "evil.example.com")
@@ -298,14 +293,16 @@ async fn ctf_11_oauth_callback_html_escapes_error_params() {
     // CSP allows inline scripts, so a `<script>` payload in `error`
     // gets executed in the user's browser. Anyone can land a victim
     // on this URL.
-    let (http, _state, _h) =
-        start_server_with_malicious_pds("https://example.com/").await;
+    let (http, _state, _h) = start_server_with_malicious_pds("https://example.com/").await;
 
     let payload = "<script>alert(1)</script>";
     let resp = reqwest::Client::new()
         .get(url(
             http,
-            &format!("/auth/callback?error={}&error_description=hi", urlencoding::encode(payload)),
+            &format!(
+                "/auth/callback?error={}&error_description=hi",
+                urlencoding::encode(payload)
+            ),
         ))
         .send()
         .await
@@ -331,8 +328,7 @@ async fn ctf_07_step_up_refuses_non_http_scheme() {
     // file:// or gopher:// or ftp:// — anything outside http(s) should
     // bounce immediately. Most reqwest builds don't enable file: but
     // belt-and-braces: explicit scheme check.
-    let (http, _state, _h) =
-        start_server_with_malicious_pds("file:///etc/passwd").await;
+    let (http, _state, _h) = start_server_with_malicious_pds("file:///etc/passwd").await;
 
     let resp = reqwest::Client::new()
         .get(url(

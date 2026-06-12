@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use axum::http::Method;
 use axum::{
     Json, Router,
     extract::{Query, State},
@@ -11,10 +12,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
-use axum::http::Method;
 
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use aes_gcm::aead::Aead;
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64::Engine;
 use hkdf::Hkdf;
 use p256::ecdsa::SigningKey;
@@ -247,11 +247,16 @@ async fn reject_private_host(host: &str) -> Result<(), anyhow::Error> {
         return Ok(());
     }
 
-    let addrs: Vec<std::net::SocketAddr> =
-        tokio::net::lookup_host(format!("{host}:443")).await?.collect();
+    let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host(format!("{host}:443"))
+        .await?
+        .collect();
     for addr in &addrs {
         if is_private_ip(&addr.ip()) {
-            anyhow::bail!("SSRF blocked: {} resolves to private IP {}", host, addr.ip());
+            anyhow::bail!(
+                "SSRF blocked: {} resolves to private IP {}",
+                host,
+                addr.ip()
+            );
         }
     }
     Ok(())
@@ -346,14 +351,16 @@ async fn main() {
     let db_path = std::env::var("BROKER_DB_PATH").unwrap_or_else(|_| "broker.db".to_string());
 
     // Ensure parent directory exists (for /app/data/broker.db etc.)
-    if let Some(parent) = std::path::Path::new(&db_path).parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).ok();
-        }
+    if let Some(parent) = std::path::Path::new(&db_path).parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).ok();
     }
 
     if shared_secret.is_empty() {
-        tracing::error!("BROKER_SHARED_SECRET not set — refusing to start. Set this env var to a strong random secret.");
+        tracing::error!(
+            "BROKER_SHARED_SECRET not set — refusing to start. Set this env var to a strong random secret."
+        );
         std::process::exit(1);
     }
 
@@ -377,8 +384,11 @@ async fn main() {
                     "Broker DB not openable yet — retrying (waiting for disk mount?)"
                 );
                 std::fs::create_dir_all(
-                    std::path::Path::new(&db_path).parent().unwrap_or(std::path::Path::new(".")),
-                ).ok();
+                    std::path::Path::new(&db_path)
+                        .parent()
+                        .unwrap_or(std::path::Path::new(".")),
+                )
+                .ok();
                 std::thread::sleep(delay);
                 delay = (delay * 2).min(std::time::Duration::from_secs(8));
             }
@@ -435,13 +445,19 @@ async fn main() {
 const GIT_COMMIT_FILE: &str = include_str!("../git_commit.txt");
 
 fn git_commit() -> String {
-    if let Ok(v) = std::env::var("GIT_HASH") {
-        if !v.is_empty() { return v; }
+    if let Ok(v) = std::env::var("GIT_HASH")
+        && !v.is_empty()
+    {
+        return v;
     }
     let trimmed = GIT_COMMIT_FILE.trim();
-    if !trimmed.is_empty() { return trimmed.to_string(); }
+    if !trimmed.is_empty() {
+        return trimmed.to_string();
+    }
     let built_in = env!("GIT_HASH");
-    if !built_in.is_empty() { return built_in.to_string(); }
+    if !built_in.is_empty() {
+        return built_in.to_string();
+    }
     "unknown".to_string()
 }
 
@@ -511,10 +527,12 @@ async fn auth_login(
         )
     })?;
 
-    let client = upstream_client().map_err(|e| (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        format!("upstream client init: {e}"),
-    ))?;
+    let client = upstream_client().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("upstream client init: {e}"),
+        )
+    })?;
     let pr_url = format!(
         "{}/.well-known/oauth-protected-resource",
         pds_url.trim_end_matches('/')
@@ -550,16 +568,12 @@ async fn auth_login(
         "{}/.well-known/oauth-authorization-server",
         auth_server.trim_end_matches('/')
     );
-    let as_resp = client
-        .get(&as_url)
-        .send()
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::BAD_GATEWAY,
-                format!("Auth server metadata failed: {e:#?}"),
-            )
-        })?;
+    let as_resp = client.get(&as_url).send().await.map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("Auth server metadata failed: {e:#?}"),
+        )
+    })?;
     let as_status = as_resp.status();
     let as_body = as_resp.text().await.unwrap_or_default();
     let auth_meta: serde_json::Value = serde_json::from_str(&as_body).map_err(|e| {
@@ -650,7 +664,8 @@ async fn auth_login(
         body = %body_preview,
         "first PAR response"
     );
-    let par_resp: serde_json::Value = if status.as_u16() == 400 && dpop_nonce.is_some()
+    let par_resp: serde_json::Value = if status.as_u16() == 400
+        && dpop_nonce.is_some()
         && first_body.contains("use_dpop_nonce")
     {
         let nonce = dpop_nonce.as_deref().unwrap();
@@ -708,11 +723,11 @@ async fn auth_login(
     let is_mobile = is_truthy(q.mobile.as_deref());
 
     // C-6: Validate return_to against allowlist to prevent open redirects
-    if let Some(ref rt) = return_to {
-        if !is_valid_return_to(rt) {
-            tracing::warn!(return_to = %rt, "Rejected invalid return_to URL");
-            return Err((StatusCode::BAD_REQUEST, "Invalid return_to URL".to_string()));
-        }
+    if let Some(ref rt) = return_to
+        && !is_valid_return_to(rt)
+    {
+        tracing::warn!(return_to = %rt, "Rejected invalid return_to URL");
+        return Err((StatusCode::BAD_REQUEST, "Invalid return_to URL".to_string()));
     }
 
     if return_to.is_none()
@@ -994,11 +1009,11 @@ async fn session(
     Json(req): Json<BrokerSessionRequest>,
 ) -> Result<Json<BrokerSessionResponse>, (StatusCode, String)> {
     // M-13: CSRF protection — reject requests from disallowed origins
-    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
-        if !ALLOWED_ORIGINS.contains(&origin) {
-            tracing::warn!(origin = %origin, "Rejected /session request from disallowed origin");
-            return Err((StatusCode::FORBIDDEN, "Origin not allowed".to_string()));
-        }
+    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok())
+        && !ALLOWED_ORIGINS.contains(&origin)
+    {
+        tracing::warn!(origin = %origin, "Rejected /session request from disallowed origin");
+        return Err((StatusCode::FORBIDDEN, "Origin not allowed".to_string()));
     }
 
     let record = get_session(&state, &req.broker_token)

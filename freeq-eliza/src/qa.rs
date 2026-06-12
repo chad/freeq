@@ -683,7 +683,8 @@ pub async fn anthropic_answer_streaming(
             let Ok(evt) = serde_json::from_str::<AnthropicDeltaEvent>(data) else {
                 continue;
             };
-            if evt.event_type == "content_block_delta" && evt.delta.delta_type == "text_delta"
+            if evt.event_type == "content_block_delta"
+                && evt.delta.delta_type == "text_delta"
                 && !evt.delta.text.is_empty()
             {
                 text.push_str(&evt.delta.text);
@@ -768,9 +769,7 @@ impl SentenceChunker {
                 i += 1;
             }
             // A following char is needed to know the sentence ended.
-            let Some(&(next_at, next_c)) = chars.get(i) else {
-                return None;
-            };
+            let &(next_at, next_c) = chars.get(i)?;
             if next_c.is_whitespace() && !ends_with_abbrev(&self.buf[..term_at]) {
                 return Some(next_at);
             }

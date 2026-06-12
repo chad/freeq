@@ -19,8 +19,8 @@
 mod cap;
 mod channel;
 pub(crate) mod draft_multiline;
-pub(crate) mod login;
 pub mod helpers;
+pub(crate) mod login;
 pub(crate) mod messaging;
 mod policy_cmd;
 mod provenance;
@@ -35,9 +35,9 @@ use tokio::io::{AsyncRead, AsyncWrite, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
-use base64::Engine;
 use crate::irc::{self, Message};
 use crate::server::SharedState;
+use base64::Engine;
 
 use cap::{handle_authenticate, handle_cap};
 use channel::{
@@ -56,16 +56,12 @@ use registration::try_complete_registration;
 /// Actor class — distinguishes humans from agents in the protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ActorClass {
+    #[default]
     Human,
     Agent,
     ExternalAgent,
-}
-
-impl Default for ActorClass {
-    fn default() -> Self {
-        ActorClass::Human
-    }
 }
 
 impl std::fmt::Display for ActorClass {
@@ -541,16 +537,16 @@ where
         tracing::debug!(%session_id, "<- {}", line_buf.trim());
 
         // Check for pending LOGIN completion (from browser OAuth callback)
-        if conn.authenticated_did.is_none() {
-            if let Some(completion) = state.login_completions.lock().remove(&session_id) {
-                conn.authenticated_did = Some(completion.did.clone());
-                // complete_irc_login may have assigned a derived nick on
-                // collision; apply it to the connection.
-                if let Some(rn) = completion.renamed_nick {
-                    conn.nick = Some(rn);
-                }
-                // Trigger auto-op etc. in channels (already handled by complete_irc_login)
+        if conn.authenticated_did.is_none()
+            && let Some(completion) = state.login_completions.lock().remove(&session_id)
+        {
+            conn.authenticated_did = Some(completion.did.clone());
+            // complete_irc_login may have assigned a derived nick on
+            // collision; apply it to the connection.
+            if let Some(rn) = completion.renamed_nick {
+                conn.nick = Some(rn);
             }
+            // Trigger auto-op etc. in channels (already handled by complete_irc_login)
         }
 
         match msg.command.as_str() {
@@ -600,7 +596,8 @@ where
 
                     // Check if the nick is in use by the same session (case change)
                     // or same DID (multi-device OK)
-                    let in_use_by_self = in_use_by_session.as_ref()
+                    let in_use_by_self = in_use_by_session
+                        .as_ref()
                         .is_some_and(|sid| sid == &session_id);
                     let in_use_by_same_did = in_use_by_self
                         || in_use_by_session.as_ref().is_some_and(|sid| {
@@ -1073,7 +1070,14 @@ where
                     for nick_target in target.split(',') {
                         let nick_target = nick_target.trim();
                         if !nick_target.is_empty() {
-                            handle_whois(&conn, nick_target, &state, &server_name, &session_id, &send);
+                            handle_whois(
+                                &conn,
+                                nick_target,
+                                &state,
+                                &server_name,
+                                &session_id,
+                                &send,
+                            );
                         }
                     }
                 }
@@ -1116,7 +1120,9 @@ where
                                         // (used by FreeqBotDelegation/v1 cert verification).
                                         let did_for_db = did.clone();
                                         let key_bytes = bytes.clone();
-                                        state.with_db(|db| db.save_signing_key(&did_for_db, &key_bytes));
+                                        state.with_db(|db| {
+                                            db.save_signing_key(&did_for_db, &key_bytes)
+                                        });
                                     }
                                     tracing::info!(
                                         session = %session_id,
@@ -1170,9 +1176,7 @@ where
                     // route it into the batch instead of dispatching
                     // immediately. Phase 2 will plug in the on-close
                     // assembly + dispatch.
-                    let concat = msg
-                        .tags
-                        .contains_key("draft/multiline-concat");
+                    let concat = msg.tags.contains_key("draft/multiline-concat");
                     let routed = draft_multiline::try_route_to_batch(
                         &state,
                         &session_id,
@@ -1195,14 +1199,7 @@ where
                             continue;
                         }
                         draft_multiline::RouteOutcome::NotInBatch => {
-                            handle_privmsg(
-                                &conn,
-                                &msg.command,
-                                &target,
-                                text,
-                                &msg.tags,
-                                &state,
-                            );
+                            handle_privmsg(&conn, &msg.command, &target, text, &msg.tags, &state);
                         }
                     }
                 }
@@ -1512,17 +1509,19 @@ where
                 match subcmd.as_str() {
                     "REGISTER" => {
                         // Parse class from trailing param: "class=agent"
-                        let class_str = msg.params.get(1)
+                        let class_str = msg
+                            .params
+                            .get(1)
                             .and_then(|p| p.strip_prefix("class="))
                             .unwrap_or("agent");
                         match class_str.parse::<ActorClass>() {
                             Ok(class) => {
                                 conn.actor_class = class;
                                 // Store in shared state for WHOIS / member list lookups
-                                state.session_actor_class.lock().insert(
-                                    session_id.clone(),
-                                    class,
-                                );
+                                state
+                                    .session_actor_class
+                                    .lock()
+                                    .insert(session_id.clone(), class);
                                 let reply = Message::from_server(
                                     &server_name,
                                     "NOTICE",
@@ -1537,10 +1536,13 @@ where
                                     // Collect targets first, then send (avoid holding multiple locks)
                                     let targets: Vec<(String, Vec<String>)> = {
                                         let channels = state.channels.lock();
-                                        channels.iter()
+                                        channels
+                                            .iter()
                                             .filter(|(_, ch)| ch.members.contains(&session_id))
                                             .map(|(ch_name, ch)| {
-                                                let members: Vec<String> = ch.members.iter()
+                                                let members: Vec<String> = ch
+                                                    .members
+                                                    .iter()
                                                     .filter(|sid| *sid != &session_id)
                                                     .cloned()
                                                     .collect();
@@ -1577,8 +1579,15 @@ where
                         let target_nick = match msg.params.get(1) {
                             Some(n) => n.clone(),
                             None => {
-                                let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
-                                    vec![&nick, "AGENT", "Usage: AGENT PAUSE/RESUME/REVOKE <nick> [reason]"]);
+                                let reply = Message::from_server(
+                                    &server_name,
+                                    irc::ERR_NEEDMOREPARAMS,
+                                    vec![
+                                        &nick,
+                                        "AGENT",
+                                        "Usage: AGENT PAUSE/RESUME/REVOKE <nick> [reason]",
+                                    ],
+                                );
                                 send(&state, &session_id, format!("{reply}\r\n"));
                                 continue;
                             }
@@ -1587,12 +1596,19 @@ where
                         let action = subcmd.to_lowercase();
 
                         // Find target session
-                        let target_session = state.nick_to_session.lock().get_session(&target_nick).map(|s| s.to_string());
+                        let target_session = state
+                            .nick_to_session
+                            .lock()
+                            .get_session(&target_nick)
+                            .map(|s| s.to_string());
                         let target_session = match target_session {
                             Some(s) => s,
                             None => {
-                                let reply = Message::from_server(&server_name, irc::ERR_NOSUCHNICK,
-                                    vec![&nick, &target_nick, "No such nick"]);
+                                let reply = Message::from_server(
+                                    &server_name,
+                                    irc::ERR_NOSUCHNICK,
+                                    vec![&nick, &target_nick, "No such nick"],
+                                );
                                 send(&state, &session_id, format!("{reply}\r\n"));
                                 continue;
                             }
@@ -1609,14 +1625,20 @@ where
                             })
                         };
                         if !is_oper && !is_op_in_shared {
-                            let reply = Message::from_server(&server_name, "482",
-                                vec![&nick, "You must be an op in a shared channel"]);
+                            let reply = Message::from_server(
+                                &server_name,
+                                "482",
+                                vec![&nick, "You must be an op in a shared channel"],
+                            );
                             send(&state, &session_id, format!("{reply}\r\n"));
                             continue;
                         }
 
                         // Send governance TAGMSG to the target agent
-                        let reason_tag = reason.as_deref().map(|r| format!(";+freeq.at/reason={}", irc::escape_tag_value(r))).unwrap_or_default();
+                        let reason_tag = reason
+                            .as_deref()
+                            .map(|r| format!(";+freeq.at/reason={}", irc::escape_tag_value(r)))
+                            .unwrap_or_default();
                         let hostmask = conn.hostmask();
                         let gov_msg = format!(
                             "@+freeq.at/governance={action};+freeq.at/issued-by={}{reason_tag} :{hostmask} TAGMSG {target_nick}\r\n",
@@ -1633,19 +1655,28 @@ where
                             "revoke" => "❌",
                             _ => "🔧",
                         };
-                        let reason_str = reason.as_deref().map(|r| format!(": {r}")).unwrap_or_default();
-                        let notice_text = format!("{emoji} {target_nick} {action}d by {nick}{reason_str}");
+                        let reason_str = reason
+                            .as_deref()
+                            .map(|r| format!(": {r}"))
+                            .unwrap_or_default();
+                        let notice_text =
+                            format!("{emoji} {target_nick} {action}d by {nick}{reason_str}");
                         {
                             let shared_channels: Vec<String> = {
                                 let channels = state.channels.lock();
-                                channels.iter()
-                                    .filter(|(_, ch)| ch.members.contains(&session_id) && ch.members.contains(&target_session))
+                                channels
+                                    .iter()
+                                    .filter(|(_, ch)| {
+                                        ch.members.contains(&session_id)
+                                            && ch.members.contains(&target_session)
+                                    })
                                     .map(|(name, _)| name.clone())
                                     .collect()
                             };
                             for ch_name in &shared_channels {
                                 helpers::broadcast_to_channel(
-                                    &state, ch_name,
+                                    &state,
+                                    ch_name,
                                     &format!(":{server_name} NOTICE {ch_name} :{notice_text}\r\n"),
                                 );
                             }
@@ -1655,7 +1686,9 @@ where
                         let target_did = state.session_dids.lock().get(&target_session).cloned();
                         if let Some(ref did) = target_did {
                             let issuer_did = conn.authenticated_did.as_deref().unwrap_or(&nick);
-                            state.with_db(|db| db.log_governance(None, did, &action, issuer_did, reason.as_deref()));
+                            state.with_db(|db| {
+                                db.log_governance(None, did, &action, issuer_did, reason.as_deref())
+                            });
                         }
 
                         // For REVOKE: also revoke all capabilities and force part
@@ -1674,7 +1707,8 @@ where
                             }
                             // Send ERROR to force disconnect
                             if let Some(tx) = state.connections.lock().get(&target_session) {
-                                let _ = tx.try_send(format!("ERROR :Revoked by {nick}{reason_str}\r\n"));
+                                let _ = tx
+                                    .try_send(format!("ERROR :Revoked by {nick}{reason_str}\r\n"));
                             }
                         }
 
@@ -1683,18 +1717,30 @@ where
 
                     // AGENT APPROVE <nick> <capability>
                     "APPROVE" => {
-                        let (target_nick, capability) = match (msg.params.get(1), msg.params.get(2)) {
+                        let (target_nick, capability) = match (msg.params.get(1), msg.params.get(2))
+                        {
                             (Some(n), Some(c)) => (n.clone(), c.clone()),
                             _ => {
-                                let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
-                                    vec![&nick, "AGENT", "Usage: AGENT APPROVE <nick> <capability>"]);
+                                let reply = Message::from_server(
+                                    &server_name,
+                                    irc::ERR_NEEDMOREPARAMS,
+                                    vec![
+                                        &nick,
+                                        "AGENT",
+                                        "Usage: AGENT APPROVE <nick> <capability>",
+                                    ],
+                                );
                                 send(&state, &session_id, format!("{reply}\r\n"));
                                 continue;
                             }
                         };
 
                         let target_did = {
-                            let ts = state.nick_to_session.lock().get_session(&target_nick).map(|s| s.to_string());
+                            let ts = state
+                                .nick_to_session
+                                .lock()
+                                .get_session(&target_nick)
+                                .map(|s| s.to_string());
                             ts.and_then(|sid| state.session_dids.lock().get(&sid).cloned())
                         };
 
@@ -1707,16 +1753,29 @@ where
                                     channels.keys().cloned().collect()
                                 };
                                 shared.into_iter().find_map(|ch| {
-                                    state.with_db(|db| Ok(db.find_pending_approval_for_agent(&ch, did, &capability))).flatten()
+                                    state
+                                        .with_db(|db| {
+                                            Ok(db.find_pending_approval_for_agent(
+                                                &ch,
+                                                did,
+                                                &capability,
+                                            ))
+                                        })
+                                        .flatten()
                                 })
                             };
 
                             if let Some(approval) = approval {
-                                let granted = state.with_db(|db| db.grant_approval(&approval.id, issuer_did))
+                                let granted = state
+                                    .with_db(|db| db.grant_approval(&approval.id, issuer_did))
                                     .unwrap_or(false);
                                 if granted {
                                     // Notify agent
-                                    let target_session = state.nick_to_session.lock().get_session(&target_nick).map(|s| s.to_string());
+                                    let target_session = state
+                                        .nick_to_session
+                                        .lock()
+                                        .get_session(&target_nick)
+                                        .map(|s| s.to_string());
                                     if let Some(ref ts) = target_session {
                                         let line = format!(
                                             "@+freeq.at/governance=approval_granted;+freeq.at/capability={} :{server_name} TAGMSG {target_nick}\r\n",
@@ -1727,55 +1786,121 @@ where
                                         }
                                     }
                                     // Notify channel
-                                    let notice = format!(":{server_name} NOTICE {} :✅ {nick} approved '{capability}' for {target_nick}\r\n", approval.channel);
-                                    helpers::broadcast_to_channel(&state, &approval.channel, &notice);
+                                    let notice = format!(
+                                        ":{server_name} NOTICE {} :✅ {nick} approved '{capability}' for {target_nick}\r\n",
+                                        approval.channel
+                                    );
+                                    helpers::broadcast_to_channel(
+                                        &state,
+                                        &approval.channel,
+                                        &notice,
+                                    );
 
-                                    state.with_db(|db| db.log_governance(Some(&approval.channel), did, "approve", issuer_did, Some(&capability)));
+                                    state.with_db(|db| {
+                                        db.log_governance(
+                                            Some(&approval.channel),
+                                            did,
+                                            "approve",
+                                            issuer_did,
+                                            Some(&capability),
+                                        )
+                                    });
                                     tracing::info!(target = %target_nick, capability = %capability, by = %nick, "Approval granted");
                                 }
                             } else {
-                                let reply = Message::from_server(&server_name, "NOTICE",
-                                    vec![&nick, &format!("No pending approval for {target_nick}/{capability}")]);
+                                let reply = Message::from_server(
+                                    &server_name,
+                                    "NOTICE",
+                                    vec![
+                                        &nick,
+                                        &format!(
+                                            "No pending approval for {target_nick}/{capability}"
+                                        ),
+                                    ],
+                                );
                                 send(&state, &session_id, format!("{reply}\r\n"));
                             }
                         } else {
-                            let reply = Message::from_server(&server_name, irc::ERR_NOSUCHNICK,
-                                vec![&nick, &target_nick, "No such nick or not authenticated"]);
+                            let reply = Message::from_server(
+                                &server_name,
+                                irc::ERR_NOSUCHNICK,
+                                vec![&nick, &target_nick, "No such nick or not authenticated"],
+                            );
                             send(&state, &session_id, format!("{reply}\r\n"));
                         }
                     }
 
                     // AGENT DENY <nick> <capability> [reason]
                     "DENY" => {
-                        let (target_nick, capability) = match (msg.params.get(1), msg.params.get(2)) {
+                        let (target_nick, capability) = match (msg.params.get(1), msg.params.get(2))
+                        {
                             (Some(n), Some(c)) => (n.clone(), c.clone()),
                             _ => {
-                                let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
-                                    vec![&nick, "AGENT", "Usage: AGENT DENY <nick> <capability> [reason]"]);
+                                let reply = Message::from_server(
+                                    &server_name,
+                                    irc::ERR_NEEDMOREPARAMS,
+                                    vec![
+                                        &nick,
+                                        "AGENT",
+                                        "Usage: AGENT DENY <nick> <capability> [reason]",
+                                    ],
+                                );
                                 send(&state, &session_id, format!("{reply}\r\n"));
                                 continue;
                             }
                         };
                         let reason = msg.params.get(3).cloned();
                         let target_did = {
-                            let ts = state.nick_to_session.lock().get_session(&target_nick).map(|s| s.to_string());
+                            let ts = state
+                                .nick_to_session
+                                .lock()
+                                .get_session(&target_nick)
+                                .map(|s| s.to_string());
                             ts.and_then(|sid| state.session_dids.lock().get(&sid).cloned())
                         };
 
                         if let Some(ref did) = target_did {
                             let issuer_did = conn.authenticated_did.as_deref().unwrap_or(&nick);
-                            let shared: Vec<String> = state.channels.lock().keys().cloned().collect();
+                            let shared: Vec<String> =
+                                state.channels.lock().keys().cloned().collect();
                             let approval = shared.into_iter().find_map(|ch| {
-                                state.with_db(|db| Ok(db.find_pending_approval_for_agent(&ch, did, &capability))).flatten()
+                                state
+                                    .with_db(|db| {
+                                        Ok(db.find_pending_approval_for_agent(
+                                            &ch,
+                                            did,
+                                            &capability,
+                                        ))
+                                    })
+                                    .flatten()
                             });
 
                             if let Some(approval) = approval {
-                                let denied = state.with_db(|db| db.deny_approval(&approval.id, issuer_did, reason.as_deref()))
+                                let denied = state
+                                    .with_db(|db| {
+                                        db.deny_approval(
+                                            &approval.id,
+                                            issuer_did,
+                                            reason.as_deref(),
+                                        )
+                                    })
                                     .unwrap_or(false);
                                 if denied {
-                                    let target_session = state.nick_to_session.lock().get_session(&target_nick).map(|s| s.to_string());
+                                    let target_session = state
+                                        .nick_to_session
+                                        .lock()
+                                        .get_session(&target_nick)
+                                        .map(|s| s.to_string());
                                     if let Some(ref ts) = target_session {
-                                        let reason_tag = reason.as_deref().map(|r| format!(";+freeq.at/reason={}", irc::escape_tag_value(r))).unwrap_or_default();
+                                        let reason_tag = reason
+                                            .as_deref()
+                                            .map(|r| {
+                                                format!(
+                                                    ";+freeq.at/reason={}",
+                                                    irc::escape_tag_value(r)
+                                                )
+                                            })
+                                            .unwrap_or_default();
                                         let line = format!(
                                             "@+freeq.at/governance=approval_denied;+freeq.at/capability={}{reason_tag} :{server_name} TAGMSG {target_nick}\r\n",
                                             irc::escape_tag_value(&capability)
@@ -1784,9 +1909,19 @@ where
                                             let _ = tx.try_send(line);
                                         }
                                     }
-                                    let reason_str = reason.as_deref().map(|r| format!(": {r}")).unwrap_or_default();
-                                    let notice = format!(":{server_name} NOTICE {} :❌ {nick} denied '{capability}' for {target_nick}{reason_str}\r\n", approval.channel);
-                                    helpers::broadcast_to_channel(&state, &approval.channel, &notice);
+                                    let reason_str = reason
+                                        .as_deref()
+                                        .map(|r| format!(": {r}"))
+                                        .unwrap_or_default();
+                                    let notice = format!(
+                                        ":{server_name} NOTICE {} :❌ {nick} denied '{capability}' for {target_nick}{reason_str}\r\n",
+                                        approval.channel
+                                    );
+                                    helpers::broadcast_to_channel(
+                                        &state,
+                                        &approval.channel,
+                                        &notice,
+                                    );
                                     tracing::info!(target = %target_nick, capability = %capability, by = %nick, "Approval denied");
                                 }
                             }
@@ -1798,58 +1933,86 @@ where
                     "MANIFEST" => {
                         let raw = msg.params.get(1).cloned().unwrap_or_default();
                         if raw.is_empty() {
-                            let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
-                                vec![&nick, "AGENT", "Usage: AGENT MANIFEST <url-or-inline-toml>"]);
+                            let reply = Message::from_server(
+                                &server_name,
+                                irc::ERR_NEEDMOREPARAMS,
+                                vec![&nick, "AGENT", "Usage: AGENT MANIFEST <url-or-inline-toml>"],
+                            );
                             send(&state, &session_id, format!("{reply}\r\n"));
                             continue;
                         }
 
                         // Try to parse as TOML first, then as URL
-                        let manifest_result = if raw.starts_with("http://") || raw.starts_with("https://") {
-                            // URL — we don't fetch in tests, just store the URL
-                            Err("URL manifests require REST API".to_string())
-                        } else {
-                            // Inline TOML (base64-encoded to survive IRC)
-                            use base64::Engine;
-                            match base64::engine::general_purpose::STANDARD.decode(&raw) {
-                                Ok(bytes) => match String::from_utf8(bytes) {
-                                    Ok(toml_str) => crate::manifest::AgentManifest::from_toml(&toml_str)
+                        let manifest_result =
+                            if raw.starts_with("http://") || raw.starts_with("https://") {
+                                // URL — we don't fetch in tests, just store the URL
+                                Err("URL manifests require REST API".to_string())
+                            } else {
+                                // Inline TOML (base64-encoded to survive IRC)
+                                use base64::Engine;
+                                match base64::engine::general_purpose::STANDARD.decode(&raw) {
+                                    Ok(bytes) => match String::from_utf8(bytes) {
+                                        Ok(toml_str) => {
+                                            crate::manifest::AgentManifest::from_toml(&toml_str)
+                                                .map_err(|e| format!("Invalid TOML: {e}"))
+                                        }
+                                        Err(e) => Err(format!("Invalid UTF-8: {e}")),
+                                    },
+                                    Err(_) => crate::manifest::AgentManifest::from_toml(&raw)
                                         .map_err(|e| format!("Invalid TOML: {e}")),
-                                    Err(e) => Err(format!("Invalid UTF-8: {e}")),
-                                },
-                                Err(_) => crate::manifest::AgentManifest::from_toml(&raw)
-                                    .map_err(|e| format!("Invalid TOML: {e}")),
-                            }
-                        };
+                                }
+                            };
 
                         match manifest_result {
                             Ok(manifest) => {
                                 if let Err(e) = manifest.validate() {
-                                    let reply = Message::from_server(&server_name, "NOTICE",
-                                        vec![&nick, &format!("Invalid manifest: {e}")]);
+                                    let reply = Message::from_server(
+                                        &server_name,
+                                        "NOTICE",
+                                        vec![&nick, &format!("Invalid manifest: {e}")],
+                                    );
                                     send(&state, &session_id, format!("{reply}\r\n"));
                                     continue;
                                 }
-                                let agent_did = conn.authenticated_did.as_deref().unwrap_or("unknown");
+                                let agent_did =
+                                    conn.authenticated_did.as_deref().unwrap_or("unknown");
                                 let registrar = conn.authenticated_did.as_deref().unwrap_or(&nick);
                                 let manifest_json = manifest.to_json();
-                                state.with_db(|db| db.save_manifest(agent_did, &manifest_json, None, registrar));
+                                state.with_db(|db| {
+                                    db.save_manifest(agent_did, &manifest_json, None, registrar)
+                                });
 
                                 // Auto-apply: set actor class + provenance
-                                if let Ok(class) = manifest.agent.actor_class.parse::<ActorClass>() {
+                                if let Ok(class) = manifest.agent.actor_class.parse::<ActorClass>()
+                                {
                                     conn.actor_class = class;
-                                    state.session_actor_class.lock().insert(session_id.clone(), class);
+                                    state
+                                        .session_actor_class
+                                        .lock()
+                                        .insert(session_id.clone(), class);
                                 }
 
                                 let caps = manifest.capabilities.default.join(", ");
-                                let reply = Message::from_server(&server_name, "NOTICE",
-                                    vec![&nick, &format!("✅ Manifest registered for {}. Capabilities: {caps}", manifest.agent.display_name)]);
+                                let reply = Message::from_server(
+                                    &server_name,
+                                    "NOTICE",
+                                    vec![
+                                        &nick,
+                                        &format!(
+                                            "✅ Manifest registered for {}. Capabilities: {caps}",
+                                            manifest.agent.display_name
+                                        ),
+                                    ],
+                                );
                                 send(&state, &session_id, format!("{reply}\r\n"));
                                 tracing::info!(nick = %nick, display_name = %manifest.agent.display_name, "AGENT MANIFEST registered");
                             }
                             Err(e) => {
-                                let reply = Message::from_server(&server_name, "NOTICE",
-                                    vec![&nick, &format!("Manifest error: {e}")]);
+                                let reply = Message::from_server(
+                                    &server_name,
+                                    "NOTICE",
+                                    vec![&nick, &format!("Manifest error: {e}")],
+                                );
                                 send(&state, &session_id, format!("{reply}\r\n"));
                             }
                         }
@@ -1861,8 +2024,15 @@ where
                         let channel = match msg.params.get(1) {
                             Some(c) if c.starts_with('#') => c.clone(),
                             _ => {
-                                let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
-                                    vec![&nick, "AGENT", "Usage: AGENT SPAWN #channel :nick=name;capabilities=a,b;ttl=300;task=id"]);
+                                let reply = Message::from_server(
+                                    &server_name,
+                                    irc::ERR_NEEDMOREPARAMS,
+                                    vec![
+                                        &nick,
+                                        "AGENT",
+                                        "Usage: AGENT SPAWN #channel :nick=name;capabilities=a,b;ttl=300;task=id",
+                                    ],
+                                );
                                 send(&state, &session_id, format!("{reply}\r\n"));
                                 continue;
                             }
@@ -1876,7 +2046,10 @@ where
                             if let Some((k, v)) = part.split_once('=') {
                                 match k.trim() {
                                     "nick" => child_nick = v.trim().to_string(),
-                                    "capabilities" => capabilities = v.split(',').map(|s| s.trim().to_string()).collect(),
+                                    "capabilities" => {
+                                        capabilities =
+                                            v.split(',').map(|s| s.trim().to_string()).collect()
+                                    }
                                     "ttl" => ttl = v.trim().parse().ok(),
                                     "task" => task_ref = Some(v.trim().to_string()),
                                     _ => {}
@@ -1884,46 +2057,73 @@ where
                             }
                         }
                         if child_nick.is_empty() {
-                            let reply = Message::from_server(&server_name, "NOTICE",
-                                vec![&nick, "SPAWN requires nick= parameter"]);
+                            let reply = Message::from_server(
+                                &server_name,
+                                "NOTICE",
+                                vec![&nick, "SPAWN requires nick= parameter"],
+                            );
                             send(&state, &session_id, format!("{reply}\r\n"));
                             continue;
                         }
 
                         // Check nick availability
-                        if state.nick_to_session.lock().get_session(&child_nick).is_some() {
-                            let reply = Message::from_server(&server_name, "433",
-                                vec![&nick, &child_nick, "Nickname already in use"]);
+                        if state
+                            .nick_to_session
+                            .lock()
+                            .get_session(&child_nick)
+                            .is_some()
+                        {
+                            let reply = Message::from_server(
+                                &server_name,
+                                "433",
+                                vec![&nick, &child_nick, "Nickname already in use"],
+                            );
                             send(&state, &session_id, format!("{reply}\r\n"));
                             continue;
                         }
 
                         // Generate session-scoped DID for child
                         let child_did = format!("did:freeq:spawn:{}", crate::msgid::generate());
-                        let parent_did = conn.authenticated_did.clone().unwrap_or_else(|| nick.clone());
+                        let parent_did = conn
+                            .authenticated_did
+                            .clone()
+                            .unwrap_or_else(|| nick.clone());
 
                         // Record spawn
-                        state.with_db(|db| db.record_spawn(
-                            &child_did, &parent_did, &session_id,
-                            &child_nick, &channel, &capabilities,
-                            ttl, task_ref.as_deref(),
-                        ));
-
-                        // Store in spawned_agents map (in-memory for fast lookup)
-                        state.spawned_agents.lock().insert(child_did.clone(), crate::server::SpawnedAgent {
-                            child_did: child_did.clone(),
-                            parent_did: parent_did.clone(),
-                            parent_session: session_id.clone(),
-                            nick: child_nick.clone(),
-                            channel: channel.clone(),
-                            capabilities: capabilities.clone(),
-                            ttl,
-                            task_ref: task_ref.clone(),
-                            spawned_at: chrono::Utc::now().timestamp(),
+                        state.with_db(|db| {
+                            db.record_spawn(
+                                &child_did,
+                                &parent_did,
+                                &session_id,
+                                &child_nick,
+                                &channel,
+                                &capabilities,
+                                ttl,
+                                task_ref.as_deref(),
+                            )
                         });
 
+                        // Store in spawned_agents map (in-memory for fast lookup)
+                        state.spawned_agents.lock().insert(
+                            child_did.clone(),
+                            crate::server::SpawnedAgent {
+                                child_did: child_did.clone(),
+                                parent_did: parent_did.clone(),
+                                parent_session: session_id.clone(),
+                                nick: child_nick.clone(),
+                                channel: channel.clone(),
+                                capabilities: capabilities.clone(),
+                                ttl,
+                                task_ref: task_ref.clone(),
+                                spawned_at: chrono::Utc::now().timestamp(),
+                            },
+                        );
+
                         // Broadcast JOIN for child to channel
-                        let child_hostmask = format!("{child_nick}!spawn@freeq/spawn/{}", &child_did[child_did.len().saturating_sub(8)..]);
+                        let child_hostmask = format!(
+                            "{child_nick}!spawn@freeq/spawn/{}",
+                            &child_did[child_did.len().saturating_sub(8)..]
+                        );
                         let join_line = format!(
                             "@+freeq.at/actor-class=agent;+freeq.at/parent={} :{child_hostmask} JOIN {channel}\r\n",
                             nick
@@ -1940,25 +2140,50 @@ where
                             tokio::spawn(async move {
                                 tokio::time::sleep(std::time::Duration::from_secs(ttl_secs)).await;
                                 // Auto-despawn
-                                if state_clone.spawned_agents.lock().remove(&child_did_clone).is_some() {
+                                if state_clone
+                                    .spawned_agents
+                                    .lock()
+                                    .remove(&child_did_clone)
+                                    .is_some()
+                                {
                                     let quit_line = format!(
                                         ":{child_nick_clone}!spawn@freeq/spawn QUIT :TTL expired\r\n"
                                     );
-                                    helpers::broadcast_to_channel(&state_clone, &channel_clone, &quit_line);
+                                    helpers::broadcast_to_channel(
+                                        &state_clone,
+                                        &channel_clone,
+                                        &quit_line,
+                                    );
                                     let notice = format!(
                                         ":{server_name_clone} NOTICE {channel_clone} :⏱ Spawned agent {child_nick_clone} expired (TTL)\r\n"
                                     );
-                                    helpers::broadcast_to_channel(&state_clone, &channel_clone, &notice);
+                                    helpers::broadcast_to_channel(
+                                        &state_clone,
+                                        &channel_clone,
+                                        &notice,
+                                    );
                                     state_clone.with_db(|db| db.record_despawn(&child_did_clone));
                                     tracing::info!(child = %child_nick_clone, "Spawned agent TTL expired");
                                 }
                             });
                         }
 
-                        let caps_str = if capabilities.is_empty() { "none".to_string() } else { capabilities.join(", ") };
+                        let caps_str = if capabilities.is_empty() {
+                            "none".to_string()
+                        } else {
+                            capabilities.join(", ")
+                        };
                         let ttl_str = ttl.map(|t| format!(", TTL: {t}s")).unwrap_or_default();
-                        let reply = Message::from_server(&server_name, "NOTICE",
-                            vec![&nick, &format!("✅ Spawned {child_nick} in {channel} (caps: {caps_str}{ttl_str})")]);
+                        let reply = Message::from_server(
+                            &server_name,
+                            "NOTICE",
+                            vec![
+                                &nick,
+                                &format!(
+                                    "✅ Spawned {child_nick} in {channel} (caps: {caps_str}{ttl_str})"
+                                ),
+                            ],
+                        );
                         send(&state, &session_id, format!("{reply}\r\n"));
                         tracing::info!(parent = %nick, child = %child_nick, channel = %channel, "AGENT SPAWN");
                     }
@@ -1968,8 +2193,11 @@ where
                         let child_nick = match msg.params.get(1) {
                             Some(n) => n.clone(),
                             None => {
-                                let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
-                                    vec![&nick, "AGENT", "Usage: AGENT DESPAWN <nick>"]);
+                                let reply = Message::from_server(
+                                    &server_name,
+                                    irc::ERR_NEEDMOREPARAMS,
+                                    vec![&nick, "AGENT", "Usage: AGENT DESPAWN <nick>"],
+                                );
                                 send(&state, &session_id, format!("{reply}\r\n"));
                                 continue;
                             }
@@ -1978,8 +2206,12 @@ where
                         // Find the spawned agent owned by this session
                         let removed = {
                             let mut spawned = state.spawned_agents.lock();
-                            let found = spawned.iter()
-                                .find(|(_, sa)| sa.nick.eq_ignore_ascii_case(&child_nick) && sa.parent_session == session_id)
+                            let found = spawned
+                                .iter()
+                                .find(|(_, sa)| {
+                                    sa.nick.eq_ignore_ascii_case(&child_nick)
+                                        && sa.parent_session == session_id
+                                })
                                 .map(|(k, v)| (k.clone(), v.clone()));
                             if let Some((key, _)) = &found {
                                 spawned.remove(key);
@@ -1994,32 +2226,53 @@ where
                             helpers::broadcast_to_channel(&state, &sa.channel, &quit_line);
                             state.with_db(|db| db.record_despawn(&child_did));
 
-                            let reply = Message::from_server(&server_name, "NOTICE",
-                                vec![&nick, &format!("✅ Despawned {child_nick}")]);
+                            let reply = Message::from_server(
+                                &server_name,
+                                "NOTICE",
+                                vec![&nick, &format!("✅ Despawned {child_nick}")],
+                            );
                             send(&state, &session_id, format!("{reply}\r\n"));
                             tracing::info!(parent = %nick, child = %child_nick, "AGENT DESPAWN");
                         } else {
-                            let reply = Message::from_server(&server_name, "NOTICE",
-                                vec![&nick, &format!("No spawned agent '{child_nick}' owned by you")]);
+                            let reply = Message::from_server(
+                                &server_name,
+                                "NOTICE",
+                                vec![
+                                    &nick,
+                                    &format!("No spawned agent '{child_nick}' owned by you"),
+                                ],
+                            );
                             send(&state, &session_id, format!("{reply}\r\n"));
                         }
                     }
 
                     // AGENT MSG <child-nick> #channel :text — send message as spawned child
                     "MSG" => {
-                        let (child_nick, target, text) = match (msg.params.get(1), msg.params.get(2), msg.params.get(3)) {
-                            (Some(cn), Some(t), Some(txt)) => (cn.clone(), t.clone(), txt.clone()),
-                            _ => {
-                                let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
-                                    vec![&nick, "AGENT", "Usage: AGENT MSG <child-nick> #channel :text"]);
-                                send(&state, &session_id, format!("{reply}\r\n"));
-                                continue;
-                            }
-                        };
+                        let (child_nick, target, text) =
+                            match (msg.params.get(1), msg.params.get(2), msg.params.get(3)) {
+                                (Some(cn), Some(t), Some(txt)) => {
+                                    (cn.clone(), t.clone(), txt.clone())
+                                }
+                                _ => {
+                                    let reply = Message::from_server(
+                                        &server_name,
+                                        irc::ERR_NEEDMOREPARAMS,
+                                        vec![
+                                            &nick,
+                                            "AGENT",
+                                            "Usage: AGENT MSG <child-nick> #channel :text",
+                                        ],
+                                    );
+                                    send(&state, &session_id, format!("{reply}\r\n"));
+                                    continue;
+                                }
+                            };
 
                         // Verify child is owned by this session
-                        let child_exists = state.spawned_agents.lock().values()
-                            .any(|sa| sa.nick.eq_ignore_ascii_case(&child_nick) && sa.parent_session == session_id);
+                        let child_exists = state.spawned_agents.lock().values().any(|sa| {
+                            sa.nick.eq_ignore_ascii_case(&child_nick)
+                                && sa.parent_session == session_id
+                        });
 
                         if child_exists {
                             let child_hostmask = format!("{child_nick}!spawn@freeq/spawn");
@@ -2029,8 +2282,14 @@ where
                             );
                             helpers::broadcast_to_channel(&state, &target, &line);
                         } else {
-                            let reply = Message::from_server(&server_name, "NOTICE",
-                                vec![&nick, &format!("No spawned agent '{child_nick}' owned by you")]);
+                            let reply = Message::from_server(
+                                &server_name,
+                                "NOTICE",
+                                vec![
+                                    &nick,
+                                    &format!("No spawned agent '{child_nick}' owned by you"),
+                                ],
+                            );
                             send(&state, &session_id, format!("{reply}\r\n"));
                         }
                     }
@@ -2039,7 +2298,12 @@ where
                         let reply = Message::from_server(
                             &server_name,
                             "NOTICE",
-                            vec![&nick, &format!("Unknown AGENT subcommand: {subcmd}. Use: REGISTER, PAUSE, RESUME, REVOKE, APPROVE, DENY, MANIFEST, SPAWN, DESPAWN, MSG")],
+                            vec![
+                                &nick,
+                                &format!(
+                                    "Unknown AGENT subcommand: {subcmd}. Use: REGISTER, PAUSE, RESUME, REVOKE, APPROVE, DENY, MANIFEST, SPAWN, DESPAWN, MSG"
+                                ),
+                            ],
                         );
                         send(&state, &session_id, format!("{reply}\r\n"));
                     }
@@ -2049,13 +2313,22 @@ where
             // APPROVAL_REQUEST — agent requests approval for a capability.
             // Usage: APPROVAL_REQUEST #channel :capability;resource=description
             "APPROVAL_REQUEST" => {
-                if !conn.registered { continue; }
+                if !conn.registered {
+                    continue;
+                }
                 let nick = conn.nick_or_star().to_string();
                 let channel = match msg.params.first() {
                     Some(c) if c.starts_with('#') => c.clone(),
                     _ => {
-                        let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
-                            vec![&nick, "APPROVAL_REQUEST", "Usage: APPROVAL_REQUEST #channel :capability;resource=desc"]);
+                        let reply = Message::from_server(
+                            &server_name,
+                            irc::ERR_NEEDMOREPARAMS,
+                            vec![
+                                &nick,
+                                "APPROVAL_REQUEST",
+                                "Usage: APPROVAL_REQUEST #channel :capability;resource=desc",
+                            ],
+                        );
                         send(&state, &session_id, format!("{reply}\r\n"));
                         continue;
                     }
@@ -2066,18 +2339,31 @@ where
                 if let Some((cap, rest)) = raw_params.split_once(';') {
                     capability = cap;
                     for part in rest.split(';') {
-                        if let Some((k, v)) = part.split_once('=') {
-                            if k.trim() == "resource" { resource = Some(v.trim().to_string()); }
+                        if let Some((k, v)) = part.split_once('=')
+                            && k.trim() == "resource"
+                        {
+                            resource = Some(v.trim().to_string());
                         }
                     }
                 }
 
                 if let Some(ref did) = conn.authenticated_did {
                     let approval_id = crate::msgid::generate();
-                    state.with_db(|db| db.create_approval(&approval_id, &channel, did, capability, resource.as_deref()));
+                    state.with_db(|db| {
+                        db.create_approval(
+                            &approval_id,
+                            &channel,
+                            did,
+                            capability,
+                            resource.as_deref(),
+                        )
+                    });
 
                     // Notify channel ops
-                    let resource_str = resource.as_deref().map(|r| format!(" on {r}")).unwrap_or_default();
+                    let resource_str = resource
+                        .as_deref()
+                        .map(|r| format!(" on {r}"))
+                        .unwrap_or_default();
                     let notice = format!(
                         ":{server_name} NOTICE {channel} :🔔 {nick} requests approval for '{capability}'{resource_str}. Use: AGENT APPROVE {nick} {capability}\r\n"
                     );
@@ -2091,13 +2377,24 @@ where
                     );
                     helpers::broadcast_to_channel(&state, &channel, &tagmsg);
 
-                    let reply = Message::from_server(&server_name, "NOTICE",
-                        vec![&nick, &format!("Approval requested: {capability} in {channel} (id: {approval_id})")]);
+                    let reply = Message::from_server(
+                        &server_name,
+                        "NOTICE",
+                        vec![
+                            &nick,
+                            &format!(
+                                "Approval requested: {capability} in {channel} (id: {approval_id})"
+                            ),
+                        ],
+                    );
                     send(&state, &session_id, format!("{reply}\r\n"));
                     tracing::info!(nick = %nick, channel = %channel, capability = %capability, "Approval requested");
                 } else {
-                    let reply = Message::from_server(&server_name, "NOTICE",
-                        vec![&nick, "Must be authenticated to request approval"]);
+                    let reply = Message::from_server(
+                        &server_name,
+                        "NOTICE",
+                        vec![&nick, "Must be authenticated to request approval"],
+                    );
                     send(&state, &session_id, format!("{reply}\r\n"));
                 }
             }
@@ -2105,13 +2402,22 @@ where
             // SPEND command — agent reports spend for budget tracking.
             // Usage: SPEND #channel :amount=0.03;unit=usd;desc=claude-sonnet-4-20250514: 1.2k tokens;task=01JQXYZ
             "SPEND" => {
-                if !conn.registered { continue; }
+                if !conn.registered {
+                    continue;
+                }
                 let nick = conn.nick_or_star().to_string();
                 let channel = match msg.params.first() {
                     Some(c) if c.starts_with('#') => c.clone(),
                     _ => {
-                        let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
-                            vec![&nick, "SPEND", "Usage: SPEND #channel :amount=0.03;unit=usd;desc=...;task=..."]);
+                        let reply = Message::from_server(
+                            &server_name,
+                            irc::ERR_NEEDMOREPARAMS,
+                            vec![
+                                &nick,
+                                "SPEND",
+                                "Usage: SPEND #channel :amount=0.03;unit=usd;desc=...;task=...",
+                            ],
+                        );
                         send(&state, &session_id, format!("{reply}\r\n"));
                         continue;
                     }
@@ -2134,60 +2440,88 @@ where
                 }
 
                 if amount <= 0.0 {
-                    let reply = Message::from_server(&server_name, "NOTICE",
-                        vec![&nick, "SPEND requires positive amount"]);
+                    let reply = Message::from_server(
+                        &server_name,
+                        "NOTICE",
+                        vec![&nick, "SPEND requires positive amount"],
+                    );
                     send(&state, &session_id, format!("{reply}\r\n"));
                     continue;
                 }
 
                 if let Some(ref did) = conn.authenticated_did {
                     // Record spend
-                    state.with_db(|db| db.record_spend(&channel, did, amount, &unit, description.as_deref(), task_ref.as_deref()));
+                    state.with_db(|db| {
+                        db.record_spend(
+                            &channel,
+                            did,
+                            amount,
+                            &unit,
+                            description.as_deref(),
+                            task_ref.as_deref(),
+                        )
+                    });
 
                     // Check budget and enforce
-                    let budget_json = state.with_db(|db| Ok(db.get_budget(&channel, Some(did)))).flatten();
-                    if let Some(ref bj) = budget_json {
-                        if let Ok(budget) = serde_json::from_str::<crate::policy::types::BudgetPolicy>(bj) {
-                            let period_start = budget_period_start(&budget.period);
-                            let total_spent = state.with_db(|db| Ok(db.sum_spend(&channel, Some(did), &budget.unit, period_start)))
-                                .unwrap_or(0.0);
-                            let ratio = total_spent / budget.max_amount;
-                            let prev_ratio = (total_spent - amount) / budget.max_amount;
+                    let budget_json = state
+                        .with_db(|db| Ok(db.get_budget(&channel, Some(did))))
+                        .flatten();
+                    if let Some(ref bj) = budget_json
+                        && let Ok(budget) =
+                            serde_json::from_str::<crate::policy::types::BudgetPolicy>(bj)
+                    {
+                        let period_start = budget_period_start(&budget.period);
+                        let total_spent = state
+                            .with_db(|db| {
+                                Ok(db.sum_spend(&channel, Some(did), &budget.unit, period_start))
+                            })
+                            .unwrap_or(0.0);
+                        let ratio = total_spent / budget.max_amount;
+                        let prev_ratio = (total_spent - amount) / budget.max_amount;
 
-                            // Warn at threshold (first crossing)
-                            if ratio >= budget.warn_threshold && prev_ratio < budget.warn_threshold {
-                                let warn = format!(
-                                    ":{server_name} NOTICE {channel} :⚠ Budget {:.0}% used by {nick} ({:.2}/{:.2} {unit})\r\n",
-                                    ratio * 100.0, total_spent, budget.max_amount
-                                );
-                                helpers::broadcast_to_channel(&state, &channel, &warn);
-                                tracing::info!(channel = %channel, agent = %nick, pct = ratio * 100.0, "Budget warning threshold hit");
-                            }
+                        // Warn at threshold (first crossing)
+                        if ratio >= budget.warn_threshold && prev_ratio < budget.warn_threshold {
+                            let warn = format!(
+                                ":{server_name} NOTICE {channel} :⚠ Budget {:.0}% used by {nick} ({:.2}/{:.2} {unit})\r\n",
+                                ratio * 100.0,
+                                total_spent,
+                                budget.max_amount
+                            );
+                            helpers::broadcast_to_channel(&state, &channel, &warn);
+                            tracing::info!(channel = %channel, agent = %nick, pct = ratio * 100.0, "Budget warning threshold hit");
+                        }
 
-                            // Block at limit
-                            if ratio >= 1.0 && budget.hard_limit {
-                                let block = format!(
-                                    ":{server_name} NOTICE {channel} :🛑 {nick} blocked: budget exceeded ({:.2}/{:.2} {unit})\r\n",
-                                    total_spent, budget.max_amount
-                                );
-                                helpers::broadcast_to_channel(&state, &channel, &block);
+                        // Block at limit
+                        if ratio >= 1.0 && budget.hard_limit {
+                            let block = format!(
+                                ":{server_name} NOTICE {channel} :🛑 {nick} blocked: budget exceeded ({:.2}/{:.2} {unit})\r\n",
+                                total_spent, budget.max_amount
+                            );
+                            helpers::broadcast_to_channel(&state, &channel, &block);
 
-                                // Send governance signal to agent
-                                let gov_line = format!(
-                                    "@+freeq.at/governance=budget_exceeded;+freeq.at/spent={:.2};+freeq.at/limit={:.2};+freeq.at/unit={} :{server_name} TAGMSG {nick}\r\n",
-                                    total_spent, budget.max_amount, irc::escape_tag_value(&unit)
-                                );
-                                send(&state, &session_id, gov_line);
-                            }
+                            // Send governance signal to agent
+                            let gov_line = format!(
+                                "@+freeq.at/governance=budget_exceeded;+freeq.at/spent={:.2};+freeq.at/limit={:.2};+freeq.at/unit={} :{server_name} TAGMSG {nick}\r\n",
+                                total_spent,
+                                budget.max_amount,
+                                irc::escape_tag_value(&unit)
+                            );
+                            send(&state, &session_id, gov_line);
                         }
                     }
 
-                    let reply = Message::from_server(&server_name, "NOTICE",
-                        vec![&nick, &format!("💰 Recorded: {amount:.4} {unit}")]);
+                    let reply = Message::from_server(
+                        &server_name,
+                        "NOTICE",
+                        vec![&nick, &format!("💰 Recorded: {amount:.4} {unit}")],
+                    );
                     send(&state, &session_id, format!("{reply}\r\n"));
                 } else {
-                    let reply = Message::from_server(&server_name, "NOTICE",
-                        vec![&nick, "Must be authenticated to report spend"]);
+                    let reply = Message::from_server(
+                        &server_name,
+                        "NOTICE",
+                        vec![&nick, "Must be authenticated to report spend"],
+                    );
                     send(&state, &session_id, format!("{reply}\r\n"));
                 }
             }
@@ -2196,13 +2530,22 @@ where
             // Usage: BUDGET #channel — query
             // Usage: BUDGET #channel :max=50;unit=usd;period=per_day;sponsor=did:plc:xxx;warn=0.8;hard=true
             "BUDGET" => {
-                if !conn.registered { continue; }
+                if !conn.registered {
+                    continue;
+                }
                 let nick = conn.nick_or_star().to_string();
                 let channel = match msg.params.first() {
                     Some(c) if c.starts_with('#') => c.clone(),
                     _ => {
-                        let reply = Message::from_server(&server_name, irc::ERR_NEEDMOREPARAMS,
-                            vec![&nick, "BUDGET", "Usage: BUDGET #channel [:max=50;unit=usd;period=per_day;...]"]);
+                        let reply = Message::from_server(
+                            &server_name,
+                            irc::ERR_NEEDMOREPARAMS,
+                            vec![
+                                &nick,
+                                "BUDGET",
+                                "Usage: BUDGET #channel [:max=50;unit=usd;period=per_day;...]",
+                            ],
+                        );
                         send(&state, &session_id, format!("{reply}\r\n"));
                         continue;
                     }
@@ -2212,13 +2555,21 @@ where
                     // Set budget — require op or oper
                     let is_op = {
                         let channels = state.channels.lock();
-                        channels.get(&channel.to_lowercase())
+                        channels
+                            .get(&channel.to_lowercase())
                             .map(|ch| ch.ops.contains(&session_id))
                             .unwrap_or(false)
                     };
                     if !is_op && !conn.is_oper {
-                        let reply = Message::from_server(&server_name, "482",
-                            vec![&nick, &channel, "You must be a channel operator to set budgets"]);
+                        let reply = Message::from_server(
+                            &server_name,
+                            "482",
+                            vec![
+                                &nick,
+                                &channel,
+                                "You must be a channel operator to set budgets",
+                            ],
+                        );
                         send(&state, &session_id, format!("{reply}\r\n"));
                         continue;
                     }
@@ -2226,13 +2577,18 @@ where
                     let mut max_amount: f64 = 50.0;
                     let mut unit_str = "usd".to_string();
                     let mut period_str = "per_day".to_string();
-                    let mut sponsor = conn.authenticated_did.clone().unwrap_or_else(|| nick.clone());
+                    let mut sponsor = conn
+                        .authenticated_did
+                        .clone()
+                        .unwrap_or_else(|| nick.clone());
                     let mut warn: f64 = 0.8;
                     let mut hard = true;
                     for part in raw.split(';') {
                         if let Some((k, v)) = part.split_once('=') {
                             match k.trim() {
-                                "max" | "max_amount" => max_amount = v.trim().parse().unwrap_or(50.0),
+                                "max" | "max_amount" => {
+                                    max_amount = v.trim().parse().unwrap_or(50.0)
+                                }
                                 "unit" => unit_str = v.trim().to_string(),
                                 "period" => period_str = v.trim().to_string(),
                                 "sponsor" => sponsor = v.trim().to_string(),
@@ -2261,8 +2617,17 @@ where
                     let issuer = conn.authenticated_did.as_deref().unwrap_or(&nick);
                     state.with_db(|db| db.set_budget(&channel, None, &budget_json, issuer));
 
-                    let reply = Message::from_server(&server_name, "NOTICE",
-                        vec![&nick, &format!("💰 Budget set for {channel}: {max_amount:.2} {unit_str}/{period_str} (warn: {:.0}%, hard: {hard})", warn * 100.0)]);
+                    let reply = Message::from_server(
+                        &server_name,
+                        "NOTICE",
+                        vec![
+                            &nick,
+                            &format!(
+                                "💰 Budget set for {channel}: {max_amount:.2} {unit_str}/{period_str} (warn: {:.0}%, hard: {hard})",
+                                warn * 100.0
+                            ),
+                        ],
+                    );
                     send(&state, &session_id, format!("{reply}\r\n"));
 
                     // Broadcast to channel
@@ -2273,21 +2638,40 @@ where
                     tracing::info!(channel = %channel, by = %nick, max = max_amount, unit = %unit_str, "BUDGET set");
                 } else {
                     // Query budget
-                    let budget_json = state.with_db(|db| Ok(db.get_budget(&channel, None))).flatten();
+                    let budget_json = state
+                        .with_db(|db| Ok(db.get_budget(&channel, None)))
+                        .flatten();
                     if let Some(ref bj) = budget_json {
-                        if let Ok(budget) = serde_json::from_str::<crate::policy::types::BudgetPolicy>(bj) {
+                        if let Ok(budget) =
+                            serde_json::from_str::<crate::policy::types::BudgetPolicy>(bj)
+                        {
                             let period_start = budget_period_start(&budget.period);
-                            let total_spent = state.with_db(|db| Ok(db.sum_spend(&channel, None, &budget.unit, period_start)))
+                            let total_spent = state
+                                .with_db(|db| {
+                                    Ok(db.sum_spend(&channel, None, &budget.unit, period_start))
+                                })
                                 .unwrap_or(0.0);
                             let remaining = budget.max_amount - total_spent;
                             let pct = (total_spent / budget.max_amount * 100.0).min(100.0);
-                            let reply = Message::from_server(&server_name, "NOTICE",
-                                vec![&nick, &format!("💰 {channel}: {total_spent:.2}/{:.2} {} ({pct:.0}% used, {remaining:.2} remaining)", budget.max_amount, budget.unit)]);
+                            let reply = Message::from_server(
+                                &server_name,
+                                "NOTICE",
+                                vec![
+                                    &nick,
+                                    &format!(
+                                        "💰 {channel}: {total_spent:.2}/{:.2} {} ({pct:.0}% used, {remaining:.2} remaining)",
+                                        budget.max_amount, budget.unit
+                                    ),
+                                ],
+                            );
                             send(&state, &session_id, format!("{reply}\r\n"));
                         }
                     } else {
-                        let reply = Message::from_server(&server_name, "NOTICE",
-                            vec![&nick, &format!("No budget set for {channel}")]);
+                        let reply = Message::from_server(
+                            &server_name,
+                            "NOTICE",
+                            vec![&nick, &format!("No budget set for {channel}")],
+                        );
                         send(&state, &session_id, format!("{reply}\r\n"));
                     }
                 }
@@ -2296,11 +2680,14 @@ where
             // PROVENANCE command — submit a provenance declaration for this agent.
             // Usage: PROVENANCE :<base64url-encoded JSON>
             "PROVENANCE" => {
-                if !conn.registered { continue; }
+                if !conn.registered {
+                    continue;
+                }
                 let nick = conn.nick_or_star().to_string();
                 if msg.params.is_empty() {
                     let reply = Message::from_server(
-                        &server_name, irc::ERR_NEEDMOREPARAMS,
+                        &server_name,
+                        irc::ERR_NEEDMOREPARAMS,
                         vec![&nick, "PROVENANCE", "Not enough parameters"],
                     );
                     send(&state, &session_id, format!("{reply}\r\n"));
@@ -2341,8 +2728,12 @@ where
                             match outcome_result {
                                 Err(reject_reason) => {
                                     let reply = Message::from_server(
-                                        &server_name, "NOTICE",
-                                        vec![&nick, &format!("Provenance rejected: {reject_reason}")],
+                                        &server_name,
+                                        "NOTICE",
+                                        vec![
+                                            &nick,
+                                            &format!("Provenance rejected: {reject_reason}"),
+                                        ],
                                     );
                                     send(&state, &session_id, format!("{reply}\r\n"));
                                     tracing::warn!(
@@ -2356,10 +2747,18 @@ where
                                         .provenance_declarations
                                         .lock()
                                         .insert(did.clone(), provenance);
-                                    let status = if outcome.verified { "verified" } else { "stored (unverified)" };
+                                    let status = if outcome.verified {
+                                        "verified"
+                                    } else {
+                                        "stored (unverified)"
+                                    };
                                     let reply = Message::from_server(
-                                        &server_name, "NOTICE",
-                                        vec![&nick, &format!("Provenance {status}: {}", outcome.reason)],
+                                        &server_name,
+                                        "NOTICE",
+                                        vec![
+                                            &nick,
+                                            &format!("Provenance {status}: {}", outcome.reason),
+                                        ],
                                     );
                                     send(&state, &session_id, format!("{reply}\r\n"));
                                     tracing::info!(
@@ -2372,7 +2771,8 @@ where
                             }
                         } else {
                             let reply = Message::from_server(
-                                &server_name, "NOTICE",
+                                &server_name,
+                                "NOTICE",
                                 vec![&nick, "Must be authenticated to submit provenance"],
                             );
                             send(&state, &session_id, format!("{reply}\r\n"));
@@ -2380,8 +2780,12 @@ where
                     }
                     None => {
                         let reply = Message::from_server(
-                            &server_name, "NOTICE",
-                            vec![&nick, "Invalid provenance format (expected base64url-encoded JSON or raw JSON)"],
+                            &server_name,
+                            "NOTICE",
+                            vec![
+                                &nick,
+                                "Invalid provenance format (expected base64url-encoded JSON or raw JSON)",
+                            ],
                         );
                         send(&state, &session_id, format!("{reply}\r\n"));
                     }
@@ -2391,11 +2795,14 @@ where
             // PRESENCE command — update structured agent presence.
             // Usage: PRESENCE :state=executing;status=building project;task=01JQXYZ
             "PRESENCE" => {
-                if !conn.registered { continue; }
+                if !conn.registered {
+                    continue;
+                }
                 let nick = conn.nick_or_star().to_string();
                 if msg.params.is_empty() {
                     let reply = Message::from_server(
-                        &server_name, irc::ERR_NEEDMOREPARAMS,
+                        &server_name,
+                        irc::ERR_NEEDMOREPARAMS,
                         vec![&nick, "PRESENCE", "Not enough parameters"],
                     );
                     send(&state, &session_id, format!("{reply}\r\n"));
@@ -2426,18 +2833,30 @@ where
                     updated_at: chrono::Utc::now().timestamp(),
                 };
 
-                state.agent_presence.lock().insert(session_id.clone(), presence.clone());
+                state
+                    .agent_presence
+                    .lock()
+                    .insert(session_id.clone(), presence.clone());
 
                 // Broadcast via AWAY mechanism for backwards compat
                 let _away_json = serde_json::to_string(&presence).unwrap_or_default();
                 let hostmask = conn.hostmask();
 
                 // Set/clear AWAY state
-                if ps == PresenceState::Online || ps == PresenceState::Active || ps == PresenceState::Idle {
+                if ps == PresenceState::Online
+                    || ps == PresenceState::Active
+                    || ps == PresenceState::Idle
+                {
                     state.session_away.lock().remove(&session_id);
                 } else {
-                    let away_text = status_text.as_deref().unwrap_or(&ps.to_string()).to_string();
-                    state.session_away.lock().insert(session_id.clone(), away_text);
+                    let away_text = status_text
+                        .as_deref()
+                        .unwrap_or(&ps.to_string())
+                        .to_string();
+                    state
+                        .session_away
+                        .lock()
+                        .insert(session_id.clone(), away_text);
                 }
 
                 // Broadcast to away-notify subscribers in shared channels
@@ -2461,7 +2880,9 @@ where
                     let conns = state.connections.lock();
                     // For active/online/idle: send AWAY with no parameter (= back from away)
                     // For other states: send human-readable AWAY text
-                    let is_clear = ps == PresenceState::Online || ps == PresenceState::Active || ps == PresenceState::Idle;
+                    let is_clear = ps == PresenceState::Online
+                        || ps == PresenceState::Active
+                        || ps == PresenceState::Idle;
                     let away_text = match (&status_text, ps) {
                         (Some(status), _) => format!("{ps}: {status}"),
                         (None, _) => ps.to_string(),
@@ -2479,7 +2900,8 @@ where
                 }
 
                 let reply = Message::from_server(
-                    &server_name, "NOTICE",
+                    &server_name,
+                    "NOTICE",
                     vec![&nick, &format!("Presence updated: {ps}")],
                 );
                 send(&state, &session_id, format!("{reply}\r\n"));
@@ -2489,7 +2911,9 @@ where
             // HEARTBEAT command — agent liveness signal.
             // Usage: HEARTBEAT :state=active;ttl=60
             "HEARTBEAT" => {
-                if !conn.registered { continue; }
+                if !conn.registered {
+                    continue;
+                }
                 let raw = msg.params.first().map(|s| s.as_str()).unwrap_or("");
                 let mut hb_state = PresenceState::Active;
                 let mut ttl: u64 = 60;
@@ -2497,15 +2921,26 @@ where
                 for part in raw.split(';') {
                     if let Some((k, v)) = part.split_once('=') {
                         match k.trim() {
-                            "state" => { if let Ok(s) = v.trim().parse() { hb_state = s; } }
-                            "ttl" => { if let Ok(t) = v.trim().parse() { ttl = t; } }
+                            "state" => {
+                                if let Ok(s) = v.trim().parse() {
+                                    hb_state = s;
+                                }
+                            }
+                            "ttl" => {
+                                if let Ok(t) = v.trim().parse() {
+                                    ttl = t;
+                                }
+                            }
                             _ => {}
                         }
                     }
                 }
 
                 let now = chrono::Utc::now().timestamp();
-                state.agent_heartbeats.lock().insert(session_id.clone(), (now, ttl));
+                state
+                    .agent_heartbeats
+                    .lock()
+                    .insert(session_id.clone(), (now, ttl));
 
                 // Update presence from heartbeat
                 let presence = AgentPresence {
@@ -2514,17 +2949,23 @@ where
                     task: None,
                     updated_at: now,
                 };
-                state.agent_presence.lock().insert(session_id.clone(), presence);
+                state
+                    .agent_presence
+                    .lock()
+                    .insert(session_id.clone(), presence);
             }
 
             // Phase 4: Revoke a peer's S2S access (oper-only).
             // Usage: REVOKEPEER <endpoint_id>
             "REVOKEPEER" => {
-                if !conn.registered { continue; }
+                if !conn.registered {
+                    continue;
+                }
                 let nick = conn.nick_or_star().to_string();
                 if !conn.is_oper {
                     let reply = Message::from_server(
-                        &server_name, "481",
+                        &server_name,
+                        "481",
                         vec![&nick, "Permission Denied - You're not an IRC operator"],
                     );
                     send(&state, &session_id, format!("{reply}\r\n"));
@@ -2532,7 +2973,8 @@ where
                 }
                 if msg.params.is_empty() {
                     let reply = Message::from_server(
-                        &server_name, irc::ERR_NEEDMOREPARAMS,
+                        &server_name,
+                        irc::ERR_NEEDMOREPARAMS,
                         vec![&nick, "REVOKEPEER", "Not enough parameters"],
                     );
                     send(&state, &session_id, format!("{reply}\r\n"));
@@ -2547,8 +2989,10 @@ where
                         manager.peer_names.lock().await.remove(target_peer);
                         manager.authenticated_peers.lock().await.remove(target_peer);
                         manager.dedup.remove_peer(target_peer).await;
-                        let notice = format!(":{} NOTICE {} :S2S peer {} revoked and disconnected\r\n",
-                            server_name, nick, target_peer);
+                        let notice = format!(
+                            ":{} NOTICE {} :S2S peer {} revoked and disconnected\r\n",
+                            server_name, nick, target_peer
+                        );
                         send(&state, &session_id, notice);
                         tracing::warn!(
                             oper = %nick,
@@ -2556,13 +3000,14 @@ where
                             "S2S peer revoked via REVOKEPEER"
                         );
                     } else {
-                        let notice = format!(":{} NOTICE {} :S2S peer {} not found in active connections\r\n",
-                            server_name, nick, target_peer);
+                        let notice = format!(
+                            ":{} NOTICE {} :S2S peer {} not found in active connections\r\n",
+                            server_name, nick, target_peer
+                        );
                         send(&state, &session_id, notice);
                     }
                 } else {
-                    let notice = format!(":{} NOTICE {} :S2S not active\r\n",
-                        server_name, nick);
+                    let notice = format!(":{} NOTICE {} :S2S not active\r\n", server_name, nick);
                     send(&state, &session_id, notice);
                 }
             }
@@ -2605,7 +3050,9 @@ where
     // the same call). When the user wasn't using per-instance tags (older
     // clients), fall back to the legacy whole-DID cleanup.
     {
-        let did_for_av = conn.authenticated_did.clone()
+        let did_for_av = conn
+            .authenticated_did
+            .clone()
             .unwrap_or_else(|| format!("guest:{}", conn.nick.as_deref().unwrap_or("*")));
 
         let instances: Vec<String> = state
@@ -2637,16 +3084,28 @@ where
                     messaging::broadcast_av_state_pub(&state, ch, av_sid, "ended", av_nick, 0, "");
                     // Clean up bridge and Room when session ends on disconnect
                     #[cfg(feature = "av-native")]
-                    { state.av_bridges.lock().remove(av_sid); }
+                    {
+                        state.av_bridges.lock().remove(av_sid);
+                    }
                     let backend = state.av_media.lock().clone();
                     let sid = av_sid.clone();
                     if let Some(backend) = backend {
                         tokio::spawn(async move {
-                            let _ = crate::av_media::MediaBackend::close_room(backend.as_ref(), &sid).await;
+                            let _ =
+                                crate::av_media::MediaBackend::close_room(backend.as_ref(), &sid)
+                                    .await;
                         });
                     }
                 } else {
-                    messaging::broadcast_av_state_pub(&state, ch, av_sid, "left", av_nick, participant_count, "");
+                    messaging::broadcast_av_state_pub(
+                        &state,
+                        ch,
+                        av_sid,
+                        "left",
+                        av_nick,
+                        participant_count,
+                        "",
+                    );
                 }
             }
             // Persist to DB
@@ -2687,8 +3146,7 @@ where
                         .iter()
                         .filter(|(name, ch)| {
                             ch.members.contains(&session_id)
-                                && (state.db.is_none()
-                                    || subscribed.contains(name.as_str()))
+                                && (state.db.is_none() || subscribed.contains(name.as_str()))
                         })
                         .map(|(name, ch)| {
                             (
@@ -2997,23 +3455,22 @@ pub fn budget_period_start(period: &crate::policy::types::BudgetPeriod) -> i64 {
     use crate::policy::types::BudgetPeriod;
     let now = chrono::Utc::now();
     match period {
-        BudgetPeriod::PerHour => {
-            now.date_naive()
-                .and_hms_opt(now.time().hour(), 0, 0)
-                .map(|dt| dt.and_utc().timestamp())
-                .unwrap_or(0)
-        }
-        BudgetPeriod::PerDay => {
-            now.date_naive()
-                .and_hms_opt(0, 0, 0)
-                .map(|dt| dt.and_utc().timestamp())
-                .unwrap_or(0)
-        }
+        BudgetPeriod::PerHour => now
+            .date_naive()
+            .and_hms_opt(now.time().hour(), 0, 0)
+            .map(|dt| dt.and_utc().timestamp())
+            .unwrap_or(0),
+        BudgetPeriod::PerDay => now
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .map(|dt| dt.and_utc().timestamp())
+            .unwrap_or(0),
         BudgetPeriod::PerWeek => {
             use chrono::Datelike;
             let days_since_monday = now.weekday().num_days_from_monday();
             let monday = now.date_naive() - chrono::Duration::days(days_since_monday as i64);
-            monday.and_hms_opt(0, 0, 0)
+            monday
+                .and_hms_opt(0, 0, 0)
                 .map(|dt| dt.and_utc().timestamp())
                 .unwrap_or(0)
         }

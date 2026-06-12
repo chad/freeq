@@ -334,7 +334,10 @@ mod tests {
         let mut r = VectorRenderer::new().expect("renderer");
         let f = r.frame_rgba(0.4, 0.8, 0.0);
         assert_eq!(f.len(), (VIDEO_W * VIDEO_H * 4) as usize);
-        let lit = f.chunks_exact(4).filter(|p| p[0] as u16 + p[1] as u16 + p[2] as u16 > 40).count();
+        let lit = f
+            .chunks_exact(4)
+            .filter(|p| p[0] as u16 + p[1] as u16 + p[2] as u16 > 40)
+            .count();
         assert!(lit > 1000, "character should fill a chunk of the frame");
     }
 }

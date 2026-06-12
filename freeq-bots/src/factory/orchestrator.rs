@@ -220,7 +220,8 @@ impl Factory {
             &format!("Project: {project_name}"),
         )
         .await?;
-        let (refined_spec, _) = output::stream_response(handle, channel, &product(), spec_deltas).await?;
+        let (refined_spec, _) =
+            output::stream_response(handle, channel, &product(), spec_deltas).await?;
         memory.set(&project_name, "spec", "current", &refined_spec)?;
 
         // Phase 2: Architect — propose design
@@ -239,7 +240,8 @@ impl Factory {
             &refined_spec,
         ).await?;
 
-        let (design, _) = output::stream_response(handle, channel, &architect(), design_deltas).await?;
+        let (design, _) =
+            output::stream_response(handle, channel, &architect(), design_deltas).await?;
         memory.set(&project_name, "decision", "architecture", &design)?;
 
         // Phase 3: Builder — write code

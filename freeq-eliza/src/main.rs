@@ -218,8 +218,9 @@ struct Cli {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("freeq_eliza=info,freeq_sdk=info,info")),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new("freeq_eliza=info,freeq_sdk=info,info")
+            }),
         )
         .init();
 
@@ -433,21 +434,23 @@ async fn main() -> Result<()> {
 
 /// Choose the STT backend. Groq wins when `GROQ_API_KEY` is present.
 fn build_stt(cli: &Cli) -> Result<stt::SttEngine> {
-    if let Ok(key) = std::env::var("GROQ_API_KEY") {
-        if !key.trim().is_empty() {
-            // Whisper must recognise the agent's own name (and its
-            // peers') or addressed utterances come back mangled and
-            // the addressing gate never fires.
-            let mut vocab: Vec<String> =
-                vec![cli.name.clone().unwrap_or_else(|| "Eliza".to_string())];
-            vocab.extend(cli.peer_agents.iter().cloned());
-            return Ok(stt::SttEngine::groq(key, cli.groq_model.clone(), &vocab));
-        }
+    if let Ok(key) = std::env::var("GROQ_API_KEY")
+        && !key.trim().is_empty()
+    {
+        // Whisper must recognise the agent's own name (and its
+        // peers') or addressed utterances come back mangled and
+        // the addressing gate never fires.
+        let mut vocab: Vec<String> = vec![cli.name.clone().unwrap_or_else(|| "Eliza".to_string())];
+        vocab.extend(cli.peer_agents.iter().cloned());
+        return Ok(stt::SttEngine::groq(key, cli.groq_model.clone(), &vocab));
     }
     #[cfg(feature = "stt")]
     {
         return stt::SttEngine::local(&cli.model_path).with_context(|| {
-            format!("loading local whisper model at {}", cli.model_path.display())
+            format!(
+                "loading local whisper model at {}",
+                cli.model_path.display()
+            )
         });
     }
     #[cfg(not(feature = "stt"))]

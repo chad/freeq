@@ -389,7 +389,11 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     .map(|(i, line)| {
                         Line::from(vec![
                             Span::styled(
-                                if i == 0 { prefix.clone() } else { indent.clone() },
+                                if i == 0 {
+                                    prefix.clone()
+                                } else {
+                                    indent.clone()
+                                },
                                 Style::default().fg(Color::DarkGray),
                             ),
                             Span::styled((*line).to_string(), Style::default().fg(Color::Cyan)),
@@ -416,10 +420,8 @@ fn draw_messages(frame: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(Color::DarkGray),
                 )];
                 if is_pinned {
-                    first_prefix_spans.push(Span::styled(
-                        "📌 ",
-                        Style::default().fg(Color::Yellow),
-                    ));
+                    first_prefix_spans
+                        .push(Span::styled("📌 ", Style::default().fg(Color::Yellow)));
                 }
                 first_prefix_spans.push(Span::styled(
                     format!("<{}> ", msg.from),
@@ -603,6 +605,7 @@ fn draw_nicklist(frame: &mut Frame, app: &App, area: Rect) {
 ///   but its body has been deleted — we don't quote empty content.
 /// - `   ↳ replying to (unknown)` when the parent isn't in this buffer
 ///   (evicted from the ring buffer or never received).
+///
 /// How many terminal rows a single message occupies after `\n`-splitting
 /// per source line and wrapping each at `width`. The first line carries
 /// the timestamp + sender prefix; continuation lines are indented to the
@@ -667,7 +670,10 @@ pub fn reply_indicator_label(buffer: &crate::app::Buffer, parent_id: &str) -> St
             } else {
                 ""
             };
-            format!("   ↳ replying to <{}>: \"{snippet}{ellipsis}\"", parent.from)
+            format!(
+                "   ↳ replying to <{}>: \"{snippet}{ellipsis}\"",
+                parent.from
+            )
         }
         None => "   ↳ replying to (unknown)".into(),
     }
@@ -954,7 +960,9 @@ mod tests {
         let spans = markdown_spans("snake_case_var", Style::default());
         assert_eq!(flat(&spans), "snake_case_var");
         assert!(
-            spans.iter().all(|s| !s.style.add_modifier.contains(Modifier::ITALIC)),
+            spans
+                .iter()
+                .all(|s| !s.style.add_modifier.contains(Modifier::ITALIC)),
             "snake_case identifiers must not be italicized"
         );
 
@@ -962,7 +970,9 @@ mod tests {
         let spans = markdown_spans("*foo*bar", Style::default());
         assert_eq!(flat(&spans), "*foo*bar");
         assert!(
-            spans.iter().all(|s| !s.style.add_modifier.contains(Modifier::BOLD)),
+            spans
+                .iter()
+                .all(|s| !s.style.add_modifier.contains(Modifier::BOLD)),
             "got spans = {spans:?}"
         );
     }
@@ -979,7 +989,9 @@ mod tests {
         // No span should be styled as bold — the doubled delimiter is
         // not our convention.
         assert!(
-            spans.iter().all(|s| !s.style.add_modifier.contains(Modifier::BOLD)),
+            spans
+                .iter()
+                .all(|s| !s.style.add_modifier.contains(Modifier::BOLD)),
             "doubled `**` should not produce a bold span"
         );
     }

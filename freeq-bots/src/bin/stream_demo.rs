@@ -9,7 +9,9 @@ use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let channel = std::env::args().nth(1).unwrap_or_else(|| "#freeq".to_string());
+    let channel = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "#freeq".to_string());
     let message = std::env::args().nth(2).unwrap_or_else(|| {
         "Hello from the streaming message demo! This message is being typed out word by word using the IRC edit-message hack. Each update edits the same message in place. Pretty cool, right? 🚀".to_string()
     });
@@ -37,7 +39,9 @@ async fn main() -> Result<()> {
                 eprintln!("Registered as {nick}");
                 handle.join(&channel).await?;
             }
-            Some(Event::Joined { channel: ch, nick, .. }) => {
+            Some(Event::Joined {
+                channel: ch, nick, ..
+            }) => {
                 eprintln!("Joined {ch} as {nick}");
                 break;
             }
@@ -59,7 +63,9 @@ async fn main() -> Result<()> {
 
     // Drain any remaining join events
     while let Ok(evt) = tokio::time::timeout(Duration::from_millis(200), events.recv()).await {
-        if let Some(e) = evt { eprintln!("Drain: {e:?}"); }
+        if let Some(e) = evt {
+            eprintln!("Drain: {e:?}");
+        }
     }
 
     eprintln!("Starting stream in {channel}...");

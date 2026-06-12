@@ -121,11 +121,11 @@ async fn run_monitor(
             tracing::debug!(?since_proactive, "proactive: cooldown, skip");
             continue;
         }
-        if let Some(last) = snapshot.last_answer {
-            if last.elapsed() < POST_ANSWER_GRACE {
-                tracing::debug!("proactive: just answered something, skip");
-                continue;
-            }
+        if let Some(last) = snapshot.last_answer
+            && last.elapsed() < POST_ANSWER_GRACE
+        {
+            tracing::debug!("proactive: just answered something, skip");
+            continue;
         }
 
         // Only look at lines added since her last proactive comment —
@@ -135,18 +135,21 @@ async fn run_monitor(
         // re-read as something a human said.
         let own_prefix = format!(
             "{}:",
-            cfg.nick.split_once('-').map(|(p, _)| p).unwrap_or(&cfg.nick)
+            cfg.nick
+                .split_once('-')
+                .map(|(p, _)| p)
+                .unwrap_or(&cfg.nick)
         );
         let total = snapshot.transcript.len();
         let start = consumed_lines.min(total);
         let new_lines: Vec<&String> = snapshot.transcript[start..]
             .iter()
-            .filter(|l| !l.to_ascii_lowercase().starts_with(&own_prefix.to_ascii_lowercase()))
+            .filter(|l| {
+                !l.to_ascii_lowercase()
+                    .starts_with(&own_prefix.to_ascii_lowercase())
+            })
             .collect();
-        let new_word_count = new_lines
-            .iter()
-            .flat_map(|l| l.split_whitespace())
-            .count();
+        let new_word_count = new_lines.iter().flat_map(|l| l.split_whitespace()).count();
         if new_word_count < 8 {
             tracing::debug!(
                 new_lines = new_lines.len(),
@@ -236,10 +239,8 @@ async fn speak_now(
 
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     let speak_task = tokio::spawn(async move {
-        let mut chain = ghostly::audio::VoiceChain::new(
-            voice_profile,
-            tts::ELEVENLABS_PCM_RATE as f32,
-        );
+        let mut chain =
+            ghostly::audio::VoiceChain::new(voice_profile, tts::ELEVENLABS_PCM_RATE as f32);
         let mut work: Vec<f32> = Vec::with_capacity(4096);
         while let Some(sentence) = rx.recv().await {
             let (spoken, _) = split_speech_and_links(&sentence);
@@ -251,20 +252,14 @@ async fn speak_now(
             let chain_ref = &mut chain;
             let work_ref = &mut work;
             let speaker_ref = &speaker;
-            if let Err(e) = tts::synthesize_streaming(
-                &http,
-                &el_key,
-                &voice,
-                &model,
-                &spoken,
-                |pcm| {
+            if let Err(e) =
+                tts::synthesize_streaming(&http, &el_key, &voice, &model, &spoken, |pcm| {
                     work_ref.clear();
                     work_ref.extend_from_slice(pcm);
                     chain_ref.process(work_ref);
                     speaker_ref.enqueue(work_ref, tts::ELEVENLABS_PCM_RATE);
-                },
-            )
-            .await
+                })
+                .await
             {
                 tracing::warn!(error = ?e, "proactive streaming TTS failed");
             }

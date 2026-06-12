@@ -120,9 +120,8 @@ pub async fn synthesize(
     model: &str,
     text: &str,
 ) -> Result<TtsAudio> {
-    let url = format!(
-        "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=pcm_48000"
-    );
+    let url =
+        format!("https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=pcm_48000");
     let resp = client
         .post(&url)
         .header("xi-api-key", api_key)
@@ -270,7 +269,10 @@ mod tests {
         assert_eq!(&wav[8..12], b"WAVE");
         assert_eq!(&wav[36..40], b"data");
         // Sample rate (offset 24) round-trips.
-        assert_eq!(u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]), 48_000);
+        assert_eq!(
+            u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]),
+            48_000
+        );
         // Decoding the data section back yields the originals.
         let decoded = decode_pcm_s16le(&wav[44..]);
         for (a, b) in pcm.iter().zip(&decoded) {

@@ -105,8 +105,12 @@ pub struct BudgetPolicy {
     pub approval_threshold: Option<f64>,
 }
 
-fn default_warn_threshold() -> f64 { 0.8 }
-fn default_hard_limit() -> bool { true }
+fn default_warn_threshold() -> f64 {
+    0.8
+}
+fn default_hard_limit() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]

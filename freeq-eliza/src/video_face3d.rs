@@ -8,9 +8,9 @@
 //!
 //! - [`Persona3d::neutral`]     — a calm teal head that turns to show depth.
 //! - [`Persona3d::fat_angry`]   — wide, lumpy, sickly, furrowed, snarling,
-//!                                shaking with rage.
+//!   shaking with rage.
 //! - [`Persona3d::slender_joy`] — tall, smooth, radiant, bright-eyed,
-//!                                beaming, floating happily.
+//!   beaming, floating happily.
 //!
 //! Eyes blink, the mouth lip-syncs to her speech level, and features ride
 //! the head surface so they turn and cull with it. Same RGBA frame
@@ -103,50 +103,96 @@ pub struct Persona3d {
 impl Persona3d {
     pub fn neutral() -> Self {
         Self {
-            kind: Kind::Neutral, form: Form::Head,
-            height: 1.08, width: 1.0, depth: 0.96, jowl: 0.0, taper: 0.26, lumpy: 0.0,
-            base: (74.0, 200.0, 214.0), glow: (90.0, 150.0, 255.0),
-            ambient: 0.28, diffuse: 0.85, spec: 0.4, spec_pow: 8.0,
+            kind: Kind::Neutral,
+            form: Form::Head,
+            height: 1.08,
+            width: 1.0,
+            depth: 0.96,
+            jowl: 0.0,
+            taper: 0.26,
+            lumpy: 0.0,
+            base: (74.0, 200.0, 214.0),
+            glow: (90.0, 150.0, 255.0),
+            ambient: 0.28,
+            diffuse: 0.85,
+            spec: 0.4,
+            spec_pow: 8.0,
         }
     }
     pub fn fat_angry() -> Self {
         Self {
-            kind: Kind::Angry, form: Form::Head,
-            height: 0.92, width: 1.2, depth: 1.1, jowl: 0.95, taper: 0.1, lumpy: 1.0,
+            kind: Kind::Angry,
+            form: Form::Head,
+            height: 0.92,
+            width: 1.2,
+            depth: 1.1,
+            jowl: 0.95,
+            taper: 0.1,
+            lumpy: 1.0,
             base: (138.0, 150.0, 92.0), // sickly olive
             glow: (200.0, 60.0, 40.0),  // angry red wash
-            ambient: 0.24, diffuse: 0.82, spec: 0.12, spec_pow: 4.0,
+            ambient: 0.24,
+            diffuse: 0.82,
+            spec: 0.12,
+            spec_pow: 4.0,
         }
     }
     pub fn slender_joy() -> Self {
         Self {
-            kind: Kind::Joy, form: Form::Head,
-            height: 1.26, width: 0.8, depth: 0.9, jowl: 0.0, taper: 0.34, lumpy: 0.0,
+            kind: Kind::Joy,
+            form: Form::Head,
+            height: 1.26,
+            width: 0.8,
+            depth: 0.9,
+            jowl: 0.0,
+            taper: 0.34,
+            lumpy: 0.0,
             base: (255.0, 206.0, 156.0), // radiant warm
             glow: (255.0, 190.0, 120.0), // golden
-            ambient: 0.42, diffuse: 0.72, spec: 0.7, spec_pow: 6.0,
+            ambient: 0.42,
+            diffuse: 0.72,
+            spec: 0.7,
+            spec_pow: 6.0,
         }
     }
     /// A giant floating eyeball — glossy white sclera, a darting iris that
     /// dilates with her voice, red veins, and no blink (extra unsettling).
     pub fn cyclops() -> Self {
         Self {
-            kind: Kind::Neutral, form: Form::Eye,
-            height: 0.96, width: 1.06, depth: 1.0, jowl: 0.0, taper: 0.0, lumpy: 0.0,
+            kind: Kind::Neutral,
+            form: Form::Eye,
+            height: 0.96,
+            width: 1.06,
+            depth: 1.0,
+            jowl: 0.0,
+            taper: 0.0,
+            lumpy: 0.0,
             base: (232.0, 230.0, 236.0), // sclera
             glow: (80.0, 255.0, 170.0),  // acid-green aura
-            ambient: 0.5, diffuse: 0.6, spec: 0.6, spec_pow: 20.0,
+            ambient: 0.5,
+            diffuse: 0.6,
+            spec: 0.6,
+            spec_pow: 20.0,
         }
     }
     /// A spinning crystal shard with a glowing slit-eye that opens when she
     /// speaks — an eldritch geometric being.
     pub fn shard() -> Self {
         Self {
-            kind: Kind::Neutral, form: Form::Shard,
-            height: 1.1, width: 1.0, depth: 1.0, jowl: 0.0, taper: 0.0, lumpy: 1.0,
-            base: (78.0, 58.0, 120.0),   // dark amethyst facets
-            glow: (255.0, 50.0, 230.0),  // magenta core
-            ambient: 0.18, diffuse: 0.95, spec: 0.6, spec_pow: 10.0,
+            kind: Kind::Neutral,
+            form: Form::Shard,
+            height: 1.1,
+            width: 1.0,
+            depth: 1.0,
+            jowl: 0.0,
+            taper: 0.0,
+            lumpy: 1.0,
+            base: (78.0, 58.0, 120.0),  // dark amethyst facets
+            glow: (255.0, 50.0, 230.0), // magenta core
+            ambient: 0.18,
+            diffuse: 0.95,
+            spec: 0.6,
+            spec_pow: 10.0,
         }
     }
 }
@@ -300,8 +346,16 @@ impl Face3dRenderer {
             Form::Head => match p.kind {
                 Kind::Neutral => (
                     0.5 * (t * 0.45).sin(),
-                    0.12 * (t * 0.7).sin() + if speaking { 0.04 * (t * 9.0).sin() } else { 0.0 },
-                    0.0, 0.0, 0.0, 1.0,
+                    0.12 * (t * 0.7).sin()
+                        + if speaking {
+                            0.04 * (t * 9.0).sin()
+                        } else {
+                            0.0
+                        },
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
                 ),
                 Kind::Angry => {
                     let shake = 2.0 + 7.0 * level;
@@ -393,14 +447,29 @@ impl Face3dRenderer {
                         continue;
                     }
                     let (vx, vy, _) = proj(vn);
-                    stroke_seg(&mut buf, vx, vy, sx + (vx - sx) * 0.5, sy + (vy - sy) * 0.5, 2.4, (192, 64, 58));
+                    stroke_seg(
+                        &mut buf,
+                        vx,
+                        vy,
+                        sx + (vx - sx) * 0.5,
+                        sy + (vy - sy) * 0.5,
+                        2.4,
+                        (192, 64, 58),
+                    );
                 }
                 let ir = 0.34 * sc;
                 fill_ellipse(&mut buf, sx, sy, ir, ir, (74, 196, 138));
                 fill_ellipse(&mut buf, sx, sy, ir * 0.64, ir * 0.64, (30, 92, 66));
                 let pr = ir * (0.30 + 0.32 * level);
                 fill_ellipse(&mut buf, sx, sy, pr, pr, (8, 10, 12));
-                fill_ellipse(&mut buf, sx - ir * 0.3, sy - ir * 0.3, ir * 0.18, ir * 0.18, (255, 255, 255));
+                fill_ellipse(
+                    &mut buf,
+                    sx - ir * 0.3,
+                    sy - ir * 0.3,
+                    ir * 0.18,
+                    ir * 0.18,
+                    (255, 255, 255),
+                );
             }
             Form::Shard => {
                 // A glowing slit-eye at the centre, camera-facing, opening
@@ -414,85 +483,129 @@ impl Face3dRenderer {
                 fill_ellipse(&mut buf, cx, cy, sx * 0.52, sy * 0.72, (255, 255, 255));
             }
             Form::Head => {
-        let (eye_rx, eye_ry, eye_y) = match p.kind {
-            Kind::Angry => (0.072, 0.058, 0.13),
-            Kind::Joy => (0.10, 0.115, 0.17),
-            Kind::Neutral => (0.085, 0.10, 0.16),
-        };
-
-        // Eyes + brows.
-        for &sgn in &[-1.0f32, 1.0] {
-            let local = V3::new(0.30 * sgn, eye_y, 0.92);
-            let nrm = xform(local.norm());
-            if nrm.z <= 0.15 {
-                continue;
-            }
-            let wp = xform(local);
-            let (sx, sy, _) = proj(wp);
-            let sc = FOCAL / (CAM_Z - wp.z);
-            let ew = eye_rx * sc;
-            let eh = eye_ry * sc * blink;
-            fill_ellipse(&mut buf, sx, sy, ew, eh, (245, 249, 255));
-            if blink > 0.4 {
-                let (phx, phy, pr) = match p.kind {
-                    Kind::Angry => (sgn * ew * 0.25, eh * 0.3, 0.5), // glaring, low+inner
-                    _ => (0.0, 0.0, 0.42),
+                let (eye_rx, eye_ry, eye_y) = match p.kind {
+                    Kind::Angry => (0.072, 0.058, 0.13),
+                    Kind::Joy => (0.10, 0.115, 0.17),
+                    Kind::Neutral => (0.085, 0.10, 0.16),
                 };
-                fill_ellipse(&mut buf, sx + phx, sy + phy, ew * pr, eh * pr, (22, 26, 34));
-                let hl = if p.kind == Kind::Joy { 0.42 } else { 0.24 };
-                fill_ellipse(&mut buf, sx + ew * 0.2, sy - eh * 0.25, ew * hl, eh * hl, (255, 255, 255));
-            }
-            // Brow.
-            let (in_y, out_y, thick, bc) = match p.kind {
-                Kind::Angry => (sy - ew * 1.0, sy - ew * 2.5, ew * 0.5, (28, 18, 14)),
-                Kind::Joy => (sy - ew * 2.3, sy - ew * 2.0, ew * 0.22, (150, 110, 80)),
-                Kind::Neutral => continue,
-            };
-            let in_x = sx - sgn * ew * 0.6; // toward face centre
-            let out_x = sx + sgn * ew * 1.25; // outer
-            stroke_seg(&mut buf, in_x, in_y, out_x, out_y, thick, bc);
-        }
 
-        // Mouth.
-        {
-            let local = V3::new(0.0, -0.40, 0.92);
-            let nrm = xform(local.norm());
-            if nrm.z > 0.15 {
-                let wp = xform(local);
-                let (mx, my, _) = proj(wp);
-                let sc = FOCAL / (CAM_Z - wp.z);
-                match p.kind {
-                    Kind::Joy => {
-                        // beaming smile; opens with speech, top teeth show
-                        draw_lips(&mut buf, mx, my, 0.20 * sc, 0.11 * sc, 0.03 * sc, (150, 70, 70));
-                        if speaking {
-                            let rx = 0.15 * sc;
-                            let ry = (0.02 + 0.13 * level) * sc;
-                            fill_ellipse(&mut buf, mx, my + ry * 0.4, rx, ry, (90, 30, 40));
-                            fill_ellipse(&mut buf, mx, my + ry * 0.05, rx * 0.92, ry * 0.32, (255, 255, 255));
-                        }
+                // Eyes + brows.
+                for &sgn in &[-1.0f32, 1.0] {
+                    let local = V3::new(0.30 * sgn, eye_y, 0.92);
+                    let nrm = xform(local.norm());
+                    if nrm.z <= 0.15 {
+                        continue;
                     }
-                    Kind::Angry => {
-                        // snarl: downturned, bared lower teeth when shouting
-                        if speaking {
-                            let rx = 0.17 * sc;
-                            let ry = (0.03 + 0.14 * level) * sc;
-                            fill_ellipse(&mut buf, mx, my, rx, ry, (24, 10, 10));
-                            fill_ellipse(&mut buf, mx, my + ry * 0.55, rx * 0.85, ry * 0.3, (235, 230, 215)); // gritted teeth
-                        }
-                        draw_lips(&mut buf, mx, my - 0.02 * sc, 0.18 * sc, -0.06 * sc, 0.035 * sc, (30, 14, 14));
+                    let wp = xform(local);
+                    let (sx, sy, _) = proj(wp);
+                    let sc = FOCAL / (CAM_Z - wp.z);
+                    let ew = eye_rx * sc;
+                    let eh = eye_ry * sc * blink;
+                    fill_ellipse(&mut buf, sx, sy, ew, eh, (245, 249, 255));
+                    if blink > 0.4 {
+                        let (phx, phy, pr) = match p.kind {
+                            Kind::Angry => (sgn * ew * 0.25, eh * 0.3, 0.5), // glaring, low+inner
+                            _ => (0.0, 0.0, 0.42),
+                        };
+                        fill_ellipse(&mut buf, sx + phx, sy + phy, ew * pr, eh * pr, (22, 26, 34));
+                        let hl = if p.kind == Kind::Joy { 0.42 } else { 0.24 };
+                        fill_ellipse(
+                            &mut buf,
+                            sx + ew * 0.2,
+                            sy - eh * 0.25,
+                            ew * hl,
+                            eh * hl,
+                            (255, 255, 255),
+                        );
                     }
-                    Kind::Neutral => {
-                        let rx = (0.16 + 0.04 * level) * sc;
-                        let ry = (0.02 + 0.16 * level) * sc;
-                        fill_ellipse(&mut buf, mx, my, rx, ry, (26, 14, 18));
-                        if level > 0.18 {
-                            fill_ellipse(&mut buf, mx, my + ry * 0.4, rx * 0.6, ry * 0.4, (224, 85, 122));
+                    // Brow.
+                    let (in_y, out_y, thick, bc) = match p.kind {
+                        Kind::Angry => (sy - ew * 1.0, sy - ew * 2.5, ew * 0.5, (28, 18, 14)),
+                        Kind::Joy => (sy - ew * 2.3, sy - ew * 2.0, ew * 0.22, (150, 110, 80)),
+                        Kind::Neutral => continue,
+                    };
+                    let in_x = sx - sgn * ew * 0.6; // toward face centre
+                    let out_x = sx + sgn * ew * 1.25; // outer
+                    stroke_seg(&mut buf, in_x, in_y, out_x, out_y, thick, bc);
+                }
+
+                // Mouth.
+                {
+                    let local = V3::new(0.0, -0.40, 0.92);
+                    let nrm = xform(local.norm());
+                    if nrm.z > 0.15 {
+                        let wp = xform(local);
+                        let (mx, my, _) = proj(wp);
+                        let sc = FOCAL / (CAM_Z - wp.z);
+                        match p.kind {
+                            Kind::Joy => {
+                                // beaming smile; opens with speech, top teeth show
+                                draw_lips(
+                                    &mut buf,
+                                    mx,
+                                    my,
+                                    0.20 * sc,
+                                    0.11 * sc,
+                                    0.03 * sc,
+                                    (150, 70, 70),
+                                );
+                                if speaking {
+                                    let rx = 0.15 * sc;
+                                    let ry = (0.02 + 0.13 * level) * sc;
+                                    fill_ellipse(&mut buf, mx, my + ry * 0.4, rx, ry, (90, 30, 40));
+                                    fill_ellipse(
+                                        &mut buf,
+                                        mx,
+                                        my + ry * 0.05,
+                                        rx * 0.92,
+                                        ry * 0.32,
+                                        (255, 255, 255),
+                                    );
+                                }
+                            }
+                            Kind::Angry => {
+                                // snarl: downturned, bared lower teeth when shouting
+                                if speaking {
+                                    let rx = 0.17 * sc;
+                                    let ry = (0.03 + 0.14 * level) * sc;
+                                    fill_ellipse(&mut buf, mx, my, rx, ry, (24, 10, 10));
+                                    fill_ellipse(
+                                        &mut buf,
+                                        mx,
+                                        my + ry * 0.55,
+                                        rx * 0.85,
+                                        ry * 0.3,
+                                        (235, 230, 215),
+                                    ); // gritted teeth
+                                }
+                                draw_lips(
+                                    &mut buf,
+                                    mx,
+                                    my - 0.02 * sc,
+                                    0.18 * sc,
+                                    -0.06 * sc,
+                                    0.035 * sc,
+                                    (30, 14, 14),
+                                );
+                            }
+                            Kind::Neutral => {
+                                let rx = (0.16 + 0.04 * level) * sc;
+                                let ry = (0.02 + 0.16 * level) * sc;
+                                fill_ellipse(&mut buf, mx, my, rx, ry, (26, 14, 18));
+                                if level > 0.18 {
+                                    fill_ellipse(
+                                        &mut buf,
+                                        mx,
+                                        my + ry * 0.4,
+                                        rx * 0.6,
+                                        ry * 0.4,
+                                        (224, 85, 122),
+                                    );
+                                }
+                            }
                         }
                     }
                 }
-            }
-        }
             }
         }
 
@@ -502,7 +615,15 @@ impl Face3dRenderer {
 
 /// Lip line — a quadratic arc from corner to corner. `curve > 0` bows the
 /// middle downward (a smile, corners up); `curve < 0` bows it up (a frown).
-fn draw_lips(buf: &mut [u8], cx: f32, cy: f32, halfw: f32, curve: f32, thick: f32, color: (u8, u8, u8)) {
+fn draw_lips(
+    buf: &mut [u8],
+    cx: f32,
+    cy: f32,
+    halfw: f32,
+    curve: f32,
+    thick: f32,
+    color: (u8, u8, u8),
+) {
     let n = 9;
     let mut prev: Option<(f32, f32)> = None;
     for i in 0..=n {
@@ -586,7 +707,15 @@ fn fill_ellipse(buf: &mut [u8], cx: f32, cy: f32, rx: f32, ry: f32, (r, g, b): (
 }
 
 /// Thick line segment via distance-to-segment fill.
-fn stroke_seg(buf: &mut [u8], x0: f32, y0: f32, x1: f32, y1: f32, half: f32, (r, g, b): (u8, u8, u8)) {
+fn stroke_seg(
+    buf: &mut [u8],
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    half: f32,
+    (r, g, b): (u8, u8, u8),
+) {
     if half < 0.4 {
         return;
     }

@@ -151,7 +151,15 @@ heartbeat_interval_seconds = 15
         let manifest = AgentManifest::from_toml(toml).unwrap();
         assert_eq!(manifest.agent.display_name, "test-bot");
         assert_eq!(manifest.capabilities.default.len(), 2);
-        assert_eq!(manifest.capabilities.channels.get("#factory").unwrap().len(), 2);
+        assert_eq!(
+            manifest
+                .capabilities
+                .channels
+                .get("#factory")
+                .unwrap()
+                .len(),
+            2
+        );
         assert_eq!(manifest.presence.heartbeat_interval_seconds, 15);
         assert!(manifest.validate().is_ok());
     }

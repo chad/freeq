@@ -12,10 +12,10 @@
 //! Usage:
 //!   cargo run --example bridge_live_audio -- --irc-addr 127.0.0.1:16667 --web-url http://127.0.0.1:18080
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use anyhow::{Result, bail};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use anyhow::{bail, Result};
 use tokio::time::timeout;
 
 const TEST_DURATION: Duration = Duration::from_secs(5);
@@ -64,7 +64,9 @@ async fn main() -> Result<()> {
     let catalog_track = moq_lite::Track::new("catalog.json");
     let mut cw = producer.create_track(catalog_track)?;
     let mut g = cw.create_group(moq_lite::Group { sequence: 0 })?;
-    g.write_frame(moq_lite::bytes::Bytes::from(hang_catalog.as_bytes().to_vec()))?;
+    g.write_frame(moq_lite::bytes::Bytes::from(
+        hang_catalog.as_bytes().to_vec(),
+    ))?;
     g.finish().ok();
 
     // Audio track — write groups continuously in background (like real mic)
@@ -81,7 +83,9 @@ async fn main() -> Result<()> {
                 Err(_) => break,
             };
             // 960 bytes = 20ms Opus frame at 48kHz
-            if g.write_frame(moq_lite::bytes::Bytes::from(vec![0xABu8; 960])).is_err() {
+            if g.write_frame(moq_lite::bytes::Bytes::from(vec![0xABu8; 960]))
+                .is_err()
+            {
                 break;
             }
             g.finish().ok();
@@ -111,14 +115,23 @@ async fn main() -> Result<()> {
 
     // Wait for bridge to notice and forward
     tokio::time::sleep(Duration::from_secs(2)).await;
-    println!("  Frames written so far: {}", frames_written.load(Ordering::Relaxed));
+    println!(
+        "  Frames written so far: {}",
+        frames_written.load(Ordering::Relaxed)
+    );
 
     // ── Step 3: Join Room as native client (AFTER stream started) ──
     println!("[3/5] Native client joining Room (latecomer)...");
-    let room_ticket: iroh_live::rooms::RoomTicket = iroh_ticket.parse()
+    let room_ticket: iroh_live::rooms::RoomTicket = iroh_ticket
+        .parse()
         .map_err(|e| anyhow::anyhow!("Invalid ticket: {e}"))?;
-    let ep = iroh::Endpoint::builder(iroh::endpoint::presets::N0).bind().await?;
-    let live = iroh_live::Live::builder(ep).with_router().with_gossip().spawn();
+    let ep = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+        .bind()
+        .await?;
+    let live = iroh_live::Live::builder(ep)
+        .with_router()
+        .with_gossip()
+        .spawn();
     let room = iroh_live::rooms::Room::new(&live, room_ticket).await?;
     let (mut events, handle) = room.split();
     handle.set_display_name("native-listener").await?;
@@ -175,7 +188,11 @@ async fn main() -> Result<()> {
                                         while let Ok(Some(frame)) = group.read_frame().await {
                                             let count = fr.fetch_add(1, Ordering::Relaxed);
                                             if count == 0 {
-                                                println!("  First audio frame: {} bytes (0x{:02X})", frame.len(), frame[0]);
+                                                println!(
+                                                    "  First audio frame: {} bytes (0x{:02X})",
+                                                    frame.len(),
+                                                    frame[0]
+                                                );
                                             }
                                         }
                                     }
@@ -211,7 +228,8 @@ async fn main() -> Result<()> {
                 }
             }
         }
-    }).await;
+    })
+    .await;
 
     // ── Step 5: Results ───────────────────────────────────────
     println!("\n[5/5] Results:");
@@ -223,8 +241,14 @@ async fn main() -> Result<()> {
     let got_broadcast = receive_result.unwrap_or(false);
     let audio_flowed = received > 0;
 
-    println!("  Broadcast arrived in Room: {}", if got_broadcast { "YES" } else { "NO" });
-    println!("  Audio frames received:     {}", if audio_flowed { "YES" } else { "NO" });
+    println!(
+        "  Broadcast arrived in Room: {}",
+        if got_broadcast { "YES" } else { "NO" }
+    );
+    println!(
+        "  Audio frames received:     {}",
+        if audio_flowed { "YES" } else { "NO" }
+    );
 
     if audio_flowed && received > 50 {
         println!("\n  PASS: Live browser audio flows through bridge ({received} frames)\n");
@@ -250,27 +274,57 @@ async fn start_session_tcp(addr: &str) -> Result<(String, String)> {
     let stream = TcpStream::connect(addr).await?;
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
-    writer.write_all(format!("NICK {nick}\r\nUSER {nick} 0 * :test\r\n").as_bytes()).await?;
+    writer
+        .write_all(format!("NICK {nick}\r\nUSER {nick} 0 * :test\r\n").as_bytes())
+        .await?;
     let mut registered = false;
     let mut ticket = None;
     let mut session_id = None;
     let result = timeout(Duration::from_secs(10), async {
         while let Some(line) = lines.next_line().await? {
-            if line.starts_with("PING") { writer.write_all(format!("{}\r\n", line.replace("PING", "PONG")).as_bytes()).await?; continue; }
+            if line.starts_with("PING") {
+                writer
+                    .write_all(format!("{}\r\n", line.replace("PING", "PONG")).as_bytes())
+                    .await?;
+                continue;
+            }
             if !registered && line.contains(" 001 ") {
                 registered = true;
-                writer.write_all(format!("CAP REQ :message-tags\r\nJOIN {channel}\r\n").as_bytes()).await?;
+                writer
+                    .write_all(format!("CAP REQ :message-tags\r\nJOIN {channel}\r\n").as_bytes())
+                    .await?;
                 tokio::time::sleep(Duration::from_millis(200)).await;
-                writer.write_all(format!("@+freeq.at/av-start TAGMSG {channel}\r\n").as_bytes()).await?;
+                writer
+                    .write_all(format!("@+freeq.at/av-start TAGMSG {channel}\r\n").as_bytes())
+                    .await?;
             }
-            if line.contains("AV session started:") { if let Some(id) = line.split("AV session started: ").nth(1) { session_id = Some(id.trim().to_string()); } }
-            if line.contains("AV ticket:") { if let Some(t) = line.split("AV ticket: ").nth(1) { ticket = Some(t.trim().to_string()); } }
-            if ticket.is_some() && session_id.is_some() { break; }
+            if line.contains("AV session started:") {
+                if let Some(id) = line.split("AV session started: ").nth(1) {
+                    session_id = Some(id.trim().to_string());
+                }
+            }
+            if line.contains("AV ticket:") {
+                if let Some(t) = line.split("AV ticket: ").nth(1) {
+                    ticket = Some(t.trim().to_string());
+                }
+            }
+            if ticket.is_some() && session_id.is_some() {
+                break;
+            }
         }
         Ok::<_, anyhow::Error>((session_id, ticket))
-    }).await??;
-    tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(30)).await; let _ = writer.write_all(b"PING :k\r\n").await; } });
-    match result { (Some(s), Some(t)) => Ok((s, t)), _ => bail!("No session ID or ticket") }
+    })
+    .await??;
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            let _ = writer.write_all(b"PING :k\r\n").await;
+        }
+    });
+    match result {
+        (Some(s), Some(t)) => Ok((s, t)),
+        _ => bail!("No session ID or ticket"),
+    }
 }
 
 async fn start_session_ws(web_url: &str) -> Result<(String, String)> {
@@ -278,35 +332,96 @@ async fn start_session_ws(web_url: &str) -> Result<(String, String)> {
     use tokio_tungstenite::tungstenite::Message;
     let nick = "live-test";
     let channel = &format!("#live-{}", std::process::id());
-    let ws_url = if web_url.starts_with("https://") { format!("wss://{}/irc", web_url.trim_start_matches("https://").trim_end_matches('/')) }
-    else { format!("ws://{}/irc", web_url.trim_start_matches("http://").trim_end_matches('/')) };
+    let ws_url = if web_url.starts_with("https://") {
+        format!(
+            "wss://{}/irc",
+            web_url.trim_start_matches("https://").trim_end_matches('/')
+        )
+    } else {
+        format!(
+            "ws://{}/irc",
+            web_url.trim_start_matches("http://").trim_end_matches('/')
+        )
+    };
     let (ws, _) = tokio_tungstenite::connect_async(&ws_url).await?;
     let (mut ws_write, mut ws_read) = ws.split();
-    ws_write.send(Message::Text(format!("NICK {nick}\r\nUSER {nick} 0 * :test\r\n").into())).await?;
+    ws_write
+        .send(Message::Text(
+            format!("NICK {nick}\r\nUSER {nick} 0 * :test\r\n").into(),
+        ))
+        .await?;
     let mut registered = false;
     let mut ticket = None;
     let mut session_id = None;
     let result = timeout(Duration::from_secs(10), async {
         while let Some(msg) = ws_read.next().await {
-            let text = match msg? { Message::Text(t) => t.to_string(), Message::Close(_) => break, _ => continue };
+            let text = match msg? {
+                Message::Text(t) => t.to_string(),
+                Message::Close(_) => break,
+                _ => continue,
+            };
             for line in text.lines() {
                 let line = line.trim();
-                if line.is_empty() { continue; }
-                if line.starts_with("PING") { ws_write.send(Message::Text(format!("{}\r\n", line.replace("PING", "PONG")).into())).await?; continue; }
+                if line.is_empty() {
+                    continue;
+                }
+                if line.starts_with("PING") {
+                    ws_write
+                        .send(Message::Text(
+                            format!("{}\r\n", line.replace("PING", "PONG")).into(),
+                        ))
+                        .await?;
+                    continue;
+                }
                 if !registered && line.contains(" 001 ") {
                     registered = true;
-                    ws_write.send(Message::Text(format!("CAP REQ :message-tags\r\nJOIN {channel}\r\n").into())).await?;
+                    ws_write
+                        .send(Message::Text(
+                            format!("CAP REQ :message-tags\r\nJOIN {channel}\r\n").into(),
+                        ))
+                        .await?;
                     tokio::time::sleep(Duration::from_millis(200)).await;
-                    ws_write.send(Message::Text(format!("@+freeq.at/av-start TAGMSG {channel}\r\n").into())).await?;
+                    ws_write
+                        .send(Message::Text(
+                            format!("@+freeq.at/av-start TAGMSG {channel}\r\n").into(),
+                        ))
+                        .await?;
                 }
-                if line.contains("AV session started:") { if let Some(id) = line.split("AV session started: ").nth(1) { session_id = Some(id.trim().to_string()); } }
-                if line.contains("AV ticket:") { if let Some(t) = line.split("AV ticket: ").nth(1) { ticket = Some(t.trim().to_string()); } }
-                if ticket.is_some() && session_id.is_some() { break; }
+                if line.contains("AV session started:") {
+                    if let Some(id) = line.split("AV session started: ").nth(1) {
+                        session_id = Some(id.trim().to_string());
+                    }
+                }
+                if line.contains("AV ticket:") {
+                    if let Some(t) = line.split("AV ticket: ").nth(1) {
+                        ticket = Some(t.trim().to_string());
+                    }
+                }
+                if ticket.is_some() && session_id.is_some() {
+                    break;
+                }
             }
-            if ticket.is_some() && session_id.is_some() { break; }
+            if ticket.is_some() && session_id.is_some() {
+                break;
+            }
         }
         Ok::<_, anyhow::Error>((session_id, ticket))
-    }).await??;
-    tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(30)).await; if ws_write.send(Message::Text("PING :k\r\n".into())).await.is_err() { break; } } });
-    match result { (Some(s), Some(t)) => Ok((s, t)), _ => bail!("No session ID or ticket") }
+    })
+    .await??;
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            if ws_write
+                .send(Message::Text("PING :k\r\n".into()))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+    match result {
+        (Some(s), Some(t)) => Ok((s, t)),
+        _ => bail!("No session ID or ticket"),
+    }
 }

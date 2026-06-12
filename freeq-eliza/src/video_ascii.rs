@@ -237,7 +237,14 @@ fn blit_mask(buf: &mut [u8], mask: &[u8], x0: u32, y0: u32, color: (u8, u8, u8),
 
 /// Signed-origin variant — clips on all four edges so glitch displacement
 /// and per-channel offsets can push a glyph partly (or fully) off-frame.
-fn blit_mask_i(buf: &mut [u8], mask: &[u8], x0: i32, y0: i32, (r, g, b): (u8, u8, u8), bright: f32) {
+fn blit_mask_i(
+    buf: &mut [u8],
+    mask: &[u8],
+    x0: i32,
+    y0: i32,
+    (r, g, b): (u8, u8, u8),
+    bright: f32,
+) {
     for cy in 0..CELL_H as i32 {
         let fy = y0 + cy;
         if fy < 0 || fy >= VIDEO_H as i32 {
@@ -304,7 +311,7 @@ fn gauss(d: f32, sigma: f32) -> f32 {
 
 /// 2-D radial gaussian bump centred at the offset `(dx,dy)`.
 fn gauss2(dx: f32, dy: f32, sigma: f32) -> f32 {
-    (-((dx * dx + dy * dy)) / (2.0 * sigma * sigma)).exp()
+    (-(dx * dx + dy * dy) / (2.0 * sigma * sigma)).exp()
 }
 
 /// Lerp `a→b` by `mix`, then lift toward white (255) by `hi`.
@@ -335,12 +342,8 @@ pub(crate) fn render_loop(tile: VideoTile) {
         let peer = f32::from_bits(tile.peer_level.load(Ordering::Relaxed));
 
         let rgba = renderer.frame_rgba(t, level, peer);
-        let frame = VideoFrame::new_rgba(
-            bytes::Bytes::from(rgba),
-            VIDEO_W,
-            VIDEO_H,
-            Duration::ZERO,
-        );
+        let frame =
+            VideoFrame::new_rgba(bytes::Bytes::from(rgba), VIDEO_W, VIDEO_H, Duration::ZERO);
         if let Ok(mut g) = tile.latest.lock() {
             *g = Some(frame);
         }
@@ -426,7 +429,7 @@ impl AsciiRainRenderer {
                 } else {
                     0.0
                 };
-                let is_head = dist >= 0.0 && dist < 1.0;
+                let is_head = (0.0..1.0).contains(&dist);
 
                 // Face field at this cell.
                 let px = self.ox as f32 + (col as f32 + 0.5) * CELL_W as f32;
@@ -571,7 +574,7 @@ impl AsciiGlitchRenderer {
         // Global instability: a steady floor, more while speaking, plus
         // periodic bursts (every ~0.4s, ~1-in-3 windows go loud).
         let burst_win = (t * 2.5) as u32;
-        let burst = if hash32(burst_win.wrapping_mul(2_246_822_519)) % 3 == 0 {
+        let burst = if hash32(burst_win.wrapping_mul(2_246_822_519)).is_multiple_of(3) {
             0.5 + (hash32(burst_win) % 100) as f32 / 100.0 * 0.5
         } else {
             0.0
@@ -589,7 +592,8 @@ impl AsciiGlitchRenderer {
 
         for row in 0..self.rows {
             // Per-row tear: some rows slip sideways when g is high.
-            let rseed = hash32(row.wrapping_mul(374_761_393) ^ (burst_win.wrapping_mul(668_265_263)));
+            let rseed =
+                hash32(row.wrapping_mul(374_761_393) ^ (burst_win.wrapping_mul(668_265_263)));
             let disp = if (rseed % 1000) as f32 / 1000.0 < g * 0.45 {
                 ((((rseed >> 10) % 80) as i32) - 40) as f32 * g
             } else {
@@ -607,9 +611,7 @@ impl AsciiGlitchRenderer {
 
                 // Corruption — random cells flare magenta with a wrong glyph.
                 let cseed = hash32(
-                    col.wrapping_mul(2_654_435_761)
-                        ^ row.wrapping_mul(40_503)
-                        ^ (t * 12.0) as u32,
+                    col.wrapping_mul(2_654_435_761) ^ row.wrapping_mul(40_503) ^ (t * 12.0) as u32,
                 );
                 let corrupt = (cseed % 1000) as f32 / 1000.0 < g * 0.12;
 
@@ -697,19 +699,22 @@ fn box_face_intensity(nx: f32, ny: f32, t: f32, level: f32, blink: f32) -> f32 {
     let glow = (0.97 - q).clamp(0.0, 1.0).powf(2.0) * 0.07;
 
     // Antenna: a thin stalk above the top edge with a blob at the tip.
-    let stalk = if nx.abs() < 0.03 && ny < -bh && ny > -bh - 0.26 { 0.8 } else { 0.0 };
+    let stalk = if nx.abs() < 0.03 && ny < -bh && ny > -bh - 0.26 {
+        0.8
+    } else {
+        0.0
+    };
     let tip = gauss2(nx, ny - (-bh - 0.30), 0.055) * 0.95;
 
     // Rectangular LED eyes; blink squashes their height.
     let eye_y = -0.24;
     let eye_h = 0.07 * (0.18 + 0.82 * blink);
-    let eye = if (ny - eye_y).abs() < eye_h
-        && ((nx - 0.40).abs() < 0.17 || (nx + 0.40).abs() < 0.17)
-    {
-        1.0
-    } else {
-        0.0
-    };
+    let eye =
+        if (ny - eye_y).abs() < eye_h && ((nx - 0.40).abs() < 0.17 || (nx + 0.40).abs() < 0.17) {
+            1.0
+        } else {
+            0.0
+        };
 
     // Equalizer mouth: ~8 vertical bars across the lower face; each bar's
     // half-height jumps with speech level (a flat slit when quiet).
@@ -855,7 +860,10 @@ mod tests {
         let space = &atlas.masks[0];
         assert!(space.iter().all(|&a| a == 0));
         let at = &atlas.masks[RAMP.len() - 1]; // '@'
-        assert!(at.iter().any(|&a| a > 0), "dense glyph should have coverage");
+        assert!(
+            at.iter().any(|&a| a > 0),
+            "dense glyph should have coverage"
+        );
     }
 
     #[test]
@@ -868,9 +876,16 @@ mod tests {
 
         // Speaking lights up more pixels than silence (the mouth opens and
         // the palette brightens).
-        let lit = |buf: &[u8]| buf.chunks_exact(4).filter(|p| p[0] as u16 + p[1] as u16 + p[2] as u16 > 24).count();
+        let lit = |buf: &[u8]| {
+            buf.chunks_exact(4)
+                .filter(|p| p[0] as u16 + p[1] as u16 + p[2] as u16 > 24)
+                .count()
+        };
         let loud = r.frame_rgba(0.0, 0.8, 0.0);
-        assert!(lit(&loud) > lit(&quiet), "speaking frame should be brighter");
+        assert!(
+            lit(&loud) > lit(&quiet),
+            "speaking frame should be brighter"
+        );
     }
 
     #[test]
@@ -879,7 +894,10 @@ mod tests {
         let f = r.frame_rgba(1.0, 0.6, 0.0);
         assert_eq!(f.len(), (VIDEO_W * VIDEO_H * 4) as usize);
         assert!(f.chunks_exact(4).all(|p| p[3] == 255));
-        let lit = f.chunks_exact(4).filter(|p| p[0] as u16 + p[1] as u16 + p[2] as u16 > 24).count();
+        let lit = f
+            .chunks_exact(4)
+            .filter(|p| p[0] as u16 + p[1] as u16 + p[2] as u16 > 24)
+            .count();
         assert!(lit > 500, "bot should light up cells");
     }
 
@@ -889,7 +907,10 @@ mod tests {
         let f = r.frame_rgba(1.0, 0.5, 0.0);
         assert_eq!(f.len(), (VIDEO_W * VIDEO_H * 4) as usize);
         assert!(f.chunks_exact(4).all(|p| p[3] == 255));
-        let lit = f.chunks_exact(4).filter(|p| p[0] as u16 + p[1] as u16 + p[2] as u16 > 24).count();
+        let lit = f
+            .chunks_exact(4)
+            .filter(|p| p[0] as u16 + p[1] as u16 + p[2] as u16 > 24)
+            .count();
         assert!(lit > 500, "rain should light up cells");
     }
 }

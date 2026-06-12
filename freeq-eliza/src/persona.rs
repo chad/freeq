@@ -119,8 +119,7 @@ impl PersonaPack {
     /// Load a persona from a JSON file on disk.
     pub fn from_file(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
         let s = std::fs::read_to_string(path)?;
-        Self::from_json_str(&s)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        Self::from_json_str(&s).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 }
 
@@ -230,8 +229,8 @@ mod tests {
         // voice DSP a persona uses.
         let mut pack = ghostly::CharacterPack::from_character("oblivion").unwrap();
         pack.name = "azure-oblivion".to_string();
-        let path = std::env::temp_dir()
-            .join(format!("freeq-persona-pack-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("freeq-persona-pack-{}.json", std::process::id()));
         std::fs::write(&path, pack.to_json_string().unwrap()).unwrap();
         let p = path.to_str().unwrap();
 

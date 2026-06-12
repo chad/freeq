@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpStream, SocketAddr};
+use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 use freeq_sdk::did::DidResolver;
@@ -73,25 +73,38 @@ impl C {
                         let _ = self.writer.flush();
                         continue;
                     }
-                    if pred(line) { return line.to_string(); }
+                    if pred(line) {
+                        return line.to_string();
+                    }
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::TimedOut
-                       || e.kind() == std::io::ErrorKind::WouldBlock =>
-                    panic!("Timeout for: {desc}"),
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::TimedOut
+                        || e.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    panic!("Timeout for: {desc}")
+                }
                 Err(e) => panic!("Error for {desc}: {e}"),
             }
         }
     }
 
     fn num(&mut self, code: &str) -> String {
-        self.expect(|l| l.split_whitespace().nth(1) == Some(code), &format!("{code}"))
+        self.expect(
+            |l| l.split_whitespace().nth(1) == Some(code),
+            &format!("{code}"),
+        )
     }
 
-    fn reg(&mut self) -> String { self.num("001") }
+    fn reg(&mut self) -> String {
+        self.num("001")
+    }
 
     fn drain(&mut self) {
-        self.writer.try_clone().unwrap()
-            .set_read_timeout(Some(Duration::from_millis(200))).ok();
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .ok();
         let mut buf = String::new();
         loop {
             buf.clear();
@@ -107,22 +120,31 @@ impl C {
                 Err(_) => break,
             }
         }
-        self.writer.try_clone().unwrap()
-            .set_read_timeout(Some(Duration::from_secs(5))).ok();
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .ok();
     }
 
     /// Check if the connection is closed (returns true if read would return 0/error).
     fn is_closed(&mut self) -> bool {
-        self.writer.try_clone().unwrap()
-            .set_read_timeout(Some(Duration::from_millis(500))).ok();
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .ok();
         let mut buf = String::new();
         let result = match self.reader.read_line(&mut buf) {
             Ok(0) => true,
             Err(_) => true,
             Ok(_) => false,
         };
-        self.writer.try_clone().unwrap()
-            .set_read_timeout(Some(Duration::from_secs(5))).ok();
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .ok();
         result
     }
 }
@@ -149,8 +171,12 @@ async fn privmsg_before_registration() {
         c.send("NICK preregtest");
         c.send("USER preregtest 0 * :test");
         let w = c.reg();
-        assert!(w.contains("preregtest"), "Should register normally after pre-reg commands");
-    }).await;
+        assert!(
+            w.contains("preregtest"),
+            "Should register normally after pre-reg commands"
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -161,27 +187,43 @@ async fn privmsg_before_registration() {
 async fn empty_privmsg_text() {
     run(|addr| {
         let mut a = C::connect(addr, "empty_a");
-        a.reg(); a.drain();
+        a.reg();
+        a.drain();
         let mut b = C::connect(addr, "empty_b");
-        b.reg(); b.drain();
-        a.send("JOIN #emptymsg"); a.num("366"); a.drain();
-        b.send("JOIN #emptymsg"); b.num("366"); b.drain();
+        b.reg();
+        b.drain();
+        a.send("JOIN #emptymsg");
+        a.num("366");
+        a.drain();
+        b.send("JOIN #emptymsg");
+        b.num("366");
+        b.drain();
 
         // Empty text after colon — server should accept and relay
         a.send("PRIVMSG #emptymsg :");
         // Bob should either receive the empty message or server should silently drop it.
         // Either way, the server must not crash.
         // Give a short timeout — if nothing comes, that's OK too.
-        b.writer.try_clone().unwrap()
-            .set_read_timeout(Some(Duration::from_millis(500))).ok();
+        b.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .ok();
         let mut buf = String::new();
         let _ = b.reader.read_line(&mut buf); // Don't care if timeout
-        b.writer.try_clone().unwrap()
-            .set_read_timeout(Some(Duration::from_secs(5))).ok();
+        b.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .ok();
         // Server still alive — send another message
         a.send("PRIVMSG #emptymsg :still alive");
-        b.expect(|l| l.contains("still alive"), "server still works after empty msg");
-    }).await;
+        b.expect(
+            |l| l.contains("still alive"),
+            "server still works after empty msg",
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -192,17 +234,22 @@ async fn empty_privmsg_text() {
 async fn privmsg_to_plus_n_channel_from_nonmember() {
     run(|addr| {
         let mut owner = C::connect(addr, "nowner");
-        owner.reg(); owner.drain();
-        owner.send("JOIN #nochat"); owner.num("366"); owner.drain();
+        owner.reg();
+        owner.drain();
+        owner.send("JOIN #nochat");
+        owner.num("366");
+        owner.drain();
         // Channel gets +nt by default for new channels
 
         let mut outsider = C::connect(addr, "nout");
-        outsider.reg(); outsider.drain();
+        outsider.reg();
+        outsider.drain();
         // Don't join — just send to channel
         outsider.send("PRIVMSG #nochat :I'm not a member!");
         // Should get 404 ERR_CANNOTSENDTOCHAN
         outsider.num("404");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -213,8 +260,11 @@ async fn privmsg_to_plus_n_channel_from_nonmember() {
 async fn double_join_same_channel() {
     run(|addr| {
         let mut c = C::connect(addr, "dblj");
-        c.reg(); c.drain();
-        c.send("JOIN #double"); c.num("366"); c.drain();
+        c.reg();
+        c.drain();
+        c.send("JOIN #double");
+        c.num("366");
+        c.drain();
 
         // Second JOIN — should be silently ignored
         c.send("JOIN #double");
@@ -223,7 +273,8 @@ async fn double_join_same_channel() {
         let names = c.num("353");
         assert!(names.contains("dblj"));
         // Should NOT get a second JOIN echo or second 366
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -234,11 +285,13 @@ async fn double_join_same_channel() {
 async fn part_channel_not_in() {
     run(|addr| {
         let mut c = C::connect(addr, "partghost");
-        c.reg(); c.drain();
+        c.reg();
+        c.drain();
         // PART from a channel we never joined — should get 442 ERR_NOTONCHANNEL
         c.send("PART #neverjoinedthis");
         c.num("442");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -249,21 +302,31 @@ async fn part_channel_not_in() {
 async fn kick_from_non_op() {
     run(|addr| {
         let mut owner = C::connect(addr, "kickown");
-        owner.reg(); owner.drain();
-        owner.send("JOIN #kickfail"); owner.num("366"); owner.drain();
+        owner.reg();
+        owner.drain();
+        owner.send("JOIN #kickfail");
+        owner.num("366");
+        owner.drain();
 
         let mut a = C::connect(addr, "kicka");
-        a.reg(); a.drain();
-        a.send("JOIN #kickfail"); a.num("366"); a.drain();
+        a.reg();
+        a.drain();
+        a.send("JOIN #kickfail");
+        a.num("366");
+        a.drain();
 
         let mut b = C::connect(addr, "kickb");
-        b.reg(); b.drain();
-        b.send("JOIN #kickfail"); b.num("366"); b.drain();
+        b.reg();
+        b.drain();
+        b.send("JOIN #kickfail");
+        b.num("366");
+        b.drain();
 
         // Non-op 'a' tries to kick 'b' — should fail
         a.send("KICK #kickfail kickb :nope");
         a.num("482"); // ERR_CHANOPRIVSNEEDED
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -274,18 +337,25 @@ async fn kick_from_non_op() {
 async fn topic_on_locked_channel_from_nonop() {
     run(|addr| {
         let mut owner = C::connect(addr, "topicown");
-        owner.reg(); owner.drain();
-        owner.send("JOIN #topiclock"); owner.num("366"); owner.drain();
+        owner.reg();
+        owner.drain();
+        owner.send("JOIN #topiclock");
+        owner.num("366");
+        owner.drain();
         // Channel gets +t by default
 
         let mut user = C::connect(addr, "topicusr2");
-        user.reg(); user.drain();
-        user.send("JOIN #topiclock"); user.num("366"); user.drain();
+        user.reg();
+        user.drain();
+        user.send("JOIN #topiclock");
+        user.num("366");
+        user.drain();
 
         // Non-op tries to set topic
         user.send("TOPIC #topiclock :my topic");
         user.num("482"); // ERR_CHANOPRIVSNEEDED
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -296,8 +366,11 @@ async fn topic_on_locked_channel_from_nonop() {
 async fn channel_key_enforcement() {
     run(|addr| {
         let mut owner = C::connect(addr, "keyown");
-        owner.reg(); owner.drain();
-        owner.send("JOIN #keyed"); owner.num("366"); owner.drain();
+        owner.reg();
+        owner.drain();
+        owner.send("JOIN #keyed");
+        owner.num("366");
+        owner.drain();
         // Set channel key
         owner.send("MODE #keyed +k secret123");
         owner.drain();
@@ -305,22 +378,29 @@ async fn channel_key_enforcement() {
 
         // User with wrong key
         let mut bad = C::connect(addr, "keybad");
-        bad.reg(); bad.drain();
+        bad.reg();
+        bad.drain();
         bad.send("JOIN #keyed wrongkey");
         bad.num("475"); // ERR_BADCHANNELKEY
 
         // User with no key
         let mut nokey = C::connect(addr, "keyno");
-        nokey.reg(); nokey.drain();
+        nokey.reg();
+        nokey.drain();
         nokey.send("JOIN #keyed");
         nokey.num("475"); // ERR_BADCHANNELKEY
 
         // User with correct key
         let mut good = C::connect(addr, "keygood");
-        good.reg(); good.drain();
+        good.reg();
+        good.drain();
         good.send("JOIN #keyed secret123");
-        good.expect(|l| l.contains("JOIN") && l.contains("#keyed"), "JOIN with correct key");
-    }).await;
+        good.expect(
+            |l| l.contains("JOIN") && l.contains("#keyed"),
+            "JOIN with correct key",
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -347,7 +427,8 @@ async fn sasl_garbage_base64() {
         // Should still be able to end CAP and register as guest
         c.send("CAP END");
         c.reg();
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -370,7 +451,9 @@ async fn three_sasl_failures_disconnect() {
             serde_json::json!({
                 "did": "did:key:z6MkBogus",
                 "signature": "AAAA"
-            }).to_string().as_bytes()
+            })
+            .to_string()
+            .as_bytes(),
         );
 
         for i in 0..3 {
@@ -380,10 +463,17 @@ async fn three_sasl_failures_disconnect() {
             c.num("904");
         }
         // After 3rd failure, should get ERROR and disconnect
-        c.expect(|l| l.contains("ERROR") || l.contains("Too many"), "ERROR after 3 failures");
+        c.expect(
+            |l| l.contains("ERROR") || l.contains("Too many"),
+            "ERROR after 3 failures",
+        );
         // Connection should be closed
-        assert!(c.is_closed(), "Connection should be closed after 3 SASL failures");
-    }).await;
+        assert!(
+            c.is_closed(),
+            "Connection should be closed after 3 SASL failures"
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -395,16 +485,23 @@ async fn unicode_nick_and_messages() {
     run(|addr| {
         // Unicode nick (should work — our validator allows non-control, non-special chars)
         let mut c = C::connect(addr, "caf\u{00e9}user");
-        c.reg(); c.drain();
-        c.send("JOIN #unicode"); c.num("366"); c.drain();
+        c.reg();
+        c.drain();
+        c.send("JOIN #unicode");
+        c.num("366");
+        c.drain();
 
         // Unicode message
         c.send("PRIVMSG #unicode :\u{1F600} emoji message \u{4e16}\u{754c}");
         // Server should relay — check via NAMES that we're still connected
         c.send("NAMES #unicode");
         let names = c.num("353");
-        assert!(names.contains("caf\u{00e9}user"), "Unicode nick preserved: {names}");
-    }).await;
+        assert!(
+            names.contains("caf\u{00e9}user"),
+            "Unicode nick preserved: {names}"
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -415,8 +512,11 @@ async fn unicode_nick_and_messages() {
 async fn rapid_nick_changes() {
     run(|addr| {
         let mut c = C::connect(addr, "rapid0");
-        c.reg(); c.drain();
-        c.send("JOIN #rapid"); c.num("366"); c.drain();
+        c.reg();
+        c.drain();
+        c.send("JOIN #rapid");
+        c.num("366");
+        c.drain();
 
         // Rapid-fire nick changes
         for i in 1..=10 {
@@ -427,8 +527,12 @@ async fn rapid_nick_changes() {
         // Verify final nick via NAMES
         c.send("NAMES #rapid");
         let names = c.num("353");
-        assert!(names.contains("rapid10"), "Final nick should be rapid10: {names}");
-    }).await;
+        assert!(
+            names.contains("rapid10"),
+            "Final nick should be rapid10: {names}"
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -439,13 +543,16 @@ async fn rapid_nick_changes() {
 async fn nick_change_to_in_use() {
     run(|addr| {
         let mut a = C::connect(addr, "taken_nick");
-        a.reg(); a.drain();
+        a.reg();
+        a.drain();
         let mut b = C::connect(addr, "wannabe");
-        b.reg(); b.drain();
+        b.reg();
+        b.drain();
 
         b.send("NICK taken_nick");
         b.num("433"); // ERR_NICKNAMEINUSE
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -456,17 +563,22 @@ async fn nick_change_to_in_use() {
 async fn invite_only_channel_rejected() {
     run(|addr| {
         let mut owner = C::connect(addr, "invown");
-        owner.reg(); owner.drain();
-        owner.send("JOIN #invonly"); owner.num("366"); owner.drain();
+        owner.reg();
+        owner.drain();
+        owner.send("JOIN #invonly");
+        owner.num("366");
+        owner.drain();
         owner.send("MODE #invonly +i");
         owner.drain();
         std::thread::sleep(Duration::from_millis(50));
 
         let mut outsider = C::connect(addr, "invout");
-        outsider.reg(); outsider.drain();
+        outsider.reg();
+        outsider.drain();
         outsider.send("JOIN #invonly");
         outsider.num("473"); // ERR_INVITEONLYCHAN
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -477,17 +589,24 @@ async fn invite_only_channel_rejected() {
 async fn mode_change_by_non_op() {
     run(|addr| {
         let mut owner = C::connect(addr, "modeown");
-        owner.reg(); owner.drain();
-        owner.send("JOIN #modelock"); owner.num("366"); owner.drain();
+        owner.reg();
+        owner.drain();
+        owner.send("JOIN #modelock");
+        owner.num("366");
+        owner.drain();
 
         let mut user = C::connect(addr, "modeusr");
-        user.reg(); user.drain();
-        user.send("JOIN #modelock"); user.num("366"); user.drain();
+        user.reg();
+        user.drain();
+        user.send("JOIN #modelock");
+        user.num("366");
+        user.drain();
 
         // Non-op tries to set mode
         user.send("MODE #modelock +m");
         user.num("482"); // ERR_CHANOPRIVSNEEDED
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -498,10 +617,15 @@ async fn mode_change_by_non_op() {
 async fn privmsg_to_self() {
     run(|addr| {
         let mut c = C::connect(addr, "selfmsg");
-        c.reg(); c.drain();
+        c.reg();
+        c.drain();
         c.send("PRIVMSG selfmsg :talking to myself");
-        c.expect(|l| l.contains("PRIVMSG") && l.contains("talking to myself"), "self-DM");
-    }).await;
+        c.expect(
+            |l| l.contains("PRIVMSG") && l.contains("talking to myself"),
+            "self-DM",
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -512,11 +636,17 @@ async fn privmsg_to_self() {
 async fn long_message() {
     run(|addr| {
         let mut a = C::connect(addr, "long_a");
-        a.reg(); a.drain();
+        a.reg();
+        a.drain();
         let mut b = C::connect(addr, "long_b");
-        b.reg(); b.drain();
-        a.send("JOIN #longmsg"); a.num("366"); a.drain();
-        b.send("JOIN #longmsg"); b.num("366"); b.drain();
+        b.reg();
+        b.drain();
+        a.send("JOIN #longmsg");
+        a.num("366");
+        a.drain();
+        b.send("JOIN #longmsg");
+        b.num("366");
+        b.drain();
 
         // Send a 4000-char message (well under 8KB line limit)
         let long_text = "x".repeat(4000);
@@ -524,7 +654,8 @@ async fn long_message() {
         let msg = b.expect(|l| l.contains("PRIVMSG") && l.contains("xxxx"), "long msg");
         // Verify it's actually long
         assert!(msg.len() > 3000, "Message should be long: {}", msg.len());
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -536,11 +667,14 @@ async fn concurrent_joins_founder_race() {
     run(|addr| {
         // Create 5 clients, all join a new channel at the same time.
         // Exactly ONE should get ops (the first to actually create the channel).
-        let mut clients: Vec<C> = (0..5).map(|i| {
-            let mut c = C::connect(addr, &format!("racer{i}"));
-            c.reg(); c.drain();
-            c
-        }).collect();
+        let mut clients: Vec<C> = (0..5)
+            .map(|i| {
+                let mut c = C::connect(addr, &format!("racer{i}"));
+                c.reg();
+                c.drain();
+                c
+            })
+            .collect();
 
         for c in &mut clients {
             c.send("JOIN #racetest");
@@ -555,7 +689,8 @@ async fn concurrent_joins_founder_race() {
         let names = clients[0].num("353");
         let op_count = names.matches('@').count();
         assert_eq!(op_count, 1, "Exactly one founder should have ops: {names}");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -566,12 +701,14 @@ async fn concurrent_joins_founder_race() {
 async fn whois_nonexistent_user() {
     run(|addr| {
         let mut c = C::connect(addr, "whoisqry");
-        c.reg(); c.drain();
+        c.reg();
+        c.drain();
         c.send("WHOIS ghostuser999");
         // Should get 401 ERR_NOSUCHNICK then 318 ENDOFWHOIS
         c.num("401");
         c.num("318");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -582,18 +719,23 @@ async fn whois_nonexistent_user() {
 async fn flood_protection_kicks_in() {
     run(|addr| {
         let mut a = C::connect(addr, "flooder");
-        a.reg(); a.drain();
-        a.send("JOIN #flood"); a.num("366"); a.drain();
+        a.reg();
+        a.drain();
+        a.send("JOIN #flood");
+        a.num("366");
+        a.drain();
 
         // Rapidly send 6 messages (limit is 5 per 2 seconds)
         for i in 0..6 {
             a.send(&format!("PRIVMSG #flood :flood {i}"));
         }
         // Should get 404 ERR_CANNOTSENDTOCHAN for the 6th message
-        a.expect(|l| {
-            l.split_whitespace().nth(1) == Some("404")
-        }, "flood protection 404");
-    }).await;
+        a.expect(
+            |l| l.split_whitespace().nth(1) == Some("404"),
+            "flood protection 404",
+        );
+    })
+    .await;
 }
 
 use base64::Engine;

@@ -47,10 +47,7 @@ pub fn is_secret_command(line: &str) -> bool {
         .next()
         .unwrap_or("")
         .to_ascii_lowercase();
-    matches!(
-        first.as_str(),
-        "/encrypt" | "/oper" | "/pass" | "/password"
-    )
+    matches!(first.as_str(), "/encrypt" | "/oper" | "/pass" | "/password")
 }
 
 /// Word-boundary-aware mention check. Returns true when `nick` appears
@@ -692,10 +689,10 @@ impl App {
     }
 
     pub fn start_batch_typed(&mut self, id: &str, target: &str, batch_type: &str) {
-        if self.batches.len() >= BATCH_CONCURRENT_CAP {
-            if let Some(victim) = self.batches.keys().next().cloned() {
-                self.batches.remove(&victim);
-            }
+        if self.batches.len() >= BATCH_CONCURRENT_CAP
+            && let Some(victim) = self.batches.keys().next().cloned()
+        {
+            self.batches.remove(&victim);
         }
         self.batches.insert(
             id.to_string(),
@@ -722,7 +719,7 @@ impl App {
     pub fn end_batch(&mut self, id: &str) {
         if let Some(mut batch) = self.batches.remove(id) {
             let buf = self.buffer_mut(&batch.target);
-            batch.lines.sort_by(|a, b| a.0.cmp(&b.0));
+            batch.lines.sort_by_key(|a| a.0);
             let was_empty = batch.lines.is_empty();
             let was_chathistory = batch.batch_type.eq_ignore_ascii_case("chathistory");
             // Prepend in order (oldest first)
@@ -960,8 +957,14 @@ mod tests {
         buf.push(line_with_msgid("hello", Some("01ABC")));
         buf.push(line_with_msgid("world", Some("01DEF")));
 
-        assert_eq!(buf.find_by_msgid("01ABC").map(|l| l.text.as_str()), Some("hello"));
-        assert_eq!(buf.find_by_msgid("01DEF").map(|l| l.text.as_str()), Some("world"));
+        assert_eq!(
+            buf.find_by_msgid("01ABC").map(|l| l.text.as_str()),
+            Some("hello")
+        );
+        assert_eq!(
+            buf.find_by_msgid("01DEF").map(|l| l.text.as_str()),
+            Some("world")
+        );
         assert!(buf.find_by_msgid("missing").is_none());
     }
 
@@ -1392,8 +1395,7 @@ mod tests {
     #[test]
     fn apply_edit_does_not_create_phantom_buffer() {
         let mut app = App::new("alice", false);
-        let before: std::collections::BTreeSet<String> =
-            app.buffers.keys().cloned().collect();
+        let before: std::collections::BTreeSet<String> = app.buffers.keys().cloned().collect();
 
         let applied = app.apply_edit(
             "mallory",
@@ -1404,8 +1406,7 @@ mod tests {
             "phantom edit",
         );
         assert!(!applied);
-        let after: std::collections::BTreeSet<String> =
-            app.buffers.keys().cloned().collect();
+        let after: std::collections::BTreeSet<String> = app.buffers.keys().cloned().collect();
         assert_eq!(
             before, after,
             "no buffer should be created for an edit that didn't apply"
@@ -1415,13 +1416,11 @@ mod tests {
     #[test]
     fn apply_delete_does_not_create_phantom_buffer() {
         let mut app = App::new("alice", false);
-        let before: std::collections::BTreeSet<String> =
-            app.buffers.keys().cloned().collect();
+        let before: std::collections::BTreeSet<String> = app.buffers.keys().cloned().collect();
 
         let applied = app.apply_delete("mallory", None, "#never-joined", "01NOPE");
         assert!(!applied);
-        let after: std::collections::BTreeSet<String> =
-            app.buffers.keys().cloned().collect();
+        let after: std::collections::BTreeSet<String> = app.buffers.keys().cloned().collect();
         assert_eq!(before, after);
     }
 
@@ -1649,7 +1648,10 @@ mod tests {
         let mut buf = Buffer::new("#test");
         // Fill past MAX_MESSAGES so early lines get evicted.
         for i in 0..MAX_MESSAGES + 5 {
-            buf.push(line_with_msgid(&format!("msg {i}"), Some(&format!("id{i:04}"))));
+            buf.push(line_with_msgid(
+                &format!("msg {i}"),
+                Some(&format!("id{i:04}")),
+            ));
         }
         // The first 5 should be gone.
         assert!(buf.find_by_msgid("id0000").is_none());

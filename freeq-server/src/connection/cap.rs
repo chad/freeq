@@ -106,10 +106,7 @@ pub(super) fn handle_cap(
                         }
                         "account-tag" => {
                             conn.cap_account_tag = true;
-                            state
-                                .cap_account_tag
-                                .lock()
-                                .insert(session_id.to_string());
+                            state.cap_account_tag.lock().insert(session_id.to_string());
                             acked.push("account-tag");
                         }
                         "extended-join" => {
@@ -380,7 +377,10 @@ pub(super) async fn handle_authenticate(
                                 let fail = Message::from_server(
                                     server_name,
                                     irc::ERR_SASLFAIL,
-                                    vec![conn.nick_or_star(), "SASL authentication failed (DPoP nonce retry limit exceeded)"],
+                                    vec![
+                                        conn.nick_or_star(),
+                                        "SASL authentication failed (DPoP nonce retry limit exceeded)",
+                                    ],
                                 );
                                 send(state, session_id, format!("{fail}\r\n"));
                                 if conn.sasl_failures >= 3 {
@@ -416,7 +416,7 @@ pub(super) async fn handle_authenticate(
                             tracing::warn!(%session_id, "SASL auth failed: {reason}");
                             conn.sasl_in_progress = false;
                             conn.sasl_failures += 1;
-                                crate::server::Metrics::bump(&state.metrics.sasl_failure_total);
+                            crate::server::Metrics::bump(&state.metrics.sasl_failure_total);
                             let fail = Message::from_server(
                                 server_name,
                                 irc::ERR_SASLFAIL,

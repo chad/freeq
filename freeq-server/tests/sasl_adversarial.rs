@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpStream, SocketAddr};
+use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,7 +22,10 @@ const DID_B: &str = "did:plc:sasl_test_bob";
 fn make_resolver(entries: Vec<(&str, &PrivateKey)>) -> DidResolver {
     let mut docs = HashMap::new();
     for (did, key) in entries {
-        docs.insert(did.to_string(), did::make_test_did_document(did, &key.public_key_multibase()));
+        docs.insert(
+            did.to_string(),
+            did::make_test_did_document(did, &key.public_key_multibase()),
+        );
     }
     DidResolver::static_map(docs)
 }
@@ -35,10 +38,14 @@ async fn start(resolver: DidResolver) -> (SocketAddr, tokio::task::JoinHandle<an
         ..Default::default()
     };
     freeq_server::server::Server::with_resolver(config, resolver)
-        .start().await.unwrap()
+        .start()
+        .await
+        .unwrap()
 }
 
-async fn start_short_timeout(resolver: DidResolver) -> (SocketAddr, tokio::task::JoinHandle<anyhow::Result<()>>) {
+async fn start_short_timeout(
+    resolver: DidResolver,
+) -> (SocketAddr, tokio::task::JoinHandle<anyhow::Result<()>>) {
     let config = freeq_server::config::ServerConfig {
         listen_addr: "127.0.0.1:0".to_string(),
         server_name: "test-sasl-short".to_string(),
@@ -46,42 +53,94 @@ async fn start_short_timeout(resolver: DidResolver) -> (SocketAddr, tokio::task:
         ..Default::default()
     };
     freeq_server::server::Server::with_resolver(config, resolver)
-        .start().await.unwrap()
+        .start()
+        .await
+        .unwrap()
 }
 
 // ── Raw TCP helper (same pattern as legacy_irc.rs) ──
 
-struct C { reader: BufReader<TcpStream>, writer: TcpStream }
+struct C {
+    reader: BufReader<TcpStream>,
+    writer: TcpStream,
+}
 impl C {
     fn raw(addr: SocketAddr) -> Self {
         let s = TcpStream::connect(addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).ok();
         let w = s.try_clone().unwrap();
-        Self { reader: BufReader::new(s), writer: w }
+        Self {
+            reader: BufReader::new(s),
+            writer: w,
+        }
     }
-    fn tx(&mut self, l: &str) { writeln!(self.writer, "{l}\r").unwrap(); self.writer.flush().ok(); }
+    fn tx(&mut self, l: &str) {
+        writeln!(self.writer, "{l}\r").unwrap();
+        self.writer.flush().ok();
+    }
     fn rx(&mut self, p: impl Fn(&str) -> bool, d: &str) -> String {
         let mut b = String::new();
-        loop { b.clear(); match self.reader.read_line(&mut b) {
-            Ok(0) => panic!("EOF: {d}"), Ok(_) => {
-                let l = b.trim_end();
-                if l.starts_with("PING") { let t = l.strip_prefix("PING ").unwrap_or(":x");
-                    let _ = writeln!(self.writer, "PONG {t}\r"); let _ = self.writer.flush(); continue; }
-                if p(l) { return l.to_string(); }
-            } Err(e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock
-                => panic!("Timeout: {d}"), Err(e) => panic!("{d}: {e}"),
-        }}
+        loop {
+            b.clear();
+            match self.reader.read_line(&mut b) {
+                Ok(0) => panic!("EOF: {d}"),
+                Ok(_) => {
+                    let l = b.trim_end();
+                    if l.starts_with("PING") {
+                        let t = l.strip_prefix("PING ").unwrap_or(":x");
+                        let _ = writeln!(self.writer, "PONG {t}\r");
+                        let _ = self.writer.flush();
+                        continue;
+                    }
+                    if p(l) {
+                        return l.to_string();
+                    }
+                }
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::TimedOut
+                        || e.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    panic!("Timeout: {d}")
+                }
+                Err(e) => panic!("{d}: {e}"),
+            }
+        }
     }
-    fn num(&mut self, c: &str) -> String { self.rx(|l| l.split_whitespace().nth(1)==Some(c), c) }
+    fn num(&mut self, c: &str) -> String {
+        self.rx(|l| l.split_whitespace().nth(1) == Some(c), c)
+    }
     fn maybe(&mut self, p: impl Fn(&str) -> bool, ms: u64) -> Option<String> {
-        self.writer.try_clone().unwrap().set_read_timeout(Some(Duration::from_millis(ms))).ok();
-        let mut b = String::new(); let r = loop { b.clear(); match self.reader.read_line(&mut b) {
-            Ok(0) => break None, Ok(_) => { let l = b.trim_end();
-                if l.starts_with("PING") { let t = l.strip_prefix("PING ").unwrap_or(":x");
-                    let _ = writeln!(self.writer, "PONG {t}\r"); let _ = self.writer.flush(); continue; }
-                if p(l) { break Some(l.to_string()); }
-            } Err(_) => break None, }};
-        self.writer.try_clone().unwrap().set_read_timeout(Some(Duration::from_secs(5))).ok(); r
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_millis(ms)))
+            .ok();
+        let mut b = String::new();
+        let r = loop {
+            b.clear();
+            match self.reader.read_line(&mut b) {
+                Ok(0) => break None,
+                Ok(_) => {
+                    let l = b.trim_end();
+                    if l.starts_with("PING") {
+                        let t = l.strip_prefix("PING ").unwrap_or(":x");
+                        let _ = writeln!(self.writer, "PONG {t}\r");
+                        let _ = self.writer.flush();
+                        continue;
+                    }
+                    if p(l) {
+                        break Some(l.to_string());
+                    }
+                }
+                Err(_) => break None,
+            }
+        };
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .ok();
+        r
     }
     /// Do CAP negotiation + NICK/USER, get challenge, return challenge string
     fn start_sasl(&mut self, nick: &str) -> String {
@@ -93,7 +152,10 @@ impl C {
         self.tx("AUTHENTICATE ATPROTO-CHALLENGE");
         let auth_line = self.rx(|l| l.starts_with("AUTHENTICATE "), "challenge");
         // Extract challenge (everything after "AUTHENTICATE ")
-        auth_line.strip_prefix("AUTHENTICATE ").unwrap_or(&auth_line).to_string()
+        auth_line
+            .strip_prefix("AUTHENTICATE ")
+            .unwrap_or(&auth_line)
+            .to_string()
     }
 }
 
@@ -114,17 +176,23 @@ async fn sasl_ed25519_happy_path() {
     let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(DID_A.to_string(), key));
     let config = ConnectConfig {
         server_addr: addr.to_string(),
-        nick: "sasl_ed".to_string(), user: "sasl_ed".to_string(), realname: "test".to_string(),
+        nick: "sasl_ed".to_string(),
+        user: "sasl_ed".to_string(),
+        realname: "test".to_string(),
         ..Default::default()
     };
     let (_handle, mut events) = client::connect(config, Some(signer));
     let auth = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if let Some(e) = events.recv().await {
-                if matches!(e, Event::Authenticated { .. }) { return e; }
+                if matches!(e, Event::Authenticated { .. }) {
+                    return e;
+                }
             }
         }
-    }).await.unwrap();
+    })
+    .await
+    .unwrap();
     assert!(matches!(auth, Event::Authenticated { did } if did == DID_A));
 }
 
@@ -137,17 +205,23 @@ async fn sasl_secp256k1_happy_path() {
     let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(DID_B.to_string(), key));
     let config = ConnectConfig {
         server_addr: addr.to_string(),
-        nick: "sasl_secp".to_string(), user: "sasl_secp".to_string(), realname: "test".to_string(),
+        nick: "sasl_secp".to_string(),
+        user: "sasl_secp".to_string(),
+        realname: "test".to_string(),
         ..Default::default()
     };
     let (_handle, mut events) = client::connect(config, Some(signer));
     let auth = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if let Some(e) = events.recv().await {
-                if matches!(e, Event::Authenticated { .. }) { return e; }
+                if matches!(e, Event::Authenticated { .. }) {
+                    return e;
+                }
             }
         }
-    }).await.unwrap();
+    })
+    .await
+    .unwrap();
     assert!(matches!(auth, Event::Authenticated { did } if did == DID_B));
 }
 
@@ -168,7 +242,8 @@ async fn sasl_garbage_base64_returns_904() {
         // Should still be able to register as guest
         c.tx("CAP END");
         c.num("001"); // Registered
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -189,7 +264,8 @@ async fn sasl_wrong_did_returns_904() {
         let encoded = auth::encode_response(&response);
         c.tx(&format!("AUTHENTICATE {encoded}"));
         c.num("904"); // Signature doesn't match
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -207,7 +283,8 @@ async fn sasl_unknown_did_returns_904() {
         let encoded = auth::encode_response(&response);
         c.tx(&format!("AUTHENTICATE {encoded}"));
         c.num("904"); // DID resolution failed
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -228,20 +305,26 @@ async fn sasl_three_failures_disconnect() {
                 serde_json::json!({
                     "did": "did:plc:fake",
                     "signature": "AAAA"
-                }).to_string().as_bytes()
+                })
+                .to_string()
+                .as_bytes(),
             )
         };
 
         for i in 0..3 {
             c.tx("AUTHENTICATE ATPROTO-CHALLENGE");
-            c.rx(|l| l.starts_with("AUTHENTICATE "), &format!("challenge {i}"));
+            c.rx(
+                |l| l.starts_with("AUTHENTICATE "),
+                &format!("challenge {i}"),
+            );
             c.tx(&format!("AUTHENTICATE {bad_response}"));
             c.num("904");
         }
         // After 3rd failure, should get ERROR and disconnect
         let err = c.maybe(|l| l.starts_with("ERROR"), 2000);
         assert!(err.is_some(), "Should get ERROR after 3 SASL failures");
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -275,7 +358,8 @@ async fn sasl_valid_after_one_failure() {
         c.num("903"); // SASL success
         c.tx("CAP END");
         c.num("001"); // Registered
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -297,7 +381,8 @@ async fn sasl_challenge_expired() {
         c.tx(&format!("AUTHENTICATE {encoded}"));
         // Should fail — challenge expired
         c.num("904");
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -323,7 +408,8 @@ async fn sasl_challenge_replay() {
         c.tx(&format!("AUTHENTICATE {encoded}"));
         // Should fail — signature is over the OLD challenge, not the new one
         c.num("904");
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -346,7 +432,8 @@ async fn sasl_abort_with_star() {
         // Should still be able to register as guest
         c.tx("CAP END");
         c.num("001");
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -361,7 +448,10 @@ async fn sasl_authenticate_before_cap_req() {
         c.tx("USER nocap 0 * :test");
         c.tx("AUTHENTICATE ATPROTO-CHALLENGE");
         // Should get a challenge anyway (server doesn't require CAP REQ)
-        let result = c.maybe(|l| l.starts_with("AUTHENTICATE ") || l.split_whitespace().nth(1) == Some("904"), 2000);
+        let result = c.maybe(
+            |l| l.starts_with("AUTHENTICATE ") || l.split_whitespace().nth(1) == Some("904"),
+            2000,
+        );
         if let Some(line) = result {
             if line.starts_with("AUTHENTICATE ") {
                 // Got challenge — sign it
@@ -369,11 +459,15 @@ async fn sasl_authenticate_before_cap_req() {
                 let challenge_bytes = auth::decode_challenge_bytes(challenge).unwrap();
                 let signer = KeySigner::new(DID_A.to_string(), key);
                 let response = signer.respond(&challenge_bytes).unwrap();
-                c.tx(&format!("AUTHENTICATE {}", auth::encode_response(&response)));
+                c.tx(&format!(
+                    "AUTHENTICATE {}",
+                    auth::encode_response(&response)
+                ));
                 c.num("903"); // Should succeed even without CAP REQ
             }
         }
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -400,9 +494,13 @@ async fn sasl_double_challenge_request() {
         let ch2_bytes = auth::decode_challenge_bytes(ch2).unwrap();
         let signer = KeySigner::new(DID_A.to_string(), key);
         let response = signer.respond(&ch2_bytes).unwrap();
-        c.tx(&format!("AUTHENTICATE {}", auth::encode_response(&response)));
+        c.tx(&format!(
+            "AUTHENTICATE {}",
+            auth::encode_response(&response)
+        ));
         c.num("903"); // Should succeed with second challenge
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -419,7 +517,8 @@ async fn sasl_response_with_empty_did() {
             .encode(serde_json::to_vec(&resp).unwrap());
         c.tx(&format!("AUTHENTICATE {encoded}"));
         c.num("904"); // Invalid DID format
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -435,7 +534,8 @@ async fn sasl_response_with_invalid_did_format() {
             .encode(serde_json::to_vec(&resp).unwrap());
         c.tx(&format!("AUTHENTICATE {encoded}"));
         c.num("904"); // Invalid DID format (doesn't start with "did:")
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -458,7 +558,8 @@ async fn sasl_empty_authenticate_parameter() {
         // Either way, should be able to continue
         c.tx("CAP END");
         c.num("001");
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -471,7 +572,8 @@ async fn guest_can_register_without_sasl() {
         c.tx("NICK pureguest");
         c.tx("USER pureguest 0 * :test");
         c.num("001");
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -488,5 +590,6 @@ async fn cap_end_without_sasl_registers_as_guest() {
         c.rx(|l| l.contains("ACK"), "ACK");
         c.tx("CAP END");
         c.num("001"); // Registered as guest
-    }).await;
+    })
+    .await;
 }

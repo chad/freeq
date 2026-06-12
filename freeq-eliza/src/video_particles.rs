@@ -39,14 +39,14 @@ use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use ghostly::{
-    apply_emotion, characters as gho_characters, Character as GhoCharacter, Emotion, FaceState,
-    RenderSettings, Renderer,
+    Character as GhoCharacter, Emotion, FaceState, RenderSettings, Renderer, apply_emotion,
+    characters as gho_characters,
 };
 use iroh_live::media::format::VideoFrame;
 use resvg::tiny_skia::{Pixmap, PixmapPaint, Transform};
 use resvg::usvg;
 
-use crate::video::{overlay_svg_for_particles, VideoTile, VIDEO_H, VIDEO_W};
+use crate::video::{VIDEO_H, VIDEO_W, VideoTile, overlay_svg_for_particles};
 
 const FPS: u64 = 15;
 /// Particle count for the 360p tile. 12K reads as solid at this
@@ -133,9 +133,7 @@ pub(crate) fn render_loop(tile: VideoTile, character_name: &str, ghostly_pack: O
             Emotion::Awe
         } else if level > 0.03 {
             Emotion::Passion
-        } else if thinking {
-            Emotion::Curiosity
-        } else if peer > 0.03 {
+        } else if thinking || peer > 0.03 {
             Emotion::Curiosity
         } else {
             Emotion::Calm
@@ -226,11 +224,7 @@ pub(crate) fn render_loop(tile: VideoTile, character_name: &str, ghostly_pack: O
                 // Clear scratch (overlay rasterizes onto a transparent
                 // canvas; we composite that onto the particle pixmap).
                 overlay_pixmap.data_mut().fill(0);
-                resvg::render(
-                    &tree,
-                    Transform::identity(),
-                    &mut overlay_pixmap.as_mut(),
-                );
+                resvg::render(&tree, Transform::identity(), &mut overlay_pixmap.as_mut());
                 composed.draw_pixmap(
                     0,
                     0,

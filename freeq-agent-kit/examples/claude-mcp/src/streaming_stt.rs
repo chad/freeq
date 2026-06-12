@@ -122,8 +122,6 @@ enum DeepgramResponse {
 struct ResultsBody {
     channel: ResultsChannel,
     is_final: bool,
-    #[serde(default)]
-    speech_final: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,7 +154,9 @@ pub fn parse_final_transcript(text: &str) -> Option<String> {
 /// transcripts and closes cleanly.
 pub async fn close_stream(writer: &mut SplitSink<WsStream, Message>) -> Result<()> {
     writer
-        .send(Message::Text(r#"{"type":"CloseStream"}"#.to_string().into()))
+        .send(Message::Text(
+            r#"{"type":"CloseStream"}"#.to_string().into(),
+        ))
         .await
         .context("sending CloseStream")
 }
@@ -164,10 +164,7 @@ pub async fn close_stream(writer: &mut SplitSink<WsStream, Message>) -> Result<(
 /// Send a chunk of raw little-endian 16-bit PCM. Wraps the binary
 /// frame so the caller doesn't need to depend on tungstenite's types
 /// directly.
-pub async fn send_pcm(
-    writer: &mut SplitSink<WsStream, Message>,
-    pcm_le: Vec<u8>,
-) -> Result<()> {
+pub async fn send_pcm(writer: &mut SplitSink<WsStream, Message>, pcm_le: Vec<u8>) -> Result<()> {
     if pcm_le.is_empty() {
         return Ok(());
     }

@@ -4,18 +4,27 @@
 //! implementation for development. Real backends (Whisper, LLM) plug in
 //! by implementing these traits.
 
-use crate::av::{AvArtifact, AvSession, ArtifactKind, ArtifactVisibility};
+use crate::av::{ArtifactKind, ArtifactVisibility, AvArtifact, AvSession};
 
 /// Trait for generating transcripts from recorded audio.
 pub trait TranscriptBackend: Send + Sync {
     /// Generate a transcript from audio data.
-    fn transcribe(&self, audio_url: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>>;
+    fn transcribe(
+        &self,
+        audio_url: &str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>>;
 }
 
 /// Trait for generating summaries from text (transcripts, chat logs).
 pub trait SummaryBackend: Send + Sync {
     /// Generate a summary from a transcript.
-    fn summarize(&self, transcript: &str, context: &SummaryContext) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SummaryResult, String>> + Send + '_>>;
+    fn summarize(
+        &self,
+        transcript: &str,
+        context: &SummaryContext,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<SummaryResult, String>> + Send + '_>,
+    >;
 }
 
 /// Context provided to the summary backend.
@@ -42,10 +51,16 @@ pub struct ActionItem {
 pub struct StubTranscriptBackend;
 
 impl TranscriptBackend for StubTranscriptBackend {
-    fn transcribe(&self, audio_url: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>> {
+    fn transcribe(
+        &self,
+        audio_url: &str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>>
+    {
         let url = audio_url.to_string();
         Box::pin(async move {
-            Ok(format!("[Transcript stub — recording at {url}]\n\nTranscript generation requires a Whisper backend.\nConfigure TRANSCRIPT_BACKEND=whisper to enable."))
+            Ok(format!(
+                "[Transcript stub — recording at {url}]\n\nTranscript generation requires a Whisper backend.\nConfigure TRANSCRIPT_BACKEND=whisper to enable."
+            ))
         })
     }
 }
@@ -54,12 +69,26 @@ impl TranscriptBackend for StubTranscriptBackend {
 pub struct StubSummaryBackend;
 
 impl SummaryBackend for StubSummaryBackend {
-    fn summarize(&self, transcript: &str, context: &SummaryContext) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SummaryResult, String>> + Send + '_>> {
+    fn summarize(
+        &self,
+        transcript: &str,
+        context: &SummaryContext,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<SummaryResult, String>> + Send + '_>,
+    > {
         let participant_list = context.participants.join(", ");
         let duration_min = context.duration_secs / 60;
         let channel = context.channel.as_deref().unwrap_or("ad-hoc").to_string();
-        let title = context.session_title.as_deref().unwrap_or("Voice session").to_string();
-        let transcript_preview = if transcript.len() > 200 { transcript[..200].to_string() } else { transcript.to_string() };
+        let title = context
+            .session_title
+            .as_deref()
+            .unwrap_or("Voice session")
+            .to_string();
+        let transcript_preview = if transcript.len() > 200 {
+            transcript[..200].to_string()
+        } else {
+            transcript.to_string()
+        };
 
         Box::pin(async move {
             Ok(SummaryResult {
@@ -93,11 +122,19 @@ pub async fn generate_session_artifacts(
 
     // Skip very short sessions (< 30 seconds — probably accidental)
     if duration_secs < 30 {
-        tracing::debug!(session_id, duration_secs, "Skipping artifact generation for short session");
+        tracing::debug!(
+            session_id,
+            duration_secs,
+            "Skipping artifact generation for short session"
+        );
         return;
     }
 
-    let participants: Vec<String> = session.participants.values().map(|p| p.nick.clone()).collect();
+    let participants: Vec<String> = session
+        .participants
+        .values()
+        .map(|p| p.nick.clone())
+        .collect();
 
     // For now, transcript requires a recording URL. Without iroh-live recording,
     // we generate a session summary from metadata only.
@@ -141,7 +178,9 @@ pub async fn generate_session_artifacts(
                     result.summary.clone()
                 };
                 crate::connection::messaging::broadcast_av_notice(
-                    state, ch, &format!("Session summary: {short_summary}"),
+                    state,
+                    ch,
+                    &format!("Session summary: {short_summary}"),
                 );
             }
 

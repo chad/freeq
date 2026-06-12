@@ -8,7 +8,9 @@ use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let channel = std::env::args().nth(1).unwrap_or_else(|| "#general".to_string());
+    let channel = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "#general".to_string());
 
     eprintln!("Connecting to irc.freeq.at:6697...");
 
@@ -56,7 +58,9 @@ async fn main() -> Result<()> {
     let words: Vec<&str> = sentence1.split_whitespace().collect();
     let mut acc = String::new();
     for (i, word) in words.iter().enumerate() {
-        if i > 0 { acc.push(' '); }
+        if i > 0 {
+            acc.push(' ');
+        }
         acc.push_str(word);
         stream.set(&acc).await?;
         stream.flush().await?;
@@ -78,7 +82,9 @@ async fn main() -> Result<()> {
     let words2: Vec<&str> = sentence2.split_whitespace().collect();
     let mut acc2 = String::new();
     for (i, word) in words2.iter().enumerate() {
-        if i > 0 { acc2.push(' '); }
+        if i > 0 {
+            acc2.push(' ');
+        }
         acc2.push_str(word);
         stream2.set(&acc2).await?;
         stream2.flush().await?;

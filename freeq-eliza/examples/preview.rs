@@ -14,7 +14,9 @@ use std::time::{Duration, Instant};
 
 use freeq_eliza::video::{Backend, VIDEO_H, VIDEO_W, VideoTile};
 use freeq_eliza::video_alexandria::AlexandriaRenderer;
-use freeq_eliza::video_ascii::{AsciiBotRenderer, AsciiGlitchRenderer, AsciiRainRenderer, AsciiRenderer};
+use freeq_eliza::video_ascii::{
+    AsciiBotRenderer, AsciiGlitchRenderer, AsciiRainRenderer, AsciiRenderer,
+};
 use freeq_eliza::video_face3d::{Face3dRenderer, Persona3d};
 use freeq_eliza::video_southpark::{SouthParkRenderer, SpStyle};
 use freeq_eliza::video_vector::VectorRenderer;
@@ -86,10 +88,14 @@ fn main() {
                 let t = tf(f);
                 let phase = (f * 4) / n.max(1); // quarter each
                 let (level, peer, thinking) = match phase {
-                    0 => (0.0, 0.0, false),                                   // idle
-                    1 => (0.0, 0.5 + 0.4 * (t * 5.0).sin().abs(), false),     // hearing
-                    2 => (0.0, 0.0, true),                                    // thinking
-                    _ => (levels[f].max(0.35 + 0.4 * (t * 7.0).sin().abs()), 0.0, false), // speaking
+                    0 => (0.0, 0.0, false),                               // idle
+                    1 => (0.0, 0.5 + 0.4 * (t * 5.0).sin().abs(), false), // hearing
+                    2 => (0.0, 0.0, true),                                // thinking
+                    _ => (
+                        levels[f].max(0.35 + 0.4 * (t * 7.0).sin().abs()),
+                        0.0,
+                        false,
+                    ), // speaking
                 };
                 save(f, r.frame_rgba_full(t, level, peer, thinking));
             }
@@ -98,7 +104,10 @@ fn main() {
             // Legacy live-loop backends (svg / particles-<char>): drive the
             // tile's level cell in real time and pull frames off the source.
             let backend = if let Some(ch) = other.strip_prefix("particles-") {
-                Backend::Particles { character: ch.to_string(), ghostly_pack: None }
+                Backend::Particles {
+                    character: ch.to_string(),
+                    ghostly_pack: None,
+                }
             } else {
                 Backend::Svg
             };

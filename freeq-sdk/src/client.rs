@@ -44,7 +44,8 @@ use crate::irc::Message;
 /// Registry for pending echo-message callbacks.
 /// When a client sends a PRIVMSG with a `+freeq.at/echo-nonce` tag, the nonce
 /// is registered here. When the echo comes back, the msgid is sent via the oneshot.
-type EchoRegistry = std::sync::Arc<parking_lot::Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>;
+type EchoRegistry =
+    std::sync::Arc<parking_lot::Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>;
 
 /// Configuration for connecting to an IRC server.
 #[derive(Debug, Clone)]
@@ -94,7 +95,16 @@ impl ConnectConfig {
         if self.nick.is_empty() || self.nick.len() > 64 {
             return Err("nick must be 1-64 characters".into());
         }
-        if self.nick.contains(|c: char| c.is_control() || c == ' ' || c == ',' || c == '*' || c == '?' || c == '!' || c == '@' || c == '#') {
+        if self.nick.contains(|c: char| {
+            c.is_control()
+                || c == ' '
+                || c == ','
+                || c == '*'
+                || c == '?'
+                || c == '!'
+                || c == '@'
+                || c == '#'
+        }) {
             return Err("nick contains invalid characters".into());
         }
         if self.user.is_empty() {
@@ -111,7 +121,10 @@ impl ConnectConfig {
 #[derive(Debug)]
 pub enum Command {
     Join(String),
-    Privmsg { target: String, text: String },
+    Privmsg {
+        target: String,
+        text: String,
+    },
     /// Send a `draft/multiline` BATCH. Used when the assembled body
     /// either contains `\n` (one chunk per logical line, concat=false)
     /// or exceeds a single line and needs ciphertext-style chunking
@@ -232,7 +245,8 @@ impl ClientHandle {
                 concat: false,
             })
             .collect();
-        self.send_multiline_chunks(target, chunks, opener_tags).await
+        self.send_multiline_chunks(target, chunks, opener_tags)
+            .await
     }
 
     /// Lower-level multiline send: caller supplies the wire chunks
@@ -366,35 +380,20 @@ impl ClientHandle {
     /// watch for it with [`crate::av::parse_av_state`] applied to
     /// incoming [`Event::TagMsg`](crate::event::Event::TagMsg) tags.
     /// `instance` is a per-call id from [`crate::av::new_av_instance`].
-    pub async fn av_start(
-        &self,
-        channel: &str,
-        instance: &str,
-        title: Option<&str>,
-    ) -> Result<()> {
+    pub async fn av_start(&self, channel: &str, instance: &str, title: Option<&str>) -> Result<()> {
         self.send_tagmsg(channel, crate::av::av_start_tags(instance, title))
             .await
     }
 
     /// Join the active AV call in `channel`. `session_id` is the id from
     /// the channel's `av-state` broadcast.
-    pub async fn av_join(
-        &self,
-        channel: &str,
-        session_id: &str,
-        instance: &str,
-    ) -> Result<()> {
+    pub async fn av_join(&self, channel: &str, session_id: &str, instance: &str) -> Result<()> {
         self.send_tagmsg(channel, crate::av::av_join_tags(session_id, instance))
             .await
     }
 
     /// Leave an AV call.
-    pub async fn av_leave(
-        &self,
-        channel: &str,
-        session_id: &str,
-        instance: &str,
-    ) -> Result<()> {
+    pub async fn av_leave(&self, channel: &str, session_id: &str, instance: &str) -> Result<()> {
         self.send_tagmsg(channel, crate::av::av_leave_tags(session_id, instance))
             .await
     }
@@ -585,9 +584,13 @@ impl ClientHandle {
         capability: &str,
         resource: Option<&str>,
     ) -> Result<()> {
-        let resource_part = resource.map(|r| format!(";resource={r}")).unwrap_or_default();
-        self.raw(&format!("APPROVAL_REQUEST {channel} :{capability}{resource_part}"))
-            .await
+        let resource_part = resource
+            .map(|r| format!(";resource={r}"))
+            .unwrap_or_default();
+        self.raw(&format!(
+            "APPROVAL_REQUEST {channel} :{capability}{resource_part}"
+        ))
+        .await
     }
 
     /// Pause an agent (must be op in shared channel).
@@ -613,13 +616,22 @@ impl ClientHandle {
 
     /// Approve an agent's pending capability request.
     pub async fn approve_agent(&self, nick: &str, capability: &str) -> Result<()> {
-        self.raw(&format!("AGENT APPROVE {nick} {capability}")).await
+        self.raw(&format!("AGENT APPROVE {nick} {capability}"))
+            .await
     }
 
     /// Deny an agent's pending capability request.
-    pub async fn deny_agent(&self, nick: &str, capability: &str, reason: Option<&str>) -> Result<()> {
+    pub async fn deny_agent(
+        &self,
+        nick: &str,
+        capability: &str,
+        reason: Option<&str>,
+    ) -> Result<()> {
         match reason {
-            Some(r) => self.raw(&format!("AGENT DENY {nick} {capability} :{r}")).await,
+            Some(r) => {
+                self.raw(&format!("AGENT DENY {nick} {capability} :{r}"))
+                    .await
+            }
             None => self.raw(&format!("AGENT DENY {nick} {capability}")).await,
         }
     }
@@ -636,8 +648,12 @@ impl ClientHandle {
         ref_id: Option<&str>,
         human_text: &str,
     ) -> Result<String> {
-        let event_id = format!("{:016x}{:016x}",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
+        let event_id = format!(
+            "{:016x}{:016x}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
             rand::random::<u64>(),
         );
         let mut tags = format!(
@@ -650,7 +666,8 @@ impl ClientHandle {
         // Send structured TAGMSG
         self.raw(&format!("@{tags} TAGMSG {channel}")).await?;
         // Send human-readable PRIVMSG with the same event tags (for rich client rendering)
-        self.raw(&format!("@{tags} PRIVMSG {channel} :{human_text}")).await?;
+        self.raw(&format!("@{tags} PRIVMSG {channel} :{human_text}"))
+            .await?;
         Ok(event_id)
     }
 
@@ -663,7 +680,8 @@ impl ClientHandle {
             &payload,
             None,
             &format!("📋 New task: {description}"),
-        ).await
+        )
+        .await
     }
 
     /// Update a task's status.
@@ -681,7 +699,8 @@ impl ClientHandle {
             &payload,
             Some(task_id),
             &format!("🔄 [{phase}] {summary}"),
-        ).await?;
+        )
+        .await?;
         Ok(())
     }
 
@@ -704,17 +723,13 @@ impl ClientHandle {
             &payload.to_string(),
             Some(task_id),
             &format!("🎉 Task complete: {summary}{url_str}"),
-        ).await?;
+        )
+        .await?;
         Ok(())
     }
 
     /// Fail a task.
-    pub async fn fail_task(
-        &self,
-        channel: &str,
-        task_id: &str,
-        error: &str,
-    ) -> Result<()> {
+    pub async fn fail_task(&self, channel: &str, task_id: &str, error: &str) -> Result<()> {
         let payload = serde_json::json!({"error": error}).to_string();
         self.emit_event(
             channel,
@@ -722,7 +737,8 @@ impl ClientHandle {
             &payload,
             Some(task_id),
             &format!("❌ Task failed: {error}"),
-        ).await?;
+        )
+        .await?;
         Ok(())
     }
 
@@ -749,7 +765,8 @@ impl ClientHandle {
             &payload.to_string(),
             Some(task_id),
             &format!("📎 Evidence ({evidence_type}): {summary}{url_str}"),
-        ).await?;
+        )
+        .await?;
         Ok(())
     }
 
@@ -791,7 +808,8 @@ impl ClientHandle {
 
     /// Send a message as a spawned child agent.
     pub async fn send_as_child(&self, child_nick: &str, channel: &str, text: &str) -> Result<()> {
-        self.raw(&format!("AGENT MSG {child_nick} {channel} :{text}")).await
+        self.raw(&format!("AGENT MSG {child_nick} {channel} :{text}"))
+            .await
     }
 
     // ── Phase 5: Economic Controls ─────────────────────────────────
@@ -823,7 +841,8 @@ impl ClientHandle {
     ) -> Result<()> {
         self.raw(&format!(
             "BUDGET {channel} :max={max_amount};unit={unit};period={period};sponsor={sponsor_did}"
-        )).await
+        ))
+        .await
     }
 
     /// Query channel budget status.
@@ -833,10 +852,7 @@ impl ClientHandle {
 
     /// Start automatic heartbeat in a background task.
     /// Returns a handle that stops the heartbeat when dropped.
-    pub fn start_heartbeat(
-        &self,
-        interval: std::time::Duration,
-    ) -> tokio::task::JoinHandle<()> {
+    pub fn start_heartbeat(&self, interval: std::time::Duration) -> tokio::task::JoinHandle<()> {
         let handle = self.clone();
         let ttl = interval.as_secs() * 2;
         tokio::spawn(async move {
@@ -891,14 +907,14 @@ pub async fn establish_connection(config: &ConnectConfig) -> Result<EstablishedC
             return Err(anyhow::anyhow!(
                 "TCP connect to {} failed: {e}",
                 config.server_addr
-            ))
+            ));
         }
         Err(_) => {
             return Err(anyhow::anyhow!(
                 "TCP connect to {} timed out after {}s",
                 config.server_addr,
                 TRANSPORT_CONNECT_TIMEOUT.as_secs()
-            ))
+            ));
         }
     };
     tracing::debug!("TCP connected to {} ({mode})", config.server_addr);
@@ -1224,8 +1240,15 @@ pub fn connect(
     let echo_reg = echo_registry.clone();
     let caps_for_loop = caps_acked.clone();
     tokio::spawn(async move {
-        if let Err(e) =
-            run_client(config, signer, event_tx.clone(), cmd_rx, echo_reg, caps_for_loop).await
+        if let Err(e) = run_client(
+            config,
+            signer,
+            event_tx.clone(),
+            cmd_rx,
+            echo_reg,
+            caps_for_loop,
+        )
+        .await
         {
             let _ = event_tx
                 .send(Event::Disconnected {
@@ -1339,14 +1362,12 @@ async fn establish_ws_connection(url: &str) -> Result<EstablishedConnection> {
     .await;
     let (ws, _resp) = match connect_result {
         Ok(Ok(pair)) => pair,
-        Ok(Err(e)) => {
-            return Err(anyhow::anyhow!("WebSocket connect to {url} failed: {e}"))
-        }
+        Ok(Err(e)) => return Err(anyhow::anyhow!("WebSocket connect to {url} failed: {e}")),
         Err(_) => {
             return Err(anyhow::anyhow!(
                 "WebSocket connect to {url} timed out after {}s",
                 TRANSPORT_CONNECT_TIMEOUT.as_secs()
-            ))
+            ));
         }
     };
     tracing::debug!("WebSocket connected: {url}");
@@ -1418,7 +1439,9 @@ async fn establish_ws_connection(url: &str) -> Result<EstablishedConnection> {
                     tracing::debug!(n = frames_in, len = b.len(), "WS: ← binary frame");
                     b.to_vec()
                 }
-                Ok(WsMessage::Ping(_)) | Ok(WsMessage::Pong(_)) | Ok(WsMessage::Frame(_)) => continue,
+                Ok(WsMessage::Ping(_)) | Ok(WsMessage::Pong(_)) | Ok(WsMessage::Frame(_)) => {
+                    continue;
+                }
                 Ok(WsMessage::Close(c)) => {
                     tracing::warn!(close = ?c, "WS: ← close frame");
                     break;
@@ -2170,7 +2193,11 @@ async fn execute_command<W: AsyncWrite + Unpin>(
                     .await?;
             }
         }
-        Command::SendMultiline { target, chunks, mut opener_tags } => {
+        Command::SendMultiline {
+            target,
+            chunks,
+            mut opener_tags,
+        } => {
             // Mint a batch id with a random suffix; collision-free
             // within a single connection at one nanosecond + random id.
             let batch_id = format!(
@@ -2248,7 +2275,10 @@ async fn execute_command<W: AsyncWrite + Unpin>(
         }
         Command::Raw(line) => {
             // Strip CRLF/NUL to prevent protocol injection via raw commands
-            let safe: String = line.chars().filter(|c| *c != '\r' && *c != '\n' && *c != '\0').collect();
+            let safe: String = line
+                .chars()
+                .filter(|c| *c != '\r' && *c != '\n' && *c != '\0')
+                .collect();
             tracing::debug!("[SDK] Raw command: {}", safe);
             writer.write_all(format!("{safe}\r\n").as_bytes()).await?;
             tracing::debug!("[SDK] Raw command sent OK");
@@ -2515,15 +2545,26 @@ mod multiline_tests {
             from: "bob".to_string(),
             opener_tags: std::collections::HashMap::new(),
             lines: vec![
-                MultilineChunk { body: "hello".into(), concat: false },
-                MultilineChunk { body: "world".into(), concat: false },
-                MultilineChunk { body: "foo".into(), concat: false },
+                MultilineChunk {
+                    body: "hello".into(),
+                    concat: false,
+                },
+                MultilineChunk {
+                    body: "world".into(),
+                    concat: false,
+                },
+                MultilineChunk {
+                    body: "foo".into(),
+                    concat: false,
+                },
             ],
             parent_batch_id: None,
         };
         dispatch_assembled_multiline(&tx, batch).await;
         match rx.recv().await.unwrap() {
-            Event::Message { from, target, text, .. } => {
+            Event::Message {
+                from, target, text, ..
+            } => {
                 assert_eq!(from, "bob");
                 assert_eq!(target, "#room");
                 assert_eq!(text, "hello\nworld\nfoo");
@@ -2540,9 +2581,18 @@ mod multiline_tests {
             from: "bob".to_string(),
             opener_tags: std::collections::HashMap::new(),
             lines: vec![
-                MultilineChunk { body: "alpha".into(), concat: false },
-                MultilineChunk { body: "beta".into(), concat: true },
-                MultilineChunk { body: "gamma".into(), concat: false },
+                MultilineChunk {
+                    body: "alpha".into(),
+                    concat: false,
+                },
+                MultilineChunk {
+                    body: "beta".into(),
+                    concat: true,
+                },
+                MultilineChunk {
+                    body: "gamma".into(),
+                    concat: false,
+                },
             ],
             parent_batch_id: None,
         };
@@ -2568,8 +2618,14 @@ mod multiline_tests {
             from: "bob".to_string(),
             opener_tags,
             lines: vec![
-                MultilineChunk { body: "x".into(), concat: false },
-                MultilineChunk { body: "y".into(), concat: false },
+                MultilineChunk {
+                    body: "x".into(),
+                    concat: false,
+                },
+                MultilineChunk {
+                    body: "y".into(),
+                    concat: false,
+                },
             ],
             parent_batch_id: None,
         };
@@ -2581,7 +2637,10 @@ mod multiline_tests {
                     tags.get("time").map(String::as_str),
                     Some("2026-05-29T17:00:00.000Z")
                 );
-                assert_eq!(tags.get("+freeq.at/payload").map(String::as_str), Some("{}"));
+                assert_eq!(
+                    tags.get("+freeq.at/payload").map(String::as_str),
+                    Some("{}")
+                );
             }
             other => panic!("expected Message, got {other:?}"),
         }
@@ -2596,9 +2655,18 @@ mod multiline_tests {
         let cmd = Command::SendMultiline {
             target: "#room".into(),
             chunks: vec![
-                MultilineChunk { body: "one".into(), concat: false },
-                MultilineChunk { body: "two".into(), concat: false },
-                MultilineChunk { body: "three".into(), concat: false },
+                MultilineChunk {
+                    body: "one".into(),
+                    concat: false,
+                },
+                MultilineChunk {
+                    body: "two".into(),
+                    concat: false,
+                },
+                MultilineChunk {
+                    body: "three".into(),
+                    concat: false,
+                },
             ],
             opener_tags: std::collections::HashMap::new(),
         };
@@ -2632,9 +2700,18 @@ mod multiline_tests {
         let cmd = Command::SendMultiline {
             target: "#room".into(),
             chunks: vec![
-                MultilineChunk { body: "ENC1:abc".into(), concat: false },
-                MultilineChunk { body: "def".into(), concat: true },
-                MultilineChunk { body: "ghi".into(), concat: true },
+                MultilineChunk {
+                    body: "ENC1:abc".into(),
+                    concat: false,
+                },
+                MultilineChunk {
+                    body: "def".into(),
+                    concat: true,
+                },
+                MultilineChunk {
+                    body: "ghi".into(),
+                    concat: true,
+                },
             ],
             opener_tags: std::collections::HashMap::new(),
         };
@@ -2642,10 +2719,7 @@ mod multiline_tests {
         let wire = String::from_utf8(buf).unwrap();
         // First chunk: no concat tag
         assert!(wire.contains(":ENC1:abc"));
-        let first_chunk_line = wire
-            .lines()
-            .find(|l| l.contains(":ENC1:abc"))
-            .unwrap();
+        let first_chunk_line = wire.lines().find(|l| l.contains(":ENC1:abc")).unwrap();
         assert!(!first_chunk_line.contains("+draft/multiline-concat"));
         // Second + third chunks: concat tag present
         let def_line = wire.lines().find(|l| l.ends_with(":def")).unwrap();
@@ -2662,8 +2736,14 @@ mod multiline_tests {
         let cmd = Command::SendMultiline {
             target: "#room".into(),
             chunks: vec![
-                MultilineChunk { body: "a".into(), concat: false },
-                MultilineChunk { body: "b".into(), concat: false },
+                MultilineChunk {
+                    body: "a".into(),
+                    concat: false,
+                },
+                MultilineChunk {
+                    body: "b".into(),
+                    concat: false,
+                },
             ],
             opener_tags,
         };
@@ -2694,9 +2774,18 @@ mod multiline_tests {
         let cmd = Command::SendMultiline {
             target: "#room".into(),
             chunks: vec![
-                MultilineChunk { body: "hello".into(), concat: false },
-                MultilineChunk { body: "world".into(), concat: false },
-                MultilineChunk { body: "foo".into(), concat: false },
+                MultilineChunk {
+                    body: "hello".into(),
+                    concat: false,
+                },
+                MultilineChunk {
+                    body: "world".into(),
+                    concat: false,
+                },
+                MultilineChunk {
+                    body: "foo".into(),
+                    concat: false,
+                },
             ],
             opener_tags: std::collections::HashMap::new(),
         };
@@ -2762,7 +2851,10 @@ mod multiline_tests {
         let mut buf: Vec<u8> = Vec::new();
         let cmd = Command::SendMultiline {
             target: "#room".into(),
-            chunks: vec![MultilineChunk { body: "x".into(), concat: false }],
+            chunks: vec![MultilineChunk {
+                body: "x".into(),
+                concat: false,
+            }],
             opener_tags: std::collections::HashMap::new(),
         };
         execute_command(&mut buf, cmd, &None, &None).await.unwrap();
@@ -2788,7 +2880,11 @@ mod multiline_tests {
         };
         handle.privmsg("#test", "alpha\nbeta\ngamma").await.unwrap();
         match cmd_rx.recv().await.unwrap() {
-            Command::SendMultiline { target, chunks, opener_tags } => {
+            Command::SendMultiline {
+                target,
+                chunks,
+                opener_tags,
+            } => {
                 assert_eq!(target, "#test");
                 assert!(opener_tags.is_empty());
                 assert_eq!(chunks.len(), 3);
@@ -2843,10 +2939,7 @@ mod multiline_tests {
         let mut tags = std::collections::HashMap::new();
         tags.insert("+freeq.at/event".to_string(), "reveal".to_string());
         tags.insert("+freeq.at/payload".to_string(), "%7B%7D".to_string());
-        handle
-            .send_tagged("#test", "x\ny\nz", tags)
-            .await
-            .unwrap();
+        handle.send_tagged("#test", "x\ny\nz", tags).await.unwrap();
         match cmd_rx.recv().await.unwrap() {
             Command::SendMultiline {
                 target,
@@ -2904,10 +2997,8 @@ mod multiline_tests {
         let (client_side, mut server_side) = tokio::io::duplex(8192);
         let (event_tx, mut event_rx) = mpsc::channel::<Event>(32);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<Command>(16);
-        let echo_registry: EchoRegistry =
-            Arc::new(parking_lot::Mutex::new(HashMap::new()));
-        let caps_acked: CapsAcked =
-            Arc::new(parking_lot::Mutex::new(HashSet::new()));
+        let echo_registry: EchoRegistry = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let caps_acked: CapsAcked = Arc::new(parking_lot::Mutex::new(HashSet::new()));
         let config = ConnectConfig {
             server_addr: "test".to_string(),
             nick: "tester".to_string(),
@@ -2964,18 +3055,15 @@ mod multiline_tests {
 
         // Collect events until we hit the BatchEnd for cht1, or timeout.
         let mut events = Vec::new();
-        let _ = tokio::time::timeout(
-            tokio::time::Duration::from_millis(800),
-            async {
-                while let Some(ev) = event_rx.recv().await {
-                    let done = matches!(&ev, Event::BatchEnd { id } if id == "cht1");
-                    events.push(ev);
-                    if done {
-                        break;
-                    }
+        let _ = tokio::time::timeout(tokio::time::Duration::from_millis(800), async {
+            while let Some(ev) = event_rx.recv().await {
+                let done = matches!(&ev, Event::BatchEnd { id } if id == "cht1");
+                events.push(ev);
+                if done {
+                    break;
                 }
-            },
-        )
+            }
+        })
         .await;
 
         // The assembled multi-line should arrive as Event::Message with
@@ -3011,10 +3099,8 @@ mod multiline_tests {
         let (client_side, mut server_side) = tokio::io::duplex(8192);
         let (event_tx, mut event_rx) = mpsc::channel::<Event>(32);
         let (_cmd_tx, cmd_rx) = mpsc::channel::<Command>(16);
-        let echo_registry: EchoRegistry =
-            Arc::new(parking_lot::Mutex::new(HashMap::new()));
-        let caps_acked: CapsAcked =
-            Arc::new(parking_lot::Mutex::new(HashSet::new()));
+        let echo_registry: EchoRegistry = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let caps_acked: CapsAcked = Arc::new(parking_lot::Mutex::new(HashSet::new()));
         let config = ConnectConfig {
             server_addr: "test".to_string(),
             nick: "tester".to_string(),
@@ -3067,18 +3153,15 @@ mod multiline_tests {
         server_side.flush().await.unwrap();
 
         let mut events = Vec::new();
-        let _ = tokio::time::timeout(
-            tokio::time::Duration::from_millis(800),
-            async {
-                while let Some(ev) = event_rx.recv().await {
-                    let done = matches!(&ev, Event::BatchEnd { id } if id == "cht1");
-                    events.push(ev);
-                    if done {
-                        break;
-                    }
+        let _ = tokio::time::timeout(tokio::time::Duration::from_millis(800), async {
+            while let Some(ev) = event_rx.recv().await {
+                let done = matches!(&ev, Event::BatchEnd { id } if id == "cht1");
+                events.push(ev);
+                if done {
+                    break;
                 }
-            },
-        )
+            }
+        })
         .await;
 
         let expected = "b10-stamp\n```\nfn main() {\n    println!(\"hello\");\n}\n```";

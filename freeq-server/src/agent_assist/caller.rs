@@ -79,7 +79,11 @@ pub fn is_channel_operator(caller: &Caller, state: &Arc<SharedState>, channel: &
 
 /// Effective disclosure level for `caller` against a specific channel.
 /// Server operators always satisfy any channel-scoped requirement.
-pub fn effective_level(caller: &Caller, state: &Arc<SharedState>, channel: &str) -> DisclosureLevel {
+pub fn effective_level(
+    caller: &Caller,
+    state: &Arc<SharedState>,
+    channel: &str,
+) -> DisclosureLevel {
     if matches!(caller.level, DisclosureLevel::ServerOperator) {
         return DisclosureLevel::ServerOperator;
     }

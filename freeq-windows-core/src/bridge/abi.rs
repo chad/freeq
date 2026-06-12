@@ -29,7 +29,10 @@ unsafe fn read_c_str(ptr: *const c_char) -> Option<String> {
     if ptr.is_null() {
         return None;
     }
-    unsafe { CStr::from_ptr(ptr) }.to_str().ok().map(String::from)
+    unsafe { CStr::from_ptr(ptr) }
+        .to_str()
+        .ok()
+        .map(String::from)
 }
 
 // ─── Create / Destroy ────────────────────────────────────────────────
@@ -69,10 +72,7 @@ pub unsafe extern "C" fn freeq_win_create_client(config_json: *const c_char) -> 
         .as_str()
         .unwrap_or("127.0.0.1:6667")
         .to_string();
-    let nick = parsed["nick"]
-        .as_str()
-        .unwrap_or("freeq_user")
-        .to_string();
+    let nick = parsed["nick"].as_str().unwrap_or("freeq_user").to_string();
     let tls = parsed["tls"].as_bool().unwrap_or(false);
 
     let id = NEXT_HANDLE.fetch_add(1, Ordering::Relaxed);
@@ -150,10 +150,7 @@ pub unsafe extern "C" fn freeq_win_subscribe_events(
 ///
 /// `token` must be a valid, NUL-terminated UTF-8 C string, or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn freeq_win_set_web_token(
-    handle: u64,
-    token: *const c_char,
-) -> i32 {
+pub unsafe extern "C" fn freeq_win_set_web_token(handle: u64, token: *const c_char) -> i32 {
     let Some(core) = HANDLES.get(&handle) else {
         return FfiResult::InvalidHandle as i32;
     };
@@ -209,7 +206,10 @@ pub unsafe extern "C" fn freeq_win_connect(handle: u64) -> i32 {
                 let domain_event = convert_event(&event);
 
                 // Track connection state
-                if matches!(&domain_event, crate::event::DomainEvent::Disconnected { .. }) {
+                if matches!(
+                    &domain_event,
+                    crate::event::DomainEvent::Disconnected { .. }
+                ) {
                     core.connected.store(false, Ordering::Release);
                 }
 
@@ -220,23 +220,31 @@ pub unsafe extern "C" fn freeq_win_connect(handle: u64) -> i32 {
 
                 // Track joined channels (for reconnect)
                 match &domain_event {
-                    crate::event::DomainEvent::Joined { channel, nick: join_nick } => {
-                        if join_nick.eq_ignore_ascii_case(&*core.nick.lock()) {
-                            let mut chans = core.channels.lock();
-                            if !chans.iter().any(|c| c.eq_ignore_ascii_case(channel)) {
-                                chans.push(channel.clone());
-                            }
+                    crate::event::DomainEvent::Joined {
+                        channel,
+                        nick: join_nick,
+                    } if join_nick.eq_ignore_ascii_case(&core.nick.lock()) => {
+                        let mut chans = core.channels.lock();
+                        if !chans.iter().any(|c| c.eq_ignore_ascii_case(channel)) {
+                            chans.push(channel.clone());
                         }
                     }
-                    crate::event::DomainEvent::Parted { channel, nick: part_nick } => {
-                        if part_nick.eq_ignore_ascii_case(&*core.nick.lock()) {
-                            core.channels.lock().retain(|c| !c.eq_ignore_ascii_case(channel));
-                        }
+                    crate::event::DomainEvent::Parted {
+                        channel,
+                        nick: part_nick,
+                    } if part_nick.eq_ignore_ascii_case(&core.nick.lock()) => {
+                        core.channels
+                            .lock()
+                            .retain(|c| !c.eq_ignore_ascii_case(channel));
                     }
-                    crate::event::DomainEvent::Kicked { channel, nick: kick_nick, .. } => {
-                        if kick_nick.eq_ignore_ascii_case(&*core.nick.lock()) {
-                            core.channels.lock().retain(|c| !c.eq_ignore_ascii_case(channel));
-                        }
+                    crate::event::DomainEvent::Kicked {
+                        channel,
+                        nick: kick_nick,
+                        ..
+                    } if kick_nick.eq_ignore_ascii_case(&core.nick.lock()) => {
+                        core.channels
+                            .lock()
+                            .retain(|c| !c.eq_ignore_ascii_case(channel));
                     }
                     _ => {}
                 }
@@ -357,10 +365,7 @@ pub unsafe extern "C" fn freeq_win_send_message(
 ///
 /// `line` must be a valid, NUL-terminated UTF-8 C string, or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn freeq_win_send_raw(
-    handle: u64,
-    line: *const c_char,
-) -> i32 {
+pub unsafe extern "C" fn freeq_win_send_raw(handle: u64, line: *const c_char) -> i32 {
     let Some(core) = HANDLES.get(&handle) else {
         return FfiResult::InvalidHandle as i32;
     };
@@ -552,10 +557,7 @@ pub unsafe extern "C" fn freeq_win_react(
 ///
 /// `target` must be a valid, NUL-terminated UTF-8 C string, or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn freeq_win_typing_start(
-    handle: u64,
-    target: *const c_char,
-) -> i32 {
+pub unsafe extern "C" fn freeq_win_typing_start(handle: u64, target: *const c_char) -> i32 {
     let Some(core) = HANDLES.get(&handle) else {
         return FfiResult::InvalidHandle as i32;
     };
@@ -585,10 +587,7 @@ pub unsafe extern "C" fn freeq_win_typing_start(
 ///
 /// `target` must be a valid, NUL-terminated UTF-8 C string, or null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn freeq_win_typing_stop(
-    handle: u64,
-    target: *const c_char,
-) -> i32 {
+pub unsafe extern "C" fn freeq_win_typing_stop(handle: u64, target: *const c_char) -> i32 {
     let Some(core) = HANDLES.get(&handle) else {
         return FfiResult::InvalidHandle as i32;
     };
@@ -995,19 +994,13 @@ mod tests {
 
     #[test]
     fn test_subscribe_events() {
-        unsafe extern "C" fn noop_cb(
-            _ptr: *const c_char,
-            _len: usize,
-            _user_data: *mut c_void,
-        ) {
-        }
+        unsafe extern "C" fn noop_cb(_ptr: *const c_char, _len: usize, _user_data: *mut c_void) {}
 
         let config = make_config(r#"{"server":"127.0.0.1:6667","nick":"test"}"#);
         let handle = unsafe { freeq_win_create_client(config.as_ptr()) };
         assert_ne!(handle, 0);
 
-        let result =
-            unsafe { freeq_win_subscribe_events(handle, noop_cb, std::ptr::null_mut()) };
+        let result = unsafe { freeq_win_subscribe_events(handle, noop_cb, std::ptr::null_mut()) };
         assert_eq!(result, FfiResult::Ok as i32);
 
         unsafe { freeq_win_destroy_client(handle) };

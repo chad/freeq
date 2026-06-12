@@ -129,7 +129,10 @@ async fn run_monitor(
         // the tile would re-theme off her own voice every tick.
         let own_prefix = format!(
             "{}:",
-            cfg.nick.split_once('-').map(|(p, _)| p).unwrap_or(&cfg.nick)
+            cfg.nick
+                .split_once('-')
+                .map(|(p, _)| p)
+                .unwrap_or(&cfg.nick)
         )
         .to_ascii_lowercase();
         let new_words = snapshot.transcript[start..]
@@ -232,11 +235,10 @@ fn escalate_to_ambient_image(cfg: &Arc<SharedConfig>, video: &VideoTile, plan: &
                 return;
             }
         };
-        let uri =
-            match tokio::task::spawn_blocking(move || imagegen::to_data_uri(&bytes)).await {
-                Ok(Ok(uri)) => uri,
-                _ => return,
-            };
+        let uri = match tokio::task::spawn_blocking(move || imagegen::to_data_uri(&bytes)).await {
+            Ok(Ok(uri)) => uri,
+            _ => return,
+        };
         video.set_ambient_image(uri);
         tracing::info!(query = %query, "ambient image ready");
     });
@@ -296,7 +298,11 @@ async fn decide(
         return None;
     }
     let accent = plan["accent"].as_str().unwrap_or("").trim().to_string();
-    let image_query = plan["image_query"].as_str().unwrap_or("").trim().to_string();
+    let image_query = plan["image_query"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
     Some(AmbientPlan {
         concept: concept.chars().take(28).collect(),
         accent,

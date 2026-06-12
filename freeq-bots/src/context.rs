@@ -167,50 +167,50 @@ impl AgentContext {
         let mut sections = Vec::new();
 
         // Decisions
-        if let Ok(decisions) = self.memory.list(project, "decision") {
-            if !decisions.is_empty() {
-                let items: Vec<String> = decisions
-                    .iter()
-                    .take(self.config.max_facts)
-                    .map(|e| format!("- **{}**: {}", e.key, e.value))
-                    .collect();
-                sections.push(format!("## Decisions\n{}", items.join("\n")));
-            }
+        if let Ok(decisions) = self.memory.list(project, "decision")
+            && !decisions.is_empty()
+        {
+            let items: Vec<String> = decisions
+                .iter()
+                .take(self.config.max_facts)
+                .map(|e| format!("- **{}**: {}", e.key, e.value))
+                .collect();
+            sections.push(format!("## Decisions\n{}", items.join("\n")));
         }
 
         // Facts
-        if let Ok(facts) = self.memory.list(project, "fact") {
-            if !facts.is_empty() {
-                let items: Vec<String> = facts
-                    .iter()
-                    .take(self.config.max_facts)
-                    .map(|e| format!("- **{}**: {}", e.key, e.value))
-                    .collect();
-                sections.push(format!("## Known Facts\n{}", items.join("\n")));
-            }
+        if let Ok(facts) = self.memory.list(project, "fact")
+            && !facts.is_empty()
+        {
+            let items: Vec<String> = facts
+                .iter()
+                .take(self.config.max_facts)
+                .map(|e| format!("- **{}**: {}", e.key, e.value))
+                .collect();
+            sections.push(format!("## Known Facts\n{}", items.join("\n")));
         }
 
         // Commitments / action items
-        if let Ok(actions) = self.memory.list(project, "action_item") {
-            if !actions.is_empty() {
-                let items: Vec<String> = actions
-                    .iter()
-                    .take(20)
-                    .map(|e| format!("- [ ] {}", e.value))
-                    .collect();
-                sections.push(format!("## Open Action Items\n{}", items.join("\n")));
-            }
+        if let Ok(actions) = self.memory.list(project, "action_item")
+            && !actions.is_empty()
+        {
+            let items: Vec<String> = actions
+                .iter()
+                .take(20)
+                .map(|e| format!("- [ ] {}", e.value))
+                .collect();
+            sections.push(format!("## Open Action Items\n{}", items.join("\n")));
         }
 
         // Preferences
-        if let Ok(prefs) = self.memory.list(project, "preference") {
-            if !prefs.is_empty() {
-                let items: Vec<String> = prefs
-                    .iter()
-                    .map(|e| format!("- {}: {}", e.key, e.value))
-                    .collect();
-                sections.push(format!("## User Preferences\n{}", items.join("\n")));
-            }
+        if let Ok(prefs) = self.memory.list(project, "preference")
+            && !prefs.is_empty()
+        {
+            let items: Vec<String> = prefs
+                .iter()
+                .map(|e| format!("- {}: {}", e.key, e.value))
+                .collect();
+            sections.push(format!("## User Preferences\n{}", items.join("\n")));
         }
 
         if sections.is_empty() {
@@ -385,8 +385,8 @@ impl AgentContext {
                 Ok(Some(_)) => {
                     // Ignore other events during batch collection
                 }
-                Ok(None) => break,       // channel closed
-                Err(_) => break,          // timeout
+                Ok(None) => break, // channel closed
+                Err(_) => break,   // timeout
             }
         }
 
@@ -412,7 +412,7 @@ impl AgentContext {
                 return Ok(false);
             };
 
-            let time_trigger = ctx.last_summary_at.map_or(true, |t| {
+            let time_trigger = ctx.last_summary_at.is_none_or(|t| {
                 let elapsed = Utc::now().timestamp() - t;
                 elapsed > (self.config.summary_interval_minutes as i64 * 60)
             });
@@ -481,10 +481,7 @@ impl AgentContext {
         self.memory.log(
             proj,
             "summary_log",
-            &format!(
-                "[{}] {summary}",
-                Utc::now().format("%Y-%m-%d %H:%M")
-            ),
+            &format!("[{}] {summary}", Utc::now().format("%Y-%m-%d %H:%M")),
         )?;
 
         // Reset counter
@@ -563,11 +560,7 @@ impl AgentContext {
         }
 
         if !stored.is_empty() {
-            tracing::info!(
-                channel,
-                "Extracted {} facts from exchange",
-                stored.len()
-            );
+            tracing::info!(channel, "Extracted {} facts from exchange", stored.len());
         }
 
         Ok(stored)
@@ -598,13 +591,7 @@ impl AgentContext {
     // ── Convenience: store a fact directly ────────────────────────────
 
     /// Store a fact, decision, preference, etc. directly.
-    pub fn store(
-        &self,
-        project: &str,
-        kind: &str,
-        key: &str,
-        value: &str,
-    ) -> Result<()> {
+    pub fn store(&self, project: &str, kind: &str, key: &str, value: &str) -> Result<()> {
         self.memory.set(project, kind, key, value)
     }
 
@@ -616,10 +603,7 @@ impl AgentContext {
     /// Get recent message count for a channel.
     pub async fn message_count(&self, channel: &str) -> usize {
         let channels = self.channels.lock().await;
-        channels
-            .get(channel)
-            .map(|c| c.recent.len())
-            .unwrap_or(0)
+        channels.get(channel).map(|c| c.recent.len()).unwrap_or(0)
     }
 }
 
@@ -708,8 +692,10 @@ mod tests {
     #[tokio::test]
     async fn test_facts_in_context() {
         let mem = Arc::new(Memory::in_memory().unwrap());
-        mem.set("test", "decision", "framework", "Use React").unwrap();
-        mem.set("test", "fact", "deployment", "Hosted on Miren").unwrap();
+        mem.set("test", "decision", "framework", "Use React")
+            .unwrap();
+        mem.set("test", "fact", "deployment", "Hosted on Miren")
+            .unwrap();
 
         let ctx = AgentContext::new(test_identity(), mem, ContextConfig::default());
         let assembled = ctx.assemble("#test", None).await;
@@ -722,8 +708,13 @@ mod tests {
     #[tokio::test]
     async fn test_summary_in_context() {
         let mem = Arc::new(Memory::in_memory().unwrap());
-        mem.set("test", "summary", "latest", "We discussed the architecture and decided on React + Rust.")
-            .unwrap();
+        mem.set(
+            "test",
+            "summary",
+            "latest",
+            "We discussed the architecture and decided on React + Rust.",
+        )
+        .unwrap();
 
         let ctx = AgentContext::new(test_identity(), mem, ContextConfig::default());
         let assembled = ctx.assemble("#test", None).await;
@@ -734,7 +725,8 @@ mod tests {
     #[tokio::test]
     async fn test_export_context_file() {
         let mem = Arc::new(Memory::in_memory().unwrap());
-        mem.set("test", "decision", "stack", "Rust + React").unwrap();
+        mem.set("test", "decision", "stack", "Rust + React")
+            .unwrap();
 
         let ctx = AgentContext::new(test_identity(), mem, ContextConfig::default());
         ctx.ingest_history(

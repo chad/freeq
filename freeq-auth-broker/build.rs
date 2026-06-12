@@ -10,7 +10,11 @@ fn main() {
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|s| !s.is_empty())
-        .or_else(|| std::fs::read_to_string(".git_commit").ok().map(|s| s.trim().to_string()))
+        .or_else(|| {
+            std::fs::read_to_string(".git_commit")
+                .ok()
+                .map(|s| s.trim().to_string())
+        })
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=GIT_HASH={hash}");

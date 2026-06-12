@@ -220,12 +220,8 @@ impl HttpResolver {
             .context("did:web SSRF check failed")?;
 
         // Use a DNS-pinned client to prevent rebinding between check and fetch
-        let pinned = crate::ssrf::pinned_client(
-            host,
-            &addrs,
-            std::time::Duration::from_secs(10),
-        )
-        .context("Failed to build pinned HTTP client")?;
+        let pinned = crate::ssrf::pinned_client(host, &addrs, std::time::Duration::from_secs(10))
+            .context("Failed to build pinned HTTP client")?;
 
         let doc: DidDocument = pinned
             .get(&url)
@@ -324,8 +320,7 @@ pub fn resolve_did_key(did: &str) -> Result<DidDocument> {
         .context("Invalid did:key format")?;
 
     // Verify the key is parseable
-    crate::crypto::PublicKey::from_multibase(multibase)
-        .context("Invalid public key in did:key")?;
+    crate::crypto::PublicKey::from_multibase(multibase).context("Invalid public key in did:key")?;
 
     let key_id = format!("{did}#{multibase}");
     Ok(DidDocument {

@@ -104,7 +104,11 @@ async fn maybe_wait<F: Fn(&Event) -> bool>(
             match rx.recv().await {
                 Some(e) if pred(&e) => return e,
                 Some(_) => continue,
-                None => return Event::Disconnected { reason: "closed".into() },
+                None => {
+                    return Event::Disconnected {
+                        reason: "closed".into(),
+                    };
+                }
             }
         }
     })
@@ -113,7 +117,14 @@ async fn maybe_wait<F: Fn(&Event) -> bool>(
 }
 
 async fn registered(rx: &mut mpsc::Receiver<Event>) -> String {
-    match wait_for(rx, |e| matches!(e, Event::Registered { .. }), "Registered", TIMEOUT).await {
+    match wait_for(
+        rx,
+        |e| matches!(e, Event::Registered { .. }),
+        "Registered",
+        TIMEOUT,
+    )
+    .await
+    {
         Event::Registered { nick } => nick,
         _ => unreachable!(),
     }
@@ -153,7 +164,10 @@ async fn msg_from(rx: &mut mpsc::Receiver<Event>, from: &str) -> String {
 async fn s2s_message_propagates() {
     let (local, remote) = match (local_server(), remote_server()) {
         (Some(l), Some(r)) => (l, r),
-        _ => { eprintln!("SKIP: LOCAL_SERVER/REMOTE_SERVER not set"); return; }
+        _ => {
+            eprintln!("SKIP: LOCAL_SERVER/REMOTE_SERVER not set");
+            return;
+        }
     };
     let ch = test_channel();
 
@@ -194,7 +208,10 @@ async fn s2s_message_propagates() {
 async fn s2s_remote_nick_does_not_collide_with_local() {
     let (local, remote) = match (local_server(), remote_server()) {
         (Some(l), Some(r)) => (l, r),
-        _ => { eprintln!("SKIP"); return; }
+        _ => {
+            eprintln!("SKIP");
+            return;
+        }
     };
     let ch = test_channel();
     let shared_nick = format!("shared{}", rand::random::<u16>());
@@ -242,7 +259,10 @@ async fn s2s_remote_nick_does_not_collide_with_local() {
 async fn s2s_remote_joiner_does_not_get_auto_ops() {
     let (local, remote) = match (local_server(), remote_server()) {
         (Some(l), Some(r)) => (l, r),
-        _ => { eprintln!("SKIP"); return; }
+        _ => {
+            eprintln!("SKIP");
+            return;
+        }
     };
     let ch = test_channel();
 
@@ -253,7 +273,8 @@ async fn s2s_remote_joiner_does_not_get_auto_ops() {
     joined(&mut rx_local, &ch).await;
 
     // Remote user joins same channel via S2S
-    let (h_remote, mut rx_remote) = guest(&remote, &format!("ops_r{}", rand::random::<u16>())).await;
+    let (h_remote, mut rx_remote) =
+        guest(&remote, &format!("ops_r{}", rand::random::<u16>())).await;
     registered(&mut rx_remote).await;
     h_remote.join(&ch).await.unwrap();
     joined(&mut rx_remote, &ch).await;
@@ -261,7 +282,10 @@ async fn s2s_remote_joiner_does_not_get_auto_ops() {
     tokio::time::sleep(S2S_SETTLE).await;
 
     // Remote user tries to set topic (requires ops on +t channel)
-    h_remote.raw(&format!("TOPIC {ch} :hostile takeover")).await.unwrap();
+    h_remote
+        .raw(&format!("TOPIC {ch} :hostile takeover"))
+        .await
+        .unwrap();
 
     // Should fail — remote user shouldn't have ops
     let _ = maybe_wait(
@@ -286,7 +310,10 @@ async fn s2s_remote_joiner_does_not_get_auto_ops() {
 async fn s2s_ban_syncs_across_servers() {
     let (local, remote) = match (local_server(), remote_server()) {
         (Some(l), Some(r)) => (l, r),
-        _ => { eprintln!("SKIP"); return; }
+        _ => {
+            eprintln!("SKIP");
+            return;
+        }
     };
     let ch = test_channel();
     let victim_nick = format!("victim{}", rand::random::<u16>());
@@ -306,11 +333,15 @@ async fn s2s_ban_syncs_across_servers() {
     tokio::time::sleep(S2S_SETTLE).await;
 
     // Local op bans the victim
-    h_op.raw(&format!("MODE {ch} +b {victim_nick}!*@*")).await.unwrap();
+    h_op.raw(&format!("MODE {ch} +b {victim_nick}!*@*"))
+        .await
+        .unwrap();
     tokio::time::sleep(S2S_SETTLE).await;
 
     // Kick victim
-    h_op.raw(&format!("KICK {ch} {victim_nick} :banned")).await.unwrap();
+    h_op.raw(&format!("KICK {ch} {victim_nick} :banned"))
+        .await
+        .unwrap();
     tokio::time::sleep(S2S_SETTLE).await;
 
     // Victim tries to rejoin on remote server — should be blocked by synced ban
@@ -338,7 +369,10 @@ async fn s2s_ban_syncs_across_servers() {
 async fn s2s_topic_propagates() {
     let (local, remote) = match (local_server(), remote_server()) {
         (Some(l), Some(r)) => (l, r),
-        _ => { eprintln!("SKIP"); return; }
+        _ => {
+            eprintln!("SKIP");
+            return;
+        }
     };
     let ch = test_channel();
 
@@ -355,7 +389,9 @@ async fn s2s_topic_propagates() {
     tokio::time::sleep(S2S_SETTLE).await;
 
     // Set topic on local
-    h_a.raw(&format!("TOPIC {ch} :federated topic test")).await.unwrap();
+    h_a.raw(&format!("TOPIC {ch} :federated topic test"))
+        .await
+        .unwrap();
     tokio::time::sleep(S2S_SETTLE).await;
 
     // Remote user should see the topic
@@ -384,7 +420,10 @@ async fn s2s_topic_propagates() {
 async fn s2s_invite_only_enforced_across_servers() {
     let (local, remote) = match (local_server(), remote_server()) {
         (Some(l), Some(r)) => (l, r),
-        _ => { eprintln!("SKIP"); return; }
+        _ => {
+            eprintln!("SKIP");
+            return;
+        }
     };
     let ch = test_channel();
 
@@ -403,13 +442,20 @@ async fn s2s_invite_only_enforced_across_servers() {
 
     let result = maybe_wait(
         &mut rx_out,
-        |e| matches!(e, Event::ServerNotice { .. } | Event::RawLine(_) | Event::Joined { .. }),
+        |e| {
+            matches!(
+                e,
+                Event::ServerNotice { .. } | Event::RawLine(_) | Event::Joined { .. }
+            )
+        },
         Duration::from_secs(10),
     )
     .await;
 
     if let Some(Event::Joined { .. }) = result {
-        eprintln!("WARNING: Remote user joined +i channel without invite — S2S mode sync may be incomplete");
+        eprintln!(
+            "WARNING: Remote user joined +i channel without invite — S2S mode sync may be incomplete"
+        );
     }
 
     h_op.quit(None).await.ok();
@@ -424,7 +470,10 @@ async fn s2s_invite_only_enforced_across_servers() {
 async fn s2s_nick_change_propagates() {
     let (local, remote) = match (local_server(), remote_server()) {
         (Some(l), Some(r)) => (l, r),
-        _ => { eprintln!("SKIP"); return; }
+        _ => {
+            eprintln!("SKIP");
+            return;
+        }
     };
     let ch = test_channel();
     let old_nick = format!("old{}", rand::random::<u16>());
@@ -458,8 +507,11 @@ async fn s2s_nick_change_propagates() {
     )
     .await;
     if let Event::Message { from, .. } = text_evt {
-        assert_eq!(from.to_lowercase(), new_nick.to_lowercase(),
-            "Message should be from new nick, got: {from}");
+        assert_eq!(
+            from.to_lowercase(),
+            new_nick.to_lowercase(),
+            "Message should be from new nick, got: {from}"
+        );
     }
 
     h_a.quit(None).await.ok();
@@ -474,7 +526,10 @@ async fn s2s_nick_change_propagates() {
 async fn s2s_quit_propagates() {
     let (local, remote) = match (local_server(), remote_server()) {
         (Some(l), Some(r)) => (l, r),
-        _ => { eprintln!("SKIP"); return; }
+        _ => {
+            eprintln!("SKIP");
+            return;
+        }
     };
     let ch = test_channel();
     let quitter = format!("quitr{}", rand::random::<u16>());
@@ -501,7 +556,10 @@ async fn s2s_quit_propagates() {
         S2S_TIMEOUT,
     )
     .await;
-    assert!(quit.is_some(), "Remote observer should see QUIT propagate via S2S");
+    assert!(
+        quit.is_some(),
+        "Remote observer should see QUIT propagate via S2S"
+    );
 
     h_obs.quit(None).await.ok();
 }
@@ -514,7 +572,10 @@ async fn s2s_quit_propagates() {
 async fn s2s_kick_propagates() {
     let (local, remote) = match (local_server(), remote_server()) {
         (Some(l), Some(r)) => (l, r),
-        _ => { eprintln!("SKIP"); return; }
+        _ => {
+            eprintln!("SKIP");
+            return;
+        }
     };
     let ch = test_channel();
 
@@ -532,12 +593,19 @@ async fn s2s_kick_propagates() {
     tokio::time::sleep(S2S_SETTLE).await;
 
     // Local op kicks remote user
-    h_op.raw(&format!("KICK {ch} {victim_nick} :s2s kick test")).await.unwrap();
+    h_op.raw(&format!("KICK {ch} {victim_nick} :s2s kick test"))
+        .await
+        .unwrap();
 
     // Remote user should see the kick
     let kick = maybe_wait(
         &mut rx_victim,
-        |e| matches!(e, Event::Kicked { .. } | Event::Parted { .. } | Event::ServerNotice { .. }),
+        |e| {
+            matches!(
+                e,
+                Event::Kicked { .. } | Event::Parted { .. } | Event::ServerNotice { .. }
+            )
+        },
         S2S_TIMEOUT,
     )
     .await;
@@ -557,7 +625,10 @@ async fn s2s_kick_propagates() {
 async fn single_server_ops_not_granted_on_existing_channel() {
     let addr = match single_server() {
         Some(a) => a,
-        None => { eprintln!("SKIP: SERVER not set"); return; }
+        None => {
+            eprintln!("SKIP: SERVER not set");
+            return;
+        }
     };
     let ch = test_channel();
 
@@ -594,7 +665,10 @@ async fn single_server_ops_not_granted_on_existing_channel() {
 async fn single_server_ban_prevents_rejoin() {
     let addr = match single_server() {
         Some(a) => a,
-        None => { eprintln!("SKIP"); return; }
+        None => {
+            eprintln!("SKIP");
+            return;
+        }
     };
     let ch = test_channel();
     let victim = format!("ban{}", rand::random::<u16>());
@@ -610,9 +684,13 @@ async fn single_server_ban_prevents_rejoin() {
     joined(&mut rx_v, &ch).await;
 
     // Ban + kick
-    h_op.raw(&format!("MODE {ch} +b {victim}!*@*")).await.unwrap();
+    h_op.raw(&format!("MODE {ch} +b {victim}!*@*"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
-    h_op.raw(&format!("KICK {ch} {victim} :banned")).await.unwrap();
+    h_op.raw(&format!("KICK {ch} {victim} :banned"))
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Try rejoin — should fail
@@ -635,7 +713,10 @@ async fn single_server_ban_prevents_rejoin() {
 async fn single_server_invite_only_blocks() {
     let addr = match single_server() {
         Some(a) => a,
-        None => { eprintln!("SKIP"); return; }
+        None => {
+            eprintln!("SKIP");
+            return;
+        }
     };
     let ch = test_channel();
 

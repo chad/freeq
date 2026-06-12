@@ -512,7 +512,6 @@ pub enum S2sMessage {
     },
 
     // ── AV session federation ───────────────────────────────────────
-
     /// An AV session was created (voice/video call started).
     #[serde(rename = "av_session_created")]
     AvSessionCreated {
@@ -798,11 +797,10 @@ impl S2sManager {
     /// Sign an S2S message and wrap it in a Signed envelope.
     pub fn sign_message(&self, msg: &S2sMessage) -> S2sMessage {
         let payload_json = serde_json::to_string(msg).unwrap_or_default();
-        let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(payload_json.as_bytes());
+        let payload_b64 =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload_json.as_bytes());
         let sig = self.signing_key.sign(payload_json.as_bytes());
-        let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(sig.to_bytes());
+        let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes());
         S2sMessage::Signed {
             payload: payload_b64,
             signature: sig_b64,
@@ -829,9 +827,11 @@ impl S2sManager {
         }
 
         let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(payload_b64).ok()?;
+            .decode(payload_b64)
+            .ok()?;
         let sig_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(signature_b64).ok()?;
+            .decode(signature_b64)
+            .ok()?;
 
         if sig_bytes.len() != 64 {
             tracing::warn!("Signed message: invalid signature length");
@@ -861,12 +861,18 @@ impl S2sManager {
         if let Some(level) = self.peer_trust.lock().await.get(peer_id) {
             return *level;
         }
-        self.trust_config.get(peer_id).copied().unwrap_or(TrustLevel::Full)
+        self.trust_config
+            .get(peer_id)
+            .copied()
+            .unwrap_or(TrustLevel::Full)
     }
 
     /// Set the runtime trust level for a peer (from HelloAck negotiation).
     pub async fn set_trust(&self, peer_id: &str, level: TrustLevel) {
-        self.peer_trust.lock().await.insert(peer_id.to_string(), level);
+        self.peer_trust
+            .lock()
+            .await
+            .insert(peer_id.to_string(), level);
     }
 
     // ── Phase 4: Key rotation ───────────────────────────────────
@@ -879,8 +885,7 @@ impl S2sManager {
             .as_secs();
         let msg = format!("rotate:{}:{}:{}", self.server_id, new_id, timestamp);
         let sig = self.signing_key.sign(msg.as_bytes());
-        let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(sig.to_bytes());
+        let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes());
         S2sMessage::KeyRotation {
             old_id: self.server_id.clone(),
             new_id: new_id.to_string(),
@@ -914,12 +919,14 @@ impl S2sManager {
         }
 
         let msg = format!("rotate:{old_id}:{new_id}:{timestamp}");
-        let sig_bytes = match base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(signature_b64) {
+        let sig_bytes = match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(signature_b64)
+        {
             Ok(b) => b,
             Err(_) => return false,
         };
-        if sig_bytes.len() != 64 { return false; }
+        if sig_bytes.len() != 64 {
+            return false;
+        }
 
         let pub_key: iroh::PublicKey = match old_id.parse() {
             Ok(k) => k,
@@ -1261,8 +1268,17 @@ async fn handle_s2s_connection(
                         // C-7 fix: Reject unsigned operational messages.
                         // Only Hello/HelloAck/KeyRotation are exempt (handshake/key mgmt).
                         let msg = match msg {
-                            S2sMessage::Signed { ref payload, ref signature, ref signer } => {
-                                match read_manager.verify_signed(payload, signature, signer, &authenticated_peer_id) {
+                            S2sMessage::Signed {
+                                ref payload,
+                                ref signature,
+                                ref signer,
+                            } => {
+                                match read_manager.verify_signed(
+                                    payload,
+                                    signature,
+                                    signer,
+                                    &authenticated_peer_id,
+                                ) {
                                     Some(inner) => inner,
                                     None => {
                                         tracing::warn!(peer = %read_peer, "S2S: dropped message with invalid signature");
@@ -1500,7 +1516,11 @@ mod tests {
 
         let signed = manager.sign_message(&msg);
         match &signed {
-            S2sMessage::Signed { payload, signature, signer } => {
+            S2sMessage::Signed {
+                payload,
+                signature,
+                signer,
+            } => {
                 assert_eq!(signer, &server_id);
                 // Verify
                 let inner = manager.verify_signed(payload, signature, signer, &server_id);
@@ -1545,7 +1565,11 @@ mod tests {
         let signed = manager.sign_message(&msg);
 
         match &signed {
-            S2sMessage::Signed { payload, signature, signer } => {
+            S2sMessage::Signed {
+                payload,
+                signature,
+                signer,
+            } => {
                 // Verify with wrong authenticated peer ID — should reject
                 let result = manager.verify_signed(payload, signature, signer, &other_id);
                 assert!(result.is_none(), "Should reject signer mismatch");
@@ -1593,7 +1617,11 @@ mod tests {
 
         let signed = manager.sign_message(&msg);
         match signed {
-            S2sMessage::Signed { payload: _, signature, signer } => {
+            S2sMessage::Signed {
+                payload: _,
+                signature,
+                signer,
+            } => {
                 // Tamper: encode a different payload
                 let tampered = S2sMessage::Privmsg {
                     event_id: "test:1".to_string(),
@@ -1604,7 +1632,7 @@ mod tests {
                     msgid: None,
                     sig: None,
                     tags: HashMap::new(),
-            multiline_lines: None,
+                    multiline_lines: None,
                 };
                 let tampered_json = serde_json::to_string(&tampered).unwrap();
                 let tampered_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -1646,7 +1674,12 @@ mod tests {
 
         let rotation = manager.announce_rotation(&new_id);
         match rotation {
-            S2sMessage::KeyRotation { ref old_id, ref new_id, timestamp, ref signature } => {
+            S2sMessage::KeyRotation {
+                ref old_id,
+                ref new_id,
+                timestamp,
+                ref signature,
+            } => {
                 assert!(manager.verify_rotation(old_id, new_id, timestamp, signature, &server_id));
             }
             _ => panic!("Expected KeyRotation"),
@@ -1684,7 +1717,12 @@ mod tests {
 
         let rotation = manager.announce_rotation(&new_id);
         match rotation {
-            S2sMessage::KeyRotation { ref old_id, ref new_id, timestamp, ref signature } => {
+            S2sMessage::KeyRotation {
+                ref old_id,
+                ref new_id,
+                timestamp,
+                ref signature,
+            } => {
                 // Verify with wrong authenticated peer — should reject
                 assert!(!manager.verify_rotation(old_id, new_id, timestamp, signature, &other_id));
             }
@@ -1723,8 +1761,7 @@ mod tests {
         let old_timestamp = 1000; // way in the past
         let msg = format!("rotate:{}:{}:{}", server_id, new_id, old_timestamp);
         let sig = secret.sign(msg.as_bytes());
-        let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(sig.to_bytes());
+        let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes());
 
         assert!(!manager.verify_rotation(&server_id, &new_id, old_timestamp, &sig_b64, &server_id));
     }
@@ -1745,7 +1782,11 @@ mod tests {
         let old_json = r#"{"type":"hello","peer_id":"abc","server_name":"old"}"#;
         let parsed: S2sMessage = serde_json::from_str(old_json).unwrap();
         match parsed {
-            S2sMessage::Hello { protocol_version, trust_level, .. } => {
+            S2sMessage::Hello {
+                protocol_version,
+                trust_level,
+                ..
+            } => {
                 assert_eq!(protocol_version, 0); // default
                 assert!(trust_level.is_none()); // default
             }
@@ -1763,7 +1804,11 @@ mod tests {
         let json = serde_json::to_string(&ack).unwrap();
         let parsed: S2sMessage = serde_json::from_str(&json).unwrap();
         match parsed {
-            S2sMessage::HelloAck { accepted, trust_level, .. } => {
+            S2sMessage::HelloAck {
+                accepted,
+                trust_level,
+                ..
+            } => {
                 assert!(accepted);
                 assert_eq!(trust_level.as_deref(), Some("relay"));
             }
@@ -1794,9 +1839,9 @@ mod tests {
             let dedup = DedupSet::new();
             assert!(dedup.check_and_insert("peer1", "peer1:100").await);
             assert!(!dedup.check_and_insert("peer1", "peer1:100").await); // duplicate
-            assert!(!dedup.check_and_insert("peer1", "peer1:50").await);  // below high water
-            assert!(dedup.check_and_insert("peer1", "peer1:200").await);  // new
-            assert!(dedup.check_and_insert("peer2", "peer2:50").await);   // different peer
+            assert!(!dedup.check_and_insert("peer1", "peer1:50").await); // below high water
+            assert!(dedup.check_and_insert("peer1", "peer1:200").await); // new
+            assert!(dedup.check_and_insert("peer2", "peer2:50").await); // different peer
         });
     }
 
@@ -1809,12 +1854,13 @@ mod tests {
 
     #[test]
     fn encode_privmsg_text_for_s2s_escapes_multiline_and_sets_tag() {
-        let (text, tags) = encode_privmsg_text_for_s2s(
-            "line one\nline two\nline three",
-            HashMap::new(),
-        );
+        let (text, tags) =
+            encode_privmsg_text_for_s2s("line one\nline two\nline three", HashMap::new());
         // Wire-safe: no literal `\n` after escape
-        assert!(!text.contains('\n'), "escaped text must not contain literal \\n");
+        assert!(
+            !text.contains('\n'),
+            "escaped text must not contain literal \\n"
+        );
         assert_eq!(text, "line one\\nline two\\nline three");
         // Tag set so receivers can decode on render
         assert!(tags.contains_key("+freeq.at/multiline"));
@@ -1826,8 +1872,14 @@ mod tests {
         existing.insert("+freeq.at/event".to_string(), "reveal".to_string());
         existing.insert("+freeq.at/payload".to_string(), "%7B%7D".to_string());
         let (_text, tags) = encode_privmsg_text_for_s2s("a\nb", existing);
-        assert_eq!(tags.get("+freeq.at/event").map(String::as_str), Some("reveal"));
-        assert_eq!(tags.get("+freeq.at/payload").map(String::as_str), Some("%7B%7D"));
+        assert_eq!(
+            tags.get("+freeq.at/event").map(String::as_str),
+            Some("reveal")
+        );
+        assert_eq!(
+            tags.get("+freeq.at/payload").map(String::as_str),
+            Some("%7B%7D")
+        );
         assert!(tags.contains_key("+freeq.at/multiline"));
     }
 
@@ -1845,8 +1897,11 @@ mod tests {
         // it writes must NOT contain `\n` mid-body or the IRC parser at
         // the recipient breaks framing.
         let bytes = format!(":sender PRIVMSG #room :{text}\r\n");
-        let body_bytes = bytes.strip_prefix(":sender PRIVMSG #room :").unwrap()
-            .strip_suffix("\r\n").unwrap();
+        let body_bytes = bytes
+            .strip_prefix(":sender PRIVMSG #room :")
+            .unwrap()
+            .strip_suffix("\r\n")
+            .unwrap();
         assert!(
             !body_bytes.contains('\n'),
             "old peer's wire bytes would contain literal \\n — wire is broken!"
@@ -1862,7 +1917,10 @@ mod tests {
         full.insert("+freeq.at/event".to_string(), "task_request".to_string());
         full.insert("+freeq.at/payload".to_string(), "%7B%7D".to_string());
         full.insert("+freeq.at/task-id".to_string(), "01HZ".to_string());
-        full.insert("+freeq.at/evidence-type".to_string(), "code_review".to_string());
+        full.insert(
+            "+freeq.at/evidence-type".to_string(),
+            "code_review".to_string(),
+        );
         // server-controlled / non-app — must NOT cross via the tags field:
         full.insert("+freeq.at/sig".to_string(), "deadbeef".to_string());
         full.insert("account".to_string(), "did:plc:x".to_string());
@@ -1871,17 +1929,35 @@ mod tests {
 
         let relayed = relay_coordination_tags(&full);
 
-        assert_eq!(relayed.get("+freeq.at/event").map(String::as_str), Some("task_request"));
-        assert_eq!(relayed.get("+freeq.at/payload").map(String::as_str), Some("%7B%7D"));
-        assert_eq!(relayed.get("+freeq.at/task-id").map(String::as_str), Some("01HZ"));
+        assert_eq!(
+            relayed.get("+freeq.at/event").map(String::as_str),
+            Some("task_request")
+        );
+        assert_eq!(
+            relayed.get("+freeq.at/payload").map(String::as_str),
+            Some("%7B%7D")
+        );
+        assert_eq!(
+            relayed.get("+freeq.at/task-id").map(String::as_str),
+            Some("01HZ")
+        );
         assert_eq!(
             relayed.get("+freeq.at/evidence-type").map(String::as_str),
             Some("code_review")
         );
-        assert!(!relayed.contains_key("+freeq.at/sig"), "sig is re-attested out-of-band");
-        assert!(!relayed.contains_key("account"), "account injected per-recipient locally");
+        assert!(
+            !relayed.contains_key("+freeq.at/sig"),
+            "sig is re-attested out-of-band"
+        );
+        assert!(
+            !relayed.contains_key("account"),
+            "account injected per-recipient locally"
+        );
         assert!(!relayed.contains_key("time"));
-        assert!(!relayed.contains_key("msgid"), "msgid carried in its own field");
+        assert!(
+            !relayed.contains_key("msgid"),
+            "msgid carried in its own field"
+        );
         assert_eq!(relayed.len(), 4);
     }
 
@@ -1910,7 +1986,9 @@ mod tests {
         // Back-compat: a peer on the old wire format omits `tags` entirely.
         let old = r##"{"type":"privmsg","event_id":"p:2","from":"a!u@h","target":"#c","text":"hi","origin":"peerB"}"##;
         match serde_json::from_str::<S2sMessage>(old).unwrap() {
-            S2sMessage::Privmsg { tags, msgid, sig, .. } => {
+            S2sMessage::Privmsg {
+                tags, msgid, sig, ..
+            } => {
                 assert!(tags.is_empty(), "missing tags → empty via serde default");
                 assert!(msgid.is_none());
                 assert!(sig.is_none());

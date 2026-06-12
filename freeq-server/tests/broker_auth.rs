@@ -11,7 +11,11 @@ use freeq_sdk::did::DidResolver;
 const BROKER_SECRET: &str = "test-broker-secret-key-for-adversarial-testing";
 
 /// Start a test server with broker secret configured.
-async fn start() -> (std::net::SocketAddr, std::net::SocketAddr, tokio::task::JoinHandle<anyhow::Result<()>>) {
+async fn start() -> (
+    std::net::SocketAddr,
+    std::net::SocketAddr,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
     let resolver = DidResolver::static_map(HashMap::new());
     let config = freeq_server::config::ServerConfig {
         listen_addr: "127.0.0.1:0".to_string(),
@@ -78,8 +82,14 @@ async fn valid_signature_accepted() {
         .header("X-Broker-Timestamp", &ts)
         .header("Content-Type", "application/json")
         .body(body_bytes)
-        .send().await.unwrap();
-    assert!(resp.status().is_success(), "Valid signature should be accepted: {}", resp.status());
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "Valid signature should be accepted: {}",
+        resp.status()
+    );
 }
 
 #[tokio::test]
@@ -89,7 +99,9 @@ async fn missing_signature_rejected() {
     let resp = reqwest::Client::new()
         .post(format!("http://{http}/auth/broker/web-token"))
         .json(&body)
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 401);
 }
 
@@ -105,7 +117,9 @@ async fn missing_timestamp_rejected() {
         .header("X-Broker-Signature", &sig)
         .header("Content-Type", "application/json")
         .body(body_bytes)
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 401, "Missing timestamp must be rejected");
 }
 
@@ -122,7 +136,9 @@ async fn expired_timestamp_rejected() {
         .header("X-Broker-Timestamp", &ts)
         .header("Content-Type", "application/json")
         .body(body_bytes)
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 401, "Expired timestamp must be rejected");
 }
 
@@ -139,7 +155,9 @@ async fn future_timestamp_rejected() {
         .header("X-Broker-Timestamp", &ts)
         .header("Content-Type", "application/json")
         .body(body_bytes)
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 401, "Future timestamp must be rejected");
 }
 
@@ -164,7 +182,9 @@ async fn wrong_secret_rejected() {
         .header("X-Broker-Timestamp", &ts)
         .header("Content-Type", "application/json")
         .body(body_bytes)
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 401, "Wrong secret must be rejected");
 }
 
@@ -183,7 +203,9 @@ async fn tampered_body_rejected() {
         .header("X-Broker-Timestamp", &ts)
         .header("Content-Type", "application/json")
         .body(serde_json::to_vec(&tampered).unwrap())
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 401, "Tampered body must be rejected");
 }
 
@@ -201,8 +223,14 @@ async fn timestamp_not_in_mac_is_different_from_header() {
         .header("X-Broker-Timestamp", &different_ts)
         .header("Content-Type", "application/json")
         .body(body_bytes)
-        .send().await.unwrap();
-    assert_eq!(resp.status(), 401, "Timestamp mismatch between MAC and header must be rejected");
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        401,
+        "Timestamp mismatch between MAC and header must be rejected"
+    );
 }
 
 #[tokio::test]
@@ -217,7 +245,9 @@ async fn invalid_timestamp_format_rejected() {
         .header("X-Broker-Timestamp", "not-a-number")
         .header("Content-Type", "application/json")
         .body(body_bytes)
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 401, "Non-numeric timestamp must be rejected");
 }
 
@@ -231,8 +261,14 @@ async fn empty_body_rejected() {
         .header("X-Broker-Timestamp", &ts)
         .header("Content-Type", "application/json")
         .body(b"".to_vec())
-        .send().await.unwrap();
-    assert_eq!(resp.status(), 400, "Empty body should be rejected as bad JSON");
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        400,
+        "Empty body should be rejected as bad JSON"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -252,10 +288,15 @@ async fn web_token_minted_and_returned() {
         .header("X-Broker-Timestamp", &ts)
         .header("Content-Type", "application/json")
         .body(body_bytes)
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert!(resp.status().is_success());
     let json: serde_json::Value = resp.json().await.unwrap();
-    assert!(json["token"].as_str().is_some_and(|t| !t.is_empty()), "Token should be non-empty");
+    assert!(
+        json["token"].as_str().is_some_and(|t| !t.is_empty()),
+        "Token should be non-empty"
+    );
     assert_eq!(json["did"].as_str(), Some("did:plc:mint"));
     assert_eq!(json["handle"].as_str(), Some("mint.bsky"));
 }
@@ -274,7 +315,9 @@ async fn different_mints_produce_different_tokens() {
             .header("X-Broker-Timestamp", &ts)
             .header("Content-Type", "application/json")
             .body(body_bytes)
-            .send().await.unwrap();
+            .send()
+            .await
+            .unwrap();
         let json: serde_json::Value = resp.json().await.unwrap();
         tokens.push(json["token"].as_str().unwrap().to_string());
     }
@@ -307,8 +350,14 @@ async fn session_push_accepted() {
         .header("X-Broker-Timestamp", &ts)
         .header("Content-Type", "application/json")
         .body(body_bytes)
-        .send().await.unwrap();
-    assert!(resp.status().is_success(), "Valid session push should succeed: {}", resp.status());
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "Valid session push should succeed: {}",
+        resp.status()
+    );
 }
 
 #[tokio::test]
@@ -322,7 +371,9 @@ async fn session_push_without_signature_rejected() {
     let resp = reqwest::Client::new()
         .post(format!("http://{http}/auth/broker/session"))
         .json(&body)
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 401);
 }
 
@@ -354,8 +405,14 @@ async fn no_secret_configured_rejects_all() {
         .header("X-Broker-Timestamp", &ts)
         .header("Content-Type", "application/json")
         .body(body_bytes)
-        .send().await.unwrap();
-    assert_eq!(resp.status(), 403, "No secret configured should return 403 Forbidden");
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        403,
+        "No secret configured should return 403 Forbidden"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -376,7 +433,9 @@ async fn replay_same_request_within_window() {
         .header("X-Broker-Timestamp", &ts)
         .header("Content-Type", "application/json")
         .body(body_bytes.clone())
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert!(resp1.status().is_success());
 
     // Replay — same sig, same ts, same body
@@ -387,7 +446,9 @@ async fn replay_same_request_within_window() {
         .header("X-Broker-Timestamp", &ts)
         .header("Content-Type", "application/json")
         .body(body_bytes)
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     // Document: currently there's no nonce-based replay protection,
     // only the 60-second timestamp window
     let _ = resp2.status();
@@ -406,7 +467,9 @@ async fn timestamp_at_exactly_60_seconds() {
         .header("X-Broker-Timestamp", &ts)
         .header("Content-Type", "application/json")
         .body(body_bytes)
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     // abs_diff(now, now-60) = 60, check is > 60, so 60 should PASS (boundary)
     // This documents the boundary behavior
     let status = resp.status();
@@ -425,8 +488,14 @@ async fn timestamp_at_61_seconds_rejected() {
         .header("X-Broker-Timestamp", &ts)
         .header("Content-Type", "application/json")
         .body(body_bytes)
-        .send().await.unwrap();
-    assert_eq!(resp.status(), 401, "61-second-old timestamp must be rejected");
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        401,
+        "61-second-old timestamp must be rejected"
+    );
 }
 
 #[tokio::test]
@@ -440,7 +509,9 @@ async fn malformed_json_body_rejected() {
         .header("X-Broker-Timestamp", &ts)
         .header("Content-Type", "application/json")
         .body(body.to_vec())
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 400, "Malformed JSON should return 400");
 }
 
@@ -456,6 +527,8 @@ async fn missing_did_field_rejected() {
         .header("X-Broker-Timestamp", &ts)
         .header("Content-Type", "application/json")
         .body(body_bytes)
-        .send().await.unwrap();
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 400, "Missing 'did' field should return 400");
 }

@@ -47,7 +47,7 @@ impl Decision {
 /// Naïve sentence splitter — period/question/exclamation. Captures
 /// the speech-rhythm we want without dragging in a full NLP tokenizer.
 fn split_sentences(text: &str) -> impl Iterator<Item = &str> {
-    text.split(|c: char| c == '.' || c == '?' || c == '!')
+    text.split(['.', '?', '!'])
         .map(str::trim)
         .filter(|s| !s.is_empty())
 }
@@ -201,10 +201,7 @@ mod tests {
 
     #[test]
     fn multiple_clauses_in_one_input() {
-        let d = Decision::extract(
-            "chad",
-            "let's ship tonight. then i'll write the post.",
-        );
+        let d = Decision::extract("chad", "let's ship tonight. then i'll write the post.");
         assert_eq!(d.len(), 2, "got {d:?}");
         assert!(d[0].what.contains("ship"));
         assert!(d[1].what.contains("write the post"));
@@ -213,11 +210,7 @@ mod tests {
     #[test]
     fn idle_speculation_not_a_decision() {
         // No commitment markers, just musing.
-        let d = Decision::extract(
-            "chad",
-            "I think the weather might turn tomorrow",
-        );
+        let d = Decision::extract("chad", "I think the weather might turn tomorrow");
         assert!(d.is_empty(), "got {d:?}");
     }
 }
-

@@ -65,7 +65,9 @@ impl StreamingMessage {
         let mut tags = std::collections::HashMap::new();
         tags.insert("+freeq.at/streaming".to_string(), "1".to_string());
         let initial_text = cursor;
-        let msgid = handle.send_and_await_echo(target, initial_text, tags).await?;
+        let msgid = handle
+            .send_and_await_echo(target, initial_text, tags)
+            .await?;
 
         Ok(Self {
             handle: handle.clone(),
@@ -104,7 +106,9 @@ impl StreamingMessage {
         let mut tags = std::collections::HashMap::new();
         tags.insert("+draft/edit".to_string(), self.msgid.clone());
         tags.insert("+freeq.at/streaming".to_string(), "1".to_string());
-        self.handle.send_tagged(&self.target, &display, tags).await?;
+        self.handle
+            .send_tagged(&self.target, &display, tags)
+            .await?;
         self.last_edit = Instant::now();
         self.dirty = false;
         Ok(())
@@ -125,7 +129,9 @@ impl StreamingMessage {
         let mut tags = std::collections::HashMap::new();
         tags.insert("+draft/edit".to_string(), self.msgid.clone());
         // No +freeq.at/streaming tag — signals completion
-        self.handle.send_tagged(&self.target, &self.content, tags).await?;
+        self.handle
+            .send_tagged(&self.target, &self.content, tags)
+            .await?;
         Ok(self.msgid)
     }
 

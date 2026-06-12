@@ -4,9 +4,9 @@
 //! initiate/respond handshake, session establishment, and encrypted
 //! message exchange between two parties.
 
-use freeq_sdk::x3dh::{self, IdentityKeyPair, SignedPreKey, PreKeyBundle, InitialMessage};
+use freeq_sdk::e2ee_did::{DmKey, GroupKey};
 use freeq_sdk::ratchet::Session;
-use freeq_sdk::e2ee_did::{GroupKey, DmKey};
+use freeq_sdk::x3dh::{self, IdentityKeyPair, InitialMessage, PreKeyBundle, SignedPreKey};
 
 // ═══════════════════════════════════════════════════════════════
 // X3DH HANDSHAKE
@@ -26,10 +26,14 @@ fn x3dh_full_handshake_produces_same_shared_secret() {
     let result = x3dh::initiate(&alice_ik, "did:plc:alice", &bob_bundle, &bob_verifying).unwrap();
 
     // Bob responds
-    let (bob_secret, _bob_ratchet_secret) = x3dh::respond(&bob_ik, &bob_spk, &result.initial_message).unwrap();
+    let (bob_secret, _bob_ratchet_secret) =
+        x3dh::respond(&bob_ik, &bob_spk, &result.initial_message).unwrap();
 
     // Both sides should derive the same shared secret
-    assert_eq!(result.shared_secret, bob_secret, "X3DH shared secrets must match");
+    assert_eq!(
+        result.shared_secret, bob_secret,
+        "X3DH shared secrets must match"
+    );
 }
 
 #[test]
@@ -74,7 +78,10 @@ fn x3dh_different_sessions_different_secrets() {
     let r1 = x3dh::initiate(&alice_ik, "did:plc:alice", &bundle, &bob_verifying).unwrap();
     let r2 = x3dh::initiate(&alice_ik, "did:plc:alice", &bundle, &bob_verifying).unwrap();
     // Different ephemeral keys → different shared secrets
-    assert_ne!(r1.shared_secret, r2.shared_secret, "Each handshake uses fresh ephemeral");
+    assert_ne!(
+        r1.shared_secret, r2.shared_secret,
+        "Each handshake uses fresh ephemeral"
+    );
 }
 
 #[test]
@@ -122,14 +129,18 @@ fn x3dh_to_ratchet_full_conversation() {
     let bundle = PreKeyBundle::new("did:plc:bob", &bob_ik, &bob_spk);
 
     let alice_result = x3dh::initiate(&alice_ik, "did:plc:alice", &bundle, &bob_verifying).unwrap();
-    let (bob_secret, bob_ratchet_secret) = x3dh::respond(&bob_ik, &bob_spk, &alice_result.initial_message).unwrap();
+    let (bob_secret, bob_ratchet_secret) =
+        x3dh::respond(&bob_ik, &bob_spk, &alice_result.initial_message).unwrap();
 
     // Initialize ratchet sessions
-    let mut alice_session = Session::init_alice(alice_result.shared_secret, alice_result.their_ratchet_key);
+    let mut alice_session =
+        Session::init_alice(alice_result.shared_secret, alice_result.their_ratchet_key);
     let mut bob_session = Session::init_bob(bob_secret, bob_ratchet_secret);
 
     // Alice → Bob
-    let ct1 = alice_session.encrypt("hello bob, this is encrypted").unwrap();
+    let ct1 = alice_session
+        .encrypt("hello bob, this is encrypted")
+        .unwrap();
     assert!(ct1.starts_with("ENC3:"));
     let pt1 = bob_session.decrypt(&ct1).unwrap();
     assert_eq!(pt1, "hello bob, this is encrypted");
@@ -180,14 +191,20 @@ fn x3dh_ratchet_wrong_session_fails() {
         let bundle = PreKeyBundle::new("did:plc:bob", &bob_ik, &bob_spk);
         let ar = x3dh::initiate(&alice_ik, "did:plc:alice", &bundle, &bob_verifying).unwrap();
         let (bs, brs) = x3dh::respond(&bob_ik, &bob_spk, &ar.initial_message).unwrap();
-        (Session::init_alice(ar.shared_secret, ar.their_ratchet_key), Session::init_bob(bs, brs))
+        (
+            Session::init_alice(ar.shared_secret, ar.their_ratchet_key),
+            Session::init_bob(bs, brs),
+        )
     };
 
     let (mut a1, _b1) = make_session();
     let (_a2, mut b2) = make_session();
 
     let ct = a1.encrypt("wrong session").unwrap();
-    assert!(b2.decrypt(&ct).is_err(), "Cross-session decryption must fail");
+    assert!(
+        b2.decrypt(&ct).is_err(),
+        "Cross-session decryption must fail"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -199,7 +216,10 @@ fn group_key_members_order_independent() {
     let k1 = GroupKey::derive("#test", &["did:a".into(), "did:b".into()], 1);
     let k2 = GroupKey::derive("#test", &["did:b".into(), "did:a".into()], 1);
     let ct = k1.encrypt("secret").unwrap();
-    assert!(k2.decrypt(&ct).is_ok(), "Key must be same regardless of member order");
+    assert!(
+        k2.decrypt(&ct).is_ok(),
+        "Key must be same regardless of member order"
+    );
 }
 
 #[test]
@@ -207,7 +227,10 @@ fn group_key_different_channel_different_key() {
     let k1 = GroupKey::derive("#chan1", &["did:a".into()], 1);
     let k2 = GroupKey::derive("#chan2", &["did:a".into()], 1);
     let ct = k1.encrypt("test").unwrap();
-    assert!(k2.decrypt(&ct).is_err(), "Different channels must produce different keys");
+    assert!(
+        k2.decrypt(&ct).is_err(),
+        "Different channels must produce different keys"
+    );
 }
 
 #[test]
@@ -246,16 +269,10 @@ fn dm_key_bidirectional() {
     let alice_pk = alice_sk.verifying_key().to_sec1_bytes();
     let bob_pk = bob_sk.verifying_key().to_sec1_bytes();
 
-    let k_ab = DmKey::from_secp256k1(
-        "did:a", "did:b",
-        &alice_sk.to_bytes().into(),
-        &bob_pk,
-    ).unwrap();
-    let k_ba = DmKey::from_secp256k1(
-        "did:b", "did:a",
-        &bob_sk.to_bytes().into(),
-        &alice_pk,
-    ).unwrap();
+    let k_ab =
+        DmKey::from_secp256k1("did:a", "did:b", &alice_sk.to_bytes().into(), &bob_pk).unwrap();
+    let k_ba =
+        DmKey::from_secp256k1("did:b", "did:a", &bob_sk.to_bytes().into(), &alice_pk).unwrap();
 
     let ct = k_ab.encrypt("hello dm").unwrap();
     assert_eq!(k_ba.decrypt(&ct).unwrap(), "hello dm");
@@ -269,17 +286,13 @@ fn dm_key_third_party_cannot_decrypt() {
     let eve_sk = SigningKey::random(&mut rand::rngs::OsRng);
     let bob_pk = bob_sk.verifying_key().to_sec1_bytes();
 
-    let k_ab = DmKey::from_secp256k1(
-        "did:a", "did:b",
-        &alice_sk.to_bytes().into(),
-        &bob_pk,
-    ).unwrap();
-    let k_eb = DmKey::from_secp256k1(
-        "did:e", "did:b",
-        &eve_sk.to_bytes().into(),
-        &bob_pk,
-    ).unwrap();
+    let k_ab =
+        DmKey::from_secp256k1("did:a", "did:b", &alice_sk.to_bytes().into(), &bob_pk).unwrap();
+    let k_eb = DmKey::from_secp256k1("did:e", "did:b", &eve_sk.to_bytes().into(), &bob_pk).unwrap();
 
     let ct = k_ab.encrypt("private").unwrap();
-    assert!(k_eb.decrypt(&ct).is_err(), "Eve must not decrypt Alice↔Bob DM");
+    assert!(
+        k_eb.decrypt(&ct).is_err(),
+        "Eve must not decrypt Alice↔Bob DM"
+    );
 }

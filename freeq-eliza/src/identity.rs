@@ -42,7 +42,8 @@ pub fn load_or_create_in(name: &str, home: &Path) -> Result<Identity> {
     let id_path = dir.join("identity.json");
 
     let seed: [u8; 32] = if key_path.exists() {
-        let raw = std::fs::read(&key_path).with_context(|| format!("reading {}", key_path.display()))?;
+        let raw =
+            std::fs::read(&key_path).with_context(|| format!("reading {}", key_path.display()))?;
         if raw.len() != 32 {
             anyhow::bail!(
                 "expected 32-byte seed at {}, got {} bytes",
@@ -62,7 +63,8 @@ pub fn load_or_create_in(name: &str, home: &Path) -> Result<Identity> {
 
     let signing_key = SigningKey::from_bytes(&seed);
     let did = did_key_from_pubkey(signing_key.verifying_key().to_bytes());
-    let private_key = PrivateKey::ed25519_from_bytes(&seed).context("constructing PrivateKey from seed")?;
+    let private_key =
+        PrivateKey::ed25519_from_bytes(&seed).context("constructing PrivateKey from seed")?;
 
     if !id_path.exists() {
         let doc = serde_json::json!({
@@ -116,8 +118,8 @@ pub fn validate_bot_name(name: &str) -> Result<()> {
 
 #[cfg(unix)]
 fn write_secret(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
     use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -206,14 +208,18 @@ mod tests {
     #[test]
     fn path_traversal_dotdot_rejected() {
         let home = TempDir::new().unwrap();
-        let err = load_or_create_in("..", home.path()).err().expect("expected error");
+        let err = load_or_create_in("..", home.path())
+            .err()
+            .expect("expected error");
         assert!(format!("{err:#}").contains("reserved"), "got: {err:#}");
     }
 
     #[test]
     fn path_traversal_with_slash_rejected() {
         let home = TempDir::new().unwrap();
-        let err = load_or_create_in("../evil", home.path()).err().expect("expected error");
+        let err = load_or_create_in("../evil", home.path())
+            .err()
+            .expect("expected error");
         assert!(
             format!("{err:#}").contains("path separators") || format!("{err:#}").contains("'..'"),
             "got: {err:#}"
@@ -222,7 +228,10 @@ mod tests {
         // `<home>/.freeq/bots/../evil/...` (which would resolve to
         // `<home>/.freeq/evil/`).
         let escaped = home.path().join(".freeq").join("evil");
-        assert!(!escaped.exists(), "path traversal succeeded — directory leaked outside bots/");
+        assert!(
+            !escaped.exists(),
+            "path traversal succeeded — directory leaked outside bots/"
+        );
     }
 
     #[test]
@@ -230,14 +239,21 @@ mod tests {
         let home = TempDir::new().unwrap();
         // Windows path separator should be rejected even on Unix, to
         // keep behaviour platform-portable.
-        let err = load_or_create_in("foo\\bar", home.path()).err().expect("expected error");
-        assert!(format!("{err:#}").contains("path separators"), "got: {err:#}");
+        let err = load_or_create_in("foo\\bar", home.path())
+            .err()
+            .expect("expected error");
+        assert!(
+            format!("{err:#}").contains("path separators"),
+            "got: {err:#}"
+        );
     }
 
     #[test]
     fn empty_name_rejected() {
         let home = TempDir::new().unwrap();
-        let err = load_or_create_in("", home.path()).err().expect("expected error");
+        let err = load_or_create_in("", home.path())
+            .err()
+            .expect("expected error");
         assert!(format!("{err:#}").contains("empty"), "got: {err:#}");
     }
 
@@ -245,7 +261,9 @@ mod tests {
     fn overlong_name_rejected() {
         let home = TempDir::new().unwrap();
         let name = "a".repeat(65);
-        let err = load_or_create_in(&name, home.path()).err().expect("expected error");
+        let err = load_or_create_in(&name, home.path())
+            .err()
+            .expect("expected error");
         assert!(format!("{err:#}").contains("64"), "got: {err:#}");
     }
 
@@ -253,7 +271,9 @@ mod tests {
     fn control_chars_in_name_rejected() {
         let home = TempDir::new().unwrap();
         for bad in ["foo\nbar", "foo\0bar", "foo\tbar", "foo\rbar"] {
-            let err = load_or_create_in(bad, home.path()).err().expect("expected error");
+            let err = load_or_create_in(bad, home.path())
+                .err()
+                .expect("expected error");
             assert!(
                 format!("{err:#}").contains("control characters"),
                 "input {bad:?} should be rejected, got: {err:#}"
@@ -281,10 +301,18 @@ mod tests {
         // overwrite the key file must not get a silently zero-padded
         // identity.
         std::fs::write(bot_dir.join("key.ed25519"), vec![0xaa; 31]).unwrap();
-        let err = load_or_create_in("trunc", home.path()).err().expect("expected error");
+        let err = load_or_create_in("trunc", home.path())
+            .err()
+            .expect("expected error");
         let msg = format!("{err:#}");
-        assert!(msg.contains("31"), "error should mention the byte count: {msg}");
-        assert!(msg.contains("key.ed25519"), "error should mention the file path: {msg}");
+        assert!(
+            msg.contains("31"),
+            "error should mention the byte count: {msg}"
+        );
+        assert!(
+            msg.contains("key.ed25519"),
+            "error should mention the file path: {msg}"
+        );
     }
 
     #[test]
@@ -296,9 +324,14 @@ mod tests {
         // (which would pick the wrong DID) and must surface the size in
         // the error.
         std::fs::write(bot_dir.join("key.ed25519"), vec![0xbb; 64]).unwrap();
-        let err = load_or_create_in("over", home.path()).err().expect("expected error");
+        let err = load_or_create_in("over", home.path())
+            .err()
+            .expect("expected error");
         let msg = format!("{err:#}");
-        assert!(msg.contains("64"), "error should mention the byte count: {msg}");
+        assert!(
+            msg.contains("64"),
+            "error should mention the byte count: {msg}"
+        );
     }
 
     #[test]
@@ -310,7 +343,9 @@ mod tests {
         let bot_dir = home.path().join(".freeq").join("bots").join("empty");
         std::fs::create_dir_all(&bot_dir).unwrap();
         std::fs::write(bot_dir.join("key.ed25519"), b"").unwrap();
-        let err = load_or_create_in("empty", home.path()).err().expect("expected error");
+        let err = load_or_create_in("empty", home.path())
+            .err()
+            .expect("expected error");
         assert!(format!("{err:#}").contains("0 bytes"), "got: {err:#}");
     }
 
@@ -323,7 +358,11 @@ mod tests {
         let id_a = load_or_create_in("nofield", home.path()).unwrap();
         let bot_dir = home.path().join(".freeq").join("bots").join("nofield");
         // Overwrite identity.json with garbage that has no `id`.
-        std::fs::write(bot_dir.join("identity.json"), br#"{"createdAt":"whenever"}"#).unwrap();
+        std::fs::write(
+            bot_dir.join("identity.json"),
+            br#"{"createdAt":"whenever"}"#,
+        )
+        .unwrap();
         let id_b = load_or_create_in("nofield", home.path()).unwrap();
         assert_eq!(
             id_a.did, id_b.did,
@@ -346,7 +385,12 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let home = TempDir::new().unwrap();
         let _ = load_or_create_in("perms", home.path()).unwrap();
-        let key = home.path().join(".freeq").join("bots").join("perms").join("key.ed25519");
+        let key = home
+            .path()
+            .join(".freeq")
+            .join("bots")
+            .join("perms")
+            .join("key.ed25519");
         let mode = std::fs::metadata(&key).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "key file mode is {mode:o}");
     }
@@ -408,6 +452,9 @@ mod tests {
     fn bot_dir_in_pins_layout() {
         let home = TempDir::new().unwrap();
         let p = bot_dir_in("transcriber", home.path());
-        assert_eq!(p, home.path().join(".freeq").join("bots").join("transcriber"));
+        assert_eq!(
+            p,
+            home.path().join(".freeq").join("bots").join("transcriber")
+        );
     }
 }

@@ -187,9 +187,7 @@ pub async fn describe(
     let text = if context.trim().is_empty() {
         question.to_string()
     } else {
-        format!(
-            "Live call transcript (recent, for reference):\n{context}\n\nQuestion: {question}"
-        )
+        format!("Live call transcript (recent, for reference):\n{context}\n\nQuestion: {question}")
     };
     let body = serde_json::json!({
         "model": model,
@@ -309,12 +307,7 @@ mod tests {
     fn frame_encodes_to_a_jpeg() {
         // A 16×16 opaque-grey RGBA frame round-trips to JPEG bytes.
         let px = vec![128u8; 16 * 16 * 4];
-        let frame = VideoFrame::new_rgba(
-            bytes::Bytes::from(px),
-            16,
-            16,
-            std::time::Duration::ZERO,
-        );
+        let frame = VideoFrame::new_rgba(bytes::Bytes::from(px), 16, 16, std::time::Duration::ZERO);
         let jpeg = frame_to_jpeg(&frame).expect("encode");
         assert!(jpeg.len() > 2);
         // JPEG SOI marker.

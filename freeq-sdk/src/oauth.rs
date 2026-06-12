@@ -825,8 +825,13 @@ mod tests {
 
     /// Decode the payload (claims) segment of a DPoP proof JWT.
     fn proof_payload(proof: &str) -> serde_json::Value {
-        let payload_b64 = proof.split('.').nth(1).expect("JWT must have a payload segment");
-        let bytes = URL_SAFE_NO_PAD.decode(payload_b64).expect("payload is base64url");
+        let payload_b64 = proof
+            .split('.')
+            .nth(1)
+            .expect("JWT must have a payload segment");
+        let bytes = URL_SAFE_NO_PAD
+            .decode(payload_b64)
+            .expect("payload is base64url");
         serde_json::from_slice(&bytes).expect("payload is JSON")
     }
 
@@ -895,7 +900,11 @@ mod tests {
         let key = DpopKey::generate();
         let encoded = key.to_base64url();
         let decoded = DpopKey::from_base64url(&encoded).expect("roundtrip");
-        assert_eq!(key.jwk(), decoded.jwk(), "public JWK must survive roundtrip");
+        assert_eq!(
+            key.jwk(),
+            decoded.jwk(),
+            "public JWK must survive roundtrip"
+        );
     }
 
     #[test]
@@ -972,7 +981,9 @@ mod tests {
     #[test]
     fn dpop_proof_omits_optional_claims() {
         let key = DpopKey::generate();
-        let proof = key.proof("POST", "https://as.example/par", None, None).unwrap();
+        let proof = key
+            .proof("POST", "https://as.example/par", None, None)
+            .unwrap();
         let payload = proof_payload(&proof);
         assert!(payload.get("nonce").is_none(), "no nonce claim when None");
         assert!(payload.get("ath").is_none(), "no ath claim when no token");
@@ -1103,17 +1114,20 @@ mod tests {
             }),
         );
         let base = spawn_app(router).await;
-        let err = test_session(base, "stale-token").validate().await.unwrap_err();
-        assert!(
-            err.to_string().contains("no longer valid"),
-            "got: {err}"
-        );
+        let err = test_session(base, "stale-token")
+            .validate()
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no longer valid"), "got: {err}");
     }
 
     #[tokio::test]
     async fn validate_rejects_wrong_token() {
         let base = spawn_app(mock_pds_router("the-real-token")).await;
-        let err = test_session(base, "attacker-token").validate().await.unwrap_err();
+        let err = test_session(base, "attacker-token")
+            .validate()
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("no longer valid"), "got: {err}");
     }
 
@@ -1459,7 +1473,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(url.starts_with("https://as.example/authorize?"), "got: {url}");
+        assert!(
+            url.starts_with("https://as.example/authorize?"),
+            "got: {url}"
+        );
         assert!(url.contains(&urlencod("client-id")), "got: {url}");
         assert!(
             url.contains(&urlencod("urn:ietf:params:oauth:request_uri:abc123")),
@@ -1641,6 +1658,9 @@ mod tests {
         let a = generate_random_string(16);
         let b = generate_random_string(16);
         assert_ne!(a, b);
-        assert!(a.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(
+            a.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        );
     }
 }

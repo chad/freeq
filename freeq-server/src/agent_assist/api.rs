@@ -27,17 +27,44 @@ pub fn routes() -> Router<Arc<SharedState>> {
     Router::new()
         .route("/.well-known/agent.json", get(get_discovery))
         // Original validators / diagnosers (batch 1).
-        .route("/agent/tools/validate_client_config", post(post_validate_client_config))
-        .route("/agent/tools/diagnose_message_ordering", post(post_diagnose_message_ordering))
+        .route(
+            "/agent/tools/validate_client_config",
+            post(post_validate_client_config),
+        )
+        .route(
+            "/agent/tools/diagnose_message_ordering",
+            post(post_diagnose_message_ordering),
+        )
         .route("/agent/tools/diagnose_sync", post(post_diagnose_sync))
         // Bot-developer batch (batch 2).
-        .route("/agent/tools/inspect_my_session", post(post_inspect_my_session))
-        .route("/agent/tools/diagnose_join_failure", post(post_diagnose_join_failure))
-        .route("/agent/tools/diagnose_disconnect", post(post_diagnose_disconnect))
-        .route("/agent/tools/replay_missed_messages", post(post_replay_missed_messages))
-        .route("/agent/tools/predict_message_outcome", post(post_predict_message_outcome))
-        .route("/agent/tools/explain_message_routing", post(post_explain_message_routing))
-        .route("/agent/tools/diagnose_av_session", post(post_diagnose_av_session))
+        .route(
+            "/agent/tools/inspect_my_session",
+            post(post_inspect_my_session),
+        )
+        .route(
+            "/agent/tools/diagnose_join_failure",
+            post(post_diagnose_join_failure),
+        )
+        .route(
+            "/agent/tools/diagnose_disconnect",
+            post(post_diagnose_disconnect),
+        )
+        .route(
+            "/agent/tools/replay_missed_messages",
+            post(post_replay_missed_messages),
+        )
+        .route(
+            "/agent/tools/predict_message_outcome",
+            post(post_predict_message_outcome),
+        )
+        .route(
+            "/agent/tools/explain_message_routing",
+            post(post_explain_message_routing),
+        )
+        .route(
+            "/agent/tools/diagnose_av_session",
+            post(post_diagnose_av_session),
+        )
         // Free-form router (LLM-backed). Returns LLM_NOT_CONFIGURED if
         // no provider is installed.
         .route("/agent/session", post(post_session))
@@ -86,8 +113,7 @@ async fn get_discovery() -> impl IntoResponse {
     Json(AgentDiscovery {
         service: "Freeq",
         version: env!("CARGO_PKG_VERSION"),
-        description:
-            "Agent-facing assistance interface for Freeq client validation and \
+        description: "Agent-facing assistance interface for Freeq client validation and \
              diagnostic queries. Returns conclusions, never raw state.",
         assistance_endpoint: "/agent/tools",
         capabilities: caps,
@@ -366,7 +392,11 @@ mod tests {
     #[test]
     fn envelope_blocks_admin_only_bundle_for_non_admin() {
         let caller = Caller::anonymous();
-        let resp = envelope("req".into(), bundle_at(DisclosureLevel::ServerOperator), &caller);
+        let resp = envelope(
+            "req".into(),
+            bundle_at(DisclosureLevel::ServerOperator),
+            &caller,
+        );
         assert!(!resp.ok);
         assert_eq!(resp.diagnosis.code, "DISCLOSURE_FILTER_BLOCKED");
         // Defense-in-depth: the original safe_facts must not appear.
@@ -380,7 +410,11 @@ mod tests {
             session_id: Some("s1".into()),
             level: DisclosureLevel::ServerOperator,
         };
-        let resp = envelope("req".into(), bundle_at(DisclosureLevel::ServerOperator), &caller);
+        let resp = envelope(
+            "req".into(),
+            bundle_at(DisclosureLevel::ServerOperator),
+            &caller,
+        );
         assert!(resp.ok);
         assert_eq!(resp.diagnosis.code, "TEST");
         assert_eq!(resp.safe_facts, vec!["fact one".to_string()]);
@@ -394,7 +428,11 @@ mod tests {
         // upfront check would slip through here — but that's why every
         // tool is responsible for its own permission gate.
         let caller = Caller::anonymous();
-        let resp = envelope("req".into(), bundle_at(DisclosureLevel::ChannelMember), &caller);
+        let resp = envelope(
+            "req".into(),
+            bundle_at(DisclosureLevel::ChannelMember),
+            &caller,
+        );
         assert!(resp.ok);
     }
 }

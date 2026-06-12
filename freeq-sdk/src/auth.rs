@@ -280,7 +280,9 @@ impl ChallengeSigner for StubSigner {
     }
 
     fn respond(&self, _challenge_bytes: &[u8]) -> anyhow::Result<ChallengeResponse> {
-        anyhow::bail!("StubSigner cannot produce real signatures; use KeySigner or PdsSessionSigner")
+        anyhow::bail!(
+            "StubSigner cannot produce real signatures; use KeySigner or PdsSessionSigner"
+        )
     }
 }
 

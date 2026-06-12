@@ -58,7 +58,10 @@ impl C {
         let s = TcpStream::connect(addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).ok();
         let w = s.try_clone().unwrap();
-        let mut c = Self { reader: BufReader::new(s), writer: w };
+        let mut c = Self {
+            reader: BufReader::new(s),
+            writer: w,
+        };
         c.tx("CAP LS 302");
         c.tx(&format!("NICK {nick}"));
         c.tx(&format!("USER {nick} 0 * :test"));
@@ -71,7 +74,10 @@ impl C {
         let s = TcpStream::connect(addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).ok();
         let w = s.try_clone().unwrap();
-        let mut c = Self { reader: BufReader::new(s), writer: w };
+        let mut c = Self {
+            reader: BufReader::new(s),
+            writer: w,
+        };
         c.tx("CAP LS 302");
         c.tx(&format!("NICK {nick}"));
         c.tx(&format!("USER {nick} 0 * :test"));
@@ -304,10 +310,7 @@ async fn dm_search_finds_own_conversation_only() {
         // Eve searches *her* DM key with alice — sees nothing of alice↔bob.
         eve.tx("SEARCH alice :rendezvous");
         let msgs = eve.collect_batch_messages();
-        assert!(
-            msgs.is_empty(),
-            "eve must not see alice/bob DMs: {msgs:?}"
-        );
+        assert!(msgs.is_empty(), "eve must not see alice/bob DMs: {msgs:?}");
     })
     .await;
 }

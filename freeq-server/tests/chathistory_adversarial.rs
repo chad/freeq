@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpStream, SocketAddr};
+use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 use freeq_sdk::auth::{self, ChallengeSigner, KeySigner};
@@ -19,7 +19,10 @@ const DID_C: &str = "did:plc:hist_eve";
 fn resolver(entries: Vec<(&str, &PrivateKey)>) -> DidResolver {
     let mut docs = HashMap::new();
     for (did, key) in entries {
-        docs.insert(did.to_string(), did::make_test_did_document(did, &key.public_key_multibase()));
+        docs.insert(
+            did.to_string(),
+            did::make_test_did_document(did, &key.public_key_multibase()),
+        );
     }
     DidResolver::static_map(docs)
 }
@@ -35,20 +38,29 @@ async fn start(r: DidResolver) -> (SocketAddr, tokio::task::JoinHandle<anyhow::R
         db_path: Some(db),
         ..Default::default()
     };
-    freeq_server::server::Server::with_resolver(config, r).start().await.unwrap()
+    freeq_server::server::Server::with_resolver(config, r)
+        .start()
+        .await
+        .unwrap()
 }
 
 async fn run(addr: SocketAddr, f: impl FnOnce(SocketAddr) + Send + 'static) {
     tokio::task::spawn_blocking(move || f(addr)).await.unwrap();
 }
 
-struct C { reader: BufReader<TcpStream>, writer: TcpStream }
+struct C {
+    reader: BufReader<TcpStream>,
+    writer: TcpStream,
+}
 impl C {
     fn with_caps(addr: SocketAddr, nick: &str) -> Self {
         let s = TcpStream::connect(addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).ok();
         let w = s.try_clone().unwrap();
-        let mut c = Self { reader: BufReader::new(s), writer: w };
+        let mut c = Self {
+            reader: BufReader::new(s),
+            writer: w,
+        };
         c.tx("CAP LS 302");
         c.tx(&format!("NICK {nick}"));
         c.tx(&format!("USER {nick} 0 * :test"));
@@ -61,7 +73,10 @@ impl C {
         let s = TcpStream::connect(addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).ok();
         let w = s.try_clone().unwrap();
-        let mut c = Self { reader: BufReader::new(s), writer: w };
+        let mut c = Self {
+            reader: BufReader::new(s),
+            writer: w,
+        };
         c.tx("CAP LS 302");
         c.tx(&format!("NICK {nick}"));
         c.tx(&format!("USER {nick} 0 * :test"));
@@ -69,7 +84,8 @@ impl C {
         c.rx(|l| l.contains("ACK"), "ACK");
         c.tx("AUTHENTICATE ATPROTO-CHALLENGE");
         let ch = c.rx(|l| l.starts_with("AUTHENTICATE "), "challenge");
-        let bytes = auth::decode_challenge_bytes(ch.strip_prefix("AUTHENTICATE ").unwrap()).unwrap();
+        let bytes =
+            auth::decode_challenge_bytes(ch.strip_prefix("AUTHENTICATE ").unwrap()).unwrap();
         let signer = KeySigner::new(did.to_string(), key);
         let resp = signer.respond(&bytes).unwrap();
         c.tx(&format!("AUTHENTICATE {}", auth::encode_response(&resp)));
@@ -77,39 +93,103 @@ impl C {
         c.tx("CAP END");
         c
     }
-    fn tx(&mut self, l: &str) { writeln!(self.writer, "{l}\r").unwrap(); self.writer.flush().ok(); }
+    fn tx(&mut self, l: &str) {
+        writeln!(self.writer, "{l}\r").unwrap();
+        self.writer.flush().ok();
+    }
     fn rx(&mut self, p: impl Fn(&str) -> bool, d: &str) -> String {
         let mut b = String::new();
-        loop { b.clear(); match self.reader.read_line(&mut b) {
-            Ok(0) => panic!("EOF: {d}"), Ok(_) => {
-                let l = b.trim_end();
-                if l.starts_with("PING") { let t = l.strip_prefix("PING ").unwrap_or(":x");
-                    let _ = writeln!(self.writer, "PONG {t}\r"); let _ = self.writer.flush(); continue; }
-                if p(l) { return l.to_string(); }
-            } Err(e) if e.kind() == std::io::ErrorKind::TimedOut || e.kind() == std::io::ErrorKind::WouldBlock
-                => panic!("Timeout: {d}"), Err(e) => panic!("{d}: {e}"),
-        }}
+        loop {
+            b.clear();
+            match self.reader.read_line(&mut b) {
+                Ok(0) => panic!("EOF: {d}"),
+                Ok(_) => {
+                    let l = b.trim_end();
+                    if l.starts_with("PING") {
+                        let t = l.strip_prefix("PING ").unwrap_or(":x");
+                        let _ = writeln!(self.writer, "PONG {t}\r");
+                        let _ = self.writer.flush();
+                        continue;
+                    }
+                    if p(l) {
+                        return l.to_string();
+                    }
+                }
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::TimedOut
+                        || e.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    panic!("Timeout: {d}")
+                }
+                Err(e) => panic!("{d}: {e}"),
+            }
+        }
     }
-    fn num(&mut self, c: &str) -> String { self.rx(|l| l.split_whitespace().nth(1)==Some(c), c) }
-    fn reg(&mut self) { self.num("001"); }
+    fn num(&mut self, c: &str) -> String {
+        self.rx(|l| l.split_whitespace().nth(1) == Some(c), c)
+    }
+    fn reg(&mut self) {
+        self.num("001");
+    }
     fn drain(&mut self) {
-        self.writer.try_clone().unwrap().set_read_timeout(Some(Duration::from_millis(300))).ok();
-        let mut b = String::new(); loop { b.clear(); match self.reader.read_line(&mut b) {
-            Ok(0) => break, Ok(_) => if b.starts_with("PING") {
-                let t = b.trim_end().strip_prefix("PING ").unwrap_or(":x");
-                let _ = writeln!(self.writer, "PONG {t}\r"); let _ = self.writer.flush(); },
-            Err(_) => break, }}
-        self.writer.try_clone().unwrap().set_read_timeout(Some(Duration::from_secs(5))).ok();
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_millis(300)))
+            .ok();
+        let mut b = String::new();
+        loop {
+            b.clear();
+            match self.reader.read_line(&mut b) {
+                Ok(0) => break,
+                Ok(_) => {
+                    if b.starts_with("PING") {
+                        let t = b.trim_end().strip_prefix("PING ").unwrap_or(":x");
+                        let _ = writeln!(self.writer, "PONG {t}\r");
+                        let _ = self.writer.flush();
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .ok();
     }
     fn maybe(&mut self, p: impl Fn(&str) -> bool, ms: u64) -> Option<String> {
-        self.writer.try_clone().unwrap().set_read_timeout(Some(Duration::from_millis(ms))).ok();
-        let mut b = String::new(); let r = loop { b.clear(); match self.reader.read_line(&mut b) {
-            Ok(0) => break None, Ok(_) => { let l = b.trim_end();
-                if l.starts_with("PING") { let t = l.strip_prefix("PING ").unwrap_or(":x");
-                    let _ = writeln!(self.writer, "PONG {t}\r"); let _ = self.writer.flush(); continue; }
-                if p(l) { break Some(l.to_string()); }
-            } Err(_) => break None, }};
-        self.writer.try_clone().unwrap().set_read_timeout(Some(Duration::from_secs(5))).ok(); r
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_millis(ms)))
+            .ok();
+        let mut b = String::new();
+        let r = loop {
+            b.clear();
+            match self.reader.read_line(&mut b) {
+                Ok(0) => break None,
+                Ok(_) => {
+                    let l = b.trim_end();
+                    if l.starts_with("PING") {
+                        let t = l.strip_prefix("PING ").unwrap_or(":x");
+                        let _ = writeln!(self.writer, "PONG {t}\r");
+                        let _ = self.writer.flush();
+                        continue;
+                    }
+                    if p(l) {
+                        break Some(l.to_string());
+                    }
+                }
+                Err(_) => break None,
+            }
+        };
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .ok();
+        r
     }
     /// Collect all PRIVMSG lines from a CHATHISTORY batch response
     fn collect_batch_messages(&mut self) -> Vec<String> {
@@ -119,15 +199,24 @@ impl C {
         // Collect until BATCH end
         loop {
             let line = self.rx(|_| true, "batch line");
-            if line.contains("BATCH -") { break; }
-            if line.contains("PRIVMSG") { msgs.push(line); }
+            if line.contains("BATCH -") {
+                break;
+            }
+            if line.contains("PRIVMSG") {
+                msgs.push(line);
+            }
         }
         msgs
     }
     fn extract_msgid(line: &str) -> String {
-        if let Some(tags_str) = line.strip_prefix('@').and_then(|s| s.split_once(' ').map(|(t,_)| t)) {
+        if let Some(tags_str) = line
+            .strip_prefix('@')
+            .and_then(|s| s.split_once(' ').map(|(t, _)| t))
+        {
             for tag in tags_str.split(';') {
-                if let Some(val) = tag.strip_prefix("msgid=") { return val.to_string(); }
+                if let Some(val) = tag.strip_prefix("msgid=") {
+                    return val.to_string();
+                }
             }
         }
         String::new()
@@ -177,11 +266,17 @@ async fn chathistory_multiline_message_replayed_as_split_privmsgs() {
         let msgs = bob.collect_batch_messages();
 
         let first_seen = msgs.iter().any(|m| m.contains("first line of the opening"));
-        let second_seen = msgs.iter().any(|m| m.contains("second line carries the claim"));
-        let third_seen = msgs.iter().any(|m| m.contains("third line is the conclusion"));
-        assert!(first_seen && second_seen && third_seen,
+        let second_seen = msgs
+            .iter()
+            .any(|m| m.contains("second line carries the claim"));
+        let third_seen = msgs
+            .iter()
+            .any(|m| m.contains("third line is the conclusion"));
+        assert!(
+            first_seen && second_seen && third_seen,
             "all 3 lines should appear in history replay; got {} messages: {msgs:?}",
-            msgs.len());
+            msgs.len()
+        );
 
         // None of the PRIVMSG bodies may contain a raw `\n`.
         for m in &msgs {
@@ -197,19 +292,32 @@ async fn chathistory_multiline_message_replayed_as_split_privmsgs() {
         // Find the chunk carrying "first line of the opening" — it
         // should have msgid; the chunks for line 2 and line 3 should
         // not.
-        let first_chunk = msgs.iter().find(|m| m.contains("first line of the opening"))
+        let first_chunk = msgs
+            .iter()
+            .find(|m| m.contains("first line of the opening"))
             .expect("first line present");
-        let second_chunk = msgs.iter().find(|m| m.contains("second line carries the claim"))
+        let second_chunk = msgs
+            .iter()
+            .find(|m| m.contains("second line carries the claim"))
             .expect("second line present");
-        let third_chunk = msgs.iter().find(|m| m.contains("third line is the conclusion"))
+        let third_chunk = msgs
+            .iter()
+            .find(|m| m.contains("third line is the conclusion"))
             .expect("third line present");
-        assert!(first_chunk.contains("msgid="),
-            "first chunk should carry msgid: {first_chunk}");
-        assert!(!second_chunk.contains("msgid="),
-            "second chunk should NOT carry msgid: {second_chunk}");
-        assert!(!third_chunk.contains("msgid="),
-            "third chunk should NOT carry msgid: {third_chunk}");
-    }).await;
+        assert!(
+            first_chunk.contains("msgid="),
+            "first chunk should carry msgid: {first_chunk}"
+        );
+        assert!(
+            !second_chunk.contains("msgid="),
+            "second chunk should NOT carry msgid: {second_chunk}"
+        );
+        assert!(
+            !third_chunk.contains("msgid="),
+            "third chunk should NOT carry msgid: {third_chunk}"
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -253,8 +361,10 @@ async fn chathistory_multiline_capable_receiver_gets_nested_batch() {
         bob.tx("CHATHISTORY LATEST #mlhist2 * 50");
 
         // Read everything between the outer chathistory BATCH + and -.
-        let outer_open = bob.rx(|l| l.contains("BATCH +") && l.contains("chathistory"),
-            "chathistory BATCH start");
+        let outer_open = bob.rx(
+            |l| l.contains("BATCH +") && l.contains("chathistory"),
+            "chathistory BATCH start",
+        );
         let outer_id = {
             let after_at = outer_open.find("BATCH +").unwrap() + "BATCH +".len();
             let rest = &outer_open[after_at..];
@@ -277,15 +387,23 @@ async fn chathistory_multiline_capable_receiver_gets_nested_batch() {
         }
 
         // Must contain a nested draft/multiline BATCH +.
-        let inner_open = lines.iter().find(|l| l.contains("BATCH +") && l.contains("draft/multiline"))
-            .expect(&format!("expected nested multiline BATCH +, lines: {lines:#?}"));
+        let inner_open = lines
+            .iter()
+            .find(|l| l.contains("BATCH +") && l.contains("draft/multiline"))
+            .expect(&format!(
+                "expected nested multiline BATCH +, lines: {lines:#?}"
+            ));
         // Inner opener should carry the chathistory batch tag for
         // nesting (batch=<outer_id>) AND the msgid for the logical
         // message.
-        assert!(inner_open.contains(&format!("batch={outer_id}")),
-            "inner BATCH + should reference outer chathistory batch: {inner_open}");
-        assert!(inner_open.contains("msgid="),
-            "inner BATCH + should carry the logical message's msgid: {inner_open}");
+        assert!(
+            inner_open.contains(&format!("batch={outer_id}")),
+            "inner BATCH + should reference outer chathistory batch: {inner_open}"
+        );
+        assert!(
+            inner_open.contains("msgid="),
+            "inner BATCH + should carry the logical message's msgid: {inner_open}"
+        );
 
         // Three PRIVMSG chunks should carry batch=<inner_id>.
         let inner_id = {
@@ -293,11 +411,14 @@ async fn chathistory_multiline_capable_receiver_gets_nested_batch() {
             let rest = &inner_open[after_at..];
             rest.split_whitespace().next().unwrap().to_string()
         };
-        let chunk_count = lines.iter().filter(|l|
-            l.contains("PRIVMSG") && l.contains(&format!("batch={inner_id}"))
-        ).count();
-        assert_eq!(chunk_count, 3,
-            "expected 3 chunk PRIVMSGs carrying batch={inner_id}, got: {lines:#?}");
+        let chunk_count = lines
+            .iter()
+            .filter(|l| l.contains("PRIVMSG") && l.contains(&format!("batch={inner_id}")))
+            .count();
+        assert_eq!(
+            chunk_count, 3,
+            "expected 3 chunk PRIVMSGs carrying batch={inner_id}, got: {lines:#?}"
+        );
 
         // The 3 chunks must carry the chunk bodies, not the joined body.
         assert!(lines.iter().any(|l| l.contains(":alpha line")));
@@ -307,12 +428,15 @@ async fn chathistory_multiline_capable_receiver_gets_nested_batch() {
         // Nested closer BATCH -<inner_id> must be present (we already
         // know the outer closer arrived because we broke the loop on
         // BATCH -<outer_id>).
-        let inner_close = lines.iter().find(|l|
-            l.contains(&format!("BATCH -{inner_id}"))
+        let inner_close = lines
+            .iter()
+            .find(|l| l.contains(&format!("BATCH -{inner_id}")));
+        assert!(
+            inner_close.is_some(),
+            "expected nested BATCH -{inner_id}: {lines:#?}"
         );
-        assert!(inner_close.is_some(),
-            "expected nested BATCH -{inner_id}: {lines:#?}");
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -321,19 +445,26 @@ async fn chathistory_requires_channel_membership() {
     let (addr, _h) = start(r).await;
     run(addr, |addr| {
         let mut alice = C::with_caps(addr, "ch_alice");
-        alice.reg(); alice.drain();
-        alice.tx("JOIN #history"); alice.num("366"); alice.drain();
+        alice.reg();
+        alice.drain();
+        alice.tx("JOIN #history");
+        alice.num("366");
+        alice.drain();
         alice.tx("PRIVMSG #history :secret message");
         alice.drain();
 
         // Bob is NOT in #history
         let mut bob = C::with_caps(addr, "ch_bob");
-        bob.reg(); bob.drain();
+        bob.reg();
+        bob.drain();
         bob.tx("CHATHISTORY LATEST #history * 50");
         let fail = bob.rx(|l| l.contains("FAIL"), "access denied");
-        assert!(fail.contains("INVALID_TARGET") || fail.contains("FAIL"),
-            "Non-member should be denied CHATHISTORY: {fail}");
-    }).await;
+        assert!(
+            fail.contains("INVALID_TARGET") || fail.contains("FAIL"),
+            "Non-member should be denied CHATHISTORY: {fail}"
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -342,17 +473,23 @@ async fn chathistory_works_for_member() {
     let (addr, _h) = start(r).await;
     run(addr, |addr| {
         let mut alice = C::with_caps(addr, "hm_alice");
-        alice.reg(); alice.drain();
-        alice.tx("JOIN #histok"); alice.num("366"); alice.drain();
+        alice.reg();
+        alice.drain();
+        alice.tx("JOIN #histok");
+        alice.num("366");
+        alice.drain();
         alice.tx("PRIVMSG #histok :test message for history");
         alice.drain();
         std::thread::sleep(Duration::from_millis(100));
 
         alice.tx("CHATHISTORY LATEST #histok * 50");
         let msgs = alice.collect_batch_messages();
-        assert!(msgs.iter().any(|m| m.contains("test message for history")),
-            "Member should see message in history: {msgs:?}");
-    }).await;
+        assert!(
+            msgs.iter().any(|m| m.contains("test message for history")),
+            "Member should see message in history: {msgs:?}"
+        );
+    })
+    .await;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -365,11 +502,17 @@ async fn deleted_messages_excluded_from_chathistory() {
     let (addr, _h) = start(r).await;
     run(addr, |addr| {
         let mut alice = C::with_caps(addr, "del_a");
-        alice.reg(); alice.drain();
+        alice.reg();
+        alice.drain();
         let mut bob = C::with_caps(addr, "del_b");
-        bob.reg(); bob.drain();
-        alice.tx("JOIN #delhist"); alice.num("366"); alice.drain();
-        bob.tx("JOIN #delhist"); bob.num("366"); bob.drain();
+        bob.reg();
+        bob.drain();
+        alice.tx("JOIN #delhist");
+        alice.num("366");
+        alice.drain();
+        bob.tx("JOIN #delhist");
+        bob.num("366");
+        bob.drain();
 
         // Alice sends two messages
         alice.tx("PRIVMSG #delhist :keep this");
@@ -386,9 +529,16 @@ async fn deleted_messages_excluded_from_chathistory() {
         alice.drain();
         alice.tx("CHATHISTORY LATEST #delhist * 50");
         let msgs = alice.collect_batch_messages();
-        assert!(msgs.iter().any(|m| m.contains("keep this")), "Kept message should be in history");
-        assert!(!msgs.iter().any(|m| m.contains("delete this")), "Deleted message should NOT be in history");
-    }).await;
+        assert!(
+            msgs.iter().any(|m| m.contains("keep this")),
+            "Kept message should be in history"
+        );
+        assert!(
+            !msgs.iter().any(|m| m.contains("delete this")),
+            "Deleted message should NOT be in history"
+        );
+    })
+    .await;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -401,25 +551,36 @@ async fn edited_message_shows_new_text_in_history() {
     let (addr, _h) = start(r).await;
     run(addr, |addr| {
         let mut alice = C::with_caps(addr, "edit_a");
-        alice.reg(); alice.drain();
+        alice.reg();
+        alice.drain();
         let mut bob = C::with_caps(addr, "edit_b");
-        bob.reg(); bob.drain();
-        alice.tx("JOIN #edithist"); alice.num("366"); alice.drain();
-        bob.tx("JOIN #edithist"); bob.num("366"); bob.drain();
+        bob.reg();
+        bob.drain();
+        alice.tx("JOIN #edithist");
+        alice.num("366");
+        alice.drain();
+        bob.tx("JOIN #edithist");
+        bob.num("366");
+        bob.drain();
 
         alice.tx("PRIVMSG #edithist :original text");
         let m = bob.rx(|l| l.contains("original text"), "msg");
         let msgid = C::extract_msgid(&m);
 
         // Edit the message
-        alice.tx(&format!("@+draft/edit={msgid} PRIVMSG #edithist :edited text"));
+        alice.tx(&format!(
+            "@+draft/edit={msgid} PRIVMSG #edithist :edited text"
+        ));
         bob.rx(|l| l.contains("edited text"), "edit");
         std::thread::sleep(Duration::from_millis(200));
 
         // New user joins and requests history
         let mut carol = C::with_caps(addr, "edit_c");
-        carol.reg(); carol.drain();
-        carol.tx("JOIN #edithist"); carol.num("366"); carol.drain();
+        carol.reg();
+        carol.drain();
+        carol.tx("JOIN #edithist");
+        carol.num("366");
+        carol.drain();
         carol.tx("CHATHISTORY LATEST #edithist * 50");
         let msgs = carol.collect_batch_messages();
 
@@ -427,7 +588,8 @@ async fn edited_message_shows_new_text_in_history() {
         let has_edit = msgs.iter().any(|m| m.contains("edited text"));
         // The edit should be visible in history
         assert!(has_edit, "Edited text should appear in history: {msgs:?}");
-    }).await;
+    })
+    .await;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -440,8 +602,11 @@ async fn join_replays_recent_messages() {
     let (addr, _h) = start(r).await;
     run(addr, |addr| {
         let mut alice = C::with_caps(addr, "jr_a");
-        alice.reg(); alice.drain();
-        alice.tx("JOIN #joinreplay"); alice.num("366"); alice.drain();
+        alice.reg();
+        alice.drain();
+        alice.tx("JOIN #joinreplay");
+        alice.num("366");
+        alice.drain();
 
         // Send some messages
         for i in 0..5 {
@@ -451,7 +616,8 @@ async fn join_replays_recent_messages() {
 
         // Bob joins — should see recent messages in batch replay
         let mut bob = C::with_caps(addr, "jr_b");
-        bob.reg(); bob.drain();
+        bob.reg();
+        bob.drain();
         bob.tx("JOIN #joinreplay");
         // Drain until 366 (end of names), collecting any PRIVMSG on the way
         let mut saw_messages = false;
@@ -460,10 +626,13 @@ async fn join_replays_recent_messages() {
             if line.contains("PRIVMSG") && line.contains("message") {
                 saw_messages = true;
             }
-            if line.split_whitespace().nth(1) == Some("366") { break; }
+            if line.split_whitespace().nth(1) == Some("366") {
+                break;
+            }
         }
         assert!(saw_messages, "Bob should see message replay on join");
-    }).await;
+    })
+    .await;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -476,8 +645,11 @@ async fn chathistory_after_part_denied() {
     let (addr, _h) = start(r).await;
     run(addr, |addr| {
         let mut alice = C::with_caps(addr, "ap_a");
-        alice.reg(); alice.drain();
-        alice.tx("JOIN #partcheck"); alice.num("366"); alice.drain();
+        alice.reg();
+        alice.drain();
+        alice.tx("JOIN #partcheck");
+        alice.num("366");
+        alice.drain();
         alice.tx("PRIVMSG #partcheck :before part");
         alice.drain();
 
@@ -494,7 +666,8 @@ async fn chathistory_after_part_denied() {
                 eprintln!("NOTE: CHATHISTORY allowed after PART (implementation choice)");
             }
         }
-    }).await;
+    })
+    .await;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -508,12 +681,16 @@ async fn dm_chathistory_requires_auth() {
     run(addr, |addr| {
         // Guest (no DID) tries CHATHISTORY for a DM
         let mut guest = C::with_caps(addr, "dm_guest");
-        guest.reg(); guest.drain();
+        guest.reg();
+        guest.drain();
         guest.tx("CHATHISTORY LATEST some_nick * 50");
         let fail = guest.rx(|l| l.contains("FAIL"), "DM history denied");
-        assert!(fail.contains("ACCOUNT_REQUIRED") || fail.contains("FAIL"),
-            "Guest should be denied DM CHATHISTORY: {fail}");
-    }).await;
+        assert!(
+            fail.contains("ACCOUNT_REQUIRED") || fail.contains("FAIL"),
+            "Guest should be denied DM CHATHISTORY: {fail}"
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -524,9 +701,11 @@ async fn dm_chathistory_between_authenticated_users() {
     let (addr, _h) = start(r).await;
     run(addr, move |addr| {
         let mut alice = C::with_sasl(addr, "dh_alice", DID_A, key_a);
-        alice.reg(); alice.drain();
+        alice.reg();
+        alice.drain();
         let mut bob = C::with_sasl(addr, "dh_bob", DID_B, key_b);
-        bob.reg(); bob.drain();
+        bob.reg();
+        bob.drain();
 
         // Alice DMs Bob
         alice.tx("PRIVMSG dh_bob :private dm message");
@@ -543,14 +722,21 @@ async fn dm_chathistory_between_authenticated_users() {
                 let mut msgs = Vec::new();
                 loop {
                     let l = alice.rx(|_| true, "batch");
-                    if l.contains("BATCH -") { break; }
-                    if l.contains("PRIVMSG") { msgs.push(l); }
+                    if l.contains("BATCH -") {
+                        break;
+                    }
+                    if l.contains("PRIVMSG") {
+                        msgs.push(l);
+                    }
                 }
-                assert!(msgs.iter().any(|m| m.contains("private dm")),
-                    "DM history should contain the message");
+                assert!(
+                    msgs.iter().any(|m| m.contains("private dm")),
+                    "DM history should contain the message"
+                );
             }
         }
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -562,11 +748,14 @@ async fn dm_chathistory_third_party_cannot_read() {
     let (addr, _h) = start(r).await;
     run(addr, move |addr| {
         let mut alice = C::with_sasl(addr, "tp_alice", DID_A, key_a);
-        alice.reg(); alice.drain();
+        alice.reg();
+        alice.drain();
         let mut bob = C::with_sasl(addr, "tp_bob", DID_B, key_b);
-        bob.reg(); bob.drain();
+        bob.reg();
+        bob.drain();
         let mut eve = C::with_sasl(addr, "tp_eve", DID_C, key_c);
-        eve.reg(); eve.drain();
+        eve.reg();
+        eve.drain();
 
         // Alice DMs Bob
         alice.tx("PRIVMSG tp_bob :super secret");
@@ -582,8 +771,12 @@ async fn dm_chathistory_third_party_cannot_read() {
                 let mut msgs = Vec::new();
                 loop {
                     let l = eve.rx(|_| true, "batch");
-                    if l.contains("BATCH -") { break; }
-                    if l.contains("PRIVMSG") { msgs.push(l); }
+                    if l.contains("BATCH -") {
+                        break;
+                    }
+                    if l.contains("PRIVMSG") {
+                        msgs.push(l);
+                    }
                 }
                 // Eve's query creates canonical_dm_key(eve_did, bob_did) — different from alice↔bob
                 // So she should NOT see alice's messages
@@ -592,7 +785,8 @@ async fn dm_chathistory_third_party_cannot_read() {
                 }
             }
         }
-    }).await;
+    })
+    .await;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -605,12 +799,16 @@ async fn chathistory_targets_requires_auth() {
     let (addr, _h) = start(r).await;
     run(addr, |addr| {
         let mut guest = C::with_caps(addr, "tgt_guest");
-        guest.reg(); guest.drain();
+        guest.reg();
+        guest.drain();
         guest.tx("CHATHISTORY TARGETS * * 50");
         let fail = guest.rx(|l| l.contains("FAIL"), "targets denied");
-        assert!(fail.contains("ACCOUNT_REQUIRED") || fail.contains("FAIL"),
-            "Guest should be denied CHATHISTORY TARGETS: {fail}");
-    }).await;
+        assert!(
+            fail.contains("ACCOUNT_REQUIRED") || fail.contains("FAIL"),
+            "Guest should be denied CHATHISTORY TARGETS: {fail}"
+        );
+    })
+    .await;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -623,8 +821,11 @@ async fn chathistory_limit_capped_at_500() {
     let (addr, _h) = start(r).await;
     run(addr, |addr| {
         let mut alice = C::with_caps(addr, "lim_a");
-        alice.reg(); alice.drain();
-        alice.tx("JOIN #limit"); alice.num("366"); alice.drain();
+        alice.reg();
+        alice.drain();
+        alice.tx("JOIN #limit");
+        alice.num("366");
+        alice.drain();
 
         // Send 3 messages (within flood limit of 5/2sec)
         for i in 0..3 {
@@ -637,8 +838,13 @@ async fn chathistory_limit_capped_at_500() {
         alice.tx("CHATHISTORY LATEST #limit * 999999");
         let msgs = alice.collect_batch_messages();
         assert!(msgs.len() <= 500, "Limit should be capped at 500");
-        assert!(msgs.len() >= 3, "Should have our messages: got {}", msgs.len());
-    }).await;
+        assert!(
+            msgs.len() >= 3,
+            "Should have our messages: got {}",
+            msgs.len()
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -647,8 +853,11 @@ async fn chathistory_before_returns_older_messages() {
     let (addr, _h) = start(r).await;
     run(addr, |addr| {
         let mut alice = C::with_caps(addr, "bef_a");
-        alice.reg(); alice.drain();
-        alice.tx("JOIN #before"); alice.num("366"); alice.drain();
+        alice.reg();
+        alice.drain();
+        alice.tx("JOIN #before");
+        alice.num("366");
+        alice.drain();
 
         // Send messages
         for i in 0..5 {
@@ -666,13 +875,17 @@ async fn chathistory_before_returns_older_messages() {
         // BEFORE with future timestamp should return all messages
         // The server expects "timestamp=<unix>" format
         let future = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() + 9999;
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 9999;
         alice.tx(&format!("CHATHISTORY BEFORE #before timestamp={future} 50"));
         let result = alice.maybe(|l| l.contains("BATCH") || l.contains("FAIL"), 2000);
         // Either returns a batch (possibly empty if timestamp format wrong) or FAIL
         // Document actual behavior
         assert!(result.is_some(), "BEFORE should return some response");
-    }).await;
+    })
+    .await;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -685,12 +898,18 @@ async fn chathistory_after_kick_denied() {
     let (addr, _h) = start(r).await;
     run(addr, |addr| {
         let mut op = C::with_caps(addr, "kick_op");
-        op.reg(); op.drain();
-        op.tx("JOIN #kickhist"); op.num("366"); op.drain();
+        op.reg();
+        op.drain();
+        op.tx("JOIN #kickhist");
+        op.num("366");
+        op.drain();
 
         let mut victim = C::with_caps(addr, "kick_vic");
-        victim.reg(); victim.drain();
-        victim.tx("JOIN #kickhist"); victim.num("366"); victim.drain();
+        victim.reg();
+        victim.drain();
+        victim.tx("JOIN #kickhist");
+        victim.num("366");
+        victim.drain();
 
         // Op sends message, victim sees it
         op.tx("PRIVMSG #kickhist :you saw this");
@@ -710,7 +929,8 @@ async fn chathistory_after_kick_denied() {
                 eprintln!("NOTE: Kicked user can still CHATHISTORY (implementation choice)");
             }
         }
-    }).await;
+    })
+    .await;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -722,7 +942,10 @@ async fn chathistory_after_kick_denied() {
 /// closer (exclusive). Skips numerics and JOIN echoes.
 fn collect_join_history_batch(c: &mut C) -> Vec<String> {
     // Wait for the chathistory BATCH opener
-    c.rx(|l| l.contains("BATCH +") && l.contains("chathistory"), "join hist BATCH start");
+    c.rx(
+        |l| l.contains("BATCH +") && l.contains("chathistory"),
+        "join hist BATCH start",
+    );
     let mut lines = Vec::new();
     loop {
         let line = c.rx(|_| true, "join hist line");
@@ -781,37 +1004,60 @@ async fn join_history_multiline_uses_nested_batch_when_cap_negotiated() {
         let lines = collect_join_history_batch(&mut bob);
 
         // Expect a nested `BATCH +<id> draft/multiline #joinml` opener
-        let opener = lines.iter().find(|l| l.contains("BATCH +") && l.contains("draft/multiline"))
+        let opener = lines
+            .iter()
+            .find(|l| l.contains("BATCH +") && l.contains("draft/multiline"))
             .unwrap_or_else(|| panic!("nested draft/multiline BATCH opener missing in {lines:?}"));
         // Extract the nested batch id from the opener's first param
-        let ml_id = opener.split_whitespace()
+        let ml_id = opener
+            .split_whitespace()
             .find(|t| t.starts_with("+ml") || t.starts_with("+"))
             .and_then(|t| t.strip_prefix('+'))
             .unwrap()
             .to_string();
 
         // Three chunk PRIVMSGs, each carrying `batch=<ml_id>` and no raw `\n`
-        let chunks: Vec<&String> = lines.iter()
+        let chunks: Vec<&String> = lines
+            .iter()
             .filter(|l| l.contains("PRIVMSG #joinml"))
             .collect();
         assert_eq!(chunks.len(), 3, "expected 3 chunk PRIVMSGs, got {chunks:?}");
         for ch in &chunks {
-            assert!(ch.contains(&format!("batch={ml_id}")),
-                "chunk missing batch={ml_id}: {ch}");
+            assert!(
+                ch.contains(&format!("batch={ml_id}")),
+                "chunk missing batch={ml_id}: {ch}"
+            );
             // The whole wire line obviously has a trailing CRLF, but the
             // PRIVMSG body must not have an internal `\n`.
             let body = ch.rsplit(':').next().unwrap_or("");
             assert!(!body.contains('\n'), "raw \\n in chunk body: {ch}");
         }
-        assert!(chunks[0].contains("line one of three"), "chunk 0: {}", chunks[0]);
-        assert!(chunks[1].contains("line two of three"), "chunk 1: {}", chunks[1]);
-        assert!(chunks[2].contains("line three of three"), "chunk 2: {}", chunks[2]);
+        assert!(
+            chunks[0].contains("line one of three"),
+            "chunk 0: {}",
+            chunks[0]
+        );
+        assert!(
+            chunks[1].contains("line two of three"),
+            "chunk 1: {}",
+            chunks[1]
+        );
+        assert!(
+            chunks[2].contains("line three of three"),
+            "chunk 2: {}",
+            chunks[2]
+        );
 
         // Nested BATCH closer with `-<ml_id>`
-        let nested_closer = lines.iter().find(|l| l.contains(&format!("BATCH -{ml_id}")));
-        assert!(nested_closer.is_some(),
-            "nested BATCH -{ml_id} closer missing in {lines:?}");
-    }).await;
+        let nested_closer = lines
+            .iter()
+            .find(|l| l.contains(&format!("BATCH -{ml_id}")));
+        assert!(
+            nested_closer.is_some(),
+            "nested BATCH -{ml_id} closer missing in {lines:?}"
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -845,11 +1091,12 @@ async fn join_history_replay_attaches_persisted_reactions_tag() {
             .find(|l| l.contains("a message worth reacting to"))
             .expect("alice's PRIVMSG missing from bob's JOIN replay");
         let alice_msgid = C::extract_msgid(alice_msg_line);
-        assert!(!alice_msgid.is_empty(), "alice msgid extraction failed: {alice_msg_line}");
+        assert!(
+            !alice_msgid.is_empty(),
+            "alice msgid extraction failed: {alice_msg_line}"
+        );
         bob.drain();
-        bob.tx(&format!(
-            "@+react=👍;+reply={alice_msgid} TAGMSG #reachist"
-        ));
+        bob.tx(&format!("@+react=👍;+reply={alice_msgid} TAGMSG #reachist"));
         bob.drain();
         std::thread::sleep(Duration::from_millis(200));
 
@@ -873,14 +1120,18 @@ async fn join_history_replay_attaches_persisted_reactions_tag() {
             .split_whitespace()
             .next()
             .and_then(|tags| tags.strip_prefix('@'))
-            .and_then(|tags| tags.split(';').find(|t| t.starts_with("+freeq.at/reactions=")))
+            .and_then(|tags| {
+                tags.split(';')
+                    .find(|t| t.starts_with("+freeq.at/reactions="))
+            })
             .and_then(|t| t.strip_prefix("+freeq.at/reactions="))
             .unwrap_or("");
         assert!(
             reactions_val.contains("👍") && reactions_val.contains("rea_bob"),
             "reactions tag value missing emoji/nick: '{reactions_val}' (whole line: {alice_replay})"
         );
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -912,10 +1163,13 @@ async fn join_history_multiline_splits_when_no_multiline_cap() {
         let lines = collect_join_history_batch(&mut bob);
 
         // No nested draft/multiline BATCH may appear.
-        assert!(!lines.iter().any(|l| l.contains("draft/multiline")),
-            "unexpected nested draft/multiline BATCH in {lines:?}");
+        assert!(
+            !lines.iter().any(|l| l.contains("draft/multiline")),
+            "unexpected nested draft/multiline BATCH in {lines:?}"
+        );
 
-        let chunks: Vec<&String> = lines.iter()
+        let chunks: Vec<&String> = lines
+            .iter()
             .filter(|l| l.contains("PRIVMSG #splitml"))
             .collect();
         assert_eq!(chunks.len(), 2, "expected 2 split PRIVMSGs, got {chunks:?}");
@@ -927,7 +1181,16 @@ async fn join_history_multiline_splits_when_no_multiline_cap() {
         }
 
         // msgid rides on the first chunk only.
-        assert!(chunks[0].contains("msgid="), "chunk 0 should carry msgid: {}", chunks[0]);
-        assert!(!chunks[1].contains("msgid="), "chunk 1 should NOT carry msgid: {}", chunks[1]);
-    }).await;
+        assert!(
+            chunks[0].contains("msgid="),
+            "chunk 0 should carry msgid: {}",
+            chunks[0]
+        );
+        assert!(
+            !chunks[1].contains("msgid="),
+            "chunk 1 should NOT carry msgid: {}",
+            chunks[1]
+        );
+    })
+    .await;
 }

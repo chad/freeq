@@ -40,10 +40,7 @@ pub fn tighten_permissions(path: &Path) {
                     current_mode = format!("{mode:04o}"),
                     "Secret file has overly permissive mode — tightening to 0600"
                 );
-                let _ = std::fs::set_permissions(
-                    path,
-                    std::fs::Permissions::from_mode(0o600),
-                );
+                let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
             }
         }
     }

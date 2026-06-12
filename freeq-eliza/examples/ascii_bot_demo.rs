@@ -8,7 +8,9 @@ use freeq_eliza::video::{VIDEO_H, VIDEO_W};
 use freeq_eliza::video_ascii::AsciiBotRenderer;
 
 fn main() {
-    let out = std::env::args().nth(1).unwrap_or_else(|| "/tmp/bot_frames".into());
+    let out = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "/tmp/bot_frames".into());
     std::fs::create_dir_all(&out).expect("create out dir");
     let (fps, secs) = (15.0f32, 14.0f32);
     let frames = (fps * secs) as usize;
@@ -34,7 +36,10 @@ fn envelope(t: f32) -> (f32, f32) {
         (((syl * 0.85 + micro) * phrase).clamp(0.0, 1.0), 0.0)
     } else if (9.0..12.0).contains(&t) {
         let s = t - 9.0;
-        (0.0, (0.35 + 0.25 * ((s * 5.0).sin() * 0.5 + 0.5)).clamp(0.0, 1.0))
+        (
+            0.0,
+            (0.35 + 0.25 * ((s * 5.0).sin() * 0.5 + 0.5)).clamp(0.0, 1.0),
+        )
     } else {
         (0.0, 0.0)
     }

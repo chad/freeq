@@ -95,7 +95,8 @@ impl MediaStore {
 
     /// Sign a media id, returning the base64url HMAC capability tag.
     pub fn sign(&self, id: &str) -> String {
-        let mut mac = HmacSha256::new_from_slice(&self.cap_key).expect("HMAC accepts any key length");
+        let mut mac =
+            HmacSha256::new_from_slice(&self.cap_key).expect("HMAC accepts any key length");
         mac.update(id.as_bytes());
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
     }
@@ -105,7 +106,8 @@ impl MediaStore {
         let Ok(provided) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(sig) else {
             return false;
         };
-        let mut mac = HmacSha256::new_from_slice(&self.cap_key).expect("HMAC accepts any key length");
+        let mut mac =
+            HmacSha256::new_from_slice(&self.cap_key).expect("HMAC accepts any key length");
         mac.update(id.as_bytes());
         mac.verify_slice(&provided).is_ok()
     }
@@ -127,7 +129,11 @@ impl MediaStore {
     /// directory fan-out reasonable.
     fn path_for(&self, id: &str) -> PathBuf {
         let shard: String = id.chars().take(2).collect();
-        let shard = if shard.is_empty() { "_".to_string() } else { shard };
+        let shard = if shard.is_empty() {
+            "_".to_string()
+        } else {
+            shard
+        };
         self.dir.join(shard).join(id)
     }
 

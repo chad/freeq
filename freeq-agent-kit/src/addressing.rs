@@ -107,7 +107,10 @@ pub fn extract_addressed(text: &str, nick: &str) -> Option<String> {
             if skip + take > words.len() {
                 continue;
             }
-            let cand: String = words[skip..skip + take].iter().map(|w| normalize_word(w)).collect();
+            let cand: String = words[skip..skip + take]
+                .iter()
+                .map(|w| normalize_word(w))
+                .collect();
             if name_matches(&cand, &nick) {
                 let rest = words[skip + take..].join(" ");
                 let rest = rest
@@ -152,7 +155,10 @@ pub fn extract_addressed_exact(text: &str, nick: &str) -> Option<String> {
             if skip + take > words.len() {
                 continue;
             }
-            let cand: String = words[skip..skip + take].iter().map(|w| normalize_word(w)).collect();
+            let cand: String = words[skip..skip + take]
+                .iter()
+                .map(|w| normalize_word(w))
+                .collect();
             if cand == nick {
                 let rest = words[skip + take..].join(" ");
                 let rest = rest
@@ -267,7 +273,10 @@ mod tests {
     fn short_nick_tolerates_no_mishearing() {
         // A 3-char nick has zero edit-distance tolerance — a one-letter
         // slip must not register as an address.
-        assert_eq!(extract_addressed("bot status", "bot").as_deref(), Some("status"));
+        assert_eq!(
+            extract_addressed("bot status", "bot").as_deref(),
+            Some("status")
+        );
         assert_eq!(extract_addressed("bat status", "bot"), None);
     }
 
@@ -276,7 +285,10 @@ mod tests {
         assert_eq!(edit_distance("eliza", "eliza"), 0);
         assert_eq!(edit_distance("eliza", "elisa"), 1);
         assert_eq!(edit_distance("eliza", "aliza"), 1);
-        assert_eq!(edit_distance("kitten", "sitting"), edit_distance("sitting", "kitten"));
+        assert_eq!(
+            edit_distance("kitten", "sitting"),
+            edit_distance("sitting", "kitten")
+        );
     }
 
     #[test]
@@ -284,9 +296,20 @@ mod tests {
         // The live misfire: "A live" normalize-joins to "alive", edit
         // distance 1 from "olive" — the fuzzy matcher takes it, the
         // exact one must not.
-        assert_eq!(extract_addressed_exact("A live voice call with the assistant", "olive"), None);
-        assert_eq!(extract_addressed_exact("elisa hello", "eliza"), None, "no edit tolerance");
-        assert_eq!(extract_addressed_exact("zootopia what's up", "utopia"), None, "no containment");
+        assert_eq!(
+            extract_addressed_exact("A live voice call with the assistant", "olive"),
+            None
+        );
+        assert_eq!(
+            extract_addressed_exact("elisa hello", "eliza"),
+            None,
+            "no edit tolerance"
+        );
+        assert_eq!(
+            extract_addressed_exact("zootopia what's up", "utopia"),
+            None,
+            "no containment"
+        );
         // Exact spellings still work, including fillers and split names.
         assert_eq!(
             extract_addressed_exact("olive, what's 2+2", "olive").as_deref(),

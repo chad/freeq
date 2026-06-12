@@ -18,7 +18,12 @@ use tokio::time::timeout;
 const DID: &str = "did:plc:multidev";
 const TIMEOUT_MS: u64 = 5000;
 
-async fn start(key: &PrivateKey) -> (std::net::SocketAddr, tokio::task::JoinHandle<anyhow::Result<()>>) {
+async fn start(
+    key: &PrivateKey,
+) -> (
+    std::net::SocketAddr,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
     let doc = did::make_test_did_document(DID, &key.public_key_multibase());
     let mut docs = HashMap::new();
     docs.insert(DID.to_string(), doc);
@@ -34,10 +39,16 @@ async fn start(key: &PrivateKey) -> (std::net::SocketAddr, tokio::task::JoinHand
         ..Default::default()
     };
     freeq_server::server::Server::with_resolver(config, resolver)
-        .start().await.unwrap()
+        .start()
+        .await
+        .unwrap()
 }
 
-async fn connect_as_did(addr: std::net::SocketAddr, nick: &str, key: PrivateKey) -> (client::ClientHandle, mpsc::Receiver<Event>) {
+async fn connect_as_did(
+    addr: std::net::SocketAddr,
+    nick: &str,
+    key: PrivateKey,
+) -> (client::ClientHandle, mpsc::Receiver<Event>) {
     let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(DID.to_string(), key));
     let config = ConnectConfig {
         server_addr: addr.to_string(),
@@ -49,7 +60,11 @@ async fn connect_as_did(addr: std::net::SocketAddr, nick: &str, key: PrivateKey)
     client::connect(config, Some(signer))
 }
 
-async fn wait_event(rx: &mut mpsc::Receiver<Event>, pred: impl Fn(&Event) -> bool, desc: &str) -> Event {
+async fn wait_event(
+    rx: &mut mpsc::Receiver<Event>,
+    pred: impl Fn(&Event) -> bool,
+    desc: &str,
+) -> Event {
     timeout(Duration::from_millis(TIMEOUT_MS), async {
         loop {
             match rx.recv().await {
@@ -58,7 +73,9 @@ async fn wait_event(rx: &mut mpsc::Receiver<Event>, pred: impl Fn(&Event) -> boo
                 None => panic!("Channel closed: {desc}"),
             }
         }
-    }).await.unwrap_or_else(|_| panic!("Timeout: {desc}"))
+    })
+    .await
+    .unwrap_or_else(|_| panic!("Timeout: {desc}"))
 }
 
 async fn wait_registered(rx: &mut mpsc::Receiver<Event>) -> String {
@@ -69,7 +86,12 @@ async fn wait_registered(rx: &mut mpsc::Receiver<Event>) -> String {
 }
 
 async fn wait_auth(rx: &mut mpsc::Receiver<Event>) {
-    wait_event(rx, |e| matches!(e, Event::Authenticated { .. }), "Authenticated").await;
+    wait_event(
+        rx,
+        |e| matches!(e, Event::Authenticated { .. }),
+        "Authenticated",
+    )
+    .await;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -87,7 +109,12 @@ async fn ghost_reconnect_within_grace_period() {
     wait_auth(&mut rx1).await;
     wait_registered(&mut rx1).await;
     h1.join("#ghost").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Joined { channel, .. } if channel == "#ghost"), "Joined").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#ghost"),
+        "Joined",
+    )
+    .await;
     h1.privmsg("#ghost", "before disconnect").await.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -125,7 +152,12 @@ async fn two_devices_same_did_both_authenticated() {
     wait_auth(&mut rx1).await;
     wait_registered(&mut rx1).await;
     h1.join("#multi").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Joined { channel, .. } if channel == "#multi"), "D1 Joined").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#multi"),
+        "D1 Joined",
+    )
+    .await;
 
     // Device 2 (same DID)
     let (h2, mut rx2) = connect_as_did(addr, "dev1", key2).await;
@@ -138,12 +170,22 @@ async fn two_devices_same_did_both_authenticated() {
 
     // Device 1 sends message — device 2 should receive it
     h1.privmsg("#multi", "from device 1").await.unwrap();
-    let msg = wait_event(&mut rx2, |e| matches!(e, Event::Message { text, .. } if text == "from device 1"), "D2 receives D1 msg").await;
+    let msg = wait_event(
+        &mut rx2,
+        |e| matches!(e, Event::Message { text, .. } if text == "from device 1"),
+        "D2 receives D1 msg",
+    )
+    .await;
     assert!(matches!(msg, Event::Message { text, .. } if text == "from device 1"));
 
     // Device 2 sends message — device 1 should receive it
     h2.privmsg("#multi", "from device 2").await.unwrap();
-    let msg = wait_event(&mut rx1, |e| matches!(e, Event::Message { text, .. } if text == "from device 2"), "D1 receives D2 msg").await;
+    let msg = wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Message { text, .. } if text == "from device 2"),
+        "D1 receives D2 msg",
+    )
+    .await;
     assert!(matches!(msg, Event::Message { text, .. } if text == "from device 2"));
 
     h1.quit(None).await.ok();
@@ -161,7 +203,12 @@ async fn multi_device_one_disconnects_other_continues() {
     wait_auth(&mut rx1).await;
     wait_registered(&mut rx1).await;
     h1.join("#persist").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Joined { channel, .. } if channel == "#persist"), "Joined").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#persist"),
+        "Joined",
+    )
+    .await;
 
     let (h2, mut rx2) = connect_as_did(addr, "persist", key2).await;
     wait_auth(&mut rx2).await;
@@ -206,7 +253,11 @@ async fn guest_cannot_claim_did_owned_nick() {
     let (_h2, mut rx2) = client::connect(config, None);
     let nick = wait_registered(&mut rx2).await;
     // Guest should get a different nick (renamed to Guest*)
-    assert_ne!(nick.to_lowercase(), "owner", "Guest should not get DID-owned nick, got: {nick}");
+    assert_ne!(
+        nick.to_lowercase(),
+        "owner",
+        "Guest should not get DID-owned nick, got: {nick}"
+    );
 
     h1.quit(None).await.ok();
 }
@@ -224,7 +275,13 @@ async fn guest_cannot_claim_did_owned_nick() {
 /// Start a server and return its address + the SQLite path it persists to,
 /// so tests can read user_channels rows directly to verify what the next
 /// reconnect would auto-rejoin.
-async fn start_with_db_path(key: &PrivateKey) -> (std::net::SocketAddr, String, tokio::task::JoinHandle<anyhow::Result<()>>) {
+async fn start_with_db_path(
+    key: &PrivateKey,
+) -> (
+    std::net::SocketAddr,
+    String,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
     let doc = did::make_test_did_document(DID, &key.public_key_multibase());
     let mut docs = HashMap::new();
     docs.insert(DID.to_string(), doc);
@@ -240,14 +297,18 @@ async fn start_with_db_path(key: &PrivateKey) -> (std::net::SocketAddr, String, 
         ..Default::default()
     };
     let (addr, handle) = freeq_server::server::Server::with_resolver(config, resolver)
-        .start().await.unwrap();
+        .start()
+        .await
+        .unwrap();
     (addr, db_path, handle)
 }
 
 /// Read the persisted auto-rejoin channels for a DID.
 fn db_user_channels(db_path: &str, did: &str) -> Vec<String> {
     let conn = rusqlite::Connection::open(db_path).expect("open db");
-    let mut stmt = conn.prepare("SELECT channel FROM user_channels WHERE did = ?1").unwrap();
+    let mut stmt = conn
+        .prepare("SELECT channel FROM user_channels WHERE did = ?1")
+        .unwrap();
     let rows = stmt
         .query_map(rusqlite::params![did], |row| row.get::<_, String>(0))
         .unwrap();
@@ -269,20 +330,34 @@ async fn solo_part_clears_db_and_reconnect_does_not_rejoin() {
     wait_auth(&mut rx1).await;
     wait_registered(&mut rx1).await;
     h1.join("#leaveme").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Joined { channel, .. } if channel == "#leaveme"), "Joined").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#leaveme"),
+        "Joined",
+    )
+    .await;
 
     // DB should now have the channel.
     let before = db_user_channels(&db_path, DID);
-    assert!(before.iter().any(|c| c == "#leaveme"),
-        "after JOIN the DB must persist the channel for auto-rejoin, got {before:?}");
+    assert!(
+        before.iter().any(|c| c == "#leaveme"),
+        "after JOIN the DB must persist the channel for auto-rejoin, got {before:?}"
+    );
 
     h1.raw("PART #leaveme").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Parted { channel, .. } if channel == "#leaveme"), "Parted").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Parted { channel, .. } if channel == "#leaveme"),
+        "Parted",
+    )
+    .await;
 
     // DB must be empty for this DID/channel after PART.
     let after = db_user_channels(&db_path, DID);
-    assert!(!after.iter().any(|c| c == "#leaveme"),
-        "after PART the DB must remove the channel so the next reconnect doesn't rejoin, got {after:?}");
+    assert!(
+        !after.iter().any(|c| c == "#leaveme"),
+        "after PART the DB must remove the channel so the next reconnect doesn't rejoin, got {after:?}"
+    );
 
     h1.quit(None).await.ok();
 }
@@ -302,18 +377,30 @@ async fn case_insensitive_part_leaves_channel() {
     wait_auth(&mut rx1).await;
     wait_registered(&mut rx1).await;
     h1.raw("JOIN #FREEQ").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Joined { channel, .. } if channel.eq_ignore_ascii_case("#FREEQ")), "Joined").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Joined { channel, .. } if channel.eq_ignore_ascii_case("#FREEQ")),
+        "Joined",
+    )
+    .await;
 
     // PART with the lower-case form — should still leave.
     h1.raw("PART #freeq").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Parted { channel, .. } if channel.eq_ignore_ascii_case("#freeq")), "Parted").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Parted { channel, .. } if channel.eq_ignore_ascii_case("#freeq")),
+        "Parted",
+    )
+    .await;
 
     // DB must be empty: regardless of how the channel was stored, a part
     // for the same channel under any casing should clear the auto-rejoin
     // entry. Otherwise the user's next reconnect silently puts them back.
     let after = db_user_channels(&db_path, DID);
-    assert!(after.iter().all(|c| !c.eq_ignore_ascii_case("#freeq")),
-        "PART must clear user_channels regardless of channel-name casing; DB still has {after:?}");
+    assert!(
+        after.iter().all(|c| !c.eq_ignore_ascii_case("#freeq")),
+        "PART must clear user_channels regardless of channel-name casing; DB still has {after:?}"
+    );
 
     h1.quit(None).await.ok();
 }
@@ -342,11 +429,20 @@ async fn multi_device_part_keeps_db_for_other_session() {
     wait_auth(&mut rx1).await;
     wait_registered(&mut rx1).await;
     h1.join("#shared").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Joined { channel, .. } if channel == "#shared"), "A Joined").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#shared"),
+        "A Joined",
+    )
+    .await;
 
     // DB has #shared.
-    assert!(db_user_channels(&db_path, DID).iter().any(|c| c == "#shared"),
-        "after A's JOIN, DB must persist #shared");
+    assert!(
+        db_user_channels(&db_path, DID)
+            .iter()
+            .any(|c| c == "#shared"),
+        "after A's JOIN, DB must persist #shared"
+    );
 
     // Device B (same DID) attaches — silently picks up #shared via attach_same_did.
     let (h2, mut rx2) = connect_as_did(addr, "shared", key2).await;
@@ -356,12 +452,21 @@ async fn multi_device_part_keeps_db_for_other_session() {
 
     // Confirm B can talk in #shared (i.e., B is actually in the channel).
     h2.privmsg("#shared", "B is here").await.unwrap();
-    let _ = wait_event(&mut rx1, |e| matches!(e, Event::Message { text, .. } if text == "B is here"),
-        "A receives B's message proving B is in #shared").await;
+    let _ = wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Message { text, .. } if text == "B is here"),
+        "A receives B's message proving B is in #shared",
+    )
+    .await;
 
     // Device A parts #shared. Per-session leave: B should still be in.
     h1.raw("PART #shared").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Parted { channel, .. } if channel == "#shared"), "A Parted").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Parted { channel, .. } if channel == "#shared"),
+        "A Parted",
+    )
+    .await;
 
     // B is still in #shared — confirm via a fresh message round-trip.
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -374,9 +479,11 @@ async fn multi_device_part_keeps_db_for_other_session() {
     // If both devices later reconnect, neither will be auto-rejoined to a
     // channel that one of them never left.
     let after = db_user_channels(&db_path, DID);
-    assert!(after.iter().any(|c| c == "#shared"),
+    assert!(
+        after.iter().any(|c| c == "#shared"),
         "after A parts but B is still in #shared, DB must keep the auto-rejoin entry; \
-         got {after:?} — B never explicitly left, so the next reconnect must restore #shared");
+         got {after:?} — B never explicitly left, so the next reconnect must restore #shared"
+    );
 
     h1.quit(None).await.ok();
     h2.quit(None).await.ok();
@@ -400,7 +507,12 @@ async fn multi_device_part_does_not_strand_other_session_on_reconnect() {
     wait_auth(&mut rx1).await;
     wait_registered(&mut rx1).await;
     h1.join("#room").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Joined { channel, .. } if channel == "#room"), "A Joined").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#room"),
+        "A Joined",
+    )
+    .await;
 
     let (h2, mut rx2) = connect_as_did(addr, "stayer", key2a).await;
     wait_auth(&mut rx2).await;
@@ -409,7 +521,12 @@ async fn multi_device_part_does_not_strand_other_session_on_reconnect() {
 
     // A parts; B is still in.
     h1.raw("PART #room").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Parted { channel, .. } if channel == "#room"), "A Parted").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Parted { channel, .. } if channel == "#room"),
+        "A Parted",
+    )
+    .await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // B disconnects (A still alive → no ghost mode for B).
@@ -448,10 +565,23 @@ async fn multi_device_part_does_not_strand_other_session_on_reconnect() {
 
 const DID_VICTIM: &str = "did:plc:kickvic";
 
-async fn start_with_two_dids(key_op: &PrivateKey, key_victim: &PrivateKey) -> (std::net::SocketAddr, String, tokio::task::JoinHandle<anyhow::Result<()>>) {
+async fn start_with_two_dids(
+    key_op: &PrivateKey,
+    key_victim: &PrivateKey,
+) -> (
+    std::net::SocketAddr,
+    String,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
     let mut docs = HashMap::new();
-    docs.insert(DID.to_string(), did::make_test_did_document(DID, &key_op.public_key_multibase()));
-    docs.insert(DID_VICTIM.to_string(), did::make_test_did_document(DID_VICTIM, &key_victim.public_key_multibase()));
+    docs.insert(
+        DID.to_string(),
+        did::make_test_did_document(DID, &key_op.public_key_multibase()),
+    );
+    docs.insert(
+        DID_VICTIM.to_string(),
+        did::make_test_did_document(DID_VICTIM, &key_victim.public_key_multibase()),
+    );
     let resolver = DidResolver::static_map(docs);
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let db_path = tmp.path().to_str().unwrap().to_string();
@@ -464,11 +594,18 @@ async fn start_with_two_dids(key_op: &PrivateKey, key_victim: &PrivateKey) -> (s
         ..Default::default()
     };
     let (addr, handle) = freeq_server::server::Server::with_resolver(config, resolver)
-        .start().await.unwrap();
+        .start()
+        .await
+        .unwrap();
     (addr, db_path, handle)
 }
 
-async fn connect_did(addr: std::net::SocketAddr, did_str: &str, nick: &str, key: PrivateKey) -> (client::ClientHandle, mpsc::Receiver<Event>) {
+async fn connect_did(
+    addr: std::net::SocketAddr,
+    did_str: &str,
+    nick: &str,
+    key: PrivateKey,
+) -> (client::ClientHandle, mpsc::Receiver<Event>) {
     let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(did_str.to_string(), key));
     let config = ConnectConfig {
         server_addr: addr.to_string(),
@@ -493,18 +630,32 @@ async fn kick_clears_victim_auto_rejoin_entry() {
     wait_auth(&mut rx_op).await;
     wait_registered(&mut rx_op).await;
     h_op.join("#room").await.unwrap();
-    wait_event(&mut rx_op, |e| matches!(e, Event::Joined { channel, .. } if channel == "#room"), "op Joined").await;
+    wait_event(
+        &mut rx_op,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#room"),
+        "op Joined",
+    )
+    .await;
 
     // Victim joins.
     let (h_v, mut rx_v) = connect_did(addr, DID_VICTIM, "victim", key_victim_use).await;
     wait_auth(&mut rx_v).await;
     wait_registered(&mut rx_v).await;
     h_v.join("#room").await.unwrap();
-    wait_event(&mut rx_v, |e| matches!(e, Event::Joined { channel, .. } if channel == "#room"), "victim Joined").await;
+    wait_event(
+        &mut rx_v,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#room"),
+        "victim Joined",
+    )
+    .await;
 
     // Sanity: victim's auto-rejoin DB row exists.
-    assert!(db_user_channels(&db_path, DID_VICTIM).iter().any(|c| c == "#room"),
-        "after victim's JOIN, DB must persist #room for victim");
+    assert!(
+        db_user_channels(&db_path, DID_VICTIM)
+            .iter()
+            .any(|c| c == "#room"),
+        "after victim's JOIN, DB must persist #room for victim"
+    );
 
     // Op kicks victim.
     h_op.raw("KICK #room victim :be gone").await.unwrap();
@@ -514,9 +665,11 @@ async fn kick_clears_victim_auto_rejoin_entry() {
     // the next time the victim reconnects, the server silently auto-rejoins
     // them to the channel they were just kicked from.
     let after = db_user_channels(&db_path, DID_VICTIM);
-    assert!(!after.iter().any(|c| c == "#room"),
+    assert!(
+        !after.iter().any(|c| c == "#room"),
         "KICK must clear the victim's user_channels row; got {after:?} — \
-         otherwise the victim's next reconnect silently restores #room and the kick is undone");
+         otherwise the victim's next reconnect silently restores #room and the kick is undone"
+    );
 
     h_op.quit(None).await.ok();
     h_v.quit(None).await.ok();
@@ -549,7 +702,12 @@ async fn part_after_other_session_quit_clears_db() {
     wait_auth(&mut rx1).await;
     wait_registered(&mut rx1).await;
     h1.join("#solo").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Joined { channel, .. } if channel == "#solo"), "A Joined").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#solo"),
+        "A Joined",
+    )
+    .await;
 
     let (h2, mut rx2) = connect_as_did(addr, "soloparter", key2).await;
     wait_auth(&mut rx2).await;
@@ -560,15 +718,24 @@ async fn part_after_other_session_quit_clears_db() {
     h1.quit(None).await.ok();
     drop(rx1);
     tokio::time::sleep(Duration::from_millis(500)).await;
-    assert!(db_user_channels(&db_path, DID).iter().any(|c| c == "#solo"),
-        "after A's QUIT (ghost mode preserves channels) DB must still have #solo");
+    assert!(
+        db_user_channels(&db_path, DID).iter().any(|c| c == "#solo"),
+        "after A's QUIT (ghost mode preserves channels) DB must still have #solo"
+    );
 
     // B parts #solo. Now no session for DID is in #solo → DB must clear.
     h2.raw("PART #solo").await.unwrap();
-    wait_event(&mut rx2, |e| matches!(e, Event::Parted { channel, .. } if channel == "#solo"), "B Parted").await;
+    wait_event(
+        &mut rx2,
+        |e| matches!(e, Event::Parted { channel, .. } if channel == "#solo"),
+        "B Parted",
+    )
+    .await;
     let after = db_user_channels(&db_path, DID);
-    assert!(!after.iter().any(|c| c == "#solo"),
-        "PART by the last remaining session must clear DB; got {after:?}");
+    assert!(
+        !after.iter().any(|c| c == "#solo"),
+        "PART by the last remaining session must clear DB; got {after:?}"
+    );
 
     h2.quit(None).await.ok();
 }
@@ -590,17 +757,37 @@ async fn rapid_join_part_join_keeps_db_consistent() {
     wait_registered(&mut rx1).await;
 
     h1.join("#x").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Joined { channel, .. } if channel == "#x"), "Joined1").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#x"),
+        "Joined1",
+    )
+    .await;
     h1.raw("PART #x").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Parted { channel, .. } if channel == "#x"), "Parted").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Parted { channel, .. } if channel == "#x"),
+        "Parted",
+    )
+    .await;
     h1.join("#x").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Joined { channel, .. } if channel == "#x"), "Joined2").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#x"),
+        "Joined2",
+    )
+    .await;
 
     let final_db = db_user_channels(&db_path, DID);
-    assert!(final_db.iter().any(|c| c == "#x"),
-        "after JOIN-PART-JOIN the DB must reflect #x as joined; got {final_db:?}");
-    assert_eq!(final_db.iter().filter(|c| c.as_str() == "#x").count(), 1,
-        "DB must not contain duplicate rows after JOIN-PART-JOIN; got {final_db:?}");
+    assert!(
+        final_db.iter().any(|c| c == "#x"),
+        "after JOIN-PART-JOIN the DB must reflect #x as joined; got {final_db:?}"
+    );
+    assert_eq!(
+        final_db.iter().filter(|c| c.as_str() == "#x").count(),
+        1,
+        "DB must not contain duplicate rows after JOIN-PART-JOIN; got {final_db:?}"
+    );
 
     h1.quit(None).await.ok();
 }
@@ -627,23 +814,50 @@ async fn part_then_reconnect_does_not_auto_rejoin() {
     wait_registered(&mut rx1).await;
 
     h1.join("#stay").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Joined { channel, .. } if channel == "#stay"), "Joined #stay").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#stay"),
+        "Joined #stay",
+    )
+    .await;
     h1.join("#leaved").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Joined { channel, .. } if channel == "#leaved"), "Joined #leaved").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#leaved"),
+        "Joined #leaved",
+    )
+    .await;
 
     // Verify both channels are in DB
     let before = db_user_channels(&db_path, DID);
-    assert!(before.iter().any(|c| c == "#stay"), "before: #stay should be in DB");
-    assert!(before.iter().any(|c| c == "#leaved"), "before: #leaved should be in DB");
+    assert!(
+        before.iter().any(|c| c == "#stay"),
+        "before: #stay should be in DB"
+    );
+    assert!(
+        before.iter().any(|c| c == "#leaved"),
+        "before: #leaved should be in DB"
+    );
 
     // PART the channel we want to leave
     h1.raw("PART #leaved").await.unwrap();
-    wait_event(&mut rx1, |e| matches!(e, Event::Parted { channel, .. } if channel == "#leaved"), "Parted").await;
+    wait_event(
+        &mut rx1,
+        |e| matches!(e, Event::Parted { channel, .. } if channel == "#leaved"),
+        "Parted",
+    )
+    .await;
 
     // Verify DB was cleaned up
     let after_part = db_user_channels(&db_path, DID);
-    assert!(after_part.iter().any(|c| c == "#stay"), "after PART: #stay should still be in DB");
-    assert!(!after_part.iter().any(|c| c == "#leaved"), "after PART: #leaved must NOT be in DB");
+    assert!(
+        after_part.iter().any(|c| c == "#stay"),
+        "after PART: #stay should still be in DB"
+    );
+    assert!(
+        !after_part.iter().any(|c| c == "#leaved"),
+        "after PART: #leaved must NOT be in DB"
+    );
 
     // Disconnect
     h1.quit(None).await.ok();
@@ -657,29 +871,42 @@ async fn part_then_reconnect_does_not_auto_rejoin() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Collect any auto-join events
-    let joined_stay = wait_for_event_timeout(&mut rx2, 500, |e| {
-        matches!(e, Event::Joined { channel, .. } if channel == "#stay")
-    }).await;
+    let joined_stay = wait_for_event_timeout(
+        &mut rx2,
+        500,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#stay"),
+    )
+    .await;
 
-    let joined_leaved = wait_for_event_timeout(&mut rx2, 200, |e| {
-        matches!(e, Event::Joined { channel, .. } if channel == "#leaved")
-    }).await;
+    let joined_leaved = wait_for_event_timeout(
+        &mut rx2,
+        200,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#leaved"),
+    )
+    .await;
 
     // Must have joined #stay (was not PARTed)
     assert!(joined_stay.is_some(), "should auto-join #stay on reconnect");
 
     // Must NOT have joined #leaved (was PARTed)
-    assert!(joined_leaved.is_none(), "should NOT auto-join #leaved after PART");
+    assert!(
+        joined_leaved.is_none(),
+        "should NOT auto-join #leaved after PART"
+    );
 
     h2.quit(None).await.ok();
 }
 
 // Helper to wait for an event with timeout, returning None on timeout
-async fn wait_for_event_timeout<F>(rx: &mut mpsc::Receiver<Event>, timeout_ms: u64, pred: F) -> Option<Event>
+async fn wait_for_event_timeout<F>(
+    rx: &mut mpsc::Receiver<Event>,
+    timeout_ms: u64,
+    pred: F,
+) -> Option<Event>
 where
     F: Fn(&Event) -> bool,
 {
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{Duration, timeout};
     match timeout(Duration::from_millis(timeout_ms), async {
         loop {
             if let Some(e) = rx.recv().await {
@@ -688,7 +915,9 @@ where
                 }
             }
         }
-    }).await {
+    })
+    .await
+    {
         Ok(e) => Some(e),
         Err(_) => None,
     }
@@ -735,7 +964,11 @@ async fn nick_to_session_recovers_when_stale_entry_lingers() {
     let (h2, mut rx2) = connect_as_did(addr, "alpha", key2).await;
     wait_auth(&mut rx2).await;
     let nick2 = wait_registered(&mut rx2).await;
-    assert_eq!(nick2.to_lowercase(), "alpha", "both sessions share the nick");
+    assert_eq!(
+        nick2.to_lowercase(),
+        "alpha",
+        "both sessions share the nick"
+    );
 
     // Both sessions should resolve via WHOIS from a third (guest) probe.
     // We use a raw IRC conversation so we can drive WHOIS and parse 401/311.
@@ -766,11 +999,18 @@ async fn nick_to_session_recovers_when_stale_entry_lingers() {
                 }
             }
         }
-    }).await;
+    })
+    .await;
 
-    assert!(got_311, "WHOIS alpha must return 311 (RPL_WHOISUSER) — \
-        if 401 instead, the bug is back: nick→session mapping is missing.");
-    assert!(!got_401, "WHOIS alpha returned 401 — half-state bug regressed.");
+    assert!(
+        got_311,
+        "WHOIS alpha must return 311 (RPL_WHOISUSER) — \
+        if 401 instead, the bug is back: nick→session mapping is missing."
+    );
+    assert!(
+        !got_401,
+        "WHOIS alpha returned 401 — half-state bug regressed."
+    );
 
     h_probe.quit(None).await.ok();
     h1.quit(None).await.ok();

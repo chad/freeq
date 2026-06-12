@@ -18,7 +18,7 @@
 //! (one statement each), so the lock is held briefly.
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -27,15 +27,15 @@ use std::sync::Mutex;
 /// two content words — and FTS-ORing the rest matched essentially every
 /// stored exchange.
 const RECALL_STOPWORDS: &[&str] = &[
-    "the", "and", "but", "for", "are", "was", "were", "you", "your", "yours", "our", "ours",
-    "his", "her", "hers", "its", "their", "theirs", "this", "that", "these", "those", "with",
-    "from", "have", "has", "had", "what", "whats", "when", "where", "which", "who", "whom",
-    "why", "how", "can", "could", "would", "should", "will", "shall", "may", "might", "must",
-    "did", "does", "doing", "done", "about", "tell", "please", "okay", "yeah", "yes", "not",
-    "now", "then", "there", "here", "they", "them", "she", "him", "out", "into", "over",
-    "under", "again", "just", "very", "really", "some", "any", "all", "one", "two", "get",
-    "got", "let", "lets", "know", "think", "like", "want", "going", "say", "said", "see",
-    "look", "right", "well", "also", "too", "been", "being", "because", "still", "more",
+    "the", "and", "but", "for", "are", "was", "were", "you", "your", "yours", "our", "ours", "his",
+    "her", "hers", "its", "their", "theirs", "this", "that", "these", "those", "with", "from",
+    "have", "has", "had", "what", "whats", "when", "where", "which", "who", "whom", "why", "how",
+    "can", "could", "would", "should", "will", "shall", "may", "might", "must", "did", "does",
+    "doing", "done", "about", "tell", "please", "okay", "yeah", "yes", "not", "now", "then",
+    "there", "here", "they", "them", "she", "him", "out", "into", "over", "under", "again", "just",
+    "very", "really", "some", "any", "all", "one", "two", "get", "got", "let", "lets", "know",
+    "think", "like", "want", "going", "say", "said", "see", "look", "right", "well", "also", "too",
+    "been", "being", "because", "still", "more",
 ];
 
 /// A single past exchange in the bot's memory.
@@ -57,9 +57,8 @@ impl Memory {
     /// FTS5 virtual table on first run.
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("creating memory parent dir {}", parent.display())
-            })?;
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating memory parent dir {}", parent.display()))?;
         }
         let conn = Connection::open(path)
             .with_context(|| format!("opening memory DB at {}", path.display()))?;
@@ -86,13 +85,7 @@ impl Memory {
     }
 
     /// Persist one (question, answer) exchange.
-    pub fn record(
-        &self,
-        channel: &str,
-        asker: &str,
-        question: &str,
-        answer: &str,
-    ) -> Result<()> {
+    pub fn record(&self, channel: &str, asker: &str, question: &str, answer: &str) -> Result<()> {
         let ts = chrono::Utc::now().timestamp();
         let conn = self.conn.lock().expect("memory conn poisoned");
         conn.execute(
@@ -118,7 +111,13 @@ impl Memory {
         // is empty, return no recollections rather than fail.
         let sanitised: String = query
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == ' ' { c } else { ' ' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == ' ' {
+                    c
+                } else {
+                    ' '
+                }
+            })
             .collect();
         // Build an OR query over the CONTENT words, each quoted as a literal
         // term, so recall fires on ANY shared term and `ORDER BY rank` (bm25)
@@ -282,14 +281,20 @@ mod tests {
         let db = dir.path().join("test.db");
         {
             let m = Memory::open(&db).unwrap();
-            m.record("#a", "chad", "i'm building a persona studio", "ship it").unwrap();
-            m.record("#b", "chad", "my band plays avant-blues", "respect").unwrap();
+            m.record("#a", "chad", "i'm building a persona studio", "ship it")
+                .unwrap();
+            m.record("#b", "chad", "my band plays avant-blues", "respect")
+                .unwrap();
             m.record("#a", "someone-else", "unrelated", "ok").unwrap();
         }
         // New session: reopen the DB from scratch.
         let m2 = Memory::open(&db).unwrap();
         let recs = m2.recall_by_asker("CHAD", 5).unwrap(); // case-insensitive
-        assert_eq!(recs.len(), 2, "both of chad's exchanges, none of someone-else's");
+        assert_eq!(
+            recs.len(),
+            2,
+            "both of chad's exchanges, none of someone-else's"
+        );
         assert!(recs.iter().all(|r| r.asker.eq_ignore_ascii_case("chad")));
         let block = Memory::format_for_prompt(&recs).unwrap();
         assert!(block.contains("persona studio") && block.contains("avant-blues"));
@@ -326,21 +331,36 @@ mod tests {
         // sessions into every prompt.
         let dir = tempdir().unwrap();
         let m = Memory::open(&dir.path().join("test.db")).unwrap();
-        m.record("#x", "chad", "what do you think about cats", "they are fine").unwrap();
-        let hits = m.recall("what do you think about that", Some("#x"), 5).unwrap();
-        assert!(hits.is_empty(), "stopword-only queries must not recall: {hits:?}");
+        m.record(
+            "#x",
+            "chad",
+            "what do you think about cats",
+            "they are fine",
+        )
+        .unwrap();
+        let hits = m
+            .recall("what do you think about that", Some("#x"), 5)
+            .unwrap();
+        assert!(
+            hits.is_empty(),
+            "stopword-only queries must not recall: {hits:?}"
+        );
     }
 
     #[test]
     fn multi_term_query_needs_two_shared_content_words() {
         let dir = tempdir().unwrap();
         let m = Memory::open(&dir.path().join("test.db")).unwrap();
-        m.record("#x", "chad", "weather in berlin today", "rainy").unwrap();
-        m.record("#x", "chad", "weather on mars", "thin and cold").unwrap();
+        m.record("#x", "chad", "weather in berlin today", "rainy")
+            .unwrap();
+        m.record("#x", "chad", "weather on mars", "thin and cold")
+            .unwrap();
         // Two content terms (weather, berlin): only the exchange sharing
         // BOTH comes back — single-word overlap ("weather") no longer
         // drags in every weather exchange ever recorded.
-        let hits = m.recall("how is the weather in berlin", Some("#x"), 5).unwrap();
+        let hits = m
+            .recall("how is the weather in berlin", Some("#x"), 5)
+            .unwrap();
         assert_eq!(hits.len(), 1, "{hits:?}");
         assert!(hits[0].question.contains("berlin"));
         // A single content term still recalls on that one word.

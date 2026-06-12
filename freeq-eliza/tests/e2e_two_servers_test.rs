@@ -20,11 +20,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use freeq_sdk::client::{self, ClientHandle, ConnectConfig};
-use freeq_sdk::event::Event;
 use freeq_eliza::identity::{self, Identity};
 use freeq_eliza::irc::{RunConfig, run};
 use freeq_eliza::stt::SttEngine;
+use freeq_sdk::client::{self, ClientHandle, ConnectConfig};
+use freeq_sdk::event::Event;
 use tokio::sync::mpsc::Receiver;
 
 // ───────────────────────────── server bootstrap ─────────────────────────────
@@ -205,9 +205,11 @@ impl Witness {
                 .checked_duration_since(Instant::now())
                 .unwrap_or(Duration::ZERO);
             match tokio::time::timeout(remaining, events.recv()).await {
-                Ok(Some(Event::Joined { channel: c, nick: n, .. }))
-                    if c.eq_ignore_ascii_case(channel) && n.eq_ignore_ascii_case(nick) =>
-                {
+                Ok(Some(Event::Joined {
+                    channel: c,
+                    nick: n,
+                    ..
+                })) if c.eq_ignore_ascii_case(channel) && n.eq_ignore_ascii_case(nick) => {
                     break;
                 }
                 Ok(Some(_)) => continue,
@@ -265,7 +267,10 @@ fn spawn_bot(
     server: &str,
     channels: Vec<String>,
     bot_name: &str,
-) -> (tokio::task::JoinHandle<anyhow::Result<()>>, tempfile::TempDir) {
+) -> (
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+    tempfile::TempDir,
+) {
     let (ident, tmp) = mint_identity(bot_name);
     let cfg = RunConfig {
         server: server.to_string(),
@@ -527,7 +532,10 @@ async fn scenario_3_happy_path() {
             _ => None,
         })
         .await;
-    assert!(ended.is_some(), "bot never posted '[transcript] session ended.'");
+    assert!(
+        ended.is_some(),
+        "bot never posted '[transcript] session ended.'"
+    );
 }
 
 // ───────────────────────────── scenario 4 ───────────────────────────────────
@@ -750,11 +758,12 @@ async fn scenario_8_foreign_channel() {
     // Neither the bot's channel nor the foreign channel may see an
     // av-join from the bot.
     let in_foreign = foreign_witness
-        .wait_for(SETTLE, |ev| {
-            is_bot_av_join(ev, "foreignbot").then_some(())
-        })
+        .wait_for(SETTLE, |ev| is_bot_av_join(ev, "foreignbot").then_some(()))
         .await;
-    assert!(in_foreign.is_none(), "bot av-joined a foreign channel's call");
+    assert!(
+        in_foreign.is_none(),
+        "bot av-joined a foreign channel's call"
+    );
 
     let mut bot_av_joins = 0;
     bot_witness.drain_now(|ev| {

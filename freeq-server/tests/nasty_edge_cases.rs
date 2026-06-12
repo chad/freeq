@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpStream, SocketAddr};
+use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 use freeq_sdk::did::DidResolver;
@@ -20,7 +20,9 @@ async fn start() -> (SocketAddr, tokio::task::JoinHandle<anyhow::Result<()>>) {
     };
     let resolver = DidResolver::static_map(HashMap::new());
     freeq_server::server::Server::with_resolver(config, resolver)
-        .start().await.unwrap()
+        .start()
+        .await
+        .unwrap()
 }
 
 async fn run(f: impl FnOnce(SocketAddr) + Send + 'static) {
@@ -39,7 +41,10 @@ impl C {
         s.set_read_timeout(Some(Duration::from_secs(5))).ok();
         let w = s.try_clone().unwrap();
         let r = BufReader::new(s);
-        let mut c = Self { reader: r, writer: w };
+        let mut c = Self {
+            reader: r,
+            writer: w,
+        };
         c.tx(&format!("NICK {nick}"));
         c.tx(&format!("USER {nick} 0 * :test"));
         c
@@ -49,7 +54,10 @@ impl C {
         let s = TcpStream::connect(addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).ok();
         let w = s.try_clone().unwrap();
-        Self { reader: BufReader::new(s), writer: w }
+        Self {
+            reader: BufReader::new(s),
+            writer: w,
+        }
     }
 
     fn tx(&mut self, l: &str) {
@@ -71,11 +79,16 @@ impl C {
                         let _ = self.writer.flush();
                         continue;
                     }
-                    if pred(l) { return l.to_string(); }
+                    if pred(l) {
+                        return l.to_string();
+                    }
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::TimedOut
-                       || e.kind() == std::io::ErrorKind::WouldBlock =>
-                    panic!("Timeout: {desc}"),
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::TimedOut
+                        || e.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    panic!("Timeout: {desc}")
+                }
                 Err(e) => panic!("{desc}: {e}"),
             }
         }
@@ -85,28 +98,44 @@ impl C {
         self.rx(|l| l.split_whitespace().nth(1) == Some(c), c)
     }
 
-    fn reg(&mut self) { self.num("001"); }
+    fn reg(&mut self) {
+        self.num("001");
+    }
 
     fn drain(&mut self) {
-        self.writer.try_clone().unwrap().set_read_timeout(Some(Duration::from_millis(200))).ok();
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .ok();
         let mut b = String::new();
         loop {
             b.clear();
             match self.reader.read_line(&mut b) {
                 Ok(0) => break,
-                Ok(_) => if b.starts_with("PING") {
-                    let t = b.trim_end().strip_prefix("PING ").unwrap_or(":x");
-                    let _ = writeln!(self.writer, "PONG {t}\r");
-                    let _ = self.writer.flush();
-                },
+                Ok(_) => {
+                    if b.starts_with("PING") {
+                        let t = b.trim_end().strip_prefix("PING ").unwrap_or(":x");
+                        let _ = writeln!(self.writer, "PONG {t}\r");
+                        let _ = self.writer.flush();
+                    }
+                }
                 Err(_) => break,
             }
         }
-        self.writer.try_clone().unwrap().set_read_timeout(Some(Duration::from_secs(5))).ok();
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .ok();
     }
 
     fn maybe(&mut self, pred: impl Fn(&str) -> bool, ms: u64) -> Option<String> {
-        self.writer.try_clone().unwrap().set_read_timeout(Some(Duration::from_millis(ms))).ok();
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_millis(ms)))
+            .ok();
         let mut b = String::new();
         let result = loop {
             b.clear();
@@ -120,12 +149,18 @@ impl C {
                         let _ = self.writer.flush();
                         continue;
                     }
-                    if pred(l) { break Some(l.to_string()); }
+                    if pred(l) {
+                        break Some(l.to_string());
+                    }
                 }
                 Err(_) => break None,
             }
         };
-        self.writer.try_clone().unwrap().set_read_timeout(Some(Duration::from_secs(5))).ok();
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .ok();
         result
     }
 }
@@ -139,14 +174,19 @@ async fn self_invite_bypass_invite_only() {
     run(|addr| {
         // Owner creates invite-only channel
         let mut own = C::new(addr, "invown2");
-        own.reg(); own.drain();
-        own.tx("JOIN #secret"); own.num("366"); own.drain();
-        own.tx("MODE #secret +i"); own.drain();
+        own.reg();
+        own.drain();
+        own.tx("JOIN #secret");
+        own.num("366");
+        own.drain();
+        own.tx("MODE #secret +i");
+        own.drain();
         std::thread::sleep(Duration::from_millis(50));
 
         // Outsider tries to join (should fail)
         let mut out = C::new(addr, "invout2");
-        out.reg(); out.drain();
+        out.reg();
+        out.drain();
         out.tx("JOIN #secret");
         out.num("473"); // ERR_INVITEONLYCHAN — correct
 
@@ -154,14 +194,18 @@ async fn self_invite_bypass_invite_only() {
         // because INVITE requires being in the channel (and op if +i).
         out.tx("INVITE invout2 #secret");
         // Should get error (442 not on channel, or 482 not op)
-        out.rx(|l| {
-            let n = l.split_whitespace().nth(1).unwrap_or("");
-            n == "442" || n == "482" || n == "443"
-        }, "self-invite rejected");
+        out.rx(
+            |l| {
+                let n = l.split_whitespace().nth(1).unwrap_or("");
+                n == "442" || n == "482" || n == "443"
+            },
+            "self-invite rejected",
+        );
         // The outsider should NOT be able to join after self-invite attempt
         out.tx("JOIN #secret");
         out.num("473"); // Should still be rejected
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -172,8 +216,11 @@ async fn self_invite_bypass_invite_only() {
 async fn empty_ban_mask() {
     run(|addr| {
         let mut c = C::new(addr, "banown");
-        c.reg(); c.drain();
-        c.tx("JOIN #bans"); c.num("366"); c.drain();
+        c.reg();
+        c.drain();
+        c.tx("JOIN #bans");
+        c.num("366");
+        c.drain();
         // Try to ban with empty mask
         c.tx("MODE #bans +b ");
         c.drain();
@@ -182,7 +229,8 @@ async fn empty_ban_mask() {
         // Expect 368 END OF BANS (with no 367 entries before it)
         let end = c.num("368");
         assert!(end.contains("368"), "Should get end of ban list");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -193,8 +241,11 @@ async fn empty_ban_mask() {
 async fn universal_ban_blocks_join() {
     run(|addr| {
         let mut own = C::new(addr, "banall_own");
-        own.reg(); own.drain();
-        own.tx("JOIN #banall"); own.num("366"); own.drain();
+        own.reg();
+        own.drain();
+        own.tx("JOIN #banall");
+        own.num("366");
+        own.drain();
         // Ban everyone
         own.tx("MODE #banall +b *!*@*");
         own.drain();
@@ -202,11 +253,13 @@ async fn universal_ban_blocks_join() {
 
         // New user tries to join
         let mut victim = C::new(addr, "banvictim");
-        victim.reg(); victim.drain();
+        victim.reg();
+        victim.drain();
         victim.tx("JOIN #banall");
         // Should get 474 ERR_BANNEDFROMCHAN
         victim.num("474");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -217,15 +270,25 @@ async fn universal_ban_blocks_join() {
 async fn kick_yourself() {
     run(|addr| {
         let mut c = C::new(addr, "selfkick");
-        c.reg(); c.drain();
-        c.tx("JOIN #selfkick"); c.num("366"); c.drain();
+        c.reg();
+        c.drain();
+        c.tx("JOIN #selfkick");
+        c.num("366");
+        c.drain();
         // Kick yourself
         c.tx("KICK #selfkick selfkick :bye myself");
         // Should either get KICK echo (you kicked yourself) or an error.
         // Either way, server must not crash.
-        let _ = c.maybe(|l| {
-            l.contains("KICK") || l.split_whitespace().nth(1).map(|n| n.starts_with('4')).unwrap_or(false)
-        }, 1000);
+        let _ = c.maybe(
+            |l| {
+                l.contains("KICK")
+                    || l.split_whitespace()
+                        .nth(1)
+                        .map(|n| n.starts_with('4'))
+                        .unwrap_or(false)
+            },
+            1000,
+        );
         // Verify server is still alive
         c.tx("PING :alive");
         // If we kicked ourselves, PONG won't come through channel, but the
@@ -233,7 +296,8 @@ async fn kick_yourself() {
         // Just try to do something:
         c.tx("JOIN #selfkick2");
         c.num("366"); // Should work — server alive
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -244,13 +308,19 @@ async fn kick_yourself() {
 async fn founder_parts_and_rejoins_gets_ops() {
     run(|addr| {
         let mut founder = C::new(addr, "founder2");
-        founder.reg(); founder.drain();
-        founder.tx("JOIN #foundtest"); founder.num("366"); founder.drain();
+        founder.reg();
+        founder.drain();
+        founder.tx("JOIN #foundtest");
+        founder.num("366");
+        founder.drain();
 
         // Second user joins (keeps channel alive)
         let mut other = C::new(addr, "other2");
-        other.reg(); other.drain();
-        other.tx("JOIN #foundtest"); other.num("366"); other.drain();
+        other.reg();
+        other.drain();
+        other.tx("JOIN #foundtest");
+        other.num("366");
+        other.drain();
 
         // Founder parts
         founder.tx("PART #foundtest");
@@ -264,7 +334,8 @@ async fn founder_parts_and_rejoins_gets_ops() {
         // This is a known limitation — let's document what actually happens.
         // The important thing is the server doesn't crash.
         let _ = names; // Result documented, not asserted
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -287,7 +358,8 @@ async fn user_sent_twice() {
         // The second USER should have overwritten the first
         // (or the first should be kept — either is acceptable as long as no crash)
         assert!(whois.contains("doubleuser"));
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -298,7 +370,8 @@ async fn user_sent_twice() {
 async fn cap_ls_after_registration() {
     run(|addr| {
         let mut c = C::new(addr, "postcap");
-        c.reg(); c.drain();
+        c.reg();
+        c.drain();
         // Send CAP LS after registration
         c.tx("CAP LS 302");
         // Should either get a CAP LS response or an error — not crash
@@ -306,7 +379,8 @@ async fn cap_ls_after_registration() {
         // Regardless, server should still work
         c.tx("JOIN #postcap");
         c.num("366");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -317,22 +391,32 @@ async fn cap_ls_after_registration() {
 async fn quit_message_broadcast() {
     run(|addr| {
         let mut a = C::new(addr, "quitmsg_a");
-        a.reg(); a.drain();
-        a.tx("JOIN #quitmsg"); a.num("366"); a.drain();
+        a.reg();
+        a.drain();
+        a.tx("JOIN #quitmsg");
+        a.num("366");
+        a.drain();
 
         let mut b = C::new(addr, "quitmsg_b");
-        b.reg(); b.drain();
-        b.tx("JOIN #quitmsg"); b.num("366"); b.drain();
+        b.reg();
+        b.drain();
+        b.tx("JOIN #quitmsg");
+        b.num("366");
+        b.drain();
 
         // Alice quits with a message
         a.tx("QUIT :see you later!");
 
         // Bob should see the quit, preferably with the message
-        let quit_line = b.rx(|l| l.contains("QUIT") && l.contains("quitmsg_a"), "QUIT broadcast");
+        let quit_line = b.rx(
+            |l| l.contains("QUIT") && l.contains("quitmsg_a"),
+            "QUIT broadcast",
+        );
         // Check if the quit message is included
         // Note: this may or may not include "see you later!" depending on implementation
         let _ = quit_line;
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -343,7 +427,8 @@ async fn quit_message_broadcast() {
 async fn nick_freed_then_taken_by_other() {
     run(|addr| {
         let mut a = C::new(addr, "ephemeral");
-        a.reg(); a.drain();
+        a.reg();
+        a.drain();
 
         // Alice changes nick, freeing "ephemeral"
         a.tx("NICK alice_new");
@@ -351,12 +436,17 @@ async fn nick_freed_then_taken_by_other() {
 
         // Bob takes the freed nick
         let mut b = C::new(addr, "ephemeral");
-        b.reg(); b.drain();
+        b.reg();
+        b.drain();
 
         // Alice messages "ephemeral" — should reach Bob (the new owner)
         a.tx("PRIVMSG ephemeral :are you the new guy?");
-        b.rx(|l| l.contains("PRIVMSG") && l.contains("are you the new guy"), "msg to new nick owner");
-    }).await;
+        b.rx(
+            |l| l.contains("PRIVMSG") && l.contains("are you the new guy"),
+            "msg to new nick owner",
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -367,15 +457,22 @@ async fn nick_freed_then_taken_by_other() {
 async fn privmsg_no_text_param() {
     run(|addr| {
         let mut c = C::new(addr, "notxt");
-        c.reg(); c.drain();
-        c.tx("JOIN #notxt"); c.num("366"); c.drain();
+        c.reg();
+        c.drain();
+        c.tx("JOIN #notxt");
+        c.num("366");
+        c.drain();
         // Send PRIVMSG with target but no text (missing second param)
         c.tx("PRIVMSG #notxt");
         // Should get 461 ERR_NEEDMOREPARAMS or be silently dropped
         // Either way, server must not crash
         c.tx("PING :alive2");
-        c.rx(|l| l.contains("PONG") || l.contains("461"), "server alive after bad PRIVMSG");
-    }).await;
+        c.rx(
+            |l| l.contains("PONG") || l.contains("461"),
+            "server alive after bad PRIVMSG",
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -386,11 +483,15 @@ async fn privmsg_no_text_param() {
 async fn banned_then_invited_still_banned() {
     run(|addr| {
         let mut own = C::new(addr, "bi_own");
-        own.reg(); own.drain();
-        own.tx("JOIN #bi"); own.num("366"); own.drain();
+        own.reg();
+        own.drain();
+        own.tx("JOIN #bi");
+        own.num("366");
+        own.drain();
 
         let mut target = C::new(addr, "bi_tgt");
-        target.reg(); target.drain();
+        target.reg();
+        target.drain();
 
         // Ban the target
         own.tx("MODE #bi +b bi_tgt!*@*");
@@ -411,7 +512,8 @@ async fn banned_then_invited_still_banned() {
         // This is the interesting question: does ban or invite win?
         // Correct IRC behavior: ban takes priority
         target.num("474"); // Should still be banned
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -422,18 +524,23 @@ async fn banned_then_invited_still_banned() {
 async fn mode_op_nonmember() {
     run(|addr| {
         let mut own = C::new(addr, "opown");
-        own.reg(); own.drain();
-        own.tx("JOIN #optest"); own.num("366"); own.drain();
+        own.reg();
+        own.drain();
+        own.tx("JOIN #optest");
+        own.num("366");
+        own.drain();
 
         let mut other = C::new(addr, "opother");
-        other.reg(); other.drain();
+        other.reg();
+        other.drain();
         // opother does NOT join #optest
 
         // Owner tries to +o someone not in the channel
         own.tx("MODE #optest +o opother");
         // Should get 441 ERR_USERNOTINCHANNEL
         own.num("441");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -444,9 +551,11 @@ async fn mode_op_nonmember() {
 async fn race_two_create_same_channel() {
     run(|addr| {
         let mut a = C::new(addr, "race_a");
-        a.reg(); a.drain();
+        a.reg();
+        a.drain();
         let mut b = C::new(addr, "race_b");
-        b.reg(); b.drain();
+        b.reg();
+        b.drain();
 
         // Both join the same new channel at the exact same time
         a.tx("JOIN #racechan");
@@ -457,16 +566,19 @@ async fn race_two_create_same_channel() {
         b.num("366");
 
         // Check NAMES: exactly one should have @
-        a.drain(); b.drain();
+        a.drain();
+        b.drain();
         a.tx("NAMES #racechan");
         let names = a.num("353");
         // Extract nick list (after the trailing colon in IRC format)
         let nick_part = names.splitn(2, " :").nth(1).unwrap_or("");
-        let ops: Vec<&str> = nick_part.split_whitespace()
+        let ops: Vec<&str> = nick_part
+            .split_whitespace()
             .filter(|w| w.starts_with('@'))
             .collect();
         assert_eq!(ops.len(), 1, "Exactly one founder op: {names}");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -482,7 +594,8 @@ async fn nick_exactly_64_chars() {
         c.drain();
         c.tx("JOIN #longnick");
         c.num("366");
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -493,7 +606,8 @@ async fn nick_65_chars_rejected() {
         c.tx(&format!("NICK {too_long}"));
         c.tx("USER test 0 * :test");
         c.num("432"); // ERR_ERRONEUSNICKNAME
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -504,19 +618,29 @@ async fn nick_65_chars_rejected() {
 async fn part_with_reason() {
     run(|addr| {
         let mut a = C::new(addr, "part_a");
-        a.reg(); a.drain();
-        a.tx("JOIN #partreason"); a.num("366"); a.drain();
+        a.reg();
+        a.drain();
+        a.tx("JOIN #partreason");
+        a.num("366");
+        a.drain();
 
         let mut b = C::new(addr, "part_b");
-        b.reg(); b.drain();
-        b.tx("JOIN #partreason"); b.num("366"); b.drain();
+        b.reg();
+        b.drain();
+        b.tx("JOIN #partreason");
+        b.num("366");
+        b.drain();
 
         a.tx("PART #partreason :I have my reasons");
-        let part = b.rx(|l| l.contains("PART") && l.contains("#partreason"), "PART broadcast");
+        let part = b.rx(
+            |l| l.contains("PART") && l.contains("#partreason"),
+            "PART broadcast",
+        );
         // Note: the reason may or may not be included depending on implementation.
         // We're documenting actual behavior here.
         let _ = part;
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -527,15 +651,19 @@ async fn part_with_reason() {
 async fn channel_key_set_then_removed() {
     run(|addr| {
         let mut own = C::new(addr, "keyremown");
-        own.reg(); own.drain();
-        own.tx("JOIN #keyrem"); own.num("366"); own.drain();
+        own.reg();
+        own.drain();
+        own.tx("JOIN #keyrem");
+        own.num("366");
+        own.drain();
         own.tx("MODE #keyrem +k mysecret");
         own.drain();
         std::thread::sleep(Duration::from_millis(50));
 
         // Can't join without key
         let mut bad = C::new(addr, "keyrem_bad");
-        bad.reg(); bad.drain();
+        bad.reg();
+        bad.drain();
         bad.tx("JOIN #keyrem");
         bad.num("475");
 
@@ -546,10 +674,15 @@ async fn channel_key_set_then_removed() {
 
         // Now should be able to join without key
         let mut good = C::new(addr, "keyrem_good");
-        good.reg(); good.drain();
+        good.reg();
+        good.drain();
         good.tx("JOIN #keyrem");
-        good.rx(|l| l.contains("JOIN") && l.contains("#keyrem"), "JOIN after key removed");
-    }).await;
+        good.rx(
+            |l| l.contains("JOIN") && l.contains("#keyrem"),
+            "JOIN after key removed",
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -560,16 +693,26 @@ async fn channel_key_set_then_removed() {
 async fn notice_to_channel() {
     run(|addr| {
         let mut a = C::new(addr, "notice_a");
-        a.reg(); a.drain();
-        a.tx("JOIN #notice"); a.num("366"); a.drain();
+        a.reg();
+        a.drain();
+        a.tx("JOIN #notice");
+        a.num("366");
+        a.drain();
 
         let mut b = C::new(addr, "notice_b");
-        b.reg(); b.drain();
-        b.tx("JOIN #notice"); b.num("366"); b.drain();
+        b.reg();
+        b.drain();
+        b.tx("JOIN #notice");
+        b.num("366");
+        b.drain();
 
         a.tx("NOTICE #notice :this is a notice");
-        b.rx(|l| l.contains("NOTICE") && l.contains("this is a notice"), "NOTICE delivered");
-    }).await;
+        b.rx(
+            |l| l.contains("NOTICE") && l.contains("this is a notice"),
+            "NOTICE delivered",
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -580,16 +723,23 @@ async fn notice_to_channel() {
 async fn cannot_deop_founder() {
     run(|addr| {
         let mut founder = C::new(addr, "deop_founder");
-        founder.reg(); founder.drain();
-        founder.tx("JOIN #deoptest"); founder.num("366"); founder.drain();
+        founder.reg();
+        founder.drain();
+        founder.tx("JOIN #deoptest");
+        founder.num("366");
+        founder.drain();
 
         let mut other = C::new(addr, "deop_other");
-        other.reg(); other.drain();
-        other.tx("JOIN #deoptest"); other.num("366"); other.drain();
+        other.reg();
+        other.drain();
+        other.tx("JOIN #deoptest");
+        other.num("366");
+        other.drain();
 
         // Give other ops
         founder.tx("MODE #deoptest +o deop_other");
-        founder.drain(); other.drain();
+        founder.drain();
+        other.drain();
         std::thread::sleep(Duration::from_millis(50));
 
         // Other tries to deop the founder
@@ -604,7 +754,8 @@ async fn cannot_deop_founder() {
         // Note: for guest founders (no DID), the deop protection may not apply
         // since it's DID-based. This test documents actual behavior.
         let _ = names;
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -616,21 +767,25 @@ async fn rapid_connect_disconnect_reconnect() {
     run(|addr| {
         for i in 0..5 {
             let mut c = C::new(addr, "flapper");
-            c.reg(); c.drain();
-            c.tx("JOIN #flap"); c.num("366");
+            c.reg();
+            c.drain();
+            c.tx("JOIN #flap");
+            c.num("366");
             c.tx(&format!("QUIT :round {i}"));
             // Small delay for cleanup
             std::thread::sleep(Duration::from_millis(100));
         }
         // Final connection should work cleanly
         let mut c = C::new(addr, "flapper");
-        c.reg(); c.drain();
+        c.reg();
+        c.drain();
         c.tx("JOIN #flap");
         c.num("366");
         c.tx("NAMES #flap");
         let names = c.num("353");
         assert!(names.contains("flapper"), "Should be in channel: {names}");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -641,12 +796,18 @@ async fn rapid_connect_disconnect_reconnect() {
 async fn away_and_back() {
     run(|addr| {
         let mut a = C::new(addr, "away_a");
-        a.reg(); a.drain();
-        a.tx("JOIN #away"); a.num("366"); a.drain();
+        a.reg();
+        a.drain();
+        a.tx("JOIN #away");
+        a.num("366");
+        a.drain();
 
         let mut b = C::new(addr, "away_b");
-        b.reg(); b.drain();
-        b.tx("JOIN #away"); b.num("366"); b.drain();
+        b.reg();
+        b.drain();
+        b.tx("JOIN #away");
+        b.num("366");
+        b.drain();
 
         // Alice goes away
         a.tx("AWAY :gone fishing");
@@ -657,7 +818,8 @@ async fn away_and_back() {
         a.tx("AWAY");
         // Should get 305 RPL_UNAWAY
         a.num("305");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -668,18 +830,23 @@ async fn away_and_back() {
 async fn bare_hash_channel() {
     run(|addr| {
         let mut c = C::new(addr, "hashtest");
-        c.reg(); c.drain();
+        c.reg();
+        c.drain();
         // Try to join just "#" — should fail or create a weird channel
         c.tx("JOIN #");
         // Should get an error or silently fail — must not crash
-        let _ = c.maybe(|l| {
-            let n = l.split_whitespace().nth(1).unwrap_or("");
-            n == "479" || n == "403" || l.contains("JOIN")
-        }, 1000);
+        let _ = c.maybe(
+            |l| {
+                let n = l.split_whitespace().nth(1).unwrap_or("");
+                n == "479" || n == "403" || l.contains("JOIN")
+            },
+            1000,
+        );
         // Server still alive
         c.tx("PING :alive3");
         c.rx(|l| l.contains("PONG"), "server alive");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -690,13 +857,16 @@ async fn bare_hash_channel() {
 async fn invite_to_nonexistent_channel() {
     run(|addr| {
         let mut a = C::new(addr, "inv_a");
-        a.reg(); a.drain();
+        a.reg();
+        a.drain();
         let mut b = C::new(addr, "inv_b");
-        b.reg(); b.drain();
+        b.reg();
+        b.drain();
 
         // Alice invites Bob to a channel that doesn't exist
         a.tx("INVITE inv_b #doesntexist");
         // Should get 442 ERR_NOTONCHANNEL (you're not on that channel)
         a.num("442");
-    }).await;
+    })
+    .await;
 }

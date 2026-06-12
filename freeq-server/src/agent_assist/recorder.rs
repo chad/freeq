@@ -136,6 +136,10 @@ impl EventRecorder {
         self.inner.lock().len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.inner.lock().is_empty()
+    }
+
     /// Drop everything (used in tests).
     #[cfg(test)]
     pub fn clear(&self) {

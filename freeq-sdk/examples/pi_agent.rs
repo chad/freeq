@@ -107,7 +107,10 @@ async fn run_cmd(cmd: &str, cwd: &PathBuf) -> String {
                 result.push_str(&stderr);
             }
             if !output.status.success() {
-                result.push_str(&format!("\n(exit code: {})", output.status.code().unwrap_or(-1)));
+                result.push_str(&format!(
+                    "\n(exit code: {})",
+                    output.status.code().unwrap_or(-1)
+                ));
             }
             result
         }
@@ -138,12 +141,7 @@ async fn read_file(path: &str, cwd: &PathBuf) -> String {
     }
 }
 
-async fn handle_command(
-    h: &ClientHandle,
-    target: &str,
-    text: &str,
-    cwd: &mut PathBuf,
-) -> bool {
+async fn handle_command(h: &ClientHandle, target: &str, text: &str, cwd: &mut PathBuf) -> bool {
     let text = text.trim();
 
     if text.eq_ignore_ascii_case("quit") || text.eq_ignore_ascii_case("exit") {
@@ -153,10 +151,10 @@ async fn handle_command(
 
     if text.eq_ignore_ascii_case("status") {
         let uptime = run_cmd("uptime", cwd).await;
+        let _ = h.privmsg(target, &format!("cwd: {}", cwd.display())).await;
         let _ = h
-            .privmsg(target, &format!("cwd: {}", cwd.display()))
+            .privmsg(target, &format!("uptime: {}", uptime.trim()))
             .await;
-        let _ = h.privmsg(target, &format!("uptime: {}", uptime.trim())).await;
         return false;
     }
 
@@ -174,14 +172,10 @@ async fn handle_command(
         match std::fs::canonicalize(&new_path) {
             Ok(canonical) => {
                 *cwd = canonical;
-                let _ = h
-                    .privmsg(target, &format!("cd {}", cwd.display()))
-                    .await;
+                let _ = h.privmsg(target, &format!("cd {}", cwd.display())).await;
             }
             Err(e) => {
-                let _ = h
-                    .privmsg(target, &format!("cd failed: {e}"))
-                    .await;
+                let _ = h.privmsg(target, &format!("cd failed: {e}")).await;
             }
         }
         return false;
@@ -289,7 +283,13 @@ async fn main() -> Result<()> {
     println!("Ready. cwd={} Listening in {ch}", cwd.display());
 
     let _ = handle
-        .privmsg(ch, &format!("🖥 pi agent online. cwd: {}. Only {OWNER} can control me.", cwd.display()))
+        .privmsg(
+            ch,
+            &format!(
+                "🖥 pi agent online. cwd: {}. Only {OWNER} can control me.",
+                cwd.display()
+            ),
+        )
         .await;
 
     // Main loop
@@ -341,8 +341,7 @@ async fn main() -> Result<()> {
                         .raw("PRESENCE :state=executing;status=Running command")
                         .await?;
 
-                    let should_quit =
-                        handle_command(&handle, &reply_to, &cmd_text, &mut cwd).await;
+                    let should_quit = handle_command(&handle, &reply_to, &cmd_text, &mut cwd).await;
 
                     if should_quit {
                         break;

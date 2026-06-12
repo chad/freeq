@@ -38,9 +38,7 @@
 //! `INTENT_UNCLEAR`.
 
 use super::prompts::{system_prompt, user_envelope};
-use super::{
-    BoxFuture, ClassificationContext, LlmError, LlmProvider, ToolIntent,
-};
+use super::{BoxFuture, ClassificationContext, LlmError, LlmProvider, ToolIntent};
 use crate::agent_assist::types::FactBundle;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -85,11 +83,19 @@ impl OpenAiCompatible {
         let body = ChatRequest {
             model: &self.model,
             messages: vec![
-                ChatMessage { role: "system", content: system },
-                ChatMessage { role: "user", content: user },
+                ChatMessage {
+                    role: "system",
+                    content: system,
+                },
+                ChatMessage {
+                    role: "user",
+                    content: user,
+                },
             ],
             temperature: 0.0,
-            response_format: Some(ResponseFormat { kind: "json_object" }),
+            response_format: Some(ResponseFormat {
+                kind: "json_object",
+            }),
             max_tokens: Some(512),
         };
 
@@ -99,16 +105,13 @@ impl OpenAiCompatible {
             req = req.bearer_auth(k);
         }
 
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    LlmError::Timeout(self.timeout.as_secs())
-                } else {
-                    LlmError::Transport(format!("{e}"))
-                }
-            })?;
+        let resp = req.send().await.map_err(|e| {
+            if e.is_timeout() {
+                LlmError::Timeout(self.timeout.as_secs())
+            } else {
+                LlmError::Transport(format!("{e}"))
+            }
+        })?;
         if !resp.status().is_success() {
             return Err(LlmError::Transport(format!(
                 "HTTP {} from {}",
@@ -222,10 +225,10 @@ fn parse_intent_lenient(raw: &str) -> Result<Option<ToolIntent>, LlmError> {
     if let Ok(intent) = serde_json::from_str::<ToolIntent>(raw) {
         return Ok(Some(intent));
     }
-    if let Some(json) = first_balanced_object(raw) {
-        if let Ok(intent) = serde_json::from_str::<ToolIntent>(json) {
-            return Ok(Some(intent));
-        }
+    if let Some(json) = first_balanced_object(raw)
+        && let Ok(intent) = serde_json::from_str::<ToolIntent>(json)
+    {
+        return Ok(Some(intent));
     }
     Ok(None)
 }

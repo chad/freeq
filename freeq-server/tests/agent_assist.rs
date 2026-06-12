@@ -139,7 +139,10 @@ async fn validate_client_config_passes_modern_client() {
         .await
         .unwrap();
 
-    assert_eq!(body["ok"], true, "modern client should validate, got: {body:#}");
+    assert_eq!(
+        body["ok"], true,
+        "modern client should validate, got: {body:#}"
+    );
     assert_eq!(body["diagnosis"]["code"], "CONFIG_OK");
     assert!(body["request_id"].as_str().unwrap().starts_with("req_"));
 }
@@ -197,7 +200,9 @@ async fn validate_client_config_flags_multi_device_without_resume() {
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
     assert!(
-        facts.iter().any(|f| f.contains("multi_device") && f.contains("resume")),
+        facts
+            .iter()
+            .any(|f| f.contains("multi_device") && f.contains("resume")),
         "expected a multi_device + resume warning fact, got {facts:?}"
     );
 }
@@ -320,7 +325,12 @@ async fn prompt_injection_in_client_name_is_quoted_not_interpreted() {
         .unwrap();
 
     // The endpoint still returns a normal validation result.
-    assert!(body["diagnosis"]["code"].as_str().unwrap().starts_with("CONFIG_"));
+    assert!(
+        body["diagnosis"]["code"]
+            .as_str()
+            .unwrap()
+            .starts_with("CONFIG_")
+    );
     // The injected text is wrapped in backticks as a label, never on
     // its own line as if it were an instruction. The "Validated
     // configuration for client" prefix is what frames it as data.
@@ -388,15 +398,26 @@ async fn session_returns_llm_not_configured_when_disabled() {
     // fallback envelope.
     let facts = body["safe_facts"].as_array().unwrap();
     assert!(
-        facts.iter().any(|f| f.as_str().unwrap().contains("validate_client_config")),
+        facts
+            .iter()
+            .any(|f| f.as_str().unwrap().contains("validate_client_config")),
         "fallback should advertise structured tools, got {facts:?}"
     );
     // Discovery must reflect the disabled state too.
     let disc: serde_json::Value = reqwest::Client::new()
         .get(url(http, "/.well-known/agent.json"))
-        .send().await.unwrap().json().await.unwrap();
-    let caps: Vec<&str> = disc["capabilities"].as_array().unwrap()
-        .iter().map(|v| v.as_str().unwrap()).collect();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let caps: Vec<&str> = disc["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
     assert!(!caps.contains(&"free_form_session"));
 }
 
@@ -430,9 +451,18 @@ async fn session_with_mock_routes_to_message_ordering() {
     // Discovery should now advertise the capability.
     let disc: serde_json::Value = reqwest::Client::new()
         .get(url(http, "/.well-known/agent.json"))
-        .send().await.unwrap().json().await.unwrap();
-    let caps: Vec<&str> = disc["capabilities"].as_array().unwrap()
-        .iter().map(|v| v.as_str().unwrap()).collect();
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let caps: Vec<&str> = disc["capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
     assert!(caps.contains(&"free_form_session"));
 }
 

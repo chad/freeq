@@ -19,26 +19,43 @@ pub enum TileOverlay {
     /// Scene card — title + bullet list, fills the lower half.
     Card { title: String, bullets: Vec<String> },
     /// Quote card — large pulled-out text, fills the lower half.
-    Quote { text: String, source: Option<String> },
+    Quote {
+        text: String,
+        source: Option<String>,
+    },
     /// File slice — monospace code rendered as the tile.
-    File { path: String, lines: Vec<String>, line_start: u32 },
+    File {
+        path: String,
+        lines: Vec<String>,
+        line_start: u32,
+    },
     /// Live whiteboard — pre-laid-out nodes + arrows from the
     /// orchestrator's accumulated SVO triples.
     Graph { steps: Vec<Step> },
     /// Service/health grid — labelled cells colour-coded by state
     /// ("ok" green, "warn" amber, "down" red, else neutral). For the
     /// ops/on-call role (Sentinel).
-    StatusGrid { title: String, items: Vec<(String, String)> },
+    StatusGrid {
+        title: String,
+        items: Vec<(String, String)>,
+    },
     /// Line chart / sparkline of a numeric series, with the latest
     /// value called out (rises green, falls red). For the markets role
     /// (Quant).
-    Chart { title: String, points: Vec<f64>, caption: Option<String> },
+    Chart {
+        title: String,
+        points: Vec<f64>,
+        caption: Option<String>,
+    },
     /// Unified-diff view — lines prefixed `+`/`-`/` ` rendered green/
     /// red/grey in monospace. For the programmer role (Ada).
     Diff { path: String, lines: Vec<String> },
     /// Day agenda — time + event rows, fills the lower half. For the
     /// productivity role (Otto).
-    Agenda { title: String, items: Vec<(String, String)> },
+    Agenda {
+        title: String,
+        items: Vec<(String, String)>,
+    },
 }
 
 /// Shared, thread-safe overlay slot. The MCP tools write to it; the
@@ -83,9 +100,11 @@ fn overlay_svg(overlay: &TileOverlay, w: u32, h: u32) -> Option<String> {
         TileOverlay::Status { label } => Some(status_svg(label, w, h)),
         TileOverlay::Card { title, bullets } => Some(card_svg(title, bullets, w, h)),
         TileOverlay::Quote { text, source } => Some(quote_svg(text, source.as_deref(), w, h)),
-        TileOverlay::File { path, lines, line_start } => {
-            Some(file_svg(path, lines, *line_start, w, h))
-        }
+        TileOverlay::File {
+            path,
+            lines,
+            line_start,
+        } => Some(file_svg(path, lines, *line_start, w, h)),
         TileOverlay::Graph { steps } => {
             if steps.is_empty() {
                 None
@@ -94,9 +113,11 @@ fn overlay_svg(overlay: &TileOverlay, w: u32, h: u32) -> Option<String> {
             }
         }
         TileOverlay::StatusGrid { title, items } => Some(status_grid_svg(title, items, w, h)),
-        TileOverlay::Chart { title, points, caption } => {
-            Some(chart_svg(title, points, caption.as_deref(), w, h))
-        }
+        TileOverlay::Chart {
+            title,
+            points,
+            caption,
+        } => Some(chart_svg(title, points, caption.as_deref(), w, h)),
         TileOverlay::Diff { path, lines } => Some(diff_svg(path, lines, w, h)),
         TileOverlay::Agenda { title, items } => Some(agenda_svg(title, items, w, h)),
     }
@@ -164,10 +185,16 @@ fn chart_svg(title: &str, points: &[f64], caption: Option<&str>, w: u32, h: u32)
     let plot_top = (card_top + 44) as f64;
     let plot_h = (card_h - 60) as f64;
 
-    let (lo, hi) = points.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &p| {
-        (lo.min(p), hi.max(p))
-    });
-    let span = if (hi - lo).abs() < f64::EPSILON { 1.0 } else { hi - lo };
+    let (lo, hi) = points
+        .iter()
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &p| {
+            (lo.min(p), hi.max(p))
+        });
+    let span = if (hi - lo).abs() < f64::EPSILON {
+        1.0
+    } else {
+        hi - lo
+    };
     let rising = points.len() >= 2 && points[points.len() - 1] >= points[0];
     let line_color = if rising { "#7cf3a0" } else { "#ff6b6b" };
 
@@ -312,7 +339,11 @@ mod tests {
         });
         assert!(down.contains("#ff6b6b")); // falling → red
         // Degenerate inputs don't panic.
-        let _ = renders(&TileOverlay::Chart { title: "f".into(), points: vec![1.0], caption: None });
+        let _ = renders(&TileOverlay::Chart {
+            title: "f".into(),
+            points: vec![1.0],
+            caption: None,
+        });
     }
 
     #[test]
@@ -330,7 +361,10 @@ mod tests {
     fn agenda_lists_time_and_event() {
         let svg = renders(&TileOverlay::Agenda {
             title: "Today".into(),
-            items: vec![("09:00".into(), "Standup".into()), ("11:30".into(), "1:1".into())],
+            items: vec![
+                ("09:00".into(), "Standup".into()),
+                ("11:30".into(), "1:1".into()),
+            ],
         });
         assert!(svg.contains("Today") && svg.contains("09:00") && svg.contains("Standup"));
     }
@@ -347,45 +381,63 @@ mod tests {
         opt.fontdb_mut().load_system_fonts();
         let mut scratch = Pixmap::new(640, 360).unwrap();
         let samples: Vec<(&str, TileOverlay)> = vec![
-            ("statusgrid", TileOverlay::StatusGrid {
-                title: "fleet".into(),
-                items: vec![
-                    ("freeq".into(), "up".into()), ("reth".into(), "warn".into()),
-                    ("ci".into(), "pass".into()), ("bettina".into(), "asleep".into()),
-                    ("golden".into(), "up".into()), ("watch".into(), "up".into()),
-                ],
-            }),
-            ("chart", TileOverlay::Chart {
-                title: "BTC".into(),
-                points: vec![100.0, 102.0, 101.5, 105.0, 104.0, 108.0, 107.0, 112.0],
-                caption: Some("+4.2% · 24h".into()),
-            }),
-            ("diff", TileOverlay::Diff {
-                path: "src/auth.rs".into(),
-                lines: vec![
-                    "  fn login(user: &str) -> Result<Session> {".into(),
-                    "-     accept(user)".into(),
-                    "+     if user.len() > 128 {".into(),
-                    "+         return Err(Error::TooLong);".into(),
-                    "+     }".into(),
-                    "+     accept(user)".into(),
-                    "  }".into(),
-                ],
-            }),
-            ("agenda", TileOverlay::Agenda {
-                title: "Today".into(),
-                items: vec![
-                    ("09:00".into(), "Standup".into()),
-                    ("11:30".into(), "1:1 w/ Nap".into()),
-                    ("14:00".into(), "Board prep".into()),
-                    ("16:30".into(), "Ada code review".into()),
-                ],
-            }),
+            (
+                "statusgrid",
+                TileOverlay::StatusGrid {
+                    title: "fleet".into(),
+                    items: vec![
+                        ("freeq".into(), "up".into()),
+                        ("reth".into(), "warn".into()),
+                        ("ci".into(), "pass".into()),
+                        ("bettina".into(), "asleep".into()),
+                        ("golden".into(), "up".into()),
+                        ("watch".into(), "up".into()),
+                    ],
+                },
+            ),
+            (
+                "chart",
+                TileOverlay::Chart {
+                    title: "BTC".into(),
+                    points: vec![100.0, 102.0, 101.5, 105.0, 104.0, 108.0, 107.0, 112.0],
+                    caption: Some("+4.2% · 24h".into()),
+                },
+            ),
+            (
+                "diff",
+                TileOverlay::Diff {
+                    path: "src/auth.rs".into(),
+                    lines: vec![
+                        "  fn login(user: &str) -> Result<Session> {".into(),
+                        "-     accept(user)".into(),
+                        "+     if user.len() > 128 {".into(),
+                        "+         return Err(Error::TooLong);".into(),
+                        "+     }".into(),
+                        "+     accept(user)".into(),
+                        "  }".into(),
+                    ],
+                },
+            ),
+            (
+                "agenda",
+                TileOverlay::Agenda {
+                    title: "Today".into(),
+                    items: vec![
+                        ("09:00".into(), "Standup".into()),
+                        ("11:30".into(), "1:1 w/ Nap".into()),
+                        ("14:00".into(), "Board prep".into()),
+                        ("16:30".into(), "Ada code review".into()),
+                    ],
+                },
+            ),
         ];
         for (name, ov) in &samples {
             let mut px = Pixmap::new(640, 360).unwrap();
             for p in px.data_mut().chunks_mut(4) {
-                p[0] = 8; p[1] = 10; p[2] = 18; p[3] = 255;
+                p[0] = 8;
+                p[1] = 10;
+                p[2] = 18;
+                p[3] = 255;
             }
             composite_overlay(ov, &mut px, &opt, &mut scratch);
             px.save_png(format!("/tmp/overlay-{name}.png")).unwrap();
@@ -394,9 +446,18 @@ mod tests {
 
     #[test]
     fn empty_collections_dont_panic() {
-        let _ = renders(&TileOverlay::StatusGrid { title: "e".into(), items: vec![] });
-        let _ = renders(&TileOverlay::Agenda { title: "e".into(), items: vec![] });
-        let _ = renders(&TileOverlay::Diff { path: "e".into(), lines: vec![] });
+        let _ = renders(&TileOverlay::StatusGrid {
+            title: "e".into(),
+            items: vec![],
+        });
+        let _ = renders(&TileOverlay::Agenda {
+            title: "e".into(),
+            items: vec![],
+        });
+        let _ = renders(&TileOverlay::Diff {
+            path: "e".into(),
+            lines: vec![],
+        });
     }
 }
 
@@ -521,7 +582,14 @@ fn graph_svg(steps: &[Step], w: u32, h: u32) -> String {
     );
     // Draw arrows first (under boxes) so labels read on top.
     for s in steps {
-        if let Step::Arrow { x1, y1, x2, y2, label } = s {
+        if let Step::Arrow {
+            x1,
+            y1,
+            x2,
+            y2,
+            label,
+        } = s
+        {
             body.push_str(&format!(
                 r##"<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="#7cb5ff" stroke-width="1.6" marker-end="url(#ah)" opacity="0.85" />"##,
             ));
@@ -541,7 +609,14 @@ fn graph_svg(steps: &[Step], w: u32, h: u32) -> String {
     }
     // Then boxes.
     for s in steps {
-        if let Step::Box { x, y, w: bw, h: bh, label } = s {
+        if let Step::Box {
+            x,
+            y,
+            w: bw,
+            h: bh,
+            label,
+        } = s
+        {
             body.push_str(&format!(
                 r##"<rect x="{x}" y="{y}" width="{bw}" height="{bh}" rx="8" fill="#0a1422ee" stroke="#7cb5ff" stroke-width="1.4" />
 <text x="{cx:.1}" y="{cy:.1}" text-anchor="middle" font-family="-apple-system, Helvetica, sans-serif" font-size="14" fill="#e6f3ff">{label}</text>"##,
@@ -553,7 +628,13 @@ fn graph_svg(steps: &[Step], w: u32, h: u32) -> String {
     }
     // Free-floating text steps (titles, captions).
     for s in steps {
-        if let Step::Text { x, y, content, size } = s {
+        if let Step::Text {
+            x,
+            y,
+            content,
+            size,
+        } = s
+        {
             let px = match size {
                 TextSize::Small => 12,
                 TextSize::Med => 16,

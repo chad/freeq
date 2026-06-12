@@ -99,14 +99,10 @@ pub enum TrackKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
+#[derive(Default)]
 pub enum MediaBackendType {
+    #[default]
     IrohLive,
-}
-
-impl Default for MediaBackendType {
-    fn default() -> Self {
-        Self::IrohLive
-    }
 }
 
 // ── Artifacts (Phase 2) ────────────────────────────────────────────
@@ -139,16 +135,12 @@ pub enum ArtifactKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum ArtifactVisibility {
+    #[default]
     Participants,
     Channel,
     Public,
-}
-
-impl Default for ArtifactVisibility {
-    fn default() -> Self {
-        Self::Participants
-    }
 }
 
 // ── Session Manager ────────────────────────────────────────────────
@@ -160,6 +152,12 @@ pub struct AvSessionManager {
     pub sessions: HashMap<AvSessionId, AvSession>,
     /// Channel → active session ID (at most one active session per channel).
     pub channel_sessions: HashMap<String, AvSessionId>,
+}
+
+impl Default for AvSessionManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AvSessionManager {
@@ -187,31 +185,29 @@ impl AvSessionManager {
         // Check: only one active session per channel.
         // If the existing session has no active participants (all left/disconnected),
         // auto-end it so a new session can start.
-        if let Some(ch) = channel {
-            if let Some(existing_id) = self.channel_sessions.get(&ch.to_lowercase()).cloned() {
-                if let Some(existing) = self.sessions.get(&existing_id) {
-                    if matches!(existing.state, AvSessionState::Active) {
-                        let active_count = existing
-                            .participants
-                            .values()
-                            .filter(|p| p.left_at.is_none())
-                            .count();
-                        if active_count > 0 {
-                            return Err(format!(
-                                "Channel {} already has an active session: {}",
-                                ch, existing_id
-                            ));
-                        }
-                        // No active participants — auto-end the stale session
-                        tracing::info!(
-                            session = %existing_id,
-                            channel = %ch,
-                            "Auto-ending stale session (0 active participants) to allow new session"
-                        );
-                        self.end_session_inner(&existing_id, Some(creator_did));
-                    }
-                }
+        if let Some(ch) = channel
+            && let Some(existing_id) = self.channel_sessions.get(&ch.to_lowercase()).cloned()
+            && let Some(existing) = self.sessions.get(&existing_id)
+            && matches!(existing.state, AvSessionState::Active)
+        {
+            let active_count = existing
+                .participants
+                .values()
+                .filter(|p| p.left_at.is_none())
+                .count();
+            if active_count > 0 {
+                return Err(format!(
+                    "Channel {} already has an active session: {}",
+                    ch, existing_id
+                ));
             }
+            // No active participants — auto-end the stale session
+            tracing::info!(
+                session = %existing_id,
+                channel = %ch,
+                "Auto-ending stale session (0 active participants) to allow new session"
+            );
+            self.end_session_inner(&existing_id, Some(creator_did));
         }
 
         let id = ulid::Ulid::new().to_string();
@@ -249,8 +245,7 @@ impl AvSessionManager {
 
         self.sessions.insert(id.clone(), session);
         if let Some(ch) = channel {
-            self.channel_sessions
-                .insert(ch.to_lowercase(), id.clone());
+            self.channel_sessions.insert(ch.to_lowercase(), id.clone());
         }
 
         Ok(self.sessions.get(&id).unwrap().clone())
@@ -420,7 +415,12 @@ impl AvSessionManager {
     pub fn active_participant_count(&self, session_id: &str) -> usize {
         self.sessions
             .get(session_id)
-            .map(|s| s.participants.values().filter(|p| p.left_at.is_none()).count())
+            .map(|s| {
+                s.participants
+                    .values()
+                    .filter(|p| p.left_at.is_none())
+                    .count()
+            })
             .unwrap_or(0)
     }
 
@@ -532,11 +532,7 @@ impl AvSessionManager {
         }
     }
 
-    pub fn apply_remote_session_ended(
-        &mut self,
-        session_id: &str,
-        ended_by: Option<&str>,
-    ) {
+    pub fn apply_remote_session_ended(&mut self, session_id: &str, ended_by: Option<&str>) {
         self.end_session_inner(session_id, ended_by);
     }
 
@@ -555,7 +551,9 @@ impl AvSessionManager {
         let key = participant_key(did, instance_id);
         let session_ids: Vec<String> = self.sessions.keys().cloned().collect();
         for session_id in session_ids {
-            let Some(session) = self.sessions.get_mut(&session_id) else { continue; };
+            let Some(session) = self.sessions.get_mut(&session_id) else {
+                continue;
+            };
             if !matches!(session.state, AvSessionState::Active) {
                 continue;
             }
@@ -597,7 +595,9 @@ impl AvSessionManager {
         live: &std::collections::HashSet<(String, Option<String>)>,
     ) {
         let now = chrono::Utc::now().timestamp();
-        let Some(session) = self.sessions.get_mut(session_id) else { return };
+        let Some(session) = self.sessions.get_mut(session_id) else {
+            return;
+        };
         if !matches!(session.state, AvSessionState::Active) {
             return;
         }
@@ -623,7 +623,9 @@ impl AvSessionManager {
 
         let session_ids: Vec<String> = self.sessions.keys().cloned().collect();
         for session_id in session_ids {
-            let Some(session) = self.sessions.get_mut(&session_id) else { continue; };
+            let Some(session) = self.sessions.get_mut(&session_id) else {
+                continue;
+            };
             if !matches!(session.state, AvSessionState::Active) {
                 continue;
             }
@@ -679,7 +681,13 @@ mod tests {
     fn create_and_join_session() {
         let mut mgr = AvSessionManager::new();
         let session = mgr
-            .create_session(Some("#test"), "did:plc:alice", "alice", Some("standup"), None)
+            .create_session(
+                Some("#test"),
+                "did:plc:alice",
+                "alice",
+                Some("standup"),
+                None,
+            )
             .unwrap();
         assert_eq!(session.created_by, "did:plc:alice");
         assert!(matches!(session.state, AvSessionState::Active));
@@ -859,7 +867,13 @@ mod tests {
         let mut mgr = AvSessionManager::new();
         // iPhone creates the session.
         let id = mgr
-            .create_session(Some("#avtest"), "did:plc:alice", "alice", None, Some("iphone"))
+            .create_session(
+                Some("#avtest"),
+                "did:plc:alice",
+                "alice",
+                None,
+                Some("iphone"),
+            )
             .unwrap()
             .id;
         // Web tab joins as same DID, different instance.
@@ -904,7 +918,13 @@ mod tests {
     fn participant_carries_instance_id_for_api_serialization() {
         let mut mgr = AvSessionManager::new();
         let id = mgr
-            .create_session(Some("#avtest"), "did:plc:alice", "alice", None, Some("iphone"))
+            .create_session(
+                Some("#avtest"),
+                "did:plc:alice",
+                "alice",
+                None,
+                Some("iphone"),
+            )
             .unwrap()
             .id;
         mgr.join_session(&id, "did:plc:alice", "alice", Some("web"))
@@ -936,23 +956,30 @@ mod tests {
     fn reap_orphan_slots_clears_phantom_participants() {
         let mut mgr = AvSessionManager::new();
         let id = mgr
-            .create_session(Some("#avtest"), "did:plc:alice", "alice", None, Some("tab1"))
+            .create_session(
+                Some("#avtest"),
+                "did:plc:alice",
+                "alice",
+                None,
+                Some("tab1"),
+            )
             .unwrap()
             .id;
         // Three more tabs joined, none ever sent av-leave (typical browser
         // tab churn).
-        mgr.join_session(&id, "did:plc:alice", "alice", Some("tab2")).unwrap();
-        mgr.join_session(&id, "did:plc:alice", "alice", Some("tab3")).unwrap();
-        mgr.join_session(&id, "did:plc:alice", "alice", Some("tab4")).unwrap();
+        mgr.join_session(&id, "did:plc:alice", "alice", Some("tab2"))
+            .unwrap();
+        mgr.join_session(&id, "did:plc:alice", "alice", Some("tab3"))
+            .unwrap();
+        mgr.join_session(&id, "did:plc:alice", "alice", Some("tab4"))
+            .unwrap();
         assert_eq!(mgr.active_participant_count(&id), 4);
 
         // Only tab4 has a live connection now. Reaper should clean tabs 1-3.
-        let live: std::collections::HashSet<(String, Option<String>)> = [(
-            "did:plc:alice".to_string(),
-            Some("tab4".to_string()),
-        )]
-        .into_iter()
-        .collect();
+        let live: std::collections::HashSet<(String, Option<String>)> =
+            [("did:plc:alice".to_string(), Some("tab4".to_string()))]
+                .into_iter()
+                .collect();
         mgr.reap_orphan_slots(&id, &live);
 
         assert_eq!(
@@ -980,16 +1007,25 @@ mod tests {
         let mut mgr = AvSessionManager::new();
         // iPhone creates session, web tab joins (both still alive).
         let id = mgr
-            .create_session(Some("#test"), "did:plc:alice", "alice", None, Some("iphone"))
+            .create_session(
+                Some("#test"),
+                "did:plc:alice",
+                "alice",
+                None,
+                Some("iphone"),
+            )
             .unwrap()
             .id;
         mgr.join_session(&id, "did:plc:alice", "alice", Some("web"))
             .unwrap();
 
         // After 3 brief tab reloads, three stale slots have accumulated.
-        mgr.join_session(&id, "did:plc:alice", "alice", Some("tab-stale1")).unwrap();
-        mgr.join_session(&id, "did:plc:alice", "alice", Some("tab-stale2")).unwrap();
-        mgr.join_session(&id, "did:plc:alice", "alice", Some("tab-stale3")).unwrap();
+        mgr.join_session(&id, "did:plc:alice", "alice", Some("tab-stale1"))
+            .unwrap();
+        mgr.join_session(&id, "did:plc:alice", "alice", Some("tab-stale2"))
+            .unwrap();
+        mgr.join_session(&id, "did:plc:alice", "alice", Some("tab-stale3"))
+            .unwrap();
         assert_eq!(mgr.active_participant_count(&id), 5);
 
         // A fourth tab joins; the live-set has the iphone, the web tab,
@@ -1044,7 +1080,8 @@ mod tests {
             .unwrap()
             .id;
         // Other participant in the call.
-        mgr.join_session(&id, "did:plc:bob", "bob", Some("bob1")).unwrap();
+        mgr.join_session(&id, "did:plc:bob", "bob", Some("bob1"))
+            .unwrap();
         assert_eq!(mgr.active_participant_count(&id), 2);
 
         // Alice's old tab dies (no av-leave sent). Then she re-joins with
@@ -1057,17 +1094,23 @@ mod tests {
         .into_iter()
         .collect();
         mgr.reap_orphan_slots(&id, &live_after_reap);
-        mgr.join_session(&id, "did:plc:alice", "alice", Some("new")).unwrap();
+        mgr.join_session(&id, "did:plc:alice", "alice", Some("new"))
+            .unwrap();
 
         // bob + alice@new — old alice slot reaped.
         assert_eq!(mgr.active_participant_count(&id), 2);
         let s = mgr.get(&id).unwrap();
-        let alice_slots: Vec<_> = s.participants.values()
+        let alice_slots: Vec<_> = s
+            .participants
+            .values()
             .filter(|p| p.did == "did:plc:alice" && p.left_at.is_none())
             .filter_map(|p| p.instance_id.clone())
             .collect();
-        assert_eq!(alice_slots, vec!["new".to_string()],
-                   "exactly one live alice slot, with the new instance — old must be reaped");
+        assert_eq!(
+            alice_slots,
+            vec!["new".to_string()],
+            "exactly one live alice slot, with the new instance — old must be reaped"
+        );
     }
 
     /// State matrix cell #11/#12: clean leave vs unclean drop both end in
@@ -1079,29 +1122,44 @@ mod tests {
     fn drop_without_leave_marks_only_dropping_instance() {
         let mut mgr = AvSessionManager::new();
         let id = mgr
-            .create_session(Some("#test"), "did:plc:alice", "alice", None, Some("iphone"))
+            .create_session(
+                Some("#test"),
+                "did:plc:alice",
+                "alice",
+                None,
+                Some("iphone"),
+            )
             .unwrap()
             .id;
-        mgr.join_session(&id, "did:plc:alice", "alice", Some("web")).unwrap();
-        mgr.join_session(&id, "did:plc:bob", "bob", Some("bob1")).unwrap();
+        mgr.join_session(&id, "did:plc:alice", "alice", Some("web"))
+            .unwrap();
+        mgr.join_session(&id, "did:plc:bob", "bob", Some("bob1"))
+            .unwrap();
         assert_eq!(mgr.active_participant_count(&id), 3);
 
         // iPhone connection dies — disconnect handler runs leave_for_did_instance.
         let results = mgr.leave_for_did_instance("did:plc:alice", Some("iphone"));
         assert_eq!(results.len(), 1, "one session was affected");
-        assert!(!results[0].3, "session should NOT end — alice@web and bob are still there");
+        assert!(
+            !results[0].3,
+            "session should NOT end — alice@web and bob are still there"
+        );
 
         // 2 alive slots: alice@web, bob.
         assert_eq!(mgr.active_participant_count(&id), 2);
         let s = mgr.get(&id).unwrap();
-        let live_pairs: std::collections::BTreeSet<_> = s.participants.values()
+        let live_pairs: std::collections::BTreeSet<_> = s
+            .participants
+            .values()
             .filter(|p| p.left_at.is_none())
             .map(|p| (p.did.clone(), p.instance_id.clone().unwrap_or_default()))
             .collect();
         assert!(live_pairs.contains(&("did:plc:alice".into(), "web".into())));
         assert!(live_pairs.contains(&("did:plc:bob".into(), "bob1".into())));
-        assert!(!live_pairs.contains(&("did:plc:alice".into(), "iphone".into())),
-                "iphone slot must be marked left");
+        assert!(
+            !live_pairs.contains(&("did:plc:alice".into(), "iphone".into())),
+            "iphone slot must be marked left"
+        );
     }
 
     /// State matrix cell #11 corollary: leave-then-rejoin from a DIFFERENT
@@ -1114,11 +1172,18 @@ mod tests {
     fn rejoin_from_different_device_uses_distinct_instance() {
         let mut mgr = AvSessionManager::new();
         let id = mgr
-            .create_session(Some("#test"), "did:plc:alice", "alice", None, Some("iphone"))
+            .create_session(
+                Some("#test"),
+                "did:plc:alice",
+                "alice",
+                None,
+                Some("iphone"),
+            )
             .unwrap()
             .id;
         // Alice leaves cleanly.
-        mgr.leave_session(&id, "did:plc:alice", Some("iphone")).unwrap();
+        mgr.leave_session(&id, "did:plc:alice", Some("iphone"))
+            .unwrap();
         // Re-create — leave on the only participant ends the session, so
         // start over for this scenario by creating fresh.
         let id = mgr
@@ -1128,8 +1193,11 @@ mod tests {
         let s = mgr.get(&id).unwrap();
         assert_eq!(s.participants.len(), 1);
         let p = s.participants.values().next().unwrap();
-        assert_eq!(p.instance_id.as_deref(), Some("ipad"),
-                   "fresh device's instance must distinguish the broadcast path");
+        assert_eq!(
+            p.instance_id.as_deref(),
+            Some("ipad"),
+            "fresh device's instance must distinguish the broadcast path"
+        );
     }
 
     /// Cross-contract: the broadcast key the web client builds from the
@@ -1147,10 +1215,17 @@ mod tests {
     fn participant_record_supports_web_broadcast_path_construction() {
         let mut mgr = AvSessionManager::new();
         let id = mgr
-            .create_session(Some("#test"), "did:plc:alice", "alice", None, Some("ios123"))
+            .create_session(
+                Some("#test"),
+                "did:plc:alice",
+                "alice",
+                None,
+                Some("ios123"),
+            )
             .unwrap()
             .id;
-        mgr.join_session(&id, "did:plc:bob", "bob", Some("web456")).unwrap();
+        mgr.join_session(&id, "did:plc:bob", "bob", Some("web456"))
+            .unwrap();
 
         let s = mgr.get(&id).unwrap();
         for p in s.participants.values() {
@@ -1164,8 +1239,10 @@ mod tests {
                 Some(iid) if !iid.is_empty() => format!("{}/{}~{}", s.id, p.nick, iid),
                 _ => format!("{}/{}", s.id, p.nick),
             };
-            assert_eq!(sdk_path, web_path,
-                       "SDK FFI path and web client path must match for {p:?}");
+            assert_eq!(
+                sdk_path, web_path,
+                "SDK FFI path and web client path must match for {p:?}"
+            );
         }
     }
 

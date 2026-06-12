@@ -142,7 +142,10 @@ fn scope_satisfies_blob_upload_with_granular_grant() {
         OauthPurpose::BlobUpload
     ));
     // Identity-only grant must NOT be enough for upload.
-    assert!(!scope_satisfies_purpose("atproto", OauthPurpose::BlobUpload));
+    assert!(!scope_satisfies_purpose(
+        "atproto",
+        OauthPurpose::BlobUpload
+    ));
     // Blob grant alone (no record) must NOT be enough — record creation
     // would fail at the PDS.
     assert!(!scope_satisfies_purpose(
@@ -185,9 +188,9 @@ fn purpose_round_trips_through_string() {
         OauthPurpose::BlueskyPost,
     ] {
         let s = p.as_str();
-        assert_eq!(OauthPurpose::from_str(s), Some(p));
+        assert_eq!(OauthPurpose::parse(s), Some(p));
     }
-    assert_eq!(OauthPurpose::from_str("nonsense"), None);
+    assert_eq!(OauthPurpose::parse("nonsense"), None);
 }
 
 #[test]
@@ -203,7 +206,11 @@ fn requested_scopes_are_narrow_not_transition_generic() {
             "purpose {:?} requests legacy scope: {s}",
             p
         );
-        assert!(s.contains("atproto"), "purpose {:?} missing atproto: {s}", p);
+        assert!(
+            s.contains("atproto"),
+            "purpose {:?} missing atproto: {s}",
+            p
+        );
     }
 }
 
@@ -221,7 +228,10 @@ fn scope_predicate_handles_extra_whitespace() {
         "atproto\tblob:image/*\trepo:blue.irc.media?action=create",
         OauthPurpose::BlobUpload,
     ));
-    assert!(scope_satisfies_purpose("\n  atproto  \n", OauthPurpose::Login));
+    assert!(scope_satisfies_purpose(
+        "\n  atproto  \n",
+        OauthPurpose::Login
+    ));
 }
 
 #[test]
@@ -239,8 +249,14 @@ fn scope_predicate_is_case_sensitive_per_spec() {
 #[test]
 fn scope_predicate_rejects_empty_or_unrelated() {
     assert!(!scope_satisfies_purpose("", OauthPurpose::Login));
-    assert!(!scope_satisfies_purpose("openid email", OauthPurpose::Login));
-    assert!(!scope_satisfies_purpose("atproto", OauthPurpose::BlobUpload));
+    assert!(!scope_satisfies_purpose(
+        "openid email",
+        OauthPurpose::Login
+    ));
+    assert!(!scope_satisfies_purpose(
+        "atproto",
+        OauthPurpose::BlobUpload
+    ));
     assert!(!scope_satisfies_purpose(
         "atproto blob:audio/*",
         OauthPurpose::BlobUpload,
@@ -310,7 +326,10 @@ async fn step_up_purpose_is_case_sensitive() {
     // typo would silently work in some places and not others.
     let (_irc, http, _h) = start_server().await;
     let resp = reqwest::Client::new()
-        .get(url(http, "/auth/step-up?purpose=BLOB_UPLOAD&did=did:plc:abc"))
+        .get(url(
+            http,
+            "/auth/step-up?purpose=BLOB_UPLOAD&did=did:plc:abc",
+        ))
         .send()
         .await
         .unwrap();
@@ -361,11 +380,8 @@ async fn metadata_scope_contains_every_requested_purpose_scope() {
         .json()
         .await
         .unwrap();
-    let metadata_scope: std::collections::HashSet<&str> = body["scope"]
-        .as_str()
-        .unwrap()
-        .split_whitespace()
-        .collect();
+    let metadata_scope: std::collections::HashSet<&str> =
+        body["scope"].as_str().unwrap().split_whitespace().collect();
     for p in [
         OauthPurpose::Login,
         OauthPurpose::BlobUpload,

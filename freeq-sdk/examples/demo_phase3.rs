@@ -37,7 +37,12 @@ enum OwnerCmd {
     Quit,
 }
 
-async fn wait_owner(rx: &mut mpsc::Receiver<Event>, ch: &str, secs: u64, handle: &ClientHandle) -> Option<OwnerCmd> {
+async fn wait_owner(
+    rx: &mut mpsc::Receiver<Event>,
+    ch: &str,
+    secs: u64,
+    handle: &ClientHandle,
+) -> Option<OwnerCmd> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
     let mut last_hb = tokio::time::Instant::now();
     loop {
@@ -49,19 +54,37 @@ async fn wait_owner(rx: &mut mpsc::Receiver<Event>, ch: &str, secs: u64, handle:
         let hb_remaining = Duration::from_secs(25).saturating_sub(last_hb.elapsed());
         let wait = remaining.min(hb_remaining);
         match timeout(wait, rx.recv()).await {
-            Ok(Some(Event::Message { from, target, text, tags })) => {
-                if tags.contains_key("batch") { continue; }
-                if !target.eq_ignore_ascii_case(ch) || !from.eq_ignore_ascii_case(OWNER) { continue; }
+            Ok(Some(Event::Message {
+                from,
+                target,
+                text,
+                tags,
+            })) => {
+                if tags.contains_key("batch") {
+                    continue;
+                }
+                if !target.eq_ignore_ascii_case(ch) || !from.eq_ignore_ascii_case(OWNER) {
+                    continue;
+                }
                 let w = text.trim().to_lowercase();
-                let w = w.strip_prefix("factory:").or_else(|| w.strip_prefix("factory,"))
-                    .or_else(|| w.strip_prefix("@factory")).map(|s| s.trim()).unwrap_or(&w);
+                let w = w
+                    .strip_prefix("factory:")
+                    .or_else(|| w.strip_prefix("factory,"))
+                    .or_else(|| w.strip_prefix("@factory"))
+                    .map(|s| s.trim())
+                    .unwrap_or(&w);
                 match w {
-                    "next" | "n" | "go" | "continue" | "ok" | "yes" | "y" | "ready" => return Some(OwnerCmd::Next),
+                    "next" | "n" | "go" | "continue" | "ok" | "yes" | "y" | "ready" => {
+                        return Some(OwnerCmd::Next);
+                    }
                     "quit" | "q" | "stop" | "exit" => return Some(OwnerCmd::Quit),
                     _ => continue,
                 }
             }
-            Ok(Some(Event::Disconnected { reason })) => { eprintln!("Disconnected: {reason}"); return Some(OwnerCmd::Quit); }
+            Ok(Some(Event::Disconnected { reason })) => {
+                eprintln!("Disconnected: {reason}");
+                return Some(OwnerCmd::Quit);
+            }
             Ok(Some(_)) => continue,
             Ok(None) => return Some(OwnerCmd::Quit),
             Err(_) => {
@@ -83,7 +106,12 @@ async fn say(h: &ClientHandle, ch: &str, lines: &[&str]) {
 }
 
 async fn prompt(h: &ClientHandle, rx: &mut mpsc::Receiver<Event>, ch: &str) -> bool {
-    say(h, ch, &["", "👉 Say 'next' to continue (or 'quit' to stop)."]).await;
+    say(
+        h,
+        ch,
+        &["", "👉 Say 'next' to continue (or 'quit' to stop)."],
+    )
+    .await;
     match wait_owner(rx, ch, 600, h).await {
         Some(OwnerCmd::Next) => true,
         _ => false,
@@ -113,9 +141,7 @@ async fn emit_event(
     human_msg: &str,
 ) {
     // Build tag string
-    let mut tags = format!(
-        "@+freeq.at/event={event_type};+freeq.at/ref={task_id}"
-    );
+    let mut tags = format!("@+freeq.at/event={event_type};+freeq.at/ref={task_id}");
     if let Some(p) = phase {
         tags.push_str(&format!(";+freeq.at/phase={p}"));
     }
@@ -139,7 +165,9 @@ async fn emit_event(
 }
 
 async fn shutdown(handle: ClientHandle) -> Result<()> {
-    handle.raw("PRESENCE :state=offline;status=Shutting down").await?;
+    handle
+        .raw("PRESENCE :state=offline;status=Shutting down")
+        .await?;
     handle.quit(Some("Goodbye!")).await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
     println!("Done.");
@@ -186,8 +214,14 @@ async fn main() -> Result<()> {
 
     loop {
         match events.recv().await {
-            Some(Event::Registered { nick }) => { println!("Registered as {nick}"); break; }
-            Some(Event::Disconnected { reason }) => { eprintln!("Disconnected: {reason}"); return Ok(()); }
+            Some(Event::Registered { nick }) => {
+                println!("Registered as {nick}");
+                break;
+            }
+            Some(Event::Disconnected { reason }) => {
+                eprintln!("Disconnected: {reason}");
+                return Ok(());
+            }
             _ => continue,
         }
     }
@@ -195,7 +229,9 @@ async fn main() -> Result<()> {
     // Agent setup
     handle.register_agent("agent").await?;
     handle.raw("HEARTBEAT 60").await?;
-    handle.raw("PRESENCE :state=active;status=Phase 3 demo").await?;
+    handle
+        .raw("PRESENCE :state=active;status=Phase 3 demo")
+        .await?;
     let provenance = serde_json::json!({
         "actor_did": did,
         "origin_type": "external_import",
@@ -205,7 +241,12 @@ async fn main() -> Result<()> {
         "authority_basis": "Operated by server administrator",
         "revocation_authority": "did:plc:4qsyxmnsblo4luuycm3572bq",
     });
-    handle.raw(&format!("PROVENANCE :{}", b64(&serde_json::to_vec(&provenance)?))).await?;
+    handle
+        .raw(&format!(
+            "PROVENANCE :{}",
+            b64(&serde_json::to_vec(&provenance)?)
+        ))
+        .await?;
     handle.join(ch).await?;
     drain(&mut events).await;
     println!("Ready.");
@@ -215,37 +256,49 @@ async fn main() -> Result<()> {
 
     // ─── Intro ──────────────────────────────────────
 
-    say(&handle, ch, &[
-        "👋 Hi! I'm factory -- demo agent for Phase 3: Coordinated Work.",
-        "",
-        "Phase 1: agents are visible (identity, provenance)",
-        "Phase 2: agents are controllable (pause, approve, spawn)",
-        "Phase 3: agent work is structured and auditable.",
-        "",
-        "I'll walk through 4 features, then do a live end-to-end build.",
-    ]).await;
+    say(
+        &handle,
+        ch,
+        &[
+            "👋 Hi! I'm factory -- demo agent for Phase 3: Coordinated Work.",
+            "",
+            "Phase 1: agents are visible (identity, provenance)",
+            "Phase 2: agents are controllable (pause, approve, spawn)",
+            "Phase 3: agent work is structured and auditable.",
+            "",
+            "I'll walk through 4 features, then do a live end-to-end build.",
+        ],
+    )
+    .await;
 
-    if !prompt(&handle, &mut events, ch).await { return shutdown(handle).await; }
+    if !prompt(&handle, &mut events, ch).await {
+        return shutdown(handle).await;
+    }
 
     // ─── Step 1: Typed Coordination Events ──────────
 
-    say(&handle, ch, &[
-        "━━━ 1/4: Typed Coordination Events ━━━",
-        "",
-        "Today, agent work is chat noise -- unstructured text in a stream.",
-        "Phase 3 adds typed events that ride alongside messages:",
-        "",
-        "  task_request     -- agent accepts a new task",
-        "  task_update      -- progress through phases",
-        "  evidence_attach  -- proof of work at each step",
-        "  task_complete    -- done, with result URL",
-        "  task_failed      -- error, with details",
-        "",
-        "Each event is an IRCv3 TAGMSG (structured, machine-readable)",
-        "paired with a PRIVMSG (human-readable, works in any client).",
-        "",
-        "Let me show you. I'll create a task:",
-    ]).await;
+    say(
+        &handle,
+        ch,
+        &[
+            "━━━ 1/4: Typed Coordination Events ━━━",
+            "",
+            "Today, agent work is chat noise -- unstructured text in a stream.",
+            "Phase 3 adds typed events that ride alongside messages:",
+            "",
+            "  task_request     -- agent accepts a new task",
+            "  task_update      -- progress through phases",
+            "  evidence_attach  -- proof of work at each step",
+            "  task_complete    -- done, with result URL",
+            "  task_failed      -- error, with details",
+            "",
+            "Each event is an IRCv3 TAGMSG (structured, machine-readable)",
+            "paired with a PRIVMSG (human-readable, works in any client).",
+            "",
+            "Let me show you. I'll create a task:",
+        ],
+    )
+    .await;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     emit_event(
@@ -254,36 +307,48 @@ async fn main() -> Result<()> {
         &format!("📋 New task: Build a todo app with user accounts (task: {task_id})"),
     ).await;
 
-    say(&handle, ch, &[
-        "",
-        "That sent two things at once:",
-        "  1. TAGMSG with +freeq.at/event=task_request (for rich clients)",
-        "  2. PRIVMSG with the emoji text you just saw (for everyone)",
-        "",
-        "A rich client renders a task card. irssi sees the text.",
-        "Both are the same event -- just different views.",
-    ]).await;
+    say(
+        &handle,
+        ch,
+        &[
+            "",
+            "That sent two things at once:",
+            "  1. TAGMSG with +freeq.at/event=task_request (for rich clients)",
+            "  2. PRIVMSG with the emoji text you just saw (for everyone)",
+            "",
+            "A rich client renders a task card. irssi sees the text.",
+            "Both are the same event -- just different views.",
+        ],
+    )
+    .await;
 
-    if !prompt(&handle, &mut events, ch).await { return shutdown(handle).await; }
+    if !prompt(&handle, &mut events, ch).await {
+        return shutdown(handle).await;
+    }
 
     // ─── Step 2: Evidence Attachments ───────────────
 
-    say(&handle, ch, &[
-        "━━━ 2/4: Evidence Attachments ━━━",
-        "",
-        "Agents shouldn't just say 'tests passed' -- they should prove it.",
-        "Evidence attachments are typed artifacts linked to a task:",
-        "",
-        "  spec_document     -- requirements text",
-        "  architecture_doc  -- design decisions",
-        "  file_manifest     -- files created",
-        "  code_review       -- review findings",
-        "  test_result       -- test output with pass/fail",
-        "  deploy_log        -- deploy output + URL",
-        "",
-        "Each has a summary, optional URL, optional content hash.",
-        "Rich clients can expand them inline. Let me attach one:",
-    ]).await;
+    say(
+        &handle,
+        ch,
+        &[
+            "━━━ 2/4: Evidence Attachments ━━━",
+            "",
+            "Agents shouldn't just say 'tests passed' -- they should prove it.",
+            "Evidence attachments are typed artifacts linked to a task:",
+            "",
+            "  spec_document     -- requirements text",
+            "  architecture_doc  -- design decisions",
+            "  file_manifest     -- files created",
+            "  code_review       -- review findings",
+            "  test_result       -- test output with pass/fail",
+            "  deploy_log        -- deploy output + URL",
+            "",
+            "Each has a summary, optional URL, optional content hash.",
+            "Rich clients can expand them inline. Let me attach one:",
+        ],
+    )
+    .await;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     emit_event(
@@ -292,111 +357,170 @@ async fn main() -> Result<()> {
         "✅ [qa] Evidence: 12/12 tests passed -- https://ci.example.com/run/456",
     ).await;
 
-    say(&handle, ch, &[
-        "",
-        "That evidence is now linked to task {task_id}.",
-        "In the web client, clicking the task shows all evidence.",
-        "The content hash means you can verify the evidence hasn't been tampered with.",
-        "",
-        "In irssi, you see the summary and URL -- still useful, just less interactive.",
-    ]).await;
+    say(
+        &handle,
+        ch,
+        &[
+            "",
+            "That evidence is now linked to task {task_id}.",
+            "In the web client, clicking the task shows all evidence.",
+            "The content hash means you can verify the evidence hasn't been tampered with.",
+            "",
+            "In irssi, you see the summary and URL -- still useful, just less interactive.",
+        ],
+    )
+    .await;
 
-    if !prompt(&handle, &mut events, ch).await { return shutdown(handle).await; }
+    if !prompt(&handle, &mut events, ch).await {
+        return shutdown(handle).await;
+    }
 
     // ─── Step 3: Audit Timeline ────────────────────
 
-    say(&handle, ch, &[
-        "━━━ 3/4: Audit Timeline ━━━",
-        "",
-        "Every coordination event is stored server-side.",
-        "The audit timeline answers: 'What did this agent do, and why?'",
-        "",
-        "REST API:",
-        "  GET /api/v1/channels/{name}/events?actor=did:key:...&ref_id=01JRXYZ",
-        "  GET /api/v1/tasks/{task_id}  (full task with all events + evidence)",
-        "",
-        "The web client renders this as a visual timeline:",
-        "",
-        "  20:00  📋 factory created task: Build a todo app",
-        "  20:01  📝 factory -> specifying (requirements doc attached)",
-        "  20:02  🏗 factory -> designing (architecture doc attached)",
-        "  20:03  🔨 factory -> building (8 files, 342 lines)",
-        "  20:04  🔍 factory -> reviewing (no issues found)",
-        "  20:05  🧪 factory -> testing (12/12 passed)",
-        "  20:06  🚀 factory -> deploying",
-        "  20:06  ✅ factory completed task (https://todo.example.com)",
-        "",
-        "Filter by agent, event type, or time range.",
-        "Every signed event has a 🔒 badge you can verify.",
-    ]).await;
+    say(
+        &handle,
+        ch,
+        &[
+            "━━━ 3/4: Audit Timeline ━━━",
+            "",
+            "Every coordination event is stored server-side.",
+            "The audit timeline answers: 'What did this agent do, and why?'",
+            "",
+            "REST API:",
+            "  GET /api/v1/channels/{name}/events?actor=did:key:...&ref_id=01JRXYZ",
+            "  GET /api/v1/tasks/{task_id}  (full task with all events + evidence)",
+            "",
+            "The web client renders this as a visual timeline:",
+            "",
+            "  20:00  📋 factory created task: Build a todo app",
+            "  20:01  📝 factory -> specifying (requirements doc attached)",
+            "  20:02  🏗 factory -> designing (architecture doc attached)",
+            "  20:03  🔨 factory -> building (8 files, 342 lines)",
+            "  20:04  🔍 factory -> reviewing (no issues found)",
+            "  20:05  🧪 factory -> testing (12/12 passed)",
+            "  20:06  🚀 factory -> deploying",
+            "  20:06  ✅ factory completed task (https://todo.example.com)",
+            "",
+            "Filter by agent, event type, or time range.",
+            "Every signed event has a 🔒 badge you can verify.",
+        ],
+    )
+    .await;
 
-    if !prompt(&handle, &mut events, ch).await { return shutdown(handle).await; }
+    if !prompt(&handle, &mut events, ch).await {
+        return shutdown(handle).await;
+    }
 
     // ─── Step 4: End-to-End Build (The Full Loop) ──
 
-    say(&handle, ch, &[
-        "━━━ 4/4: End-to-End Build ━━━",
-        "",
-        "Now I'll simulate a full factory build with coordination events.",
-        "This is what it looks like when Phase 1 + 2 + 3 work together.",
-        "",
-        "Imagine you just said: 'factory: build a todo app'",
-        "Watch the structured lifecycle play out...",
-    ]).await;
+    say(
+        &handle,
+        ch,
+        &[
+            "━━━ 4/4: End-to-End Build ━━━",
+            "",
+            "Now I'll simulate a full factory build with coordination events.",
+            "This is what it looks like when Phase 1 + 2 + 3 work together.",
+            "",
+            "Imagine you just said: 'factory: build a todo app'",
+            "Watch the structured lifecycle play out...",
+        ],
+    )
+    .await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // ── Task creation
-    handle.raw("PRESENCE :state=active;status=Accepted task: Build a todo app").await?;
+    handle
+        .raw("PRESENCE :state=active;status=Accepted task: Build a todo app")
+        .await?;
     emit_event(
-        &handle, ch, "task_request", task_id, None, None,
+        &handle,
+        ch,
+        "task_request",
+        task_id,
+        None,
+        None,
         r#"{"description":"Build a todo app with user accounts","requested_by":"chadfowler.com"}"#,
         &format!("📋 New task: Build a todo app with user accounts (task: {task_id})"),
-    ).await;
+    )
+    .await;
 
     // ── Phase: Specifying
-    handle.raw("PRESENCE :state=executing;status=Phase: specifying").await?;
+    handle
+        .raw("PRESENCE :state=executing;status=Phase: specifying")
+        .await?;
 
     // Spawn a product worker
     handle.raw(&format!("AGENT SPAWN {ch} :nick=factory-product;capabilities=post_message;ttl=120;task=spec-{task_id}")).await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    handle.raw(&format!("AGENT MSG factory-product {ch} :📝 Clarifying requirements...")).await?;
+    handle
+        .raw(&format!(
+            "AGENT MSG factory-product {ch} :📝 Clarifying requirements..."
+        ))
+        .await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
     handle.raw(&format!("AGENT MSG factory-product {ch} :📝 Users need: signup, login, create/edit/delete todos, mark complete")).await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     emit_event(
-        &handle, ch, "task_update", task_id, Some("specifying"), None,
+        &handle,
+        ch,
+        "task_update",
+        task_id,
+        Some("specifying"),
+        None,
         r#"{"phase":"specifying","summary":"Requirements clarified: CRUD + auth"}"#,
         "📝 [product] Spec complete: CRUD todos with user accounts",
-    ).await;
+    )
+    .await;
     emit_event(
-        &handle, ch, "evidence_attach", task_id, None, Some("spec_document"),
+        &handle,
+        ch,
+        "evidence_attach",
+        task_id,
+        None,
+        Some("spec_document"),
         r#"{"summary":"Product spec: 4 user stories, 2 acceptance criteria each","raw":"..."}"#,
         "📎 Evidence attached: spec_document (4 user stories)",
-    ).await;
+    )
+    .await;
 
     handle.raw("AGENT DESPAWN factory-product").await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    if !prompt(&handle, &mut events, ch).await { return shutdown(handle).await; }
+    if !prompt(&handle, &mut events, ch).await {
+        return shutdown(handle).await;
+    }
 
     // ── Phase: Designing
-    handle.raw("PRESENCE :state=executing;status=Phase: designing").await?;
+    handle
+        .raw("PRESENCE :state=executing;status=Phase: designing")
+        .await?;
 
     handle.raw(&format!("AGENT SPAWN {ch} :nick=factory-architect;capabilities=post_message;ttl=120;task=design-{task_id}")).await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    handle.raw(&format!("AGENT MSG factory-architect {ch} :🏗 Evaluating stack options...")).await?;
+    handle
+        .raw(&format!(
+            "AGENT MSG factory-architect {ch} :🏗 Evaluating stack options..."
+        ))
+        .await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
     handle.raw(&format!("AGENT MSG factory-architect {ch} :🏗 Decision: React + Express + SQLite. 6 components, 3 API routes.")).await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     emit_event(
-        &handle, ch, "task_update", task_id, Some("designing"), None,
+        &handle,
+        ch,
+        "task_update",
+        task_id,
+        Some("designing"),
+        None,
         r#"{"phase":"designing","summary":"Stack: React + Express + SQLite, 6 components"}"#,
         "🏗 [architect] Design complete: React + Express + SQLite",
-    ).await;
+    )
+    .await;
     emit_event(
         &handle, ch, "evidence_attach", task_id, None, Some("architecture_doc"),
         r#"{"summary":"Architecture: React SPA, Express API, SQLite, JWT auth","components":6,"routes":3}"#,
@@ -406,28 +530,50 @@ async fn main() -> Result<()> {
     handle.raw("AGENT DESPAWN factory-architect").await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    if !prompt(&handle, &mut events, ch).await { return shutdown(handle).await; }
+    if !prompt(&handle, &mut events, ch).await {
+        return shutdown(handle).await;
+    }
 
     // ── Phase: Building
-    handle.raw("PRESENCE :state=executing;status=Phase: building").await?;
+    handle
+        .raw("PRESENCE :state=executing;status=Phase: building")
+        .await?;
 
     handle.raw(&format!("AGENT SPAWN {ch} :nick=factory-builder;capabilities=post_message;ttl=120;task=build-{task_id}")).await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    handle.raw(&format!("AGENT MSG factory-builder {ch} :🔨 Creating project scaffold...")).await?;
+    handle
+        .raw(&format!(
+            "AGENT MSG factory-builder {ch} :🔨 Creating project scaffold..."
+        ))
+        .await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
     handle.raw(&format!("AGENT MSG factory-builder {ch} :🔨 Building components: TodoList, TodoItem, LoginForm, SignupForm...")).await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
-    handle.raw(&format!("AGENT MSG factory-builder {ch} :🔨 Building API: /auth, /todos, /users...")).await?;
+    handle
+        .raw(&format!(
+            "AGENT MSG factory-builder {ch} :🔨 Building API: /auth, /todos, /users..."
+        ))
+        .await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
-    handle.raw(&format!("AGENT MSG factory-builder {ch} :✅ Build complete. 8 files, 342 lines.")).await?;
+    handle
+        .raw(&format!(
+            "AGENT MSG factory-builder {ch} :✅ Build complete. 8 files, 342 lines."
+        ))
+        .await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     emit_event(
-        &handle, ch, "task_update", task_id, Some("building"), None,
+        &handle,
+        ch,
+        "task_update",
+        task_id,
+        Some("building"),
+        None,
         r#"{"phase":"building","summary":"8 files created, 342 lines of code"}"#,
         "🔨 [builder] Build complete: 8 files, 342 lines",
-    ).await;
+    )
+    .await;
     emit_event(
         &handle, ch, "evidence_attach", task_id, None, Some("file_manifest"),
         r#"{"summary":"8 files: App.tsx, TodoList.tsx, TodoItem.tsx, LoginForm.tsx, SignupForm.tsx, server.ts, db.ts, auth.ts","total_lines":342}"#,
@@ -437,15 +583,23 @@ async fn main() -> Result<()> {
     handle.raw("AGENT DESPAWN factory-builder").await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    if !prompt(&handle, &mut events, ch).await { return shutdown(handle).await; }
+    if !prompt(&handle, &mut events, ch).await {
+        return shutdown(handle).await;
+    }
 
     // ── Phase: Reviewing
-    handle.raw("PRESENCE :state=executing;status=Phase: reviewing").await?;
+    handle
+        .raw("PRESENCE :state=executing;status=Phase: reviewing")
+        .await?;
 
     handle.raw(&format!("AGENT SPAWN {ch} :nick=factory-reviewer;capabilities=post_message;ttl=120;task=review-{task_id}")).await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    handle.raw(&format!("AGENT MSG factory-reviewer {ch} :🔍 Reviewing code quality...")).await?;
+    handle
+        .raw(&format!(
+            "AGENT MSG factory-reviewer {ch} :🔍 Reviewing code quality..."
+        ))
+        .await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
     handle.raw(&format!("AGENT MSG factory-reviewer {ch} :🔍 Checking security: input validation, SQL injection, auth flow...")).await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -453,10 +607,16 @@ async fn main() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     emit_event(
-        &handle, ch, "task_update", task_id, Some("reviewing"), None,
+        &handle,
+        ch,
+        "task_update",
+        task_id,
+        Some("reviewing"),
+        None,
         r#"{"phase":"reviewing","summary":"Code review passed, 0 critical, 1 suggestion"}"#,
         "🔍 [reviewer] Review passed: 0 critical issues, 1 suggestion",
-    ).await;
+    )
+    .await;
     emit_event(
         &handle, ch, "evidence_attach", task_id, None, Some("code_review"),
         r#"{"summary":"0 critical, 0 major, 1 minor (add rate limiting to /auth)","approved":true}"#,
@@ -466,30 +626,60 @@ async fn main() -> Result<()> {
     handle.raw("AGENT DESPAWN factory-reviewer").await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    if !prompt(&handle, &mut events, ch).await { return shutdown(handle).await; }
+    if !prompt(&handle, &mut events, ch).await {
+        return shutdown(handle).await;
+    }
 
     // ── Phase: Testing
-    handle.raw("PRESENCE :state=executing;status=Phase: testing").await?;
+    handle
+        .raw("PRESENCE :state=executing;status=Phase: testing")
+        .await?;
 
     handle.raw(&format!("AGENT SPAWN {ch} :nick=factory-qa;capabilities=post_message;ttl=120;task=test-{task_id}")).await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    handle.raw(&format!("AGENT MSG factory-qa {ch} :🧪 Running test suite...")).await?;
+    handle
+        .raw(&format!(
+            "AGENT MSG factory-qa {ch} :🧪 Running test suite..."
+        ))
+        .await?;
     tokio::time::sleep(Duration::from_secs(2)).await;
-    handle.raw(&format!("AGENT MSG factory-qa {ch} :🧪 Auth tests: 4/4 passed")).await?;
+    handle
+        .raw(&format!(
+            "AGENT MSG factory-qa {ch} :🧪 Auth tests: 4/4 passed"
+        ))
+        .await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
-    handle.raw(&format!("AGENT MSG factory-qa {ch} :🧪 CRUD tests: 6/6 passed")).await?;
+    handle
+        .raw(&format!(
+            "AGENT MSG factory-qa {ch} :🧪 CRUD tests: 6/6 passed"
+        ))
+        .await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
-    handle.raw(&format!("AGENT MSG factory-qa {ch} :🧪 Edge cases: 2/2 passed")).await?;
+    handle
+        .raw(&format!(
+            "AGENT MSG factory-qa {ch} :🧪 Edge cases: 2/2 passed"
+        ))
+        .await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
-    handle.raw(&format!("AGENT MSG factory-qa {ch} :✅ All tests passed: 12/12")).await?;
+    handle
+        .raw(&format!(
+            "AGENT MSG factory-qa {ch} :✅ All tests passed: 12/12"
+        ))
+        .await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     emit_event(
-        &handle, ch, "task_update", task_id, Some("testing"), None,
+        &handle,
+        ch,
+        "task_update",
+        task_id,
+        Some("testing"),
+        None,
         r#"{"phase":"testing","summary":"12/12 tests passed"}"#,
         "🧪 [qa] Tests complete: 12/12 passed",
-    ).await;
+    )
+    .await;
     emit_event(
         &handle, ch, "evidence_attach", task_id, None, Some("test_result"),
         r#"{"summary":"12/12 passed (4 auth, 6 CRUD, 2 edge)","passed":12,"failed":0,"url":"https://ci.example.com/run/789"}"#,
@@ -499,42 +689,69 @@ async fn main() -> Result<()> {
     handle.raw("AGENT DESPAWN factory-qa").await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    if !prompt(&handle, &mut events, ch).await { return shutdown(handle).await; }
+    if !prompt(&handle, &mut events, ch).await {
+        return shutdown(handle).await;
+    }
 
     // ── Phase: Deploy (with Phase 2 approval flow!)
-    handle.raw("PRESENCE :state=blocked_on_permission;status=Awaiting deploy approval").await?;
-    handle.raw(&format!("APPROVAL_REQUEST {ch} :deploy;resource=todo-app")).await?;
+    handle
+        .raw("PRESENCE :state=blocked_on_permission;status=Awaiting deploy approval")
+        .await?;
+    handle
+        .raw(&format!("APPROVAL_REQUEST {ch} :deploy;resource=todo-app"))
+        .await?;
 
-    say(&handle, ch, &[
-        "",
-        "🔔 Build is done. Requesting deploy approval.",
-        "Phase 2 + Phase 3 working together: structured work meets governance.",
-        "",
-        "Approve:  /quote AGENT APPROVE factory deploy",
-        "(Or say 'next' to simulate.)",
-    ]).await;
+    say(
+        &handle,
+        ch,
+        &[
+            "",
+            "🔔 Build is done. Requesting deploy approval.",
+            "Phase 2 + Phase 3 working together: structured work meets governance.",
+            "",
+            "Approve:  /quote AGENT APPROVE factory deploy",
+            "(Or say 'next' to simulate.)",
+        ],
+    )
+    .await;
 
     match wait_owner(&mut events, ch, 120, &handle).await {
         Some(OwnerCmd::Quit) => return shutdown(handle).await,
         _ => {}
     }
 
-    handle.raw("PRESENCE :state=executing;status=Phase: deploying").await?;
+    handle
+        .raw("PRESENCE :state=executing;status=Phase: deploying")
+        .await?;
 
     emit_event(
-        &handle, ch, "task_update", task_id, Some("deploying"), None,
+        &handle,
+        ch,
+        "task_update",
+        task_id,
+        Some("deploying"),
+        None,
         r#"{"phase":"deploying","summary":"Deploying to production"}"#,
         "🚀 [deploy] Deploying to production...",
-    ).await;
+    )
+    .await;
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     let deploy_url = "https://todo-app.example.com";
 
     emit_event(
-        &handle, ch, "evidence_attach", task_id, None, Some("deploy_log"),
-        &format!(r#"{{"summary":"Deployed successfully","url":"{deploy_url}","duration_seconds":8}}"#),
+        &handle,
+        ch,
+        "evidence_attach",
+        task_id,
+        None,
+        Some("deploy_log"),
+        &format!(
+            r#"{{"summary":"Deployed successfully","url":"{deploy_url}","duration_seconds":8}}"#
+        ),
         &format!("📎 Evidence attached: deploy_log -- {deploy_url}"),
-    ).await;
+    )
+    .await;
 
     // ── Task complete
     emit_event(
@@ -543,57 +760,80 @@ async fn main() -> Result<()> {
         &format!("🎉 Task complete: Todo app deployed at {deploy_url} (6 phases, 6 evidence items)"),
     ).await;
 
-    handle.raw(&format!("PRESENCE :state=idle;status=Task complete -- {deploy_url}")).await?;
+    handle
+        .raw(&format!(
+            "PRESENCE :state=idle;status=Task complete -- {deploy_url}"
+        ))
+        .await?;
 
     // ─── Summary ────────────────────────────────────
 
-    say(&handle, ch, &[
-        "",
-        "━━━ Phase 3: Coordinated Work -- Summary ━━━",
-        "",
-        "What happened during that build:",
-        "",
-        "  Events emitted:",
-        "    1x task_request   -- task created",
-        "    6x task_update    -- one per phase (spec, design, build, review, test, deploy)",
-        "    6x evidence_attach -- proof at each step",
-        "    1x task_complete  -- final result with URL",
-        "",
-        "  Agents spawned and despawned:",
-        "    factory-product, factory-architect, factory-builder,",
-        "    factory-reviewer, factory-qa (each with TTL)",
-        "",
-        "  Governance:",
-        "    1x approval_request before deploy (Phase 2)",
-        "",
-        "All of this is:",
-        "  - Queryable via REST API (filter by task, agent, time)",
-        "  - Renderable as a visual timeline in the web client",
-        "  - Readable as plain text in any IRC client",
-        "  - Cryptographically signed for non-repudiation",
-        "",
-        "Phase 1: 'Who is this agent?'",
-        "Phase 2: 'What can it do, and who controls it?'",
-        "Phase 3: 'What did it do, and can I verify it?'",
-        "",
-        "👋 factory signing off. Say 'quit' or I'll hang out.",
-    ]).await;
+    say(
+        &handle,
+        ch,
+        &[
+            "",
+            "━━━ Phase 3: Coordinated Work -- Summary ━━━",
+            "",
+            "What happened during that build:",
+            "",
+            "  Events emitted:",
+            "    1x task_request   -- task created",
+            "    6x task_update    -- one per phase (spec, design, build, review, test, deploy)",
+            "    6x evidence_attach -- proof at each step",
+            "    1x task_complete  -- final result with URL",
+            "",
+            "  Agents spawned and despawned:",
+            "    factory-product, factory-architect, factory-builder,",
+            "    factory-reviewer, factory-qa (each with TTL)",
+            "",
+            "  Governance:",
+            "    1x approval_request before deploy (Phase 2)",
+            "",
+            "All of this is:",
+            "  - Queryable via REST API (filter by task, agent, time)",
+            "  - Renderable as a visual timeline in the web client",
+            "  - Readable as plain text in any IRC client",
+            "  - Cryptographically signed for non-repudiation",
+            "",
+            "Phase 1: 'Who is this agent?'",
+            "Phase 2: 'What can it do, and who controls it?'",
+            "Phase 3: 'What did it do, and can I verify it?'",
+            "",
+            "👋 factory signing off. Say 'quit' or I'll hang out.",
+        ],
+    )
+    .await;
 
-    handle.raw("PRESENCE :state=idle;status=Demo complete").await?;
+    handle
+        .raw("PRESENCE :state=idle;status=Demo complete")
+        .await?;
 
     // Idle loop
     let mut last_hb = tokio::time::Instant::now();
     loop {
         let hb_remaining = Duration::from_secs(25).saturating_sub(last_hb.elapsed());
         match timeout(hb_remaining, events.recv()).await {
-            Ok(Some(Event::Message { from, target, text, tags })) => {
-                if tags.contains_key("batch") { continue; }
+            Ok(Some(Event::Message {
+                from,
+                target,
+                text,
+                tags,
+            })) => {
+                if tags.contains_key("batch") {
+                    continue;
+                }
                 if target.eq_ignore_ascii_case(ch) && from.eq_ignore_ascii_case(OWNER) {
                     let w = text.trim().to_lowercase();
-                    if matches!(w.as_str(), "quit" | "q" | "stop" | "exit") { break; }
+                    if matches!(w.as_str(), "quit" | "q" | "stop" | "exit") {
+                        break;
+                    }
                 }
             }
-            Ok(Some(Event::Disconnected { reason })) => { eprintln!("Disconnected: {reason}"); return Ok(()); }
+            Ok(Some(Event::Disconnected { reason })) => {
+                eprintln!("Disconnected: {reason}");
+                return Ok(());
+            }
             Ok(_) => {}
             Err(_) => {
                 handle.raw("HEARTBEAT 60").await?;

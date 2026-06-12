@@ -74,7 +74,10 @@ async fn start() -> (
 /// AND the open TcpStream — keep both halves alive so the server
 /// doesn't clean up the session_id (and the bearer with it) the moment
 /// the SASL handshake finishes.
-fn auth_and_capture_bearer(addr: SocketAddr, key: PrivateKey) -> (String, TcpStream, BufReader<TcpStream>) {
+fn auth_and_capture_bearer(
+    addr: SocketAddr,
+    key: PrivateKey,
+) -> (String, TcpStream, BufReader<TcpStream>) {
     let s = TcpStream::connect(addr).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).ok();
     let writer = s.try_clone().unwrap();
@@ -109,7 +112,10 @@ fn auth_and_capture_bearer(addr: SocketAddr, key: PrivateKey) -> (String, TcpStr
     let bytes = auth::decode_challenge_bytes(challenge).unwrap();
     let signer = KeySigner::new(DID_BOT.to_string(), key);
     let resp = signer.respond(&bytes).unwrap();
-    tx(&mut writer, &format!("AUTHENTICATE {}", auth::encode_response(&resp)));
+    tx(
+        &mut writer,
+        &format!("AUTHENTICATE {}", auth::encode_response(&resp)),
+    );
 
     // After 903 RPL_SASLSUCCESS the server now also sends:
     //   :auth-test NOTICE * :API-BEARER <session_id>
@@ -239,7 +245,9 @@ async fn authenticated_bot_unlocks_predict_diagnose_inspect() {
     );
     let facts = inspect["safe_facts"].as_array().unwrap();
     assert!(
-        facts.iter().any(|f| f.as_str().unwrap_or("").contains("authbot")),
+        facts
+            .iter()
+            .any(|f| f.as_str().unwrap_or("").contains("authbot")),
         "session_reported should include the bot's nick (authbot); got facts {facts:?}"
     );
 
@@ -329,7 +337,9 @@ async fn did_key_sasl_resolves_locally_without_pds() {
 /// when the test generates its own did:key rather than using the static
 /// `DID_BOT` constant.
 fn auth_and_capture_bearer_with_did(
-    addr: SocketAddr, did: &str, key: PrivateKey,
+    addr: SocketAddr,
+    did: &str,
+    key: PrivateKey,
 ) -> (String, TcpStream, BufReader<TcpStream>) {
     let s = TcpStream::connect(addr).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).ok();
@@ -348,7 +358,9 @@ fn auth_and_capture_bearer_with_did(
                 panic!("EOF");
             }
             let l = b.trim_end().to_string();
-            if p(&l) { return l; }
+            if p(&l) {
+                return l;
+            }
         }
     }
 
@@ -363,7 +375,10 @@ fn auth_and_capture_bearer_with_did(
     let bytes = auth::decode_challenge_bytes(challenge).unwrap();
     let signer = KeySigner::new(did.to_string(), key);
     let resp = signer.respond(&bytes).unwrap();
-    tx(&mut writer, &format!("AUTHENTICATE {}", auth::encode_response(&resp)));
+    tx(
+        &mut writer,
+        &format!("AUTHENTICATE {}", auth::encode_response(&resp)),
+    );
     let notice = rx_until(&mut reader, |l| l.contains("API-BEARER"));
     let bearer = notice.split_whitespace().last().unwrap().to_string();
     tx(&mut writer, "CAP END");
