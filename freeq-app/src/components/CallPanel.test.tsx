@@ -167,7 +167,7 @@ describe('CallPanel — participant tiles', () => {
     const { container } = render(<CallPanel />);
     await flush();
 
-    expect(container.querySelectorAll('moq-watch')).toHaveLength(0);
+    expect(container.querySelectorAll('moq-watch:not([name$="/screen"])')).toHaveLength(0);
   });
 
   it('renders exactly one remote tile for a different (nick, instance)', async () => {
@@ -177,7 +177,7 @@ describe('CallPanel — participant tiles', () => {
     const { container } = render(<CallPanel />);
     await flush();
 
-    const watches = container.querySelectorAll('moq-watch');
+    const watches = container.querySelectorAll('moq-watch:not([name$="/screen"])');
     expect(watches).toHaveLength(1);
     expect(watches[0].getAttribute('name')).toBe('sess-1/alice~aaaaaaaa');
   });
@@ -192,7 +192,7 @@ describe('CallPanel — participant tiles', () => {
     const { container } = render(<CallPanel />);
     await flush();
 
-    expect(container.querySelectorAll('moq-watch')).toHaveLength(0);
+    expect(container.querySelectorAll('moq-watch:not([name$="/screen"])')).toHaveLength(0);
   });
 
   it('renders one tile for the multi-device same-DID case (my nick, different instance)', async () => {
@@ -206,7 +206,7 @@ describe('CallPanel — participant tiles', () => {
     const { container } = render(<CallPanel />);
     await flush();
 
-    const watches = container.querySelectorAll('moq-watch');
+    const watches = container.querySelectorAll('moq-watch:not([name$="/screen"])');
     expect(watches).toHaveLength(1);
     expect(watches[0].getAttribute('name')).toBe('sess-1/me~deadbeef');
   });
@@ -219,7 +219,7 @@ describe('CallPanel — participant tiles', () => {
     const { container } = render(<CallPanel />);
     await flush();
 
-    const watches = container.querySelectorAll('moq-watch');
+    const watches = container.querySelectorAll('moq-watch:not([name$="/screen"])');
     expect(watches).toHaveLength(1);
     // No "~" suffix because the participant has no instance.
     expect(watches[0].getAttribute('name')).toBe('sess-1/bob');
@@ -242,7 +242,7 @@ describe('CallPanel — participant tiles', () => {
     // Microtask-drain so the initial pollParticipants completes.
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     await act(async () => { await Promise.resolve(); });
-    expect(container.querySelectorAll('moq-watch')).toHaveLength(0);
+    expect(container.querySelectorAll('moq-watch:not([name$="/screen"])')).toHaveLength(0);
 
     participants = [{ nick: 'alice', instance_id: 'aaaaaaaa' }];
     await act(async () => {
@@ -255,7 +255,7 @@ describe('CallPanel — participant tiles', () => {
     await flush();
 
     expect(fetchSpy).toHaveBeenCalled();
-    expect(container.querySelectorAll('moq-watch')).toHaveLength(1);
+    expect(container.querySelectorAll('moq-watch:not([name$="/screen"])')).toHaveLength(1);
   });
 
   it('renders three tiles for three distinct DIDs', async () => {
@@ -271,7 +271,7 @@ describe('CallPanel — participant tiles', () => {
     const { container } = render(<CallPanel />);
     await flush();
 
-    const watches = Array.from(container.querySelectorAll('moq-watch'));
+    const watches = Array.from(container.querySelectorAll('moq-watch:not([name$="/screen"])'));
     expect(watches).toHaveLength(3);
     const names = watches.map((w) => w.getAttribute('name')).sort();
     expect(names).toEqual([
@@ -298,7 +298,7 @@ describe('CallPanel — participant tiles', () => {
     const { container } = render(<CallPanel />);
     await flush();
 
-    const watches = Array.from(container.querySelectorAll('moq-watch'));
+    const watches = Array.from(container.querySelectorAll('moq-watch:not([name$="/screen"])'));
     expect(watches).toHaveLength(1);
     expect(watches[0].getAttribute('name')).toBe('sess-1/me~livesecond');
   });
@@ -326,7 +326,7 @@ describe('CallPanel — participant tiles', () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     await act(async () => { await Promise.resolve(); });
 
-    let watches = Array.from(container.querySelectorAll('moq-watch'));
+    let watches = Array.from(container.querySelectorAll('moq-watch:not([name$="/screen"])'));
     expect(watches).toHaveLength(1);
     expect(watches[0].getAttribute('name')).toBe('sess-1/alice~first');
     const firstWatch = watches[0];
@@ -345,7 +345,7 @@ describe('CallPanel — participant tiles', () => {
     vi.useRealTimers();
     await flush();
 
-    watches = Array.from(container.querySelectorAll('moq-watch'));
+    watches = Array.from(container.querySelectorAll('moq-watch:not([name$="/screen"])'));
     expect(watches).toHaveLength(1);
     expect(watches[0].getAttribute('name')).toBe('sess-1/alice~second');
     // The previous element was unmounted; its url should have been cleared
@@ -373,7 +373,7 @@ describe('CallPanel — participant tiles', () => {
     const { container } = render(<CallPanel />);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     await act(async () => { await Promise.resolve(); });
-    expect(container.querySelectorAll('moq-watch')).toHaveLength(1);
+    expect(container.querySelectorAll('moq-watch:not([name$="/screen"])')).toHaveLength(1);
 
     // Server's disconnect handler removed alice from participants.
     participants = [];
@@ -386,7 +386,7 @@ describe('CallPanel — participant tiles', () => {
     vi.useRealTimers();
     await flush();
 
-    expect(container.querySelectorAll('moq-watch')).toHaveLength(0);
+    expect(container.querySelectorAll('moq-watch:not([name$="/screen"])')).toHaveLength(0);
   });
 
   it('removes a tile within one poll cycle when a participant disappears', async () => {
@@ -407,7 +407,7 @@ describe('CallPanel — participant tiles', () => {
     const { container } = render(<CallPanel />);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     await act(async () => { await Promise.resolve(); });
-    expect(container.querySelectorAll('moq-watch')).toHaveLength(1);
+    expect(container.querySelectorAll('moq-watch:not([name$="/screen"])')).toHaveLength(1);
 
     participants = [];
     await act(async () => {
@@ -419,7 +419,7 @@ describe('CallPanel — participant tiles', () => {
     vi.useRealTimers();
     await flush();
 
-    expect(container.querySelectorAll('moq-watch')).toHaveLength(0);
+    expect(container.querySelectorAll('moq-watch:not([name$="/screen"])')).toHaveLength(0);
   });
 });
 
@@ -636,7 +636,7 @@ describe('CallPanel — cleanup', () => {
     });
 
     expect(container.querySelector('moq-publish')).toBeNull();
-    expect(container.querySelectorAll('moq-watch')).toHaveLength(0);
+    expect(container.querySelectorAll('moq-watch:not([name$="/screen"])')).toHaveLength(0);
   });
 
   it('on unmount every <moq-watch> is removed and its url cleared', async () => {
@@ -648,7 +648,7 @@ describe('CallPanel — cleanup', () => {
 
     const { container, unmount } = render(<CallPanel />);
     await flush();
-    const watches = Array.from(container.querySelectorAll('moq-watch'));
+    const watches = Array.from(container.querySelectorAll('moq-watch:not([name$="/screen"])'));
     expect(watches).toHaveLength(2);
     for (const w of watches) expect(w.getAttribute('url')).not.toBe('');
 
