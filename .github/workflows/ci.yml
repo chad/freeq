@@ -55,6 +55,32 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+  audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Cargo audit (RustSec advisories)
+        run: cargo audit
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: npm audit (web client)
+        working-directory: freeq-app
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: npm audit (JS SDK)
+        working-directory: freeq-sdk-js
+        run: npm audit --omit=dev --audit-level=high
+
   web:
     name: Web Client
     runs-on: ubuntu-latest
