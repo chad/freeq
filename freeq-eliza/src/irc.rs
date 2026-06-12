@@ -127,6 +127,7 @@ use crate::{imagegen, qa, summary, tts, vision};
 pub struct RunConfig {
     pub server: String,
     pub channels: Vec<String>,
+    pub owner: Option<String>,
     pub nick: String,
     pub ident: Identity,
     pub stt: Arc<SttEngine>,
@@ -181,10 +182,18 @@ pub struct RunConfig {
     pub render_backend: String,
     /// Ghostly character name when `render_backend == "particles"`.
     pub ghostly_character: String,
+    /// Optional path to a custom ghostly `CharacterPack` JSON. When set
+    /// (from a `--persona` pack), the face + voice DSP come from this
+    /// pack instead of the built-in `ghostly_character`.
+    pub ghostly_pack: Option<String>,
     /// Per-character system-prompt override (Oblivion / Narrator /
     /// Utopia personality). `None` falls back to the default Eliza
     /// prompt in `qa.rs`.
     pub character_system_prompt: Option<String>,
+    /// Line spoken aloud on joining a call — the persona's greeting.
+    /// Resolved once in `main` (from a built-in profile or a loaded
+    /// `--persona` pack). `None` = silent on arrival.
+    pub persona_hello_line: Option<String>,
     /// Other agent nicks in the channel. When set, the bot can hold a
     /// bounded multi-agent dialogue (e.g. Oblivion + Utopia debating)
     /// but won't run away: after a streak of bot-to-bot exchanges
@@ -200,6 +209,8 @@ pub struct RunConfig {
 pub(crate) struct SharedConfig {
     pub(crate) server: String,
     pub(crate) channels: Vec<String>,
+    /// Owner handle/nick — only this identity may issue lifecycle commands.
+    pub(crate) owner: Option<String>,
     pub(crate) nick: String,
     pub(crate) stt: Arc<SttEngine>,
     pub(crate) window_secs: f32,
@@ -229,9 +240,14 @@ pub(crate) struct SharedConfig {
     pub(crate) render_backend: String,
     /// Ghostly character name when `render_backend == "particles"`.
     pub(crate) ghostly_character: String,
+    /// Optional path to a custom ghostly `CharacterPack` JSON (face +
+    /// voice DSP). Overrides `ghostly_character` when set.
+    pub(crate) ghostly_pack: Option<String>,
     /// Per-character system prompt — when present, replaces the
     /// default Eliza prompt in [`qa::answer_streaming`].
     pub(crate) character_system_prompt: Option<String>,
+    /// Greeting spoken on joining a call. `None` = silent on arrival.
+    pub(crate) persona_hello_line: Option<String>,
     /// Lowercased nicks of OTHER agents in the channel — peers this
     /// bot recognises by name. Used to prevent multi-agent runaway: a
     /// bot can engage with another bot when called, but won't keep
@@ -273,6 +289,19 @@ pub(crate) struct SharedConfig {
     /// this", …) pushes this 90 s into the future; otherwise it
     /// stays in the past and the strict policy applies.
     pub(crate) discussion_until: std::sync::Arc<std::sync::Mutex<Instant>>,
+    /// Lowercased nick → DID, learned from extended-join. Lets a being key
+    /// personalization off real identity (DID → Bluesky handle) instead of the
+    /// fragile assumption that the nick *is* the handle.
+    pub(crate) nick_dids: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, String>>>,
+    /// DID → Bluesky handle cache (None = looked up, no handle, e.g. did:key).
+    pub(crate) did_handles:
+        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Option<String>>>>,
+    /// Lowercased nicks already greeted this session — proactive greeting fires
+    /// at most once per person.
+    pub(crate) greeted: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    /// Revenant console base URL — when set, notable answers are auto-captured
+    /// as shareable "moment" cards there (the self-propagating viral loop).
+    pub(crate) console_url: Option<String>,
 }
 
 /// Active-call state. Held inside an `Arc<AsyncMutex<Option<...>>>`
@@ -283,6 +312,10 @@ pub(crate) struct ActiveCall {
     pub(crate) channel: String,
     pub(crate) session_id: String,
     pub(crate) instance_id: String,
+    /// When the bot joined THIS call. The voice grace is relative to this,
+    /// not process start, so a restart/wake mid-call doesn't deafen her to
+    /// live questions — it only skips the brief audio burst right after join.
+    pub(crate) joined_at: Instant,
     /// Lines of `<nick>: <utterance>` heard so far. Buffered as context
     /// for answering questions and the end-of-call summary — never
     /// posted to the channel.
@@ -306,6 +339,9 @@ pub(crate) struct ActiveCall {
     proactive_task: Option<JoinHandle<()>>,
     /// The ambient-monitor task (if enabled). Same drop story.
     ambient_task: Option<JoinHandle<()>>,
+    /// Watchdog that leaves the call once we've been alone in it too long, so a
+    /// lingering empty call doesn't burn CPU or block auto-sleep. Same drop story.
+    lonely_task: Option<JoinHandle<()>>,
 }
 
 impl Drop for ActiveCall {
@@ -315,6 +351,9 @@ impl Drop for ActiveCall {
             t.abort();
         }
         if let Some(t) = &self.ambient_task {
+            t.abort();
+        }
+        if let Some(t) = &self.lonely_task {
             t.abort();
         }
         self.video.stop();
@@ -328,6 +367,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
     let RunConfig {
         server,
         channels,
+        owner,
         nick,
         ident: Identity { did, private_key },
         stt,
@@ -349,7 +389,9 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         ambient_enabled,
         render_backend,
         ghostly_character,
+        ghostly_pack,
         character_system_prompt,
+        persona_hello_line,
         peer_agents,
     } = cfg;
 
@@ -402,6 +444,10 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
             "version": env!("CARGO_PKG_VERSION"),
             "runtime": "freeq-sdk/rust",
             "capabilities": ["av-transcription", "summary"],
+            // Provenance: who owns this being. (Soft today — a verifiable
+            // owner→bot delegation cert needs the Bluesky-OAuth onboarding.)
+            "owner": owner.clone(),
+            "persona": nick.clone(),
         }))
         .await;
     let _ = handle
@@ -436,6 +482,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
     let cfg = Arc::new(SharedConfig {
         server,
         channels,
+        owner,
         nick,
         stt,
         window_secs,
@@ -455,7 +502,9 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         ambient_enabled,
         render_backend,
         ghostly_character,
+        ghostly_pack,
         character_system_prompt,
+        persona_hello_line,
         peer_agents: peer_agents
             .iter()
             .map(|n| n.to_ascii_lowercase())
@@ -473,6 +522,13 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         discussion_until: std::sync::Arc::new(std::sync::Mutex::new(
             Instant::now() - Duration::from_secs(3600),
         )),
+        nick_dids: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        did_handles: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        greeted: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        console_url: std::env::var("REVENANT_CONSOLE_URL")
+            .ok()
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty()),
         http: reqwest::Client::new(),
         started_at: Instant::now(),
     });
@@ -524,8 +580,72 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         }
     }
 
+    // On (re)connect, rejoin any call already in progress in one of our channels
+    // — e.g. after a restart or a wake-from-sleep mid-call. The reactive handler
+    // below only fires on a *new* av-state=started, so without this a restarted
+    // bot sits in the text channel while a live call carries on without it. The
+    // --start-session-in path above already handled its own channel. One call max.
+    {
+        let no_active = active.lock().await.is_none();
+        if no_active {
+            for ch in cfg.channels.iter() {
+                if start_session_in
+                    .as_ref()
+                    .is_some_and(|s| s.eq_ignore_ascii_case(ch))
+                {
+                    continue; // already handled above
+                }
+                if let Some(session_id) = discover_active_session(&cfg, ch).await {
+                    tracing::info!(channel = %ch, %session_id, "rejoining active call on connect");
+                    match start_transcription(
+                        cfg.clone(),
+                        handle_arc.clone(),
+                        ch.clone(),
+                        session_id.clone(),
+                        None,
+                        active.clone(),
+                    )
+                    .await
+                    {
+                        Ok(call) => {
+                            spawn_hello_on_join(
+                                &cfg,
+                                call.speaker.clone(),
+                                call.video.peer_level_handle(),
+                            );
+                            *active.lock().await = Some(call);
+                            break; // at most one active call at a time
+                        }
+                        Err(e) => tracing::warn!(error = ?e, "failed to rejoin active call"),
+                    }
+                }
+            }
+        }
+    }
+
+    // Graceful shutdown. On SIGTERM (systemctl stop — how the watcher puts us to
+    // sleep), explicitly drop the call and PART our channels before exiting. An
+    // abrupt disconnect leaves the server's 30s ghost membership, so the bot
+    // appears to linger in the channel after sleeping; an explicit PART removes
+    // it immediately. This runs BEFORE the watcher suspends the VM, because
+    // `systemctl stop` waits for us to exit.
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("install SIGTERM handler");
     loop {
-        let Some(event) = events.recv().await else {
+        let event = tokio::select! {
+            ev = events.recv() => ev,
+            _ = sigterm.recv() => {
+                tracing::info!("SIGTERM — leaving call + channels cleanly before shutdown");
+                *active.lock().await = None; // drop the call → MoQ teardown (leaves video)
+                for ch in &cfg.channels {
+                    let _ = handle_arc.raw(&format!("PART {ch} :resting")).await;
+                }
+                let _ = handle_arc.quit(Some("resting")).await;
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await; // let it flush
+                return Ok(());
+            }
+        };
+        let Some(event) = event else {
             tracing::warn!("event stream closed");
             return Ok(());
         };
@@ -715,19 +835,26 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                     if is_peer_nick(&cfg.peer_agents, &from) {
                         let parts: Vec<&str> = rest.splitn(3, '|').collect();
                         if parts.len() == 3 {
-                            if let Ok(mut log) = cfg.diagrams.lock() {
-                                let d = log.entry(target.clone()).or_default();
-                                let sentence =
-                                    format!("{} {} {}", parts[0], parts[1], parts[2]);
-                                if d.ingest(&sentence) > 0 {
-                                    let steps = d.to_steps();
-                                    if !steps.is_empty() {
-                                        if let Some(call) = active.lock().await.as_ref() {
-                                            call.video.show_board(
-                                                steps,
-                                                "#7FE7CB".into(),
-                                            );
-                                        }
+                            // Ingest under the std-mutex guard, but DROP it
+                            // before awaiting `active` — holding it across
+                            // the await makes the whole run() future !Send.
+                            let steps = match cfg.diagrams.lock() {
+                                Ok(mut log) => {
+                                    let d = log.entry(target.clone()).or_default();
+                                    let sentence =
+                                        format!("{} {} {}", parts[0], parts[1], parts[2]);
+                                    if d.ingest(&sentence) > 0 {
+                                        Some(d.to_steps())
+                                    } else {
+                                        None
+                                    }
+                                }
+                                Err(_) => None,
+                            };
+                            if let Some(steps) = steps {
+                                if !steps.is_empty() {
+                                    if let Some(call) = active.lock().await.as_ref() {
+                                        call.video.show_board(steps, "#7FE7CB".into());
                                     }
                                 }
                             }
@@ -739,11 +866,34 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                     continue;
                 };
                 // Don't answer the burst of channel history the server
-                // replays right after the bot joins — those messages
-                // predate the bot and aren't being asked of it now.
+                // replays right after the bot joins — those messages predate
+                // the bot. (This also stops a replayed "go to sleep" from
+                // re-sleeping us the instant we wake, so it must come first.)
                 if cfg.started_at.elapsed() < STARTUP_GRACE {
                     tracing::info!(%from, "ignoring addressed chat message (startup grace)");
                     continue;
+                }
+                // Owner lifecycle command by text ("go to sleep", "join #x",
+                // "leave") — owner-only.
+                if is_owner(&cfg, &from) {
+                    if let Some(cmd) = parse_owner_command(&question) {
+                        if let OwnerCmd::Fork(utt) = cmd {
+                            // Mitosis runs in its own task (slow: VM fork +
+                            // boot) and speaks its progress when on a call.
+                            let speaker =
+                                active.lock().await.as_ref().map(|c| c.speaker.clone());
+                            crate::mitosis::spawn(
+                                cfg.clone(),
+                                handle_arc.clone(),
+                                target.clone(),
+                                utt,
+                                speaker,
+                            );
+                        } else {
+                            run_owner_command(&handle_arc, Some(&target), cmd).await;
+                        }
+                        continue;
+                    }
                 }
                 // Multi-agent chatter guard: if the last several
                 // addressers are all peer bots (no human breaking in),
@@ -783,6 +933,23 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                     .await;
                 });
             }
+            Event::Joined { channel, nick, account } => {
+                tracing::info!(%nick, %channel, has_account = account.is_some(), "Event::Joined");
+                // Learn the joiner's real identity (extended-join DID) so
+                // personalization keys off identity, not their freeq nick.
+                if let Some(did) = account {
+                    if let Ok(mut m) = cfg.nick_dids.lock() {
+                        m.insert(nick.to_ascii_lowercase(), did);
+                    }
+                }
+                // Proactive "it knows me" greeting — only in our channels, and
+                // past the startup grace so we don't greet a reconnect backlog.
+                if cfg.channels.iter().any(|c| c.eq_ignore_ascii_case(&channel))
+                    && cfg.started_at.elapsed() > Duration::from_secs(8)
+                {
+                    spawn_join_greeting(cfg.clone(), handle_arc.clone(), channel, nick);
+                }
+            }
             Event::Disconnected { reason } => {
                 tracing::warn!(%reason, "disconnected");
                 return Ok(());
@@ -792,10 +959,197 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
     }
 }
 
+/// A brief, varied "thinking" filler spoken the instant she's addressed —
+/// played in parallel with the model call so the wait reads as a person
+/// considering, not dead air. Returns `None` for short utterances (answer
+/// straight away) and skips a fraction of the time so it never tics; gated to
+/// substantial questions, where the model is slow enough that the beat masks
+/// real latency rather than adding it. Deterministic (keyed off the question)
+/// so the phrase rotates without RNG.
+fn thinking_beat(question: &str) -> Option<String> {
+    if question.split_whitespace().count() < 6 {
+        return None;
+    }
+    const BEATS: [&str; 6] = [
+        "Hmm,", "Let me think.", "Okay,", "Let's see.", "Right,", "Good question.",
+    ];
+    let h: usize = question.bytes().map(|b| b as usize).sum();
+    if h % 5 == 0 {
+        return None; // sometimes just answer — keeps the rhythm from feeling canned
+    }
+    Some(BEATS[h % BEATS.len()].to_string())
+}
+
 /// Handle one addressed question: stream the answer from Groq and speak
 /// it sentence-by-sentence as it generates — so Eliza starts talking
 /// almost immediately — then post any links and show a visual card.
 #[allow(clippy::too_many_arguments)]
+/// Resolve a freeq nick to a Bluesky handle for personalization, by the
+/// joiner's *verified* identity only: nick → DID (the extended-join account the
+/// server bound at SASL) → handle. `None` when we have no verified DID.
+///
+/// We deliberately do NOT fall back to treating a handle-shaped nick as a real
+/// handle. Nicks are self-asserted and freely chosen, so trusting one would let
+/// anyone who nicks themselves `someone.bsky.social` make the being pull and
+/// speak that stranger's real feed back as if it were them — impersonation. A
+/// `did:key` DID (guests, AI beings) also has no Bluesky profile, so it
+/// resolves to `None`.
+async fn resolve_handle(cfg: &SharedConfig, nick: &str) -> Option<String> {
+    let key = nick.to_ascii_lowercase();
+    let did = cfg.nick_dids.lock().ok().and_then(|m| m.get(&key).cloned())?;
+    if did.starts_with("did:key:") {
+        return None;
+    }
+    if let Some(cached) = cfg.did_handles.lock().ok().and_then(|m| m.get(&did).cloned()) {
+        return cached;
+    }
+    let handle = crate::social_feed::handle_for_did(&cfg.http, &did).await;
+    if let Ok(mut m) = cfg.did_handles.lock() {
+        m.insert(did, handle.clone());
+    }
+    handle
+}
+
+/// Best-effort feed-aware context block for `nick` — resolves their handle and
+/// folds their recent public posts in so the being can be personal. `None` on
+/// any miss (guest, empty feed, network blip).
+async fn fetch_bsky_context(cfg: &SharedConfig, nick: &str) -> Option<String> {
+    let handle = resolve_handle(cfg, nick).await?;
+    let posts = crate::social_feed::recent_posts(&cfg.http, &handle, 4).await;
+    let block = crate::social_feed::context_block(&handle, &posts);
+    if block.is_some() {
+        tracing::info!(actor = %nick, handle = %handle, posts = posts.len(),
+            "folded asker's Bluesky feed into context");
+    }
+    block
+}
+
+/// Generate a one-line, in-character personalized greeting from what the being
+/// remembers about the person (memory) and/or their recent Bluesky posts (feed).
+/// `None` when there's nothing to personalize on or no answer model is set.
+async fn generate_greeting(
+    cfg: &SharedConfig,
+    label: &str,
+    memory_block: Option<&str>,
+    feed_block: Option<&str>,
+) -> Option<String> {
+    // Combined context: memory first (continuity beats novelty), then feed.
+    let mut ctx = String::new();
+    if let Some(m) = memory_block {
+        ctx.push_str(m);
+        ctx.push('\n');
+    }
+    if let Some(f) = feed_block {
+        ctx.push_str(f);
+    }
+    if ctx.trim().is_empty() {
+        return None;
+    }
+    let returning = memory_block.is_some();
+    let question = if returning {
+        format!(
+            "{label} just came back. Greet them by name in ONE short line that shows \
+you remember them — reference a past conversation above (or their recent posts if \
+more apt). Warm, specific, no preamble, no question, under 30 words."
+        )
+    } else {
+        format!(
+            "{label} just walked into the room. Greet them by name with ONE short, \
+specific line that reacts to their recent posts above — like a friend who actually \
+follows them. No preamble, no question, under 30 words."
+        )
+    };
+    let system = cfg.character_system_prompt.as_deref();
+    let ans = if qa::is_anthropic_model(&cfg.groq_answer_model) {
+        let akey = cfg.anthropic_key.as_deref()?;
+        qa::anthropic_answer_streaming(
+            &cfg.http, akey, &cfg.groq_answer_model, &ctx, &question, system, |_| {},
+        )
+        .await
+        .ok()?
+    } else {
+        let gkey = cfg.groq_api_key.as_deref()?;
+        qa::answer_streaming(
+            &cfg.http, gkey, &cfg.groq_answer_model, &ctx, &question, system, |_| {},
+        )
+        .await
+        .ok()?
+    };
+    let t = ans.text.trim().trim_matches('"').trim().to_string();
+    (!t.is_empty()).then_some(t)
+}
+
+/// On a human joining a channel, fire a one-time proactive personalized greeting.
+/// It opens with what the being REMEMBERS about them (continuity across sessions)
+/// and/or their recent public Bluesky posts. Spawned so it never blocks the event
+/// loop; self-guards on once-per-nick, humans only; stays silent if there's
+/// nothing to personalize on (no generic "hello").
+fn spawn_join_greeting(cfg: Arc<SharedConfig>, handle: Arc<ClientHandle>, channel: String, nick: String) {
+    let key = nick.to_ascii_lowercase();
+    // Skip self and known peer agents.
+    let self_canonical = cfg
+        .nick
+        .split_once('-')
+        .map(|(p, _)| p)
+        .unwrap_or(cfg.nick.as_str())
+        .to_ascii_lowercase();
+    if key == cfg.nick.to_ascii_lowercase()
+        || key == self_canonical
+        || cfg.peer_agents.contains(&key)
+    {
+        return;
+    }
+    // Once per nick per session.
+    {
+        let Ok(mut g) = cfg.greeted.lock() else { return };
+        if !g.insert(key.clone()) {
+            return;
+        }
+    }
+    tracing::info!(%nick, %channel, "join greeting: considering");
+    tokio::spawn(async move {
+        // Memory of this person (by nick) — works even without a Bluesky handle.
+        let mem_recs = match cfg.memory.as_ref() {
+            Some(m) => match m.recall_by_asker(&nick, 3) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(%nick, error = ?e, "join greeting: memory recall errored");
+                    Vec::new()
+                }
+            },
+            None => {
+                tracing::info!(%nick, "join greeting: no memory store");
+                Vec::new()
+            }
+        };
+        tracing::info!(%nick, mem_recs = mem_recs.len(), "join greeting: memory recall");
+        let memory_block = crate::memory::Memory::format_for_prompt(&mem_recs);
+        // Feed (needs a resolvable handle).
+        let handle_opt = resolve_handle(&cfg, &nick).await;
+        let posts = match &handle_opt {
+            Some(h) => crate::social_feed::recent_posts(&cfg.http, h, 4).await,
+            None => Vec::new(),
+        };
+        let feed_block = handle_opt
+            .as_ref()
+            .and_then(|h| crate::social_feed::context_block(h, &posts));
+        if memory_block.is_none() && feed_block.is_none() {
+            tracing::info!(%nick, "join greeting: nothing to personalize on — skip");
+            return;
+        }
+        let label = handle_opt.clone().unwrap_or_else(|| nick.clone());
+        let Some(line) =
+            generate_greeting(&cfg, &label, memory_block.as_deref(), feed_block.as_deref()).await
+        else {
+            tracing::warn!(%nick, "join greeting: model produced nothing — skip");
+            return;
+        };
+        tracing::info!(%nick, handle = ?handle_opt, remembered = memory_block.is_some(),
+            "proactive personalized greeting on join");
+        let _ = handle.privmsg(&channel, &line).await;
+    });
+}
+
 async fn answer_and_speak(
     cfg: Arc<SharedConfig>,
     handle: Arc<ClientHandle>,
@@ -837,8 +1191,10 @@ async fn answer_and_speak(
                 let voice = cfg.elevenlabs_voice_id.clone();
                 let model = cfg.elevenlabs_model.clone();
                 // Per-character voice chain — see proactive.rs for design intent.
-                let voice_profile =
-                    ghostly::audio::profile::for_character(&cfg.ghostly_character);
+                let voice_profile = crate::persona::resolve_voice_profile(
+                    &cfg.ghostly_character,
+                    cfg.ghostly_pack.as_deref(),
+                );
                 // Peer-loudness handle for the don't-talk-over gate.
                 // `peer_level` is the loudest of all OTHER participants
                 // (humans + other agents) on this tile; the bot is
@@ -898,6 +1254,15 @@ async fn answer_and_speak(
             _ => None,
         };
 
+    // Thinking beat: the moment she's addressed, send a brief filler to the
+    // speaker so she audibly engages while the model composes. It rides ahead of
+    // the answer sentences in the same queue, after the wait-for-quiet gate.
+    if speak_task.is_some() {
+        if let Some(beat) = thinking_beat(&question) {
+            let _ = tx.send(beat);
+        }
+    }
+
     // Pull relevant past exchanges from memory and prepend to the
     // transcript so the model can reference prior conversations
     // ("last time you asked about X, you ended up at Y…"). Scoped
@@ -918,18 +1283,31 @@ async fn answer_and_speak(
         transcript
     };
 
+    // Feed-aware cold open: best-effort. If the asker's nick resolves to a
+    // Bluesky account, fold their recent public posts into context so the being
+    // can react to who it's actually talking to ("saw you shipped X"). Folds in
+    // alongside memory; gracefully no-ops when the nick isn't a handle.
+    let transcript = match fetch_bsky_context(&cfg, &asker).await {
+        Some(block) => format!("{block}\n{transcript}"),
+        None => transcript,
+    };
+
     // A visual question we can actually see → the vision model with the
     // asker's latest frame. A visual question with no frame → a useful
     // hint (otherwise QA answers "I'm a language model"). Anything else
     // → the normal streaming QA. Completed sentences always go to the
     // speaker task.
     let mut chunker = qa::SentenceChunker::new();
-    let visual = vision::is_visual_question(&question);
-    let frame = if visual {
-        asker_video.as_ref().and_then(|vh| vh.latest())
+    // When the asker has a live frame, route on the looser cue set too
+    // ("how many fingers am I holding up") — a missed route sends a
+    // visual question to the text model, which can't see and says so.
+    let candidate_frame = asker_video.as_ref().and_then(|vh| vh.latest());
+    let visual = if candidate_frame.is_some() {
+        vision::is_visual_question_with_frame(&question)
     } else {
-        None
+        vision::is_visual_question(&question)
     };
+    let frame = if visual { candidate_frame } else { None };
 
     // Race a whiteboard plan in parallel with the answer call. For
     // "explain it" questions the model returns drawing steps and the
@@ -1086,6 +1464,25 @@ sharpen the thread. Do NOT address yourself."
     // Log the full answer text — invaluable for debugging when she's
     // saying something weird (e.g. reading image alt attributes).
     tracing::info!(text = %answer.text, "answer text (sent to TTS)");
+
+    // Auto-capture a notable line as a shareable "moment" card on the console
+    // (silent — feeds the /moments gallery so the viral loop closes without a
+    // human step). Best-effort, fire-and-forget.
+    if let Some(console) = cfg.console_url.clone() {
+        if is_moment_worthy(&answer.text) {
+            let http = cfg.http.clone();
+            let being = cfg.nick.split_once('-').map(|(p, _)| p).unwrap_or(&cfg.nick).to_string();
+            let quote = answer.text.clone();
+            let to = asker.clone();
+            tokio::spawn(async move {
+                if let Some(id) =
+                    crate::social_feed::post_moment(&http, &console, &being, &quote, Some(&to)).await
+                {
+                    tracing::info!(%id, %being, "captured moment card");
+                }
+            });
+        }
+    }
 
     // Deterministic peer hand-off (discussion mode). The LLM's
     // answer often ends with addressing a peer ("Utopia, your
@@ -1342,18 +1739,18 @@ fn spawn_backchannel_loop(
         let Some(el_key) = cfg.elevenlabs_api_key.clone() else {
             return;
         };
-        // Skip backchannels for characters without a profile (e.g.
-        // plain "eliza"); the rest map to TTS voices we know.
-        let Some(profile) = crate::character_profile::by_name(&cfg.ghostly_character)
-        else {
+        // Skip backchannels for agents without a persona (e.g. plain
+        // "eliza", whose `character_system_prompt` is None); personas
+        // map to TTS voices + a ghostly voice-DSP character we know.
+        if cfg.character_system_prompt.is_none() {
             return;
-        };
+        }
         let voice_id = cfg.elevenlabs_voice_id.clone();
         let model = cfg.elevenlabs_model.clone();
         let http = cfg.http.clone();
         let character = cfg.ghostly_character.clone();
-        let _ = profile; // voice_id is already pulled from cfg
-        let voice_profile = ghostly::audio::profile::for_character(&character);
+        let voice_profile =
+            crate::persona::resolve_voice_profile(&character, cfg.ghostly_pack.as_deref());
 
         let mut chain =
             ghostly::audio::VoiceChain::new(voice_profile, tts::ELEVENLABS_PCM_RATE as f32);
@@ -1447,7 +1844,7 @@ fn spawn_hello_on_join(
         tracing::info!("hello-on-join skipped — no ELEVENLABS_API_KEY");
         return;
     };
-    let Some(profile) = crate::character_profile::by_name(&cfg.ghostly_character) else {
+    let Some(hello_line) = cfg.persona_hello_line.clone() else {
         return;
     };
     // Session recall: prepend a one-line "I remember…" hook drawn
@@ -1455,7 +1852,7 @@ fn spawn_hello_on_join(
     // call with continuity instead of a cold restart. Best-effort —
     // when memory is unavailable or empty, fall through to the
     // plain hello-line.
-    let mut text = profile.hello_line.to_string();
+    let mut text = hello_line;
     if let Some(mem) = cfg.memory.as_ref() {
         // Cross-channel: we want the bot's last memorable exchange
         // wherever it happened, not necessarily this room.
@@ -1469,6 +1866,7 @@ fn spawn_hello_on_join(
     let model = cfg.elevenlabs_model.clone();
     let http = cfg.http.clone();
     let character = cfg.ghostly_character.clone();
+    let ghostly_pack = cfg.ghostly_pack.clone();
     tokio::spawn(async move {
         // Audio-pipeline settle: when the bot has just joined the call,
         // the MoQ broadcast publish has been opened but no subscriber
@@ -1484,7 +1882,8 @@ fn spawn_hello_on_join(
         // one (staggered launch), and they all greet — without this
         // gate they'd talk over each other.
         wait_for_room_quiet(&peer_level).await;
-        let voice_profile = ghostly::audio::profile::for_character(&character);
+        let voice_profile =
+            crate::persona::resolve_voice_profile(&character, ghostly_pack.as_deref());
         let mut chain = ghostly::audio::VoiceChain::new(
             voice_profile,
             tts::ELEVENLABS_PCM_RATE as f32,
@@ -1719,7 +2118,22 @@ async fn start_transcription(
     let backend = match cfg.render_backend.as_str() {
         "particles" => crate::video::Backend::Particles {
             character: cfg.ghostly_character.clone(),
+            ghostly_pack: cfg.ghostly_pack.clone(),
         },
+        "ascii" => crate::video::Backend::Ascii,
+        "ascii-rain" => crate::video::Backend::AsciiRain,
+        "ascii-glitch" => crate::video::Backend::AsciiGlitch,
+        "ascii-bot" => crate::video::Backend::AsciiBot,
+        "vector" => crate::video::Backend::Vector,
+        "southpark" => crate::video::Backend::SouthPark,
+        "southpark-goofy" => crate::video::Backend::SouthParkGoofy,
+        "southpark-stoner" | "southpark-burnout" => crate::video::Backend::SouthParkStoner,
+        "3d" | "face3d" => crate::video::Backend::Face3d,
+        "3d-angry" => crate::video::Backend::Face3dAngry,
+        "3d-joy" => crate::video::Backend::Face3dJoy,
+        "3d-eye" => crate::video::Backend::Face3dEye,
+        "3d-shard" => crate::video::Backend::Face3dShard,
+        "alexandria" => crate::video::Backend::Alexandria,
         _ => crate::video::Backend::Svg,
     };
     let video = VideoTile::with_backend(backend);
@@ -1747,6 +2161,10 @@ async fn start_transcription(
     let active_for_task = active.clone();
     let video_for_session = video.clone();
     let video_for_taps = video.clone();
+    // Live count of people we're transcribing — shared across this call's taps
+    // (so each can tell one-on-one from a group) AND the lonely watchdog below.
+    let humans = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let humans_for_task = humans.clone();
     let task = tokio::spawn(async move {
         let mut session =
             AvSession::connect(av_config, push_source, move || video_for_session.source());
@@ -1759,6 +2177,7 @@ async fn start_transcription(
                 handle_for_task.clone(),
                 active_for_task.clone(),
                 video_for_taps.peer_level_handle(),
+                humans_for_task.clone(),
             ));
         }
         tracing::info!("AvSession ended");
@@ -1791,10 +2210,21 @@ async fn start_transcription(
         None
     };
 
+    // Lonely watchdog — leave the call once we've been alone in it for a
+    // while, so the being returns to idle (and the box can sleep to ~$0)
+    // instead of holding a tap open on an empty room. Aborts via
+    // ActiveCall::drop when the call ends for any other reason.
+    let lonely_task = Some(tokio::spawn(lonely_watchdog(
+        active.clone(),
+        humans.clone(),
+        session_id.clone(),
+    )));
+
     Ok(ActiveCall {
         channel,
         session_id,
         instance_id,
+        joined_at: Instant::now(),
         transcript: Vec::new(),
         last_answer: None,
         speaker,
@@ -1802,7 +2232,57 @@ async fn start_transcription(
         moq_task: task,
         proactive_task,
         ambient_task,
+        lonely_task,
     })
+}
+
+/// Watchdog that leaves the current call once the being has been alone in
+/// it (no humans being transcribed) for `ALONE_LEAVE`. Polls every
+/// `CHECK`; exits quietly if the call is replaced or already gone, so a new
+/// call's watchdog never tears down a different session.
+async fn lonely_watchdog(
+    active: Arc<AsyncMutex<Option<ActiveCall>>>,
+    humans: Arc<std::sync::atomic::AtomicUsize>,
+    session_id: String,
+) {
+    use std::sync::atomic::Ordering;
+    // Seconds alone before leaving. Override with `ELIZA_ALONE_LEAVE_SECS`;
+    // set it to 0 to never auto-leave (e.g. parking a being in a call for a
+    // demo / kiosk).
+    let alone_secs = std::env::var("ELIZA_ALONE_LEAVE_SECS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(60);
+    if alone_secs == 0 {
+        tracing::info!("lonely watchdog disabled (ELIZA_ALONE_LEAVE_SECS=0)");
+        return;
+    }
+    let alone_leave = Duration::from_secs(alone_secs);
+    const CHECK: Duration = Duration::from_secs(10);
+    let mut alone_since: Option<Instant> = None;
+    loop {
+        tokio::time::sleep(CHECK).await;
+        // Bail if this is no longer the live call.
+        {
+            let g = active.lock().await;
+            if !matches!(g.as_ref(), Some(c) if c.session_id == session_id) {
+                return;
+            }
+        }
+        if humans.load(Ordering::Relaxed) == 0 {
+            let since = *alone_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= alone_leave {
+                let mut g = active.lock().await;
+                if matches!(g.as_ref(), Some(c) if c.session_id == session_id) {
+                    tracing::info!(%session_id, "alone in the call too long — leaving");
+                    *g = None; // ActiveCall::drop tears down taps + tasks
+                }
+                return;
+            }
+        } else {
+            alone_since = None;
+        }
+    }
 }
 
 // ── Addressed-question dispatch timing ──────────────────────────────
@@ -1817,6 +2297,208 @@ const ANSWER_DEBOUNCE: Duration = Duration::from_secs(8);
 /// replay buffered audio) — answering that backlog is an unprompted
 /// "monologue" of stale messages. Live questions come after the burst.
 const STARTUP_GRACE: Duration = Duration::from_secs(15);
+/// Voice version of the join grace — relative to call-join (not process start)
+/// and kept short, so it only skips the post-join audio burst and never
+/// suppresses live questions after a restart/wake mid-call.
+const CALL_JOIN_GRACE: Duration = Duration::from_secs(3);
+
+// ── Owner lifecycle commands ────────────────────────────────────────
+// The owner can tell the bot to sleep / join / leave by voice or text.
+// We can't suspend the VM from here (the boxd key lives in the watcher,
+// by design) — so on "sleep" the bot leaves cleanly and schedules its own
+// service stop just outside its cgroup; boxd auto-suspend then takes the VM
+// to ~$0, and the always-on watcher resumes it on the next summon.
+
+#[derive(Debug)]
+enum OwnerCmd {
+    Sleep,
+    Join(String),
+    Leave,
+    /// Mitosis: fork this being into a new one. Carries the owner's full
+    /// utterance — the mutation ("…but make her an optimist") rides along
+    /// for the child-composition model. See [`crate::mitosis`].
+    Fork(String),
+}
+
+/// Is `who` the configured owner? (Nick/handle match, case-insensitive.)
+fn is_owner(cfg: &SharedConfig, who: &str) -> bool {
+    cfg.owner.as_deref().is_some_and(|o| o.eq_ignore_ascii_case(who))
+}
+
+/// Parse an owner lifecycle command from an addressed utterance.
+fn parse_owner_command(text: &str) -> Option<OwnerCmd> {
+    let t = text.to_lowercase();
+    let tt = t.trim();
+    let words = tt.split_whitespace().count();
+    let has_word = |w: &str| tt.split(|c: char| !c.is_alphanumeric()).any(|x| x == w);
+    // Mitosis: "fork yourself", "clone yourself", "split yourself", "make a
+    // copy of yourself" — the rest of the line rides along as the mutation
+    // ("…but make her an optimist"). Checked FIRST: a fork utterance can be
+    // long and could otherwise trip the looser sleep/leave matchers.
+    let about_self = t.contains("yourself") || t.contains("your self") || t.contains("of you");
+    if about_self
+        && (has_word("fork")
+            || has_word("clone")
+            || has_word("split")
+            || has_word("duplicate")
+            || has_word("copy"))
+    {
+        return Some(OwnerCmd::Fork(text.trim().to_string()));
+    }
+    // Sleep is owner-gated and the intent is unambiguous, so be STT-tolerant:
+    // Whisper mangles "go to sleep" into "goes to sleep" / "all the sleep" /
+    // even "all of god's sleep". Treat any SHORT owner utterance that mentions
+    // sleep/nap (or the old explicit phrases) as the sleep command — the length
+    // cap keeps a real sentence ("I couldn't sleep last night") from matching.
+    if t.contains("go to bed")
+        || t.contains("power down")
+        || ((has_word("sleep") || has_word("nap") || has_word("asleep")) && words <= 8)
+    {
+        return Some(OwnerCmd::Sleep);
+    }
+    if let Some(i) = t.find('#') {
+        let before = &t[..i];
+        if before.contains("join") || before.contains("come to") || before.contains("go to") {
+            let ch: String = t[i..]
+                .chars()
+                .take_while(|c| !c.is_whitespace() && !matches!(c, '.' | ',' | '!' | '?'))
+                .collect();
+            if ch.len() > 1 {
+                return Some(OwnerCmd::Join(ch));
+            }
+        }
+    }
+    // Leave: same tolerance — a short owner utterance with "leave"/"go away".
+    if t.contains("go away")
+        || (has_word("leave") && words <= 6)
+        || tt == "dismiss"
+    {
+        return Some(OwnerCmd::Leave);
+    }
+    None
+}
+
+/// Actuate an owner command. Join/leave act directly; sleep acks, then leaves
+/// and schedules a service stop outside our cgroup (so it survives teardown).
+async fn run_owner_command(handle: &ClientHandle, channel: Option<&str>, cmd: OwnerCmd) {
+    match cmd {
+        OwnerCmd::Sleep => {
+            tracing::info!("owner command: sleep");
+            // We can't suspend our own VM (the boxd key lives in the watcher, by
+            // design). Relay via a coordination event — the watcher stops us and
+            // suspends the VM to ~$0, then resumes us on the next summon. The
+            // human_text doubles as the posted/spoken acknowledgement.
+            if let Some(ch) = channel {
+                let _ = handle
+                    .emit_event(
+                        ch,
+                        "revenant_sleep",
+                        "{}",
+                        None,
+                        "Resting now \u{1F4A4} — call my name when you need me.",
+                    )
+                    .await;
+            }
+        }
+        OwnerCmd::Join(c) => {
+            tracing::info!(channel = %c, "owner command: join");
+            let _ = handle.join(&c).await;
+            if let Some(ch) = channel {
+                let _ = handle.privmsg(ch, &format!("On my way to {c}.")).await;
+            }
+        }
+        OwnerCmd::Leave => {
+            tracing::info!("owner command: leave");
+            if let Some(ch) = channel {
+                let _ = handle.privmsg(ch, "Heading out \u{1F44B} — call me back anytime.").await;
+                let _ = handle.raw(&format!("PART {ch}")).await;
+            }
+        }
+        // Fork is dispatched to `crate::mitosis::spawn` at the call sites
+        // (it needs the shared config + the call speaker); it never lands
+        // here. Kept exhaustive on purpose.
+        OwnerCmd::Fork(_) => {
+            tracing::warn!("owner command: fork reached run_owner_command (dispatch bug)");
+        }
+    }
+}
+
+/// Decrements a shared tap counter on drop — tracks how many participants we
+/// are currently transcribing (i.e. how many other humans are in the call).
+struct TapGuard(Arc<std::sync::atomic::AtomicUsize>);
+impl Drop for TapGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Worth responding to? Filters empty/backchannel utterances so the bot doesn't
+/// react to "yeah" / "um" when it's listening for real input.
+fn is_substantive(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    if t.is_empty() || !t.chars().any(|c| c.is_alphabetic()) {
+        return false;
+    }
+    let words: Vec<&str> = t.split_whitespace().collect();
+    if words.len() == 1 {
+        const FILLER: [&str; 14] = [
+            "yeah", "yep", "ok", "okay", "mm", "mhm", "uh", "um", "hmm", "right",
+            "sure", "cool", "nice", "what",
+        ];
+        let w = words[0].trim_matches(|c: char| !c.is_alphanumeric());
+        return !FILLER.contains(&w);
+    }
+    true
+}
+
+/// Does this utterance look like a question? STT rarely emits "?", so a leading
+/// question word also counts.
+fn looks_like_question(text: &str) -> bool {
+    let t = text.trim().to_lowercase();
+    if t.ends_with('?') {
+        return true;
+    }
+    const Q: [&str; 16] = [
+        "what", "why", "how", "when", "where", "who", "which", "can", "could",
+        "would", "should", "is", "are", "do", "does", "did",
+    ];
+    t.split_whitespace()
+        .next()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+        .is_some_and(|w| Q.contains(&w))
+}
+
+/// Whether `text` reads like a request/imperative directed at the agent
+/// ("tell me…", "make a plan", "play something"). In a 1:1 call this lets
+/// natural requests through without saying the name, while bare ambient
+/// declaratives ("all of us are down", "I'm sorry") are left alone.
+fn looks_like_request(text: &str) -> bool {
+    const VERBS: [&str; 26] = [
+        "tell", "give", "show", "make", "help", "explain", "write", "draw", "find", "search",
+        "play", "sing", "list", "summarize", "summarise", "describe", "build", "create",
+        "suggest", "recommend", "remind", "let", "lets", "gimme", "teach", "pitch",
+    ];
+    text.trim()
+        .to_lowercase()
+        .split_whitespace()
+        .next()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+        .is_some_and(|w| VERBS.contains(&w))
+}
+
+/// Whether an answer is worth freezing into a shareable "moment" card: a tight,
+/// quotable line (not a stub, not an apology/error, not a wall of text).
+fn is_moment_worthy(text: &str) -> bool {
+    let t = text.trim();
+    let len = t.chars().count();
+    if !(25..=280).contains(&len) || !t.chars().any(|c| c.is_alphabetic()) {
+        return false;
+    }
+    let lc = t.to_lowercase();
+    !["sorry", "i couldn't", "i could not", "i can't", "i cannot", "i'm not able"]
+        .iter()
+        .any(|p| lc.starts_with(p))
+}
 
 /// Consume one participant's decoded-PCM stream (from an [`AvSession`])
 /// and segment it into utterances by voice activity — accumulate while
@@ -1833,9 +2515,14 @@ async fn transcribe_participant(
     // Shared loudness cell — fed the participant's level so the video
     // presence can show a "listening" mood when a human is talking.
     peer_level: Arc<std::sync::atomic::AtomicU32>,
+    // Live count of participants being transcribed (= other humans in the
+    // call). When it's just one of them and us, no name is needed to address us.
+    humans: Arc<std::sync::atomic::AtomicUsize>,
 ) {
     let AvParticipant { path, nick, mut audio, video } = participant;
     let stt = cfg.stt.clone();
+    humans.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let _tap = TapGuard(humans.clone()); // decrement when this tap ends
     tracing::info!(%nick, %path, "participant audio live — transcribing");
 
     // VAD: turn the PCM stream into utterances, cut at natural pauses.
@@ -1883,6 +2570,7 @@ async fn transcribe_participant(
         let handle = handle.clone();
         let active = active.clone();
         let cfg = cfg.clone();
+        let humans = humans.clone();
         // The asker's own video — so a visual question can be answered
         // from what they're showing.
         let asker_video = video.clone();
@@ -1964,13 +2652,76 @@ async fn transcribe_participant(
                         }
                     }
 
-                    // Voice-addressed Q&A: if the utterance starts with
-                    // the bot's name ("eliza, summarize…"), treat
-                    // it as a spoken question — answer + speak back —
-                    // instead of just logging it as a transcript line.
-                    // In a voice call people address the bot by talking,
-                    // not typing.
-                    if let Some(question) = address_with_aliases(&text, &cfg.nick) {
+                    // Voice-addressed Q&A. People don't say someone's name to
+                    // address them, so neither should they have to say ours —
+                    // but we must NOT answer every ambient line either (in a 1:1
+                    // that made her reply to "I'm sorry" / room noise). So:
+                    //  • named ("eliza, …")  → always addressed
+                    //  • a question          → addressed (any call size)
+                    //  • 1:1 + a request     → addressed ("tell me…", "play…")
+                    //  • bare declaratives   → ignored (ambient / self-talk)
+                    // We're always transcribing regardless; this only decides
+                    // when to *answer*. `humans` is the live count of people in
+                    // the call (1 == one-on-one with us).
+                    let named = address_with_aliases(&text, &cfg.nick);
+                    let humans = humans.load(std::sync::atomic::Ordering::Relaxed);
+
+                    // Owner lifecycle command by voice ("go to sleep", "join #x",
+                    // "leave") — owner-only, past the call-join grace (so replayed
+                    // audio can't re-sleep us). Checked BEFORE the Q&A gate: a
+                    // command isn't a question/request, so it must not depend on
+                    // being "addressed". Match on the name-stripped remainder when
+                    // named, else the raw line ("olive, go to sleep" / "go to sleep").
+                    if is_owner(&cfg, &nick) {
+                        let past_grace = active
+                            .lock()
+                            .await
+                            .as_ref()
+                            .map_or(false, |c| c.joined_at.elapsed() >= CALL_JOIN_GRACE);
+                        if past_grace {
+                            let cmd_text = named.as_deref().unwrap_or(&text);
+                            if let Some(cmd) = parse_owner_command(cmd_text) {
+                                tracing::info!(%nick, "owner lifecycle command by voice");
+                                if let OwnerCmd::Fork(utt) = cmd {
+                                    // Mitosis: own task + spoken progress.
+                                    let speaker = active
+                                        .lock()
+                                        .await
+                                        .as_ref()
+                                        .map(|c| c.speaker.clone());
+                                    crate::mitosis::spawn(
+                                        cfg.clone(),
+                                        handle.clone(),
+                                        channel.clone(),
+                                        utt,
+                                        speaker,
+                                    );
+                                } else {
+                                    run_owner_command(&handle, Some(&channel), cmd).await;
+                                }
+                                return;
+                            }
+                        }
+                    }
+
+                    let inferred: Option<String> = named.clone().or_else(|| {
+                        if !is_substantive(&text) {
+                            None
+                        } else if looks_like_question(&text)
+                            || (humans <= 1 && looks_like_request(&text))
+                        {
+                            Some(text.trim().to_string())
+                        } else {
+                            None
+                        }
+                    });
+                    tracing::info!(
+                        %nick, humans,
+                        named = named.is_some(),
+                        addressed = inferred.is_some(),
+                        "voice addressing decision"
+                    );
+                    if let Some(question) = inferred {
                         // Multi-agent chatter guard: see is_address_allowed.
                         if !is_address_allowed(&cfg, &nick) {
                             tracing::info!(
@@ -1989,8 +2740,8 @@ async fn transcribe_participant(
                                 // Startup grace: ignore the backlog of
                                 // audio the SFU can replay right after the
                                 // bot joins (a stale "monologue").
-                                Some(_) if cfg.started_at.elapsed() < STARTUP_GRACE => {
-                                    tracing::info!(%nick, "ignoring addressed question (startup grace)");
+                                Some(call) if call.joined_at.elapsed() < CALL_JOIN_GRACE => {
+                                    tracing::info!(%nick, "ignoring addressed question (call-join grace)");
                                     None
                                 }
                                 // Barge-in: Eliza is mid-answer and a
@@ -2311,6 +3062,102 @@ fn _pathbuf_marker() -> PathBuf {
 mod tests {
     use super::*;
     use tokio::sync::mpsc;
+
+    // ---------- owner lifecycle command (STT-tolerant) ----------
+
+    #[test]
+    fn sleep_command_survives_stt_mangling() {
+        // The real "go to sleep", plus the ways Whisper actually rendered it
+        // in the live demo, must all sleep her.
+        for s in [
+            "go to sleep",
+            "goes to sleep",
+            "all the sleep",
+            "all of god's sleep",
+            "time to sleep now",
+            "olive, go to sleep",
+            "sleep",
+            "take a nap",
+        ] {
+            assert!(
+                matches!(parse_owner_command(s), Some(OwnerCmd::Sleep)),
+                "should sleep on {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sleep_command_ignores_long_incidental_mentions() {
+        // A real sentence that merely mentions sleep must NOT sleep her.
+        assert!(parse_owner_command(
+            "honestly I could not sleep at all last night and now my brain is mush"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn leave_command_is_tolerant_but_bounded() {
+        assert!(matches!(parse_owner_command("leave"), Some(OwnerCmd::Leave)));
+        assert!(matches!(parse_owner_command("ok you can leave now"), Some(OwnerCmd::Leave)));
+        assert!(parse_owner_command("don't leave the door open or the cat gets out tonight").is_none());
+    }
+
+    #[test]
+    fn owner_command_fork_mitosis() {
+        // The mutation rides along verbatim for the child-composition model.
+        for s in [
+            "fork yourself",
+            "fork yourself but make her an optimist",
+            "clone yourself and make him obsessed with gardening",
+            "split yourself in two",
+            "make a copy of yourself",
+            "could you duplicate yourself please",
+        ] {
+            match parse_owner_command(s) {
+                Some(OwnerCmd::Fork(utt)) => assert_eq!(utt, s),
+                other => panic!("{s:?} → {other:?}, expected Fork"),
+            }
+        }
+        // Mentions of forks/splits that aren't about the being stay inert —
+        // and a long fork-ish sentence about something else doesn't trip it.
+        assert!(parse_owner_command("the road forks ahead").is_none());
+        assert!(parse_owner_command("let's split the bill").is_none());
+        assert!(parse_owner_command("I forked the repo yesterday").is_none());
+        // "fork yourself" must win over the looser sleep matcher even when
+        // the mutation mentions sleep.
+        assert!(matches!(
+            parse_owner_command("fork yourself but make her sleepy"),
+            Some(OwnerCmd::Fork(_))
+        ));
+    }
+
+    // ---------- voice addressing gate ----------
+
+    #[test]
+    fn request_detector_separates_asks_from_ambient() {
+        assert!(looks_like_request("tell me a story"));
+        assert!(looks_like_request("play something upbeat"));
+        // The ambient/garbled lines that wrongly triggered her in 1:1:
+        assert!(!looks_like_request("all of us are down"));
+        assert!(!looks_like_request("hello, I didn't say anything"));
+        assert!(!looks_like_request("I'm sorry"));
+    }
+
+    #[test]
+    fn questions_still_recognized() {
+        assert!(looks_like_question("what should I build?"));
+        assert!(looks_like_question("how does this work"));
+        assert!(!looks_like_question("all of us are down"));
+    }
+
+    #[test]
+    fn moment_worthiness_filters_stubs_and_apologies() {
+        assert!(is_moment_worthy("You're not shipping features, you're shipping a whole atmosphere."));
+        assert!(!is_moment_worthy("yeah"), "too short");
+        assert!(!is_moment_worthy("sorry — I couldn't answer that (timeout)."), "apology/error");
+        assert!(!is_moment_worthy(&"x".repeat(400)), "wall of text");
+        assert!(!is_moment_worthy("   "), "blank");
+    }
 
     // ---------- sfu_url_from_server ----------
 

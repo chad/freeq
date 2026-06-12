@@ -2,10 +2,23 @@ import SwiftUI
 
 struct MessageListView: View {
     @Environment(AppState.self) private var appState
+    /// Which channel we last rendered for. A channel switch should snap
+    /// the scroll to the bottom (no animation, no visible "scroll from
+    /// top down" sweep). Only subsequent incremental adds in the SAME
+    /// channel get the gentle scroll animation.
+    @State private var lastRenderedChannel: String?
 
     private var messages: [ChatMessage] {
         appState.activeChannelState?.messages ?? []
     }
+
+    /// Stable sentinel ID for the bottom anchor — scrolling to a fixed
+    /// invisible spacer below the last row is more reliable than
+    /// scrolling to the last message's ID, because the message ID changes
+    /// every time a new one arrives (forcing layout) and SwiftUI's
+    /// LazyVStack sometimes lays out the last row partially below the
+    /// viewport on first measurement.
+    private let bottomAnchorID = "__bottom"
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -41,21 +54,51 @@ struct MessageListView: View {
                             }
                         }
                     }
+
+                    // Invisible bottom-of-list anchor. Reserved height
+                    // gives the last real message room so it doesn't hug
+                    // the divider above the compose bar (the "half off
+                    // the bottom" symptom was the last row landing at
+                    // the very edge of the scroll viewport with no breathing
+                    // room).
+                    Color.clear
+                        .frame(height: 12)
+                        .id(bottomAnchorID)
                 }
-                .padding(.vertical, 8)
+                .padding(.top, 8)
             }
             .onChange(of: messages.count) { oldCount, newCount in
-                // Only auto-scroll if messages were added at the end (not prepended history)
-                if newCount > oldCount, let last = messages.last {
+                // If this count change is the initial load for a newly-
+                // selected channel, snap with no animation — otherwise
+                // the user sees a fast visual scroll from top to bottom
+                // as the rows render.
+                let isInitialLoadForCurrentChannel =
+                    lastRenderedChannel != appState.activeChannel
+                guard newCount > 0 else { return }
+                if isInitialLoadForCurrentChannel {
+                    proxy.scrollTo(bottomAnchorID, anchor: .bottom)
+                    lastRenderedChannel = appState.activeChannel
+                } else if newCount > oldCount {
                     withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(last.id, anchor: .bottom)
+                        proxy.scrollTo(bottomAnchorID, anchor: .bottom)
                     }
                 }
             }
-            .onAppear {
-                if let last = messages.last {
-                    proxy.scrollTo(last.id, anchor: .bottom)
+            .onChange(of: appState.activeChannel) { _, _ in
+                // Channel switch — snap to bottom on the next runloop
+                // tick so the LazyVStack has populated its rows. Without
+                // the deferral, scrollTo runs against an empty stack
+                // and the view appears at the top, then the count-onChange
+                // visibly catches up by animating down.
+                DispatchQueue.main.async {
+                    proxy.scrollTo(bottomAnchorID, anchor: .bottom)
+                    lastRenderedChannel = appState.activeChannel
                 }
+            }
+            .onAppear {
+                // First mount — snap immediately, no animation.
+                proxy.scrollTo(bottomAnchorID, anchor: .bottom)
+                lastRenderedChannel = appState.activeChannel
             }
             .onChange(of: appState.scrollToMessageId) { _, newId in
                 if let id = newId {

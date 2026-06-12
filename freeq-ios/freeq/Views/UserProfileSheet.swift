@@ -188,55 +188,65 @@ struct UserProfileSheet: View {
     }
 
     private func fetchProfile() async {
-        // Resolve preferred actor: DID first (most reliable; survives handle
-        // changes / custom domains), then nick-as-handle fallbacks.
-        let didFromMembers = await MainActor.run { () -> String? in
+        // Resolve ONLY by the server-verified DID. We must NOT fall back to
+        // the nick (nor a guessed "<nick>.bsky.social"): nicks are freely
+        // chosen, so resolving from one shows a STRANGER's profile, avatar
+        // and feed for whoever happens to match — e.g. tapping the AI being
+        // "olive" surfacing the unrelated real account olive.bsky.social.
+        // Identity on freeq is the DID bound at SASL; without one there is no
+        // Bluesky profile to show. did:key users (guests, AI beings) have
+        // none either.
+        let did = await MainActor.run { () -> String? in
             for ch in appState.channels {
                 if let m = ch.members.first(where: { $0.nick.lowercased() == nick.lowercased() }),
-                   let did = m.did, !did.isEmpty {
-                    return did
+                   let d = m.did, !d.isEmpty {
+                    return d
                 }
             }
             return nil
         }
-        var actors: [String] = []
-        if let did = didFromMembers { actors.append(did) }
-        if nick.contains(".") {
-            actors.append(nick)
-        } else {
-            actors.append("\(nick).bsky.social")
+        guard let actor = did, !actor.hasPrefix("did:key:") else {
+            await MainActor.run { loading = false }
+            return
         }
 
-        for actor in actors {
-            let urlStr = "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=\(actor.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? actor)"
-            guard let url = URL(string: urlStr) else { continue }
+        let urlStr = "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=\(actor.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? actor)"
+        guard let url = URL(string: urlStr) else {
+            await MainActor.run { loading = false }
+            return
+        }
 
-            do {
-                let (data, response) = try await URLSession.shared.data(from: url)
-                guard (response as? HTTPURLResponse)?.statusCode == 200 else { continue }
-                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-                guard let json = json else { continue }
-
-                let resolvedHandle = json["handle"] as? String ?? actor
-                await MainActor.run {
-                    profile = BlueskyProfile(
-                        handle: resolvedHandle,
-                        displayName: json["displayName"] as? String,
-                        description: json["description"] as? String,
-                        avatar: json["avatar"] as? String,
-                        followersCount: json["followersCount"] as? Int,
-                        followsCount: json["followsCount"] as? Int,
-                        postsCount: json["postsCount"] as? Int
-                    )
-                    loading = false
-                    loadingFeed = true
-                }
-                await fetchAuthorFeed(actor: resolvedHandle)
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else {
+                await MainActor.run { loading = false }
                 return
-            } catch { }
-        }
+            }
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            guard let json = json else {
+                await MainActor.run { loading = false }
+                return
+            }
 
-        await MainActor.run { loading = false }
+            // Trust the DID-resolved handle, not the nick.
+            let resolvedHandle = json["handle"] as? String ?? actor
+            await MainActor.run {
+                profile = BlueskyProfile(
+                    handle: resolvedHandle,
+                    displayName: json["displayName"] as? String,
+                    description: json["description"] as? String,
+                    avatar: json["avatar"] as? String,
+                    followersCount: json["followersCount"] as? Int,
+                    followsCount: json["followsCount"] as? Int,
+                    postsCount: json["postsCount"] as? Int
+                )
+                loading = false
+                loadingFeed = true
+            }
+            await fetchAuthorFeed(actor: resolvedHandle)
+        } catch {
+            await MainActor.run { loading = false }
+        }
     }
 
     private func fetchAuthorFeed(actor: String) async {

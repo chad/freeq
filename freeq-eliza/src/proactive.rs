@@ -220,7 +220,7 @@ async fn speak_now(
     // Stateful (delay + reverb tails) so we build it once per
     // speak_now invocation and reuse across sentences.
     let voice_profile =
-        ghostly::audio::profile::for_character(&cfg.ghostly_character);
+        crate::persona::resolve_voice_profile(&cfg.ghostly_character, cfg.ghostly_pack.as_deref());
 
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     let speak_task = tokio::spawn(async move {

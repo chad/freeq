@@ -22,9 +22,10 @@ use iroh_live::media::traits::VideoSource;
 
 use crate::whiteboard::Step;
 
-/// Tile resolution. 720p — chunkier than the old 360p but with the
-/// new bloom + ember count it reads enormously better, and CPU
-/// rasterizing at 15 fps still leaves headroom.
+/// Tile resolution. 720p @ 15 fps. The earlier 360p cap was a workaround for
+/// the *debug* build, whose unoptimized rasterizer + Opus encoder couldn't keep
+/// real-time on a 2-vCPU VM. On the release build the CPU-bound path is far
+/// cheaper, so the full-resolution tile fits with audio headroom to spare.
 pub const VIDEO_W: u32 = 1280;
 pub const VIDEO_H: u32 = 720;
 const FPS: u64 = 15;
@@ -215,7 +216,53 @@ impl Scene {
 #[derive(Clone, Debug)]
 pub enum Backend {
     Svg,
-    Particles { character: String },
+    Particles {
+        character: String,
+        /// Optional path to a custom ghostly `CharacterPack` JSON. When
+        /// set, the face is built from the pack instead of the built-in
+        /// `character` name.
+        ghostly_pack: Option<String>,
+    },
+    /// Text-mode "terminal being" — a glyph-rendered face that lip-syncs
+    /// to her speech level. Like `Particles`, it's a single-layer face:
+    /// scene cards, whiteboards, and the ambient HUD are NO-OPS here.
+    Ascii,
+    /// Rigged vector character — a hand-drawn blob-headed face with
+    /// blinking eyes, expressive brows, and a lip-syncing mouth. Single
+    /// layer like `Particles`/`Ascii`; overlays are NO-OPS.
+    Vector,
+    /// Digital-rain ASCII — a Matrix-style falling-glyph face. Weirder
+    /// sibling of `Ascii`; same single-layer face, overlays are NO-OPS.
+    AsciiRain,
+    /// Glitch ASCII — a cursed, corrupted terminal face (chromatic split,
+    /// row-tearing, corruption). Single-layer; overlays are NO-OPS.
+    AsciiGlitch,
+    /// Boxy-robot ASCII — a rectangular head with antenna, LED eyes, and an
+    /// equalizer-bar mouth (no round face). Single-layer; overlays NO-OP.
+    AsciiBot,
+    /// Belligerent South Park-style cartoon — an angry construction-paper
+    /// kid that screams. Single-layer; overlays are NO-OPS.
+    SouthPark,
+    /// Goofy buck-toothed South Park derp (propeller beanie, googly eyes).
+    SouthParkGoofy,
+    /// Spaced-out South Park stoner (half-lidded eyes, lazy grin).
+    SouthParkStoner,
+    /// Real-time CPU-rendered low-poly 3D head. Single-layer; overlays NO-OP.
+    Face3d,
+    /// 3D head — fat, ugly, angry personality.
+    Face3dAngry,
+    /// 3D head — slender, beautiful, joyful personality.
+    Face3dJoy,
+    /// 3D — a giant floating cyclops eyeball.
+    Face3dEye,
+    /// 3D — a spinning crystal shard with a glowing slit-eye.
+    Face3dShard,
+    /// Ancient bronze coin with a Pharos-lighthouse relief and circuit
+    /// traces. State is told in light: cyan pulses flow inward while
+    /// hearing, amber pulses circulate while thinking, the beacon flares
+    /// and pulses flow outward while speaking. Single-layer; overlays
+    /// are NO-OPS.
+    Alexandria,
 }
 
 impl Default for Backend {
@@ -477,11 +524,58 @@ impl VideoTile {
         let backend = tile.backend.clone();
         std::thread::Builder::new()
             .name("eliza-video".into())
-            .spawn(move || match backend {
-                Backend::Svg => tile.render_loop(),
-                Backend::Particles { character } => {
-                    crate::video_particles::render_loop(tile, &character)
+            .spawn(move || {
+                // Yield CPU to the audio path. On the 2-core agent VMs
+                // the 15fps raster + H264 encode starves the Opus
+                // encoder's 20ms ticks during long answers — the voice
+                // arrives later and later until the receiver's playout
+                // gives up ("trailed off to silence"). A repeated video
+                // frame is invisible; late audio is not. nice(+10) on
+                // Linux applies to just this thread, so the renderer
+                // only runs when the audio pipeline doesn't need the
+                // core.
+                #[cfg(target_os = "linux")]
+                unsafe {
+                    libc::nice(10);
                 }
+                match backend {
+                Backend::Svg => tile.render_loop(),
+                Backend::Particles { character, ghostly_pack } => {
+                    crate::video_particles::render_loop(tile, &character, ghostly_pack.as_deref())
+                }
+                Backend::Ascii => crate::video_ascii::render_loop(tile),
+                Backend::AsciiRain => crate::video_ascii::render_loop_rain(tile),
+                Backend::AsciiGlitch => crate::video_ascii::render_loop_glitch(tile),
+                Backend::AsciiBot => crate::video_ascii::render_loop_bot(tile),
+                Backend::Vector => crate::video_vector::render_loop(tile),
+                Backend::SouthPark => crate::video_southpark::render_loop(tile),
+                Backend::SouthParkGoofy => crate::video_southpark::render_loop_with(
+                    tile,
+                    crate::video_southpark::SpStyle::Goofy,
+                ),
+                Backend::SouthParkStoner => crate::video_southpark::render_loop_with(
+                    tile,
+                    crate::video_southpark::SpStyle::Stoner,
+                ),
+                Backend::Face3d => crate::video_face3d::render_loop(tile),
+                Backend::Face3dAngry => crate::video_face3d::render_loop_with(
+                    tile,
+                    crate::video_face3d::Persona3d::fat_angry(),
+                ),
+                Backend::Face3dJoy => crate::video_face3d::render_loop_with(
+                    tile,
+                    crate::video_face3d::Persona3d::slender_joy(),
+                ),
+                Backend::Face3dEye => crate::video_face3d::render_loop_with(
+                    tile,
+                    crate::video_face3d::Persona3d::cyclops(),
+                ),
+                Backend::Face3dShard => crate::video_face3d::render_loop_with(
+                    tile,
+                    crate::video_face3d::Persona3d::shard(),
+                ),
+                Backend::Alexandria => crate::video_alexandria::render_loop(tile),
+            }
             })
             .expect("spawn video renderer");
     }

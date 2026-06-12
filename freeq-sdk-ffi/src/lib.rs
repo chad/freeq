@@ -447,7 +447,7 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
         Event::AuthFailed { reason } => FreeqEvent::AuthFailed {
             reason: reason.clone(),
         },
-        Event::Joined { channel, nick } => FreeqEvent::Joined {
+        Event::Joined { channel, nick, .. } => FreeqEvent::Joined {
             channel: channel.clone(),
             nick: nick.clone(),
         },

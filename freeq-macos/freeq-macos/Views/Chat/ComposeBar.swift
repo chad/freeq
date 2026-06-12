@@ -4,6 +4,10 @@ struct ComposeBar: View {
     @Environment(AppState.self) private var appState
     @State private var text: String = ""
     @FocusState private var isFocused: Bool
+    /// Bumped on .onAppear and whenever `activeChannel` changes — the
+    /// ComposeTextView watches this token and grabs first-responder
+    /// status so the user can start typing immediately.
+    @State private var focusToken: Int = 0
     @State private var pendingUpload: PendingUpload?
     @State private var isUploading = false
     @State private var autocompleteIndex: Int = 0
@@ -130,7 +134,8 @@ struct ComposeBar: View {
                         text: $text,
                         onSubmit: send,
                         onUpArrow: editLastMessage,
-                        members: appState.activeChannelState?.members.map(\.nick) ?? []
+                        members: appState.activeChannelState?.members.map(\.nick) ?? [],
+                        focusToken: focusToken
                     )
                     .frame(minHeight: 32, maxHeight: 120)
                     .fixedSize(horizontal: false, vertical: true)
@@ -199,6 +204,13 @@ struct ComposeBar: View {
             if let newValue {
                 text = newValue
             }
+        }
+        // Focus the compose bar on first appear and on every channel
+        // change so the user can start typing immediately after a
+        // sidebar selection — no extra click into the input required.
+        .onAppear { focusToken &+= 1 }
+        .onChange(of: appState.activeChannel) { _, _ in
+            focusToken &+= 1
         }
     }
 
@@ -334,6 +346,12 @@ struct ComposeTextView: NSViewRepresentable {
     var onSubmit: () -> Void
     var onUpArrow: () -> Void
     var members: [String]  // For tab completion
+    /// Monotonic token bumped by the parent when the input should grab
+    /// keyboard focus — e.g. after the user switches channels or the
+    /// view appears. The coordinator remembers the last value it acted
+    /// on so re-renders that didn't change the token don't steal focus
+    /// from the user mid-type.
+    var focusToken: Int = 0
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSScrollView()
@@ -368,6 +386,19 @@ struct ComposeTextView: NSViewRepresentable {
         textView.submitAction = onSubmit
         textView.upArrowAction = onUpArrow
         textView.members = members
+
+        // Honour focus-token bumps. Defer to the next runloop so the
+        // window has finished mounting the new compose bar before we
+        // ask it to make the text view first responder — otherwise on
+        // a sidebar selection change we'd race the view installation.
+        if context.coordinator.lastFocusToken != focusToken {
+            context.coordinator.lastFocusToken = focusToken
+            DispatchQueue.main.async {
+                if let window = textView.window {
+                    window.makeFirstResponder(textView)
+                }
+            }
+        }
     }
 
     func makeCoordinator() -> Coordinator {
@@ -376,6 +407,10 @@ struct ComposeTextView: NSViewRepresentable {
 
     class Coordinator: NSObject, NSTextViewDelegate {
         let parent: ComposeTextView
+        /// Last focus-token we acted on. Starts at -1 so the first
+        /// `focusToken=0` from the parent counts as a fresh request and
+        /// the compose bar takes focus on initial mount.
+        var lastFocusToken: Int = -1
 
         init(parent: ComposeTextView) {
             self.parent = parent

@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
                 eprintln!("Registered as {nick}");
                 handle.join(&channel).await?;
             }
-            Some(Event::Joined { channel: ch, nick }) => {
+            Some(Event::Joined { channel: ch, nick, .. }) => {
                 eprintln!("Joined {ch} as {nick}");
                 break;
             }

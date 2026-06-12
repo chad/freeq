@@ -1547,10 +1547,11 @@ public struct IrcMessage {
     public var isSigned: Bool
     public var timestampMs: Int64
     public var account: String?
+    public var reactions: [ReactionTally]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(fromNick: String, target: String, text: String, msgid: String?, replyTo: String?, replacesMsgid: String?, editOf: String?, batchId: String?, pinMsgid: String?, unpinMsgid: String?, isAction: Bool, isSigned: Bool, timestampMs: Int64, account: String?) {
+    public init(fromNick: String, target: String, text: String, msgid: String?, replyTo: String?, replacesMsgid: String?, editOf: String?, batchId: String?, pinMsgid: String?, unpinMsgid: String?, isAction: Bool, isSigned: Bool, timestampMs: Int64, account: String?, reactions: [ReactionTally]) {
         self.fromNick = fromNick
         self.target = target
         self.text = text
@@ -1565,6 +1566,7 @@ public struct IrcMessage {
         self.isSigned = isSigned
         self.timestampMs = timestampMs
         self.account = account
+        self.reactions = reactions
     }
 }
 
@@ -1617,6 +1619,9 @@ extension IrcMessage: Equatable, Hashable {
         if lhs.account != rhs.account {
             return false
         }
+        if lhs.reactions != rhs.reactions {
+            return false
+        }
         return true
     }
 
@@ -1635,6 +1640,7 @@ extension IrcMessage: Equatable, Hashable {
         hasher.combine(isSigned)
         hasher.combine(timestampMs)
         hasher.combine(account)
+        hasher.combine(reactions)
     }
 }
 
@@ -1660,7 +1666,8 @@ public struct FfiConverterTypeIrcMessage: FfiConverterRustBuffer {
                 isAction: FfiConverterBool.read(from: &buf), 
                 isSigned: FfiConverterBool.read(from: &buf), 
                 timestampMs: FfiConverterInt64.read(from: &buf), 
-                account: FfiConverterOptionString.read(from: &buf)
+                account: FfiConverterOptionString.read(from: &buf), 
+                reactions: FfiConverterSequenceTypeReactionTally.read(from: &buf)
         )
     }
 
@@ -1679,6 +1686,7 @@ public struct FfiConverterTypeIrcMessage: FfiConverterRustBuffer {
         FfiConverterBool.write(value.isSigned, into: &buf)
         FfiConverterInt64.write(value.timestampMs, into: &buf)
         FfiConverterOptionString.write(value.account, into: &buf)
+        FfiConverterSequenceTypeReactionTally.write(value.reactions, into: &buf)
     }
 }
 
@@ -1781,6 +1789,76 @@ public func FfiConverterTypePreKeyBundle_lift(_ buf: RustBuffer) throws -> PreKe
 #endif
 public func FfiConverterTypePreKeyBundle_lower(_ value: PreKeyBundle) -> RustBuffer {
     return FfiConverterTypePreKeyBundle.lower(value)
+}
+
+
+public struct ReactionTally {
+    public var emoji: String
+    public var nicks: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(emoji: String, nicks: [String]) {
+        self.emoji = emoji
+        self.nicks = nicks
+    }
+}
+
+#if compiler(>=6)
+extension ReactionTally: Sendable {}
+#endif
+
+
+extension ReactionTally: Equatable, Hashable {
+    public static func ==(lhs: ReactionTally, rhs: ReactionTally) -> Bool {
+        if lhs.emoji != rhs.emoji {
+            return false
+        }
+        if lhs.nicks != rhs.nicks {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(emoji)
+        hasher.combine(nicks)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeReactionTally: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ReactionTally {
+        return
+            try ReactionTally(
+                emoji: FfiConverterString.read(from: &buf), 
+                nicks: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ReactionTally, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.emoji, into: &buf)
+        FfiConverterSequenceString.write(value.nicks, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReactionTally_lift(_ buf: RustBuffer) throws -> ReactionTally {
+    return try FfiConverterTypeReactionTally.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeReactionTally_lower(_ value: ReactionTally) -> RustBuffer {
+    return FfiConverterTypeReactionTally.lower(value)
 }
 
 
@@ -3103,6 +3181,31 @@ fileprivate struct FfiConverterSequenceTypeIrcMember: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeIrcMember.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeReactionTally: FfiConverterRustBuffer {
+    typealias SwiftType = [ReactionTally]
+
+    public static func write(_ value: [ReactionTally], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeReactionTally.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ReactionTally] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ReactionTally]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeReactionTally.read(from: &buf))
         }
         return seq
     }

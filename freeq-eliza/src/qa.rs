@@ -504,9 +504,10 @@ struct AnthropicTextDelta {
 /// Messages API instead of Groq's OpenAI-compatible chat completions.
 /// Use this when `model` starts with `claude-` (e.g. `claude-opus-4-7`).
 ///
-/// Anthropic doesn't have native web-search inside Messages the way
-/// Groq's compound model does — answers come purely from the model's
-/// training. The returned [`Answer`] never has a `source` set.
+/// Web search is enabled via Anthropic's server-side `web_search` tool, so she
+/// can answer with current facts while keeping claude's reasoning. The streaming
+/// parser reads only the answer text (tool blocks are ignored), so the
+/// returned [`Answer`] still has no `source` set — the citations land inline.
 pub async fn anthropic_answer_streaming(
     client: &reqwest::Client,
     api_key: &str,
@@ -521,9 +522,14 @@ pub async fn anthropic_answer_streaming(
     // (the model picks its own sampling). Setting it returns 400.
     let body = serde_json::json!({
         "model": model,
-        "max_tokens": 320,
+        "max_tokens": 512,
         "stream": true,
         "system": system,
+        // Server-side web search — keeps claude's reasoning AND lets her look up
+        // current facts (the system prompt already tells her when to). Capped
+        // uses bound latency/cost; the streaming parser ignores the tool blocks
+        // and just reads the answer text, so she only gets smarter, never breaks.
+        "tools": [ { "type": "web_search_20250305", "name": "web_search", "max_uses": 2 } ],
         "messages": [
             { "role": "user", "content": user_prompt(transcript, question) },
         ],

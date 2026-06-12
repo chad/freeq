@@ -415,7 +415,7 @@ async fn channel_messaging() {
     expect_event(
         &mut events1,
         2000,
-        |e| matches!(e, Event::Joined { channel, nick } if channel == "#test" && nick == "alice"),
+        |e| matches!(e, Event::Joined { channel, nick, .. } if channel == "#test" && nick == "alice"),
         "Alice joined",
     )
     .await;
@@ -424,7 +424,7 @@ async fn channel_messaging() {
     expect_event(
         &mut events2,
         2000,
-        |e| matches!(e, Event::Joined { channel, nick } if channel == "#test" && nick == "bob"),
+        |e| matches!(e, Event::Joined { channel, nick, .. } if channel == "#test" && nick == "bob"),
         "Bob joined",
     )
     .await;
@@ -433,7 +433,7 @@ async fn channel_messaging() {
     expect_event(
         &mut events1,
         2000,
-        |e| matches!(e, Event::Joined { channel, nick } if channel == "#test" && nick == "bob"),
+        |e| matches!(e, Event::Joined { channel, nick, .. } if channel == "#test" && nick == "bob"),
         "Alice sees Bob join",
     )
     .await;
@@ -2733,7 +2733,7 @@ async fn channel_key() {
     expect_event(
         &mut events2,
         2000,
-        |e| matches!(e, Event::Joined { channel, nick } if channel == "#secret" && nick == "bob"),
+        |e| matches!(e, Event::Joined { channel, nick, .. } if channel == "#secret" && nick == "bob"),
         "Bob joined with key",
     )
     .await;
@@ -2762,7 +2762,7 @@ async fn channel_key() {
     expect_event(
         &mut events3,
         2000,
-        |e| matches!(e, Event::Joined { channel, nick } if channel == "#secret" && nick == "carol"),
+        |e| matches!(e, Event::Joined { channel, nick, .. } if channel == "#secret" && nick == "carol"),
         "Carol joined",
     )
     .await;

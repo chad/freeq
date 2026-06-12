@@ -49,9 +49,9 @@ use resvg::usvg;
 use crate::video::{overlay_svg_for_particles, VideoTile, VIDEO_H, VIDEO_W};
 
 const FPS: u64 = 15;
-/// Particle count at 1280×720. Roughly 2.3× the 12K we used at 360p
-/// — the field needs more density to read as solid at the higher
-/// resolution. CPU render still hits 15 fps with comfortable headroom.
+/// Particle count for the 720p tile — the field needs this density to read as
+/// solid at full resolution. Affordable now that eliza runs as a release build
+/// (see the resolution note in `video.rs`).
 const PARTICLES: usize = 28_000;
 /// Emotion-blend intensity — how strongly the mood mood overrides the
 /// character's resting palette. Low so a fully-Joy Eliza still reads as
@@ -61,13 +61,14 @@ const EMOTION_INTENSITY: f32 = 0.45;
 /// Particle-backend render loop. Drains the tile's mood/audio cells
 /// each frame, picks an emotion + intensity, asks ghostly to render,
 /// and publishes the frame back to the tile.
-pub(crate) fn render_loop(tile: VideoTile, character_name: &str) {
-    let base_character = match gho_characters::by_name(character_name) {
+pub(crate) fn render_loop(tile: VideoTile, character_name: &str, ghostly_pack: Option<&str>) {
+    let base_character = match crate::persona::resolve_character(character_name, ghostly_pack) {
         Some(c) => c,
         None => {
             tracing::warn!(
                 character = %character_name,
-                "unknown ghostly character; falling back to 'eliza'"
+                pack = ?ghostly_pack,
+                "unknown ghostly character/pack; falling back to 'eliza'"
             );
             gho_characters::by_name("eliza").expect("eliza always exists")
         }

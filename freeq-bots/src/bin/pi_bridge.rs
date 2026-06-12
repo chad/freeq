@@ -156,6 +156,7 @@ async fn run_once(cfg: Config) -> anyhow::Result<()> {
             Event::Joined {
                 channel,
                 nick: joined_nick,
+                ..
             } => {
                 if joined_nick.eq_ignore_ascii_case(&current_nick) {
                     tracing::info!(channel = %channel, "pi-bridge joined channel");

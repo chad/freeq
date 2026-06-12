@@ -890,7 +890,7 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
         Event::AuthFailed { reason } => {
             app.status_msg(&format!("Authentication failed: {reason}"));
         }
-        Event::Joined { channel, nick } => {
+        Event::Joined { channel, nick, .. } => {
             let cloak = app
                 .nick_hosts
                 .get(&nick.to_lowercase())

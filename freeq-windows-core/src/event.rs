@@ -124,7 +124,7 @@ pub fn convert_event(event: &freeq_sdk::event::Event) -> DomainEvent {
         Event::AuthFailed { reason } => DomainEvent::AuthFailed {
             reason: reason.clone(),
         },
-        Event::Joined { channel, nick } => DomainEvent::Joined {
+        Event::Joined { channel, nick, .. } => DomainEvent::Joined {
             channel: channel.clone(),
             nick: nick.clone(),
         },

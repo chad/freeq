@@ -174,7 +174,7 @@ async fn handle_event(
         Event::Connected => tracing::info!("Connected"),
         Event::Registered { nick } => tracing::info!("Registered as {nick}"),
 
-        Event::Joined { channel, nick } => {
+        Event::Joined { channel, nick, .. } => {
             if nick == bot_nick {
                 output::status(handle, channel, &system_agent(), "🤖",
                     "AI Factory online. Commands: /factory build <spec> | /audit <repo> | /prototype <spec> | /help"

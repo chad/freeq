@@ -71,6 +71,12 @@ chrono = "0.4"
 # question and injected into the LLM context.
 rusqlite = { workspace = true }
 
+# nice(2) for the video render thread — on the 2-core agent VMs the
+# raster + H264 encode starves the Opus encoder's real-time ticks, so
+# the renderer self-deprioritizes (video.rs spawn_renderer).
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [features]
 default = []
 stt = ["dep:whisper-rs"]
