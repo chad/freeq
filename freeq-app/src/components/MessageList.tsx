@@ -217,7 +217,12 @@ function renderTextSafe(text: string): React.ReactElement {
 /** Trusted domains that always load inline (our own infrastructure). */
 function isTrustedImageUrl(url: string): boolean {
   try {
-    const u = new URL(url);
+    const u = new URL(url, window.location.origin);
+    // Private freeq media served from our own origin is always first-party —
+    // never gate it behind the "load external media" setting.
+    if (u.origin === window.location.origin && u.pathname.startsWith('/api/v1/media/')) {
+      return true;
+    }
     const h = u.hostname;
     return h === 'cdn.bsky.app' || h.endsWith('.bsky.app') || h.endsWith('.bsky.network')
       || h === 'freeq.at' || h.endsWith('.freeq.at') || h === 'localhost';
@@ -360,7 +365,7 @@ function InlineVideoPlayer({ url }: { url: string }) {
   );
 }
 
-function MessageContent({ msg }: { msg: Message }) {
+export function MessageContent({ msg }: { msg: Message }) {
   const setLightbox = useStore((s) => s.setLightboxUrl);
 
   if (msg.isAction) {
