@@ -738,6 +738,15 @@ pub struct SharedState {
     pub spawned_agents: Mutex<HashMap<String, SpawnedAgent>>,
     /// Per-IP rate limiter for expensive REST endpoints (OG preview, blob proxy, upload).
     pub rest_rate_limiter: crate::web::IpRateLimiter,
+    /// Liveness probes: session_id → when the probe PING was sent. Set when a
+    /// new same-DID session attaches; cleared by the probed session's PONG.
+    /// Sessions still pending after the deadline are evicted — this reaps
+    /// zombie sockets left behind by frozen/resumed agent VMs in seconds
+    /// instead of waiting out the ping timeout.
+    pub liveness_probes: Mutex<HashMap<String, std::time::Instant>>,
+    /// Per-session eviction signal. Notifying it makes the session's read
+    /// loop exit and run its normal disconnect cleanup path.
+    pub session_kill: Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
 }
 
 /// A spawned virtual agent (child of a real agent session).
@@ -1420,6 +1429,8 @@ impl Server {
             spawned_agents: Mutex::new(HashMap::new()),
             // 30 requests per 60-second window per IP for expensive REST endpoints
             rest_rate_limiter: crate::web::IpRateLimiter::new(30, 60),
+            liveness_probes: Mutex::new(HashMap::new()),
+            session_kill: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -4399,6 +4410,8 @@ mod s2s_adversarial_tests {
             ghost_sessions: Mutex::new(HashMap::new()),
             spawned_agents: Mutex::new(HashMap::new()),
             rest_rate_limiter: crate::web::IpRateLimiter::new(30, 60),
+            liveness_probes: Mutex::new(HashMap::new()),
+            session_kill: Mutex::new(HashMap::new()),
         })
     }
 

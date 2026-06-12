@@ -387,6 +387,17 @@ where
     let ping_timeout = tokio::time::Duration::from_secs(60);
     let mut awaiting_pong = false;
 
+    // Eviction signal: the liveness reaper (registration::probe_sibling_liveness)
+    // notifies this to force the loop to exit and run normal cleanup.
+    let kill_signal = {
+        let n = std::sync::Arc::new(tokio::sync::Notify::new());
+        state
+            .session_kill
+            .lock()
+            .insert(session_id.clone(), n.clone());
+        n
+    };
+
     // Rate limiting: max 10 commands per second, token bucket
     let mut rate_tokens: f64 = 10.0;
     let mut rate_last = tokio::time::Instant::now();
@@ -406,7 +417,7 @@ where
         // is fully buffered, preventing OOM from clients sending gigabytes
         // without a newline.
         const MAX_LINE_LEN: usize = 8192;
-        let read_result = tokio::time::timeout(ping_interval, async {
+        let read_fut = tokio::time::timeout(ping_interval, async {
             use tokio::io::AsyncBufReadExt as _;
             loop {
                 let buf = reader.fill_buf().await?;
@@ -436,8 +447,14 @@ where
                     return Ok(line_buf.len());
                 }
             }
-        })
-        .await;
+        });
+        let read_result = tokio::select! {
+            r = read_fut => r,
+            _ = kill_signal.notified() => {
+                tracing::info!(%session_id, "Session evicted (liveness probe unanswered)");
+                break;
+            }
+        };
         if line_buf.len() > MAX_LINE_LEN {
             tracing::warn!(%session_id, len = line_buf.len(), "Line too long, dropping");
             let reply =
@@ -735,6 +752,8 @@ where
             }
             "PONG" => {
                 awaiting_pong = false;
+                // Answering any PING proves liveness — clear a pending probe.
+                state.liveness_probes.lock().remove(&session_id);
             }
             "JOIN" => {
                 if !conn.registered {
@@ -2901,6 +2920,8 @@ fn broadcast_quit_s2s(state: &Arc<SharedState>, nick: &str) {
 /// Clean up per-session state (connections, caps, etc.) but NOT channel membership.
 fn cleanup_session_state(state: &Arc<SharedState>, session_id: &str) {
     state.connections.lock().remove(session_id);
+    state.session_kill.lock().remove(session_id);
+    state.liveness_probes.lock().remove(session_id);
     state.session_dids.lock().remove(session_id);
     state.session_handles.lock().remove(session_id);
     state.session_iroh_ids.lock().remove(session_id);
