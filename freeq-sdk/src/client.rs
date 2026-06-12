@@ -864,6 +864,10 @@ impl ClientHandle {
 pub const TRANSPORT_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 pub async fn establish_connection(config: &ConnectConfig) -> Result<EstablishedConnection> {
+    config
+        .validate()
+        .map_err(|e| anyhow::anyhow!("invalid ConnectConfig: {e}"))?;
+
     // If a WebSocket URL is configured, prefer that transport. iOS sets this
     // so it can reach the server on networks that block port 6667.
     #[cfg(feature = "websocket")]
@@ -3074,6 +3078,59 @@ mod multiline_tests {
             got.as_deref(),
             Some(expected),
             "codeblock body should be assembled byte-exact. events: {events:#?}",
+        );
+    }
+}
+
+#[cfg(test)]
+mod connect_config_tests {
+    use super::*;
+
+    #[test]
+    fn default_config_is_valid() {
+        assert!(ConnectConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_empty_and_oversized_nick() {
+        let mut c = ConnectConfig::default();
+        c.nick = String::new();
+        assert!(c.validate().is_err());
+        c.nick = "x".repeat(65);
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_nick_with_protocol_characters() {
+        for bad in ["a b", "a,b", "a*b", "a?b", "a!b", "a@b", "a#b", "a\rb"] {
+            let mut c = ConnectConfig::default();
+            c.nick = bad.to_string();
+            assert!(c.validate().is_err(), "nick {bad:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn rejects_empty_server_addr_and_user() {
+        let mut c = ConnectConfig::default();
+        c.server_addr = String::new();
+        assert!(c.validate().is_err());
+
+        let mut c = ConnectConfig::default();
+        c.user = String::new();
+        assert!(c.validate().is_err());
+    }
+
+    #[tokio::test]
+    async fn establish_connection_enforces_validation() {
+        let mut c = ConnectConfig::default();
+        c.nick = "bad nick".to_string();
+        let err = match establish_connection(&c).await {
+            Ok(_) => panic!("invalid config must not connect"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("invalid ConnectConfig"),
+            "got: {err}"
         );
     }
 }
