@@ -121,6 +121,22 @@ pub struct MessageRow {
     pub sender_did: Option<String>,
 }
 
+/// A persisted private-media metadata row. The bytes themselves live
+/// encrypted-at-rest on disk (see `media_store`); this is just the index.
+#[derive(Debug, Clone)]
+pub struct MediaRow {
+    pub id: String,
+    pub uploader_did: String,
+    /// Channel name or `canonical_dm_key` the media was uploaded to.
+    pub scope: String,
+    pub mime: String,
+    pub size: u64,
+    pub alt: Option<String>,
+    pub filename: String,
+    pub created_at: u64,
+    pub deleted_at: Option<u64>,
+}
+
 /// A persisted identity (DID-nick binding).
 #[derive(Debug, Clone)]
 pub struct IdentityRow {
@@ -389,6 +405,24 @@ impl Db {
                 UNIQUE(channel, msgid)
             );
             CREATE INDEX IF NOT EXISTS idx_pins_channel ON pins(channel, pinned_at DESC);
+            ",
+        )?;
+        // Private media: metadata for blobs stored encrypted-at-rest on local
+        // disk and served via signed capability URLs. The bytes live on disk
+        // (see `media_store`), not in this table — only metadata is recorded.
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS media (
+                id           TEXT PRIMARY KEY,
+                uploader_did TEXT NOT NULL,
+                scope        TEXT NOT NULL,   -- channel name or canonical_dm_key
+                mime         TEXT NOT NULL,
+                size         INTEGER NOT NULL,
+                alt          TEXT,
+                filename     TEXT NOT NULL,
+                created_at   INTEGER NOT NULL,
+                deleted_at   INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_media_scope ON media(scope, created_at DESC);
             ",
         )?;
         self.conn.execute_batch(
@@ -895,6 +929,75 @@ impl Db {
         Ok(changed)
     }
 
+    /// Record metadata for a privately-stored media object.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_media(
+        &self,
+        id: &str,
+        uploader_did: &str,
+        scope: &str,
+        mime: &str,
+        size: u64,
+        alt: Option<&str>,
+        filename: &str,
+        created_at: u64,
+    ) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT INTO media (id, uploader_did, scope, mime, size, alt, filename, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                id,
+                uploader_did,
+                scope,
+                mime,
+                size as i64,
+                alt,
+                filename,
+                created_at as i64
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Fetch live (non-deleted) media metadata by id. Returns None if missing
+    /// or soft-deleted.
+    pub fn get_media(&self, id: &str) -> SqlResult<Option<MediaRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, uploader_did, scope, mime, size, alt, filename, created_at, deleted_at
+             FROM media WHERE id = ?1 AND deleted_at IS NULL LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map(params![id], |row| {
+            Ok(MediaRow {
+                id: row.get(0)?,
+                uploader_did: row.get(1)?,
+                scope: row.get(2)?,
+                mime: row.get(3)?,
+                size: row.get::<_, i64>(4)? as u64,
+                alt: row.get(5)?,
+                filename: row.get(6)?,
+                created_at: row.get::<_, i64>(7)? as u64,
+                deleted_at: row.get::<_, Option<i64>>(8)?.map(|v| v as u64),
+            })
+        })?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Soft-delete a media object by id. Returns the number of rows changed.
+    pub fn soft_delete_media(&self, id: &str) -> SqlResult<usize> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let changed = self.conn.execute(
+            "UPDATE media SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
+            params![now as i64, id],
+        )?;
+        Ok(changed)
+    }
+
     /// Store an edit (a new message that replaces an old one).
     pub fn insert_edit(
         &self,
@@ -1371,6 +1474,43 @@ mod tests {
         let loaded_ch = loaded.get("#test").unwrap();
         assert_eq!(loaded_ch.bans.len(), 1);
         assert_eq!(loaded_ch.bans[0].mask, "did:plc:abc");
+    }
+
+    #[test]
+    fn media_insert_get_softdelete() {
+        let db = Db::open_memory().unwrap();
+
+        db.insert_media(
+            "abc123",
+            "did:plc:alice",
+            "#test",
+            "image/jpeg",
+            4096,
+            Some("a cat"),
+            "cat.jpg",
+            1000,
+        )
+        .unwrap();
+
+        let row = db.get_media("abc123").unwrap().expect("media should exist");
+        assert_eq!(row.id, "abc123");
+        assert_eq!(row.uploader_did, "did:plc:alice");
+        assert_eq!(row.scope, "#test");
+        assert_eq!(row.mime, "image/jpeg");
+        assert_eq!(row.size, 4096);
+        assert_eq!(row.alt.as_deref(), Some("a cat"));
+        assert_eq!(row.filename, "cat.jpg");
+        assert_eq!(row.created_at, 1000);
+        assert!(row.deleted_at.is_none());
+
+        // Unknown id → None.
+        assert!(db.get_media("nope").unwrap().is_none());
+
+        // Soft delete hides it from get_media.
+        assert_eq!(db.soft_delete_media("abc123").unwrap(), 1);
+        assert!(db.get_media("abc123").unwrap().is_none());
+        // Deleting again is a no-op.
+        assert_eq!(db.soft_delete_media("abc123").unwrap(), 0);
     }
 
     #[test]

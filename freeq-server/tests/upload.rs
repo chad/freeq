@@ -40,6 +40,47 @@ async fn start_server() -> (
     server.start_with_web().await.unwrap()
 }
 
+/// Start a test server with persistence enabled (db_path + data_dir in a
+/// tempdir), so private media storage is available. Returns the tempdir guard
+/// too — keep it alive for the duration of the test.
+async fn start_server_with_db() -> (
+    std::net::SocketAddr,
+    std::net::SocketAddr,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+    tempfile::TempDir,
+    PrivateKey,
+) {
+    let key = PrivateKey::generate_ed25519();
+    let did_doc = did::make_test_did_document(TEST_DID, &key.public_key_multibase());
+    let mut docs = HashMap::new();
+    docs.insert(TEST_DID.to_string(), did_doc);
+    let resolver = DidResolver::static_map(docs);
+
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("freeq.db");
+    let config = freeq_server::config::ServerConfig {
+        listen_addr: "127.0.0.1:0".to_string(),
+        server_name: "test-upload-db".to_string(),
+        challenge_timeout_secs: 60,
+        db_path: Some(db_path.to_string_lossy().to_string()),
+        data_dir: Some(tmp.path().to_string_lossy().to_string()),
+        ..Default::default()
+    };
+    let server = freeq_server::server::Server::with_resolver(config, resolver);
+    let (irc, http, h) = server.start_with_web().await.unwrap();
+    (irc, http, h, tmp, key)
+}
+
+/// Connect + authenticate the given key as TEST_DID and wait until registered.
+async fn authenticate(irc: std::net::SocketAddr, key: PrivateKey) -> mpsc::Receiver<Event> {
+    let mut rx = connect_authenticated(irc, key).await;
+    wait_for(&mut rx, |e| matches!(e, Event::Connected), "connected").await;
+    wait_for(&mut rx, |e| matches!(e, Event::Authenticated { .. }), "auth").await;
+    wait_for(&mut rx, |e| matches!(e, Event::Registered { .. }), "registered").await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    rx
+}
+
 /// Connect and authenticate an IRC client (populates session_dids on server).
 async fn connect_authenticated(
     irc_addr: std::net::SocketAddr,
@@ -166,48 +207,23 @@ async fn upload_rejects_oversized_file() {
     assert_eq!(resp.status(), 413);
 }
 
+/// A private-by-default upload (no share toggles) needs only an authenticated
+/// freeq session — NO PDS blob scope / step-up — and returns a signed
+/// capability URL that serves the original bytes back.
 #[tokio::test]
-async fn upload_with_active_session_passes_auth_gate() {
-    let key = PrivateKey::generate_ed25519();
-    let did_doc = did::make_test_did_document(TEST_DID, &key.public_key_multibase());
-    let mut docs = HashMap::new();
-    docs.insert(TEST_DID.to_string(), did_doc);
-    let resolver = DidResolver::static_map(docs);
-
-    let config = freeq_server::config::ServerConfig {
-        listen_addr: "127.0.0.1:0".to_string(),
-        server_name: "test-upload-session".to_string(),
-        challenge_timeout_secs: 60,
-        ..Default::default()
-    };
-    let server = freeq_server::server::Server::with_resolver(config, resolver);
-    let (irc, http, _h) = server.start_with_web().await.unwrap();
-
-    // Connect + authenticate via IRC to populate session_dids
-    let mut rx = connect_authenticated(irc, key).await;
-    wait_for(&mut rx, |e| matches!(e, Event::Connected), "connected").await;
-    wait_for(
-        &mut rx,
-        |e| matches!(e, Event::Authenticated { .. }),
-        "auth",
-    )
-    .await;
-    wait_for(
-        &mut rx,
-        |e| matches!(e, Event::Registered { .. }),
-        "registered",
-    )
-    .await;
-
-    tokio::time::sleep(Duration::from_millis(200)).await;
+async fn private_upload_succeeds_and_serves_roundtrip() {
+    let (irc, http, _h, _tmp, key) = start_server_with_db().await;
+    let _rx = authenticate(irc, key).await;
 
     let client = reqwest::Client::new();
+    let body_bytes = b"hello private world".to_vec();
     let form = reqwest::multipart::Form::new()
         .text("did", TEST_DID.to_string())
+        .text("channel", "#secret")
         .part(
             "file",
-            reqwest::multipart::Part::bytes(b"hello".to_vec())
-                .file_name("test.txt")
+            reqwest::multipart::Part::bytes(body_bytes.clone())
+                .file_name("note.txt")
                 .mime_str("text/plain")
                 .unwrap(),
         );
@@ -218,14 +234,136 @@ async fn upload_with_active_session_passes_auth_gate() {
         .send()
         .await
         .unwrap();
-
-    let status = resp.status().as_u16();
-    let body = resp.text().await.unwrap();
-    // Auth gate passed → "No active session for this DID" (no PDS creds)
-    assert_eq!(status, 401);
+    assert_eq!(resp.status(), 200, "private upload should succeed");
+    let json: serde_json::Value = resp.json().await.unwrap();
+    let url = json["url"].as_str().expect("url in response");
     assert!(
-        body.contains("No active session for this DID"),
-        "Should pass auth gate but fail on PDS session; got: {body}"
+        url.contains("/api/v1/media/"),
+        "should be a capability URL, got {url}"
+    );
+    assert_eq!(json["private"], serde_json::json!(true));
+
+    // Fetch the capability URL back → original bytes + correct content-type.
+    let got = client.get(url).send().await.unwrap();
+    assert_eq!(got.status(), 200);
+    assert_eq!(
+        got.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("text/plain")
+    );
+    let fetched = got.bytes().await.unwrap();
+    assert_eq!(fetched.as_ref(), body_bytes.as_slice());
+}
+
+/// A tampered capability signature is rejected with 403.
+#[tokio::test]
+async fn media_serve_rejects_tampered_signature() {
+    let (irc, http, _h, _tmp, key) = start_server_with_db().await;
+    let _rx = authenticate(irc, key).await;
+
+    let client = reqwest::Client::new();
+    let form = reqwest::multipart::Form::new()
+        .text("did", TEST_DID.to_string())
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(b"top secret".to_vec())
+                .file_name("s.txt")
+                .mime_str("text/plain")
+                .unwrap(),
+        );
+    let resp = client
+        .post(format!("http://{http}/api/v1/upload"))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    let json: serde_json::Value = resp.json().await.unwrap();
+    let url = json["url"].as_str().unwrap().to_string();
+
+    // Corrupt the signature segment: /api/v1/media/{id}/{sig}/{filename}
+    let parts: Vec<&str> = url.split("/api/v1/media/").collect();
+    let tail = parts[1]; // {id}/{sig}/{filename}
+    let segs: Vec<&str> = tail.split('/').collect();
+    let tampered = format!(
+        "http://{http}/api/v1/media/{}/{}/{}",
+        segs[0], "AAAAAAAAAAAAAAAAAAAAAA", segs[2]
+    );
+    let got = client.get(&tampered).send().await.unwrap();
+    assert_eq!(got.status(), 403, "tampered sig must be forbidden");
+}
+
+/// Range requests return 206 with a correct Content-Range and partial body.
+#[tokio::test]
+async fn media_serve_supports_range() {
+    let (irc, http, _h, _tmp, key) = start_server_with_db().await;
+    let _rx = authenticate(irc, key).await;
+
+    let client = reqwest::Client::new();
+    let data: Vec<u8> = (0..=255u8).collect(); // 256 bytes
+    let form = reqwest::multipart::Form::new()
+        .text("did", TEST_DID.to_string())
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(data.clone())
+                .file_name("clip.mp4")
+                .mime_str("video/mp4")
+                .unwrap(),
+        );
+    let resp = client
+        .post(format!("http://{http}/api/v1/upload"))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    let json: serde_json::Value = resp.json().await.unwrap();
+    let url = json["url"].as_str().unwrap().to_string();
+
+    let got = client
+        .get(&url)
+        .header("Range", "bytes=10-19")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(got.status(), 206, "range request should be partial content");
+    assert_eq!(
+        got.headers()
+            .get("content-range")
+            .and_then(|v| v.to_str().ok()),
+        Some("bytes 10-19/256")
+    );
+    let body = got.bytes().await.unwrap();
+    assert_eq!(body.as_ref(), &data[10..=19]);
+}
+
+/// Asking to share to the PDS without a blob-upload session triggers step-up.
+#[tokio::test]
+async fn share_pds_without_scope_requires_step_up() {
+    let (irc, http, _h, _tmp, key) = start_server_with_db().await;
+    let _rx = authenticate(irc, key).await;
+
+    let client = reqwest::Client::new();
+    let form = reqwest::multipart::Form::new()
+        .text("did", TEST_DID.to_string())
+        .text("share_pds", "true")
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(b"hi".to_vec())
+                .file_name("p.txt")
+                .mime_str("text/plain")
+                .unwrap(),
+        );
+    let resp = client
+        .post(format!("http://{http}/api/v1/upload"))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    // Authenticated via IRC SASL but no web OAuth session → not_authenticated (401).
+    let status = resp.status().as_u16();
+    assert!(
+        status == 401 || status == 403,
+        "share without blob scope should require auth/step-up, got {status}"
     );
 }
 
