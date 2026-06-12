@@ -103,6 +103,14 @@ struct Cli {
     #[arg(long, default_value = "llama-3.3-70b-versatile")]
     voice_answer_model: String,
 
+    /// Model for spoken questions that need LIVE data (weather, prices,
+    /// scores, news). The fast voice model above has no web access — a
+    /// question routed as needs-live-data goes here instead: a Groq
+    /// agentic model with server-side web search. Slower (~2-4 s) but
+    /// honest; the alternative is a confident hallucination.
+    #[arg(long, default_value = "groq/compound-mini")]
+    voice_search_model: String,
+
     /// Groq vision model for questions about a participant's shared
     /// screen or camera (e.g. "Eliza, what's on my screen?").
     #[arg(long, default_value = "meta-llama/llama-4-scout-17b-16e-instruct")]
@@ -329,6 +337,7 @@ async fn main() -> Result<()> {
         groq_chat_model: cli.groq_chat_model,
         groq_answer_model: cli.groq_answer_model,
         voice_answer_model: cli.voice_answer_model,
+        voice_search_model: cli.voice_search_model,
         vision_model: cli.vision_model,
         elevenlabs_api_key,
         elevenlabs_model: cli.elevenlabs_model,

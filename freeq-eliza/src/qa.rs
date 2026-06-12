@@ -84,12 +84,20 @@ sentence gets read aloud as garbage.\n\
 a picture of X', 'what does Y look like', 'show me Z', or 'draw me a \
 W', say yes and answer briefly: 'Here's the Eiffel Tower at night.' / \
 'That's what a quokka looks like.' / 'Here it is.' — the picture WILL \
-appear as you speak. Sound confident, not apologetic.\n\
-4. When a question needs current events or specific facts, search the \
-web and answer from what you find. Do NOT narrate that you are \
-searching — just deliver the answer.\n\
-5. Use the call transcript below as context for questions about the \
-conversation itself. Otherwise answer from general knowledge.\n\
+appear as you speak. Sound confident, not apologetic. But never \
+INVENT a visual observation: if no image came with this message, \
+don't claim to be looking at one right now.\n\
+4. Answer NOW, in this reply, from what you have. NEVER promise to \
+'check', 'look up', 'get back to you', or ask for 'a moment' — there \
+is no later; an unfulfilled promise is worse than a plain answer. If \
+you have web search available, use it silently and deliver the \
+result. If you don't and the question needs live data (weather, \
+prices, scores, breaking news), give your best answer and say plainly \
+that it may not reflect this minute.\n\
+5. The LIVE CALL TRANSCRIPT section (when present) is what has been \
+said in THIS call — use it for questions about the conversation. A \
+PAST EXCHANGES section is older sessions, possibly days old — never \
+treat it as something said just now.\n\
 6. Don't repeat the question. If you genuinely don't know, say so \
 plainly.\n\
 7. NEVER mention the words 'scene card', 'video tile', 'image query', \
@@ -143,15 +151,21 @@ pub async fn answer(
     Ok(Answer { text, source })
 }
 
-/// The user-turn prompt: the rolling transcript as context plus the
+/// The user-turn prompt: pre-labeled context sections plus the
 /// question. Shared by [`answer`] and [`answer_streaming`].
-fn user_prompt(transcript: &str, question: &str) -> String {
-    let context = if transcript.trim().is_empty() {
-        "(no transcript yet — the call just started)".to_string()
+///
+/// `context` arrives ALREADY labeled by the caller (a "LIVE CALL
+/// TRANSCRIPT" section, an optional "PAST EXCHANGES" section, …) — we
+/// must not wrap it in another header. The old behaviour stamped
+/// "Call transcript so far:" over everything, which made days-old
+/// memory recall read as things said in this call.
+fn user_prompt(context: &str, question: &str) -> String {
+    let context = if context.trim().is_empty() {
+        "(no call context yet — the call just started)"
     } else {
-        transcript.to_string()
+        context
     };
-    format!("Call transcript so far:\n{context}\n\nQuestion: {question}")
+    format!("{context}\n\nQuestion: {question}")
 }
 
 /// The top web source behind an answer — the first result of the first
@@ -167,6 +181,75 @@ fn extract_source(tools: &[ExecutedTool]) -> Option<Source> {
             title: r.title.trim().to_string(),
             url: r.url.trim().to_string(),
         })
+}
+
+// ── Question routing ─────────────────────────────────────────────────
+
+/// How a spoken question should be answered — decided by a fast
+/// classifier so routing doesn't depend on brittle cue-phrase lists.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+pub struct QuestionRoute {
+    /// The asker wants the bot to LOOK at their camera/screen.
+    #[serde(default)]
+    pub visual: bool,
+    /// Needs data from right now (weather, prices, scores, news) — the
+    /// fast voice model would have to hallucinate it.
+    #[serde(default)]
+    pub live_data: bool,
+}
+
+/// Model for [`route_question`] — small and fast (~100-200 ms); the
+/// router runs in parallel with context assembly so it adds no latency
+/// to the answer path.
+pub const ROUTER_MODEL: &str = "llama-3.1-8b-instant";
+
+const ROUTER_SYSTEM: &str = "You route a question asked aloud in a live \
+video call to the right answering pipeline. Output ONLY a JSON object: \
+{\"visual\": bool, \"live_data\": bool}.\n\
+visual=true when the asker wants you to LOOK at their live camera or \
+shared screen: anything about what they're showing, holding, wearing, \
+pointing at, their surroundings, text/numbers on their screen or tile, \
+'do you see...', 'what is this', 'read this'.\n\
+live_data=true when answering requires CURRENT real-world data that \
+changes hour to hour or day to day: weather or forecasts, stock or \
+crypto prices, sports scores or fixtures, breaking news, today's \
+events, current status of services. NOT for stable facts, math, \
+opinions, the call itself, or anything answerable from general \
+knowledge.\n\
+Both false for everything else. When unsure, false.";
+
+/// Classify a spoken question with a fast small model. Returns `None`
+/// on any error or non-JSON reply — callers fall back to the cue-list
+/// heuristics, so a router hiccup degrades, never breaks.
+pub async fn route_question(
+    client: &reqwest::Client,
+    api_key: &str,
+    question: &str,
+) -> Option<QuestionRoute> {
+    let body = serde_json::json!({
+        "model": ROUTER_MODEL,
+        "max_tokens": 40,
+        "temperature": 0,
+        "response_format": { "type": "json_object" },
+        "messages": [
+            { "role": "system", "content": ROUTER_SYSTEM },
+            { "role": "user", "content": question },
+        ],
+    });
+    let resp = client
+        .post("https://api.groq.com/openai/v1/chat/completions")
+        .bearer_auth(api_key)
+        .json(&body)
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let parsed: ChatResponse = resp.json().await.ok()?;
+    let text = parsed.choices.first()?.message.content.trim().to_string();
+    let v = extract_json(&text)?;
+    serde_json::from_value::<QuestionRoute>(v).ok()
 }
 
 const SCENE_SYSTEM: &str = "You design one visual card for Eliza's \

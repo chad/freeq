@@ -14,7 +14,10 @@ use serde::Deserialize;
 
 const VISION_SYSTEM: &str = "You are an AI agent in a live voice \
 call. A participant is sharing their screen or camera and has asked you \
-about what you see. Answer their question from the image. Rules: answer \
+about what you see. Answer their question from the image. A recent \
+slice of the call transcript may be included — use it to resolve \
+references like 'now', 'again', 'the same thing', or 'like I said', \
+but answer from the IMAGE, not the transcript. Rules: answer \
 in 1-3 short sentences — your reply is spoken aloud, so be brief and \
 conversational. No markdown, no bullet points, no emoji. Never put URLs \
 in your answer. If the image is unclear or doesn't show what they asked \
@@ -175,8 +178,19 @@ pub async fn describe(
     api_key: &str,
     model: &str,
     question: &str,
+    // Recent live-call transcript ("" = none) — lets the vision model
+    // resolve "now"/"again"/"the same thing" instead of answering each
+    // question amnesiac.
+    context: &str,
     image_data_uri: &str,
 ) -> Result<String> {
+    let text = if context.trim().is_empty() {
+        question.to_string()
+    } else {
+        format!(
+            "Live call transcript (recent, for reference):\n{context}\n\nQuestion: {question}"
+        )
+    };
     let body = serde_json::json!({
         "model": model,
         "max_tokens": 320,
@@ -184,7 +198,7 @@ pub async fn describe(
         "messages": [
             { "role": "system", "content": VISION_SYSTEM },
             { "role": "user", "content": [
-                { "type": "text", "text": question },
+                { "type": "text", "text": text },
                 { "type": "image_url", "image_url": { "url": image_data_uri } },
             ]},
         ],

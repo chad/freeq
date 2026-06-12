@@ -155,16 +155,16 @@ fn is_directly_addressed(text: &str, nick: &str) -> bool {
 /// canonical lowercase name. Used so a bot can swing its gaze toward
 /// whoever the human just called on.
 ///
-/// The matcher is intentionally permissive on the leading word — STT
-/// frequently mishears names — but rejects anything that doesn't
-/// land on a candidate. Returns `None` for idle chatter or addresses
-/// to nobody we know.
+/// The matcher is EXACT on the name (no edit-distance, no
+/// containment), unlike the fuzzy self-address parser. A match here
+/// *suppresses* the bot's own answer ("that line is for olive, not
+/// me"), so a fuzzy false positive silences the bot — the live
+/// misfire was "A live voice call..." matching "olive" at distance 1
+/// and muting yokota on a question containing its own name. Returns
+/// `None` for idle chatter or addresses to nobody we know.
 pub fn extract_addressee(text: &str, candidates: &[&str]) -> Option<String> {
-    // Re-use the avatar-kit address parser by trying each candidate
-    // in turn — first match wins. The parser already handles colon,
-    // comma, @ prefix, and slight STT mishearings via edit distance.
     for cand in candidates {
-        if freeq_agent_kit::addressing::extract_addressed(text, cand).is_some() {
+        if freeq_agent_kit::addressing::extract_addressed_exact(text, cand).is_some() {
             return Some(cand.to_ascii_lowercase());
         }
     }
@@ -327,6 +327,22 @@ mod tests {
             &["narrator", "utopia"],
         );
         assert!(r.is_none(), "mid-sentence mentions should not be addresses");
+    }
+
+    #[test]
+    fn addressee_fuzzy_mishearings_do_not_suppress() {
+        // The live misfire: "A live" → "alive", edit distance 1 from
+        // "olive" — the fuzzy matcher took it and muted yokota on a
+        // line containing yokota's OWN name. Matching other agents'
+        // names must be exact.
+        let r = extract_addressee(
+            "A live voice call with the assistant Yokota.",
+            &["olive", "utopia"],
+        );
+        assert!(r.is_none(), "fuzzy near-miss must not register as an address");
+        // Exact spelling still routes.
+        let r = extract_addressee("olive, what's 2+2", &["olive", "utopia"]);
+        assert_eq!(r.as_deref(), Some("olive"));
     }
 
     #[test]

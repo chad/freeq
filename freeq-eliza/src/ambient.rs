@@ -124,9 +124,17 @@ async fn run_monitor(
 
         let total = snapshot.transcript.len();
         let start = consumed_lines.min(total);
-        let new_lines = &snapshot.transcript[start..];
-        let new_words = new_lines
+        // The bot's own answers are in the transcript now (symmetric
+        // log) — they don't count as new conversation to react to, or
+        // the tile would re-theme off her own voice every tick.
+        let own_prefix = format!(
+            "{}:",
+            cfg.nick.split_once('-').map(|(p, _)| p).unwrap_or(&cfg.nick)
+        )
+        .to_ascii_lowercase();
+        let new_words = snapshot.transcript[start..]
             .iter()
+            .filter(|l| !l.to_ascii_lowercase().starts_with(&own_prefix))
             .flat_map(|l| l.split_whitespace())
             .count();
         if new_words < MIN_NEW_WORDS {

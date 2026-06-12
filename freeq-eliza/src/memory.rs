@@ -22,6 +22,22 @@ use rusqlite::{params, Connection};
 use std::path::Path;
 use std::sync::Mutex;
 
+/// Words too common to anchor a memory recall on. Spoken questions are
+/// mostly these — "what do you think about the weather" carries exactly
+/// two content words — and FTS-ORing the rest matched essentially every
+/// stored exchange.
+const RECALL_STOPWORDS: &[&str] = &[
+    "the", "and", "but", "for", "are", "was", "were", "you", "your", "yours", "our", "ours",
+    "his", "her", "hers", "its", "their", "theirs", "this", "that", "these", "those", "with",
+    "from", "have", "has", "had", "what", "whats", "when", "where", "which", "who", "whom",
+    "why", "how", "can", "could", "would", "should", "will", "shall", "may", "might", "must",
+    "did", "does", "doing", "done", "about", "tell", "please", "okay", "yeah", "yes", "not",
+    "now", "then", "there", "here", "they", "them", "she", "him", "out", "into", "over",
+    "under", "again", "just", "very", "really", "some", "any", "all", "one", "two", "get",
+    "got", "let", "lets", "know", "think", "like", "want", "going", "say", "said", "see",
+    "look", "right", "well", "also", "too", "been", "being", "because", "still", "more",
+];
+
 /// A single past exchange in the bot's memory.
 #[derive(Debug, Clone)]
 pub struct Recollection {
@@ -104,21 +120,30 @@ impl Memory {
             .chars()
             .map(|c| if c.is_alphanumeric() || c == ' ' { c } else { ' ' })
             .collect();
-        // Build an OR query over the content words, each quoted as a literal
+        // Build an OR query over the CONTENT words, each quoted as a literal
         // term, so recall fires on ANY shared term and `ORDER BY rank` (bm25)
         // surfaces the most relevant — the intended "top-K relevant" behaviour.
         // A bare multi-word MATCH is implicit-AND, which required a past
         // exchange to contain EVERY word of the question and so almost never hit
         // for natural, paraphrased recall ("remind me what we discussed…").
-        let q: String = sanitised
+        //
+        // Content words only: OR over stopwords ("what", "the", "you")
+        // matched essentially EVERY stored exchange, so unrelated past
+        // sessions got prepended to every question's prompt and the bot
+        // answered from days-old context.
+        let terms: Vec<String> = sanitised
             .split_whitespace()
-            .filter(|t| t.len() >= 2)
+            .map(|t| t.to_lowercase())
+            .filter(|t| t.len() >= 3 && !RECALL_STOPWORDS.contains(&t.as_str()))
+            .collect();
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let q: String = terms
+            .iter()
             .map(|t| format!("\"{t}\""))
             .collect::<Vec<_>>()
             .join(" OR ");
-        if q.is_empty() {
-            return Ok(Vec::new());
-        }
 
         let conn = self.conn.lock().expect("memory conn poisoned");
         let limit_i = limit as i64;
@@ -160,6 +185,20 @@ impl Memory {
                     .context("decoding recall rows")?
             }
         };
+        // Post-filter: with ≥2 content terms in the question, demand a
+        // record share at least 2 DISTINCT terms. One shared word
+        // ("weather") dragging in every weather exchange ever recorded
+        // is how test junk ended up in live answers.
+        if terms.len() >= 2 {
+            let recs: Vec<Recollection> = recs
+                .into_iter()
+                .filter(|r| {
+                    let hay = format!("{} {}", r.question, r.answer).to_lowercase();
+                    terms.iter().filter(|t| hay.contains(t.as_str())).count() >= 2
+                })
+                .collect();
+            return Ok(recs);
+        }
         Ok(recs)
     }
 
@@ -197,7 +236,10 @@ impl Memory {
         if recs.is_empty() {
             return None;
         }
-        let mut out = String::from("RELEVANT PAST EXCHANGES (use only if they actually relate; do not force a reference):\n");
+        let mut out = String::from(
+            "PAST EXCHANGES from previous sessions (possibly days old — these were NOT said in \
+             this call; use only if genuinely relevant, never as current context):\n",
+        );
         for r in recs {
             let when = chrono::DateTime::<chrono::Utc>::from_timestamp(r.ts, 0)
                 .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
@@ -275,5 +317,35 @@ mod tests {
         assert!(m.recall("", Some("#x"), 5).unwrap().is_empty());
         // Punctuation-only also yields nothing rather than panic.
         assert!(m.recall("???", Some("#x"), 5).unwrap().is_empty());
+    }
+
+    #[test]
+    fn stopword_only_query_recalls_nothing() {
+        // "what do you think about that" has zero content words — OR-ing
+        // its stopwords used to match EVERY stored exchange and drag old
+        // sessions into every prompt.
+        let dir = tempdir().unwrap();
+        let m = Memory::open(&dir.path().join("test.db")).unwrap();
+        m.record("#x", "chad", "what do you think about cats", "they are fine").unwrap();
+        let hits = m.recall("what do you think about that", Some("#x"), 5).unwrap();
+        assert!(hits.is_empty(), "stopword-only queries must not recall: {hits:?}");
+    }
+
+    #[test]
+    fn multi_term_query_needs_two_shared_content_words() {
+        let dir = tempdir().unwrap();
+        let m = Memory::open(&dir.path().join("test.db")).unwrap();
+        m.record("#x", "chad", "weather in berlin today", "rainy").unwrap();
+        m.record("#x", "chad", "weather on mars", "thin and cold").unwrap();
+        // Two content terms (weather, berlin): only the exchange sharing
+        // BOTH comes back — single-word overlap ("weather") no longer
+        // drags in every weather exchange ever recorded.
+        let hits = m.recall("how is the weather in berlin", Some("#x"), 5).unwrap();
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(hits[0].question.contains("berlin"));
+        // A single content term still recalls on that one word.
+        let hits = m.recall("tell me about mars", Some("#x"), 5).unwrap();
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert!(hits[0].question.contains("mars"));
     }
 }

@@ -290,6 +290,7 @@ fn spawn_bot(
         groq_chat_model: "llama-3.3-70b-versatile".to_string(),
         groq_answer_model: "groq/compound".to_string(),
         voice_answer_model: "llama-3.3-70b-versatile".to_string(),
+        voice_search_model: "groq/compound-mini".to_string(),
         elevenlabs_api_key: None,
         elevenlabs_voice_id: "aj0fZfXTBc7E3By4X8L2".to_string(),
         elevenlabs_model: "eleven_turbo_v2_5".to_string(),
