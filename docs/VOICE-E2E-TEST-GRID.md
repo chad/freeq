@@ -10,7 +10,15 @@ Run against a live agent (yokota in #bots) after the 2026-06-11 fix set
    transcribes every utterance (Groq whisper / local fallback). It is *always*
    transcribing; the addressing gate only decides when to *answer*.
 2. **Addressing**: named ("yokota, …") → always answers. Any question → answers.
-   1:1 + a request ("tell me…", "play…") → answers. Bare declaratives → ignored.
+   1:1 + substantive → answers (conversational mode — alone with one human,
+   every real sentence is for the bot). Bare declaratives in a group → ignored.
+   A bare name segment (VAD split at the comma) primes the speaker's NEXT
+   segment: own name → addressed; a peer's name → addressed-to-other.
+2b. **Routing**: every answered question passes a fast classifier
+   (llama-3.1-8b, ≤900 ms, observed 60–90 ms): `live_data` + voice →
+   `groq/compound-mini` (server-side web search, source link posted to
+   channel); `visual` → vision model ∪ cue lists. Never promise to "check
+   later" — answer now from what's available.
 3. **Latency**: first audible word within ~1-2 s of the asker finishing
    (thinking-beat may fill while the model streams). Stage logs:
    `latency: STT round-trip` → `context assembled` → `first model token` →
@@ -125,6 +133,37 @@ verify"):
   visual → "The title written on your video tile is BANANA TEST 42." First
   TTS audio **1443 ms**.
 
+**2026-06-11 round 7** (context-discipline batch `0e76c01` deployed to all 3
+VMs, memory DBs purged, fresh session; voice question "Yokota. / Tell me the
+current weather in New York City." — VAD split the name off, as usual):
+
+- ✅ **Bare-name priming live**: "Yokota." → `bare name heard — priming next
+  segment as addressed`; the split question 2 s later → `name-primed segment —
+  treating as addressed`, `named=true`. The round-6 open bug is closed.
+- ✅ **Live-data routing live**: `question routed elapsed_ms=59 visual=false
+  live_data=true model=groq/compound-mini` — and the answer carried a real
+  searched source (`posted source link url=https://forecast.weather.gov/…`).
+  Router cost 59–85 ms across all observed questions, far under the 900 ms cap.
+- ✅ **Typed mirror routed too** (live_data=true → claude-opus-4-7,
+  `answered in text only` — no dual speech).
+- ✅ **Peer suppression**: yokota stayed silent through olive's nonstop
+  chatter (`suppressing voice reply — recent addressers all peer agents`).
+- ❌ **Truncation at the colon**: both searched answers ended mid-sentence
+  ("…it's warm and sunny:") — `max_tokens` (320 Groq / 512 Anthropic) is also
+  spent on the compound models' server-side tool calls + reasoning, so the
+  text after the search got cut. Fixed in `5581451`: 1024/2048 +
+  `finish_reason=length` / `stop_reason=max_tokens` warnings.
+- ❌ **Bare peer-name steal**: olive heard the same "Yokota." + question
+  split, suppressed the name line via `addressed_to_other`, then the 1:1
+  conversational gate answered the unnamed follow-up — olive answered a
+  question addressed to yokota. Fixed in `5581451`: bare PEER names prime the
+  speaker's next segment as addressed-to-other (mirror of self-priming).
+- ⚠️ **1:1 gate answers filler**: the MCP bridge's auto-heartbeats ("Give me
+  a sec", "Almost there") were answered with long chatty paragraphs, and one
+  barged in and killed the real weather answer mid-speech. Mostly a test-rig
+  artifact (humans don't get their speech mirrored + heartbeated), but worth
+  watching: `is_substantive` may need to gate harder on acks in 1:1.
+
 ## Grid
 
 Legend: ✅ pass · ❌ fail · ⚠️ partial · ☐ not yet run
@@ -144,8 +183,8 @@ Legend: ✅ pass · ❌ fail · ⚠️ partial · ☐ not yet run
 | # | Provocation | Expected | Result |
 |---|---|---|---|
 | B1 | "yokota, hello" (named, not a question) | Answers | ☐ |
-| B2 | Unnamed question, 1:1 | Answers | ☐ |
-| B3 | Unnamed request 1:1 ("tell me a joke") | Answers | ☐ |
+| B2 | Unnamed question, 1:1 | Answers | ✅ r7 (gate mechanics proven — olive answered an unnamed request in 1:1 mode) |
+| B3 | Unnamed request 1:1 ("tell me a joke") | Answers | ✅ r7 (same; correct-target with peers present re-verified after `5581451`) |
 | B4 | Bare declarative ("I had pasta for lunch") | Ignored (`addressed=false`), still transcribed | ✅ r2 |
 | B5 | "I'm sorry." / sigh / filler | Ignored | ☐ |
 | B6 | Mention without address ("I think yokota would like this") | Hand-raise halo, no speech | ☐ |
