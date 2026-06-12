@@ -101,20 +101,40 @@ pub struct AvParticipant {
 /// (audio-only). Cheap to clone.
 #[derive(Clone, Default)]
 pub struct VideoHandle {
-    latest: Arc<Mutex<Option<VideoFrame>>>,
+    latest: Arc<Mutex<Option<(Instant, VideoFrame)>>>,
 }
+
+/// How long a stored frame stays servable. Without this, a participant
+/// who turns their camera off (or whose track freezes) leaves the last
+/// frame in the handle forever — the agent then "sees" and describes a
+/// minutes-old image as if it were live. Generous enough for low-fps
+/// static screenshares, short enough that a dead feed reads as dead.
+const FRAME_FRESHNESS: Duration = Duration::from_secs(10);
 
 impl VideoHandle {
     /// The most recent frame, cloned out — frame pixel data is
-    /// reference-counted, so the clone is shallow.
+    /// reference-counted, so the clone is shallow. Returns `None` when
+    /// no frame has arrived within [`FRAME_FRESHNESS`].
     pub fn latest(&self) -> Option<VideoFrame> {
-        self.latest.lock().ok().and_then(|g| g.clone())
+        self.latest.lock().ok().and_then(|g| {
+            g.as_ref().and_then(|(at, frame)| {
+                (at.elapsed() < FRAME_FRESHNESS).then(|| frame.clone())
+            })
+        })
     }
 
     /// Replace the stored frame (called by the video pump).
     fn set(&self, frame: VideoFrame) {
         if let Ok(mut g) = self.latest.lock() {
-            *g = Some(frame);
+            *g = Some((Instant::now(), frame));
+        }
+    }
+
+    /// Drop the stored frame — called when the video track ends so a
+    /// toggled-off camera can't serve its final frame as "current".
+    fn clear(&self) {
+        if let Ok(mut g) = self.latest.lock() {
+            *g = None;
         }
     }
 }
@@ -377,13 +397,22 @@ where
 /// participant leaves or this task is aborted (on session reconnect).
 /// When they drop, the decode pipeline tears down and the PCM receiver
 /// the caller holds simply closes.
+///
+/// A track can also end while the participant is still *in* the call —
+/// their client restarts its mic track, or the transport hiccups. The
+/// broadcast path stays announced, so the watcher never re-announces it
+/// and a one-shot tap would leave the agent deaf to that participant for
+/// the rest of the call (observed live: tap died 30 s into a call, the
+/// human kept talking to a bot that could no longer hear them). So this
+/// loops: when a track stops, re-await `audio_ready` and surface a fresh
+/// [`AvParticipant`]. If the participant actually left, the watcher
+/// aborts this task when their path is unannounced.
 async fn run_tap(
     tx: mpsc::Sender<AvParticipant>,
     path: String,
     nick: String,
     broadcast_consumer: moq_lite::BroadcastConsumer,
 ) {
-    let (backend, audio_rx) = TapBackend::channel();
     let remote = match RemoteBroadcast::new(&path, broadcast_consumer).await {
         Ok(r) => r,
         Err(e) => {
@@ -391,74 +420,106 @@ async fn run_tap(
             return;
         }
     };
-    // `audio_ready` blocks on the catalog watcher until the broadcast
-    // advertises an audio rendition, then subscribes. The plain `audio()`
-    // is a one-shot catalog read — a participant whose Opus track lands
-    // a beat after the broadcast is announced would fail it permanently
-    // with "no audio renditions".
-    let track = match remote.audio_ready(&backend).await {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::warn!(%nick, error = ?e, "audio subscribe failed");
-            return;
+    let mut retap = false;
+    loop {
+        if retap {
+            // Brief pause so a track that dies instantly on subscribe
+            // can't spin this loop hot.
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            tracing::info!(%nick, %path, "track ended but broadcast still live — re-tapping");
         }
-    };
-    tracing::info!(%nick, %path, "audio track live — tapping");
+        retap = true;
 
-    // Dump what the SFU advertises for this participant — diagnostic for
-    // "she doesn't see my screen" cases (no video rendition? unsupported
-    // codec? camera off?).
-    {
-        let cat = remote.catalog();
-        let video_renditions: Vec<String> =
-            cat.video_renditions().map(str::to_string).collect();
-        let audio_renditions: Vec<String> =
-            cat.audio_renditions().map(str::to_string).collect();
-        tracing::info!(
-            %nick,
-            has_video = remote.has_video(),
-            has_audio = remote.has_audio(),
-            video = ?video_renditions,
-            audio = ?audio_renditions,
-            "participant catalog",
-        );
-    }
-
-    let video = VideoHandle::default();
-    if tx
-        .send(AvParticipant {
-            path,
-            nick: nick.clone(),
-            audio: audio_rx,
-            video: video.clone(),
-        })
-        .await
-        .is_err()
-    {
-        return; // AvSession dropped — nobody is listening.
-    }
-
-    // Pump the participant's video into the shared latest-frame cell —
-    // best-effort, since many participants are audio-only (`video_ready`
-    // then just never resolves). Park on whichever ends first: the audio
-    // track stopping, or the video pump finishing. `remote` + `track`
-    // drop on return → pipelines tear down → the PCM receiver closes.
-    let video_pump = async {
-        match remote.video_ready().await {
-            Ok(mut vtrack) => {
-                tracing::info!(%nick, "video track live — watching");
-                while let Some(frame) = vtrack.next_frame().await {
-                    video.set(frame);
-                }
+        let (backend, audio_rx) = TapBackend::channel();
+        // `audio_ready` blocks on the catalog watcher until the broadcast
+        // advertises an audio rendition, then subscribes. The plain `audio()`
+        // is a one-shot catalog read — a participant whose Opus track lands
+        // a beat after the broadcast is announced would fail it permanently
+        // with "no audio renditions".
+        let track = match remote.audio_ready(&backend).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(%nick, error = ?e, "audio subscribe failed");
+                return;
             }
-            Err(e) => tracing::warn!(%nick, error = ?e, "video subscribe failed"),
+        };
+        tracing::info!(%nick, %path, "audio track live — tapping");
+
+        // Dump what the SFU advertises for this participant — diagnostic for
+        // "she doesn't see my screen" cases (no video rendition? unsupported
+        // codec? camera off?).
+        {
+            let cat = remote.catalog();
+            let video_renditions: Vec<String> =
+                cat.video_renditions().map(str::to_string).collect();
+            let audio_renditions: Vec<String> =
+                cat.audio_renditions().map(str::to_string).collect();
+            tracing::info!(
+                %nick,
+                has_video = remote.has_video(),
+                has_audio = remote.has_audio(),
+                video = ?video_renditions,
+                audio = ?audio_renditions,
+                "participant catalog",
+            );
         }
-    };
-    tokio::select! {
-        _ = track.stopped() => {}
-        _ = video_pump => {}
+
+        let video = VideoHandle::default();
+        if tx
+            .send(AvParticipant {
+                path: path.clone(),
+                nick: nick.clone(),
+                audio: audio_rx,
+                video: video.clone(),
+            })
+            .await
+            .is_err()
+        {
+            return; // AvSession dropped — nobody is listening.
+        }
+
+        // Pump the participant's video into the shared latest-frame cell —
+        // best-effort, since many participants are audio-only (`video_ready`
+        // then just never resolves). The pump LOOPS: a camera toggled off
+        // ends the video track, and the next `video_ready` blocks until the
+        // camera comes back — same handle, no tap teardown. (The old
+        // one-shot pump completed on camera-off, which made the select!
+        // below tear down the AUDIO tap too: every camera toggle deafened
+        // the agent for the 1 s re-tap pause, and a `video_ready` error
+        // did the same permanently.) The pump never finishes on its own,
+        // so only the audio track stopping ends this iteration. `remote` +
+        // `track` drop at the end of the iteration → pipelines tear down →
+        // the PCM receiver closes (ending the consumer's transcribe task
+        // cleanly).
+        let video_pump = async {
+            loop {
+                match remote.video_ready().await {
+                    Ok(mut vtrack) => {
+                        tracing::info!(%nick, "video track live — watching");
+                        while let Some(frame) = vtrack.next_frame().await {
+                            video.set(frame);
+                        }
+                        // Camera off / track restart — stop serving the
+                        // final frame as "current" and wait for the next.
+                        video.clear();
+                        tracing::info!(%nick, "video track ended — awaiting restart");
+                    }
+                    Err(e) => {
+                        video.clear();
+                        tracing::warn!(%nick, error = ?e, "video subscribe failed — retrying");
+                    }
+                }
+                // A track that dies (or errors) instantly on subscribe
+                // must not spin this loop hot.
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        };
+        tokio::select! {
+            _ = track.stopped() => {}
+            _ = video_pump => {}
+        }
+        tracing::info!(%nick, "participant tap ended");
     }
-    tracing::info!(%nick, "participant tap ended");
 }
 
 #[cfg(test)]

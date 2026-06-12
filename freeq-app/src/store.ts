@@ -168,6 +168,7 @@ export interface Store {
   avAudioActive: boolean;          // call panel visible/audio connected
   avMuted: boolean;                // local mic muted
   avCameraOn: boolean;             // local camera on (off by default)
+  avScreenShareOn: boolean;        // local screen share on (off by default)
   sidebarRevealChannel: string | null; // transient: scroll this channel into view in the sidebar
 
   // Actions — connection
@@ -258,6 +259,7 @@ export interface Store {
   setAvAudioActive: (active: boolean) => void;
   setAvMuted: (muted: boolean) => void;
   setAvCameraOn: (on: boolean) => void;
+  setAvScreenShareOn: (on: boolean) => void;
   setSidebarRevealChannel: (name: string | null) => void;
 
   // Join gate
@@ -341,6 +343,7 @@ export const useStore = create<Store>((set, get) => ({
   avAudioActive: false,
   avMuted: false,
   avCameraOn: false,
+  avScreenShareOn: false,
   sidebarRevealChannel: null,
   joinGateChannel: null,
   channelSettingsOpen: null,
@@ -993,6 +996,7 @@ export const useStore = create<Store>((set, get) => ({
   setAvAudioActive: (active) => set({ avAudioActive: active }),
   setAvMuted: (muted) => set({ avMuted: muted }),
   setAvCameraOn: (on) => set({ avCameraOn: on }),
+  setAvScreenShareOn: (on) => set({ avScreenShareOn: on }),
   setSidebarRevealChannel: (name) => set({ sidebarRevealChannel: name }),
 
   setJoinGateChannel: (channel) => set({ joinGateChannel: channel }),

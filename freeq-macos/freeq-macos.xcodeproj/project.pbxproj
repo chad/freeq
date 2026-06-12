@@ -92,8 +92,8 @@
 		BF84986DB3E316AB54CFA706 /* CallMicCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CallMicCapture.swift; sourceTree = "<group>"; };
 		CECE4CB96A2A81AB72EC2324 /* freeq-macos.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "freeq-macos.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		D1561609D65E3676C79D46E2 /* LinkPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreview.swift; sourceTree = "<group>"; };
-		D90D45494AECECE10448CB0E /* ComposeCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposeCommands.swift; sourceTree = "<group>"; };
 		D2DFA3935D1A36696CF3DBC0 /* Validation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Validation.swift; sourceTree = "<group>"; };
+		D90D45494AECECE10448CB0E /* ComposeCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposeCommands.swift; sourceTree = "<group>"; };
 		DA3E838FFB8176761B9DAA50 /* ChatMessage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatMessage.swift; sourceTree = "<group>"; };
 		DB1B29BA8601FC220D46B705 /* Logger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logger.swift; sourceTree = "<group>"; };
 		DB6D944E494A3AE591F53C28 /* MediaViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaViews.swift; sourceTree = "<group>"; };

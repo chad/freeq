@@ -587,7 +587,7 @@ sentence description. Pair with freeq_say so the room hears what you saw.")]
             Err(e) => return Ok(error_text(&format!("jpeg encode failed: {e:#}"))),
         };
         let client = reqwest::Client::new();
-        match freeq_eliza::vision::describe(&client, &api_key, &model, question, &uri).await {
+        match freeq_eliza::vision::describe(&client, &api_key, &model, question, "", &uri).await {
             Ok(description) => Ok(success_json(serde_json::json!({
                 "speaker": picked,
                 "description": description,

@@ -43,7 +43,11 @@ export function ComposeBox() {
     });
   };
   const [pendingUpload, setPendingUpload] = useState<PendingUpload | null>(null);
-  const [crossPost, setCrossPost] = useState(false);
+  // Media is private to this channel/DM by default. These two opt-in toggles
+  // are the only way bytes leave freeq: save a public copy to the user's PDS,
+  // and/or also post it to their Bluesky feed (which implies the PDS copy).
+  const [sharePds, setSharePds] = useState(false);
+  const [shareBluesky, setShareBluesky] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const emojiRef = useRef<HTMLButtonElement>(null);
@@ -182,6 +186,8 @@ export function ComposeBox() {
   const cancelUpload = () => {
     if (pendingUpload?.preview) URL.revokeObjectURL(pendingUpload.preview);
     setPendingUpload(null);
+    setSharePds(false);
+    setShareBluesky(false);
   };
 
   const doUpload = useCallback(async () => {
@@ -189,30 +195,19 @@ export function ComposeBox() {
     setPendingUpload((p) => p ? { ...p, uploading: true, error: undefined } : null);
 
     try {
-      const form = new FormData();
-      form.append('file', pendingUpload.file);
-      form.append('did', authDid);
-      if (activeChannel !== 'server' && activeChannel.startsWith('#')) {
-        form.append('channel', activeChannel);
-      }
-      if (text.trim()) {
-        form.append('alt', text.trim());
-      }
-      if (crossPost) {
-        form.append('cross_post', 'true');
-      }
-
       const buildForm = () => {
         const f = new FormData();
         f.append('file', pendingUpload.file);
         f.append('did', authDid);
         if (activeChannel !== 'server' && activeChannel.startsWith('#')) f.append('channel', activeChannel);
         if (text.trim()) f.append('alt', text.trim());
-        if (crossPost) f.append('cross_post', 'true');
+        // share_bluesky implies share_pds (feed embed references the PDS blob).
+        if (sharePds || shareBluesky) f.append('share_pds', 'true');
+        if (shareBluesky) f.append('share_bluesky', 'true');
         return f;
       };
 
-      let resp = await fetch('/api/v1/upload', { method: 'POST', body: form });
+      let resp = await fetch('/api/v1/upload', { method: 'POST', body: buildForm() });
 
       // 403 step_up_required: the user has a Login session but hasn't
       // granted blob upload yet. Drive the step-up popup, then retry
@@ -260,13 +255,7 @@ export function ComposeBox() {
             console.log('[upload] broker refresh response:', refreshResp.status);
             if (refreshResp.ok) {
               // Broker pushed fresh OAuth session to server — retry upload
-              const retryForm = new FormData();
-              retryForm.append('file', pendingUpload.file);
-              retryForm.append('did', authDid);
-              if (activeChannel !== 'server' && activeChannel.startsWith('#')) retryForm.append('channel', activeChannel);
-              if (text.trim()) retryForm.append('alt', text.trim());
-              if (crossPost) retryForm.append('cross_post', 'true');
-              resp = await fetch('/api/v1/upload', { method: 'POST', body: retryForm });
+              resp = await fetch('/api/v1/upload', { method: 'POST', body: buildForm() });
               console.log('[upload] retry response:', resp.status);
             }
           } catch (e) {
@@ -293,10 +282,12 @@ export function ComposeBox() {
       if (pendingUpload.preview) URL.revokeObjectURL(pendingUpload.preview);
       setPendingUpload(null);
       setText('');
+      setSharePds(false);
+      setShareBluesky(false);
     } catch (e: any) {
       setPendingUpload((p) => p ? { ...p, uploading: false, error: e.message || 'Upload failed' } : null);
     }
-  }, [pendingUpload, authDid, activeChannel, text, ch]);
+  }, [pendingUpload, authDid, activeChannel, text, ch, sharePds, shareBluesky]);
 
   // ── Drag & drop ──
 
@@ -612,16 +603,32 @@ export function ComposeBox() {
               <div className="text-xs text-danger mt-0.5">{pendingUpload.error}</div>
             )}
             {authDid && (
-              <label className="flex items-center gap-1.5 mt-1 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={crossPost}
-                  onChange={(e) => setCrossPost(e.target.checked)}
-                  className="w-3 h-3 rounded accent-blue"
-                />
-                <span className="text-sm text-fg-dim">Also post to Bluesky</span>
-                <span className="text-[10px]">🦋</span>
-              </label>
+              <div className="mt-1 space-y-0.5">
+                <div className="flex items-center gap-1 text-[11px] text-fg-dim">
+                  <span>🔒</span>
+                  <span>Private to {ch?.name || activeChannel} by default</span>
+                </div>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={sharePds || shareBluesky}
+                    disabled={shareBluesky}
+                    onChange={(e) => setSharePds(e.target.checked)}
+                    className="w-3 h-3 rounded accent-blue"
+                  />
+                  <span className="text-sm text-fg-dim">Save a public copy to my PDS</span>
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={shareBluesky}
+                    onChange={(e) => setShareBluesky(e.target.checked)}
+                    className="w-3 h-3 rounded accent-blue"
+                  />
+                  <span className="text-sm text-fg-dim">Also post to Bluesky feed</span>
+                  <span className="text-[10px]">🦋</span>
+                </label>
+              </div>
             )}
           </div>
           {pendingUpload.uploading ? (

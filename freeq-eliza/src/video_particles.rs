@@ -49,10 +49,10 @@ use resvg::usvg;
 use crate::video::{overlay_svg_for_particles, VideoTile, VIDEO_H, VIDEO_W};
 
 const FPS: u64 = 15;
-/// Particle count for the 720p tile — the field needs this density to read as
-/// solid at full resolution. Affordable now that eliza runs as a release build
-/// (see the resolution note in `video.rs`).
-const PARTICLES: usize = 28_000;
+/// Particle count for the 360p tile. 12K reads as solid at this
+/// resolution; the 28K we used at 720p was part of what pushed the
+/// 2-vCPU VMs past real-time (see the resolution note in `video.rs`).
+const PARTICLES: usize = 12_000;
 /// Emotion-blend intensity — how strongly the mood mood overrides the
 /// character's resting palette. Low so a fully-Joy Eliza still reads as
 /// Eliza, not a generic solar face.

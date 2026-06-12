@@ -384,6 +384,6 @@ async fn describe_via_vision(
     };
     let uri = freeq_eliza::vision::frame_to_jpeg_data_uri(&frame)?;
     let client = reqwest::Client::new();
-    let text = freeq_eliza::vision::describe(&client, &api_key, &model, question, &uri).await?;
+    let text = freeq_eliza::vision::describe(&client, &api_key, &model, question, "", &uri).await?;
     Ok((picked, text))
 }

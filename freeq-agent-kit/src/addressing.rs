@@ -122,6 +122,51 @@ pub fn extract_addressed(text: &str, nick: &str) -> Option<String> {
     None
 }
 
+/// Strict variant of [`extract_addressed`]: the candidate words must
+/// EQUAL the normalized nick — no edit-distance tolerance, no
+/// containment. Same skip/take walk (fillers, split names), so
+/// "hey o live, ..." still reaches "olive", but "a live" (distance 1)
+/// does not.
+///
+/// Use this when matching OTHER agents' names to decide a line is *not*
+/// for you: a fuzzy match there suppresses your own answer, so a false
+/// positive silences the bot. (Matching your OWN name stays fuzzy —
+/// there a false negative is the expensive error.)
+pub fn extract_addressed_exact(text: &str, nick: &str) -> Option<String> {
+    let nick = normalize_word(nick);
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.is_empty() {
+        return None;
+    }
+    for skip in [0usize, 1, 2] {
+        if skip >= words.len() {
+            break;
+        }
+        let preceding_ok = words[..skip]
+            .iter()
+            .all(|w| LEADING_FILLERS.contains(&normalize_word(w).as_str()));
+        if !preceding_ok {
+            continue;
+        }
+        for take in [1usize, 2] {
+            if skip + take > words.len() {
+                continue;
+            }
+            let cand: String = words[skip..skip + take].iter().map(|w| normalize_word(w)).collect();
+            if cand == nick {
+                let rest = words[skip + take..].join(" ");
+                let rest = rest
+                    .trim_start_matches(|c: char| c.is_ascii_punctuation() || c.is_whitespace())
+                    .trim();
+                if !rest.is_empty() {
+                    return Some(rest.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +277,30 @@ mod tests {
         assert_eq!(edit_distance("eliza", "elisa"), 1);
         assert_eq!(edit_distance("eliza", "aliza"), 1);
         assert_eq!(edit_distance("kitten", "sitting"), edit_distance("sitting", "kitten"));
+    }
+
+    #[test]
+    fn exact_variant_rejects_fuzzy_matches() {
+        // The live misfire: "A live" normalize-joins to "alive", edit
+        // distance 1 from "olive" — the fuzzy matcher takes it, the
+        // exact one must not.
+        assert_eq!(extract_addressed_exact("A live voice call with the assistant", "olive"), None);
+        assert_eq!(extract_addressed_exact("elisa hello", "eliza"), None, "no edit tolerance");
+        assert_eq!(extract_addressed_exact("zootopia what's up", "utopia"), None, "no containment");
+        // Exact spellings still work, including fillers and split names.
+        assert_eq!(
+            extract_addressed_exact("olive, what's 2+2", "olive").as_deref(),
+            Some("what's 2+2")
+        );
+        assert_eq!(
+            extract_addressed_exact("hey olive what's 2+2", "olive").as_deref(),
+            Some("what's 2+2")
+        );
+        assert_eq!(
+            extract_addressed_exact("o live what's 2+2", "olive").as_deref(),
+            Some("what's 2+2"),
+            "split-name exact join still matches"
+        );
     }
 
     #[test]

@@ -129,13 +129,20 @@ async fn run_monitor(
         }
 
         // Only look at lines added since her last proactive comment —
-        // the "looping correction" fix. A correction itself doesn't add
-        // to `transcript` (her own speech doesn't), so once she's
-        // commented on a line it falls below `consumed_lines` and
-        // never resurfaces.
+        // the "looping correction" fix. The bot's own answers ARE in
+        // the transcript now (symmetric log), so filter own lines out:
+        // they must neither count as "new material to react to" nor be
+        // re-read as something a human said.
+        let own_prefix = format!(
+            "{}:",
+            cfg.nick.split_once('-').map(|(p, _)| p).unwrap_or(&cfg.nick)
+        );
         let total = snapshot.transcript.len();
         let start = consumed_lines.min(total);
-        let new_lines = &snapshot.transcript[start..];
+        let new_lines: Vec<&String> = snapshot.transcript[start..]
+            .iter()
+            .filter(|l| !l.to_ascii_lowercase().starts_with(&own_prefix.to_ascii_lowercase()))
+            .collect();
         let new_word_count = new_lines
             .iter()
             .flat_map(|l| l.split_whitespace())
@@ -151,7 +158,11 @@ async fn run_monitor(
 
         // Last ~30 of the new lines for context.
         let tail_start = new_lines.len().saturating_sub(30);
-        let recent = new_lines[tail_start..].join("\n");
+        let recent = new_lines[tail_start..]
+            .iter()
+            .map(|l| l.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
 
         let secs_since = since_proactive.as_secs().min(9999) as u32;
         match decide(&cfg.http, key, &cfg.groq_chat_model, &recent, secs_since).await {
@@ -221,6 +232,7 @@ async fn speak_now(
     // speak_now invocation and reuse across sentences.
     let voice_profile =
         crate::persona::resolve_voice_profile(&cfg.ghostly_character, cfg.ghostly_pack.as_deref());
+    let recent_tts = cfg.recent_tts.clone();
 
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
     let speak_task = tokio::spawn(async move {
@@ -234,6 +246,8 @@ async fn speak_now(
             if !spoken.chars().any(char::is_alphanumeric) {
                 continue;
             }
+            // Echo-guard log — see SharedConfig::recent_tts.
+            crate::irc::note_spoken(&recent_tts, &spoken);
             let chain_ref = &mut chain;
             let work_ref = &mut work;
             let speaker_ref = &speaker;

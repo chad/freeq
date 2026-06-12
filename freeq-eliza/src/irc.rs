@@ -154,9 +154,16 @@ pub struct RunConfig {
     pub groq_api_key: Option<String>,
     /// Groq chat model for the visual board (scene generation).
     pub groq_chat_model: String,
-    /// Groq model for answering addressed questions. Defaults to an
-    /// agentic model (`groq/compound`) so eliza can search the web.
+    /// Model for answering addressed questions in *text* (channel
+    /// messages). `claude-*` routes to Anthropic, anything else to Groq.
     pub groq_answer_model: String,
+    /// Model for answering *spoken* questions in a live call — fast by
+    /// default, because time-to-first-word is the whole experience.
+    pub voice_answer_model: String,
+    /// Model for spoken questions that need LIVE data (weather, news,
+    /// prices). A Groq agentic model with server-side web search —
+    /// slower than `voice_answer_model` but honest.
+    pub voice_search_model: String,
     /// Groq vision model for questions about a participant's shared
     /// screen or camera.
     pub vision_model: String,
@@ -221,6 +228,10 @@ pub(crate) struct SharedConfig {
     pub(crate) groq_api_key: Option<String>,
     pub(crate) groq_chat_model: String,
     pub(crate) groq_answer_model: String,
+    /// Voice-path answer model (see [`RunConfig::voice_answer_model`]).
+    pub(crate) voice_answer_model: String,
+    /// Voice-path live-data model (see [`RunConfig::voice_search_model`]).
+    pub(crate) voice_search_model: String,
     pub(crate) vision_model: String,
     pub(crate) elevenlabs_api_key: Option<String>,
     pub(crate) elevenlabs_voice_id: String,
@@ -302,6 +313,16 @@ pub(crate) struct SharedConfig {
     /// Revenant console base URL — when set, notable answers are auto-captured
     /// as shareable "moment" cards there (the self-propagating viral loop).
     pub(crate) console_url: Option<String>,
+    /// Rolling log of text the bot itself spoke through TTS recently
+    /// (`(spoken_at, normalized_text)`). A participant whose client has
+    /// no echo cancellation leaks the bot's voice from their speakers
+    /// back into their mic; the SFU attributes it to THEM, STT
+    /// transcribes it, and the addressing gate can fire on it — the bot
+    /// then answers its own words, sometimes in a sustained loop.
+    /// Every transcript is checked against this log (see
+    /// [`is_own_echo`]) before being treated as human speech.
+    pub(crate) recent_tts:
+        std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(Instant, String)>>>,
 }
 
 /// Active-call state. Held inside an `Arc<AsyncMutex<Option<...>>>`
@@ -331,6 +352,9 @@ pub(crate) struct ActiveCall {
     /// The agent's video tile (audio-reactive presence + visual-aid
     /// cards). `show_card` puts up an LLM-drawn visual.
     pub(crate) video: VideoTile,
+    /// Live nick → video-handle map across this call's taps, so a typed
+    /// question can find the asker's camera (see [`CallVideoTaps`]).
+    pub(crate) video_taps: CallVideoTaps,
     /// The MoQ subscriber/publisher task. Aborted by `Drop` on call
     /// end — a plain `JoinHandle` drop only *detaches*, which would
     /// leave the reconnect loop running forever after the call ends.
@@ -342,6 +366,12 @@ pub(crate) struct ActiveCall {
     /// Watchdog that leaves the call once we've been alone in it too long, so a
     /// lingering empty call doesn't burn CPU or block auto-sleep. Same drop story.
     lonely_task: Option<JoinHandle<()>>,
+    /// IRC handle — Drop uses it to send av-leave. Without that, the
+    /// server keeps counting us as an active participant after the MoQ
+    /// teardown, and a session everyone has silently abandoned can never
+    /// reach zero participants and auto-end — it haunts the channel
+    /// forever, re-summoning every bot on each reconnect.
+    handle: Arc<ClientHandle>,
 }
 
 impl Drop for ActiveCall {
@@ -357,6 +387,21 @@ impl Drop for ActiveCall {
             t.abort();
         }
         self.video.stop();
+        // Tell the server we left. Idempotent when the session already
+        // ended (the server re-marks an already-left participant), so
+        // every drop path — lonely watchdog, owner "leave", replaced
+        // call, session end — can share it. Drop can't await; spawn the
+        // send if a runtime is still up (at shutdown the QUIT/connection
+        // teardown cleans our slot server-side instead).
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            let handle = self.handle.clone();
+            let channel = self.channel.clone();
+            let session_id = self.session_id.clone();
+            let instance_id = self.instance_id.clone();
+            rt.spawn(async move {
+                let _ = handle.av_leave(&channel, &session_id, &instance_id).await;
+            });
+        }
     }
 }
 
@@ -380,6 +425,8 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         groq_api_key,
         groq_chat_model,
         groq_answer_model,
+        voice_answer_model,
+        voice_search_model,
         vision_model,
         elevenlabs_api_key,
         elevenlabs_voice_id,
@@ -493,6 +540,8 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         groq_api_key,
         groq_chat_model,
         groq_answer_model,
+        voice_answer_model,
+        voice_search_model,
         vision_model,
         elevenlabs_api_key,
         elevenlabs_voice_id,
@@ -531,6 +580,9 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
             .filter(|s| !s.is_empty()),
         http: reqwest::Client::new(),
         started_at: Instant::now(),
+        recent_tts: std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::VecDeque::new(),
+        )),
     });
     let handle_arc = Arc::new(handle);
 
@@ -811,6 +863,56 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                             }
                         });
                     }
+                    AvAction::Joined { channel, session_id } => {
+                        // A human (re)joined a call we may not be in.
+                        // The classifier already filtered self-joins;
+                        // peer-agent joins must not summon us either —
+                        // two bots re-joining on each other's joins
+                        // would ping-pong forever.
+                        if is_peer_nick(&cfg.peer_agents, &actor) {
+                            tracing::debug!(channel = %channel, %actor, "peer agent joined a call — not following");
+                            continue;
+                        }
+                        let mut active_guard = active.lock().await;
+                        if active_guard.is_some() {
+                            // Already in a call (this one or another) —
+                            // nothing to do.
+                            continue;
+                        }
+                        tracing::info!(
+                            channel = %channel,
+                            session_id = %session_id,
+                            %actor,
+                            "human joined a call we're not in — joining"
+                        );
+                        match start_transcription(
+                            cfg.clone(),
+                            handle_arc.clone(),
+                            channel.clone(),
+                            session_id.clone(),
+                            None,
+                            active.clone(),
+                        )
+                        .await
+                        {
+                            Ok(call) => {
+                                spawn_hello_on_join(
+                                    &cfg,
+                                    call.speaker.clone(),
+                                    call.video.peer_level_handle(),
+                                );
+                                let _ = spawn_backchannel_loop(
+                                    cfg.clone(),
+                                    call.speaker.clone(),
+                                    call.video.peer_level_handle(),
+                                );
+                                *active_guard = Some(call);
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = ?e, "failed to join call on human join");
+                            }
+                        }
+                    }
                     AvAction::Noop => {
                         tracing::debug!(channel = %target, %actor, "av-state");
                     }
@@ -835,9 +937,10 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                     if is_peer_nick(&cfg.peer_agents, &from) {
                         let parts: Vec<&str> = rest.splitn(3, '|').collect();
                         if parts.len() == 3 {
-                            // Ingest under the std-mutex guard, but DROP it
-                            // before awaiting `active` — holding it across
-                            // the await makes the whole run() future !Send.
+                            // Ingest under the sync lock, then DROP the
+                            // guard before awaiting — holding it across
+                            // `active.lock().await` makes `run`'s future
+                            // non-Send (it can't be tokio::spawn'ed).
                             let steps = match cfg.diagrams.lock() {
                                 Ok(mut log) => {
                                     let d = log.entry(target.clone()).or_default();
@@ -914,21 +1017,35 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                 }
                 // A typed question gets a typed answer — pass no speaker
                 // or video so `answer_and_speak` posts text rather than
-                // speaking it. The call transcript is still useful context.
-                let transcript = {
-                    let guard = active.lock().await;
-                    guard
-                        .as_ref()
-                        .map(|c| c.transcript.join("\n"))
-                        .unwrap_or_default()
+                // speaking it. The call transcript is still useful context,
+                // and if the asker is on the call with a camera, their
+                // video handle rides along so "what do you see?" typed in
+                // the channel works the same as asked by voice.
+                let (transcript, asker_video) = {
+                    let mut guard = active.lock().await;
+                    match guard.as_mut() {
+                        Some(c) => {
+                            // Snapshot before pushing, then record the typed
+                            // question as a transcript line — the call heard
+                            // it (the bot answers aloud in the channel), so
+                            // the conversation log must carry it.
+                            let snapshot =
+                                recent_lines(&c.transcript, TRANSCRIPT_PROMPT_LINES);
+                            c.transcript.push(format!("{from}: {question}"));
+                            (snapshot, lookup_tap_video(&c.video_taps, &from))
+                        }
+                        None => (String::new(), None),
+                    }
                 };
                 let cfg = cfg.clone();
                 let handle = handle_arc.clone();
                 let channel = target.clone();
                 let asker = from.clone();
+                let active = active.clone();
                 tokio::spawn(async move {
                     answer_and_speak(
-                        cfg, handle, channel, asker, question, transcript, None, None, None,
+                        cfg, handle, channel, asker, question, transcript, None, None,
+                        asker_video, Some(active),
                     )
                     .await;
                 });
@@ -978,6 +1095,84 @@ fn thinking_beat(question: &str) -> Option<String> {
         return None; // sometimes just answer — keeps the rhythm from feeling canned
     }
     Some(BEATS[h % BEATS.len()].to_string())
+}
+
+/// How long a spoken sentence stays in the echo log. Long enough to
+/// cover the full acoustic round-trip (TTS synth → playout → the
+/// participant's speakers → their mic → SFU → our STT) plus a long
+/// answer still being spoken; short enough that a human legitimately
+/// *quoting* the bot a minute later isn't suppressed.
+const ECHO_WINDOW: Duration = Duration::from_secs(45);
+/// Most entries kept — a runaway answer can't grow the log unbounded.
+const ECHO_LOG_CAP: usize = 64;
+
+pub(crate) type RecentTts =
+    std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(Instant, String)>>>;
+
+/// Lowercased alphanumeric words — the normalization both sides of the
+/// echo comparison go through, so punctuation/casing drift from the
+/// STT round-trip doesn't defeat the match.
+fn echo_words(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect()
+}
+
+/// Record a sentence the bot is about to speak. Called from every TTS
+/// site that speaks full sentences: answers, hello-on-join, proactive
+/// comments, mitosis progress. Backchannels ("mm", "right") are
+/// deliberately NOT recorded — they're short, heavily attenuated, and
+/// logging them would make the guard eat a human's own "right"/"okay".
+pub(crate) fn note_spoken(recent: &RecentTts, text: &str) {
+    let Ok(mut log) = recent.lock() else { return };
+    let now = Instant::now();
+    log.push_back((now, text.to_string()));
+    while log.len() > ECHO_LOG_CAP {
+        log.pop_front();
+    }
+    while log
+        .front()
+        .is_some_and(|(at, _)| at.elapsed() > ECHO_WINDOW)
+    {
+        log.pop_front();
+    }
+}
+
+/// Does a transcript look like the bot's own recent TTS leaking back
+/// through a participant's mic? Word-bag containment against everything
+/// spoken inside [`ECHO_WINDOW`]: an echo transcript is (a fragment of)
+/// our own words, so nearly all of its words appear in the log — while
+/// a real reply *about* our answer brings its own words ("no", "wrong",
+/// "what about…") and falls under the threshold.
+///
+/// Utterances under 4 words are exempt from the bag test (too easy to
+/// false-positive on "yes" / "okay") and only match as an exact
+/// substring of a logged sentence.
+fn is_own_echo(recent: &RecentTts, heard: &str) -> bool {
+    let heard_words = echo_words(heard);
+    if heard_words.is_empty() {
+        return false;
+    }
+    let Ok(log) = recent.lock() else { return false };
+    let fresh: Vec<&String> = log
+        .iter()
+        .filter(|(at, _)| at.elapsed() <= ECHO_WINDOW)
+        .map(|(_, t)| t)
+        .collect();
+    if fresh.is_empty() {
+        return false;
+    }
+    if heard_words.len() < 4 {
+        let needle = heard_words.join(" ");
+        return fresh
+            .iter()
+            .any(|t| echo_words(t).join(" ").contains(&needle));
+    }
+    let bag: std::collections::HashSet<String> =
+        fresh.iter().flat_map(|t| echo_words(t)).collect();
+    let hits = heard_words.iter().filter(|w| bag.contains(*w)).count();
+    (hits as f32 / heard_words.len() as f32) >= 0.8
 }
 
 /// Handle one addressed question: stream the answer from Groq and speak
@@ -1161,9 +1356,34 @@ async fn answer_and_speak(
     video: Option<VideoTile>,
     // The asker's own video (their screen/camera), for visual questions.
     asker_video: Option<VideoHandle>,
+    // The live call slot — so the bot's own answer can be appended to
+    // the transcript (symmetric conversation log). `None` when there's
+    // no call.
+    active: Option<Arc<AsyncMutex<Option<ActiveCall>>>>,
 ) {
     let Some(key) = cfg.groq_api_key.as_deref() else { return };
-    tracing::info!(%asker, %question, "answering addressed question");
+    // Per-stage latency clock — every stage below logs elapsed_ms off
+    // this so a slow answer can be blamed on its actual stage (recall /
+    // feed / first token / first TTS audio) instead of guessed at.
+    let t0 = Instant::now();
+    // Voice answers use the fast model: time-to-first-word IS the
+    // experience in a call. Text answers keep the heavyweight default.
+    let is_voice = speaker.is_some();
+    tracing::info!(%asker, %question, voice = is_voice, "answering addressed question");
+
+    // Route the question with a fast small-model classifier, in
+    // parallel with the context assembly below — by the time context is
+    // ready the verdict usually is too, so routing costs ~no latency.
+    // visual → the vision model with the asker's frame; live_data (on
+    // the voice path) → the agentic search model instead of the fast
+    // no-tools model, which otherwise bluffs a forecast. Any router
+    // failure falls back to the cue-list heuristics.
+    let router_task: JoinHandle<Option<qa::QuestionRoute>> = {
+        let http = cfg.http.clone();
+        let api_key = key.to_string();
+        let q = question.clone();
+        tokio::spawn(async move { qa::route_question(&http, &api_key, &q).await })
+    };
 
     // Show the "thinking" mood on the tile while the LLM call runs.
     // The guard clears it on every exit path.
@@ -1201,6 +1421,7 @@ async fn answer_and_speak(
                 // filtered out of its own subscription so its own TTS
                 // does not drive this signal.
                 let peer_level = video.as_ref().map(|v| v.peer_level_handle());
+                let recent_tts = cfg.recent_tts.clone();
                 Some(tokio::spawn(async move {
                     let mut chain = ghostly::audio::VoiceChain::new(
                         voice_profile,
@@ -1208,6 +1429,7 @@ async fn answer_and_speak(
                     );
                     let mut work: Vec<f32> = Vec::with_capacity(4096);
                     let mut first = true;
+                    let mut first_audio_logged = false;
                     while let Some(sentence) = rx.recv().await {
                         // URLs are unpronounceable — strip them from
                         // speech; the channel gets them as text instead.
@@ -1226,11 +1448,20 @@ async fn answer_and_speak(
                             if let Some(pl) = &peer_level {
                                 wait_for_room_quiet(pl).await;
                             }
+                            tracing::info!(
+                                elapsed_ms = t0.elapsed().as_millis() as u64,
+                                "latency: first sentence reached TTS"
+                            );
                             first = false;
                         }
+                        // Log what we're about to say so a participant's
+                        // speaker→mic leak (no AEC) transcribed back at us
+                        // can be recognized and dropped (see is_own_echo).
+                        note_spoken(&recent_tts, &spoken);
                         let chain_ref = &mut chain;
                         let work_ref = &mut work;
                         let sp_ref = &sp;
+                        let first_audio_ref = &mut first_audio_logged;
                         if let Err(e) = tts::synthesize_streaming(
                             &http,
                             &el_key,
@@ -1238,6 +1469,13 @@ async fn answer_and_speak(
                             &model,
                             &spoken,
                             |pcm| {
+                                if !*first_audio_ref {
+                                    *first_audio_ref = true;
+                                    tracing::info!(
+                                        elapsed_ms = t0.elapsed().as_millis() as u64,
+                                        "latency: first TTS audio enqueued"
+                                    );
+                                }
                                 work_ref.clear();
                                 work_ref.extend_from_slice(pcm);
                                 chain_ref.process(work_ref);
@@ -1263,34 +1501,95 @@ async fn answer_and_speak(
         }
     }
 
-    // Pull relevant past exchanges from memory and prepend to the
-    // transcript so the model can reference prior conversations
-    // ("last time you asked about X, you ended up at Y…"). Scoped
-    // to this channel by default — cross-channel recall would be a
-    // separate, more invasive product decision.
-    let transcript = if let Some(mem) = cfg.memory.as_ref() {
+    // Context assembly. Each section is explicitly LABELED so the model
+    // can tell this call from older material — the old code prepended
+    // memory + feed blocks onto the transcript and qa.rs stamped one
+    // "Call transcript so far:" header over the lot, so days-old
+    // recalled exchanges read as things said in this call and the bot
+    // answered from past sessions.
+    let live_transcript = transcript;
+    let mut sections: Vec<String> = Vec::new();
+
+    // Past exchanges from memory ("last time you asked about X…").
+    // Scoped to this channel by default — cross-channel recall would be
+    // a separate, more invasive product decision.
+    if let Some(mem) = cfg.memory.as_ref() {
         match mem.recall(&question, Some(&channel), 3) {
-            Ok(recs) => match crate::memory::Memory::format_for_prompt(&recs) {
-                Some(block) => format!("{block}\n{transcript}"),
-                None => transcript,
-            },
+            Ok(recs) => {
+                if let Some(block) = crate::memory::Memory::format_for_prompt(&recs) {
+                    sections.push(block);
+                }
+            }
             Err(e) => {
                 tracing::warn!(error = ?e, "memory recall failed; continuing without it");
-                transcript
             }
         }
-    } else {
-        transcript
-    };
+    }
 
     // Feed-aware cold open: best-effort. If the asker's nick resolves to a
     // Bluesky account, fold their recent public posts into context so the being
     // can react to who it's actually talking to ("saw you shipped X"). Folds in
     // alongside memory; gracefully no-ops when the nick isn't a handle.
-    let transcript = match fetch_bsky_context(&cfg, &asker).await {
-        Some(block) => format!("{block}\n{transcript}"),
-        None => transcript,
+    //
+    // Timeboxed: this is 1-2 public HTTP round-trips sitting directly in
+    // front of the LLM call, on EVERY answer. A slow Bluesky response was
+    // adding whole seconds before the model even started — flavor context
+    // is not worth dead air, so past the deadline we answer without it.
+    let bsky_deadline = if is_voice {
+        Duration::from_millis(800)
+    } else {
+        Duration::from_millis(2500)
     };
+    match tokio::time::timeout(bsky_deadline, fetch_bsky_context(&cfg, &asker)).await {
+        Ok(Some(block)) => sections.push(block),
+        Ok(None) => {}
+        Err(_) => {
+            tracing::info!("bsky context fetch timed out — answering without it");
+        }
+    }
+
+    // The live conversation, last — closest to the question.
+    if !live_transcript.trim().is_empty() {
+        sections.push(format!(
+            "LIVE CALL TRANSCRIPT (this call, oldest line first):\n{live_transcript}"
+        ));
+    }
+    // Tell the model the asker is visibly on camera — so "can you see
+    // me?" gets "yes" even when the question routes to the text model.
+    if asker_video.is_some() {
+        sections.push(format!(
+            "({asker} has their camera or screen live in this call.)"
+        ));
+    }
+    let context = sections.join("\n\n");
+    tracing::info!(
+        elapsed_ms = t0.elapsed().as_millis() as u64,
+        "latency: context assembled (memory + feed), dispatching model"
+    );
+
+    // Collect the router verdict — it has been running since the top of
+    // this function, so it's almost always already done; the timeout
+    // only bounds the unlucky case.
+    let route = match tokio::time::timeout(Duration::from_millis(900), router_task).await {
+        Ok(Ok(r)) => r,
+        _ => None,
+    };
+    let answer_model: &str = if is_voice {
+        if route.is_some_and(|r| r.live_data) {
+            &cfg.voice_search_model
+        } else {
+            &cfg.voice_answer_model
+        }
+    } else {
+        &cfg.groq_answer_model
+    };
+    tracing::info!(
+        elapsed_ms = t0.elapsed().as_millis() as u64,
+        visual = route.map(|r| r.visual),
+        live_data = route.map(|r| r.live_data),
+        model = %answer_model,
+        "question routed"
+    );
 
     // A visual question we can actually see → the vision model with the
     // asker's latest frame. A visual question with no frame → a useful
@@ -1298,15 +1597,38 @@ async fn answer_and_speak(
     // → the normal streaming QA. Completed sentences always go to the
     // speaker task.
     let mut chunker = qa::SentenceChunker::new();
-    // When the asker has a live frame, route on the looser cue set too
+    // Visual routing: the router's semantic verdict, UNION the cue-list
+    // heuristics as a fallback (router down/slow → cue lists still
+    // route; a cue-list false negative → the router still routes).
+    // When the asker HAS a video tap, the looser cue set applies too
     // ("how many fingers am I holding up") — a missed route sends a
     // visual question to the text model, which can't see and says so.
-    let candidate_frame = asker_video.as_ref().and_then(|vh| vh.latest());
-    let visual = if candidate_frame.is_some() {
-        vision::is_visual_question_with_frame(&question)
-    } else {
-        vision::is_visual_question(&question)
-    };
+    // Keyed off the tap existing, not off a frame already decoded:
+    // "can you see this?" usually arrives in the same breath as the
+    // camera coming on, before the first frame lands.
+    let mut candidate_frame = asker_video.as_ref().and_then(|vh| vh.latest());
+    let visual = route.is_some_and(|r| r.visual)
+        || if asker_video.is_some() {
+            vision::is_visual_question_with_frame(&question)
+        } else {
+            vision::is_visual_question(&question)
+        };
+    // Camera warm-up: a visual question with a tap but no frame yet —
+    // poll briefly for the first decode instead of claiming blindness.
+    if visual && candidate_frame.is_none() {
+        if let Some(vh) = asker_video.as_ref() {
+            let warmup = Instant::now();
+            while candidate_frame.is_none() && warmup.elapsed() < Duration::from_secs(2) {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                candidate_frame = vh.latest();
+            }
+            tracing::info!(
+                got_frame = candidate_frame.is_some(),
+                waited_ms = warmup.elapsed().as_millis() as u64,
+                "visual question — waited for camera warm-up"
+            );
+        }
+    }
     let frame = if visual { candidate_frame } else { None };
 
     // Race a whiteboard plan in parallel with the answer call. For
@@ -1335,8 +1657,15 @@ async fn answer_and_speak(
                 if let Some(v) = &video {
                     v.set_vision_thumb(uri.clone());
                 }
-                vision::describe(&cfg.http, key, &cfg.vision_model, &question, &uri)
-                    .await
+                vision::describe(
+                    &cfg.http,
+                    key,
+                    &cfg.vision_model,
+                    &question,
+                    &live_transcript,
+                    &uri,
+                )
+                .await
                     .map(|text| {
                         for sentence in chunker.push(&text) {
                             let _ = tx.send(sentence);
@@ -1399,43 +1728,49 @@ sharpen the thread. Do NOT address yourself."
         // Dispatch: a `claude-*` model goes to Anthropic Messages
         // (uses ANTHROPIC_API_KEY); anything else stays on the Groq
         // OpenAI-compatible endpoint (uses GROQ_API_KEY). Per-call
-        // streaming, same `Answer` shape returned either way.
-        if qa::is_anthropic_model(&cfg.groq_answer_model) {
+        // streaming, same `Answer` shape returned either way. First
+        // delta is logged so slow answers can be split into "model was
+        // slow to start" vs "everything after".
+        let mut first_delta_logged = false;
+        let mut on_delta = |delta: &str| {
+            if !first_delta_logged {
+                first_delta_logged = true;
+                tracing::info!(
+                    elapsed_ms = t0.elapsed().as_millis() as u64,
+                    "latency: first model token"
+                );
+            }
+            for sentence in chunker.push(delta) {
+                let _ = tx.send(sentence);
+            }
+        };
+        if qa::is_anthropic_model(answer_model) {
             match cfg.anthropic_key.as_deref() {
                 Some(akey) => {
                     qa::anthropic_answer_streaming(
                         &cfg.http,
                         akey,
-                        &cfg.groq_answer_model,
-                        &transcript,
+                        answer_model,
+                        &context,
                         &question,
                         effective_system_prompt,
-                        |delta| {
-                            for sentence in chunker.push(delta) {
-                                let _ = tx.send(sentence);
-                            }
-                        },
+                        |delta| on_delta(delta),
                     )
                     .await
                 }
                 None => Err(anyhow::anyhow!(
-                    "model {} requires ANTHROPIC_API_KEY",
-                    cfg.groq_answer_model
+                    "model {answer_model} requires ANTHROPIC_API_KEY"
                 )),
             }
         } else {
             qa::answer_streaming(
                 &cfg.http,
                 key,
-                &cfg.groq_answer_model,
-                &transcript,
+                answer_model,
+                &context,
                 &question,
                 effective_system_prompt,
-                |delta| {
-                    for sentence in chunker.push(delta) {
-                        let _ = tx.send(sentence);
-                    }
-                },
+                |delta| on_delta(delta),
             )
             .await
         }
@@ -1518,6 +1853,18 @@ sharpen the thread. Do NOT address yourself."
             let msg = format!("{peer}: {body}");
             tracing::info!(target = %peer, %body, "discussion hand-off");
             let _ = handle.privmsg(&channel, &msg).await;
+        }
+    }
+
+    // Symmetric transcript: the bot's own answer becomes a transcript
+    // line, so follow-ups ("what did you just say?", "tell me more")
+    // have the answer in context. Both sides of every exchange are now
+    // in the log — questions are pushed at the dispatch sites.
+    if let Some(active) = active.as_ref() {
+        let mut guard = active.lock().await;
+        if let Some(call) = guard.as_mut() {
+            call.transcript
+                .push(format!("{}: {}", canonical_name(&cfg.nick), answer.text));
         }
     }
 
@@ -1867,6 +2214,7 @@ fn spawn_hello_on_join(
     let http = cfg.http.clone();
     let character = cfg.ghostly_character.clone();
     let ghostly_pack = cfg.ghostly_pack.clone();
+    let recent_tts = cfg.recent_tts.clone();
     tokio::spawn(async move {
         // Audio-pipeline settle: when the bot has just joined the call,
         // the MoQ broadcast publish has been opened but no subscriber
@@ -1882,6 +2230,7 @@ fn spawn_hello_on_join(
         // one (staggered launch), and they all greet — without this
         // gate they'd talk over each other.
         wait_for_room_quiet(&peer_level).await;
+        note_spoken(&recent_tts, &text);
         let voice_profile =
             crate::persona::resolve_voice_profile(&character, ghostly_pack.as_deref());
         let mut chain = ghostly::audio::VoiceChain::new(
@@ -2002,7 +2351,12 @@ pub(crate) enum AvAction {
     Start { channel: String, session_id: String },
     /// End transcription for `(channel, session_id)`.
     End { channel: String, session_id: String },
-    /// Anything else we don't act on (joined/left/unknown state) but
+    /// A HUMAN joined a call in one of our channels. If we're not in
+    /// it, we should be — the lonely watchdog may have walked us out
+    /// of this very session while the room was empty, and without
+    /// this the human sits in a call no being ever returns to.
+    Joined { channel: String, session_id: String },
+    /// Anything else we don't act on (left/unknown state) but
     /// shouldn't surface as a hard skip — useful for tracing.
     Noop,
 }
@@ -2012,21 +2366,22 @@ pub(crate) enum AvAction {
 ///   - required tags must be present,
 ///   - `started` is acted on only for one of our joined channels.
 ///
-/// We deliberately do NOT skip events whose `+freeq.at/av-actor` is the
-/// bot's own nick. The bot must react to a session *it* started (the
-/// `--start-session-in` flow) — that `av-state=started` is attributed
-/// to the bot. There's no self-recursion risk: the bot's own av-join
-/// produces an `av-state=joined` broadcast, which maps to `Noop`
-/// below (only `started`/`ended` are actioned), and the run loop's
-/// `already in a call` guard absorbs any duplicate `started`.
+/// We deliberately do NOT skip `started` events whose
+/// `+freeq.at/av-actor` is the bot's own nick. The bot must react to a
+/// session *it* started (the `--start-session-in` flow) — that
+/// `av-state=started` is attributed to the bot.
 ///
-/// `my_nick` is retained in the signature for callers/tests; it is no
-/// longer used for filtering.
+/// `joined` IS actor-filtered: the bot's own av-join echoes back as an
+/// `av-state=joined` attributed to the bot — acting on it would
+/// re-trigger a join loop, so self-joined maps to `Noop`. A missing
+/// actor also maps to `Noop` (we can't tell human from bot). Peer-agent
+/// joins are filtered in the run loop (the classifier doesn't know the
+/// peer set).
 pub(crate) fn classify_av_event(
     target: &str,
     tags: &std::collections::HashMap<String, String>,
     my_channels: &[String],
-    _my_nick: &str,
+    my_nick: &str,
 ) -> AvAction {
     if !target.starts_with('#') && !target.starts_with('&') {
         return AvAction::Skip;
@@ -2048,6 +2403,26 @@ pub(crate) fn classify_av_event(
             channel: target.to_string(),
             session_id: av_id.clone(),
         },
+        "joined" => {
+            if !my_channels.iter().any(|c| c.eq_ignore_ascii_case(target)) {
+                return AvAction::Skip;
+            }
+            // Self-join echo (our own av-join broadcast back at us) —
+            // never act on it. Missing actor → can't attribute → Noop.
+            let actor = tags
+                .get("+freeq.at/av-actor")
+                .map(String::as_str)
+                .unwrap_or("");
+            if actor.is_empty()
+                || canonical_name(actor).eq_ignore_ascii_case(canonical_name(my_nick))
+            {
+                return AvAction::Noop;
+            }
+            AvAction::Joined {
+                channel: target.to_string(),
+                session_id: av_id.clone(),
+            }
+        }
         _ => AvAction::Noop,
     }
 }
@@ -2165,6 +2540,21 @@ async fn start_transcription(
     // (so each can tell one-on-one from a group) AND the lonely watchdog below.
     let humans = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let humans_for_task = humans.clone();
+    // When the last human left — drives the stale-transcript fence so a
+    // human joining a long-empty call gets a fresh conversation, not the
+    // tail of a dead one. See [`STALE_TRANSCRIPT_GAP`].
+    let last_human_left: LastHumanLeft = Arc::new(std::sync::Mutex::new(None));
+    let last_human_left_for_task = last_human_left.clone();
+    // Live nick roster across this call's taps — lets the addressing
+    // gate see when a question opens by naming a different participant.
+    let roster: CallRoster =
+        Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+    let roster_for_task = roster.clone();
+    // Nick → video handle across this call's taps — lets a TYPED visual
+    // question find the asker's camera (see [`CallVideoTaps`]).
+    let video_taps: CallVideoTaps =
+        Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let video_taps_for_task = video_taps.clone();
     let task = tokio::spawn(async move {
         let mut session =
             AvSession::connect(av_config, push_source, move || video_for_session.source());
@@ -2178,6 +2568,9 @@ async fn start_transcription(
                 active_for_task.clone(),
                 video_for_taps.peer_level_handle(),
                 humans_for_task.clone(),
+                roster_for_task.clone(),
+                video_taps_for_task.clone(),
+                last_human_left_for_task.clone(),
             ));
         }
         tracing::info!("AvSession ended");
@@ -2229,10 +2622,12 @@ async fn start_transcription(
         last_answer: None,
         speaker,
         video,
+        video_taps,
         moq_task: task,
         proactive_task,
         ambient_task,
         lonely_task,
+        handle,
     })
 }
 
@@ -2424,12 +2819,103 @@ async fn run_owner_command(handle: &ClientHandle, channel: Option<&str>, cmd: Ow
 }
 
 /// Decrements a shared tap counter on drop — tracks how many participants we
-/// are currently transcribing (i.e. how many other humans are in the call).
-struct TapGuard(Arc<std::sync::atomic::AtomicUsize>);
+/// are currently transcribing (i.e. how many other humans are in the call) —
+/// and removes the participant's nick from the live call roster.
+struct TapGuard {
+    humans: Arc<std::sync::atomic::AtomicUsize>,
+    /// Whether this tap incremented `humans` (peer agents don't) — the
+    /// decrement must mirror the increment or the count drifts negative.
+    counted: bool,
+    roster: CallRoster,
+    video_taps: CallVideoTaps,
+    nick: String,
+    /// Stamped when this drop takes the human count to ZERO — the
+    /// stale-transcript fence reads it when the next human arrives.
+    /// See [`STALE_TRANSCRIPT_GAP`].
+    last_human_left: LastHumanLeft,
+}
 impl Drop for TapGuard {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        if self.counted {
+            let prev = self
+                .humans
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            if prev == 1 {
+                // Room just went human-empty.
+                if let Ok(mut g) = self.last_human_left.lock() {
+                    *g = Some(Instant::now());
+                }
+            }
+        }
+        if let Ok(mut r) = self.roster.lock() {
+            r.remove(&self.nick);
+        }
+        if let Ok(mut v) = self.video_taps.lock() {
+            v.remove(&self.nick);
+        }
     }
+}
+
+/// When the call has been human-empty for at least this long, whatever
+/// is in the in-call transcript is a DEAD conversation — the next human
+/// to walk in starts a new one, and feeding them someone else's context
+/// makes the being answer a conversation they weren't in ("it felt like
+/// Olive's conversation was not the one I was having"). Kept above the
+/// network-blip scale so a brief rejoin keeps its context.
+const STALE_TRANSCRIPT_GAP: Duration = Duration::from_secs(60);
+
+/// Shared per-call cell: when did the last human leave? `None` while
+/// humans are present (or before any ever joined).
+type LastHumanLeft = Arc<std::sync::Mutex<Option<Instant>>>;
+
+/// Live set of participant nicks we're currently tapping (lowercased,
+/// as-published). Shared across a call's tap tasks so the addressing
+/// gate can tell when a question opens by naming someone *else*.
+pub(crate) type CallRoster = Arc<std::sync::Mutex<std::collections::HashSet<String>>>;
+
+/// Live map of tapped participant nick (lowercased) → their video handle.
+/// Shared across a call's tap tasks so a question TYPED in the channel can
+/// still see the asker's camera — the voice path gets the handle with the
+/// utterance, but the PRIVMSG path has only a nick (observed live: "read me
+/// the title on my tile" typed mid-call answered "no frame coming through"
+/// while the same question by voice described the frame).
+pub(crate) type CallVideoTaps =
+    Arc<std::sync::Mutex<std::collections::HashMap<String, VideoHandle>>>;
+
+/// The asker's video handle, by nick. Exact lowercase match first; a
+/// server-suffixed variant ("olive-3qkx…") still matches its base name in
+/// either direction, since IRC nick and broadcast nick can disagree on the
+/// suffix.
+pub(crate) fn lookup_tap_video(taps: &CallVideoTaps, asker: &str) -> Option<VideoHandle> {
+    let want = asker.to_ascii_lowercase();
+    let m = taps.lock().ok()?;
+    if let Some(vh) = m.get(&want) {
+        return Some(vh.clone());
+    }
+    let base = |s: &str| s.split_once('-').map(|(p, _)| p.to_string()).unwrap_or_else(|| s.to_string());
+    let want_base = base(&want);
+    m.iter()
+        .find_map(|(k, vh)| (base(k) == want_base).then(|| vh.clone()))
+}
+
+/// True when `text` opens by addressing some OTHER named participant or
+/// peer agent — "Yokota, what is two plus two?" is Yokota's question,
+/// and an agent named anything else must not answer it just because it
+/// is a question. `others` are candidate names (roster nicks + the
+/// configured peer agents); the agent's own name is filtered out so a
+/// genuine address to us never matches here.
+pub(crate) fn addressed_to_other(text: &str, self_nick: &str, others: &[String]) -> bool {
+    let self_canonical = self_nick
+        .split_once('-')
+        .map(|(p, _)| p)
+        .unwrap_or(self_nick)
+        .to_ascii_lowercase();
+    let refs: Vec<&str> = others
+        .iter()
+        .map(|s| s.as_str())
+        .filter(|n| !n.eq_ignore_ascii_case(&self_canonical))
+        .collect();
+    crate::social::extract_addressee(text, &refs).is_some()
 }
 
 /// Worth responding to? Filters empty/backchannel utterances so the bot doesn't
@@ -2468,23 +2954,44 @@ fn looks_like_question(text: &str) -> bool {
         .is_some_and(|w| Q.contains(&w))
 }
 
-/// Whether `text` reads like a request/imperative directed at the agent
-/// ("tell me…", "make a plan", "play something"). In a 1:1 call this lets
-/// natural requests through without saying the name, while bare ambient
-/// declaratives ("all of us are down", "I'm sorry") are left alone.
-fn looks_like_request(text: &str) -> bool {
-    const VERBS: [&str; 26] = [
-        "tell", "give", "show", "make", "help", "explain", "write", "draw", "find", "search",
-        "play", "sing", "list", "summarize", "summarise", "describe", "build", "create",
-        "suggest", "recommend", "remind", "let", "lets", "gimme", "teach", "pitch",
-    ];
-    text.trim()
-        .to_lowercase()
-        .split_whitespace()
-        .next()
-        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
-        .is_some_and(|w| VERBS.contains(&w))
+/// The bot's character name without the server DID suffix —
+/// `oblivion-z6mkfa8x` → `oblivion`. What humans say and what
+/// transcript lines should carry.
+fn canonical_name(nick: &str) -> &str {
+    nick.split_once('-').map(|(p, _)| p).unwrap_or(nick)
 }
+
+/// How many transcript lines ride along as context on a QA prompt. A
+/// long call's full transcript drowns the question (and the token
+/// budget); the model needs the recent conversation, not the hour.
+const TRANSCRIPT_PROMPT_LINES: usize = 60;
+
+/// The last `max` lines of a transcript, joined — the QA-prompt
+/// snapshot. The full transcript stays in the call for the end-of-call
+/// summary.
+fn recent_lines(lines: &[String], max: usize) -> String {
+    let start = lines.len().saturating_sub(max);
+    lines[start..].join("\n")
+}
+
+/// True when the utterance is nothing but the bot's name (plus
+/// fillers/punctuation) — "Yokota." / "hey yokota". TTS comma pauses
+/// and human hesitation make the VAD cut "Yokota, please read…" into
+/// "Yokota." + the question as two segments, and neither alone passes
+/// the named gate. A bare name primes the speaker's NEXT segment as
+/// addressed (see `transcribe_participant`).
+///
+/// Implementation trick: append a sentinel word and run the normal
+/// address parser — it matches iff every real word before the sentinel
+/// was the name (with the usual filler/split/mishearing tolerance).
+fn is_bare_name(text: &str, nick: &str) -> bool {
+    address_with_aliases(&format!("{} zzsentinel", text.trim()), nick).as_deref()
+        == Some("zzsentinel")
+}
+
+/// How long a bare-name utterance keeps the speaker's next segment
+/// treated as addressed.
+const NAME_PRIME_WINDOW: Duration = Duration::from_secs(4);
 
 /// Whether an answer is worth freezing into a shareable "moment" card: a tight,
 /// quotable line (not a stub, not an apology/error, not a wall of text).
@@ -2518,12 +3025,76 @@ async fn transcribe_participant(
     // Live count of participants being transcribed (= other humans in the
     // call). When it's just one of them and us, no name is needed to address us.
     humans: Arc<std::sync::atomic::AtomicUsize>,
+    // Shared nick roster for the call — see [`CallRoster`].
+    roster: CallRoster,
+    // Shared nick → video map — see [`CallVideoTaps`].
+    video_taps: CallVideoTaps,
+    // When the last human left the call — see [`STALE_TRANSCRIPT_GAP`].
+    last_human_left: LastHumanLeft,
 ) {
     let AvParticipant { path, nick, mut audio, video } = participant;
     let stt = cfg.stt.clone();
-    humans.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let _tap = TapGuard(humans.clone()); // decrement when this tap ends
+    // `humans` drives the 1:1 conversational gate ("alone with one
+    // person, every sentence is for me") — a peer AGENT on the call
+    // must not count, or one human + two bots reads as a group call
+    // and the bot goes name-only.
+    let counted = !is_peer_nick(&cfg.peer_agents, &nick);
+    if counted {
+        let prev = humans.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if prev == 0 {
+            // First human in the room. If it's been human-empty past the
+            // fence, the in-call transcript is a dead conversation —
+            // clear it so the being doesn't answer from someone else's
+            // context. `take()` re-arms the fence either way; the marker
+            // is only meaningful across a humans==0 stretch.
+            let stale = last_human_left
+                .lock()
+                .ok()
+                .and_then(|mut g| g.take())
+                .is_some_and(|t| t.elapsed() >= STALE_TRANSCRIPT_GAP);
+            if stale {
+                if let Some(call) = active.lock().await.as_mut() {
+                    if !call.transcript.is_empty() {
+                        tracing::info!(
+                            %nick,
+                            lines = call.transcript.len(),
+                            "stale call transcript cleared — new conversation"
+                        );
+                        call.transcript.clear();
+                        call.last_answer = None;
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(mut r) = roster.lock() {
+        r.insert(nick.to_ascii_lowercase());
+    }
+    if let Ok(mut v) = video_taps.lock() {
+        v.insert(nick.to_ascii_lowercase(), video.clone());
+    }
+    let _tap = TapGuard {
+        // decrement + de-roster + de-map when this tap ends
+        humans: humans.clone(),
+        counted,
+        roster: roster.clone(),
+        video_taps: video_taps.clone(),
+        nick: nick.to_ascii_lowercase(),
+        last_human_left,
+    };
     tracing::info!(%nick, %path, "participant audio live — transcribing");
+
+    // Bare-name priming state for this participant — set when they say
+    // just the bot's name, consumed by their next utterance. See
+    // `is_bare_name`.
+    let name_primed: Arc<std::sync::Mutex<Option<Instant>>> =
+        Arc::new(std::sync::Mutex::new(None));
+    // The mirror for OTHER agents: a bare "Yokota." (heard by Olive)
+    // marks the speaker's next segment as someone else's — without
+    // this, the 1:1 conversational gate answers a question the VAD
+    // split away from its addressee's name.
+    let other_primed: Arc<std::sync::Mutex<Option<Instant>>> =
+        Arc::new(std::sync::Mutex::new(None));
 
     // VAD: turn the PCM stream into utterances, cut at natural pauses.
     let mut segmenter = VadSegmenter::new(VadConfig::default());
@@ -2571,6 +3142,9 @@ async fn transcribe_participant(
         let active = active.clone();
         let cfg = cfg.clone();
         let humans = humans.clone();
+        let roster = roster.clone();
+        let name_primed = name_primed.clone();
+        let other_primed = other_primed.clone();
         // The asker's own video — so a visual question can be answered
         // from what they're showing.
         let asker_video = video.clone();
@@ -2578,10 +3152,27 @@ async fn transcribe_participant(
         // local whisper does its own spawn_blocking internally. One task
         // per utterance so a slow STT call doesn't stall the tap loop.
         tokio::spawn(async move {
-            match stt.transcribe(&chunk).await {
+            let t_stt = Instant::now();
+            let stt_result = stt.transcribe(&chunk).await;
+            tracing::info!(
+                %nick,
+                elapsed_ms = t_stt.elapsed().as_millis() as u64,
+                "latency: STT round-trip"
+            );
+            match stt_result {
                 Ok(text) => {
                     if text.is_empty() || is_hallucination(&text) {
                         tracing::info!(%nick, %text, "dropped empty/hallucinated utterance");
+                        return;
+                    }
+                    // Own-TTS echo: a participant without echo
+                    // cancellation plays our voice out their speakers,
+                    // their mic picks it up, and it comes back
+                    // transcribed under their nick. Answering it = the
+                    // bot talking to itself in a loop. Drop it before
+                    // it reaches the transcript or the addressing gate.
+                    if is_own_echo(&cfg.recent_tts, &text) {
+                        tracing::info!(%nick, %text, "dropped own-TTS echo");
                         return;
                     }
                     tracing::info!(%nick, %text, "transcribed utterance");
@@ -2654,17 +3245,88 @@ async fn transcribe_participant(
 
                     // Voice-addressed Q&A. People don't say someone's name to
                     // address them, so neither should they have to say ours —
-                    // but we must NOT answer every ambient line either (in a 1:1
-                    // that made her reply to "I'm sorry" / room noise). So:
+                    // but we must NOT answer every ambient line either. So:
                     //  • named ("eliza, …")  → always addressed
                     //  • a question          → addressed (any call size)
-                    //  • 1:1 + a request     → addressed ("tell me…", "play…")
-                    //  • bare declaratives   → ignored (ambient / self-talk)
+                    //  • 1:1 + substantive   → addressed (conversational mode:
+                    //    alone with one human, every real sentence is for us —
+                    //    STT name-mangling kept dropping legitimate requests)
+                    //  • bare declaratives in a group → ignored (ambient)
                     // We're always transcribing regardless; this only decides
-                    // when to *answer*. `humans` is the live count of people in
-                    // the call (1 == one-on-one with us).
-                    let named = address_with_aliases(&text, &cfg.nick);
+                    // when to *answer*. `humans` is the live count of humans in
+                    // the call (1 == one-on-one with us; peer agents excluded).
+                    let mut named = address_with_aliases(&text, &cfg.nick);
                     let humans = humans.load(std::sync::atomic::Ordering::Relaxed);
+
+                    // Other participants + configured peers — used for
+                    // "addressed to someone else" checks. Candidates come
+                    // from the live call roster (so this works even when
+                    // --peer-agents wasn't configured) plus the peer list.
+                    let others: Vec<String> = {
+                        let mut others: Vec<String> = roster
+                            .lock()
+                            .map(|r| {
+                                r.iter()
+                                    .map(|n| {
+                                        n.split_once('-')
+                                            .map(|(p, _)| p)
+                                            .unwrap_or(n)
+                                            .to_string()
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        others.extend(cfg.peer_agents.iter().cloned());
+                        others.sort();
+                        others.dedup();
+                        others
+                    };
+
+                    // Name-primed merge: a bare "Yokota." segment (the VAD
+                    // cutting at the comma of "Yokota, please read…") makes
+                    // the speaker's NEXT segment addressed, so the split
+                    // question still lands.
+                    if named.is_none() && is_bare_name(&text, &cfg.nick) {
+                        if let Ok(mut primed) = name_primed.lock() {
+                            *primed = Some(Instant::now());
+                        }
+                        tracing::info!(%nick, "bare name heard — priming next segment as addressed");
+                        return;
+                    }
+                    // Mirror: a bare PEER name primes the next segment as
+                    // addressed to THEM, so we don't steal it via the 1:1
+                    // gate. (The bare line itself already suppresses via
+                    // `addressed_to_other` below.)
+                    if named.is_none()
+                        && others.iter().any(|o| is_bare_name(&text, o))
+                    {
+                        if let Ok(mut primed) = other_primed.lock() {
+                            *primed = Some(Instant::now());
+                        }
+                        tracing::info!(
+                            %nick,
+                            "bare peer name heard — priming next segment as addressed to other"
+                        );
+                    }
+                    if named.is_none() {
+                        let was_primed = name_primed
+                            .lock()
+                            .ok()
+                            .and_then(|mut p| p.take())
+                            .is_some_and(|t| t.elapsed() <= NAME_PRIME_WINDOW);
+                        if was_primed && is_substantive(&text) {
+                            tracing::info!(%nick, "name-primed segment — treating as addressed");
+                            named = Some(text.trim().to_string());
+                        }
+                    }
+                    // Consume an other-agent prime: within the window, an
+                    // unnamed follow-up segment belongs to the primed peer.
+                    let other_primed_hit = named.is_none()
+                        && other_primed
+                            .lock()
+                            .ok()
+                            .and_then(|mut p| p.take())
+                            .is_some_and(|t| t.elapsed() <= NAME_PRIME_WINDOW);
 
                     // Owner lifecycle command by voice ("go to sleep", "join #x",
                     // "leave") — owner-only, past the call-join grace (so replayed
@@ -2704,12 +3366,19 @@ async fn transcribe_participant(
                         }
                     }
 
+                    // A question that opens by naming a DIFFERENT
+                    // participant or peer agent is theirs, not ours —
+                    // "Yokota, what is two plus two?" must not be
+                    // answered by Olive just because it's a question.
+                    // `other_primed_hit` covers the VAD-split variant
+                    // ("Yokota." … "what is two plus two?").
+                    let to_other = named.is_none()
+                        && (other_primed_hit
+                            || addressed_to_other(&text, &cfg.nick, &others));
                     let inferred: Option<String> = named.clone().or_else(|| {
-                        if !is_substantive(&text) {
+                        if !is_substantive(&text) || to_other {
                             None
-                        } else if looks_like_question(&text)
-                            || (humans <= 1 && looks_like_request(&text))
-                        {
+                        } else if looks_like_question(&text) || humans <= 1 {
                             Some(text.trim().to_string())
                         } else {
                             None
@@ -2718,6 +3387,7 @@ async fn transcribe_participant(
                     tracing::info!(
                         %nick, humans,
                         named = named.is_some(),
+                        to_other,
                         addressed = inferred.is_some(),
                         "voice addressing decision"
                     );
@@ -2758,11 +3428,15 @@ async fn transcribe_participant(
                                     tracing::info!(%nick, "barge-in — interrupting current answer");
                                     call.speaker.clear();
                                     call.last_answer = Some(Instant::now());
-                                    Some((
-                                        call.transcript.join("\n"),
-                                        call.speaker.clone(),
-                                        call.video.clone(),
-                                    ))
+                                    // Snapshot the context BEFORE pushing the
+                                    // question — then record the question as a
+                                    // transcript line so the conversation log
+                                    // is symmetric (questions used to vanish:
+                                    // this arm returned before the push below).
+                                    let snapshot =
+                                        recent_lines(&call.transcript, TRANSCRIPT_PROMPT_LINES);
+                                    call.transcript.push(format!("{nick}: {text}"));
+                                    Some((snapshot, call.speaker.clone(), call.video.clone()))
                                 }
                                 // Debounce: a speaker joined from several
                                 // devices is tapped once per broadcast, so
@@ -2774,11 +3448,10 @@ async fn transcribe_participant(
                                         .map_or(true, |t| t.elapsed() >= ANSWER_DEBOUNCE) =>
                                 {
                                     call.last_answer = Some(Instant::now());
-                                    Some((
-                                        call.transcript.join("\n"),
-                                        call.speaker.clone(),
-                                        call.video.clone(),
-                                    ))
+                                    let snapshot =
+                                        recent_lines(&call.transcript, TRANSCRIPT_PROMPT_LINES);
+                                    call.transcript.push(format!("{nick}: {text}"));
+                                    Some((snapshot, call.speaker.clone(), call.video.clone()))
                                 }
                                 Some(_) => {
                                     tracing::info!(%nick, "ignoring duplicate addressed question (debounce)");
@@ -2798,6 +3471,7 @@ async fn transcribe_participant(
                                 Some(speaker),
                                 Some(video),
                                 Some(asker_video),
+                                Some(active.clone()),
                             )
                             .await;
                         }
@@ -3063,6 +3737,157 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc;
 
+    // ---------- own-TTS echo guard ----------
+
+    fn echo_log(sentences: &[&str]) -> RecentTts {
+        let log: RecentTts = Default::default();
+        for s in sentences {
+            note_spoken(&log, s);
+        }
+        log
+    }
+
+    // ---------- addressed-to-other gate ----------
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn question_naming_another_agent_is_theirs() {
+        // Olive must not answer "Yokota, what is two plus two?"
+        assert!(addressed_to_other(
+            "Yokota, what is two plus two?",
+            "olive",
+            &names(&["yokota", "claude"]),
+        ));
+    }
+
+    #[test]
+    fn question_naming_me_is_mine() {
+        // Yokota's own name filtered from the candidate list — a
+        // genuine address to us never reads as "someone else's".
+        assert!(!addressed_to_other(
+            "Yokota, what is two plus two?",
+            "yokota-z6mkqxh7",
+            &names(&["yokota", "olive", "claude"]),
+        ));
+    }
+
+    #[test]
+    fn bare_question_is_nobody_elses() {
+        assert!(!addressed_to_other(
+            "What time is it?",
+            "yokota",
+            &names(&["olive", "claude"]),
+        ));
+    }
+
+    #[test]
+    fn suffixed_roster_nick_still_matches() {
+        // The roster carries the server-suffixed nick; the gate is fed
+        // pre-dash prefixes, so the spoken character name matches.
+        assert!(addressed_to_other(
+            "Olive, are you kidding me?",
+            "yokota",
+            &names(&["olive", "claude"]),
+        ));
+    }
+
+    #[test]
+    fn empty_candidates_never_match() {
+        assert!(!addressed_to_other(
+            "Yokota, what is two plus two?",
+            "yokota",
+            &[],
+        ));
+    }
+
+    // ---------- lookup_tap_video ----------
+
+    fn taps_of(nicks: &[&str]) -> CallVideoTaps {
+        let m: std::collections::HashMap<String, VideoHandle> = nicks
+            .iter()
+            .map(|n| (n.to_string(), VideoHandle::default()))
+            .collect();
+        Arc::new(std::sync::Mutex::new(m))
+    }
+
+    #[test]
+    fn typed_asker_finds_their_tap_exactly() {
+        let taps = taps_of(&["claude", "olive"]);
+        assert!(lookup_tap_video(&taps, "Claude").is_some());
+    }
+
+    #[test]
+    fn typed_asker_matches_suffixed_broadcast_nick() {
+        // IRC nick "yokota" typed the question; the broadcast tap was
+        // registered under the server-suffixed "yokota-z6mkqxh7".
+        let taps = taps_of(&["yokota-z6mkqxh7"]);
+        assert!(lookup_tap_video(&taps, "yokota").is_some());
+        // …and the reverse: suffixed IRC nick, plain broadcast nick.
+        let taps = taps_of(&["yokota"]);
+        assert!(lookup_tap_video(&taps, "yokota-z6mkqxh7").is_some());
+    }
+
+    #[test]
+    fn typed_asker_not_on_call_has_no_tap() {
+        let taps = taps_of(&["olive"]);
+        assert!(lookup_tap_video(&taps, "claude").is_none());
+    }
+
+    #[test]
+    fn echo_exact_comes_back_dropped() {
+        let log = echo_log(&["The patterns are already moving across the field."]);
+        assert!(is_own_echo(&log, "The patterns are already moving across the field."));
+    }
+
+    #[test]
+    fn echo_stt_mangled_still_dropped() {
+        // STT round-trips are lossy: casing, punctuation, a dropped word.
+        let log = echo_log(&["A live voice call with the assistant Eliza is in progress."]);
+        assert!(is_own_echo(&log, "a live voice call with the assistant eliza in progress"));
+    }
+
+    #[test]
+    fn echo_fragment_of_long_answer_dropped() {
+        // Speaker leak often clips to a fragment of one sentence.
+        let log = echo_log(&[
+            "Rust's borrow checker enforces memory safety at compile time.",
+            "That means no garbage collector and no data races.",
+        ]);
+        assert!(is_own_echo(&log, "no garbage collector and no data races"));
+    }
+
+    #[test]
+    fn real_reply_about_answer_not_dropped() {
+        // A human responding brings their own words — under threshold.
+        let log = echo_log(&["Rust's borrow checker enforces memory safety at compile time."]);
+        assert!(!is_own_echo(&log, "okay but what about unsafe blocks in the borrow checker"));
+    }
+
+    #[test]
+    fn short_human_ack_not_dropped() {
+        // "yes", "okay then" — too short for the bag test, and not a
+        // substring of anything spoken.
+        let log = echo_log(&["Let me think about the deployment order for a second."]);
+        assert!(!is_own_echo(&log, "okay sure"));
+        assert!(!is_own_echo(&log, "yes"));
+    }
+
+    #[test]
+    fn short_exact_fragment_dropped() {
+        // A short utterance that IS a verbatim slice of recent TTS.
+        let log = echo_log(&["Let me think about the deployment order."]);
+        assert!(is_own_echo(&log, "the deployment order"));
+    }
+
+    #[test]
+    fn empty_log_never_matches() {
+        let log: RecentTts = Default::default();
+        assert!(!is_own_echo(&log, "anything at all here"));
+    }
+
     // ---------- owner lifecycle command (STT-tolerant) ----------
 
     #[test]
@@ -3134,13 +3959,27 @@ mod tests {
     // ---------- voice addressing gate ----------
 
     #[test]
-    fn request_detector_separates_asks_from_ambient() {
-        assert!(looks_like_request("tell me a story"));
-        assert!(looks_like_request("play something upbeat"));
-        // The ambient/garbled lines that wrongly triggered her in 1:1:
-        assert!(!looks_like_request("all of us are down"));
-        assert!(!looks_like_request("hello, I didn't say anything"));
-        assert!(!looks_like_request("I'm sorry"));
+    fn bare_name_detector_primes_only_on_the_name_alone() {
+        // The VAD split: "Yokota, please read…" arrives as "Yokota." +
+        // the question. The bare name must register…
+        assert!(is_bare_name("Yokota.", "yokota"));
+        assert!(is_bare_name("hey yokota", "yokota"));
+        assert!(is_bare_name("Yokota", "yokota-z6mkqxh7"), "suffix alias");
+        // …but a name WITH content is a normal address (handled by the
+        // named gate), and unrelated lines never prime.
+        assert!(!is_bare_name("yokota what time is it", "yokota"));
+        assert!(!is_bare_name("please read my tile", "yokota"));
+        assert!(!is_bare_name("", "yokota"));
+    }
+
+    #[test]
+    fn recent_lines_caps_the_prompt_snapshot() {
+        let lines: Vec<String> = (0..100).map(|i| format!("line {i}")).collect();
+        let s = recent_lines(&lines, 60);
+        assert!(s.starts_with("line 40\n") && s.ends_with("line 99"));
+        // Short transcripts come through whole.
+        assert_eq!(recent_lines(&lines[..3], 60), "line 0\nline 1\nline 2");
+        assert_eq!(recent_lines(&[], 60), "");
     }
 
     #[test]
@@ -3486,9 +4325,9 @@ mod tests {
 
     #[test]
     fn classify_emits_noop_for_unknown_state() {
-        // `joined`, `left`, or anything else — we log but don't act.
-        // Pin so a careless `_ => AvAction::Start` regression is caught.
-        for state in ["joined", "left", "weird"] {
+        // `left` or anything unknown — we log but don't act. Pin so a
+        // careless `_ => AvAction::Start` regression is caught.
+        for state in ["left", "weird"] {
             let t = tags(&[
                 ("+freeq.at/av-state", state),
                 ("+freeq.at/av-id", "s"),
@@ -3499,6 +4338,69 @@ mod tests {
                 "state {state:?}"
             );
         }
+    }
+
+    #[test]
+    fn classify_human_joined_is_actioned() {
+        // A human joining a call in our channel must summon us — the
+        // lonely watchdog may have walked us out of this very session
+        // while the room was empty.
+        let t = tags(&[
+            ("+freeq.at/av-state", "joined"),
+            ("+freeq.at/av-id", "s1"),
+            ("+freeq.at/av-actor", "chadfowler.com"),
+        ]);
+        assert_eq!(
+            classify_av_event("#room", &t, &["#room".into()], "tbot"),
+            AvAction::Joined {
+                channel: "#room".into(),
+                session_id: "s1".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn classify_joined_in_unknown_channel_is_skipped() {
+        // Same trust boundary as `started`: a joined event must not
+        // drag the bot into a channel it isn't a member of.
+        let t = tags(&[
+            ("+freeq.at/av-state", "joined"),
+            ("+freeq.at/av-id", "s1"),
+            ("+freeq.at/av-actor", "alice"),
+        ]);
+        assert_eq!(
+            classify_av_event("#elsewhere", &t, &["#room".into()], "tbot"),
+            AvAction::Skip
+        );
+    }
+
+    #[test]
+    fn classify_joined_missing_actor_is_noop() {
+        // No actor → can't tell human from bot → don't act.
+        let t = tags(&[
+            ("+freeq.at/av-state", "joined"),
+            ("+freeq.at/av-id", "s1"),
+        ]);
+        assert_eq!(
+            classify_av_event("#room", &t, &["#room".into()], "tbot"),
+            AvAction::Noop
+        );
+    }
+
+    #[test]
+    fn classify_self_joined_with_did_suffix_is_noop() {
+        // The bot's registered nick can carry a DID suffix
+        // (`tbot-z6mkfa8x`); the self-join check compares canonical
+        // (pre-dash) names so the echo never re-triggers a join.
+        let t = tags(&[
+            ("+freeq.at/av-state", "joined"),
+            ("+freeq.at/av-id", "s1"),
+            ("+freeq.at/av-actor", "TBot-z6mkfa8x"),
+        ]);
+        assert_eq!(
+            classify_av_event("#room", &t, &["#room".into()], "tbot"),
+            AvAction::Noop
+        );
     }
 
     #[test]

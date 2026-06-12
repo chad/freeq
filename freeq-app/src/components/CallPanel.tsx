@@ -35,6 +35,20 @@ type MoqPublishEl = HTMLElement & {
   audio?: MoqSignal<MoqDeviceSource | undefined>;
   video?: MoqSignal<MoqDeviceSource | undefined>;
 };
+// moq-watch exposes a `status` Signal whose value transitions
+// offline → loading → live as a broadcast announces and its catalog
+// arrives. We use it to reveal a screen-share tile only once the
+// presenter's `…/screen` broadcast is actually live.
+type MoqWatchEl = HTMLElement & {
+  status?: MoqSignal<string>;
+};
+
+/** True when this browser can capture a screen (getDisplayMedia present). */
+function canShareScreen(): boolean {
+  return typeof navigator !== 'undefined'
+    && !!navigator.mediaDevices
+    && typeof navigator.mediaDevices.getDisplayMedia === 'function';
+}
 
 // moq's Signal.subscribe only fires on *future* changes — it never
 // replays the current value. `pub.video` is assigned exactly once, when
@@ -52,6 +66,7 @@ export function CallPanel() {
   const avAudioActive = useStore((s) => s.avAudioActive);
   const avMuted = useStore((s) => s.avMuted);
   const avCameraOn = useStore((s) => s.avCameraOn);
+  const avScreenShareOn = useStore((s) => s.avScreenShareOn);
   const avSessions = useStore((s) => s.avSessions);
 
   const session = activeAvSession ? avSessions.get(activeAvSession) : null;
@@ -60,7 +75,12 @@ export function CallPanel() {
 
   const publishContainerRef = useRef<HTMLDivElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
+  const localScreenRef = useRef<HTMLVideoElement>(null);
   const publishElRef = useRef<HTMLElement | null>(null);
+  // Second publisher dedicated to the screen-share broadcast
+  // (`{name}/screen`), so the camera+mic publish element above is never
+  // disturbed when sharing starts/stops.
+  const screenPubElRef = useRef<HTMLElement | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // The moq-publish element, mirrored into state so the camera/mute sync
   // effects re-run once it exists. They previously read publishElRef
@@ -70,6 +90,19 @@ export function CallPanel() {
   const [pubEl, setPubEl] = useState<MoqPublishEl | null>(null);
 
   const [participantSlots, setParticipantSlots] = useState<Slot[]>([]);
+  // Which participant slots currently have a *live* `…/screen` broadcast.
+  // Driven up from each ScreenTile's moq-watch `status` so we only show the
+  // spotlight chrome when something is actually being shared.
+  const [liveScreens, setLiveScreens] = useState<Set<string>>(new Set());
+  const handleScreenLive = useCallback((key: string, live: boolean) => {
+    setLiveScreens((prev) => {
+      if (live === prev.has(key)) return prev;
+      const next = new Set(prev);
+      if (live) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }, []);
   // Full-screen: the call panel takes over the whole web-app viewport so
   // participant video (and eliza's visual-aid cards) is actually big
   // enough to see.
@@ -264,6 +297,73 @@ export function CallPanel() {
     };
   }, [avCameraOn, pubEl, refreshDevices]);
 
+  // ── Screen share: a second, dedicated publisher ─────────────
+  // The screen rides its own broadcast `{name}/screen` so the camera+mic
+  // publish element is never touched (a single MoQ broadcast can't carry
+  // mic audio + screen video — `source='screen'` would replace the mic).
+  // The element is muted: video only, never tab/system audio.
+  useEffect(() => {
+    if (!avScreenShareOn || !sessionId || !myNick) return;
+    if (!canShareScreen()) {
+      useStore.getState().setAvScreenShareOn(false);
+      return;
+    }
+    const container = publishContainerRef.current;
+    if (!container) return;
+
+    const myInstance = getAvInstanceId();
+    const broadcastKey = myInstance ? `${myNick}~${myInstance}` : myNick;
+    const screenName = `${sessionId}/${broadcastKey}/screen`;
+
+    const pub = document.createElement('moq-publish') as MoqPublishEl;
+    container.appendChild(pub);
+    screenPubElRef.current = pub;
+    pub.setAttribute('url', moqOrigin);
+    pub.setAttribute('name', screenName);
+    // Video only — mute before `source` so no audio rendition is ever
+    // published even if the browser hands us a display-audio track.
+    pub.setAttribute('muted', '');
+    (pub as HTMLElement & { muted?: boolean }).muted = true;
+    // `source='screen'` opens getDisplayMedia (the OS surface picker).
+    pub.setAttribute('source', 'screen');
+    console.log('[call] Sharing screen:', screenName);
+
+    // Local preview from the publisher's own track, and — critically —
+    // detect the browser's native "Stop sharing" button via the track's
+    // `ended` event so our toggle state stays truthful.
+    const onEnded = () => useStore.getState().setAvScreenShareOn(false);
+    let endedTrack: MediaStreamTrack | null = null;
+    let unsubInner: (() => void) | null = null;
+    const videoSig = pub.video;
+    const unsubOuter = videoSig?.subscribe((screen) => {
+      unsubInner?.();
+      unsubInner = null;
+      if (!screen?.source) return;
+      unsubInner = screen.source.subscribe((track) => {
+        if (endedTrack) {
+          endedTrack.removeEventListener('ended', onEnded);
+          endedTrack = null;
+        }
+        if (localScreenRef.current) {
+          localScreenRef.current.srcObject = track ? new MediaStream([track]) : null;
+        }
+        if (track) {
+          endedTrack = track;
+          track.addEventListener('ended', onEnded);
+        }
+      });
+    });
+
+    return () => {
+      unsubInner?.();
+      unsubOuter?.();
+      if (endedTrack) endedTrack.removeEventListener('ended', onEnded);
+      if (localScreenRef.current) localScreenRef.current.srcObject = null;
+      tearDownScreen();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [avScreenShareOn, sessionId]);
+
   // ── Poll participants ───────────────────────────────────────
   const pollParticipants = useCallback(async () => {
     if (!sessionId) return;
@@ -353,6 +453,7 @@ export function CallPanel() {
       pub.remove();
       publishElRef.current = null;
     }
+    tearDownScreen();
     setPubEl(null);
     if (localVideoRef.current) {
       localVideoRef.current.srcObject = null;
@@ -363,8 +464,29 @@ export function CallPanel() {
     setSelectedCamera('');
   }
 
+  // Hard-stop the screen-share publisher. As with the main publish
+  // element, `removeAttribute('source')` (NOT `''`) is what closes the
+  // getDisplayMedia capture — clearing it to '' throws inside the
+  // component before its source state updates, leaking the capture.
+  function tearDownScreen() {
+    const pub = screenPubElRef.current;
+    if (!pub) return;
+    const p = pub as HTMLElement & { paused?: boolean; muted?: boolean };
+    p.muted = true;
+    p.paused = true;
+    pub.setAttribute('muted', '');
+    pub.removeAttribute('source');
+    pub.setAttribute('url', '');
+    pub.remove();
+    screenPubElRef.current = null;
+  }
+
   const handleMuteToggle = () => useStore.getState().setAvMuted(!avMuted);
   const handleCameraToggle = () => useStore.getState().setAvCameraOn(!avCameraOn);
+  const handleScreenShareToggle = () => {
+    if (!canShareScreen()) return;
+    useStore.getState().setAvScreenShareOn(!avScreenShareOn);
+  };
 
   // Switch capture hardware mid-call by setting the moq-publish source's
   // `device.preferred` signal. Empty id = keep moq's default heuristic.
@@ -383,6 +505,7 @@ export function CallPanel() {
     cleanup();
     useStore.getState().setAvAudioActive(false);
     useStore.getState().setAvCameraOn(false);
+    useStore.getState().setAvScreenShareOn(false);
     if (channel && sessionId) leaveAvSession(channel, sessionId);
   };
 
@@ -390,6 +513,7 @@ export function CallPanel() {
 
   const participantCount = (session?.participants.size || 0);
   const showVideoGrid = avCameraOn || participantSlots.length > 0;
+  const anyScreen = avScreenShareOn || liveScreens.size > 0;
   const authDid = useStore.getState().authDid;
   const myAvatar = authDid ? getCachedProfile(authDid)?.avatar : null;
 
@@ -401,6 +525,43 @@ export function CallPanel() {
           : 'border-b border-border bg-bg-secondary'
       }
     >
+      {/* Screen-share spotlight. The ScreenTiles are always mounted (so
+          their moq-watch can detect a `…/screen` broadcast going live), but
+          the row's visible chrome only appears when something is shared. */}
+      <div
+        className={
+          anyScreen
+            ? (fullscreen
+                ? 'flex flex-wrap gap-4 p-4 justify-center items-center'
+                : 'flex flex-wrap gap-3 p-3 justify-center border-b border-border')
+            : ''
+        }
+      >
+        {avScreenShareOn && (
+          <div className={spotlightTileClasses(fullscreen)}>
+            <video
+              ref={localScreenRef}
+              autoPlay
+              muted
+              playsInline
+              className="absolute inset-0 w-full h-full object-contain bg-black"
+            />
+            <span className="absolute bottom-1 left-1 text-[10px] bg-black/60 text-white px-1 rounded z-10">
+              You — screen
+            </span>
+          </div>
+        )}
+        {participantSlots.map((slot) => (
+          <ScreenTile
+            key={slot.broadcastKey + ':screen'}
+            slot={slot}
+            moqOrigin={moqOrigin}
+            fullscreen={fullscreen}
+            onLiveChange={handleScreenLive}
+          />
+        ))}
+      </div>
+
       {/* Video grid — shown when camera is on or participants exist */}
       {showVideoGrid && (
         <div
@@ -515,6 +676,21 @@ export function CallPanel() {
           {avCameraOn ? <CameraOnIcon size={18} /> : <CameraOffIcon size={18} />}
         </button>
 
+        {/* Share screen — only when the browser can capture a display */}
+        {canShareScreen() && (
+          <button
+            onClick={handleScreenShareToggle}
+            className={`p-2 rounded-full transition-colors ${
+              avScreenShareOn
+                ? 'bg-accent text-white hover:bg-accent/80'
+                : 'bg-bg-tertiary text-fg hover:bg-bg-tertiary/80'
+            }`}
+            title={avScreenShareOn ? 'Stop sharing screen' : 'Share screen'}
+          >
+            <ScreenShareIcon size={18} />
+          </button>
+        )}
+
         {/* Full screen */}
         <button
           onClick={() => setFullscreen((f) => !f)}
@@ -565,6 +741,83 @@ function tileClasses(fullscreen: boolean): string {
   return fullscreen
     ? 'relative w-[42vw] max-w-[820px] min-w-[280px] aspect-video rounded-xl overflow-hidden bg-bg-tertiary flex-shrink-0'
     : 'relative w-32 h-24 rounded-lg overflow-hidden bg-bg-tertiary flex-shrink-0';
+}
+
+/// Screen-share tiles are always large 16:9 (even when the panel isn't
+/// fullscreen) so shared content is actually legible.
+function spotlightTileClasses(fullscreen: boolean): string {
+  return fullscreen
+    ? 'relative w-[64vw] max-w-[1100px] min-w-[320px] aspect-video rounded-xl overflow-hidden bg-black flex-shrink-0'
+    : 'relative w-[80vw] max-w-[680px] min-w-[280px] aspect-video rounded-xl overflow-hidden bg-black flex-shrink-0';
+}
+
+/// A participant's screen-share tile. Always mounts a `<moq-watch>` on the
+/// participant's `…/screen` broadcast so it can observe the `status` signal,
+/// but only reveals the (large) tile while that broadcast is `live`.
+function ScreenTile({
+  slot,
+  moqOrigin,
+  fullscreen,
+  onLiveChange,
+}: {
+  slot: Slot;
+  moqOrigin: string;
+  fullscreen: boolean;
+  onLiveChange: (key: string, live: boolean) => void;
+}) {
+  const mountRef = useRef<HTMLDivElement>(null);
+  const [live, setLive] = useState(false);
+
+  useEffect(() => {
+    const mount = mountRef.current;
+    if (!mount) return;
+    const watchEl = document.createElement('moq-watch') as MoqWatchEl;
+    const canvas = document.createElement('canvas');
+    // `object-contain` (not cover) so a shared window/screen isn't cropped.
+    canvas.className = 'absolute inset-0 w-full h-full object-contain';
+    watchEl.appendChild(canvas);
+    watchEl.style.position = 'absolute';
+    watchEl.style.inset = '0';
+    watchEl.style.width = '100%';
+    watchEl.style.height = '100%';
+    watchEl.setAttribute('jitter', '80');
+    watchEl.setAttribute('reload', '');
+    watchEl.setAttribute('url', moqOrigin);
+    watchEl.setAttribute('name', `${slot.broadcastName}/screen`);
+    mount.appendChild(watchEl);
+
+    // Reveal the tile only once the screen broadcast announces + its catalog
+    // arrives (status → 'live'); hide again when it stops.
+    const statusSig = watchEl.status;
+    const apply = (s: string | undefined) => setLive(s === 'live');
+    apply(statusSig?.peek());
+    const unsub = statusSig?.subscribe(apply);
+
+    return () => {
+      unsub?.();
+      (watchEl as HTMLElement & { paused?: boolean }).paused = true;
+      watchEl.setAttribute('url', '');
+      watchEl.setAttribute('name', '');
+      watchEl.remove();
+    };
+  }, [slot.broadcastName, moqOrigin]);
+
+  // Report live transitions up; clear on unmount.
+  useEffect(() => {
+    onLiveChange(slot.broadcastKey, live);
+    return () => onLiveChange(slot.broadcastKey, false);
+  }, [live, slot.broadcastKey, onLiveChange]);
+
+  return (
+    <div className={live ? spotlightTileClasses(fullscreen) : 'hidden'}>
+      <div ref={mountRef} className="absolute inset-0" />
+      {live && (
+        <span className="absolute bottom-1 left-1 text-[10px] bg-black/60 text-white px-1 rounded z-10">
+          {slot.nick} — screen
+        </span>
+      )}
+    </div>
+  );
 }
 
 function RemoteTile({
@@ -641,6 +894,17 @@ function MinimizeIcon({ size = 16 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <path d="M6 2v4H2M10 2v4h4M6 14v-4H2M10 14v-4h4" />
+    </svg>
+  );
+}
+
+function ScreenShareIcon({ size = 16 }: { size?: number }) {
+  // Monitor with an up-arrow (share). Stroke style matches the other glyphs.
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="1.5" y="2.5" width="13" height="9" rx="1.5" />
+      <path d="M5.5 14h5M8 11.5V14" />
+      <path d="M8 4.5v4M6 6.5 8 4.5l2 2" />
     </svg>
   );
 }

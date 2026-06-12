@@ -22,12 +22,14 @@ use iroh_live::media::traits::VideoSource;
 
 use crate::whiteboard::Step;
 
-/// Tile resolution. 720p @ 15 fps. The earlier 360p cap was a workaround for
-/// the *debug* build, whose unoptimized rasterizer + Opus encoder couldn't keep
-/// real-time on a 2-vCPU VM. On the release build the CPU-bound path is far
-/// cheaper, so the full-resolution tile fits with audio headroom to spare.
-pub const VIDEO_W: u32 = 1280;
-pub const VIDEO_H: u32 = 720;
+/// Tile resolution. 360p @ 15 fps. We tried 720p (28K particles) on the
+/// theory that the release build had headroom — live logs from the 2-vCPU
+/// agent VMs said otherwise: `audio encoder too slow by 5-27ms` every few
+/// frames during real calls, which starves Opus, garbles the agent's
+/// *inbound* decode (`audio buffer low, buffered_ms=0`), and wrecks STT.
+/// Voice is the product; the tile is presence. 360p keeps audio real-time.
+pub const VIDEO_W: u32 = 640;
+pub const VIDEO_H: u32 = 360;
 const FPS: u64 = 15;
 /// Most points a scene shows (extras are dropped).
 const MAX_POINTS: usize = 6;

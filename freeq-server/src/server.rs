@@ -738,6 +738,9 @@ pub struct SharedState {
     pub spawned_agents: Mutex<HashMap<String, SpawnedAgent>>,
     /// Per-IP rate limiter for expensive REST endpoints (OG preview, blob proxy, upload).
     pub rest_rate_limiter: crate::web::IpRateLimiter,
+    /// Private media store: encrypted-at-rest blobs on local disk served via
+    /// signed capability URLs. None only in lightweight test harnesses.
+    pub media_store: Option<crate::media_store::MediaStore>,
     /// Liveness probes: session_id → when the probe PING was sent. Set when a
     /// new same-DID session attaches; cleared by the probed session's PONG.
     /// Sessions still pending after the deadline are evicted — this reaps
@@ -1280,6 +1283,30 @@ impl Server {
             None => None,
         };
 
+        // Private media store: encrypted blobs on disk under {data_dir}/media.
+        // Metadata lives in the DB, so the store is only meaningful when
+        // persistence is enabled — gate on `db` to avoid creating a stray
+        // ./media dir in ephemeral (in-memory) configurations.
+        let media_store = if db.is_some() {
+            let data_dir = self.config.data_dir.as_deref().unwrap_or(".");
+            let media_dir = std::path::Path::new(data_dir).join("media");
+            let seed = msg_signing_key.to_bytes();
+            let enc_key = crate::media_store::derive_enc_key(&seed);
+            let cap_key = crate::media_store::derive_cap_key(&seed);
+            match crate::media_store::MediaStore::new(media_dir.clone(), enc_key, cap_key) {
+                Ok(store) => {
+                    tracing::info!("Private media store at {}", media_dir.display());
+                    Some(store)
+                }
+                Err(e) => {
+                    tracing::error!("Failed to init media store at {}: {e}", media_dir.display());
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // Load persisted state from DB
         let mut channels = HashMap::new();
         let mut did_nicks = HashMap::new();
@@ -1458,6 +1485,7 @@ impl Server {
             spawned_agents: Mutex::new(HashMap::new()),
             // 30 requests per 60-second window per IP for expensive REST endpoints
             rest_rate_limiter: crate::web::IpRateLimiter::new(30, 60),
+            media_store,
             liveness_probes: Mutex::new(HashMap::new()),
             session_kill: Mutex::new(HashMap::new()),
             metrics: Metrics::default(),
@@ -4472,6 +4500,7 @@ mod s2s_adversarial_tests {
             ghost_sessions: Mutex::new(HashMap::new()),
             spawned_agents: Mutex::new(HashMap::new()),
             rest_rate_limiter: crate::web::IpRateLimiter::new(30, 60),
+            media_store: None,
             liveness_probes: Mutex::new(HashMap::new()),
             session_kill: Mutex::new(HashMap::new()),
             metrics: Metrics::default(),

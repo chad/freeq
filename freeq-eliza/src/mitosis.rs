@@ -129,6 +129,8 @@ async fn speak(cfg: &Arc<SharedConfig>, speaker: &Speaker, text: &str) {
     );
     let mut chain =
         ghostly::audio::VoiceChain::new(voice_profile, tts::ELEVENLABS_PCM_RATE as f32);
+    // Echo-guard log — see SharedConfig::recent_tts.
+    crate::irc::note_spoken(&cfg.recent_tts, text);
     let mut work: Vec<f32> = Vec::with_capacity(4096);
     let chain_ref = &mut chain;
     let work_ref = &mut work;

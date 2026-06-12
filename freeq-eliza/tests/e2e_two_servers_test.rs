@@ -289,15 +289,17 @@ fn spawn_bot(
         groq_api_key: None,
         groq_chat_model: "llama-3.3-70b-versatile".to_string(),
         groq_answer_model: "groq/compound".to_string(),
+        voice_answer_model: "llama-3.3-70b-versatile".to_string(),
+        voice_search_model: "groq/compound-mini".to_string(),
         elevenlabs_api_key: None,
         elevenlabs_voice_id: "aj0fZfXTBc7E3By4X8L2".to_string(),
         elevenlabs_model: "eleven_turbo_v2_5".to_string(),
         image_ai: None,
-        // Control-plane-only defaults: no owner gating, no summary, no
-        // monitors, default SVG tile, lone agent.
         owner: None,
         summary_enabled: false,
         vision_model: "meta-llama/llama-4-scout-17b-16e-instruct".to_string(),
+        // Proactive/ambient monitors poll LLMs — keep them off so these
+        // control-plane tests stay deterministic and offline.
         proactive_enabled: false,
         ambient_enabled: false,
         render_backend: "svg".to_string(),
