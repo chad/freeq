@@ -202,8 +202,26 @@ logs (`/tmp/diag-rev-{yokota-l1qn,olive-ibl5}.log`):
 - **Olive blind**: the owner's client published NO video track — participant
   catalog `video=[] audio=["audio/data"]`. Bot-side behaved correctly
   (`visual question — waited for camera warm-up got_frame=false` ×3).
-  Client-side bug, NOT bot-side. Open question: which client was the owner
-  on? (Suspect the macOS app with its uncommitted AV changes.)
+  **RESOLVED — stale web tab.** Owner confirmed they were on the web client.
+  nginx access-log forensics: the device that joined the incident call
+  (`/av/moq` upgrade at 02:29:40, IP 47.214.178.76) last fetched the SPA
+  bundle on **Jun 7** (`index-CGcAnG_o.js`) — three days BEFORE the camera
+  fixes shipped (`index-BqhcCn03.js`, built Jun 10 14:11). The tab was
+  running the pre-fix code whose known failure mode was exactly this:
+  duplicate `getUserMedia` grab → happy local preview, no video rendition
+  in the catalog (fixed in `d276a6d`). The vendored moq-publish component
+  was audited end-to-end and is fully reactive (invisible → enabled →
+  camera grab → broadcast.video.source → frame pump → rendition catalog →
+  catalog.json rewrite all propagate on late camera-on); `index.html` is
+  served `Cache-Control: no-cache`, hashed assets immutable — so a *reload*
+  always heals. The hole is SPA tabs left open across deploys: no
+  version-check, no reload prompt. Residual (separate, minor): the vendored
+  `Ot` camera class swallows `getUserMedia` rejection silently
+  (`.catch(()=>{})`) — camera-busy/denied yields an audio-only publish with
+  the camera button lit and zero feedback. Proposed fixes (freeq-app, owner's
+  tree — not applied): (1) version poll against `/api/v1/server` git_commit
+  + "new version — reload" toast or reload-on-focus; (2) camera watchdog:
+  `avCameraOn` but no track from `pub.video` within ~5 s → warning toast.
 - **Wrong conversation**: olive stayed in the call across the humanless gap,
   so its in-call transcript still carried my whole MCP test session — the
   owner inherited a dead conversation as LLM context. **Fixed in `0c8dd68`**:
