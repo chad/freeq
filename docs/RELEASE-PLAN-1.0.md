@@ -1,6 +1,8 @@
 # freeq 1.0 / Public Beta Release Plan
 
-_Last updated: 2026-06-11. Update this file as items complete._
+_Last updated: 2026-06-11 (evening sprint — search, ghost-session fix, federation
+fixes, metrics, permalinks/export, oauth tests, Miren path, governance docs,
+IRCv3 draft, CI audit all landed; tagged v0.9.0-beta.1)._
 
 ## One-pager: what freeq is and why it matters
 
@@ -65,8 +67,8 @@ Suggested sequence: **Beta blockers → public beta announcement → fast-follow
 
 ## Phase 0 — Release engineering (prerequisite for everything)
 
-- [ ] Adopt semver; tag `v0.9.0-beta.1` (no git tags exist today)
-- [ ] CHANGELOG.md generated from history; release notes discipline going forward
+- [x] Adopt semver; tag `v0.9.0-beta.1` (local tag created 2026-06-11; push when ready)
+- [x] CHANGELOG.md generated from history (2026-06-11); release notes discipline going forward
 - [ ] GitHub Releases with prebuilt server binaries (linux x86_64/arm64, macOS)
 - [ ] Docker image published to a registry (GHCR), pinned tags, `latest` = stable
 - [ ] Publish `freeq-sdk` (Rust) to crates.io; pin/publish `@freeq/sdk`, `@freeq/bot-kit` versions on npm
@@ -78,7 +80,7 @@ Suggested sequence: **Beta blockers → public beta announcement → fast-follow
 ### Product credibility (Slack/Discord-replacement table stakes)
 - [x] **Search (FTS5) — server side DONE** (2026-06-11). FTS5 index + IRC SEARCH command + REST /api/v1/search, CHATHISTORY-grade authorization, 15 new tests. Remaining: surface in web/macOS/iOS clients; land `fix/eliza-recall-or-semantics` for agent memory recall
 - [ ] **Real push notifications** — web push via service worker (currently only while tab open); APNs for iOS/macOS; FCM for Android. A team chat tool without notifications when closed is unusable as a daily driver
-- [ ] **Message permalinks + export** — msgid-addressable URLs and a conversation export format. This is the "conversation is the commit" proof point; minimum viable: permalink + JSON/markdown export of a thread/channel range
+- [x] **Message permalinks + export — server side DONE** (2026-06-11). GET /api/v1/messages/{msgid} + /api/v1/channels/{name}/export?format=json|markdown. Remaining: web client deep-link route + export button
 - [ ] Web client offline/reconnect resilience pass (it has IndexedDB + SW; verify the disconnect/resume path under real network churn)
 
 ### Abuse & moderation (the public-network killer)
@@ -90,28 +92,28 @@ Suggested sequence: **Beta blockers → public beta announcement → fast-follow
 
 ### Federation safety (strangers will federate during beta)
 - [ ] **S2S mutual auth** — formalize: both directions check allowlist; document trust levels (Readonly/Relay/Full) and make them configurable per peer
-- [ ] Fix topic merge flapping (SyncResponse vs CRDT strategy mismatch)
-- [ ] Channel key removal (`-k`) propagation (additive-only SyncResponse gap)
-- [ ] SyncResponse invite merge: add founder-authority check (open audit item)
+- [x] Fix topic merge flapping — DONE 2026-06-11 (sync-adopted topics seed the CRDT; CRDT is sole topic authority)
+- [x] Channel key removal (`-k`) propagation — DONE 2026-06-11 (full snapshot adoption when no local members)
+- [x] SyncResponse invite merge founder-authority check — DONE 2026-06-11 (founder mismatch → invites rejected + logged)
 - [ ] Federation operator guide: how to peer with the public network, what state you accept, how to de-peer
 
 ### Agent platform fixes (before pushing agent developers)
-- [ ] **Ghost session bug**: DID session lingers after agent VM resume → crash loop (found by revenant). Implement server-side session takeover or timeout on duplicate DID auth
-- [ ] Typing-indicator auto-timeout; backgroundWhois size cap; ConnectConfig validation (open audit items)
+- [x] **Ghost session bug** — DONE 2026-06-11. Liveness probe on same-DID attach: siblings that don't PONG within 10s are evicted via normal cleanup (~10s instead of ~90s); healthy multi-device clients unaffected
+- [x] Audit items — DONE 2026-06-11. ConnectConfig::validate() now actually enforced in establish_connection (+5 tests); typing auto-clear and backgroundWhois cap verified already implemented
 - [ ] Agent developer quickstart: "bot in 5 minutes" + "governed agent in 30" using bot-kit/agent-kit; publish freeqcc as the reference
 
 ### Self-hosting story — **miren.dev is the default path**
-- [ ] Publish a Miren template/recipe for freeq: one command (or one click) → server + web client + auth broker + persistent volume for SQLite + TLS on your domain. Generalize `deploy/irc/deploy.sh` (today it's our bespoke tarball build) into something any Miren user can run against a release tag, not a source checkout
-- [ ] Rewrite `docs/self-hosting.md` to lead with Miren; Docker Compose becomes the documented fallback, from-source last
+- [x] Miren template — DONE 2026-06-11 (deploy/miren/: parameterized deploy.sh + Dockerfile + 10-min README; runs from a fresh clone). Remaining: verify the TODO(verify) Miren CLI specifics against a real Miren instance, then test as a stranger
+- [x] `docs/self-hosting.md` leads with Miren — DONE 2026-06-11 (also fixed broken `--bind` flag in docker-compose; added `--bind` alias to server)
 - [ ] Smoke-test the Miren path end to end as a stranger would (fresh account, fresh domain, federate with irc.freeq.at)
-- [ ] **Backup/restore documentation** (none exists; SQLite + WAL specifics — including what that means on Miren volumes)
-- [ ] Prometheus `/metrics` endpoint (connections, messages, S2S peers, auth failures) — minimum viable observability
+- [x] **Backup/restore documentation** — DONE 2026-06-11 (deploy/miren/README.md: sqlite3 .backup / VACUUM INTO, WAL/SHM + *.secret notes)
+- [x] Prometheus `/metrics` endpoint — DONE 2026-06-11 (connections/channels/s2s_peers gauges; messages, sasl success/failure counters; uptime)
 - [ ] Upgrade procedure doc tied to the migration story in Phase 0 (Miren redeploy + migration path included)
 
 ### Security posture
-- [ ] SECURITY.md + responsible disclosure policy
-- [ ] Add `cargo audit`/`npm audit` + a SAST pass to CI
-- [ ] oauth.rs unit tests (mock PDS) — currently zero coverage on a security-critical path
+- [x] SECURITY.md + responsible disclosure policy — DONE 2026-06-11
+- [x] `cargo audit` + `npm audit` in CI — DONE 2026-06-11 (3 documented transitive exceptions in .cargo/audit.toml; npm clean)
+- [x] oauth.rs unit tests (mock PDS) — DONE 2026-06-11 (38 tests: DPoP nonce dance, bounded retries, DID mismatch, callback CSRF, encrypted session persistence). Residual: client-side login() lacks HTTPS-only PDS URL check
 - [ ] Key rotation: invalidate sessions when DID doc keys change (known limitation; matters more at public scale)
 
 ## Phase 2 — Beta launch
@@ -126,7 +128,7 @@ Suggested sequence: **Beta blockers → public beta announcement → fast-follow
 ## Phase 3 — 1.0 gate (after beta feedback)
 
 - [ ] App Store / Play Store submissions (iOS, macOS; Android after small-screen polish)
-- [ ] ATPROTO-CHALLENGE written up as an IRCv3 WG draft (credibility + the original acceptance criterion). Plan: extract a standalone normative spec from docs/PROTOCOL.md (crypto method normative; broker/PDS methods informative), reconcile spec-vs-implementation divergences (curve requirements, AUTHENTICATE 400-byte chunking, error numerics), open an ircv3-specifications issue → PR, offer a second implementation (e.g. Ergo extension) to satisfy the running-code norm, IANA SASL mechanism registration as a later step
+- [~] ATPROTO-CHALLENGE IRCv3 WG draft — spec WRITTEN 2026-06-11 (docs/ircv3/atproto-challenge.md, WG house style, crypto method normative, byte-accurate examples). Editor's notes list implementation divergences to fix before submission: AUTHENTICATE 400-byte chunking not implemented anywhere, no server-name binding in challenge, abort returns 904 not 906, bare `sasl` cap (no 302 mechanism list). Remaining: fix those, open ircv3-specifications issue → PR, offer Ergo second implementation, IANA registration later
 - [ ] Second security review (external if possible) focused on federation + agent surfaces
 - [ ] Conversation↔artifact linking: msgid trailers in git commits / freeqcc emitting commit↔conversation links (thesis feature, scope after beta learnings)
 - [ ] TUI auto-reconnect
@@ -141,6 +143,16 @@ Suggested sequence: **Beta blockers → public beta announcement → fast-follow
 - AT Protocol record-backed channels; label-based moderation integration
 - Serverless P2P mode; reputation via social graph
 - ghostly GPU backend / FFT audio bands / composite mode (revenant track, not core)
+
+## Needs Chad (credentials / outward-facing — not automatable)
+
+- [ ] Push main + the `v0.9.0-beta.1` tag to GitHub; create the GitHub Release
+- [ ] Publish: `freeq-sdk` to crates.io; version-bump + publish `@freeq/sdk`, `@freeq/bot-kit` on npm; Docker image to GHCR
+- [ ] Verify deploy/miren TODO(verify) items against a real Miren instance, then run the stranger test (fresh account → own domain → federate with irc.freeq.at)
+- [ ] Publish PGP key for security@freeq.at (SECURITY.md references it); set up security@ + conduct@ mailboxes
+- [ ] TestFlight public links (iOS/macOS); App Store metadata + privacy policy
+- [ ] Deploy current main to irc.freeq.at (picks up search, liveness eviction, federation fixes, /metrics)
+- [ ] Decide launch timing; pair announcement with "The Conversation Is the Commit"
 
 ## What is already done (do not redo)
 
