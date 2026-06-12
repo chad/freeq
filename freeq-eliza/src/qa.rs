@@ -469,6 +469,12 @@ struct StreamChoice {
     /// Some providers attach tool info to a `message` even mid-stream.
     #[serde(default)]
     message: StreamDelta,
+    /// `"length"` means the answer was cut by `max_tokens` — for
+    /// compound (server-side tool) models the budget also covers the
+    /// internal search/reasoning tokens, so a too-small cap truncates
+    /// the spoken answer mid-sentence.
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -496,9 +502,13 @@ pub async fn answer_streaming(
     mut on_delta: impl FnMut(&str),
 ) -> Result<Answer> {
     let system = system_override.unwrap_or(SYSTEM);
+    // 1024, not ~320: the prompt already caps answers at a few spoken
+    // sentences, but compound models spend this same budget on their
+    // server-side tool calls (web search) and reasoning first — a tight
+    // cap truncated live-data answers mid-sentence ("…warm and sunny:").
     let body = serde_json::json!({
         "model": model,
-        "max_tokens": 320,
+        "max_tokens": 1024,
         "temperature": 0.3,
         "stream": true,
         "messages": [
@@ -524,6 +534,7 @@ pub async fn answer_streaming(
     let mut buf: Vec<u8> = Vec::new();
     let mut text = String::new();
     let mut source: Option<Source> = None;
+    let mut finish_reason: Option<String> = None;
 
     while let Some(network_chunk) = resp.chunk().await.context("reading groq chat stream")? {
         buf.extend_from_slice(&network_chunk);
@@ -551,10 +562,16 @@ pub async fn answer_streaming(
                     source = extract_source(&choice.delta.executed_tools)
                         .or_else(|| extract_source(&choice.message.executed_tools));
                 }
+                if let Some(f) = choice.finish_reason {
+                    finish_reason = Some(f);
+                }
             }
         }
     }
 
+    if finish_reason.as_deref() == Some("length") {
+        tracing::warn!(%model, "answer truncated by max_tokens (finish_reason=length)");
+    }
     let text = text.trim().to_string();
     if text.is_empty() {
         anyhow::bail!("groq streaming chat returned no content");
@@ -581,6 +598,10 @@ struct AnthropicTextDelta {
     delta_type: String,
     #[serde(default)]
     text: String,
+    /// Present on `message_delta` events; `"max_tokens"` means the
+    /// answer was truncated by the cap.
+    #[serde(default)]
+    stop_reason: Option<String>,
 }
 
 /// Streaming variant of [`answer_streaming`] that hits Anthropic's
@@ -603,9 +624,12 @@ pub async fn anthropic_answer_streaming(
     let system = system_override.unwrap_or(SYSTEM);
     // Note: no `temperature` field — `claude-opus-4-7` deprecated it
     // (the model picks its own sampling). Setting it returns 400.
+    // 2048, not ~512: with server-side web search enabled the budget
+    // also covers tool-call blocks, so a tight cap truncated searched
+    // answers right after the lead-in sentence.
     let body = serde_json::json!({
         "model": model,
-        "max_tokens": 512,
+        "max_tokens": 2048,
         "stream": true,
         "system": system,
         // Server-side web search — keeps claude's reasoning AND lets her look up
@@ -664,6 +688,11 @@ pub async fn anthropic_answer_streaming(
             {
                 text.push_str(&evt.delta.text);
                 on_delta(&evt.delta.text);
+            }
+            if evt.event_type == "message_delta"
+                && evt.delta.stop_reason.as_deref() == Some("max_tokens")
+            {
+                tracing::warn!(%model, "answer truncated by max_tokens (stop_reason)");
             }
         }
     }

@@ -2933,6 +2933,12 @@ async fn transcribe_participant(
     // `is_bare_name`.
     let name_primed: Arc<std::sync::Mutex<Option<Instant>>> =
         Arc::new(std::sync::Mutex::new(None));
+    // The mirror for OTHER agents: a bare "Yokota." (heard by Olive)
+    // marks the speaker's next segment as someone else's — without
+    // this, the 1:1 conversational gate answers a question the VAD
+    // split away from its addressee's name.
+    let other_primed: Arc<std::sync::Mutex<Option<Instant>>> =
+        Arc::new(std::sync::Mutex::new(None));
 
     // VAD: turn the PCM stream into utterances, cut at natural pauses.
     let mut segmenter = VadSegmenter::new(VadConfig::default());
@@ -2982,6 +2988,7 @@ async fn transcribe_participant(
         let humans = humans.clone();
         let roster = roster.clone();
         let name_primed = name_primed.clone();
+        let other_primed = other_primed.clone();
         // The asker's own video — so a visual question can be answered
         // from what they're showing.
         let asker_video = video.clone();
@@ -3095,6 +3102,30 @@ async fn transcribe_participant(
                     let mut named = address_with_aliases(&text, &cfg.nick);
                     let humans = humans.load(std::sync::atomic::Ordering::Relaxed);
 
+                    // Other participants + configured peers — used for
+                    // "addressed to someone else" checks. Candidates come
+                    // from the live call roster (so this works even when
+                    // --peer-agents wasn't configured) plus the peer list.
+                    let others: Vec<String> = {
+                        let mut others: Vec<String> = roster
+                            .lock()
+                            .map(|r| {
+                                r.iter()
+                                    .map(|n| {
+                                        n.split_once('-')
+                                            .map(|(p, _)| p)
+                                            .unwrap_or(n)
+                                            .to_string()
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        others.extend(cfg.peer_agents.iter().cloned());
+                        others.sort();
+                        others.dedup();
+                        others
+                    };
+
                     // Name-primed merge: a bare "Yokota." segment (the VAD
                     // cutting at the comma of "Yokota, please read…") makes
                     // the speaker's NEXT segment addressed, so the split
@@ -3105,6 +3136,21 @@ async fn transcribe_participant(
                         }
                         tracing::info!(%nick, "bare name heard — priming next segment as addressed");
                         return;
+                    }
+                    // Mirror: a bare PEER name primes the next segment as
+                    // addressed to THEM, so we don't steal it via the 1:1
+                    // gate. (The bare line itself already suppresses via
+                    // `addressed_to_other` below.)
+                    if named.is_none()
+                        && others.iter().any(|o| is_bare_name(&text, o))
+                    {
+                        if let Ok(mut primed) = other_primed.lock() {
+                            *primed = Some(Instant::now());
+                        }
+                        tracing::info!(
+                            %nick,
+                            "bare peer name heard — priming next segment as addressed to other"
+                        );
                     }
                     if named.is_none() {
                         let was_primed = name_primed
@@ -3117,6 +3163,14 @@ async fn transcribe_participant(
                             named = Some(text.trim().to_string());
                         }
                     }
+                    // Consume an other-agent prime: within the window, an
+                    // unnamed follow-up segment belongs to the primed peer.
+                    let other_primed_hit = named.is_none()
+                        && other_primed
+                            .lock()
+                            .ok()
+                            .and_then(|mut p| p.take())
+                            .is_some_and(|t| t.elapsed() <= NAME_PRIME_WINDOW);
 
                     // Owner lifecycle command by voice ("go to sleep", "join #x",
                     // "leave") — owner-only, past the call-join grace (so replayed
@@ -3160,28 +3214,11 @@ async fn transcribe_participant(
                     // participant or peer agent is theirs, not ours —
                     // "Yokota, what is two plus two?" must not be
                     // answered by Olive just because it's a question.
-                    // Candidates come from the live call roster (so
-                    // this works even when --peer-agents wasn't
-                    // configured) plus the configured peer list.
-                    let to_other = named.is_none() && {
-                        let mut others: Vec<String> = roster
-                            .lock()
-                            .map(|r| {
-                                r.iter()
-                                    .map(|n| {
-                                        n.split_once('-')
-                                            .map(|(p, _)| p)
-                                            .unwrap_or(n)
-                                            .to_string()
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        others.extend(cfg.peer_agents.iter().cloned());
-                        others.sort();
-                        others.dedup();
-                        addressed_to_other(&text, &cfg.nick, &others)
-                    };
+                    // `other_primed_hit` covers the VAD-split variant
+                    // ("Yokota." … "what is two plus two?").
+                    let to_other = named.is_none()
+                        && (other_primed_hit
+                            || addressed_to_other(&text, &cfg.nick, &others));
                     let inferred: Option<String> = named.clone().or_else(|| {
                         if !is_substantive(&text) || to_other {
                             None
