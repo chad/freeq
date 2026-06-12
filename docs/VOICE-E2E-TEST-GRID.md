@@ -164,6 +164,20 @@ current weather in New York City." — VAD split the name off, as usual):
   artifact (humans don't get their speech mirrored + heartbeated), but worth
   watching: `is_substantive` may need to gate harder on acks in 1:1.
 
+**2026-06-11 round 8** (after `5581451` deployed to all 3 VMs): "Yokota, what
+is the weather right now in New York City?" (arrived as one segment this time) —
+
+- ✅ **Full searched answer, no truncation**: routed live_data=true →
+  groq/compound-mini (64 ms), spoke a complete real forecast ("partly cloudy…
+  mid-90 °F (around 35 °C)… breeze from the west-northwest at 10-20 mph…
+  humidity in the 50% range"). The round-7 colon truncation is gone.
+- ✅ **Olive stayed silent**: `to_other=true addressed=false` — the question
+  belonged to yokota and only yokota answered.
+- ⚠️ Cosmetic leftovers: compound-mini's `executed_tools` source extraction
+  picked a junk URL (an airline page) for the posted link; the typed
+  say-mirror still produces a duplicate text answer (known), and the opus
+  typed answer degenerated to a bare stage direction ("*leans in*").
+
 ## Grid
 
 Legend: ✅ pass · ❌ fail · ⚠️ partial · ☐ not yet run
