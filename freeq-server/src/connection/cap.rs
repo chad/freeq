@@ -346,6 +346,7 @@ pub(super) async fn handle_authenticate(
                             );
                             send(state, session_id, format!("{success}\r\n"));
                             tracing::info!(%session_id, %did, nick = %nick, "SASL authentication successful");
+                            crate::server::Metrics::bump(&state.metrics.sasl_success_total);
 
                             // Surface the API bearer for this connection so the
                             // bot can hit /agent/tools/* with the same identity
@@ -375,6 +376,7 @@ pub(super) async fn handle_authenticate(
                                 tracing::warn!(%session_id, retries = conn.dpop_retries, "DPoP nonce retry limit exceeded");
                                 conn.sasl_in_progress = false;
                                 conn.sasl_failures += 1;
+                                crate::server::Metrics::bump(&state.metrics.sasl_failure_total);
                                 let fail = Message::from_server(
                                     server_name,
                                     irc::ERR_SASLFAIL,
@@ -414,6 +416,7 @@ pub(super) async fn handle_authenticate(
                             tracing::warn!(%session_id, "SASL auth failed: {reason}");
                             conn.sasl_in_progress = false;
                             conn.sasl_failures += 1;
+                                crate::server::Metrics::bump(&state.metrics.sasl_failure_total);
                             let fail = Message::from_server(
                                 server_name,
                                 irc::ERR_SASLFAIL,

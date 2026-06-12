@@ -228,42 +228,17 @@ struct ComposeBar: View {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let target = appState.activeChannel else { return }
 
-        // Save to history
+        // Save to history (UI concern)
         if !trimmed.hasPrefix("/") || trimmed.hasPrefix("/me ") {
             history.append(trimmed)
             if history.count > 100 { history.removeFirst() }
         }
         historyIndex = -1
 
-        // Editing mode
-        if let editId = appState.editingMessageId {
-            appState.editMessage(target: target, msgId: editId, newText: trimmed)
-            appState.editingMessageId = nil
-            appState.editingText = nil
-            text = ""
-            return
-        }
-
-        // Handle slash commands
-        if trimmed.hasPrefix("/") {
-            handleCommand(trimmed, target: target)
-            text = ""
-            return
-        }
-
-        // Normal messages (split multi-line)
-        let replyId = appState.replyingToMessage?.id
-        for line in trimmed.components(separatedBy: .newlines) {
-            let l = line.trimmingCharacters(in: .whitespaces)
-            if !l.isEmpty {
-                if let replyId {
-                    appState.sendRaw("@+reply=\(replyId) PRIVMSG \(target) :\(l)")
-                    appState.replyingToMessage = nil
-                } else {
-                    appState.sendMessage(to: target, text: l)
-                }
-            }
-        }
+        // All command/edit/reply/message handling lives in AppState so the UI
+        // and the test-mode bridge share one code path.
+        appState.onComposeMediaRequest = { pickFile() }
+        appState.submitInput(trimmed, target: target)
         text = ""
     }
 
@@ -363,112 +338,6 @@ struct ComposeBar: View {
         }
     }
 
-    private func handleCommand(_ input: String, target: String) {
-        let parts = input.dropFirst().split(separator: " ", maxSplits: 1)
-        let cmd = parts.first.map(String.init)?.lowercased() ?? ""
-        let arg = parts.count > 1 ? String(parts[1]) : ""
-
-        switch cmd {
-        case "join", "j":
-            arg.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }
-                .forEach { appState.joinChannel(String($0)) }
-        case "part", "leave":
-            appState.partChannel(arg.isEmpty ? target : arg)
-        case "topic", "t":
-            if !arg.isEmpty { appState.sendRaw("TOPIC \(target) :\(arg)") }
-        case "nick":
-            if !arg.isEmpty { appState.sendRaw("NICK \(arg)") }
-        case "me", "action":
-            if !arg.isEmpty { appState.sendAction(to: target, text: arg) }
-        case "msg", "query":
-            let mp = arg.split(separator: " ", maxSplits: 1)
-            if mp.count == 2 {
-                let dmTarget = String(mp[0])
-                appState.sendMessage(to: dmTarget, text: String(mp[1]))
-                let dm = appState.getOrCreateDM(dmTarget)
-                appState.activeChannel = dm.name
-            }
-        case "kick", "k":
-            let kp = arg.split(separator: " ", maxSplits: 1)
-            if let user = kp.first {
-                appState.kickUser(target, String(user), reason: kp.count > 1 ? String(kp[1]) : nil)
-            }
-        case "op":
-            if !arg.isEmpty { appState.setMode(target, "+o", arg) }
-        case "deop":
-            if !arg.isEmpty { appState.setMode(target, "-o", arg) }
-        case "voice":
-            if !arg.isEmpty { appState.setMode(target, "+v", arg) }
-        case "invite":
-            if !arg.isEmpty { appState.inviteUser(target, arg) }
-        case "away":
-            appState.setAway(arg.isEmpty ? nil : arg)
-        case "whois", "wi":
-            if !arg.isEmpty { appState.sendWhois(arg) }
-        case "mode", "m":
-            if !arg.isEmpty {
-                appState.sendRaw("MODE \(arg.hasPrefix("#") ? "" : "\(target) ")\(arg)")
-            }
-        case "raw", "quote":
-            appState.sendRaw(arg)
-        case "p2p":
-            handleP2pCommand(arg)
-        case "help":
-            let ch = appState.activeChannelState
-            let help = [
-                "── Commands ──",
-                "/join #channel · /part · /topic text",
-                "/kick user · /op user · /voice user · /invite user",
-                "/whois user · /away reason · /me action",
-                "/msg user text · /mode +o user · /raw IRC_LINE",
-                "/p2p start|id|connect|peers",
-                "── Shortcuts ──",
-                "⌘K quick switch · ⌘J join · ↑ edit last · Esc cancel edit"
-            ]
-            for line in help {
-                ch?.appendIfNew(ChatMessage(
-                    id: UUID().uuidString, from: "system", text: line,
-                    isAction: false, timestamp: Date(), replyTo: nil
-                ))
-            }
-        default:
-            appState.sendRaw("\(cmd.uppercased())\(arg.isEmpty ? "" : " \(arg)")")
-        }
-    }
-
-    private func handleP2pCommand(_ arg: String) {
-        let parts = arg.split(separator: " ", maxSplits: 1)
-        let subcmd = parts.first.map(String.init) ?? ""
-        let ch = appState.activeChannelState
-
-        switch subcmd {
-        case "start":
-            appState.startP2p()
-            ch?.appendIfNew(ChatMessage(id: UUID().uuidString, from: "system",
-                text: "P2P subsystem starting…", isAction: false, timestamp: Date(), replyTo: nil))
-        case "id":
-            if let id = appState.p2pEndpointId {
-                ch?.appendIfNew(ChatMessage(id: UUID().uuidString, from: "system",
-                    text: "Your iroh endpoint: \(id)", isAction: false, timestamp: Date(), replyTo: nil))
-            } else {
-                ch?.appendIfNew(ChatMessage(id: UUID().uuidString, from: "system",
-                    text: "P2P not active. Use /p2p start", isAction: false, timestamp: Date(), replyTo: nil))
-            }
-        case "connect":
-            if parts.count > 1 {
-                appState.connectP2pPeer(String(parts[1]))
-            }
-        case "peers":
-            let peers = appState.p2pConnectedPeers
-            let msg = peers.isEmpty ? "No P2P peers connected" : "P2P peers: \(peers.joined(separator: ", "))"
-            ch?.appendIfNew(ChatMessage(id: UUID().uuidString, from: "system",
-                text: msg, isAction: false, timestamp: Date(), replyTo: nil))
-        default:
-            ch?.appendIfNew(ChatMessage(id: UUID().uuidString, from: "system",
-                text: "P2P commands: start, id, connect <endpoint>, peers", isAction: false, timestamp: Date(), replyTo: nil))
-        }
-    }
 }
 
 /// NSTextView wrapper that handles Enter vs Shift+Enter, Up arrow, and Tab completion.

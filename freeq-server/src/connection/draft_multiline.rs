@@ -909,6 +909,9 @@ mod tests {
             spawned_agents: Mutex::new(HashMap::new()),
             rest_rate_limiter: crate::web::IpRateLimiter::new(30, 60),
             media_store: None,
+            liveness_probes: Mutex::new(HashMap::new()),
+            session_kill: Mutex::new(HashMap::new()),
+            metrics: crate::server::Metrics::default(),
         })
     }
 

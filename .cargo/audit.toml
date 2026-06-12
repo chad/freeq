@@ -1,0 +1,14 @@
+# cargo-audit configuration. Each ignore is a known, accepted advisory —
+# remove the entry as soon as an upgrade path exists.
+
+[advisories]
+ignore = [
+    # hickory-proto 0.25.2, transitive via iroh 0.97. Fixed in >=0.26.1,
+    # which iroh has not adopted yet. Revisit on every iroh bump.
+    "RUSTSEC-2026-0119", # O(n²) name compression CPU exhaustion
+    "RUSTSEC-2026-0118", # NSEC3 closest-encloser unbounded loop (no fix released)
+
+    # rsa 0.9 Marvin timing sidechannel — no fixed release exists.
+    # Transitive via freeq-claude-mcp; freeq itself does no RSA operations.
+    "RUSTSEC-2023-0071",
+]

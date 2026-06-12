@@ -183,8 +183,12 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/client-metadata.json", get(client_metadata))
         // REST API (read-only, v1)
         .route("/api/v1/health", get(api_health))
+        .route("/metrics", get(api_metrics))
         .route("/api/v1/channels", get(api_channels))
         .route("/api/v1/channels/{name}/history", get(api_channel_history))
+        .route("/api/v1/search", get(api_search))
+        .route("/api/v1/messages/{msgid}", get(api_message_by_id))
+        .route("/api/v1/channels/{name}/export", get(api_channel_export))
         .route("/api/v1/channels/{name}/topic", get(api_channel_topic))
         .route("/api/v1/channels/{name}/pins", get(api_channel_pins))
         .route("/api/v1/users/{nick}", get(api_user))
@@ -393,6 +397,14 @@ struct MessageResponse {
 
 #[derive(Deserialize)]
 struct HistoryQuery {
+    limit: Option<usize>,
+    before: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    channel: String,
+    q: String,
     limit: Option<usize>,
     before: Option<u64>,
 }
@@ -1205,6 +1217,229 @@ async fn api_channel_history(
             }
         }
     }
+}
+
+/// True when REST may serve this channel's history: real channel (not a DM
+/// key) with no +i/+k access controls. Restricted content goes through the
+/// membership-checked IRC commands instead.
+fn rest_readable_channel(state: &SharedState, channel: &str) -> Result<(), StatusCode> {
+    if channel.to_lowercase().starts_with("dm:") || channel.contains("dm:") {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let channels = state.channels.lock();
+    match channels.get(&channel.to_lowercase()) {
+        Some(ch) => {
+            if ch.invite_only || ch.key.is_some() {
+                Err(StatusCode::FORBIDDEN)
+            } else {
+                Ok(())
+            }
+        }
+        None => Err(StatusCode::NOT_FOUND),
+    }
+}
+
+/// GET /api/v1/messages/{msgid} — permalink resolution. Returns the message
+/// plus its channel so clients can deep-link `irc.example.org/#/{channel}`
+/// scrolled to the msgid. Same access rules as channel history.
+async fn api_message_by_id(
+    Path(msgid): Path<String>,
+    State(state): State<Arc<SharedState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let row = state
+        .with_db(|db| db.find_message_by_msgid(&msgid))
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    rest_readable_channel(&state, &row.channel)?;
+    Ok(Json(serde_json::json!({
+        "channel": row.channel,
+        "msgid": row.msgid,
+        "sender": row.sender,
+        "sender_did": row.sender_did,
+        "text": row.text,
+        "timestamp": row.timestamp,
+        "tags": row.tags,
+        "replaces_msgid": row.replaces_msgid,
+    })))
+}
+
+#[derive(Deserialize)]
+struct ExportQuery {
+    format: Option<String>,
+    limit: Option<usize>,
+    before: Option<u64>,
+}
+
+/// Render messages as a readable markdown transcript.
+fn format_export_markdown(channel: &str, rows: &[crate::db::MessageRow]) -> String {
+    let mut out = format!("# {channel} — exported transcript\n\n");
+    for r in rows {
+        let ts = chrono::DateTime::from_timestamp(r.timestamp as i64, 0)
+            .unwrap_or_default()
+            .format("%Y-%m-%d %H:%M:%S UTC");
+        let sender = r.sender.split('!').next().unwrap_or(&r.sender);
+        let msgid = r.msgid.as_deref().unwrap_or("-");
+        // Indent continuation lines so multiline messages stay readable.
+        let body = r.text.replace('\n', "\n    ");
+        out.push_str(&format!("- `{ts}` **{sender}** ({msgid}): {body}\n"));
+    }
+    out
+}
+
+/// GET /api/v1/channels/{name}/export?format=json|markdown — bulk export of
+/// a public channel's stored history, oldest-first. "The conversation is the
+/// commit": conversations must be extractable, not trapped in the database.
+async fn api_channel_export(
+    Path(name): Path<String>,
+    Query(params): Query<ExportQuery>,
+    State(state): State<Arc<SharedState>>,
+) -> Result<axum::response::Response, StatusCode> {
+    use axum::response::IntoResponse as _;
+    let channel = if name.starts_with('#') {
+        name
+    } else {
+        format!("#{name}")
+    };
+    rest_readable_channel(&state, &channel)?;
+
+    let limit = params.limit.unwrap_or(1000).min(10_000);
+    let rows = state
+        .with_db(|db| db.get_messages(&channel, limit, params.before))
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+
+    match params.format.as_deref().unwrap_or("json") {
+        "markdown" | "md" => Ok((
+            [(axum::http::header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+            format_export_markdown(&channel, &rows),
+        )
+            .into_response()),
+        _ => {
+            let resp: Vec<MessageResponse> = rows
+                .into_iter()
+                .map(|r| MessageResponse {
+                    id: r.id,
+                    sender: r.sender,
+                    text: r.text,
+                    timestamp: r.timestamp,
+                    msgid: r.msgid,
+                    tags: r.tags,
+                })
+                .collect();
+            Ok(Json(resp).into_response())
+        }
+    }
+}
+
+/// Render Prometheus text exposition format (version 0.0.4).
+fn format_metrics(
+    connections: usize,
+    channels: usize,
+    s2s_peers: usize,
+    messages_total: u64,
+    sasl_success_total: u64,
+    sasl_failure_total: u64,
+    uptime_seconds: u64,
+) -> String {
+    format!(
+        "# HELP freeq_connections Currently connected sessions\n\
+         # TYPE freeq_connections gauge\n\
+         freeq_connections {connections}\n\
+         # HELP freeq_channels Channels known to this server\n\
+         # TYPE freeq_channels gauge\n\
+         freeq_channels {channels}\n\
+         # HELP freeq_s2s_peers Authenticated federation peers\n\
+         # TYPE freeq_s2s_peers gauge\n\
+         freeq_s2s_peers {s2s_peers}\n\
+         # HELP freeq_messages_total PRIVMSG/NOTICE handled since start\n\
+         # TYPE freeq_messages_total counter\n\
+         freeq_messages_total {messages_total}\n\
+         # HELP freeq_sasl_success_total Successful SASL authentications since start\n\
+         # TYPE freeq_sasl_success_total counter\n\
+         freeq_sasl_success_total {sasl_success_total}\n\
+         # HELP freeq_sasl_failure_total Failed SASL authentications since start\n\
+         # TYPE freeq_sasl_failure_total counter\n\
+         freeq_sasl_failure_total {sasl_failure_total}\n\
+         # HELP freeq_uptime_seconds Seconds since process start\n\
+         # TYPE freeq_uptime_seconds gauge\n\
+         freeq_uptime_seconds {uptime_seconds}\n"
+    )
+}
+
+/// GET /metrics — Prometheus scrape endpoint.
+async fn api_metrics(State(state): State<Arc<SharedState>>) -> impl axum::response::IntoResponse {
+    use std::sync::atomic::Ordering::Relaxed;
+    let connections = state.connections.lock().len();
+    let channels = state.channels.lock().len();
+    let s2s = state.s2s_manager.lock().clone();
+    let s2s_peers = match s2s {
+        Some(mgr) => mgr.authenticated_peers.lock().await.len(),
+        None => 0,
+    };
+    let body = format_metrics(
+        connections,
+        channels,
+        s2s_peers,
+        state.metrics.messages_total.load(Relaxed),
+        state.metrics.sasl_success_total.load(Relaxed),
+        state.metrics.sasl_failure_total.load(Relaxed),
+        state.metrics.started_at.elapsed().as_secs(),
+    );
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        body,
+    )
+}
+
+/// GET /api/v1/search?channel=#name&q=terms — full-text history search.
+/// Channels only: DM search requires DID auth and goes through the IRC
+/// SEARCH command. Access rules mirror /channels/{name}/history: channels
+/// with +i or +k return 403.
+async fn api_search(
+    Query(params): Query<SearchQuery>,
+    State(state): State<Arc<SharedState>>,
+) -> Result<Json<Vec<MessageResponse>>, StatusCode> {
+    let channel = if params.channel.starts_with('#') {
+        params.channel.clone()
+    } else {
+        format!("#{}", params.channel)
+    };
+    // Never expose DM history through the unauthenticated REST surface.
+    if channel.to_lowercase().contains("dm:") {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    {
+        let channels = state.channels.lock();
+        match channels.get(&channel.to_lowercase()) {
+            Some(ch) => {
+                if ch.invite_only || ch.key.is_some() {
+                    return Err(StatusCode::FORBIDDEN);
+                }
+            }
+            None => return Err(StatusCode::NOT_FOUND),
+        }
+    }
+
+    let limit = params.limit.unwrap_or(25).min(100);
+    let rows = state
+        .with_db(|db| db.search_messages(&channel, &params.q, limit, params.before))
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| MessageResponse {
+                id: r.id,
+                sender: r.sender,
+                text: r.text,
+                timestamp: r.timestamp,
+                msgid: r.msgid,
+                tags: r.tags,
+            })
+            .collect(),
+    ))
 }
 
 async fn api_channel_topic(
@@ -3946,4 +4181,70 @@ fn session_to_json(s: &crate::av::AvSession, mgr: &crate::av::AvSessionManager) 
         "recording_enabled": s.recording_enabled,
         "iroh_ticket": s.iroh_ticket,
     })
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::format_export_markdown;
+    use std::collections::HashMap;
+
+    fn row(sender: &str, text: &str, ts: u64, msgid: &str) -> crate::db::MessageRow {
+        crate::db::MessageRow {
+            id: 1,
+            channel: "#x".into(),
+            sender: sender.into(),
+            text: text.into(),
+            timestamp: ts,
+            tags: HashMap::new(),
+            msgid: Some(msgid.into()),
+            replaces_msgid: None,
+            deleted_at: None,
+            sender_did: None,
+        }
+    }
+
+    #[test]
+    fn markdown_export_renders_transcript() {
+        let rows = vec![
+            row("alice!a@h", "hello world", 1750000000, "01A"),
+            row("bob!b@h", "line one\nline two", 1750000060, "01B"),
+        ];
+        let md = format_export_markdown("#dev", &rows);
+        assert!(md.starts_with("# #dev — exported transcript\n"));
+        assert!(md.contains("**alice** (01A): hello world\n"));
+        // Hostmask stripped to nick; multiline bodies indented, not split
+        // into separate top-level entries.
+        assert!(md.contains("**bob** (01B): line one\n    line two\n"));
+    }
+}
+
+#[cfg(test)]
+mod metrics_tests {
+    use super::format_metrics;
+
+    #[test]
+    fn exposition_format_is_well_formed() {
+        let out = format_metrics(3, 7, 2, 100, 5, 1, 42);
+        assert!(out.contains("freeq_connections 3\n"));
+        assert!(out.contains("freeq_channels 7\n"));
+        assert!(out.contains("freeq_s2s_peers 2\n"));
+        assert!(out.contains("freeq_messages_total 100\n"));
+        assert!(out.contains("freeq_sasl_success_total 5\n"));
+        assert!(out.contains("freeq_sasl_failure_total 1\n"));
+        assert!(out.contains("freeq_uptime_seconds 42\n"));
+        // Every metric line is preceded by HELP + TYPE comments.
+        for name in [
+            "freeq_connections",
+            "freeq_channels",
+            "freeq_s2s_peers",
+            "freeq_messages_total",
+            "freeq_sasl_success_total",
+            "freeq_sasl_failure_total",
+            "freeq_uptime_seconds",
+        ] {
+            assert!(out.contains(&format!("# HELP {name} ")), "missing HELP for {name}");
+            assert!(out.contains(&format!("# TYPE {name} ")), "missing TYPE for {name}");
+        }
+        assert!(out.ends_with('\n'));
+    }
 }

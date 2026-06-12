@@ -71,18 +71,34 @@ class ChannelState: Identifiable {
         }
     }
 
-    func applyReaction(msgId: String, emoji: String, from: String) {
+    /// Idempotently add `from` to a message's reaction set. Used for both the
+    /// optimistic local update and inbound `+react` events, so a self-echo of
+    /// our own reaction is a harmless no-op (rather than toggling it back off).
+    func addReaction(msgId: String, emoji: String, from: String) {
         if let idx = findMessage(byId: msgId) {
             var reactions = messages[idx].reactions
             var nicks = reactions[emoji] ?? Set()
-            if nicks.contains(from) {
-                nicks.remove(from)
-                if nicks.isEmpty { reactions.removeValue(forKey: emoji) }
-                else { reactions[emoji] = nicks }
-            } else {
-                nicks.insert(from)
-                reactions[emoji] = nicks
-            }
+            nicks.insert(from)
+            reactions[emoji] = nicks
+            messages[idx].reactions = reactions
+        }
+    }
+
+    /// Whether `from` has already reacted to `msgId` with `emoji`.
+    func hasReaction(msgId: String, emoji: String, from: String) -> Bool {
+        guard let idx = findMessage(byId: msgId) else { return false }
+        return messages[idx].reactions[emoji]?.contains(from) ?? false
+    }
+
+    /// Explicitly remove a reaction (from a `+freeq.at/unreact` tag), as
+    /// opposed to the toggle in `applyReaction`.
+    func removeReaction(msgId: String, emoji: String, from: String) {
+        if let idx = findMessage(byId: msgId) {
+            var reactions = messages[idx].reactions
+            guard var nicks = reactions[emoji] else { return }
+            nicks.remove(from)
+            if nicks.isEmpty { reactions.removeValue(forKey: emoji) }
+            else { reactions[emoji] = nicks }
             messages[idx].reactions = reactions
         }
     }

@@ -107,6 +107,29 @@ When a user authenticates, their nick is bound to their DID. This binding:
 - **DID bans**: `MODE +b did:plc:xyz` bans by identity rather than hostmask.
   DID bans survive nick changes.
 
+### SEARCH Command
+
+Full-text search over stored history, backed by SQLite FTS5 (plaintext
+databases) or a bounded decrypt-and-scan (databases encrypted at rest).
+
+```
+SEARCH <target> :<query>
+```
+
+- **Authorization mirrors CHATHISTORY**: channel search requires membership;
+  DM search requires DID authentication and runs against the requester's own
+  canonical DM key (`dm:<didA>,<didB>`), so it can never see third-party DMs.
+- Query terms are ANDed; FTS5 operators in the query are matched literally.
+- Results replay as PRIVMSGs inside a `BATCH` of type `freeq.at/search`,
+  oldest-first, capped at 25, carrying `msgid`/`account`/`time` tags and the
+  same multiline emission shapes as CHATHISTORY.
+- Failures use `FAIL SEARCH NEED_MORE_PARAMS | INVALID_TARGET |
+  ACCOUNT_REQUIRED`.
+
+REST equivalent for public channels: `GET /api/v1/search?channel=#name&q=terms`
+(`limit` ≤ 100, `before` for pagination). Channels with `+i` or `+k` return
+403; DMs are never exposed over REST.
+
 ### WHOIS Extensions
 
 Freeq adds custom WHOIS numerics:

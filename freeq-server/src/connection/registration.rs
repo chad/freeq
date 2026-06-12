@@ -6,6 +6,59 @@ use crate::irc::{self, Message};
 use crate::server::SharedState;
 use std::sync::Arc;
 
+/// How long a probed session has to answer the liveness PING before it is
+/// presumed to be a zombie socket and evicted.
+const LIVENESS_PROBE_SECS: u64 = 10;
+
+/// Send a liveness PING to every existing session of a DID that just gained
+/// a new session, and evict any that have not answered with PONG after
+/// [`LIVENESS_PROBE_SECS`]. Eviction notifies the session's kill signal, so
+/// teardown runs the session's own cleanup path (QUIT broadcast, membership
+/// removal, ghost-session grace) exactly as a ping timeout would.
+fn probe_sibling_liveness(
+    state: &Arc<SharedState>,
+    siblings: &[String],
+    new_session_id: &str,
+    send: &impl Fn(&Arc<SharedState>, &str, String),
+) {
+    if siblings.is_empty() {
+        return;
+    }
+    {
+        let now = std::time::Instant::now();
+        let mut probes = state.liveness_probes.lock();
+        for sid in siblings {
+            // entry(): never extend an already-running probe's deadline.
+            probes.entry(sid.clone()).or_insert(now);
+        }
+    }
+    for sid in siblings {
+        send(state, sid, "PING :liveness-probe\r\n".to_string());
+    }
+
+    let state = Arc::clone(state);
+    let siblings = siblings.to_vec();
+    let trigger = new_session_id.to_string();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(LIVENESS_PROBE_SECS)).await;
+        for sid in &siblings {
+            // Still pending = no PONG arrived; the PONG handler removes the
+            // entry, so remove() doubles as the answered/unanswered check.
+            if state.liveness_probes.lock().remove(sid).is_none() {
+                continue;
+            }
+            let kill = state.session_kill.lock().get(sid).cloned();
+            if let Some(kill) = kill {
+                tracing::info!(
+                    zombie = %sid, trigger = %trigger,
+                    "Liveness probe unanswered — evicting zombie session"
+                );
+                kill.notify_one();
+            }
+        }
+    });
+}
+
 /// Attach a new session to existing sessions with the same DID.
 /// Instead of ghosting (killing) old sessions, this enables multi-device:
 /// - The new session shares the same nick
@@ -178,6 +231,14 @@ pub(super) fn attach_same_did(
     // Multi-device attach: existing sessions exist for this DID
     tracing::info!(did = %did, session = %session_id, existing = ?existing_sessions.len(),
                    "Attaching additional session for DID");
+
+    // Probe the existing sessions for liveness. A frozen-then-resumed agent
+    // VM (boxd pause/resume) leaves a zombie TCP session that would otherwise
+    // hold nick + channel state until the ping timeout (~90s) and crash-loop
+    // the reconnecting agent. Healthy multi-device siblings answer the PING
+    // immediately and are untouched; sessions that stay silent past the
+    // deadline are evicted through their normal cleanup path.
+    probe_sibling_liveness(state, &existing_sessions, session_id, send);
 
     // Find the canonical nick from existing sessions
     let canonical_nick = {

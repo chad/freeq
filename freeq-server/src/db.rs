@@ -72,6 +72,18 @@ fn decrypt_at_rest(key: &[u8; 32], stored: &str) -> String {
     }
 }
 
+/// Convert a user-supplied search string into a safe FTS5 query.
+/// Each whitespace-separated term becomes a quoted phrase (embedded quotes
+/// doubled), joined by implicit AND. FTS5 operators (OR, NEAR, *, etc.) in
+/// user input are matched literally rather than interpreted.
+fn sanitize_fts_query(query: &str) -> String {
+    query
+        .split_whitespace()
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Compute a canonical DM channel key from two DIDs.
 /// The key is `dm:<did_a>,<did_b>` where the DIDs are alphabetically sorted.
 /// This ensures both participants produce the same key regardless of who sends.
@@ -281,6 +293,8 @@ impl Db {
             let _ = self.conn.execute(sql, []);
         }
 
+        self.init_fts()?;
+
         // Phase 2: agent governance tables
         self.conn.execute_batch(
             "
@@ -483,6 +497,125 @@ impl Db {
         )?;
 
         Ok(())
+    }
+
+    // ── Full-text search (FTS5) ────────────────────────────────────────
+    //
+    // The FTS index holds message plaintext, so it only exists when at-rest
+    // encryption is OFF. Opening an encrypted database drops any index left
+    // behind by a previous plaintext run, ensuring no plaintext survives the
+    // switch to encryption. Encrypted databases fall back to a bounded
+    // decrypt-and-scan in `search_messages`.
+
+    /// Maximum rows decrypt-and-scanned per search on encrypted databases.
+    const SEARCH_SCAN_CAP: usize = 10_000;
+
+    fn fts_enabled(&self) -> bool {
+        self.encryption_key.is_none()
+    }
+
+    fn init_fts(&self) -> SqlResult<()> {
+        if self.encryption_key.is_some() {
+            self.conn
+                .execute_batch("DROP TABLE IF EXISTS messages_fts;")?;
+            return Ok(());
+        }
+        self.conn.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(text);",
+        )?;
+        // Backfill: index any messages that predate the FTS table (upgrade
+        // path, or a database previously run with encryption enabled).
+        self.conn.execute(
+            "INSERT INTO messages_fts (rowid, text)
+             SELECT id, text FROM messages
+             WHERE deleted_at IS NULL
+               AND id NOT IN (SELECT rowid FROM messages_fts)",
+            [],
+        )?;
+        Ok(())
+    }
+
+    /// Index one message row. No-op when encryption is on.
+    fn fts_index(&self, rowid: i64, text: &str) -> SqlResult<()> {
+        if self.fts_enabled() {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO messages_fts (rowid, text) VALUES (?1, ?2)",
+                params![rowid, text],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Search messages in a channel (or DM key), newest-first.
+    /// `before`: if Some, only messages with timestamp < value (pagination).
+    /// Terms are ANDed; FTS5 query syntax in `query` is treated literally.
+    pub fn search_messages(
+        &self,
+        channel: &str,
+        query: &str,
+        limit: usize,
+        before: Option<u64>,
+    ) -> SqlResult<Vec<MessageRow>> {
+        if self.fts_enabled() {
+            let fts_query = sanitize_fts_query(query);
+            if fts_query.is_empty() {
+                return Ok(vec![]);
+            }
+            let before_ts = before.map(|b| b as i64).unwrap_or(i64::MAX);
+            let mut stmt = self.conn.prepare(
+                "SELECT m.id, m.channel, m.sender, m.text, m.timestamp, m.tags_json,
+                        m.msgid, m.replaces_msgid, m.deleted_at, m.sender_did
+                 FROM messages_fts
+                 JOIN messages m ON m.id = messages_fts.rowid
+                 WHERE messages_fts MATCH ?1
+                   AND m.channel = ?2
+                   AND m.deleted_at IS NULL
+                   AND m.timestamp < ?3
+                 ORDER BY m.timestamp DESC, m.id DESC
+                 LIMIT ?4",
+            )?;
+            let rows = stmt.query_map(
+                params![fts_query, channel, before_ts, limit as i64],
+                map_message_row,
+            )?;
+            return rows.collect::<SqlResult<Vec<_>>>();
+        }
+
+        // Encrypted at rest: bounded decrypt-and-scan, newest-first.
+        let key = self.encryption_key.as_ref().expect("encrypted branch");
+        let terms: Vec<String> = query
+            .split_whitespace()
+            .map(|t| t.to_lowercase())
+            .collect();
+        if terms.is_empty() {
+            return Ok(vec![]);
+        }
+        let before_ts = before.map(|b| b as i64).unwrap_or(i64::MAX);
+        let mut stmt = self.conn.prepare(
+            "SELECT id, channel, sender, text, timestamp, tags_json,
+                    msgid, replaces_msgid, deleted_at, sender_did
+             FROM messages
+             WHERE channel = ?1 AND deleted_at IS NULL AND timestamp < ?2
+             ORDER BY timestamp DESC, id DESC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(
+            params![channel, before_ts, Self::SEARCH_SCAN_CAP as i64],
+            map_message_row,
+        )?;
+        let mut matches = Vec::new();
+        for row in rows {
+            let mut row = row?;
+            row.text = decrypt_at_rest(key, &row.text);
+            let haystack = row.text.to_lowercase();
+            if terms.iter().all(|t| haystack.contains(t)) {
+                matches.push(row);
+                if matches.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Ok(matches)
     }
 
     // ── Channel state ──────────────────────────────────────────────────
@@ -757,6 +890,7 @@ impl Db {
         ev.did = sender_did.map(|s| s.to_string());
         ev.server_sequence = Some(self.conn.last_insert_rowid());
         crate::agent_assist::recorder::record(ev);
+        self.fts_index(self.conn.last_insert_rowid(), text)?;
         Ok(())
     }
 
@@ -861,6 +995,16 @@ impl Db {
 
     /// Prune old messages for a channel, keeping only the most recent `max_keep`.
     pub fn prune_messages(&self, channel: &str, max_keep: usize) -> SqlResult<()> {
+        if self.fts_enabled() {
+            self.conn.execute(
+                "DELETE FROM messages_fts WHERE rowid IN (
+                    SELECT id FROM messages WHERE channel = ?1 AND id NOT IN (
+                        SELECT id FROM messages WHERE channel = ?1 ORDER BY timestamp DESC, id DESC LIMIT ?2
+                    )
+                )",
+                params![channel, max_keep as i64],
+            )?;
+        }
         self.conn.execute(
             "DELETE FROM messages WHERE channel = ?1 AND id NOT IN (
                 SELECT id FROM messages WHERE channel = ?1 ORDER BY timestamp DESC, id DESC LIMIT ?2
@@ -922,6 +1066,14 @@ impl Db {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
+        if self.fts_enabled() {
+            self.conn.execute(
+                "DELETE FROM messages_fts WHERE rowid IN (
+                    SELECT id FROM messages WHERE channel = ?1 AND msgid = ?2 AND deleted_at IS NULL
+                )",
+                params![channel, msgid],
+            )?;
+        }
         let changed = self.conn.execute(
             "UPDATE messages SET deleted_at = ?1 WHERE channel = ?2 AND msgid = ?3 AND deleted_at IS NULL",
             params![now as i64, channel, msgid],
@@ -1021,6 +1173,7 @@ impl Db {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![channel, sender, stored_text, timestamp as i64, tags_json, msgid, replaces_msgid, sender_did],
         )?;
+        self.fts_index(self.conn.last_insert_rowid(), text)?;
         Ok(())
     }
 
@@ -1194,6 +1347,13 @@ impl Db {
             self.conn.execute(
                 "UPDATE messages SET text = ?1 WHERE msgid = ?2",
                 params![stored_text, msgid],
+            )?;
+        }
+        if self.fts_enabled() {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO messages_fts (rowid, text)
+                 SELECT id, ?1 FROM messages WHERE msgid = ?2",
+                params![new_text, msgid],
             )?;
         }
         Ok(())
@@ -1408,6 +1568,155 @@ fn map_message_row(row: &rusqlite::Row) -> SqlResult<MessageRow> {
 mod tests {
     use super::*;
     use crate::server::BanEntry;
+
+    fn msg(db: &Db, channel: &str, text: &str, ts: u64, msgid: &str) {
+        db.insert_message(
+            channel,
+            "alice!a@host",
+            text,
+            ts,
+            &HashMap::new(),
+            Some(msgid),
+            Some("did:plc:alice"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn search_finds_matching_messages_newest_first() {
+        let db = Db::open_memory().unwrap();
+        msg(&db, "#dev", "deploy went fine", 100, "m1");
+        msg(&db, "#dev", "lunch plans anyone", 200, "m2");
+        msg(&db, "#dev", "the deploy failed again", 300, "m3");
+
+        let hits = db.search_messages("#dev", "deploy", 50, None).unwrap();
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].msgid.as_deref(), Some("m3"));
+        assert_eq!(hits[1].msgid.as_deref(), Some("m1"));
+    }
+
+    #[test]
+    fn search_is_channel_scoped_and_ands_terms() {
+        let db = Db::open_memory().unwrap();
+        msg(&db, "#dev", "deploy failed", 100, "m1");
+        msg(&db, "#ops", "deploy failed", 110, "m2");
+        msg(&db, "#dev", "deploy succeeded", 120, "m3");
+
+        let hits = db.search_messages("#dev", "deploy failed", 50, None).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].msgid.as_deref(), Some("m1"));
+    }
+
+    #[test]
+    fn search_excludes_deleted_and_pruned() {
+        let db = Db::open_memory().unwrap();
+        msg(&db, "#dev", "secret apple", 100, "m1");
+        msg(&db, "#dev", "banana", 200, "m2");
+        msg(&db, "#dev", "cherry", 300, "m3");
+
+        db.soft_delete_message("#dev", "m1").unwrap();
+        assert!(db.search_messages("#dev", "apple", 50, None).unwrap().is_empty());
+
+        db.prune_messages("#dev", 1).unwrap();
+        assert!(db.search_messages("#dev", "banana", 50, None).unwrap().is_empty());
+        assert_eq!(db.search_messages("#dev", "cherry", 50, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn search_pagination_with_before() {
+        let db = Db::open_memory().unwrap();
+        msg(&db, "#dev", "build one", 100, "m1");
+        msg(&db, "#dev", "build two", 200, "m2");
+        msg(&db, "#dev", "build three", 300, "m3");
+
+        let page = db.search_messages("#dev", "build", 2, None).unwrap();
+        assert_eq!(page[0].msgid.as_deref(), Some("m3"));
+        assert_eq!(page[1].msgid.as_deref(), Some("m2"));
+
+        let next = db
+            .search_messages("#dev", "build", 2, Some(page[1].timestamp))
+            .unwrap();
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].msgid.as_deref(), Some("m1"));
+    }
+
+    #[test]
+    fn search_treats_fts_operators_literally() {
+        let db = Db::open_memory().unwrap();
+        msg(&db, "#dev", "a OR b syntax question", 100, "m1");
+        msg(&db, "#dev", "unrelated", 200, "m2");
+
+        // None of these may error or be interpreted as FTS5 syntax.
+        for q in ["OR", "\"quoted\"", "wild*", "(group)", "NEAR", "col:val"] {
+            let _ = db.search_messages("#dev", q, 50, None).unwrap();
+        }
+        let hits = db.search_messages("#dev", "OR", 50, None).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].msgid.as_deref(), Some("m1"));
+        assert!(db.search_messages("#dev", "   ", 50, None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_reflects_edits() {
+        let db = Db::open_memory().unwrap();
+        msg(&db, "#dev", "original wording", 100, "m1");
+        db.edit_message("m1", "alice!a@host", "revised phrasing", Some("m2"))
+            .unwrap();
+
+        assert!(db.search_messages("#dev", "original", 50, None).unwrap().is_empty());
+        let hits = db.search_messages("#dev", "revised", 50, None).unwrap();
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn search_works_on_encrypted_database_via_scan() {
+        let db = Db::open_encrypted_memory([7u8; 32]).unwrap();
+        msg(&db, "#dev", "Deploy Failed Loudly", 100, "m1");
+        msg(&db, "#dev", "all quiet", 200, "m2");
+        db.soft_delete_message("#dev", "m2").unwrap();
+
+        // Case-insensitive match on decrypted text; no FTS table involved.
+        let hits = db.search_messages("#dev", "deploy failed", 50, None).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].text, "Deploy Failed Loudly");
+        assert!(db.search_messages("#dev", "quiet", 50, None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn opening_encrypted_drops_plaintext_fts_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("freeq.db");
+        {
+            let db = Db::open(&path).unwrap();
+            msg(&db, "#dev", "plaintext indexed", 100, "m1");
+            assert_eq!(db.search_messages("#dev", "plaintext", 50, None).unwrap().len(), 1);
+        }
+        let db = Db::open_encrypted(&path, [9u8; 32]).unwrap();
+        let fts_exists: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'messages_fts'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts_exists, 0, "plaintext FTS index must not survive encryption");
+    }
+
+    #[test]
+    fn reopening_plaintext_backfills_fts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("freeq.db");
+        {
+            let db = Db::open(&path).unwrap();
+            msg(&db, "#dev", "needle in history", 100, "m1");
+            // Simulate a pre-FTS database (or one previously run encrypted).
+            db.conn.execute_batch("DROP TABLE messages_fts;").unwrap();
+        }
+        let db = Db::open(&path).unwrap();
+        let hits = db.search_messages("#dev", "needle", 50, None).unwrap();
+        assert_eq!(hits.len(), 1);
+    }
 
     #[test]
     fn roundtrip_channel_state() {

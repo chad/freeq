@@ -50,6 +50,17 @@ function canShareScreen(): boolean {
     && typeof navigator.mediaDevices.getDisplayMedia === 'function';
 }
 
+// moq's Signal.subscribe only fires on *future* changes — it never
+// replays the current value. `pub.video` is assigned exactly once, when
+// `source="camera"` is set at call start, so a bare subscribe made when
+// the camera is toggled on later never fires and the local preview
+// stays black. Always subscribe AND replay the current value.
+function watchSignal<T>(sig: MoqSignal<T>, fn: (value: T) => void): () => void {
+  const unsub = sig.subscribe(fn);
+  fn(sig.peek());
+  return unsub;
+}
+
 export function CallPanel() {
   const activeAvSession = useStore((s) => s.activeAvSession);
   const avAudioActive = useStore((s) => s.avAudioActive);
@@ -71,6 +82,12 @@ export function CallPanel() {
   // disturbed when sharing starts/stops.
   const screenPubElRef = useRef<HTMLElement | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // The moq-publish element, mirrored into state so the camera/mute sync
+  // effects re-run once it exists. They previously read publishElRef
+  // inside the effect: if the camera was toggled while start() was still
+  // awaiting module load or mic permission, the effect ran against a
+  // null ref and never re-ran — camera captured, no local preview.
+  const [pubEl, setPubEl] = useState<MoqPublishEl | null>(null);
 
   const [participantSlots, setParticipantSlots] = useState<Slot[]>([]);
   // Which participant slots currently have a *live* `…/screen` broadcast.
@@ -176,6 +193,7 @@ export function CallPanel() {
       const pub = document.createElement('moq-publish');
       container.appendChild(pub);
       publishElRef.current = pub;
+      setPubEl(pub as MoqPublishEl);
 
       // Include the per-call instance suffix the IRC layer generated for
       // our av-join TAGMSG so this device's path is unique even if the
@@ -215,7 +233,7 @@ export function CallPanel() {
 
   // ── Sync mute state ─────────────────────────────────────────
   useEffect(() => {
-    const pub = publishElRef.current;
+    const pub = pubEl;
     if (!pub) return;
     // Belt + suspenders: set both the DOM attribute and the JS property
     // — moq-publish's mute implementation has shifted between attribute-
@@ -228,11 +246,11 @@ export function CallPanel() {
       pub.removeAttribute('muted');
     }
     (pub as HTMLElement & { muted?: boolean }).muted = avMuted;
-  }, [avMuted]);
+  }, [avMuted, pubEl]);
 
   // ── Sync camera state ───────────────────────────────────────
   useEffect(() => {
-    const pub = publishElRef.current as MoqPublishEl | null;
+    const pub = pubEl;
     if (!pub) return;
 
     if (!avCameraOn) {
@@ -253,11 +271,15 @@ export function CallPanel() {
     const videoSig = pub.video;
     if (!videoSig) return;
     let unsubInner: (() => void) | null = null;
-    const unsubOuter = videoSig.subscribe((camera) => {
+    // watchSignal (not bare subscribe): pub.video already holds the
+    // camera source by the time the camera is toggled on, and the signal
+    // never fires again — a bare subscribe here left the preview black
+    // while the camera LED was on and the broadcast carried video.
+    const unsubOuter = watchSignal(videoSig, (camera) => {
       unsubInner?.();
       unsubInner = null;
       if (!camera?.source) return;
-      unsubInner = camera.source.subscribe((track) => {
+      unsubInner = watchSignal(camera.source, (track) => {
         if (!localVideoRef.current) return;
         if (track) {
           localVideoRef.current.srcObject = new MediaStream([track]);
@@ -273,7 +295,7 @@ export function CallPanel() {
       unsubInner?.();
       unsubOuter();
     };
-  }, [avCameraOn, refreshDevices]);
+  }, [avCameraOn, pubEl, refreshDevices]);
 
   // ── Screen share: a second, dedicated publisher ─────────────
   // The screen rides its own broadcast `{name}/screen` so the camera+mic
@@ -432,6 +454,7 @@ export function CallPanel() {
       publishElRef.current = null;
     }
     tearDownScreen();
+    setPubEl(null);
     if (localVideoRef.current) {
       localVideoRef.current.srcObject = null;
     }

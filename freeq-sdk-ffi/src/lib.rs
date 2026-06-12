@@ -1554,15 +1554,27 @@ impl FreeqAv {
     }
 
     fn leave(&self) {
-        let mut guard = self.state.lock().unwrap();
-        if let Some(state) = guard.as_mut() {
-            if let Some(tx) = state.shutdown_tx.take() {
-                let _ = tx.send(());
+        // Take the State out under the lock, then release the lock before the
+        // teardown so we don't hold the mutex during async shutdown.
+        let taken = {
+            let mut guard = self.state.lock().unwrap();
+            if let Some(state) = guard.as_mut() {
+                if let Some(tx) = state.shutdown_tx.take() {
+                    let _ = tx.send(());
+                }
+                state.connected = false;
             }
-            state.connected = false;
+            guard.take()
+        };
+        // Drop the State (which tears down the MoQ / web-transport session)
+        // INSIDE the tokio runtime context. The session's Drop impl spawns
+        // shutdown work and panics ("there is no reactor running, must be
+        // called from the context of a Tokio 1.x runtime") if dropped from a
+        // plain FFI thread — which crashes the host app on `/av leave`.
+        if let Some(state) = taken {
+            let _enter = RUNTIME.enter();
+            drop(state);
         }
-        // Drop the entire State to tear down the broadcast and session.
-        *guard = None;
     }
 
     fn set_muted(&self, muted: bool) {
@@ -1607,6 +1619,22 @@ impl FreeqAv {
             .as_ref()
             .map(|s| s.connected)
             .unwrap_or(false)
+    }
+}
+
+#[cfg(feature = "av")]
+impl Drop for FreeqAv {
+    fn drop(&mut self) {
+        // Belt-and-suspenders for the same reason as `leave()`: if the object
+        // is deallocated while still holding a live session (e.g. a call that
+        // was never explicitly left), tear it down inside the runtime context
+        // so the web-transport session's Drop has a reactor.
+        if let Ok(mut guard) = self.state.lock() {
+            if let Some(state) = guard.take() {
+                let _enter = RUNTIME.enter();
+                drop(state);
+            }
+        }
     }
 }
 

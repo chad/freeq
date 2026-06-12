@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import UserNotifications
+import AVFoundation
 
 /// Connection transport type.
 enum TransportType: Equatable {
@@ -57,10 +58,36 @@ class AppState {
     var p2pConnectedPeers: Set<String> = []
     var p2pDMActive: Set<String> = []
 
+    // MARK: - AV (voice/video calls)
+    var isInCall: Bool = false
+    var isMuted: Bool = false
+    var isCameraOn: Bool = false
+    var isCallExpanded: Bool = false
+    var callParticipants: [String] = []
+    /// channel (lowercased) → active session id, populated from `+freeq.at/av-state` TAGMSGs
+    var activeAvSessions: [String: String] = [:]
+    var currentCallChannel: String? = nil
+    var currentCallSessionId: String? = nil
+    /// Nicks for which at least one video frame has arrived this call.
+    var participantsWithVideo: Set<String> = []
+    @ObservationIgnored var avSession: FreeqAv? = nil
+    /// Channels where we sent `av-start` and are waiting on the server's `started` echo.
+    @ObservationIgnored var pendingAvStart: Set<String> = []
+    /// Per-call instance id sent on av-join/av-leave (`+freeq.at/av-instance`).
+    @ObservationIgnored var currentAvInstance: String? = nil
+    @ObservationIgnored var cameraCapture: CallCameraCapture? = nil
+    @ObservationIgnored var micCapture: CallMicCapture? = nil
+    /// Per-nick remote video display layers (lowercased nick → layer, weakly held).
+    @ObservationIgnored var remoteVideoLayers =
+        NSMapTable<NSString, AVSampleBufferDisplayLayer>.strongToWeakObjects()
+    var localPreviewCapture: CallCameraCapture? { cameraCapture }
+
     // MARK: - UI State
     var showDetailPanel: Bool = true
     var showQuickSwitcher: Bool = false
     var showJoinSheet: Bool = false
+    var showBookmarks: Bool = false
+    var showChannelList: Bool = false
     var errorMessage: String?
 
     // MARK: - Compose state (editing/replying)
@@ -94,6 +121,13 @@ class AppState {
     // MARK: - Typing debounce
     private var lastTypingSent: [String: Date] = [:]
 
+    // MARK: - Compose hooks
+    /// Set by ComposeBar so the `/media` command can open a file picker.
+    /// nil in headless/test contexts.
+    @ObservationIgnored var onComposeMediaRequest: (() -> Void)?
+    /// Test-mode debug command bridge (file-driven). Held so it isn't deinited.
+    @ObservationIgnored var debugBridge: DebugBridge?
+
     // MARK: - Private
     private var client: FreeqClient?
     private var p2p: FreeqP2p?
@@ -125,6 +159,12 @@ class AppState {
     init() {
         loadSavedState()
         requestNotificationPermission()
+        // In test mode the SwiftUI view lifecycle may never run `.onAppear`
+        // (e.g. the screen is locked during automated runs), so kick off the
+        // guest connect + DebugBridge from init, independent of any view.
+        if ProcessInfo.processInfo.environment["FREEQ_TEST_NICK"] != nil {
+            DispatchQueue.main.async { [weak self] in self?.startupConnect() }
+        }
     }
 
     private func loadSavedState() {
@@ -137,8 +177,13 @@ class AppState {
         if let saved = UserDefaults.standard.stringArray(forKey: "freeq.channels"), !saved.isEmpty {
             autoJoinChannels = saved
         }
-        brokerToken = KeychainHelper.load(key: "brokerToken")
-        authenticatedDID = KeychainHelper.load(key: "did")
+        // In test mode we connect as a guest and don't need the saved
+        // credentials — skip the keychain reads, which on ad-hoc-signed dev
+        // builds pop a blocking "allow keychain access" dialog every rebuild.
+        if ProcessInfo.processInfo.environment["FREEQ_TEST_NICK"] == nil {
+            brokerToken = KeychainHelper.load(key: "brokerToken")
+            authenticatedDID = KeychainHelper.load(key: "did")
+        }
         favorites = Set(UserDefaults.standard.stringArray(forKey: "freeq.favorites") ?? [])
         mutedChannels = Set(UserDefaults.standard.stringArray(forKey: "freeq.muted") ?? [])
         if let data = UserDefaults.standard.data(forKey: "freeq.bookmarks"),
@@ -212,6 +257,24 @@ class AppState {
         activeChannel = nil
     }
 
+    /// Called once on launch. Honors a test/guest auto-connect env var, then
+    /// falls back to restoring a saved session.
+    func startupConnect() {
+        if let testNick = ProcessInfo.processInfo.environment["FREEQ_TEST_NICK"],
+           !testNick.isEmpty, connectionState == .disconnected {
+            // Deterministic guest connect + file-driven command bridge for UI
+            // testing against the real server.
+            let bridge = DebugBridge(appState: self)
+            debugBridge = bridge
+            bridge.start()
+            connect(nick: testNick)
+            return
+        }
+        if hasSavedSession && connectionState == .disconnected {
+            reconnectIfSaved()
+        }
+    }
+
     func reconnectIfSaved() {
         guard connectionState == .disconnected, hasSavedSession else { return }
         guard let token = brokerToken, !token.isEmpty else {
@@ -240,16 +303,19 @@ class AppState {
                     }
                     self.connect(nick: session.nick)
                 }
-            } catch {
-                // Surface to the user instead of leaving them on a
-                // spinner forever. Common causes: expired broker
-                // token, broker reachable but returning non-200,
-                // network down on wake-from-sleep.
+            } catch BrokerError.invalidToken {
+                // The stored broker token has been revoked/expired. Clear it so
+                // the UI drops to the sign-in screen instead of looping forever
+                // on "Disconnected — reconnecting…".
                 await MainActor.run {
-                    self.errorMessage = "Could not refresh session: \(error.localizedDescription). Please sign in again."
                     self.brokerToken = nil
+                    self.authenticatedDID = nil
                     KeychainHelper.delete(key: "brokerToken")
+                    self.errorMessage = "Your session expired. Please sign in again."
                 }
+            } catch {
+                // Transient (network/5xx) — leave the saved session in place
+                // and let the reconnect loop try again.
             }
         }
     }
@@ -294,7 +360,19 @@ class AppState {
     }
 
     func sendReaction(target: String, msgId: String, emoji: String) {
-        sendRaw("@+react=\(emoji);+reply=\(msgId) TAGMSG \(target)")
+        // Toggle based on our current local state, and apply optimistically —
+        // the server relays the TAGMSG to other members but does not echo it
+        // back to us, so without this our own reaction would never appear.
+        let ch = channels.first { $0.name.lowercased() == target.lowercased() }
+            ?? dmBuffers.first { $0.name.lowercased() == target.lowercased() }
+        let already = ch?.hasReaction(msgId: msgId, emoji: emoji, from: nick) ?? false
+        if already {
+            ch?.removeReaction(msgId: msgId, emoji: emoji, from: nick)
+            sendRaw("@+freeq.at/unreact=\(emoji);+reply=\(msgId) TAGMSG \(target)")
+        } else {
+            ch?.addReaction(msgId: msgId, emoji: emoji, from: nick)
+            sendRaw("@+react=\(emoji);+reply=\(msgId) TAGMSG \(target)")
+        }
     }
 
     func sendTyping(target: String) {
@@ -338,6 +416,46 @@ class AppState {
             sendRaw("CHATHISTORY BEFORE \(channel) timestamp=\(iso) 50")
         } else {
             sendRaw("CHATHISTORY LATEST \(channel) * 50")
+        }
+    }
+
+    /// Populate a channel's pinned-messages bar from the server's REST pins
+    /// endpoint. Called on join and after a pin/unpin. (The IRC PIN/UNPIN/PINS
+    /// flow drives the server; the REST list is the source of truth for display.)
+    func fetchPins(channel: String) {
+        guard channel.hasPrefix("#") else { return }
+        let host = serverAddress.split(separator: ":").first.map(String.init) ?? "irc.freeq.at"
+        let encoded = channel.addingPercentEncoding(withAllowedCharacters: .urlHostAllowed) ?? channel
+        guard let url = URL(string: "https://\(host)/api/v1/channels/\(encoded)/pins") else { return }
+        Task {
+            guard let (data, _) = try? await URLSession.shared.data(from: url),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let pins = json["pins"] as? [[String: Any]] else { return }
+            let msgs: [ChatMessage] = pins.compactMap { p in
+                guard let msgid = p["msgid"] as? String, let text = p["text"] as? String else { return nil }
+                let fromRaw = (p["from"] as? String) ?? ""
+                let author = fromRaw.split(separator: "!").first.map(String.init) ?? fromRaw
+                let ts = (p["pinned_at"] as? Double).map { Date(timeIntervalSince1970: $0) } ?? Date()
+                return ChatMessage(id: msgid, from: author, text: text,
+                                   isAction: false, timestamp: ts, replyTo: nil)
+            }
+            await MainActor.run {
+                if let ch = self.channels.first(where: { $0.name.lowercased() == channel.lowercased() }) {
+                    ch.pinnedMessages = msgs
+                }
+            }
+        }
+    }
+
+    /// Pin/unpin a message and refresh the pinned bar (the server applies it
+    /// async, so re-fetch shortly after).
+    func pin(msgId: String, in channel: String) { pinAction("PIN", msgId, channel) }
+    func unpin(msgId: String, in channel: String) { pinAction("UNPIN", msgId, channel) }
+
+    private func pinAction(_ verb: String, _ msgId: String, _ channel: String) {
+        sendRaw("\(verb) \(channel) \(msgId)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.fetchPins(channel: channel)
         }
     }
 
@@ -528,7 +646,11 @@ class AppState {
     func lastOwnMessage(in target: String) -> ChatMessage? {
         let ch = channels.first { $0.name.lowercased() == target.lowercased() }
             ?? dmBuffers.first { $0.name.lowercased() == target.lowercased() }
-        return ch?.messages.last { $0.from.lowercased() == nick.lowercased() && !$0.isDeleted }
+        // Exclude action/notice lines (e.g. server-generated "pinned a message"
+        // actions are attributed to our nick but carry no editable msgid).
+        return ch?.messages.last {
+            $0.from.lowercased() == nick.lowercased() && !$0.isDeleted && !$0.isAction
+        }
     }
 
     // MARK: - WHOIS for DID discovery
@@ -654,6 +776,8 @@ extension AppState {
                     autoJoinChannels.append(channel)
                     UserDefaults.standard.set(autoJoinChannels, forKey: "freeq.channels")
                 }
+                // Load any pinned messages for the channel's pinned bar.
+                fetchPins(channel: channel)
             } else {
                 if let ch = channels.first(where: { $0.name.lowercased() == channel.lowercased() }) {
                     if !ch.members.contains(where: { $0.nick.lowercased() == joinNick.lowercased() }) {
@@ -805,11 +929,27 @@ extension AppState {
                 Task { await MessageStore.shared.markDeleted(msgId: deleteId) }
             }
 
-            // Reactions
+            // Reactions — idempotent add (a self-echo or duplicate is a no-op).
             if let emoji = tags["+react"], let replyId = tags["+reply"] {
                 let bufferName = target.hasPrefix("#") ? target : from
                 let ch = bufferName.hasPrefix("#") ? getOrCreateChannel(bufferName) : getOrCreateDM(bufferName)
-                ch.applyReaction(msgId: replyId, emoji: emoji, from: from)
+                ch.addReaction(msgId: replyId, emoji: emoji, from: from)
+            }
+
+            // Reaction removal (toggle off)
+            if let emoji = tags["+freeq.at/unreact"], let replyId = tags["+reply"] {
+                let bufferName = target.hasPrefix("#") ? target : from
+                let ch = bufferName.hasPrefix("#") ? getOrCreateChannel(bufferName) : getOrCreateDM(bufferName)
+                ch.removeReaction(msgId: replyId, emoji: emoji, from: from)
+            }
+
+            // AV session lifecycle (`+freeq.at/av-state`)
+            if let avState = tags["+freeq.at/av-state"],
+               let avId = tags["+freeq.at/av-id"],
+               target.hasPrefix("#") {
+                handleAvState(avState, sessionId: avId,
+                              actor: tags["+freeq.at/av-actor"] ?? from,
+                              channel: target)
             }
 
         case .names(let channel, let memberList):
@@ -987,6 +1127,12 @@ extension AppState {
 
         case .disconnected(let reason):
             connectionState = .disconnected
+            // If we were in a call when the IRC connection dropped, tear it
+            // down locally — peers only learn we left via the av-leave TAGMSG,
+            // which we can't send on a dead wire.
+            if isInCall {
+                tearDownCallLocallyOnDisconnect()
+            }
             if !reason.contains("intentional") && hasSavedSession {
                 reconnectAttempts += 1
                 let delay = min(Double(1 << min(reconnectAttempts, 5)), 30.0)

@@ -424,11 +424,7 @@ pub async fn login(handle: &str) -> Result<OAuthSession> {
     .await?;
 
     // 9. Verify DID matches
-    if let Some(ref token_did) = token_did
-        && token_did != &did
-    {
-        bail!("DID mismatch: resolved {did} but token is for {token_did}");
-    }
+    check_token_did(&did, token_did.as_deref())?;
 
     // 10. Probe PDS getSession to discover the DPoP nonce
     //     The PDS will reject our first call but return the nonce we need.
@@ -443,6 +439,18 @@ pub async fn login(handle: &str) -> Result<OAuthSession> {
         dpop_key,
         dpop_nonce,
     })
+}
+
+/// Verify that the DID asserted by the token response (`sub`), when present,
+/// matches the DID we resolved from the user's handle. A mismatch means the
+/// authorization server issued a token for someone else — reject it.
+fn check_token_did(resolved_did: &str, token_did: Option<&str>) -> Result<()> {
+    if let Some(token_did) = token_did
+        && token_did != resolved_did
+    {
+        bail!("DID mismatch: resolved {resolved_did} but token is for {token_did}");
+    }
+    Ok(())
 }
 
 /// Discover the authorization server for a PDS.
@@ -777,4 +785,862 @@ fn urlencod(s: &str) -> String {
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::Router;
+    use axum::extract::Form;
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::response::IntoResponse;
+    use axum::routing::{get, post};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // ── Mock PDS / auth-server infrastructure ──────────────────────
+
+    /// Serve an axum router on an ephemeral loopback port.
+    /// Returns the base URL (e.g. `http://127.0.0.1:54321`).
+    async fn spawn_app(router: Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        base
+    }
+
+    /// Like `spawn_app`, but the router builder gets the server's own base
+    /// URL (needed when metadata responses must reference the server itself).
+    async fn spawn_app_with_base(build: impl FnOnce(String) -> Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let router = build(base.clone());
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        base
+    }
+
+    /// Decode the payload (claims) segment of a DPoP proof JWT.
+    fn proof_payload(proof: &str) -> serde_json::Value {
+        let payload_b64 = proof.split('.').nth(1).expect("JWT must have a payload segment");
+        let bytes = URL_SAFE_NO_PAD.decode(payload_b64).expect("payload is base64url");
+        serde_json::from_slice(&bytes).expect("payload is JSON")
+    }
+
+    fn dpop_header(headers: &HeaderMap) -> String {
+        headers
+            .get("dpop")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string()
+    }
+
+    /// A mock PDS `getSession` endpoint that behaves like a real one:
+    /// - rejects a wrong Authorization header outright (403);
+    /// - demands the DPoP proof carry `nonce == "fresh-nonce"`, replying
+    ///   401 + `DPoP-Nonce` header + `use_dpop_nonce` body otherwise;
+    /// - demands the `ath` claim (RFC 9449 §4.2);
+    /// - returns a session document on success.
+    fn mock_pds_router(expected_token: &'static str) -> Router {
+        Router::new().route(
+            "/xrpc/com.atproto.server.getSession",
+            get(move |headers: HeaderMap| async move {
+                let auth = headers
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("");
+                if auth != format!("DPoP {expected_token}") {
+                    return (StatusCode::FORBIDDEN, r#"{"error":"InvalidToken"}"#).into_response();
+                }
+                let payload = proof_payload(&dpop_header(&headers));
+                if payload.get("nonce").and_then(|n| n.as_str()) != Some("fresh-nonce") {
+                    return (
+                        StatusCode::UNAUTHORIZED,
+                        [("dpop-nonce", "fresh-nonce")],
+                        r#"{"error":"use_dpop_nonce","message":"DPoP nonce required"}"#,
+                    )
+                        .into_response();
+                }
+                if payload.get("ath").is_none() {
+                    return (StatusCode::UNAUTHORIZED, r#"{"error":"missing ath claim"}"#)
+                        .into_response();
+                }
+                (
+                    StatusCode::OK,
+                    r#"{"did":"did:plc:test","handle":"alice.test"}"#,
+                )
+                    .into_response()
+            }),
+        )
+    }
+
+    fn test_session(pds_url: String, access_token: &str) -> OAuthSession {
+        OAuthSession {
+            did: "did:plc:test".to_string(),
+            handle: "alice.test".to_string(),
+            access_token: access_token.to_string(),
+            pds_url,
+            dpop_key: DpopKey::generate(),
+            dpop_nonce: None,
+        }
+    }
+
+    // ── DpopKey ─────────────────────────────────────────────────────
+
+    #[test]
+    fn dpop_key_base64url_roundtrip() {
+        let key = DpopKey::generate();
+        let encoded = key.to_base64url();
+        let decoded = DpopKey::from_base64url(&encoded).expect("roundtrip");
+        assert_eq!(key.jwk(), decoded.jwk(), "public JWK must survive roundtrip");
+    }
+
+    #[test]
+    fn dpop_key_rejects_garbage() {
+        assert!(DpopKey::from_base64url("!!!not base64url!!!").is_err());
+        // valid base64url but not a valid P-256 scalar (wrong length)
+        let short = URL_SAFE_NO_PAD.encode([0u8; 5]);
+        assert!(DpopKey::from_base64url(&short).is_err());
+        // all-zero 32-byte scalar is not a valid private key
+        let zeros = URL_SAFE_NO_PAD.encode([0u8; 32]);
+        assert!(DpopKey::from_base64url(&zeros).is_err());
+    }
+
+    #[test]
+    fn dpop_proof_structure_and_signature_verify() {
+        use p256::ecdsa::signature::Verifier;
+
+        let key = DpopKey::generate();
+        let proof = key
+            .proof(
+                "GET",
+                "https://pds.example/xrpc/com.atproto.server.getSession",
+                Some("nonce-123"),
+                Some("my-access-token"),
+            )
+            .unwrap();
+
+        let parts: Vec<&str> = proof.split('.').collect();
+        assert_eq!(parts.len(), 3, "DPoP proof must be a 3-part JWT");
+
+        // Header
+        let header: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
+        assert_eq!(header["typ"], "dpop+jwt");
+        assert_eq!(header["alg"], "ES256");
+        assert_eq!(header["jwk"]["kty"], "EC");
+        assert_eq!(header["jwk"]["crv"], "P-256");
+
+        // Payload
+        let payload: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
+        assert_eq!(payload["htm"], "GET");
+        assert_eq!(
+            payload["htu"],
+            "https://pds.example/xrpc/com.atproto.server.getSession"
+        );
+        assert_eq!(payload["nonce"], "nonce-123");
+        assert!(payload["jti"].as_str().is_some_and(|j| !j.is_empty()));
+        let iat = payload["iat"].as_i64().unwrap();
+        let now = chrono::Utc::now().timestamp();
+        assert!((now - iat).abs() < 30, "iat must be roughly now");
+        // ath = base64url(SHA-256(access_token)) per RFC 9449 §4.2
+        let expected_ath = URL_SAFE_NO_PAD.encode(Sha256::digest(b"my-access-token"));
+        assert_eq!(payload["ath"], expected_ath);
+
+        // Signature verifies against the embedded JWK
+        let x = URL_SAFE_NO_PAD
+            .decode(header["jwk"]["x"].as_str().unwrap())
+            .unwrap();
+        let y = URL_SAFE_NO_PAD
+            .decode(header["jwk"]["y"].as_str().unwrap())
+            .unwrap();
+        let mut sec1 = vec![0x04];
+        sec1.extend_from_slice(&x);
+        sec1.extend_from_slice(&y);
+        let vk = p256::ecdsa::VerifyingKey::from_sec1_bytes(&sec1).unwrap();
+        let sig_bytes = URL_SAFE_NO_PAD.decode(parts[2]).unwrap();
+        let sig = p256::ecdsa::Signature::from_slice(&sig_bytes).unwrap();
+        let signing_input = format!("{}.{}", parts[0], parts[1]);
+        vk.verify(signing_input.as_bytes(), &sig)
+            .expect("ES256 signature must verify against embedded JWK");
+    }
+
+    #[test]
+    fn dpop_proof_omits_optional_claims() {
+        let key = DpopKey::generate();
+        let proof = key.proof("POST", "https://as.example/par", None, None).unwrap();
+        let payload = proof_payload(&proof);
+        assert!(payload.get("nonce").is_none(), "no nonce claim when None");
+        assert!(payload.get("ath").is_none(), "no ath claim when no token");
+    }
+
+    // ── DID mismatch check (login step 9) ───────────────────────────
+
+    #[test]
+    fn token_did_match_accepted() {
+        assert!(check_token_did("did:plc:abc", Some("did:plc:abc")).is_ok());
+    }
+
+    #[test]
+    fn token_did_absent_accepted() {
+        // Token responses without `sub` are tolerated (sub is optional).
+        assert!(check_token_did("did:plc:abc", None).is_ok());
+    }
+
+    #[test]
+    fn token_did_mismatch_rejected() {
+        let err = check_token_did("did:plc:abc", Some("did:plc:evil")).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("DID mismatch"), "got: {msg}");
+        assert!(msg.contains("did:plc:evil"), "got: {msg}");
+    }
+
+    // ── Session persistence ─────────────────────────────────────────
+
+    fn temp_path(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("freeq-oauth-test-{}-{name}", std::process::id()))
+    }
+
+    #[test]
+    fn session_save_load_roundtrip() {
+        let path = temp_path("plain.session.json");
+        let session = test_session("https://pds.example".into(), "tok-1");
+        session.save(&path).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "session file must be 0600");
+        }
+
+        let loaded = OAuthSession::load(&path).unwrap();
+        assert_eq!(loaded.did, session.did);
+        assert_eq!(loaded.handle, session.handle);
+        assert_eq!(loaded.access_token, session.access_token);
+        assert_eq!(loaded.pds_url, session.pds_url);
+        assert_eq!(loaded.dpop_key.jwk(), session.dpop_key.jwk());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn session_save_encrypted_load_roundtrip() {
+        let path = temp_path("enc.session.bin");
+        let key = derive_session_key(b"machine-secret", "did:plc:test");
+        let mut session = test_session("https://pds.example".into(), "tok-2");
+        session.dpop_nonce = Some("cached-nonce".into());
+        session.save_encrypted(&path, &key).unwrap();
+
+        // Ciphertext on disk must not leak the token
+        let raw = std::fs::read(&path).unwrap();
+        assert!(
+            !raw.windows(b"tok-2".len()).any(|w| w == b"tok-2"),
+            "access token must not appear in plaintext on disk"
+        );
+
+        let loaded = OAuthSession::load_encrypted(&path, &key).unwrap();
+        assert_eq!(loaded.access_token, "tok-2");
+        assert_eq!(loaded.dpop_nonce.as_deref(), Some("cached-nonce"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn session_load_encrypted_wrong_key_fails() {
+        let path = temp_path("wrongkey.session.bin");
+        let key = derive_session_key(b"machine-secret", "did:plc:test");
+        let wrong = derive_session_key(b"other-secret", "did:plc:test");
+        test_session("https://pds.example".into(), "tok-3")
+            .save_encrypted(&path, &key)
+            .unwrap();
+        let err = OAuthSession::load_encrypted(&path, &wrong).unwrap_err();
+        assert!(err.to_string().contains("decryption failed"), "got: {err}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn session_load_encrypted_truncated_fails() {
+        let path = temp_path("truncated.session.bin");
+        std::fs::write(&path, [0u8; 7]).unwrap();
+        let key = derive_session_key(b"machine-secret", "did:plc:test");
+        let err = OAuthSession::load_encrypted(&path, &key).unwrap_err();
+        assert!(err.to_string().contains("too short"), "got: {err}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn derive_session_key_deterministic_and_distinct() {
+        let a = derive_session_key(b"secret", "did:plc:alice");
+        let b = derive_session_key(b"secret", "did:plc:alice");
+        assert_eq!(a, b, "same inputs derive the same key");
+        assert_ne!(a, derive_session_key(b"secret", "did:plc:bob"));
+        assert_ne!(a, derive_session_key(b"other", "did:plc:alice"));
+    }
+
+    // ── OAuthSession::validate against a mock PDS ───────────────────
+
+    #[tokio::test]
+    async fn validate_succeeds_and_learns_dpop_nonce() {
+        // The probe (no nonce) gets 401 + DPoP-Nonce; validate then calls
+        // getSession with the fresh nonce and succeeds.
+        let base = spawn_app(mock_pds_router("good-token")).await;
+        let session = test_session(base, "good-token");
+        let validated = session.validate().await.expect("validate should succeed");
+        assert_eq!(validated.dpop_nonce.as_deref(), Some("fresh-nonce"));
+    }
+
+    #[tokio::test]
+    async fn validate_rejects_expired_token() {
+        // PDS that 401s every request without offering a nonce — the way a
+        // real PDS answers a token that is simply expired.
+        let router = Router::new().route(
+            "/xrpc/com.atproto.server.getSession",
+            get(|| async {
+                (StatusCode::UNAUTHORIZED, r#"{"error":"ExpiredToken"}"#).into_response()
+            }),
+        );
+        let base = spawn_app(router).await;
+        let err = test_session(base, "stale-token").validate().await.unwrap_err();
+        assert!(
+            err.to_string().contains("no longer valid"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_rejects_wrong_token() {
+        let base = spawn_app(mock_pds_router("the-real-token")).await;
+        let err = test_session(base, "attacker-token").validate().await.unwrap_err();
+        assert!(err.to_string().contains("no longer valid"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn validate_unreachable_pds_is_error_not_panic() {
+        // Bind a port and immediately free it so nothing is listening.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let result = test_session(base, "tok").validate().await;
+        assert!(result.is_err());
+    }
+
+    // ── discover_auth_server ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn discover_auth_server_happy_path() {
+        let base = spawn_app_with_base(|base| {
+            let pr_base = base.clone();
+            let as_base = base.clone();
+            Router::new()
+                .route(
+                    "/.well-known/oauth-protected-resource",
+                    get(move || {
+                        let base = pr_base.clone();
+                        async move {
+                            axum::Json(serde_json::json!({
+                                "authorization_servers": [base]
+                            }))
+                        }
+                    }),
+                )
+                .route(
+                    "/.well-known/oauth-authorization-server",
+                    get(move || {
+                        let base = as_base.clone();
+                        async move {
+                            axum::Json(serde_json::json!({
+                                "issuer": base,
+                                "authorization_endpoint": format!("{base}/authorize"),
+                                "token_endpoint": format!("{base}/token"),
+                                "pushed_authorization_request_endpoint": format!("{base}/par"),
+                            }))
+                        }
+                    }),
+                )
+        })
+        .await;
+
+        let meta = discover_auth_server(&base).await.unwrap();
+        assert_eq!(meta.issuer, base);
+        assert_eq!(meta.authorization_endpoint, format!("{base}/authorize"));
+        assert_eq!(meta.token_endpoint, format!("{base}/token"));
+        assert_eq!(
+            meta.pushed_authorization_request_endpoint.as_deref(),
+            Some(format!("{base}/par").as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_auth_server_empty_list_is_error() {
+        let router = Router::new().route(
+            "/.well-known/oauth-protected-resource",
+            get(|| async { axum::Json(serde_json::json!({"authorization_servers": []})) }),
+        );
+        let base = spawn_app(router).await;
+        let err = discover_auth_server(&base).await.unwrap_err();
+        assert!(
+            err.to_string().contains("No authorization servers"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_auth_server_malformed_json_is_error() {
+        let router = Router::new().route(
+            "/.well-known/oauth-protected-resource",
+            get(|| async { "this is not json" }),
+        );
+        let base = spawn_app(router).await;
+        let err = discover_auth_server(&base).await.unwrap_err();
+        assert!(
+            err.to_string().contains("protected resource metadata"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn discover_auth_server_http_error_is_error() {
+        let router = Router::new().route(
+            "/.well-known/oauth-protected-resource",
+            get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "boom").into_response() }),
+        );
+        let base = spawn_app(router).await;
+        assert!(discover_auth_server(&base).await.is_err());
+    }
+
+    // ── exchange_code ───────────────────────────────────────────────
+
+    /// Build a token endpoint whose behavior is driven by the DPoP proof:
+    /// without `nonce == required_nonce` it replies 400 + DPoP-Nonce header;
+    /// with it, 200 + token JSON. Counts requests.
+    fn mock_token_endpoint(required_nonce: &'static str, hits: Arc<AtomicUsize>) -> Router {
+        Router::new().route(
+            "/token",
+            post(
+                move |headers: HeaderMap, Form(params): Form<HashMap<String, String>>| {
+                    let hits = hits.clone();
+                    async move {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        if params.get("grant_type").map(String::as_str)
+                            != Some("authorization_code")
+                        {
+                            return (StatusCode::IM_A_TEAPOT, "wrong grant_type").into_response();
+                        }
+                        let payload = proof_payload(&dpop_header(&headers));
+                        if payload.get("nonce").and_then(|n| n.as_str()) != Some(required_nonce) {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                [("dpop-nonce", required_nonce)],
+                                r#"{"error":"use_dpop_nonce"}"#,
+                            )
+                                .into_response();
+                        }
+                        (
+                            StatusCode::OK,
+                            r#"{"access_token":"minted-token","sub":"did:plc:test"}"#,
+                        )
+                            .into_response()
+                    }
+                },
+            ),
+        )
+    }
+
+    #[tokio::test]
+    async fn exchange_code_success_first_try() {
+        let router = Router::new().route(
+            "/token",
+            post(|Form(params): Form<HashMap<String, String>>| async move {
+                if params.get("code").map(String::as_str) != Some("auth-code-1") {
+                    return (StatusCode::BAD_REQUEST, "wrong code").into_response();
+                }
+                (
+                    StatusCode::OK,
+                    r#"{"access_token":"minted-token","sub":"did:plc:test"}"#,
+                )
+                    .into_response()
+            }),
+        );
+        let base = spawn_app(router).await;
+        let key = DpopKey::generate();
+        let (token, sub) = exchange_code(
+            &format!("{base}/token"),
+            "auth-code-1",
+            "verifier",
+            "http://127.0.0.1:1/callback",
+            "client-id",
+            &key,
+        )
+        .await
+        .unwrap();
+        assert_eq!(token, "minted-token");
+        assert_eq!(sub.as_deref(), Some("did:plc:test"));
+    }
+
+    #[tokio::test]
+    async fn exchange_code_use_dpop_nonce_triggers_retry_with_new_nonce() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let base = spawn_app(mock_token_endpoint("server-nonce-1", hits.clone())).await;
+        let key = DpopKey::generate();
+        let (token, sub) = exchange_code(
+            &format!("{base}/token"),
+            "code",
+            "verifier",
+            "http://127.0.0.1:1/callback",
+            "client-id",
+            &key,
+        )
+        .await
+        .expect("retry with fresh nonce should succeed");
+        assert_eq!(token, "minted-token");
+        assert_eq!(sub.as_deref(), Some("did:plc:test"));
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            2,
+            "exactly one retry: first attempt without nonce, second with it"
+        );
+    }
+
+    #[tokio::test]
+    async fn exchange_code_retry_is_bounded_no_infinite_loop() {
+        // Endpoint that ALWAYS rejects with use_dpop_nonce + a header.
+        // A buggy client would loop forever; ours must stop after one retry.
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_c = hits.clone();
+        let router = Router::new().route(
+            "/token",
+            post(move |_headers: HeaderMap| {
+                let hits = hits_c.clone();
+                async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    (
+                        StatusCode::BAD_REQUEST,
+                        [("dpop-nonce", "always-stale")],
+                        r#"{"error":"use_dpop_nonce"}"#,
+                    )
+                        .into_response()
+                }
+            }),
+        );
+        let base = spawn_app(router).await;
+        let key = DpopKey::generate();
+        let err = exchange_code(
+            &format!("{base}/token"),
+            "code",
+            "verifier",
+            "http://127.0.0.1:1/callback",
+            "client-id",
+            &key,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("Token exchange failed"),
+            "got: {err}"
+        );
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            2,
+            "must stop after the single nonce retry"
+        );
+    }
+
+    #[tokio::test]
+    async fn exchange_code_malformed_json_is_error_not_panic() {
+        let router = Router::new().route(
+            "/token",
+            post(|| async { (StatusCode::OK, "garbage{{{not-json").into_response() }),
+        );
+        let base = spawn_app(router).await;
+        let key = DpopKey::generate();
+        let err = exchange_code(
+            &format!("{base}/token"),
+            "code",
+            "verifier",
+            "http://127.0.0.1:1/callback",
+            "client-id",
+            &key,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to parse token response"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn exchange_code_http_error_without_nonce_is_error() {
+        let router = Router::new().route(
+            "/token",
+            post(|| async {
+                (StatusCode::FORBIDDEN, r#"{"error":"access_denied"}"#).into_response()
+            }),
+        );
+        let base = spawn_app(router).await;
+        let key = DpopKey::generate();
+        let err = exchange_code(
+            &format!("{base}/token"),
+            "code",
+            "verifier",
+            "http://127.0.0.1:1/callback",
+            "client-id",
+            &key,
+        )
+        .await
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Token exchange failed"), "got: {msg}");
+        assert!(msg.contains("403"), "status should be surfaced, got: {msg}");
+    }
+
+    // ── push_authorization_request ──────────────────────────────────
+
+    fn mock_par_endpoint(required_nonce: &'static str, hits: Arc<AtomicUsize>) -> Router {
+        Router::new().route(
+            "/par",
+            post(
+                move |headers: HeaderMap, Form(params): Form<HashMap<String, String>>| {
+                    let hits = hits.clone();
+                    async move {
+                        hits.fetch_add(1, Ordering::SeqCst);
+                        if params.get("response_type").map(String::as_str) != Some("code")
+                            || params.get("code_challenge_method").map(String::as_str)
+                                != Some("S256")
+                        {
+                            return (StatusCode::IM_A_TEAPOT, "bad params").into_response();
+                        }
+                        let payload = proof_payload(&dpop_header(&headers));
+                        if payload.get("nonce").and_then(|n| n.as_str()) != Some(required_nonce) {
+                            return (
+                                StatusCode::BAD_REQUEST,
+                                [("dpop-nonce", required_nonce)],
+                                r#"{"error":"use_dpop_nonce"}"#,
+                            )
+                                .into_response();
+                        }
+                        (
+                            StatusCode::CREATED,
+                            r#"{"request_uri":"urn:ietf:params:oauth:request_uri:abc123"}"#,
+                        )
+                            .into_response()
+                    }
+                },
+            ),
+        )
+    }
+
+    #[tokio::test]
+    async fn par_success_returns_authorization_url() {
+        let router = Router::new().route(
+            "/par",
+            post(|| async {
+                (
+                    StatusCode::CREATED,
+                    r#"{"request_uri":"urn:ietf:params:oauth:request_uri:abc123"}"#,
+                )
+                    .into_response()
+            }),
+        );
+        let base = spawn_app(router).await;
+        let key = DpopKey::generate();
+        let url = push_authorization_request(
+            &format!("{base}/par"),
+            "https://as.example/authorize",
+            "client-id",
+            "http://127.0.0.1:1/callback",
+            "challenge",
+            "state-1",
+            "alice.test",
+            &key,
+        )
+        .await
+        .unwrap();
+        assert!(url.starts_with("https://as.example/authorize?"), "got: {url}");
+        assert!(url.contains(&urlencod("client-id")), "got: {url}");
+        assert!(
+            url.contains(&urlencod("urn:ietf:params:oauth:request_uri:abc123")),
+            "got: {url}"
+        );
+    }
+
+    #[tokio::test]
+    async fn par_use_dpop_nonce_triggers_retry() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let base = spawn_app(mock_par_endpoint("par-nonce-1", hits.clone())).await;
+        let key = DpopKey::generate();
+        let url = push_authorization_request(
+            &format!("{base}/par"),
+            "https://as.example/authorize",
+            "client-id",
+            "http://127.0.0.1:1/callback",
+            "challenge",
+            "state-1",
+            "alice.test",
+            &key,
+        )
+        .await
+        .expect("nonce retry should succeed");
+        assert!(url.contains("request_uri"), "got: {url}");
+        assert_eq!(hits.load(Ordering::SeqCst), 2, "one retry with the nonce");
+    }
+
+    #[tokio::test]
+    async fn par_missing_request_uri_is_error() {
+        let router = Router::new().route(
+            "/par",
+            post(|| async { (StatusCode::CREATED, r#"{"expires_in":60}"#).into_response() }),
+        );
+        let base = spawn_app(router).await;
+        let key = DpopKey::generate();
+        let err = push_authorization_request(
+            &format!("{base}/par"),
+            "https://as.example/authorize",
+            "client-id",
+            "http://127.0.0.1:1/callback",
+            "challenge",
+            "state-1",
+            "alice.test",
+            &key,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("No request_uri"), "got: {err}");
+    }
+
+    // ── probe_dpop_nonce ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn probe_returns_nonce_from_rejection_header() {
+        let router = Router::new().route(
+            "/xrpc/com.atproto.server.getSession",
+            get(|| async {
+                (
+                    StatusCode::UNAUTHORIZED,
+                    [("dpop-nonce", "probe-nonce-1")],
+                    r#"{"error":"use_dpop_nonce"}"#,
+                )
+                    .into_response()
+            }),
+        );
+        let base = spawn_app(router).await;
+        let key = DpopKey::generate();
+        let nonce = probe_dpop_nonce(&base, "tok", &key).await;
+        assert_eq!(nonce.as_deref(), Some("probe-nonce-1"));
+    }
+
+    #[tokio::test]
+    async fn probe_returns_none_without_nonce_header() {
+        let router = Router::new().route(
+            "/xrpc/com.atproto.server.getSession",
+            get(|| async { (StatusCode::OK, r#"{"did":"did:plc:test"}"#).into_response() }),
+        );
+        let base = spawn_app(router).await;
+        let key = DpopKey::generate();
+        assert_eq!(probe_dpop_nonce(&base, "tok", &key).await, None);
+    }
+
+    #[tokio::test]
+    async fn probe_returns_none_when_pds_unreachable() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let key = DpopKey::generate();
+        assert_eq!(probe_dpop_nonce(&base, "tok", &key).await, None);
+    }
+
+    // ── wait_for_callback (loopback redirect handler) ───────────────
+
+    async fn send_raw_request(addr: std::net::SocketAddr, path: &str) -> String {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut buf = vec![0u8; 8192];
+        match stream.read(&mut buf).await {
+            Ok(n) => String::from_utf8_lossy(&buf[..n]).to_string(),
+            Err(_) => String::new(), // server may bail before responding
+        }
+    }
+
+    #[tokio::test]
+    async fn callback_returns_code_on_matching_state() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { wait_for_callback(listener, "state-ok").await });
+        let resp = send_raw_request(addr, "/callback?code=the-code&state=state-ok").await;
+        assert!(resp.starts_with("HTTP/1.1 200"), "got: {resp}");
+        assert!(resp.contains("Authorization Successful"), "got: {resp}");
+        let code = task.await.unwrap().unwrap();
+        assert_eq!(code, "the-code");
+    }
+
+    #[tokio::test]
+    async fn callback_rejects_state_mismatch() {
+        // CSRF guard: a forged callback with the wrong state must fail.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { wait_for_callback(listener, "expected").await });
+        let _ = send_raw_request(addr, "/callback?code=evil&state=forged").await;
+        let err = task.await.unwrap().unwrap_err();
+        assert!(err.to_string().contains("State mismatch"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn callback_propagates_authorization_error() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { wait_for_callback(listener, "state-x").await });
+        let resp =
+            send_raw_request(addr, "/callback?error=access_denied&error_description=nope").await;
+        assert!(resp.contains("Authorization Failed"), "got: {resp}");
+        let err = task.await.unwrap().unwrap_err();
+        assert!(err.to_string().contains("access_denied"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn callback_ignores_unrelated_requests_then_accepts() {
+        // Favicon probes etc. must get a 404 and not consume the flow.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { wait_for_callback(listener, "state-ok").await });
+        let resp = send_raw_request(addr, "/favicon.ico").await;
+        assert!(resp.starts_with("HTTP/1.1 404"), "got: {resp}");
+        let resp = send_raw_request(addr, "/callback?code=real-code&state=state-ok").await;
+        assert!(resp.starts_with("HTTP/1.1 200"), "got: {resp}");
+        assert_eq!(task.await.unwrap().unwrap(), "real-code");
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────
+
+    #[test]
+    fn urlencod_passes_unreserved_and_escapes_the_rest() {
+        assert_eq!(urlencod("AZaz09-_.~"), "AZaz09-_.~");
+        assert_eq!(urlencod("a b"), "a%20b");
+        assert_eq!(urlencod("http://x?y=z&w"), "http%3A%2F%2Fx%3Fy%3Dz%26w");
+        // multi-byte UTF-8 is escaped per byte
+        assert_eq!(urlencod("é"), "%C3%A9");
+    }
+
+    #[test]
+    fn pkce_challenge_is_sha256_of_verifier() {
+        let (verifier, challenge) = generate_pkce();
+        let expected = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
+        assert_eq!(challenge, expected);
+        assert!(!challenge.contains('='), "must be unpadded base64url");
+        // 32 random bytes encode to 43 chars
+        assert_eq!(verifier.len(), 43);
+    }
+
+    #[test]
+    fn random_strings_are_unique_and_url_safe() {
+        let a = generate_random_string(16);
+        let b = generate_random_string(16);
+        assert_ne!(a, b);
+        assert!(a.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+    }
 }

@@ -9,6 +9,12 @@ struct ChatView: View {
             TopBarView()
             Divider()
 
+            // Active voice/video call panel
+            if appState.isInCall {
+                CallView(channel: appState.currentCallChannel ?? "")
+                Divider()
+            }
+
             // Pinned messages bar
             if let pins = appState.activeChannelState?.pinnedMessages, !pins.isEmpty {
                 PinnedMessagesBar(pins: pins)
@@ -130,6 +136,23 @@ struct TopBarView: View {
             .buttonStyle(.plain)
             .help("Search (⌘F)")
 
+            // Voice/video call (channels only)
+            if isChannel {
+                Button {
+                    if appState.isInCall,
+                       appState.currentCallChannel?.lowercased() == channel?.name.lowercased() {
+                        appState.leaveCall()
+                    } else if let name = channel?.name {
+                        appState.startOrJoinVoice(channel: name)
+                    }
+                } label: {
+                    Image(systemName: callIconName)
+                        .foregroundStyle(callIconColor)
+                }
+                .buttonStyle(.plain)
+                .help(inThisCall ? "Leave call" : "Start or join voice call")
+            }
+
             // Member count + settings (channels only)
             if isChannel {
                 Button {
@@ -162,6 +185,23 @@ struct TopBarView: View {
         .padding(.horizontal, 16)
         .frame(height: 44)
         .background(.bar)
+    }
+
+    private var inThisCall: Bool {
+        appState.isInCall && appState.currentCallChannel?.lowercased() == channel?.name.lowercased()
+    }
+
+    private var callIconName: String {
+        inThisCall ? "phone.down.fill" : "phone.fill"
+    }
+
+    private var callIconColor: Color {
+        if inThisCall { return .red }
+        // Accent if a call is active on this channel that we haven't joined.
+        if let name = channel?.name, appState.activeAvSessions[name.lowercased()] != nil {
+            return .green
+        }
+        return .secondary
     }
 
     private var isOnline: Bool {
