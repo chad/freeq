@@ -1568,6 +1568,11 @@ where
     let mut last_activity = tokio::time::Instant::now();
     let ping_interval = tokio::time::Duration::from_secs(60);
     let ping_timeout = tokio::time::Duration::from_secs(120);
+    // Paced separately from `last_activity`: re-arming the timer off
+    // `last_activity` alone busy-loops once the first keepalive fires
+    // (the deadline stays in the past until inbound data arrives),
+    // spamming PINGs for a full RTT — or for 60s into a dead socket.
+    let mut next_ping = last_activity + ping_interval;
 
     loop {
         tokio::select! {
@@ -1579,6 +1584,7 @@ where
                 }
 
                 last_activity = tokio::time::Instant::now();
+                next_ping = last_activity + ping_interval;
                 let raw = line_buf.trim_end().to_string();
                 let _ = event_tx.send(Event::RawLine(raw.clone())).await;
 
@@ -1763,7 +1769,12 @@ where
                                 .and_then(|p| p.split('!').next())
                                 .unwrap_or("")
                                 .to_string();
-                            let _ = event_tx.send(Event::Joined { channel, nick }).await;
+                            // extended-join: `JOIN <chan> <account> :<realname>`.
+                            // account is "*" when the joiner isn't authenticated.
+                            let account = msg.params.get(1)
+                                .filter(|a| !a.is_empty() && a.as_str() != "*")
+                                .cloned();
+                            let _ = event_tx.send(Event::Joined { channel, nick, account }).await;
                         }
                         "PART" => {
                             let channel = msg.params.first().cloned().unwrap_or_default();
@@ -2072,12 +2083,13 @@ where
                 }
             }
             // Periodic client-to-server PING and timeout detection
-            _ = tokio::time::sleep_until(last_activity + ping_interval) => {
+            _ = tokio::time::sleep_until(next_ping) => {
                 if last_activity.elapsed() > ping_timeout {
                     let _ = event_tx.send(Event::Disconnected { reason: "Ping timeout".to_string() }).await;
                     break;
                 }
                 writer.write_all(b"PING :keepalive\r\n").await?;
+                next_ping = tokio::time::Instant::now() + ping_interval;
             }
         }
     }

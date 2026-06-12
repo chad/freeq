@@ -3,6 +3,9 @@ import SwiftUI
 @main
 struct FreeqApp: App {
     @State private var appState = AppState()
+    @State private var showQuickSwitcher = false
+    @State private var showBookmarks = false
+    @State private var showChannelList = false
     @State private var showOnboarding = !UserDefaults.standard.bool(forKey: "freeq.onboardingComplete")
 
     var body: some Scene {
@@ -10,18 +13,15 @@ struct FreeqApp: App {
             MainView()
                 .environment(appState)
                 .frame(minWidth: 700, minHeight: 400)
-                .sheet(isPresented: Binding(
-                    get: { appState.showQuickSwitcher }, set: { appState.showQuickSwitcher = $0 })) {
+                .sheet(isPresented: $showQuickSwitcher) {
                     QuickSwitcher()
                         .environment(appState)
                 }
-                .sheet(isPresented: Binding(
-                    get: { appState.showBookmarks }, set: { appState.showBookmarks = $0 })) {
+                .sheet(isPresented: $showBookmarks) {
                     BookmarksPanel()
                         .environment(appState)
                 }
-                .sheet(isPresented: Binding(
-                    get: { appState.showChannelList }, set: { appState.showChannelList = $0 })) {
+                .sheet(isPresented: $showChannelList) {
                     ChannelListBrowser()
                         .environment(appState)
                 }
@@ -29,7 +29,9 @@ struct FreeqApp: App {
                     OnboardingView()
                 }
                 .onAppear {
-                    appState.startupConnect()
+                    if appState.hasSavedSession && appState.connectionState == .disconnected {
+                        appState.reconnectIfSaved()
+                    }
                 }
                 .onChange(of: appState.activeChannel) { _, newValue in
                     updateWindowTitle(newValue)
@@ -48,7 +50,7 @@ struct FreeqApp: App {
 
             CommandGroup(replacing: .newItem) {
                 Button("Quick Switcher") {
-                    appState.showQuickSwitcher = true
+                    showQuickSwitcher = true
                 }
                 .keyboardShortcut("k", modifiers: .command)
 
@@ -58,12 +60,12 @@ struct FreeqApp: App {
                 .keyboardShortcut("f", modifiers: .command)
 
                 Button("Bookmarks") {
-                    appState.showBookmarks = true
+                    showBookmarks = true
                 }
                 .keyboardShortcut("b", modifiers: [.command, .shift])
 
                 Button("Browse Channels") {
-                    appState.showChannelList = true
+                    showChannelList = true
                 }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
 

@@ -86,28 +86,26 @@ pub struct PostArgs {
     pub text: String,
 }
 
+// A flat struct, NOT a tagged enum: schemars emits a top-level `oneOf` for an
+// enum, and the Anthropic API rejects any tool whose input_schema has oneOf/
+// allOf/anyOf at the top level ("400 ... does not support oneOf"). A plain
+// object with a `kind` discriminator keeps the schema API-safe.
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-// schemars emits a bare `oneOf` for an internally-tagged enum; Claude Code's
-// MCP client rejects any tool whose inputSchema lacks `"type": "object"`,
-// which drops the *entire* tools/list. Force the object type alongside the
-// variant `oneOf`.
-#[schemars(extend("type" = "object"))]
-pub enum ShowArgs {
-    /// A scene card — title at the top, up to 6 bullets below.
-    Card {
-        title: String,
-        #[serde(default)]
-        bullets: Vec<String>,
-    },
-    /// A quote — pulled-out italic text with optional attribution.
-    Quote {
-        text: String,
-        #[serde(default)]
-        source: Option<String>,
-    },
-    /// Clear the overlay and return to plain face.
-    Clear,
+pub struct ShowArgs {
+    /// What to show: "card", "quote", or "clear".
+    pub kind: String,
+    /// Card title (when kind = "card").
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Card bullets (when kind = "card"), up to 6.
+    #[serde(default)]
+    pub bullets: Vec<String>,
+    /// Quote text (when kind = "quote").
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Quote attribution (when kind = "quote", optional).
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -137,6 +135,45 @@ pub struct StatusArgs {
     /// face). Defaults to true when label is "thinking", else false.
     #[serde(default)]
     pub thinking: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct StatusGridArgs {
+    /// Heading for the grid (e.g. "fleet", "services").
+    pub title: String,
+    /// Rows of [label, state]. State colour-codes the cell: "ok"/"up" →
+    /// green, "warn"/"degraded" → amber, "down"/"failed"/"error" → red,
+    /// anything else → neutral.
+    pub items: Vec<(String, String)>,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct ChartArgs {
+    /// Chart heading (e.g. a ticker or metric name).
+    pub title: String,
+    /// The numeric series, oldest → newest. The latest value is called
+    /// out; the line tints green if it ends ≥ where it started, else red.
+    pub points: Vec<f64>,
+    /// Optional caption under the chart (e.g. "+10% 24h").
+    #[serde(default)]
+    pub caption: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct DiffArgs {
+    /// File path shown in the header.
+    pub path: String,
+    /// Unified-diff lines, each prefixed '+' (added), '-' (removed), or
+    /// ' ' (context).
+    pub lines: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct AgendaArgs {
+    /// Heading (e.g. "Today", "This afternoon").
+    pub title: String,
+    /// Rows of [time, event], e.g. ["09:00", "Standup"].
+    pub items: Vec<(String, String)>,
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -341,10 +378,16 @@ surface key points without speaking — humans glance, don't read in full.")]
         let Some(orc) = orc else {
             return Ok(error_text("not connected — call freeq_connect first"));
         };
-        let overlay = match args {
-            ShowArgs::Card { title, bullets } => TileOverlay::Card { title, bullets },
-            ShowArgs::Quote { text, source } => TileOverlay::Quote { text, source },
-            ShowArgs::Clear => TileOverlay::None,
+        let overlay = match args.kind.as_str() {
+            "card" => TileOverlay::Card {
+                title: args.title.unwrap_or_default(),
+                bullets: args.bullets,
+            },
+            "quote" => TileOverlay::Quote {
+                text: args.text.unwrap_or_default(),
+                source: args.source,
+            },
+            _ => TileOverlay::None,
         };
         orc.control.set_overlay(overlay);
         Ok(success_json(serde_json::json!({ "shown": true })))
@@ -389,6 +432,86 @@ the exact lines you're talking about. Clear by calling freeq_show with \
             "shown": true,
             "lines": n,
         })))
+    }
+
+    #[tool(description = "\
+Project a service/health grid onto your tile — labelled cells colour-coded \
+by state (ok/up → green, warn → amber, down/failed → red). For status \
+dashboards (deploys, VMs, CI, services). Clear with freeq_show kind:clear.")]
+    async fn freeq_show_status_grid(
+        &self,
+        Parameters(args): Parameters<StatusGridArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let orc = {
+            let g = self.orc.lock().await;
+            g.as_ref().cloned()
+        };
+        let Some(orc) = orc else {
+            return Ok(error_text("not connected — call freeq_connect first"));
+        };
+        orc.control.set_overlay(TileOverlay::StatusGrid { title: args.title, items: args.items });
+        Ok(success_json(serde_json::json!({ "shown": true })))
+    }
+
+    #[tool(description = "\
+Project a line chart of a numeric series onto your tile — the latest value \
+is called out and the line tints green/red by direction. For markets, \
+metrics, trends. Clear with freeq_show kind:clear.")]
+    async fn freeq_show_chart(
+        &self,
+        Parameters(args): Parameters<ChartArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let orc = {
+            let g = self.orc.lock().await;
+            g.as_ref().cloned()
+        };
+        let Some(orc) = orc else {
+            return Ok(error_text("not connected — call freeq_connect first"));
+        };
+        orc.control.set_overlay(TileOverlay::Chart {
+            title: args.title,
+            points: args.points,
+            caption: args.caption,
+        });
+        Ok(success_json(serde_json::json!({ "shown": true })))
+    }
+
+    #[tool(description = "\
+Project a unified diff onto your tile — added lines green, removed red, \
+context grey. Pass lines each prefixed '+', '-', or ' '. For showing code \
+changes you've made before committing. Clear with freeq_show kind:clear.")]
+    async fn freeq_show_diff(
+        &self,
+        Parameters(args): Parameters<DiffArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let orc = {
+            let g = self.orc.lock().await;
+            g.as_ref().cloned()
+        };
+        let Some(orc) = orc else {
+            return Ok(error_text("not connected — call freeq_connect first"));
+        };
+        orc.control.set_overlay(TileOverlay::Diff { path: args.path, lines: args.lines });
+        Ok(success_json(serde_json::json!({ "shown": true })))
+    }
+
+    #[tool(description = "\
+Project a day agenda onto your tile — time + event rows. Pass items as \
+[time, event] pairs. For schedules, meeting line-ups, the day ahead. \
+Clear with freeq_show kind:clear.")]
+    async fn freeq_show_agenda(
+        &self,
+        Parameters(args): Parameters<AgendaArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let orc = {
+            let g = self.orc.lock().await;
+            g.as_ref().cloned()
+        };
+        let Some(orc) = orc else {
+            return Ok(error_text("not connected — call freeq_connect first"));
+        };
+        orc.control.set_overlay(TileOverlay::Agenda { title: args.title, items: args.items });
+        Ok(success_json(serde_json::json!({ "shown": true })))
     }
 
     #[tool(description = "\
@@ -537,12 +660,17 @@ impl ServerHandler for FreeqClaudeHandler {
                 "Bridge a Claude Code agent into a freeq AV channel as a voice + \
                  chat + visual participant. Tools: freeq_connect, freeq_listen, \
                  freeq_say (priority=addressed|volunteer), freeq_post, freeq_show, \
-                 freeq_show_file, freeq_set_status, freeq_disconnect. After connect, \
-                 loop on freeq_listen. Route output by bandwidth: voice for the one \
-                 sentence a human would want spoken; freeq_post for artifacts \
-                 (links, code, decisions); freeq_show / freeq_show_file for \
-                 persistent visual context on your tile. Direct-address replies are \
-                 free; volunteer utterances are cooldowned. Don't narrate tool calls.",
+                 freeq_show_file, freeq_show_status_grid, freeq_show_chart, \
+                 freeq_show_diff, freeq_show_agenda, freeq_set_status, \
+                 freeq_disconnect. After connect, loop on freeq_listen. Route output \
+                 by bandwidth: voice for the one sentence a human would want spoken; \
+                 freeq_post for artifacts (links, code, decisions); the freeq_show* \
+                 family for persistent visual context on your tile — pick the view \
+                 that fits (status_grid for health/deploys, chart for metrics/markets, \
+                 diff for code changes, agenda for schedules, show_file for code, \
+                 show for cards/quotes). Make the tile show your actual work. \
+                 Direct-address replies are free; volunteer utterances are \
+                 cooldowned. Don't narrate tool calls.",
             )
     }
 }

@@ -2404,6 +2404,7 @@ dependencies = [
  "ghostly",
  "image",
  "iroh-live",
+ "libc",
  "rand 0.8.6",
  "reqwest 0.12.28",
  "resvg",
@@ -2866,12 +2867,14 @@ dependencies = [
 [[package]]
 name = "ghostly"
 version = "0.1.0"
-source = "git+https://github.com/chad/ghostly?branch=main#0a0ec3f71af248a237c09e35666996a4367c0d61"
+source = "git+https://github.com/chad/ghostly?branch=main#10430f6881a39df31c0de6010cf9307ea563fd58"
 dependencies = [
  "fastrand",
  "fundsp",
  "hound",
  "png 0.17.16",
+ "serde",
+ "serde_json",
  "tiny-skia",
 ]
 

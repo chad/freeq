@@ -28,9 +28,6 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.social-networking
         INFOPLIST_KEY_CFBundleDisplayName: freeq
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: "freeq uses your microphone for voice and video calls."
-        INFOPLIST_KEY_NSCameraUsageDescription: "freeq uses your camera for video calls."
         GENERATE_INFOPLIST_FILE: YES
         OTHER_LDFLAGS:
           - "-framework"
@@ -39,35 +36,11 @@ targets:
           - "SystemConfiguration"
           - "-framework"
           - "AuthenticationServices"
-          # AV (voice/video) — frameworks the Rust SDK's iroh-live/videotoolbox
-          # backend and the Swift capture/render paths link against.
-          - "-framework"
-          - "AVFoundation"
-          - "-framework"
-          - "AVKit"
-          - "-framework"
-          - "AudioToolbox"
-          - "-framework"
-          - "CoreAudio"
-          - "-framework"
-          - "CoreMedia"
-          - "-framework"
-          - "CoreVideo"
-          - "-framework"
-          - "VideoToolbox"
-          - "-framework"
-          - "Network"
-          - "-lc++"
         CLANG_ENABLE_MODULES: YES
     dependencies:
-      # Static-lib xcframework — links into the binary, must NOT be embedded
-      # (an embedded .a in Contents/Frameworks fails codesign).
       - framework: FreeqSDK.xcframework
-        embed: false
     entitlements:
       path: freeq-macos/freeq-macos.entitlements
       properties:
         com.apple.security.app-sandbox: false
         com.apple.security.network.client: true
-        com.apple.security.device.audio-input: true
-        com.apple.security.device.camera: true

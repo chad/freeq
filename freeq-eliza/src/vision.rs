@@ -12,7 +12,7 @@ use base64::Engine;
 use iroh_live::media::format::VideoFrame;
 use serde::Deserialize;
 
-const VISION_SYSTEM: &str = "You are Eliza, an AI agent in a live voice \
+const VISION_SYSTEM: &str = "You are an AI agent in a live voice \
 call. A participant is sharing their screen or camera and has asked you \
 about what you see. Answer their question from the image. Rules: answer \
 in 1-3 short sentences — your reply is spoken aloud, so be brief and \
@@ -29,6 +29,10 @@ const VISUAL_CUES: &[&str] = &[
     "what do you see",
     "look at",
     "looking at",
+    "my video",
+    "video tile",
+    "my tile",
+    "my feed",
     "this slide",
     "this image",
     "this picture",
@@ -45,6 +49,65 @@ const VISUAL_CUES: &[&str] = &[
     "am i showing",
     "i'm showing",
     "im showing",
+    "how many fingers",
+    "see me",
+    "see us",
+    "watch me",
+    "watch this",
+];
+
+/// Weaker cues that only count when the asker actually has a live
+/// video frame. "How many fingers am I holding up?" matches none of
+/// the strong cues — and a missed route means the text model fields a
+/// visual question and denies it can see at all. With a frame in hand
+/// a false positive is cheap (the vision model sees the frame and the
+/// question, and says when the image doesn't show what was asked), so
+/// the bar drops.
+const VISUAL_CUES_WITH_FRAME: &[&str] = &[
+    "finger",
+    "am i holding",
+    "i'm holding",
+    "im holding",
+    "holding up",
+    "am i wearing",
+    "i'm wearing",
+    "im wearing",
+    "do i look",
+    "do we look",
+    "look like",
+    "my face",
+    "my hand",
+    "my hair",
+    "my shirt",
+    "behind me",
+    "in front of me",
+    "next to me",
+    "around me",
+    "my room",
+    "my desk",
+    "my environment",
+    "what color",
+    "what colour",
+    "count these",
+    "count them",
+    "count my",
+    // Reading something off the asker's feed — "read me the title on my
+    // tile", "can you read this/that/it". With a live frame in hand a
+    // false positive ("read the room") costs little; a missed route
+    // costs the answer.
+    "read me",
+    "read my",
+    "read it",
+    "read that",
+    "read what",
+    "can you read",
+    "the title",
+    "what's on my",
+    "what is on my",
+    "showing you",
+    "sharing my",
+    "i'm sharing",
+    "im sharing",
 ];
 
 /// Whether `question` is asking Eliza about something visual — so it
@@ -52,6 +115,17 @@ const VISUAL_CUES: &[&str] = &[
 pub fn is_visual_question(question: &str) -> bool {
     let q = question.to_lowercase();
     VISUAL_CUES.iter().any(|cue| q.contains(cue))
+}
+
+/// Looser visual-question test for when the asker has a live frame:
+/// strong cues plus phrasings about their own appearance/surroundings
+/// ("how many fingers am I holding up", "what am I wearing").
+pub fn is_visual_question_with_frame(question: &str) -> bool {
+    if is_visual_question(question) {
+        return true;
+    }
+    let q = question.to_lowercase();
+    VISUAL_CUES_WITH_FRAME.iter().any(|cue| q.contains(cue))
 }
 
 /// Encode a decoded video frame as JPEG bytes. The frame's pixels are
@@ -156,6 +230,10 @@ mod tests {
             "describe this picture",
             "read this for me",
             "what am i showing you",
+            // The round-4 miss: tile/feed phrasings are strong cues too.
+            "what do you think of my video tile",
+            "describe my feed",
+            "is my video coming through",
         ] {
             assert!(is_visual_question(q), "should be visual: {q:?}");
         }
@@ -172,6 +250,39 @@ mod tests {
         ] {
             assert!(!is_visual_question(q), "should not be visual: {q:?}");
         }
+    }
+
+    #[test]
+    fn frame_lowers_the_routing_bar() {
+        // The Yokota miss: no strong cue, but obviously visual when a
+        // camera is live.
+        for q in [
+            "how many fingers am I holding up",
+            "what am I wearing today",
+            "do I look tired",
+            "what's behind me",
+            "what color is my shirt",
+            // The round-4 live miss, verbatim.
+            "please read the title shown on my video tile.",
+            "read me the title written on my video tile",
+            "can you read this",
+            "what's on my whiteboard",
+        ] {
+            assert!(is_visual_question_with_frame(q), "frame-visual: {q:?}");
+        }
+        // Still not visual even with a frame — plain knowledge/transcript.
+        for q in [
+            "what time is it",
+            "summarize the call",
+            "what is the capital of France",
+        ] {
+            assert!(!is_visual_question_with_frame(q), "not visual: {q:?}");
+        }
+        // Loose cues alone never fire without a frame ("how many
+        // fingers" is a STRONG cue — frameless it earns the "turn on
+        // your camera" hint — so probe a loose-only phrasing here).
+        assert!(!is_visual_question("what am I wearing today"));
+        assert!(!is_visual_question("do I look tired"));
     }
 
     #[test]

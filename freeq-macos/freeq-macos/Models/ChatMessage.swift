@@ -14,15 +14,7 @@ struct ChatMessage: Identifiable, Equatable {
     var reactions: [String: Set<String>] = [:]  // emoji -> set of nicks
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
-        // Compare the mutable fields too — comparing only `id` makes a message
-        // with a new reaction/edit/deletion look unchanged, which can cause
-        // SwiftUI to diff-skip the row's re-render.
         lhs.id == rhs.id
-            && lhs.text == rhs.text
-            && lhs.isEdited == rhs.isEdited
-            && lhs.isDeleted == rhs.isDeleted
-            && lhs.isSigned == rhs.isSigned
-            && lhs.reactions == rhs.reactions
     }
 }
 

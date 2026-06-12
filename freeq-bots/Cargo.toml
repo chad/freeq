@@ -29,6 +29,10 @@ path = "src/bin/stream_demo.rs"
 name = "stream-demo2"
 path = "src/bin/stream_demo2.rs"
 
+[[bin]]
+name = "post"
+path = "src/bin/post.rs"
+
 [dependencies]
 freeq-sdk = { path = "../freeq-sdk" }
 tokio = { workspace = true }

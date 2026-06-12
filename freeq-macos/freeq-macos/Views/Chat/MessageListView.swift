@@ -2,10 +2,23 @@ import SwiftUI
 
 struct MessageListView: View {
     @Environment(AppState.self) private var appState
+    /// Which channel we last rendered for. A channel switch should snap
+    /// the scroll to the bottom (no animation, no visible "scroll from
+    /// top down" sweep). Only subsequent incremental adds in the SAME
+    /// channel get the gentle scroll animation.
+    @State private var lastRenderedChannel: String?
 
     private var messages: [ChatMessage] {
         appState.activeChannelState?.messages ?? []
     }
+
+    /// Stable sentinel ID for the bottom anchor — scrolling to a fixed
+    /// invisible spacer below the last row is more reliable than
+    /// scrolling to the last message's ID, because the message ID changes
+    /// every time a new one arrives (forcing layout) and SwiftUI's
+    /// LazyVStack sometimes lays out the last row partially below the
+    /// viewport on first measurement.
+    private let bottomAnchorID = "__bottom"
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -41,21 +54,51 @@ struct MessageListView: View {
                             }
                         }
                     }
+
+                    // Invisible bottom-of-list anchor. Reserved height
+                    // gives the last real message room so it doesn't hug
+                    // the divider above the compose bar (the "half off
+                    // the bottom" symptom was the last row landing at
+                    // the very edge of the scroll viewport with no breathing
+                    // room).
+                    Color.clear
+                        .frame(height: 12)
+                        .id(bottomAnchorID)
                 }
-                .padding(.vertical, 8)
+                .padding(.top, 8)
             }
             .onChange(of: messages.count) { oldCount, newCount in
-                // Only auto-scroll if messages were added at the end (not prepended history)
-                if newCount > oldCount, let last = messages.last {
+                // If this count change is the initial load for a newly-
+                // selected channel, snap with no animation — otherwise
+                // the user sees a fast visual scroll from top to bottom
+                // as the rows render.
+                let isInitialLoadForCurrentChannel =
+                    lastRenderedChannel != appState.activeChannel
+                guard newCount > 0 else { return }
+                if isInitialLoadForCurrentChannel {
+                    proxy.scrollTo(bottomAnchorID, anchor: .bottom)
+                    lastRenderedChannel = appState.activeChannel
+                } else if newCount > oldCount {
                     withAnimation(.easeOut(duration: 0.15)) {
-                        proxy.scrollTo(last.id, anchor: .bottom)
+                        proxy.scrollTo(bottomAnchorID, anchor: .bottom)
                     }
                 }
             }
-            .onAppear {
-                if let last = messages.last {
-                    proxy.scrollTo(last.id, anchor: .bottom)
+            .onChange(of: appState.activeChannel) { _, _ in
+                // Channel switch — snap to bottom on the next runloop
+                // tick so the LazyVStack has populated its rows. Without
+                // the deferral, scrollTo runs against an empty stack
+                // and the view appears at the top, then the count-onChange
+                // visibly catches up by animating down.
+                DispatchQueue.main.async {
+                    proxy.scrollTo(bottomAnchorID, anchor: .bottom)
+                    lastRenderedChannel = appState.activeChannel
                 }
+            }
+            .onAppear {
+                // First mount — snap immediately, no animation.
+                proxy.scrollTo(bottomAnchorID, anchor: .bottom)
+                lastRenderedChannel = appState.activeChannel
             }
             .onChange(of: appState.scrollToMessageId) { _, newId in
                 if let id = newId {
@@ -255,12 +298,8 @@ struct MessageRow: View {
                     .textSelection(.enabled)
             } else {
                 let imageURLs = extractImageURLs(from: message.text)
-                let videoURLs = extractVideoURLs(from: message.text)
-                let audioURLs = extractAudioURLs(from: message.text)
                 let ytId = extractYouTubeID(from: message.text)
-                let isVoice = isVoiceMessage(message.text)
-                let mediaURLs = imageURLs + videoURLs + audioURLs
-                let cleanText = mediaURLs.isEmpty ? message.text : textWithoutImages(message.text, imageURLs: mediaURLs)
+                let cleanText = imageURLs.isEmpty ? message.text : textWithoutImages(message.text, imageURLs: imageURLs)
 
                 if !cleanText.isEmpty {
                     Text(parseMessageText(cleanText))
@@ -274,20 +313,6 @@ struct MessageRow: View {
                     }
                 }
 
-                // Inline video
-                if !videoURLs.isEmpty {
-                    ForEach(videoURLs, id: \.self) { url in
-                        InlineVideoView(url: url)
-                    }
-                }
-
-                // Inline audio / voice messages
-                if !audioURLs.isEmpty {
-                    ForEach(audioURLs, id: \.self) { url in
-                        InlineAudioView(url: url, isVoice: isVoice)
-                    }
-                }
-
                 // Bluesky post embed
                 if let bsky = extractBskyPost(from: message.text) {
                     BlueskyEmbed(handle: bsky.handle, rkey: bsky.rkey)
@@ -298,8 +323,8 @@ struct MessageRow: View {
                     YouTubeThumbnail(videoId: ytId)
                 }
 
-                // Link preview (only if no other media)
-                if mediaURLs.isEmpty && ytId == nil && extractBskyPost(from: message.text) == nil,
+                // Link preview (only if no images/YouTube/Bluesky)
+                if imageURLs.isEmpty && ytId == nil && extractBskyPost(from: message.text) == nil,
                    let url = extractFirstURL(from: message.text) {
                     LinkPreviewView(url: url)
                 }
@@ -401,8 +426,7 @@ struct MessageRow: View {
             if let target = appState.activeChannel, target.hasPrefix("#") {
                 let isPinned = appState.activeChannelState?.pinnedMessages.contains(where: { $0.id == message.id }) ?? false
                 Button(isPinned ? "Unpin Message" : "Pin Message") {
-                    if isPinned { appState.unpin(msgId: message.id, in: target) }
-                    else { appState.pin(msgId: message.id, in: target) }
+                    appState.sendRaw("\(isPinned ? "UNPIN" : "PIN") \(target) \(message.id)")
                 }
             }
         }
@@ -423,40 +447,53 @@ struct MessageRow: View {
 
     /// Parse message text into AttributedString with formatting.
     private func parseMessageText(_ text: String) -> AttributedString {
-        // Parse inline markdown (**bold**, *italic*, _italic_, `code`,
-        // ~~strike~~, [label](url)) — this STRIPS the delimiters so they don't
-        // show literally, matching the web/iOS clients. Falls back to plain
-        // text if the string isn't valid markdown.
-        var options = AttributedString.MarkdownParsingOptions()
-        options.interpretedSyntax = .inlineOnlyPreservingWhitespace
-        options.failurePolicy = .returnPartiallyParsedIfPossible
-        var result = (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        var result = AttributedString(text)
 
-        // Give inline code a monospaced look (markdown marks it with an
-        // inlinePresentationIntent but applies no visible style on its own).
-        for run in result.runs where run.inlinePresentationIntent?.contains(.code) == true {
-            result[run.range].font = .system(.body, design: .monospaced)
-            result[run.range].backgroundColor = Color(nsColor: .quaternaryLabelColor)
-        }
-
-        // Markdown only links [label](url) / <url>; detect bare URLs too, on the
-        // delimiter-stripped plain text so indices line up.
-        let plain = String(result.characters)
+        // URLs
         let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-        if let matches = detector?.matches(in: plain, range: NSRange(plain.startIndex..., in: plain)) {
+        if let matches = detector?.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
             for match in matches.reversed() {
-                guard let r = Range(match.range, in: plain),
-                      let attrRange = Range(r, in: result),
+                guard let range = Range(match.range, in: text),
+                      let attrRange = Range(range, in: result),
                       let url = match.url else { continue }
-                if result[attrRange].link == nil { result[attrRange].link = url }
+                result[attrRange].link = url
+                result[attrRange].foregroundColor = .accentColor
             }
         }
 
-        // Color every link with the accent.
-        for run in result.runs where run.link != nil {
-            result[run.range].foregroundColor = .accentColor
+        // Bold: **text**
+        result = applyFormatting(result, pattern: "\\*\\*(.+?)\\*\\*", text: text) { attributed, range in
+            attributed[range].inlinePresentationIntent = .stronglyEmphasized
         }
 
+        // Italic: *text*
+        result = applyFormatting(result, pattern: "(?<![*])\\*([^*]+?)\\*(?![*])", text: text) { attributed, range in
+            attributed[range].inlinePresentationIntent = .emphasized
+        }
+
+        // Code: `text`
+        result = applyFormatting(result, pattern: "`([^`]+?)`", text: text) { attributed, range in
+            attributed[range].font = .system(.body, design: .monospaced)
+            attributed[range].backgroundColor = Color(nsColor: .quaternaryLabelColor)
+        }
+
+        return result
+    }
+
+    private func applyFormatting(
+        _ attributed: AttributedString,
+        pattern: String,
+        text: String,
+        apply: (inout AttributedString, Range<AttributedString.Index>) -> Void
+    ) -> AttributedString {
+        var result = attributed
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return result }
+        let matches = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        for match in matches {
+            guard let range = Range(match.range, in: text),
+                  let attrRange = Range(range, in: result) else { continue }
+            apply(&result, attrRange)
+        }
         return result
     }
 }

@@ -109,6 +109,15 @@ class ProfileCache {
 }
 
 /// Async image loader with memory + disk caching.
+///
+/// Reads `ProfileCache.shared.profile(for: nick)` inside the body so
+/// the @Observable cache tracking sees the dependency — that way when
+/// WHOIS lands the DID, ProfileCache fetches the bsky profile, the
+/// cache mutates, this view re-renders, and the `.task(id: avatarURL)`
+/// fires with the freshly-arrived URL. The prior implementation called
+/// `loadAvatar()` once from `.onAppear` and never retried, so any view
+/// that mounted before the profile was cached just stayed on its
+/// fallback initial.
 struct AvatarView: View {
     let nick: String
     let size: CGFloat
@@ -123,7 +132,11 @@ struct AvatarView: View {
     }()
 
     var body: some View {
-        Group {
+        // Read inside body so @Observable tracks the dependency on
+        // ProfileCache.shared.cache; mutations rebuild this body.
+        let avatarURL = ProfileCache.shared.profile(for: nick)?.avatarURL
+
+        return Group {
             if let image {
                 Image(nsImage: image)
                     .resizable()
@@ -141,38 +154,40 @@ struct AvatarView: View {
                 }
             }
         }
-        .onAppear { loadAvatar() }
+        .task(id: avatarURL) {
+            // Re-runs whenever avatarURL changes: nil→URL (profile just
+            // arrived), URL→URL' (rare — user changed avatar), or
+            // URL→nil (profile evicted). Each transition gets a fresh
+            // load attempt.
+            guard let url = avatarURL else {
+                image = nil
+                return
+            }
+            await loadImage(from: url)
+        }
     }
 
-    private func loadAvatar() {
-        guard let url = ProfileCache.shared.profile(for: nick)?.avatarURL else { return }
-
-        // Memory cache
+    private func loadImage(from url: URL) async {
         if let cached = Self.memoryCache[url] {
-            image = cached
+            await MainActor.run { image = cached }
             return
         }
-
-        // Disk cache
         let diskFile = Self.diskCacheDir.appendingPathComponent(url.lastPathComponent)
-        if let data = try? Data(contentsOf: diskFile), let nsImage = NSImage(data: data) {
+        if let data = try? Data(contentsOf: diskFile),
+           let nsImage = NSImage(data: data) {
             Self.memoryCache[url] = nsImage
-            image = nsImage
+            await MainActor.run { image = nsImage }
             return
         }
-
-        // Network fetch
-        Task {
-            do {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                if let nsImage = NSImage(data: data) {
-                    Self.memoryCache[url] = nsImage
-                    try? data.write(to: diskFile)
-                    await MainActor.run { image = nsImage }
-                }
-            } catch {
-                Log.media.error("Avatar fetch failed for \(nick): \(error.localizedDescription)")
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            if let nsImage = NSImage(data: data) {
+                Self.memoryCache[url] = nsImage
+                try? data.write(to: diskFile)
+                await MainActor.run { image = nsImage }
             }
+        } catch {
+            Log.media.error("Avatar fetch failed for \(nick): \(error.localizedDescription)")
         }
     }
 }

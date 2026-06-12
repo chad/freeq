@@ -1296,6 +1296,7 @@ fn build_stt(cfg: &OrcConfig) -> Result<SttEngine> {
             return Ok(SttEngine::groq(
                 key,
                 "whisper-large-v3-turbo".to_string(),
+                &[cfg.nick.clone()],
             ));
         }
     }

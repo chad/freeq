@@ -1253,99 +1253,6 @@ fn parse_chathistory_ts(s: &str) -> Option<u64> {
         .map(|dt| dt.timestamp() as u64)
 }
 
-/// Resolve a CHATHISTORY/SEARCH target and authorize access.
-/// For channels: membership check. For DMs: auth check + canonical key.
-/// Returns (db_key, display_target); None means a FAIL was already sent.
-/// `cmd` names the failing command in FAIL replies.
-fn resolve_history_target(
-    conn: &Connection,
-    raw_target: &str,
-    cmd: &str,
-    state: &Arc<SharedState>,
-    server_name: &str,
-    session_id: &str,
-    send: &dyn Fn(&Arc<SharedState>, &str, String),
-) -> Option<(String, String)> {
-    let is_channel = raw_target.starts_with('#') || raw_target.starts_with('&');
-
-    if is_channel {
-        let target = normalize_channel(raw_target);
-        {
-            let channels = state.channels.lock();
-            if let Some(ch) = channels.get(&target) {
-                if !ch.members.contains(session_id) {
-                    let reply = Message::from_server(
-                        server_name,
-                        "FAIL",
-                        vec![
-                            cmd,
-                            "INVALID_TARGET",
-                            &target,
-                            "You are not in that channel",
-                        ],
-                    );
-                    send(state, session_id, format!("{reply}\r\n"));
-                    return None;
-                }
-            } else {
-                let reply = Message::from_server(
-                    server_name,
-                    "FAIL",
-                    vec![cmd, "INVALID_TARGET", &target, "No such channel"],
-                );
-                send(state, session_id, format!("{reply}\r\n"));
-                return None;
-            }
-        }
-        Some((target.clone(), target))
-    } else {
-        // DM target — require DID authentication
-        let requester_did = match conn.authenticated_did.as_deref() {
-            Some(did) => did.to_string(),
-            None => {
-                let reply = Message::from_server(
-                    server_name,
-                    "FAIL",
-                    vec![
-                        cmd,
-                        "ACCOUNT_REQUIRED",
-                        raw_target,
-                        "You must be authenticated to access DM history",
-                    ],
-                );
-                send(state, session_id, format!("{reply}\r\n"));
-                return None;
-            }
-        };
-
-        // Resolve target to DID — accept DID directly or resolve nick
-        let target_did = if raw_target.starts_with("did:") {
-            raw_target.to_string()
-        } else {
-            match state
-                .nick_owners
-                .lock()
-                .get(&raw_target.to_lowercase())
-                .cloned()
-            {
-                Some(did) => did,
-                None => {
-                    let reply = Message::from_server(
-                        server_name,
-                        "FAIL",
-                        vec![cmd, "INVALID_TARGET", raw_target, "Unknown target"],
-                    );
-                    send(state, session_id, format!("{reply}\r\n"));
-                    return None;
-                }
-            }
-        };
-
-        let dm_key = crate::db::canonical_dm_key(&requester_did, &target_did);
-        Some((dm_key, raw_target.to_string()))
-    }
-}
-
 pub(super) fn handle_chathistory(
     conn: &Connection,
     msg: &irc::Message,
@@ -1376,16 +1283,92 @@ pub(super) fn handle_chathistory(
         return;
     }
 
-    let Some((db_key, target)) = resolve_history_target(
-        conn,
-        &msg.params[1],
-        "CHATHISTORY",
-        state,
-        server_name,
-        session_id,
-        send,
-    ) else {
-        return;
+    let raw_target = &msg.params[1];
+    let is_channel = raw_target.starts_with('#') || raw_target.starts_with('&');
+
+    // Resolve target and authorize access.
+    // For channels: membership check. For DMs: auth check + canonical key.
+    // db_key = key used for DB queries, target = display name for IRC messages.
+    let (db_key, target) = if is_channel {
+        let target = normalize_channel(raw_target);
+        {
+            let channels = state.channels.lock();
+            if let Some(ch) = channels.get(&target) {
+                if !ch.members.contains(session_id) {
+                    let reply = Message::from_server(
+                        server_name,
+                        "FAIL",
+                        vec![
+                            "CHATHISTORY",
+                            "INVALID_TARGET",
+                            &target,
+                            "You are not in that channel",
+                        ],
+                    );
+                    send(state, session_id, format!("{reply}\r\n"));
+                    return;
+                }
+            } else {
+                let reply = Message::from_server(
+                    server_name,
+                    "FAIL",
+                    vec!["CHATHISTORY", "INVALID_TARGET", &target, "No such channel"],
+                );
+                send(state, session_id, format!("{reply}\r\n"));
+                return;
+            }
+        }
+        (target.clone(), target)
+    } else {
+        // DM target — require DID authentication
+        let requester_did = match conn.authenticated_did.as_deref() {
+            Some(did) => did.to_string(),
+            None => {
+                let reply = Message::from_server(
+                    server_name,
+                    "FAIL",
+                    vec![
+                        "CHATHISTORY",
+                        "ACCOUNT_REQUIRED",
+                        raw_target,
+                        "You must be authenticated to access DM history",
+                    ],
+                );
+                send(state, session_id, format!("{reply}\r\n"));
+                return;
+            }
+        };
+
+        // Resolve target to DID — accept DID directly or resolve nick
+        let target_did = if raw_target.starts_with("did:") {
+            raw_target.to_string()
+        } else {
+            match state
+                .nick_owners
+                .lock()
+                .get(&raw_target.to_lowercase())
+                .cloned()
+            {
+                Some(did) => did,
+                None => {
+                    let reply = Message::from_server(
+                        server_name,
+                        "FAIL",
+                        vec![
+                            "CHATHISTORY",
+                            "INVALID_TARGET",
+                            raw_target,
+                            "Unknown target",
+                        ],
+                    );
+                    send(state, session_id, format!("{reply}\r\n"));
+                    return;
+                }
+            }
+        };
+
+        let dm_key = crate::db::canonical_dm_key(&requester_did, &target_did);
+        (dm_key, raw_target.to_string())
     };
 
     let has_tags = state.cap_message_tags.lock().contains(session_id);
@@ -1449,110 +1432,13 @@ pub(super) fn handle_chathistory(
         _ => vec![],
     };
 
-    replay_rows_as_batch(
-        messages,
-        &target,
-        "chathistory",
-        state,
-        server_name,
-        session_id,
-        send,
-        has_tags,
-        has_time,
-        has_batch,
-        has_multiline,
-    );
-}
-
-/// SEARCH <target> :<query> — full-text search over stored history.
-/// Authorization matches CHATHISTORY: channel search requires membership,
-/// DM search requires DID authentication. Results are replayed newest-last
-/// inside a `freeq.at/search` batch, capped at 25 messages.
-pub(super) fn handle_search(
-    conn: &Connection,
-    msg: &irc::Message,
-    state: &Arc<SharedState>,
-    server_name: &str,
-    session_id: &str,
-    send: &dyn Fn(&Arc<SharedState>, &str, String),
-) {
-    if msg.params.len() < 2 || msg.params[1].trim().is_empty() {
-        let reply = Message::from_server(
-            server_name,
-            "FAIL",
-            vec!["SEARCH", "NEED_MORE_PARAMS", "Usage: SEARCH <target> :<query>"],
-        );
-        send(state, session_id, format!("{reply}\r\n"));
-        return;
-    }
-
-    let Some((db_key, target)) = resolve_history_target(
-        conn,
-        &msg.params[0],
-        "SEARCH",
-        state,
-        server_name,
-        session_id,
-        send,
-    ) else {
-        return;
-    };
-
-    let query = msg.params[1..].join(" ");
-    const SEARCH_LIMIT: usize = 25;
-    let mut messages: Vec<crate::db::MessageRow> = state
-        .with_db(|db| db.search_messages(&db_key, &query, SEARCH_LIMIT, None))
-        .unwrap_or_default();
-    // search_messages returns newest-first; replay oldest-first so the
-    // batch reads like CHATHISTORY output.
-    messages.reverse();
-
-    let has_tags = state.cap_message_tags.lock().contains(session_id);
-    let has_time = state.cap_server_time.lock().contains(session_id);
-    let has_batch = state.cap_batch.lock().contains(session_id);
-    let has_multiline = state.cap_draft_multiline.lock().contains(session_id);
-
-    replay_rows_as_batch(
-        messages,
-        &target,
-        "freeq.at/search",
-        state,
-        server_name,
-        session_id,
-        send,
-        has_tags,
-        has_time,
-        has_batch,
-        has_multiline,
-    );
-}
-
-/// Replay stored message rows to one session as an (optionally batched)
-/// sequence of PRIVMSGs, preserving msgid/account/reaction tags and
-/// multiline emission shapes. Shared by CHATHISTORY and SEARCH.
-#[allow(clippy::too_many_arguments)]
-fn replay_rows_as_batch(
-    messages: Vec<crate::db::MessageRow>,
-    target: &str,
-    batch_type: &str,
-    state: &Arc<SharedState>,
-    server_name: &str,
-    session_id: &str,
-    send: &dyn Fn(&Arc<SharedState>, &str, String),
-    has_tags: bool,
-    has_time: bool,
-    has_batch: bool,
-    has_multiline: bool,
-) {
-    let target = target.to_string();
-
     // Send as a batch (unique ID per request)
     let batch_id = format!("ch{}", crate::msgid::generate());
     if has_batch {
         send(
             state,
             session_id,
-            format!(":{server_name} BATCH +{batch_id} {batch_type} {target}\r\n"),
+            format!(":{server_name} BATCH +{batch_id} chathistory {target}\r\n"),
         );
     }
 

@@ -14,20 +14,21 @@ class AvatarCache: ObservableObject {
         cache[nick]
     }
 
-    /// Request avatar fetch for a nick (if not already cached/pending).
-    /// Passing a non-empty `did` retries even if a previous DID-less
-    /// attempt failed — DID is the most reliable lookup and may succeed
-    /// where the nick-as-handle fallback didn't (e.g. custom-domain handles).
+    /// Request avatar fetch for a nick. Resolution requires a verified
+    /// `did` — see `fetchAvatar` for why we never resolve from the nick.
+    /// A no-DID call is a no-op: we simply wait for the DID to arrive
+    /// (account-tag on a message, account-notify, or WHOIS) and resolve then.
     func prefetch(_ nick: String, did: String? = nil) {
         let key = nick.lowercased()
-        // Skip guest nicks - they're not Bluesky accounts (avoid false positives like guest111.bsky.social)
+        // Skip guest nicks - they're not Bluesky accounts.
         guard !key.hasPrefix("guest"), !key.hasPrefix("web") else { return }
         if cache[key] != nil || pending.contains(key) { return }
-        let hasDid = did.map { !$0.isEmpty } ?? false
-        if failed.contains(key) && !hasDid { return }
-        // A new DID is a fresh signal — clear the failed marker so this attempt
-        // is allowed to run.
-        failed.remove(key)
+        // Identity on freeq is the DID the server bound at SASL — never the
+        // freely-settable nick. Without a verified DID there is nothing we
+        // can safely resolve, and `did:key` users (guests, AI beings) have
+        // no Bluesky profile at all.
+        guard let did = did, !did.isEmpty, !did.hasPrefix("did:key:") else { return }
+        if failed.contains(key) { return }
         pending.insert(key)
 
         Task {
@@ -43,28 +44,23 @@ class AvatarCache: ObservableObject {
     }
 
     private func fetchAvatar(nick: String, key: String, did: String? = nil) async {
-        // Try DID first — most reliable
-        if let did = did, !did.isEmpty {
-            if let url = await resolveAvatar(handle: did) {
-                cache[key] = url
-                pending.remove(key)
-                return
-            }
+        // Resolve ONLY by the server-verified DID. We must never derive a
+        // Bluesky identity from the nick — neither the bare nick as a handle
+        // nor a guessed "<nick>.bsky.social". Nicks are freely chosen, so any
+        // such guess shows a STRANGER's photo and handle for whoever happens
+        // to match (e.g. the AI being "olive" pulling up the unrelated real
+        // account olive.bsky.social). That is impersonation. `prefetch`
+        // already guarantees a non-empty, non-did:key DID here.
+        guard let did = did, !did.isEmpty else {
+            failed.insert(key)
+            pending.remove(key)
+            return
         }
-
-        // Try the nick as an AT handle — could be "chadfowler.com" or "alice.bsky.social"
-        // Also try with .bsky.social suffix if no dots
-        let handles = nick.contains(".") ? [nick] : ["\(nick).bsky.social"]
-
-        for handle in handles {
-            if let url = await resolveAvatar(handle: handle) {
-                cache[key] = url
-                pending.remove(key)
-                return
-            }
+        if let url = await resolveAvatar(handle: did) {
+            cache[key] = url
+        } else {
+            failed.insert(key)
         }
-
-        failed.insert(key)
         pending.remove(key)
     }
 

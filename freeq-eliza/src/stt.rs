@@ -26,6 +26,12 @@ pub enum SttEngine {
         client: reqwest::Client,
         api_key: String,
         model: String,
+        /// Whisper context prompt seeding the vocabulary with the
+        /// agent's (and its peers') names. Without it Whisper mangles
+        /// an unusual name at the start of an utterance — "Yokota,
+        /// what time is it?" came back as "You could tell what time
+        /// is it." — so the bot never sees that it was addressed.
+        prompt: String,
     },
     /// Local whisper.cpp (feature-gated).
     #[cfg(feature = "stt")]
@@ -35,12 +41,15 @@ pub enum SttEngine {
 }
 
 impl SttEngine {
-    /// Construct a Groq-backed engine.
-    pub fn groq(api_key: String, model: String) -> Self {
+    /// Construct a Groq-backed engine. `vocab_names` are the names
+    /// Whisper must recognise — the agent's own name first, then any
+    /// peer agents — woven into the transcription context prompt.
+    pub fn groq(api_key: String, model: String, vocab_names: &[String]) -> Self {
         SttEngine::Groq {
             client: reqwest::Client::new(),
             api_key,
             model,
+            prompt: vocab_prompt(vocab_names),
         }
     }
 
@@ -74,8 +83,8 @@ impl SttEngine {
             return Ok(String::new());
         }
         match self {
-            SttEngine::Groq { client, api_key, model } => {
-                groq_transcribe(client, api_key, model, pcm_16k_mono).await
+            SttEngine::Groq { client, api_key, model, prompt } => {
+                groq_transcribe(client, api_key, model, prompt, pcm_16k_mono).await
             }
             #[cfg(feature = "stt")]
             SttEngine::Local(whisper) => {
@@ -98,10 +107,49 @@ struct GroqResponse {
     text: String,
 }
 
+/// Build the Whisper context prompt from the names it must get right.
+/// Whisper biases toward vocabulary it has seen in the prompt, so a
+/// natural sentence naming the assistant (and any peers) makes
+/// addressed utterances transcribe correctly instead of mangling the
+/// name into nearby English ("Yokota" → "You could tell").
+pub(crate) fn vocab_prompt(vocab_names: &[String]) -> String {
+    fn cap(s: &str) -> String {
+        let mut c = s.chars();
+        match c.next() {
+            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            None => String::new(),
+        }
+    }
+    let mut names: Vec<String> = Vec::new();
+    for n in vocab_names {
+        let n = n.trim();
+        if n.is_empty() {
+            continue;
+        }
+        let n = cap(n);
+        if !names.contains(&n) {
+            names.push(n);
+        }
+    }
+    let first = names.first().cloned().unwrap_or_else(|| "Eliza".to_string());
+    let mut prompt = format!(
+        "A live voice call with the assistant {first}. \
+         People say \"{first}\" to ask it questions."
+    );
+    if names.len() > 1 {
+        prompt.push_str(&format!(
+            " Other participants are named {}.",
+            names[1..].join(", ")
+        ));
+    }
+    prompt
+}
+
 async fn groq_transcribe(
     client: &reqwest::Client,
     api_key: &str,
     model: &str,
+    prompt: &str,
     pcm_16k_mono: &[f32],
 ) -> Result<String> {
     let wav = encode_wav_16k_mono(pcm_16k_mono);
@@ -114,15 +162,11 @@ async fn groq_transcribe(
         .text("model", model.to_string())
         .text("response_format", "json")
         .text("language", "en")
-        // Seed Whisper's vocabulary with the assistant's name. Without
-        // this it mangles "Eliza" at the start of an utterance into
-        // things like "advice of" or "you guys", so the bot never sees
-        // that it was addressed and never replies.
-        .text(
-            "prompt",
-            "A live voice call with the assistant Eliza. \
-             People say \"Eliza\" to ask her questions.",
-        )
+        // Seed Whisper's vocabulary with the assistant's (and peers')
+        // names — see `vocab_prompt`. Without this it mangles the name
+        // at the start of an utterance into nearby English, so the bot
+        // never sees that it was addressed and never replies.
+        .text("prompt", prompt.to_string())
         .text("temperature", "0");
 
     let resp = client
@@ -347,7 +391,7 @@ mod tests {
     #[tokio::test]
     async fn sub_second_input_short_circuits() {
         // Even a Groq engine must not round-trip < 1s of audio.
-        let e = SttEngine::groq("fake-key".into(), "whisper-large-v3-turbo".into());
+        let e = SttEngine::groq("fake-key".into(), "whisper-large-v3-turbo".into(), &[]);
         assert_eq!(e.transcribe(&vec![0.1; 8_000]).await.unwrap(), "");
     }
 
@@ -504,6 +548,31 @@ mod tests {
             out.len(),
         );
         assert!(out.iter().all(|s| s.abs() < 1e-3));
+    }
+
+    #[test]
+    fn vocab_prompt_names_the_agent() {
+        let p = vocab_prompt(&["yokota".to_string()]);
+        assert!(p.contains("Yokota"), "prompt should carry the agent's name: {p}");
+        assert!(!p.contains("Eliza"), "no hardcoded Eliza when a name is given: {p}");
+    }
+
+    #[test]
+    fn vocab_prompt_includes_peers() {
+        let p = vocab_prompt(&[
+            "yokota".to_string(),
+            "olive".to_string(),
+            "olive".to_string(), // dupes collapse
+            "".to_string(),      // blanks dropped
+        ]);
+        assert!(p.contains("Yokota") && p.contains("Olive"), "{p}");
+        assert_eq!(p.matches("Olive").count(), 1, "{p}");
+    }
+
+    #[test]
+    fn vocab_prompt_defaults_to_eliza() {
+        let p = vocab_prompt(&[]);
+        assert!(p.contains("Eliza"), "{p}");
     }
 
     #[test]

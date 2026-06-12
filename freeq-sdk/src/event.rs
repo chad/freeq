@@ -23,6 +23,10 @@ pub enum Event {
     Joined {
         channel: String,
         nick: String,
+        /// Extended-join account — the joiner's DID (`did:plc:…` / `did:key:…`),
+        /// or `None` when unauthenticated. Lets a consumer resolve who joined
+        /// to their real identity (e.g. DID → Bluesky handle).
+        account: Option<String>,
     },
 
     /// Someone left a channel.

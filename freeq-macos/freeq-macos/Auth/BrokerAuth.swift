@@ -38,12 +38,6 @@ enum BrokerAuth {
             return try parseSession(retryData)
         }
 
-        // 401 means the stored broker token has been revoked/expired — the
-        // caller should clear it and route the user back to sign-in rather
-        // than loop on a doomed reconnect.
-        if httpResponse.statusCode == 401 {
-            throw BrokerError.invalidToken
-        }
         guard httpResponse.statusCode == 200 else {
             throw BrokerError.sessionFailed("Status \(httpResponse.statusCode)")
         }
@@ -134,5 +128,4 @@ class MacPresentationContextProvider: NSObject, ASWebAuthenticationPresentationC
 
 enum BrokerError: Error {
     case sessionFailed(String)
-    case invalidToken
 }

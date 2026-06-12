@@ -243,7 +243,7 @@ When modifying a high-gamma file, write tests FIRST.
 ### P2.5 — Web App Prerequisites (see `docs/WEB-APP-PLAN.md`)
 
 - [x] **Web app (Phase 1)** — ✅ DONE. React+TS+Vite+Tailwind at freeq-app/.
-- [x] **Search (FTS5)** — ✅ DONE. SQLite FTS5 index (plaintext DBs; encrypted DBs use bounded decrypt-and-scan, and opening encrypted drops any stale plaintext index). IRC `SEARCH <target> :<query>` with CHATHISTORY-equivalent authorization, results in `freeq.at/search` batch. REST `GET /api/v1/search?channel=&q=` (channels only, +i/+k → 403). 9 db unit tests + 6 acceptance tests.
+- [ ] **Search (FTS5)** — SQLite FTS5 for message search. REST endpoint or IRC SEARCH command.
 - [x] **Pinned messages** — ✅ DONE. PIN/UNPIN/PINS commands, REST API, web client PinnedBar + context menu.
 
 ### P3 — Future

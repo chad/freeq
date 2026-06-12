@@ -33,7 +33,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use freeq_eliza::{character_profile, identity, imagegen, irc, stt};
+use freeq_eliza::{identity, imagegen, irc, persona, stt};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -63,6 +63,11 @@ struct Cli {
     #[arg(long)]
     nick: Option<String>,
 
+    /// Owner handle/nick. Only this identity may issue lifecycle commands
+    /// ("go to sleep", "join #x", "leave") — matched against the speaker's nick.
+    #[arg(long)]
+    owner: Option<String>,
+
     /// Path to a ggml whisper.cpp model — used only by the local STT
     /// backend (the `stt` cargo feature). Ignored when `GROQ_API_KEY`
     /// is set, which is the preferred path.
@@ -87,6 +92,16 @@ struct Cli {
     /// `claude-*` routes to Anthropic Messages automatically.
     #[arg(long, default_value = "claude-opus-4-7")]
     groq_answer_model: String,
+
+    /// Model for answering *spoken* questions in a live call. Voice is
+    /// latency-critical: the gap between the asker finishing and the
+    /// first audible word is the whole experience, so this defaults to
+    /// a fast Groq model (~100-200 ms to first token) rather than the
+    /// text-channel default above (Opus quality is wasted on an answer
+    /// that arrives three seconds late). `claude-*` values route to
+    /// Anthropic Messages, same as `--groq-answer-model`.
+    #[arg(long, default_value = "llama-3.3-70b-versatile")]
+    voice_answer_model: String,
 
     /// Groq vision model for questions about a participant's shared
     /// screen or camera (e.g. "Eliza, what's on my screen?").
@@ -151,8 +166,20 @@ struct Cli {
     no_ambient: bool,
 
     /// Video tile renderer: `svg` (default — full freeq cyberpunk
-    /// presence with EQ strip, scene cards, ambient HUD, vision PiP) or
-    /// `particles` (ghostly particle face — face only, no overlays).
+    /// presence with EQ strip, scene cards, ambient HUD, vision PiP),
+    /// `particles` (ghostly particle face — face only, no overlays),
+    /// `ascii` (text-mode "terminal being" — glyph face that lip-syncs),
+    /// `ascii-rain` (Matrix-style digital-rain face), `ascii-glitch`
+    /// (cursed/corrupted terminal face), `ascii-bot` (boxy robot head —
+    /// no round face), `vector` (rigged hand-drawn character),
+    /// `southpark`/`southpark-goofy`/`southpark-stoner` (whacky cartoon
+    /// kids), or a real-time
+    /// CPU-rendered 3D being — `3d` (neutral head), `3d-angry`
+    /// (fat/ugly), `3d-joy` (slender/beautiful), `3d-eye` (floating
+    /// eyeball), `3d-shard` (spinning crystal with a glowing slit-eye),
+    /// or `alexandria` (ancient bronze coin with a Pharos-lighthouse
+    /// relief — cyan light flows inward while hearing, amber circulates
+    /// while thinking, the beacon flares while speaking).
     #[arg(long, default_value = "svg")]
     render_backend: String,
 
@@ -160,6 +187,13 @@ struct Cli {
     /// `eliza`, `narrator`, `utopia`, `oblivion`.
     #[arg(long, default_value = "eliza")]
     ghostly_character: String,
+
+    /// Path to a persona pack (JSON) — a forkable agent definition
+    /// (name, system prompt, TTS voice, greeting, and the ghostly
+    /// character it wears). Overrides the built-in profile lookup and
+    /// `--ghostly-character`. See `freeq_eliza::persona::PersonaPack`.
+    #[arg(long)]
+    persona: Option<PathBuf>,
 
     /// Other agent nicks this bot recognises as peers — e.g.
     /// `--peer-agents oblivion,utopia` when running Eliza alongside
@@ -184,13 +218,32 @@ async fn main() -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let cli = Cli::parse();
+
+    // Resolve the agent persona — the forkable brain (system prompt, TTS
+    // voice, greeting) plus the ghostly character it wears. A `--persona`
+    // pack wins; otherwise fall back to a built-in profile keyed by
+    // `--ghostly-character` (Oblivion / Narrator / Utopia), or `None` for
+    // plain Eliza. The persona references its ghostly character by NAME —
+    // the only seam between freeq (the brain) and ghostly (face + voice
+    // DSP); freeq never reaches into ghostly's character internals.
+    let persona = match &cli.persona {
+        Some(path) => Some(
+            persona::PersonaPack::from_file(path)
+                .with_context(|| format!("loading persona pack {}", path.display()))?,
+        ),
+        None => persona::PersonaPack::builtin(&cli.ghostly_character),
+    };
+
     // Identity defaults to the active character — `--render-backend
     // particles --ghostly-character oblivion` lands in
     // `~/.freeq/bots/oblivion/` with a fresh DID and bound nick
     // "oblivion", instead of sharing eliza's identity and getting
-    // server-side rebound to her nick. Explicit `--name` always wins.
+    // server-side rebound to her nick. A `--persona` pack names the
+    // agent after itself. Explicit `--name` always wins.
     let identity_name = cli.name.clone().unwrap_or_else(|| {
-        if cli.render_backend == "particles" && !cli.ghostly_character.is_empty() {
+        if let Some(p) = persona.as_ref().filter(|_| cli.persona.is_some()) {
+            p.name.clone()
+        } else if cli.render_backend == "particles" && !cli.ghostly_character.is_empty() {
             cli.ghostly_character.clone()
         } else {
             "eliza".to_string()
@@ -262,6 +315,7 @@ async fn main() -> Result<()> {
     irc::run(irc::RunConfig {
         server: cli.server,
         channels: cli.channel,
+        owner: cli.owner,
         nick,
         ident,
         stt,
@@ -274,24 +328,95 @@ async fn main() -> Result<()> {
         groq_api_key,
         groq_chat_model: cli.groq_chat_model,
         groq_answer_model: cli.groq_answer_model,
+        voice_answer_model: cli.voice_answer_model,
         vision_model: cli.vision_model,
         elevenlabs_api_key,
         elevenlabs_model: cli.elevenlabs_model,
         image_ai,
         proactive_enabled: !cli.no_proactive,
         ambient_enabled: !cli.no_ambient,
-        render_backend: cli.render_backend.clone(),
-        ghostly_character: cli.ghostly_character.clone(),
-        // Per-character voice + system-prompt overrides. When the
-        // character matches an entry in `character_profile`, swap in
-        // its ElevenLabs voice ID and personality. Without a match
-        // (e.g. `--ghostly-character eliza`) we fall through to the
+        // A `--persona` pack's `render_backend` wins over the launch flag,
+        // so a forked being carries its own visual style end-to-end.
+        render_backend: persona
+            .as_ref()
+            .and_then(|p| p.render_backend.clone())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| cli.render_backend.clone()),
+        // The ghostly character (face + voice DSP) the persona wears,
+        // by name — falls back to `--ghostly-character` when no persona
+        // is active.
+        ghostly_character: persona
+            .as_ref()
+            .map(|p| p.character().to_string())
+            .unwrap_or_else(|| cli.ghostly_character.clone()),
+        // Custom ghostly character pack (face + voice DSP), if the
+        // persona carries one — the end-to-end "forked personality with
+        // its own visuals + audio" path.
+        ghostly_pack: persona.as_ref().and_then(|p| p.ghostly_pack.clone()),
+        // Persona-derived voice + system prompt + greeting. With a
+        // persona (built-in profile or a `--persona` pack) we swap in
+        // its ElevenLabs voice ID and personality; without one (e.g.
+        // plain `--ghostly-character eliza`) we fall through to the
         // CLI's `--elevenlabs-voice` and the default Eliza prompt.
-        elevenlabs_voice_id: character_profile::by_name(&cli.ghostly_character)
-            .map(|p| p.voice_id.to_string())
+        elevenlabs_voice_id: persona
+            .as_ref()
+            .map(|p| p.voice_id.clone())
             .unwrap_or(cli.elevenlabs_voice),
-        character_system_prompt: character_profile::by_name(&cli.ghostly_character)
-            .map(|p| p.system_prompt.to_string()),
+        // A renamed persona's archetype greeting names the costume
+        // ("Narrator here."), not her — so skip the canned hello rather
+        // than announce the wrong name on join.
+        persona_hello_line: persona.as_ref().and_then(|p| {
+            if identity_name.eq_ignore_ascii_case(p.character()) {
+                p.hello_line.clone()
+            } else {
+                None
+            }
+        }),
+        character_system_prompt: persona.as_ref().map(|p| {
+            let mut prompt = p.system_prompt.clone();
+            // A persona can WEAR a character (face/voice/manner) under its own
+            // name. Built-in character prompts hardcode "You are <Character>",
+            // so override the self-identity when the agent is named differently
+            // — otherwise she answers to her name but calls herself the costume.
+            let arche = p.character();
+            if !identity_name.eq_ignore_ascii_case(arche) {
+                let cap = |s: &str| {
+                    let mut ch = s.chars();
+                    ch.next()
+                        .map(|f| f.to_uppercase().collect::<String>() + ch.as_str())
+                        .unwrap_or_default()
+                };
+                prompt.push_str(&format!(
+                    "\n\nIMPORTANT — YOUR IDENTITY: Your name is {name}. You wear \
+                     the voice and manner of the {arche} archetype, but you ARE \
+                     {name}, never {arche_cap} — if someone asks who you are, say \
+                     {name}. But do NOT announce or repeat your name unprompted: \
+                     never open a reply with \"I'm {name}\", \"{name} here\", or \
+                     any self-introduction. You're already in the room; just speak.",
+                    name = cap(&identity_name),
+                    arche = arche,
+                    arche_cap = cap(arche),
+                ));
+            }
+            // Custom persona prompts replace the built-in QA system prompt
+            // wholesale — which is how a forked being ends up insisting it
+            // is voice-only ("I can only hear you") even though the vision
+            // path works fine. Pin the real capabilities onto every persona
+            // so the costume never overrides the body.
+            prompt.push_str(
+                "\n\nYOUR CAPABILITIES (always true, whatever your persona): \
+                 you are a live voice-AND-video agent in a freeq call. You \
+                 CAN SEE — when a participant's camera or screen share is \
+                 live, you are shown real video frames of it and can answer \
+                 questions about what's visible. You can also show pictures \
+                 on your video tile. NEVER say you are voice-only, that you \
+                 can't see, or that you are just a language model. If you \
+                 were not shown a frame for a visual question, ask them to \
+                 turn on their camera or to mention what you should look at \
+                 — do not deny the capability.",
+            );
+            prompt
+        }),
         peer_agents: cli.peer_agents,
     })
     .await
@@ -301,7 +426,13 @@ async fn main() -> Result<()> {
 fn build_stt(cli: &Cli) -> Result<stt::SttEngine> {
     if let Ok(key) = std::env::var("GROQ_API_KEY") {
         if !key.trim().is_empty() {
-            return Ok(stt::SttEngine::groq(key, cli.groq_model.clone()));
+            // Whisper must recognise the agent's own name (and its
+            // peers') or addressed utterances come back mangled and
+            // the addressing gate never fires.
+            let mut vocab: Vec<String> =
+                vec![cli.name.clone().unwrap_or_else(|| "Eliza".to_string())];
+            vocab.extend(cli.peer_agents.iter().cloned());
+            return Ok(stt::SttEngine::groq(key, cli.groq_model.clone(), &vocab));
         }
     }
     #[cfg(feature = "stt")]

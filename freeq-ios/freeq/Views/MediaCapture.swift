@@ -525,7 +525,10 @@ struct MediaPreviewSheet: View {
     let channel: String
 
     @State private var caption: String = ""
-    @State private var crossPost = false
+    // Private to the channel/DM by default. Two opt-in toggles are the only
+    // way bytes leave freeq. Posting to the feed implies the PDS copy.
+    @State private var sharePds = false
+    @State private var shareBluesky = false
     @State private var uploading = false
     @State private var uploadError: String? = nil
     @FocusState private var captionFocused: Bool
@@ -607,19 +610,44 @@ struct MediaPreviewSheet: View {
                     }
                     .padding(.horizontal, 20)
 
-                    // Cross-post toggle
+                    // Sharing toggles — private to the channel by default.
                     if appState.authenticatedDID != nil {
-                        Toggle(isOn: $crossPost) {
-                            HStack(spacing: 8) {
-                                Image(systemName: "arrow.up.right.circle.fill")
-                                    .font(.system(size: 16))
-                                    .foregroundColor(Color(hex: "0085ff"))
-                                Text("Also post to Bluesky")
-                                    .font(.system(size: 14, weight: .medium))
-                                    .foregroundColor(Theme.textPrimary)
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "lock.fill")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(Theme.textMuted)
+                                Text("Private to \(channel) by default")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Theme.textMuted)
                             }
+                            Toggle(isOn: Binding(
+                                get: { sharePds || shareBluesky },
+                                set: { sharePds = $0 }
+                            )) {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "icloud.and.arrow.up.fill")
+                                        .font(.system(size: 16))
+                                        .foregroundColor(Color(hex: "0085ff"))
+                                    Text("Save a public copy to my PDS")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(Theme.textPrimary)
+                                }
+                            }
+                            .tint(Color(hex: "0085ff"))
+                            .disabled(shareBluesky)
+                            Toggle(isOn: $shareBluesky) {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "arrow.up.right.circle.fill")
+                                        .font(.system(size: 16))
+                                        .foregroundColor(Color(hex: "0085ff"))
+                                    Text("Also post to Bluesky feed")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(Theme.textPrimary)
+                                }
+                            }
+                            .tint(Color(hex: "0085ff"))
                         }
-                        .tint(Color(hex: "0085ff"))
                         .padding(.horizontal, 20)
                         .padding(.vertical, 8)
                     }
@@ -730,9 +758,14 @@ struct MediaPreviewSheet: View {
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
             body.append("Content-Disposition: form-data; name=\"channel\"\r\n\r\n\(channel)\r\n".data(using: .utf8)!)
 
-            if crossPost {
+            // share_bluesky implies share_pds (the feed embed references the blob).
+            if sharePds || shareBluesky {
                 body.append("--\(boundary)\r\n".data(using: .utf8)!)
-                body.append("Content-Disposition: form-data; name=\"cross_post\"\r\n\r\ntrue\r\n".data(using: .utf8)!)
+                body.append("Content-Disposition: form-data; name=\"share_pds\"\r\n\r\ntrue\r\n".data(using: .utf8)!)
+            }
+            if shareBluesky {
+                body.append("--\(boundary)\r\n".data(using: .utf8)!)
+                body.append("Content-Disposition: form-data; name=\"share_bluesky\"\r\n\r\ntrue\r\n".data(using: .utf8)!)
             }
 
             body.append("--\(boundary)\r\n".data(using: .utf8)!)
