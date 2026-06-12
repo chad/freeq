@@ -4,8 +4,9 @@ use clap::Parser;
 #[derive(Parser, Debug, Clone)]
 #[command(name = "freeq-server", version, about)]
 pub struct ServerConfig {
-    /// Plain TCP listener address.
-    #[arg(long, default_value = "127.0.0.1:6667")]
+    /// Plain TCP listener address. (`--bind` kept as an alias — older docs
+    /// and docker-compose files used it.)
+    #[arg(long, alias = "bind", default_value = "127.0.0.1:6667")]
     pub listen_addr: String,
 
     /// TLS listener address. Only active if --tls-cert and --tls-key are set.

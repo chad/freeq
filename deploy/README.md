@@ -1,5 +1,14 @@
 # Deployment
 
+**Map of this directory:** [`miren/`](miren/README.md) is the **recommended
+self-hosting path** — a generalized, parameterized [Miren](https://miren.dev/)
+deploy (server + web client) any user can run from a fresh clone; start with
+[deploy/miren/README.md](miren/README.md). `irc/` is the **maintainer's
+bespoke production deploy** of irc.freeq.at on Miren (hardcoded app name,
+route, and MOTD — reference only), and `staging/` is the same for
+staging.freeq.at. `setup.sh` / `deploy.sh` are the **bare-VPS systemd path**
+(Ubuntu + nginx + certbot), documented below.
+
 ## Initial Setup (Ubuntu VPS)
 
 ```sh
@@ -66,26 +75,35 @@ sudo journalctl -u freeq-server -f   # Tail logs
 | `nginx.conf.template` | Nginx config template (setup.sh substitutes variables) |
 | `freeq-server.service` | Chad's example systemd unit (reference only) |
 | `nginx-irc-freeq-at.conf` | Chad's production nginx config (reference only) |
-| `irc/` | Miren deployment (see below) |
+| `miren/` | **Recommended** generalized Miren deployment (see below) |
+| `irc/` | Maintainer's Miren deploy of irc.freeq.at (reference only) |
+| `staging/` | Maintainer's Miren deploy of staging.freeq.at (reference only) |
 
-## Alternative: Miren Deployment
+## Recommended: Miren Deployment
 
-[Miren](https://miren.dev/) is a self-hosted PaaS. The `irc/` subdirectory contains a complete deployment for Miren:
+[Miren](https://miren.dev/) is a self-hosted, Heroku-style PaaS. The `miren/`
+subdirectory contains a parameterized deployment any user can run from a
+fresh clone:
 
 ```sh
-cd deploy/irc
-./deploy.sh
+DOMAIN=irc.example.com ./deploy/miren/deploy.sh
 ```
 
 This script:
-1. Copies the workspace to a temp directory
-2. Generates a Miren app config and Procfile
+1. Copies the workspace + web client to a temp directory
+2. Generates a Miren app config, Procfile, and Dockerfile
 3. Runs `miren deploy -f`
-4. Sets the route (e.g. `irc.freeq.at`)
+4. Sets the route for your domain
 
 The Procfile runs freeq-server with data stored at `/app/data/`. Miren sets `$PORT` for the web interface.
 
-**Requirements:** Miren CLI installed and configured, route DNS pointing to your Miren instance.
+**Requirements:** Miren CLI installed and logged in, DNS pointing your domain at your Miren instance.
+
+Full quickstart (secrets, TLS, backups, upgrades, federation): [deploy/miren/README.md](miren/README.md).
+
+`irc/` and `staging/` are the maintainer's hardcoded production/staging
+variants of the same approach — useful as reference, not meant to be run by
+self-hosters.
 
 ## Paths
 

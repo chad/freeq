@@ -2,29 +2,39 @@
 
 Run your own freeq server with TLS, the web client, and optional federation.
 
-## Quick Start
+## Recommended: Miren
 
-### From source
+The default self-hosting path. [Miren](https://miren.dev/) is a self-hosted,
+Heroku-style PaaS — one command builds and deploys the IRC server **and** the
+web client, with `$PORT` injection, a `Procfile` process model, and HTTPS
+routing for your domain:
 
 ```bash
+# Prerequisites: a Miren instance + the miren CLI installed and logged in
 git clone https://github.com/chad/freeq
 cd freeq
-cargo build --release -p freeq-server
-
-# Start with defaults (port 6667, no TLS, in-memory)
-./target/release/freeq-server --bind 0.0.0.0:6667
+DOMAIN=irc.example.com ./deploy/miren/deploy.sh
 ```
 
-### With Docker
+Then point DNS (A/AAAA) for `irc.example.com` at your Miren host. Miren's
+router terminates TLS; the web client is served at the root, WebSocket IRC at
+`/irc`, REST API at `/api/v1/*`.
+
+Secrets can be exported before deploying:
 
 ```bash
-docker run -d \
-  -p 6667:6667 -p 8080:8080 \
-  -v freeq-data:/data \
-  ghcr.io/chad/freeq:latest
+OPER_PASSWORD=... BROKER_SHARED_SECRET=... \
+DOMAIN=irc.example.com ./deploy/miren/deploy.sh
 ```
 
-### With Docker Compose
+The full 10-minute walkthrough — secrets, domain/TLS, where the SQLite data
+lives and how to back it up, upgrades, the auth broker, and federation flags
+— is in [deploy/miren/README.md](../deploy/miren/README.md).
+
+## Fallback: Docker Compose
+
+If you don't run Miren, Docker Compose gives you the same stack (server +
+web client, with optional nginx TLS termination and OAuth broker):
 
 ```bash
 git clone https://github.com/chad/freeq
@@ -42,6 +52,29 @@ For the OAuth broker (needed for web client AT Protocol login):
 ```bash
 docker compose --profile with-broker up -d
 ```
+
+Plain Docker, without compose:
+
+```bash
+docker run -d \
+  -p 6667:6667 -p 8080:8080 \
+  -v freeq-data:/data \
+  ghcr.io/chad/freeq:latest
+```
+
+## From source
+
+```bash
+git clone https://github.com/chad/freeq
+cd freeq
+cargo build --release -p freeq-server
+
+# Start with defaults (port 6667, no TLS, in-memory)
+./target/release/freeq-server --bind 0.0.0.0:6667
+```
+
+For a bare-VPS install with systemd + nginx + certbot, see
+[deploy/README.md](../deploy/README.md) (`./deploy/setup.sh yourdomain.com --nginx`).
 
 ## Configuration Reference
 
