@@ -185,7 +185,13 @@ logs (`/tmp/diag-rev-{yokota-l1qn,olive-ibl5}.log`):
 
 - **Both joined**: my round-8 MCP test call was never ended (the bridge's
   disconnect failed silently) — both bots correctly rejoined the still-live
-  session on reconnect. Stale input, not a bug.
+  session on reconnect. Deeper root cause found while cleaning up: the bot
+  NEVER sent `av-leave` (`ActiveCall::drop` only tore down MoQ), so its
+  participant slot stayed active server-side forever — and the server only
+  auto-ends a session when its last participant *leaves*. Abandoned sessions
+  were therefore immortal, re-summoning every bot on each reconnect.
+  **Fixed in `3ef287a`**: Drop now sends av-leave (idempotent on
+  already-ended sessions); at shutdown the QUIT teardown cleans the slot.
 - **Yokota silent**: lonely watchdog left at 02:30:41 — 55 s BEFORE the owner
   joined at 02:31:36 — and `av-state=joined` was a Noop, so nothing ever
   re-summoned it. **Fixed in `0c8dd68`**: a HUMAN joining a call in one of
