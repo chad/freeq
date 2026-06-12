@@ -19,11 +19,15 @@ cp -r "$REPO_ROOT/freeq-server" "$TMPDIR/"
 # freeq-av-client is needed if av-native feature is enabled
 [ -d "$REPO_ROOT/freeq-av-client" ] && cp -r "$REPO_ROOT/freeq-av-client" "$TMPDIR/"
 
-# Stub ALL other workspace members — Cargo needs them to exist but we don't compile them.
-# Copy the full source tree so Cargo.toml references resolve, but cargo-chef/build
-# will only compile freeq-server and its actual deps (freeq-sdk).
-for dir in freeq-tui freeq-auth-broker freeq-bots freeq-bot-id freeq-sdk-ffi freeq-windows-core; do
-    [ -d "$REPO_ROOT/$dir" ] && cp -r "$REPO_ROOT/$dir" "$TMPDIR/"
+# Cargo needs every workspace member referenced by Cargo.toml to exist on
+# disk, even if cargo-build only compiles freeq-server. Derive the member
+# list from Cargo.toml itself so this can never go stale again (nested
+# members like freeq-agent-kit/examples/* are covered by copying the top-
+# level directory).
+for dir in $(sed -n '/^members = \[/,/^\]/p' "$REPO_ROOT/Cargo.toml" | grep -o '"[^"]*"' | tr -d '"' | cut -d/ -f1 | sort -u); do
+    if [ -d "$REPO_ROOT/$dir" ] && [ ! -d "$TMPDIR/$dir" ]; then
+        cp -r "$REPO_ROOT/$dir" "$TMPDIR/"
+    fi
 done
 
 # Copy web client source (without node_modules/dist/tauri)

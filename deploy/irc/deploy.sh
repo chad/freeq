@@ -17,11 +17,14 @@ cp -r "$REPO_ROOT/freeq-sdk" "$TMPDIR/"
 cp -r "$REPO_ROOT/freeq-server" "$TMPDIR/"
 
 # Cargo needs every workspace member referenced by Cargo.toml to exist on
-# disk, even if cargo-build only compiles freeq-server. Copy the whole
-# source tree for the rest — cargo will skip them since they're not deps
-# of `--package freeq-server`. (Mirror of deploy/staging/deploy.sh.)
-for dir in freeq-tui freeq-auth-broker freeq-bots freeq-bot-id freeq-sdk-ffi freeq-windows-core freeq-av-client; do
-    [ -d "$REPO_ROOT/$dir" ] && cp -r "$REPO_ROOT/$dir" "$TMPDIR/"
+# disk, even if cargo-build only compiles freeq-server. Derive the member
+# list from Cargo.toml itself so this can never go stale again (nested
+# members like freeq-agent-kit/examples/* are covered by copying the top-
+# level directory).
+for dir in $(sed -n '/^members = \[/,/^\]/p' "$REPO_ROOT/Cargo.toml" | grep -o '"[^"]*"' | tr -d '"' | cut -d/ -f1 | sort -u); do
+    if [ -d "$REPO_ROOT/$dir" ] && [ ! -d "$TMPDIR/$dir" ]; then
+        cp -r "$REPO_ROOT/$dir" "$TMPDIR/"
+    fi
 done
 
 # Miren app config
