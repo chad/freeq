@@ -12,13 +12,13 @@
 //!   freeq-av-image --sfu https://irc.freeq.at:8080/av/moq \
 //!     --session <SID> --nick pixbot --instance 0a1b2c3d --image cat.png
 
-use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use clap::Parser;
-use freeq_av::{broadcast_path, AvConfig, AvSession, Speaker};
+use freeq_av::{AvConfig, AvSession, Speaker, broadcast_path};
 use iroh_live::media::format::{PixelFormat, VideoFormat, VideoFrame};
 use iroh_live::media::traits::VideoSource;
 
@@ -106,7 +106,9 @@ impl VideoSource for StaticImage {
 /// Decode `path` and contain-fit it (preserving aspect) onto a black
 /// TILE_W×TILE_H RGBA canvas. Returns the raw RGBA buffer as `Bytes`.
 fn load_frame(path: &str) -> anyhow::Result<bytes::Bytes> {
-    let src = image::open(path).with_context(|| format!("open image {path}"))?.to_rgba8();
+    let src = image::open(path)
+        .with_context(|| format!("open image {path}"))?
+        .to_rgba8();
     let (sw, sh) = src.dimensions();
     let scale = (TILE_W as f32 / sw as f32).min(TILE_H as f32 / sh as f32);
     let nw = ((sw as f32 * scale).round() as u32).max(1);
@@ -127,8 +129,7 @@ fn load_frame(path: &str) -> anyhow::Result<bytes::Bytes> {
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 

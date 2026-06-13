@@ -16,11 +16,8 @@ use std::time::Duration;
 
 use freeq_claude_mcp::{OrcConfig, Orchestrator, SayPriority, TileOverlay};
 use rmcp::{
-    ErrorData as McpError, ServerHandler, ServiceExt,
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::*,
-    schemars, tool, tool_handler, tool_router,
-    transport::stdio,
+    ErrorData as McpError, ServerHandler, ServiceExt, handler::server::wrapper::Parameters,
+    model::*, schemars, tool, tool_handler, tool_router, transport::stdio,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -207,7 +204,6 @@ fn default_recall_limit() -> u32 {
 #[derive(Clone)]
 pub struct FreeqClaudeHandler {
     orc: Arc<Mutex<Option<Arc<Orchestrator>>>>,
-    tool_router: ToolRouter<FreeqClaudeHandler>,
 }
 
 #[tool_router]
@@ -215,7 +211,6 @@ impl FreeqClaudeHandler {
     pub fn new() -> Self {
         Self {
             orc: Arc::new(Mutex::new(None)),
-            tool_router: Self::tool_router(),
         }
     }
 
@@ -229,7 +224,9 @@ a human to start one.")]
         Parameters(args): Parameters<ConnectArgs>,
     ) -> Result<CallToolResult, McpError> {
         if self.orc.lock().await.is_some() {
-            return Ok(error_text("already connected — call freeq_disconnect first"));
+            return Ok(error_text(
+                "already connected — call freeq_disconnect first",
+            ));
         }
         let nick = args.nick.unwrap_or_else(|| "claude".to_string());
         let identity_name = args.identity_name.unwrap_or_else(|| nick.clone());
@@ -449,7 +446,10 @@ dashboards (deploys, VMs, CI, services). Clear with freeq_show kind:clear.")]
         let Some(orc) = orc else {
             return Ok(error_text("not connected — call freeq_connect first"));
         };
-        orc.control.set_overlay(TileOverlay::StatusGrid { title: args.title, items: args.items });
+        orc.control.set_overlay(TileOverlay::StatusGrid {
+            title: args.title,
+            items: args.items,
+        });
         Ok(success_json(serde_json::json!({ "shown": true })))
     }
 
@@ -491,7 +491,10 @@ changes you've made before committing. Clear with freeq_show kind:clear.")]
         let Some(orc) = orc else {
             return Ok(error_text("not connected — call freeq_connect first"));
         };
-        orc.control.set_overlay(TileOverlay::Diff { path: args.path, lines: args.lines });
+        orc.control.set_overlay(TileOverlay::Diff {
+            path: args.path,
+            lines: args.lines,
+        });
         Ok(success_json(serde_json::json!({ "shown": true })))
     }
 
@@ -510,7 +513,10 @@ Clear with freeq_show kind:clear.")]
         let Some(orc) = orc else {
             return Ok(error_text("not connected — call freeq_connect first"));
         };
-        orc.control.set_overlay(TileOverlay::Agenda { title: args.title, items: args.items });
+        orc.control.set_overlay(TileOverlay::Agenda {
+            title: args.title,
+            items: args.items,
+        });
         Ok(success_json(serde_json::json!({ "shown": true })))
     }
 
@@ -538,8 +544,9 @@ Pass an empty label to clear.")]
         if args.label.is_empty() {
             orc.control.set_overlay(TileOverlay::None);
         } else {
-            orc.control
-                .set_overlay(TileOverlay::Status { label: args.label.clone() });
+            orc.control.set_overlay(TileOverlay::Status {
+                label: args.label.clone(),
+            });
         }
         Ok(success_json(serde_json::json!({
             "status": args.label,
@@ -626,7 +633,9 @@ no match.")]
         }
     }
 
-    #[tool(description = "List the current AV participants we know about (every nick we've subscribed to). Useful before freeq_look to pick which speaker.")]
+    #[tool(
+        description = "List the current AV participants we know about (every nick we've subscribed to). Useful before freeq_look to pick which speaker."
+    )]
     async fn freeq_participants(&self) -> Result<CallToolResult, McpError> {
         let orc = {
             let g = self.orc.lock().await;
@@ -647,6 +656,12 @@ no match.")]
         };
         let _ = orc.disconnect().await;
         Ok(success_json(serde_json::json!({ "was_connected": true })))
+    }
+}
+
+impl Default for FreeqClaudeHandler {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -682,10 +697,11 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .with_ansi(false)
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new(
                     "freeq_claude_mcp=info,freeq_eliza=info,freeq_av=info,info",
-                )),
+                )
+            }),
         )
         .init();
 

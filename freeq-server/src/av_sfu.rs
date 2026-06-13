@@ -7,7 +7,10 @@
 //! Uses moq_relay::Cluster to route audio streams between all participants.
 
 #[cfg(feature = "av-native")]
-use std::sync::{Arc, atomic::{AtomicU64, Ordering}};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 /// Shared SFU state, accessible from the web server for WebSocket MoQ connections.
 #[cfg(feature = "av-native")]
@@ -21,7 +24,7 @@ pub struct SfuState {
 /// Also spawns the QUIC accept loop if a port is provided.
 #[cfg(feature = "av-native")]
 pub async fn init_sfu(quic_port: Option<u16>) -> anyhow::Result<Arc<SfuState>> {
-    use moq_relay::{Cluster, ClusterConfig, Auth, AuthConfig};
+    use moq_relay::{Auth, AuthConfig, Cluster, ClusterConfig};
 
     // QUIC server config (also used for cluster's internal client)
     let mut client_config = moq_native::ClientConfig::default();
@@ -217,10 +220,18 @@ fn axum_to_tungstenite(
     use qmux::tungstenite;
     match message {
         Ok(msg) => Ok(match msg {
-            axum::extract::ws::Message::Text(text) => tungstenite::Message::Text(text.to_string().into()),
-            axum::extract::ws::Message::Binary(bin) => tungstenite::Message::Binary(Vec::from(bin).into()),
-            axum::extract::ws::Message::Ping(ping) => tungstenite::Message::Ping(Vec::from(ping).into()),
-            axum::extract::ws::Message::Pong(pong) => tungstenite::Message::Pong(Vec::from(pong).into()),
+            axum::extract::ws::Message::Text(text) => {
+                tungstenite::Message::Text(text.to_string().into())
+            }
+            axum::extract::ws::Message::Binary(bin) => {
+                tungstenite::Message::Binary(Vec::from(bin).into())
+            }
+            axum::extract::ws::Message::Ping(ping) => {
+                tungstenite::Message::Ping(Vec::from(ping).into())
+            }
+            axum::extract::ws::Message::Pong(pong) => {
+                tungstenite::Message::Pong(Vec::from(pong).into())
+            }
             axum::extract::ws::Message::Close(close) => {
                 tungstenite::Message::Close(close.map(|c| tungstenite::protocol::CloseFrame {
                     code: c.code.into(),
@@ -236,14 +247,29 @@ fn axum_to_tungstenite(
 #[allow(clippy::result_large_err)]
 fn tungstenite_to_axum(
     message: qmux::tungstenite::Message,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<axum::extract::ws::Message, qmux::tungstenite::Error>> + Send + Sync>> {
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<
+                Output = Result<axum::extract::ws::Message, qmux::tungstenite::Error>,
+            > + Send
+            + Sync,
+    >,
+> {
     use qmux::tungstenite;
     Box::pin(async move {
         Ok(match message {
-            tungstenite::Message::Text(text) => axum::extract::ws::Message::Text(text.to_string().into()),
-            tungstenite::Message::Binary(bin) => axum::extract::ws::Message::Binary(Vec::from(bin).into()),
-            tungstenite::Message::Ping(ping) => axum::extract::ws::Message::Ping(Vec::from(ping).into()),
-            tungstenite::Message::Pong(pong) => axum::extract::ws::Message::Pong(Vec::from(pong).into()),
+            tungstenite::Message::Text(text) => {
+                axum::extract::ws::Message::Text(text.to_string().into())
+            }
+            tungstenite::Message::Binary(bin) => {
+                axum::extract::ws::Message::Binary(Vec::from(bin).into())
+            }
+            tungstenite::Message::Ping(ping) => {
+                axum::extract::ws::Message::Ping(Vec::from(ping).into())
+            }
+            tungstenite::Message::Pong(pong) => {
+                axum::extract::ws::Message::Pong(Vec::from(pong).into())
+            }
             tungstenite::Message::Frame(_) => unreachable!(),
             tungstenite::Message::Close(close) => {
                 axum::extract::ws::Message::Close(close.map(|c| axum::extract::ws::CloseFrame {

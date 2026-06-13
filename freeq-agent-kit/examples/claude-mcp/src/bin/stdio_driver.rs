@@ -101,10 +101,11 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new(
                     "freeq_claude_mcp=info,freeq_eliza=info,freeq_av=info,info",
-                )),
+                )
+            }),
         )
         .init();
 
@@ -124,7 +125,13 @@ async fn main() -> Result<()> {
             }
         };
         match cmd {
-            Cmd::Connect { channel, nick, identity_name, start_if_idle, peer_agents } => {
+            Cmd::Connect {
+                channel,
+                nick,
+                identity_name,
+                start_if_idle,
+                peer_agents,
+            } => {
                 if orc.lock().await.is_some() {
                     emit_error("already connected");
                     continue;
@@ -246,7 +253,11 @@ async fn main() -> Result<()> {
                     emit_error("not connected");
                 }
             }
-            Cmd::ShowFile { path, line_start, line_end } => {
+            Cmd::ShowFile {
+                path,
+                line_start,
+                line_end,
+            } => {
                 if let Some(o) = orc.lock().await.as_ref() {
                     match std::fs::read_to_string(&path) {
                         Ok(body) => {
@@ -257,8 +268,14 @@ async fn main() -> Result<()> {
                                 .take((end - line_start + 1) as usize)
                                 .map(|s| s.to_string())
                                 .collect();
-                            o.control.set_overlay(TileOverlay::File { path: path.clone(), lines, line_start });
-                            emit_event(&serde_json::json!({ "event": "shown", "kind": "file", "path": path }));
+                            o.control.set_overlay(TileOverlay::File {
+                                path: path.clone(),
+                                lines,
+                                line_start,
+                            });
+                            emit_event(
+                                &serde_json::json!({ "event": "shown", "kind": "file", "path": path }),
+                            );
                         }
                         Err(e) => emit_error(&format!("read {}: {e}", path)),
                     }
@@ -273,9 +290,13 @@ async fn main() -> Result<()> {
                     if label.is_empty() {
                         o.control.set_overlay(TileOverlay::None);
                     } else {
-                        o.control.set_overlay(TileOverlay::Status { label: label.clone() });
+                        o.control.set_overlay(TileOverlay::Status {
+                            label: label.clone(),
+                        });
                     }
-                    emit_event(&serde_json::json!({ "event": "status", "label": label, "thinking": thinking }));
+                    emit_event(
+                        &serde_json::json!({ "event": "status", "label": label, "thinking": thinking }),
+                    );
                 } else {
                     emit_error("not connected");
                 }
@@ -297,7 +318,9 @@ async fn main() -> Result<()> {
                 match describe_via_vision(
                     &o,
                     speaker.as_deref(),
-                    question.as_deref().unwrap_or("What do you see in this frame?"),
+                    question
+                        .as_deref()
+                        .unwrap_or("What do you see in this frame?"),
                 )
                 .await
                 {

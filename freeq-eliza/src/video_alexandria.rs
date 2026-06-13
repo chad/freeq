@@ -68,9 +68,27 @@ impl Env {
         let speaking = level > 0.03;
         let hearing = peer > 0.03 && !speaking && !thinking;
         let think = thinking && !speaking;
-        smooth(&mut self.speak, if speaking { 1.0 } else { 0.0 }, dt, 0.10, 0.45);
-        smooth(&mut self.think, if think { 1.0 } else { 0.0 }, dt, 0.14, 0.50);
-        smooth(&mut self.hear, if hearing { 1.0 } else { 0.0 }, dt, 0.12, 0.45);
+        smooth(
+            &mut self.speak,
+            if speaking { 1.0 } else { 0.0 },
+            dt,
+            0.10,
+            0.45,
+        );
+        smooth(
+            &mut self.think,
+            if think { 1.0 } else { 0.0 },
+            dt,
+            0.14,
+            0.50,
+        );
+        smooth(
+            &mut self.hear,
+            if hearing { 1.0 } else { 0.0 },
+            dt,
+            0.12,
+            0.45,
+        );
         smooth(&mut self.level, level, dt, 0.05, 0.22);
         smooth(&mut self.peer, peer, dt, 0.06, 0.30);
     }
@@ -86,12 +104,37 @@ impl Env {
 /// Right-half circuit traces: tower-edge → bends → LED pad. The left
 /// half is the mirror (`x → 640 − x`). Authored against the design grid.
 const TRACES_R: &[&[(f32, f32)]] = &[
-    &[(352.0, 140.0), (390.0, 140.0), (405.0, 125.0), (430.0, 125.0)],
-    &[(350.0, 160.0), (400.0, 160.0), (415.0, 175.0), (445.0, 175.0)],
-    &[(352.0, 188.0), (385.0, 188.0), (400.0, 203.0), (433.0, 203.0)],
-    &[(340.0, 118.0), (370.0, 118.0), (385.0, 103.0), (414.0, 103.0)],
+    &[
+        (352.0, 140.0),
+        (390.0, 140.0),
+        (405.0, 125.0),
+        (430.0, 125.0),
+    ],
+    &[
+        (350.0, 160.0),
+        (400.0, 160.0),
+        (415.0, 175.0),
+        (445.0, 175.0),
+    ],
+    &[
+        (352.0, 188.0),
+        (385.0, 188.0),
+        (400.0, 203.0),
+        (433.0, 203.0),
+    ],
+    &[
+        (340.0, 118.0),
+        (370.0, 118.0),
+        (385.0, 103.0),
+        (414.0, 103.0),
+    ],
     &[(332.0, 98.0), (355.0, 98.0), (370.0, 83.0), (396.0, 83.0)],
-    &[(368.0, 232.0), (398.0, 232.0), (410.0, 244.0), (436.0, 244.0)],
+    &[
+        (368.0, 232.0),
+        (398.0, 232.0),
+        (410.0, 244.0),
+        (436.0, 244.0),
+    ],
 ];
 
 /// A trace polyline (owned, mirrored as needed) + its total length.
@@ -211,9 +254,7 @@ pub fn coin_svg(t: f32, e: &Env) -> String {
         let d: String = pts
             .iter()
             .enumerate()
-            .map(|(i, (x, y))| {
-                format!("{}{x:.1} {y:.1}", if i == 0 { "M " } else { " L " })
-            })
+            .map(|(i, (x, y))| format!("{}{x:.1} {y:.1}", if i == 0 { "M " } else { " L " }))
             .collect();
         trace_svg.push_str(&format!(
             r##"<path d="{d}" fill="none" stroke="#1f1209" stroke-width="4" stroke-linejoin="round"/>
@@ -296,8 +337,8 @@ pub fn coin_svg(t: f32, e: &Env) -> String {
         tower.push_str(&format!(
             r##"<g transform="translate(2 2)" fill="#241308" stroke="none">{shape_shadow}</g>
 <g fill="{tower_fill}" stroke="{tower_line}" stroke-width="1.6">{shape}</g>"##,
-            shape_shadow = shape
-                .replace(&format!(r##"fill="{tower_fill}""##), r##"fill="#241308""##),
+            shape_shadow =
+                shape.replace(&format!(r##"fill="{tower_fill}""##), r##"fill="#241308""##),
         ));
     };
     // Foundation, base wall, end bastions + crenellations.
@@ -353,7 +394,7 @@ pub fn coin_svg(t: f32, e: &Env) -> String {
         let lit = (0.12
             + e.speak * 0.88 * vu_lit
             + e.think * 0.55 * flicker
-            + idle * 0.10 * (((t * 0.4 + x * 0.7 + y).sin() * 0.5 + 0.5) as f32).powi(2))
+            + idle * 0.10 * ((t * 0.4 + x * 0.7 + y).sin() * 0.5 + 0.5).powi(2))
         .clamp(0.0, 1.0);
         // Crossfade window colour from dark socket to lit cyan.
         wins.push_str(&format!(
@@ -373,12 +414,9 @@ pub fn coin_svg(t: f32, e: &Env) -> String {
     // ── Beacon: breath (idle) / heartbeat (thinking) / flare (speaking) ──
     let beat = ((t * 2.4).sin() * 0.5 + 0.5).powi(2);
     let breath_g = (t * 1.5).sin() * 0.5 + 0.5;
-    let beacon_r = 11.0
-        + idle * 3.0 * breath_g
-        + e.think * 6.0 * beat
-        + e.speak * (10.0 + 30.0 * e.level);
-    let beacon_op = (0.22 + 0.12 * breath_g * idle + 0.30 * e.think * beat
-        - 0.10 * e.hear
+    let beacon_r =
+        11.0 + idle * 3.0 * breath_g + e.think * 6.0 * beat + e.speak * (10.0 + 30.0 * e.level);
+    let beacon_op = (0.22 + 0.12 * breath_g * idle + 0.30 * e.think * beat - 0.10 * e.hear
         + e.speak * (0.30 + 0.40 * e.level))
         .clamp(0.05, 0.95);
     let flame_s = 1.0 + 0.35 * e.speak * e.level + 0.08 * (t * 3.1).sin();
@@ -525,12 +563,8 @@ pub(crate) fn render_loop(tile: VideoTile) {
         let thinking = tile.thinking.load(Ordering::Relaxed);
 
         let rgba = r.frame_rgba_full(t, level, peer, thinking);
-        let frame = VideoFrame::new_rgba(
-            bytes::Bytes::from(rgba),
-            VIDEO_W,
-            VIDEO_H,
-            Duration::ZERO,
-        );
+        let frame =
+            VideoFrame::new_rgba(bytes::Bytes::from(rgba), VIDEO_W, VIDEO_H, Duration::ZERO);
         if let Ok(mut g) = tile.latest.lock() {
             *g = Some(frame);
         }
@@ -584,7 +618,10 @@ mod tests {
             .chunks_exact(4)
             .filter(|p| p[0] as u16 + p[1] as u16 + p[2] as u16 > 40)
             .count();
-        assert!(lit > 5000, "coin should fill a chunk of the frame, lit={lit}");
+        assert!(
+            lit > 5000,
+            "coin should fill a chunk of the frame, lit={lit}"
+        );
     }
 
     #[test]
@@ -616,7 +653,11 @@ mod tests {
             e.step(0.7, 0.0, true, 1.0 / 15.0);
         }
         assert!(e.speak > 0.8, "speaking should take over: {}", e.speak);
-        assert!(e.think < 0.4, "thinking should fade under speech: {}", e.think);
+        assert!(
+            e.think < 0.4,
+            "thinking should fade under speech: {}",
+            e.think
+        );
     }
 
     #[test]
@@ -625,6 +666,9 @@ mod tests {
         assert_eq!(point_along(&pts, 0.0), (0.0, 0.0));
         assert_eq!(point_along(&pts, 1.0), (10.0, 10.0));
         let (x, y) = point_along(&pts, 0.5);
-        assert!((x - 10.0).abs() < 0.01 && y.abs() < 0.01, "midpoint at the bend: ({x},{y})");
+        assert!(
+            (x - 10.0).abs() < 0.01 && y.abs() < 0.01,
+            "midpoint at the bend: ({x},{y})"
+        );
     }
 }

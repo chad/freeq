@@ -75,8 +75,18 @@ async fn start_server_with_db() -> (
 async fn authenticate(irc: std::net::SocketAddr, key: PrivateKey) -> mpsc::Receiver<Event> {
     let mut rx = connect_authenticated(irc, key).await;
     wait_for(&mut rx, |e| matches!(e, Event::Connected), "connected").await;
-    wait_for(&mut rx, |e| matches!(e, Event::Authenticated { .. }), "auth").await;
-    wait_for(&mut rx, |e| matches!(e, Event::Registered { .. }), "registered").await;
+    wait_for(
+        &mut rx,
+        |e| matches!(e, Event::Authenticated { .. }),
+        "auth",
+    )
+    .await;
+    wait_for(
+        &mut rx,
+        |e| matches!(e, Event::Registered { .. }),
+        "registered",
+    )
+    .await;
     tokio::time::sleep(Duration::from_millis(200)).await;
     rx
 }

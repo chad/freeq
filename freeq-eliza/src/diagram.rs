@@ -125,9 +125,10 @@ impl Diagram {
         }
 
         for edge in &self.edges {
-            let (Some(&(x1, y1)), Some(&(x2, y2))) =
-                (centres.get(edge.from.as_str()), centres.get(edge.to.as_str()))
-            else {
+            let (Some(&(x1, y1)), Some(&(x2, y2))) = (
+                centres.get(edge.from.as_str()),
+                centres.get(edge.to.as_str()),
+            ) else {
                 continue;
             };
             steps.push(Step::Arrow {
@@ -211,7 +212,7 @@ const RELATIONS: &[&str] = &[
 const ARTICLES: &[&str] = &["the ", "a ", "an ", "our ", "their "];
 
 fn split_sentences(text: &str) -> impl Iterator<Item = &str> {
-    text.split(|c: char| c == '.' || c == '?' || c == '!' || c == ';' || c == '\n')
+    text.split(['.', '?', '!', ';', '\n'])
         .map(str::trim)
         .filter(|s| !s.is_empty())
 }
@@ -327,8 +328,7 @@ fn strip_article(s: &str) -> &str {
 }
 
 fn trim_trailing_punct(s: &str) -> &str {
-    s.trim_end_matches(|c: char| matches!(c, ',' | ':' | '"' | '\''))
-        .trim()
+    s.trim_end_matches([',', ':', '"', '\'']).trim()
 }
 
 #[cfg(test)]

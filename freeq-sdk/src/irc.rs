@@ -120,23 +120,32 @@ impl fmt::Display for Message {
 
         if let Some(ref prefix) = self.prefix {
             // Strip control characters from prefix to prevent protocol injection
-            let safe: String = prefix.chars().filter(|c| *c != '\r' && *c != '\n' && *c != '\0').collect();
+            let safe: String = prefix
+                .chars()
+                .filter(|c| *c != '\r' && *c != '\n' && *c != '\0')
+                .collect();
             write!(f, ":{safe} ")?;
         }
         write!(f, "{}", self.command)?;
         for (i, param) in self.params.iter().enumerate() {
             // Strip CRLF/NUL from all params to prevent protocol injection
-            let safe: String = param.chars().filter(|c| *c != '\r' && *c != '\n' && *c != '\0').collect();
+            let safe: String = param
+                .chars()
+                .filter(|c| *c != '\r' && *c != '\n' && *c != '\0')
+                .collect();
             let is_last = i == self.params.len() - 1;
-            if is_last
-                && (safe.contains(' ') || safe.starts_with(':') || safe.is_empty())
-            {
+            if is_last && (safe.contains(' ') || safe.starts_with(':') || safe.is_empty()) {
                 write!(f, " :{safe}")?;
             } else if !is_last && safe.contains(' ') {
                 // Space in non-last param: force to trailing position by
                 // writing remaining params as a single trailing
-                let remaining: Vec<String> = self.params[i..].iter()
-                    .map(|p| p.chars().filter(|c| *c != '\r' && *c != '\n' && *c != '\0').collect())
+                let remaining: Vec<String> = self.params[i..]
+                    .iter()
+                    .map(|p| {
+                        p.chars()
+                            .filter(|c| *c != '\r' && *c != '\n' && *c != '\0')
+                            .collect()
+                    })
                     .collect();
                 write!(f, " :{}", remaining.join(" "))?;
                 return Ok(());
@@ -282,7 +291,10 @@ mod tests {
         let msg = Message::parse(
             "@+freeq.at/pin=01KM9EDCZD9QVT7G4PYPR2C9TG :zapnap!~u@host NOTICE #naptest :\x01ACTION pinned a message\x01"
         ).unwrap();
-        assert_eq!(msg.tags.get("+freeq.at/pin").unwrap(), "01KM9EDCZD9QVT7G4PYPR2C9TG");
+        assert_eq!(
+            msg.tags.get("+freeq.at/pin").unwrap(),
+            "01KM9EDCZD9QVT7G4PYPR2C9TG"
+        );
         assert_eq!(msg.prefix.as_deref(), Some("zapnap!~u@host"));
         assert_eq!(msg.command, "NOTICE");
         assert_eq!(msg.params[0], "#naptest");

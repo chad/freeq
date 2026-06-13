@@ -89,7 +89,9 @@ pub struct OrcConfig {
 /// asked something — always speaks. `Volunteer` means the bot decided
 /// the utterance is worth surfacing on its own — subject to the
 /// cooldown to prevent room domination.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum SayPriority {
     Addressed,
@@ -152,10 +154,6 @@ pub struct Orchestrator {
     /// Last time a `Volunteer`-priority utterance was spoken. Used to
     /// enforce `volunteer_cooldown`.
     last_volunteer_at: AsyncMutex<Option<Instant>>,
-    /// Wall-clock ms of the most recent `addressed=true` transcript.
-    /// Heartbeat fires when this is older than the threshold and no
-    /// `say` has happened since.
-    last_addressed_ms: Arc<AtomicI64>,
     /// Wall-clock ms of the most recent `say` (any priority). Heartbeat
     /// also counts as a `say` write so a heartbeat doesn't immediately
     /// trigger another.
@@ -179,8 +177,7 @@ impl Orchestrator {
     pub async fn connect(cfg: OrcConfig) -> Result<Self> {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-        let ident = identity::load_or_create(&cfg.identity_name)
-            .context("loading bot identity")?;
+        let ident = identity::load_or_create(&cfg.identity_name).context("loading bot identity")?;
         tracing::info!(did = %ident.did, "bot identity ready");
 
         let stt = Arc::new(build_stt(&cfg)?);
@@ -326,7 +323,9 @@ impl Orchestrator {
         }
         handles.push(tokio::spawn(async move {
             let mut guard = av_for_loop.lock().await;
-            let Some(session) = guard.as_mut() else { return };
+            let Some(session) = guard.as_mut() else {
+                return;
+            };
             while let Some(participant) = session.recv().await {
                 if shutdown_for_loop.load(Ordering::Relaxed) {
                     break;
@@ -389,7 +388,11 @@ impl Orchestrator {
             let mut interval = tokio::time::interval(Duration::from_millis(50));
             while !shutdown_for_pump.load(Ordering::Relaxed) {
                 interval.tick().await;
-                let lvl = if speaker_for_pump.is_speaking() { 1.0 } else { 0.0 };
+                let lvl = if speaker_for_pump.is_speaking() {
+                    1.0
+                } else {
+                    0.0
+                };
                 control_for_pump.set_self_level(lvl);
             }
         }));
@@ -507,7 +510,6 @@ impl Orchestrator {
             say_active,
             volunteer_cooldown: Duration::from_secs(cfg.volunteer_cooldown_secs),
             last_volunteer_at: AsyncMutex::new(None),
-            last_addressed_ms,
             last_say_ms,
             _join_handles: handles,
             _av_session: av_session,
@@ -530,10 +532,10 @@ impl Orchestrator {
             for (nick, vh) in videos.iter() {
                 let nick_lc = nick.to_lowercase();
                 let prefix = nick_lc.split('-').next().unwrap_or(&nick_lc).to_string();
-                if nick_lc == target_lc || prefix == target_lc {
-                    if let Some(f) = vh.latest() {
-                        return Some((nick.clone(), f));
-                    }
+                if (nick_lc == target_lc || prefix == target_lc)
+                    && let Some(f) = vh.latest()
+                {
+                    return Some((nick.clone(), f));
                 }
             }
             return None;
@@ -611,7 +613,10 @@ impl Orchestrator {
                 let elapsed = t.elapsed();
                 if elapsed < self.volunteer_cooldown {
                     let remaining = self.volunteer_cooldown.saturating_sub(elapsed).as_secs();
-                    return Ok(SayResult { suppressed: true, cooldown_remaining_secs: remaining });
+                    return Ok(SayResult {
+                        suppressed: true,
+                        cooldown_remaining_secs: remaining,
+                    });
                 }
             }
             *last = Some(Instant::now());
@@ -674,7 +679,10 @@ impl Orchestrator {
             // empty — so recall hits surface uniformly.
             let _ = mem.record(&self.channel, &self.nick, text, "");
         }
-        Ok(SayResult { suppressed: false, cooldown_remaining_secs: 0 })
+        Ok(SayResult {
+            suppressed: false,
+            cooldown_remaining_secs: 0,
+        })
     }
 
     /// Returns true while there's audio still queued / being spoken.
@@ -778,7 +786,12 @@ async fn transcribe_participant(args: TranscribeArgs) {
         memory,
         tx,
     } = args;
-    let AvParticipant { path, nick, mut audio, .. } = participant;
+    let AvParticipant {
+        path,
+        nick,
+        mut audio,
+        ..
+    } = participant;
     tracing::info!(%nick, %path, "participant audio live — transcribing");
     let mut segmenter = VadSegmenter::new(VadConfig::default());
     // Barge-in state: count of consecutive loud frames from this peer.
@@ -805,7 +818,11 @@ async fn transcribe_participant(args: TranscribeArgs) {
         // Snap up to the peak, ease down — same shape the eliza tile uses.
         let peak = pcm.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
         let prev = f32::from_bits(control.peer_level.load(Ordering::Relaxed));
-        let smoothed = if peak > prev { peak } else { prev * 0.92 + peak * 0.08 };
+        let smoothed = if peak > prev {
+            peak
+        } else {
+            prev * 0.92 + peak * 0.08
+        };
         control.set_peer_level(smoothed);
 
         // Auto-thinking: voice activity flips the face's working
@@ -819,11 +836,12 @@ async fn transcribe_participant(args: TranscribeArgs) {
                 control.set_thinking(true);
             }
             last_voice_at = Some(Instant::now());
-        } else if let Some(t) = last_voice_at {
-            if t.elapsed() > VOICE_GRACE && !say_active.load(Ordering::Relaxed) {
-                control.set_thinking(false);
-                last_voice_at = None;
-            }
+        } else if let Some(t) = last_voice_at
+            && t.elapsed() > VOICE_GRACE
+            && !say_active.load(Ordering::Relaxed)
+        {
+            control.set_thinking(false);
+            last_voice_at = None;
         }
 
         // Barge-in: when smoothed peer audio is sustained above the
@@ -849,7 +867,7 @@ async fn transcribe_participant(args: TranscribeArgs) {
                 sustained_loud = sustained_loud.saturating_sub(1);
             }
             peak_log_throttle = peak_log_throttle.wrapping_add(1);
-            if peak_log_throttle % 25 == 0 && smoothed > 0.001 {
+            if peak_log_throttle.is_multiple_of(25) && smoothed > 0.001 {
                 tracing::info!(%nick, peak, smoothed, sustained_loud, active, "peer audio sample");
             }
         }
@@ -870,7 +888,9 @@ async fn transcribe_participant(args: TranscribeArgs) {
         let accumulated_diagram = accumulated_diagram.clone();
         let control_for_graph = control.clone();
         tokio::spawn(async move {
-            let Ok(text) = stt.transcribe(&chunk).await else { return };
+            let Ok(text) = stt.transcribe(&chunk).await else {
+                return;
+            };
             if text.is_empty() || freeq_agent_kit::is_hallucination(&text) {
                 return;
             }
@@ -895,13 +915,16 @@ async fn transcribe_participant(args: TranscribeArgs) {
                 let steps = {
                     let mut acc = accumulated_diagram.lock().expect("diagram poisoned");
                     let added = acc.ingest(&text);
-                    if added > 0 { Some(acc.to_steps()) } else { None }
+                    if added > 0 {
+                        Some(acc.to_steps())
+                    } else {
+                        None
+                    }
                 };
                 if let Some(steps) = steps {
-                    control_for_graph
-                        .set_overlay_if_idle_or_graph(crate::tile_overlay::TileOverlay::Graph {
-                            steps,
-                        });
+                    control_for_graph.set_overlay_if_idle_or_graph(
+                        crate::tile_overlay::TileOverlay::Graph { steps },
+                    );
                 }
             }
 
@@ -949,7 +972,12 @@ async fn transcribe_participant_streaming(args: TranscribeArgs, cfg: StreamingSt
         memory,
         tx,
     } = args;
-    let AvParticipant { path, nick, mut audio, .. } = participant;
+    let AvParticipant {
+        path,
+        nick,
+        mut audio,
+        ..
+    } = participant;
     tracing::info!(%nick, %path, "participant audio live — streaming STT");
 
     let (mut writer, reader) = match streaming_stt::connect(&cfg).await {
@@ -1011,7 +1039,11 @@ async fn transcribe_participant_streaming(args: TranscribeArgs, cfg: StreamingSt
                 let steps = {
                     let mut acc = accumulated_diagram_r.lock().expect("diagram poisoned");
                     let added = acc.ingest(&text);
-                    if added > 0 { Some(acc.to_steps()) } else { None }
+                    if added > 0 {
+                        Some(acc.to_steps())
+                    } else {
+                        None
+                    }
                 };
                 if let Some(steps) = steps {
                     control_r.set_overlay_if_idle_or_graph(
@@ -1047,7 +1079,11 @@ async fn transcribe_participant_streaming(args: TranscribeArgs, cfg: StreamingSt
         }
         let peak = frame.samples.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
         let prev = f32::from_bits(control.peer_level.load(Ordering::Relaxed));
-        let smoothed = if peak > prev { peak } else { prev * 0.92 + peak * 0.08 };
+        let smoothed = if peak > prev {
+            peak
+        } else {
+            prev * 0.92 + peak * 0.08
+        };
         control.set_peer_level(smoothed);
 
         if smoothed > BARGE_PEAK {
@@ -1055,11 +1091,12 @@ async fn transcribe_participant_streaming(args: TranscribeArgs, cfg: StreamingSt
                 control.set_thinking(true);
             }
             last_voice_at = Some(Instant::now());
-        } else if let Some(t) = last_voice_at {
-            if t.elapsed() > VOICE_GRACE && !say_active.load(Ordering::Relaxed) {
-                control.set_thinking(false);
-                last_voice_at = None;
-            }
+        } else if let Some(t) = last_voice_at
+            && t.elapsed() > VOICE_GRACE
+            && !say_active.load(Ordering::Relaxed)
+        {
+            control.set_thinking(false);
+            last_voice_at = None;
         }
 
         if barge_in {
@@ -1204,9 +1241,14 @@ mod tests {
         let level = Arc::new(AtomicU32::new(0));
         let (speaker, _push_source) = Speaker::new(level.clone());
         // 1s of 48k audio enqueued → queue full.
-        let pcm: Vec<f32> = (0..48_000).map(|i| ((i as f32) * 0.01).sin() * 0.5).collect();
+        let pcm: Vec<f32> = (0..48_000)
+            .map(|i| ((i as f32) * 0.01).sin() * 0.5)
+            .collect();
         speaker.enqueue(&pcm, 48_000);
-        assert!(speaker.is_speaking(), "queue should hold audio after enqueue");
+        assert!(
+            speaker.is_speaking(),
+            "queue should hold audio after enqueue"
+        );
         speaker.clear();
         assert!(!speaker.is_speaking(), "queue should be empty after clear");
         // Touch the level cell so the dropped _push_source isn't elided.
@@ -1248,19 +1290,16 @@ async fn wait_for_registration(events: &mut mpsc::Receiver<Event>) -> Result<()>
 
 /// Watch for a `+freeq.at/av-state=started` TAGMSG on the channel and
 /// return its session id.
-async fn wait_for_av_started(
-    events: &mut mpsc::Receiver<Event>,
-    channel: &str,
-) -> Result<String> {
+async fn wait_for_av_started(events: &mut mpsc::Receiver<Event>, channel: &str) -> Result<String> {
     let deadline = Instant::now() + Duration::from_secs(120);
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
         match tokio::time::timeout(remaining, events.recv()).await {
             Ok(Some(Event::TagMsg { target, tags, .. })) if target == channel => {
-                if let Some(state) = parse_av_state(&tags) {
-                    if state.action == AvAction::Started {
-                        return Ok(state.session_id);
-                    }
+                if let Some(state) = parse_av_state(&tags)
+                    && state.action == AvAction::Started
+                {
+                    return Ok(state.session_id);
                 }
             }
             Ok(Some(_)) => continue,
@@ -1275,13 +1314,21 @@ fn derive_transport(server: &str) -> Result<(Option<String>, String)> {
     if server.starts_with("ws://") || server.starts_with("wss://") {
         let u: url::Url = server.parse().context("parsing server URL")?;
         let host = u.host_str().unwrap_or("localhost");
-        let port = u.port().unwrap_or(if server.starts_with("wss") { 443 } else { 80 });
+        let port = u
+            .port()
+            .unwrap_or(if server.starts_with("wss") { 443 } else { 80 });
         Ok((Some(server.to_string()), format!("{host}:{port}")))
     } else if server.starts_with("https://") || server.starts_with("http://") {
         let u: url::Url = server.parse().context("parsing server URL")?;
         let host = u.host_str().unwrap_or("localhost");
-        let port = u.port().unwrap_or(if server.starts_with("https") { 443 } else { 80 });
-        let ws_scheme = if server.starts_with("https") { "wss" } else { "ws" };
+        let port = u
+            .port()
+            .unwrap_or(if server.starts_with("https") { 443 } else { 80 });
+        let ws_scheme = if server.starts_with("https") {
+            "wss"
+        } else {
+            "ws"
+        };
         let path = u.path();
         let ws = format!("{ws_scheme}://{host}:{port}{path}");
         Ok((Some(ws), format!("{host}:{port}")))
@@ -1291,14 +1338,14 @@ fn derive_transport(server: &str) -> Result<(Option<String>, String)> {
 }
 
 fn build_stt(cfg: &OrcConfig) -> Result<SttEngine> {
-    if let Some(key) = cfg.groq_api_key.clone() {
-        if !key.trim().is_empty() {
-            return Ok(SttEngine::groq(
-                key,
-                "whisper-large-v3-turbo".to_string(),
-                &[cfg.nick.clone()],
-            ));
-        }
+    if let Some(key) = cfg.groq_api_key.clone()
+        && !key.trim().is_empty()
+    {
+        return Ok(SttEngine::groq(
+            key,
+            "whisper-large-v3-turbo".to_string(),
+            std::slice::from_ref(&cfg.nick),
+        ));
     }
     tracing::warn!(
         "no GROQ_API_KEY in config — transcription is a no-op. \

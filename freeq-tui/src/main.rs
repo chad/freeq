@@ -324,12 +324,11 @@ async fn main() -> Result<()> {
                             registered = true;
                             eprintln!("  registered");
                         }
-                        Some(Event::NamesEnd { channel }) => {
-                            if channel.eq_ignore_ascii_case(&target_channel) {
+                        Some(Event::NamesEnd { channel })
+                            if channel.eq_ignore_ascii_case(&target_channel) => {
                                 joined = true;
                                 eprintln!("  joined {channel}");
                             }
-                        }
                         Some(Event::AuthFailed { reason }) => {
                             anyhow::bail!("Authentication failed: {reason}");
                         }
@@ -352,7 +351,9 @@ async fn main() -> Result<()> {
         }
 
         // Send the message
-        handle.send_tagged(&target_channel, msg, std::collections::HashMap::new()).await?;
+        handle
+            .send_tagged(&target_channel, msg, std::collections::HashMap::new())
+            .await?;
         eprintln!("  sent to {target_channel}: {msg}");
 
         // Brief pause to let the server process and broadcast
@@ -667,15 +668,12 @@ async fn run_app(
                                 buf.scroll = buf.scroll.saturating_add(n);
                                 // Heuristic: when scroll puts us within ~20 lines
                                 // of the top of what's loaded, request more.
-                                let near_top = buf
-                                    .scroll
-                                    .saturating_add(20)
-                                    >= buf.messages.len() as u16;
+                                let near_top =
+                                    buf.scroll.saturating_add(20) >= buf.messages.len() as u16;
                                 let eligible = near_top
                                     && !buf.history_in_flight
                                     && !buf.history_exhausted
-                                    && (buf.name.starts_with('#')
-                                        || buf.name.starts_with('&'));
+                                    && (buf.name.starts_with('#') || buf.name.starts_with('&'));
                                 let oldest = if eligible {
                                     buf.oldest_msgid().map(String::from)
                                 } else {
@@ -982,20 +980,23 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
             // the channel's pin set; let the action message itself fall through
             // so the user sees who pinned what.
             if target.starts_with('#') || target.starts_with('&') {
-                if let Some(pinned_id) =
-                    tags.get("+freeq.at/pin").filter(|v| crate::app::is_valid_msgid(v))
+                if let Some(pinned_id) = tags
+                    .get("+freeq.at/pin")
+                    .filter(|v| crate::app::is_valid_msgid(v))
                 {
                     app.buffer_mut(&target).add_pinned(pinned_id);
-                } else if let Some(unpinned_id) =
-                    tags.get("+freeq.at/unpin").filter(|v| crate::app::is_valid_msgid(v))
+                } else if let Some(unpinned_id) = tags
+                    .get("+freeq.at/unpin")
+                    .filter(|v| crate::app::is_valid_msgid(v))
                 {
                     app.buffer_mut(&target).pinned.remove(unpinned_id);
                 }
             }
 
             // Edit message: rewrite the original in place; don't push a new line.
-            if let Some(original_msgid) =
-                tags.get("+draft/edit").filter(|v| crate::app::is_valid_msgid(v))
+            if let Some(original_msgid) = tags
+                .get("+draft/edit")
+                .filter(|v| crate::app::is_valid_msgid(v))
             {
                 let buf_name = if !target.starts_with('#') && !target.starts_with('&') {
                     if from == app.nick {
@@ -1167,8 +1168,9 @@ fn process_irc_event(app: &mut App, event: Event, _handle: &client::ClientHandle
         }
         Event::TagMsg { from, target, tags } => {
             // Delete: mark the target line as deleted; don't display a new line.
-            if let Some(deleted_msgid) =
-                tags.get("+draft/delete").filter(|v| crate::app::is_valid_msgid(v))
+            if let Some(deleted_msgid) = tags
+                .get("+draft/delete")
+                .filter(|v| crate::app::is_valid_msgid(v))
             {
                 let buf_name = if !target.starts_with('#') && !target.starts_with('&') {
                     if from == app.nick {
@@ -1516,11 +1518,7 @@ async fn process_input(app: &mut App, handle: &client::ClientHandle, input: &str
                                 .rev()
                                 .take(20)
                                 .map(|line| {
-                                    (
-                                        line.timestamp.clone(),
-                                        line.from.clone(),
-                                        line.text.clone(),
-                                    )
+                                    (line.timestamp.clone(), line.from.clone(), line.text.clone())
                                 })
                                 .collect()
                         })
@@ -1540,9 +1538,7 @@ async fn process_input(app: &mut App, handle: &client::ClientHandle, input: &str
                             } else {
                                 ""
                             };
-                            app.status_msg(&format!(
-                                "  {ts} <{from}> {trimmed}{ellipsis}"
-                            ));
+                            app.status_msg(&format!("  {ts} <{from}> {trimmed}{ellipsis}"));
                         }
                     }
                 }
@@ -1609,14 +1605,11 @@ async fn process_input(app: &mut App, handle: &client::ClientHandle, input: &str
                         let parts: Vec<&str> = arg.splitn(2, ' ').collect();
                         let first = parts[0];
                         let rest = parts.get(1).copied().unwrap_or("");
-                        if !rest.is_empty()
-                            && buf.is_some_and(|b| b.find_by_msgid(first).is_some())
+                        if !rest.is_empty() && buf.is_some_and(|b| b.find_by_msgid(first).is_some())
                         {
                             (Some(first.to_string()), rest.to_string())
                         } else {
-                            let parent = buf
-                                .and_then(|b| b.recent_msgid())
-                                .map(|s| s.to_string());
+                            let parent = buf.and_then(|b| b.recent_msgid()).map(|s| s.to_string());
                             (parent, arg.to_string())
                         }
                     };
@@ -1646,8 +1639,7 @@ async fn process_input(app: &mut App, handle: &client::ClientHandle, input: &str
                         let parts: Vec<&str> = arg.splitn(2, ' ').collect();
                         let first = parts[0];
                         let rest = parts.get(1).copied().unwrap_or("");
-                        if !rest.is_empty()
-                            && buf.is_some_and(|b| b.find_by_msgid(first).is_some())
+                        if !rest.is_empty() && buf.is_some_and(|b| b.find_by_msgid(first).is_some())
                         {
                             (Some(first.to_string()), rest.to_string())
                         } else {
@@ -2111,9 +2103,13 @@ async fn process_input(app: &mut App, handle: &client::ClientHandle, input: &str
                 app.status_msg("  /msgs [N]           List DM conversations (default 50)");
                 app.status_msg("  /me action          Action message (* nick does something)");
                 app.status_msg("  /react emoji        React to most recent message (/r)");
-                app.status_msg("  /reply [id] text    Reply to most recent (or specific) message (/re)");
+                app.status_msg(
+                    "  /reply [id] text    Reply to most recent (or specific) message (/re)",
+                );
                 app.status_msg("  /edit [id] text     Edit your last (or a specific) message (/e)");
-                app.status_msg("  /delete [id]        Delete your last (or a specific) message (/del)");
+                app.status_msg(
+                    "  /delete [id]        Delete your last (or a specific) message (/del)",
+                );
                 app.status_msg("  /pin [id]           Pin most recent (or specific) message");
                 app.status_msg("  /unpin <id>         Unpin a message by msgid");
                 app.status_msg("  /pins               List pinned messages in this channel");
@@ -2227,7 +2223,9 @@ async fn process_input(app: &mut App, handle: &client::ClientHandle, input: &str
             "/msgs" => {
                 let limit = if arg.is_empty() { "50" } else { arg };
                 app.status_msg("── DM conversations ────────────────────");
-                handle.chathistory_targets(limit.parse().unwrap_or(50)).await?;
+                handle
+                    .chathistory_targets(limit.parse().unwrap_or(50))
+                    .await?;
             }
             "/config" | "/settings" => {
                 let cfg = config::Config::load();
@@ -2871,9 +2869,6 @@ mod tests {
 
         let huge_nick = "n".repeat(8192);
         let line = format!(":{huge_nick}!~u@freeq/plc/abc JOIN #room");
-        assert!(
-            parse_join_prefix(&line).is_none(),
-            "must reject giant nick"
-        );
+        assert!(parse_join_prefix(&line).is_none(), "must reject giant nick");
     }
 }

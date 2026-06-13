@@ -54,8 +54,14 @@ pub(crate) fn spawn(
     tokio::spawn(async move {
         // Pre-flight: both console pieces must be configured, else say so.
         let Some(console) = cfg.console_url.clone() else {
-            announce(&cfg, &handle, &channel, speaker.as_ref(),
-                "I can't fork myself here — my fleet has no console configured.").await;
+            announce(
+                &cfg,
+                &handle,
+                &channel,
+                speaker.as_ref(),
+                "I can't fork myself here — my fleet has no console configured.",
+            )
+            .await;
             return;
         };
         let Some(token) = std::env::var("REVENANT_FORK_TOKEN")
@@ -63,8 +69,14 @@ pub(crate) fn spawn(
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
         else {
-            announce(&cfg, &handle, &channel, speaker.as_ref(),
-                "I can't fork myself here — no fork token configured.").await;
+            announce(
+                &cfg,
+                &handle,
+                &channel,
+                speaker.as_ref(),
+                "I can't fork myself here — no fork token configured.",
+            )
+            .await;
             return;
         };
 
@@ -75,8 +87,14 @@ pub(crate) fn spawn(
             Ok(s) => s,
             Err(e) => {
                 tracing::warn!(error = ?e, "mitosis: child composition failed");
-                announce(&cfg, &handle, &channel, speaker.as_ref(),
-                    "The split didn't take — I couldn't compose the child. Try me again.").await;
+                announce(
+                    &cfg,
+                    &handle,
+                    &channel,
+                    speaker.as_ref(),
+                    "The split didn't take — I couldn't compose the child. Try me again.",
+                )
+                .await;
                 return;
             }
         };
@@ -98,7 +116,12 @@ pub(crate) fn spawn(
                     .privmsg(&channel, &format!("Mitosis failed: {e}"))
                     .await;
                 if let Some(sp) = speaker.as_ref() {
-                    speak(&cfg, sp, "The split didn't take. The console refused — check the logs.").await;
+                    speak(
+                        &cfg,
+                        sp,
+                        "The split didn't take. The console refused — check the logs.",
+                    )
+                    .await;
                 }
             }
         }
@@ -122,13 +145,12 @@ async fn announce(
 /// One-shot TTS through the persona's voice chain — same pipeline as
 /// answers, minus the sentence streaming (announcements are short).
 async fn speak(cfg: &Arc<SharedConfig>, speaker: &Speaker, text: &str) {
-    let Some(el_key) = cfg.elevenlabs_api_key.clone() else { return };
-    let voice_profile = crate::persona::resolve_voice_profile(
-        &cfg.ghostly_character,
-        cfg.ghostly_pack.as_deref(),
-    );
-    let mut chain =
-        ghostly::audio::VoiceChain::new(voice_profile, tts::ELEVENLABS_PCM_RATE as f32);
+    let Some(el_key) = cfg.elevenlabs_api_key.clone() else {
+        return;
+    };
+    let voice_profile =
+        crate::persona::resolve_voice_profile(&cfg.ghostly_character, cfg.ghostly_pack.as_deref());
+    let mut chain = ghostly::audio::VoiceChain::new(voice_profile, tts::ELEVENLABS_PCM_RATE as f32);
     // Echo-guard log — see SharedConfig::recent_tts.
     crate::irc::note_spoken(&cfg.recent_tts, text);
     let mut work: Vec<f32> = Vec::with_capacity(4096);
@@ -192,8 +214,7 @@ CHILD's voice, acknowledging the split."
         .find('{')
         .and_then(|a| raw.rfind('}').map(|b| &raw[a..=b]))
         .context("model returned no JSON object")?;
-    let mut spec: ChildSpec =
-        serde_json::from_str(json).context("child spec JSON didn't parse")?;
+    let mut spec: ChildSpec = serde_json::from_str(json).context("child spec JSON didn't parse")?;
     // Sanitize the name into a nick/channel-safe slug; reject degenerate
     // or parent-identical names rather than forking something confusing.
     spec.name = spec
@@ -238,7 +259,10 @@ async fn anthropic_json(
         .context("anthropic request failed")?;
     let status = resp.status();
     if !status.is_success() {
-        anyhow::bail!("anthropic {status}: {}", resp.text().await.unwrap_or_default());
+        anyhow::bail!(
+            "anthropic {status}: {}",
+            resp.text().await.unwrap_or_default()
+        );
     }
     let v: serde_json::Value = resp.json().await.context("anthropic parse failed")?;
     let text: String = v["content"]
@@ -246,7 +270,8 @@ async fn anthropic_json(
         .map(|blocks| {
             blocks
                 .iter()
-                .filter_map(|b| (b["type"] == "text").then(|| b["text"].as_str().unwrap_or("")))
+                .filter(|&b| b["type"] == "text")
+                .map(|b| b["text"].as_str().unwrap_or(""))
                 .collect()
         })
         .unwrap_or_default();
@@ -330,7 +355,10 @@ async fn console_mitosis(
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
-        anyhow::bail!("console {status}: {}", text.chars().take(200).collect::<String>());
+        anyhow::bail!(
+            "console {status}: {}",
+            text.chars().take(200).collect::<String>()
+        );
     }
     serde_json::from_str(&text).context("console mitosis reply didn't parse")
 }

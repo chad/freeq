@@ -38,7 +38,10 @@ pub(super) fn handle_login(
         let reply = Message::from_server(
             server_name,
             "NOTICE",
-            vec![&nick, "Usage: LOGIN <handle> (e.g., LOGIN yourname.bsky.social)"],
+            vec![
+                &nick,
+                "Usage: LOGIN <handle> (e.g., LOGIN yourname.bsky.social)",
+            ],
         );
         send(state, session_id, format!("{reply}\r\n"));
         return;
@@ -66,13 +69,12 @@ pub(super) fn handle_login(
     let notice1 = Message::from_server(
         server_name,
         "NOTICE",
-        vec![&nick, &format!("To authenticate as @{handle}, open this URL in your browser:")],
+        vec![
+            &nick,
+            &format!("To authenticate as @{handle}, open this URL in your browser:"),
+        ],
     );
-    let notice2 = Message::from_server(
-        server_name,
-        "NOTICE",
-        vec![&nick, &login_url],
-    );
+    let notice2 = Message::from_server(server_name, "NOTICE", vec![&nick, &login_url]);
     let notice3 = Message::from_server(
         server_name,
         "NOTICE",
@@ -98,12 +100,7 @@ pub struct LoginCompletion {
 
 /// Called from the OAuth callback when `irc_state` is present.
 /// Stores the completion and sends a signal to the IRC connection.
-pub fn complete_irc_login(
-    state: &Arc<SharedState>,
-    session_id: &str,
-    did: &str,
-    handle: &str,
-) {
+pub fn complete_irc_login(state: &Arc<SharedState>, session_id: &str, did: &str, handle: &str) {
     let server_name = &state.server_name;
 
     // Store DID and handle in session maps
@@ -166,7 +163,10 @@ pub fn complete_irc_login(
     let account_notice = Message::from_server(
         server_name,
         "NOTICE",
-        vec![&assigned, &format!("You are now authenticated as {did} (@{handle})")],
+        vec![
+            &assigned,
+            &format!("You are now authenticated as {did} (@{handle})"),
+        ],
     );
 
     if let Some(tx) = state.connections.lock().get(session_id) {
@@ -176,14 +176,18 @@ pub fn complete_irc_login(
 
     // Store the completion so the connection loop can update
     // conn.authenticated_did (and conn.nick if we renamed).
-    state
-        .login_completions
-        .lock()
-        .insert(session_id.to_string(), LoginCompletion {
+    state.login_completions.lock().insert(
+        session_id.to_string(),
+        LoginCompletion {
             did: did.to_string(),
             handle: handle.to_string(),
-            renamed_nick: if renamed { Some(assigned.clone()) } else { None },
-        });
+            renamed_nick: if renamed {
+                Some(assigned.clone())
+            } else {
+                None
+            },
+        },
+    );
 
     // Broadcast account-notify to channels
     {
@@ -195,10 +199,11 @@ pub fn complete_irc_login(
         for ch in channels.values() {
             if ch.members.contains(session_id) {
                 for member_sid in &ch.members {
-                    if member_sid != session_id && account_caps.contains(member_sid) {
-                        if let Some(tx) = conns.get(member_sid) {
-                            let _ = tx.try_send(account_line.clone());
-                        }
+                    if member_sid != session_id
+                        && account_caps.contains(member_sid)
+                        && let Some(tx) = conns.get(member_sid)
+                    {
+                        let _ = tx.try_send(account_line.clone());
                     }
                 }
             }
@@ -213,8 +218,7 @@ pub fn complete_irc_login(
             if !ch.members.contains(session_id) {
                 continue;
             }
-            let should_op = ch.founder_did.as_deref() == Some(did)
-                || ch.did_ops.contains(did);
+            let should_op = ch.founder_did.as_deref() == Some(did) || ch.did_ops.contains(did);
             if should_op && !ch.ops.contains(session_id) {
                 ch.ops.insert(session_id.to_string());
                 // Broadcast MODE +o

@@ -8,8 +8,8 @@
 //!   # Staging:
 //!   cargo run --example demo3_demo4_e2e -- --web-url https://staging.freeq.at
 
+use anyhow::{Result, bail};
 use std::time::Duration;
-use anyhow::{bail, Result};
 use tokio::time::timeout;
 
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -80,10 +80,22 @@ async fn main() -> Result<()> {
     let d4 = demo4.is_ok_and(|b| b);
     let d5 = demo5.is_ok_and(|b| b);
     let d6 = demo6.is_ok_and(|b| b);
-    println!("  Demo 3 (P2P native clients): {}", if d3 { "PASS" } else { "FAIL" });
-    println!("  Demo 4 (mixed call):         {}", if d4 { "PASS" } else { "FAIL" });
-    println!("  Demo 5 (latecomer):          {}", if d5 { "PASS" } else { "FAIL" });
-    println!("  Demo 6 (disconnect):         {}", if d6 { "PASS" } else { "FAIL" });
+    println!(
+        "  Demo 3 (P2P native clients): {}",
+        if d3 { "PASS" } else { "FAIL" }
+    );
+    println!(
+        "  Demo 4 (mixed call):         {}",
+        if d4 { "PASS" } else { "FAIL" }
+    );
+    println!(
+        "  Demo 5 (latecomer):          {}",
+        if d5 { "PASS" } else { "FAIL" }
+    );
+    println!(
+        "  Demo 6 (disconnect):         {}",
+        if d6 { "PASS" } else { "FAIL" }
+    );
     if d3 && d4 && d5 && d6 {
         println!("\n  ALL PASS\n");
     } else {
@@ -101,13 +113,19 @@ async fn run_demo3(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
     let (session_id, iroh_ticket) = start_av_session(irc_addr, web_url, "d3-starter").await?;
     println!("  Session: {session_id}");
 
-    let room_ticket: iroh_live::rooms::RoomTicket = iroh_ticket.parse()
+    let room_ticket: iroh_live::rooms::RoomTicket = iroh_ticket
+        .parse()
         .map_err(|e| anyhow::anyhow!("Invalid ticket: {e}"))?;
 
     // Native client A joins Room
     println!("[2/4] Native client A joining Room...");
-    let ep_a = iroh::Endpoint::builder(iroh::endpoint::presets::N0).bind().await?;
-    let live_a = iroh_live::Live::builder(ep_a).with_router().with_gossip().spawn();
+    let ep_a = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+        .bind()
+        .await?;
+    let live_a = iroh_live::Live::builder(ep_a)
+        .with_router()
+        .with_gossip()
+        .spawn();
     let room_a = iroh_live::rooms::Room::new(&live_a, room_ticket.clone()).await?;
     let (mut events_a, handle_a) = room_a.split();
     handle_a.set_display_name("alice").await?;
@@ -133,8 +151,13 @@ async fn run_demo3(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
 
     // Native client B joins same Room
     println!("[3/4] Native client B joining Room...");
-    let ep_b = iroh::Endpoint::builder(iroh::endpoint::presets::N0).bind().await?;
-    let live_b = iroh_live::Live::builder(ep_b).with_router().with_gossip().spawn();
+    let ep_b = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+        .bind()
+        .await?;
+    let live_b = iroh_live::Live::builder(ep_b)
+        .with_router()
+        .with_gossip()
+        .spawn();
     let room_b = iroh_live::rooms::Room::new(&live_b, room_ticket).await?;
     let (mut events_b, handle_b) = room_b.split();
     handle_b.set_display_name("bob").await?;
@@ -172,7 +195,11 @@ async fn run_demo3(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
                         if let Ok(mut track) = consumer.subscribe_track(&at) {
                             if let Ok(Some(mut group)) = track.next_group().await {
                                 if let Ok(Some(frame)) = group.read_frame().await {
-                                    println!("  Alice got Bob's audio: {} bytes (0x{:02X})", frame.len(), frame[0]);
+                                    println!(
+                                        "  Alice got Bob's audio: {} bytes (0x{:02X})",
+                                        frame.len(),
+                                        frame[0]
+                                    );
                                     return frame[0] == 0xBB;
                                 }
                             }
@@ -183,7 +210,9 @@ async fn run_demo3(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
                 None => return false,
             }
         }
-    }).await.unwrap_or(false);
+    })
+    .await
+    .unwrap_or(false);
 
     let b_sees_a = timeout(TIMEOUT, async {
         loop {
@@ -196,7 +225,11 @@ async fn run_demo3(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
                         if let Ok(mut track) = consumer.subscribe_track(&at) {
                             if let Ok(Some(mut group)) = track.next_group().await {
                                 if let Ok(Some(frame)) = group.read_frame().await {
-                                    println!("  Bob got Alice's audio: {} bytes (0x{:02X})", frame.len(), frame[0]);
+                                    println!(
+                                        "  Bob got Alice's audio: {} bytes (0x{:02X})",
+                                        frame.len(),
+                                        frame[0]
+                                    );
                                     return frame[0] == 0xAA;
                                 }
                             }
@@ -207,7 +240,9 @@ async fn run_demo3(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
                 None => return false,
             }
         }
-    }).await.unwrap_or(false);
+    })
+    .await
+    .unwrap_or(false);
 
     println!("  Alice sees Bob: {}", if a_sees_b { "YES" } else { "NO" });
     println!("  Bob sees Alice: {}", if b_sees_a { "YES" } else { "NO" });
@@ -243,10 +278,16 @@ async fn run_demo4(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
 
     // Native client joins Room
     println!("[4/5] Native client joining Room...");
-    let room_ticket: iroh_live::rooms::RoomTicket = iroh_ticket.parse()
+    let room_ticket: iroh_live::rooms::RoomTicket = iroh_ticket
+        .parse()
         .map_err(|e| anyhow::anyhow!("Invalid ticket: {e}"))?;
-    let ep = iroh::Endpoint::builder(iroh::endpoint::presets::N0).bind().await?;
-    let live = iroh_live::Live::builder(ep).with_router().with_gossip().spawn();
+    let ep = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+        .bind()
+        .await?;
+    let live = iroh_live::Live::builder(ep)
+        .with_router()
+        .with_gossip()
+        .spawn();
     let room = iroh_live::rooms::Room::new(&live, room_ticket).await?;
     let (mut events, handle) = room.split();
     handle.set_display_name("native-carol").await?;
@@ -267,7 +308,9 @@ async fn run_demo4(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
         g.write_frame(moq_lite::bytes::Bytes::from(vec![0xC3u8; 480]))?;
         g.finish().ok();
     }
-    handle.publish_producer("native-carol", prod_n.clone()).await?;
+    handle
+        .publish_producer("native-carol", prod_n.clone())
+        .await?;
     println!("  Native Carol published to Room");
 
     // Check: native sees both browsers via bridge (MoQ→Room)
@@ -285,18 +328,26 @@ async fn run_demo4(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
                     if let Ok(mut track) = consumer.subscribe_track(&at) {
                         if let Ok(Some(mut group)) = track.next_group().await {
                             if let Ok(Some(frame)) = group.read_frame().await {
-                                println!("  Native got audio from {name}: {} bytes (0x{:02X})", frame.len(), frame[0]);
+                                println!(
+                                    "  Native got audio from {name}: {} bytes (0x{:02X})",
+                                    frame.len(),
+                                    frame[0]
+                                );
                                 native_saw.insert(name);
                             }
                         }
                     }
-                    if native_saw.len() >= 2 { return true; }
+                    if native_saw.len() >= 2 {
+                        return true;
+                    }
                 }
                 Some(_) => {}
                 None => return false,
             }
         }
-    }).await.unwrap_or(false);
+    })
+    .await
+    .unwrap_or(false);
 
     // Check: MoQ subscriber sees all 3 broadcasts (browsers + native via bridge)
     let (_sub_session, mut sub_consumer) = subscribe_moq(&moq_url).await?;
@@ -307,22 +358,53 @@ async fn run_demo4(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
             if path_str.starts_with(&session_id) && announce.is_some() {
                 println!("  MoQ subscriber saw: {path_str}");
                 moq_saw.insert(path_str);
-                if moq_saw.len() >= 3 { return true; }
+                if moq_saw.len() >= 3 {
+                    return true;
+                }
             }
         }
         false
-    }).await.unwrap_or(false);
+    })
+    .await
+    .unwrap_or(false);
 
     let alice_path = format!("{session_id}/browser-alice");
     let bob_path = format!("{session_id}/browser-bob");
     let carol_path = format!("{session_id}/native-carol");
 
-    println!("\n  Native sees browsers (MoQ→Room): {}", if native_result { "YES" } else { "NO" });
-    println!("  MoQ has all 3 broadcasts:        {}", if moq_result { "YES" } else { "NO" });
+    println!(
+        "\n  Native sees browsers (MoQ→Room): {}",
+        if native_result { "YES" } else { "NO" }
+    );
+    println!(
+        "  MoQ has all 3 broadcasts:        {}",
+        if moq_result { "YES" } else { "NO" }
+    );
     if moq_result {
-        println!("    alice:  {}", if moq_saw.contains(&alice_path) { "YES" } else { "NO" });
-        println!("    bob:    {}", if moq_saw.contains(&bob_path) { "YES" } else { "NO" });
-        println!("    carol:  {}", if moq_saw.contains(&carol_path) { "YES" } else { "NO" });
+        println!(
+            "    alice:  {}",
+            if moq_saw.contains(&alice_path) {
+                "YES"
+            } else {
+                "NO"
+            }
+        );
+        println!(
+            "    bob:    {}",
+            if moq_saw.contains(&bob_path) {
+                "YES"
+            } else {
+                "NO"
+            }
+        );
+        println!(
+            "    carol:  {}",
+            if moq_saw.contains(&carol_path) {
+                "YES"
+            } else {
+                "NO"
+            }
+        );
     }
 
     live.shutdown().await;
@@ -352,10 +434,16 @@ async fn run_demo5(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
 
     // Native B joins LATE
     println!("[3/4] Native B joins late...");
-    let room_ticket: iroh_live::rooms::RoomTicket = iroh_ticket.parse()
+    let room_ticket: iroh_live::rooms::RoomTicket = iroh_ticket
+        .parse()
         .map_err(|e| anyhow::anyhow!("Invalid ticket: {e}"))?;
-    let ep = iroh::Endpoint::builder(iroh::endpoint::presets::N0).bind().await?;
-    let live = iroh_live::Live::builder(ep).with_router().with_gossip().spawn();
+    let ep = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+        .bind()
+        .await?;
+    let live = iroh_live::Live::builder(ep)
+        .with_router()
+        .with_gossip()
+        .spawn();
     let room = iroh_live::rooms::Room::new(&live, room_ticket).await?;
     let (mut events, handle) = room.split();
     handle.set_display_name("late-bob").await?;
@@ -391,7 +479,11 @@ async fn run_demo5(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
                         if let Ok(mut track) = consumer.subscribe_track(&at) {
                             if let Ok(Some(mut group)) = track.next_group().await {
                                 if let Ok(Some(frame)) = group.read_frame().await {
-                                    println!("  Late Bob got early Alice's audio: {} bytes (0x{:02X})", frame.len(), frame[0]);
+                                    println!(
+                                        "  Late Bob got early Alice's audio: {} bytes (0x{:02X})",
+                                        frame.len(),
+                                        frame[0]
+                                    );
                                     return frame[0] == 0xA1;
                                 }
                             }
@@ -403,7 +495,9 @@ async fn run_demo5(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
                 None => return false,
             }
         }
-    }).await.unwrap_or(false);
+    })
+    .await
+    .unwrap_or(false);
 
     // Check: MoQ subscriber C joining even later sees both Alice and Bob
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -414,14 +508,25 @@ async fn run_demo5(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
             let p = path.to_string();
             if p.starts_with(&session_id) && announce.is_some() {
                 late_moq_saw.insert(p);
-                if late_moq_saw.len() >= 2 { return true; }
+                if late_moq_saw.len() >= 2 {
+                    return true;
+                }
             }
         }
         false
-    }).await.unwrap_or(false);
+    })
+    .await
+    .unwrap_or(false);
 
-    println!("  Late native sees early browser: {}", if native_sees_alice { "YES" } else { "NO" });
-    println!("  Late MoQ subscriber sees both:  {} ({:?})", if moq_sees_both { "YES" } else { "NO" }, late_moq_saw);
+    println!(
+        "  Late native sees early browser: {}",
+        if native_sees_alice { "YES" } else { "NO" }
+    );
+    println!(
+        "  Late MoQ subscriber sees both:  {} ({:?})",
+        if moq_sees_both { "YES" } else { "NO" },
+        late_moq_saw
+    );
 
     live.shutdown().await;
     Ok(native_sees_alice && moq_sees_both)
@@ -444,10 +549,16 @@ async fn run_demo6(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
 
     // Native B joins and publishes
     println!("[3/4] Native B joining...");
-    let room_ticket: iroh_live::rooms::RoomTicket = iroh_ticket.parse()
+    let room_ticket: iroh_live::rooms::RoomTicket = iroh_ticket
+        .parse()
         .map_err(|e| anyhow::anyhow!("Invalid ticket: {e}"))?;
-    let ep = iroh::Endpoint::builder(iroh::endpoint::presets::N0).bind().await?;
-    let live = iroh_live::Live::builder(ep).with_router().with_gossip().spawn();
+    let ep = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+        .bind()
+        .await?;
+    let live = iroh_live::Live::builder(ep)
+        .with_router()
+        .with_gossip()
+        .spawn();
     let room = iroh_live::rooms::Room::new(&live, room_ticket).await?;
     let (_events, handle) = room.split();
     handle.set_display_name("native-bob").await?;
@@ -467,7 +578,9 @@ async fn run_demo6(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
         g.write_frame(moq_lite::bytes::Bytes::from(vec![0xB2u8; 480]))?;
         g.finish().ok();
     }
-    handle.publish_producer("native-bob", prod_b.clone()).await?;
+    handle
+        .publish_producer("native-bob", prod_b.clone())
+        .await?;
     println!("  Bob published");
 
     // Wait for bridge to settle
@@ -481,10 +594,14 @@ async fn run_demo6(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
             let p = path.to_string();
             if p.starts_with(&session_id) && announce.is_some() {
                 before.insert(p);
-                if before.len() >= 2 { break; }
+                if before.len() >= 2 {
+                    break;
+                }
             }
         }
-    }).await.ok();
+    })
+    .await
+    .ok();
     println!("  Before disconnect: {:?}", before);
 
     // ── DROP browser A (simulates ungraceful disconnect) ──────────
@@ -503,7 +620,9 @@ async fn run_demo6(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
             }
         }
         false
-    }).await.unwrap_or(false);
+    })
+    .await
+    .unwrap_or(false);
 
     // Verify: session API still works
     let session_ok = reqwest::get(format!("{web_url}/api/v1/sessions/{session_id}"))
@@ -511,8 +630,14 @@ async fn run_demo6(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
         .map(|r| r.status().is_success())
         .unwrap_or(false);
 
-    println!("  Bob still in MoQ cluster: {}", if bob_still_there { "YES" } else { "NO" });
-    println!("  Session API still works:  {}", if session_ok { "YES" } else { "NO" });
+    println!(
+        "  Bob still in MoQ cluster: {}",
+        if bob_still_there { "YES" } else { "NO" }
+    );
+    println!(
+        "  Session API still works:  {}",
+        if session_ok { "YES" } else { "NO" }
+    );
 
     live.shutdown().await;
     Ok(bob_still_there && session_ok)
@@ -520,7 +645,11 @@ async fn run_demo6(irc_addr: &Option<String>, web_url: &str) -> Result<bool> {
 
 // ── Helpers ───────────────────────────────────────────────────────
 
-async fn start_av_session(irc_addr: &Option<String>, web_url: &str, nick: &str) -> Result<(String, String)> {
+async fn start_av_session(
+    irc_addr: &Option<String>,
+    web_url: &str,
+    nick: &str,
+) -> Result<(String, String)> {
     match irc_addr {
         Some(addr) => start_av_session_tcp(addr, nick).await,
         None => start_av_session_ws(web_url, nick).await,
@@ -531,12 +660,20 @@ async fn start_av_session_tcp(addr: &str, nick: &str) -> Result<(String, String)
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::TcpStream;
 
-    let channel = &format!("#d-{}-{}", std::process::id(), nick.chars().filter(|c| c.is_alphanumeric()).collect::<String>());
+    let channel = &format!(
+        "#d-{}-{}",
+        std::process::id(),
+        nick.chars()
+            .filter(|c| c.is_alphanumeric())
+            .collect::<String>()
+    );
     let stream = TcpStream::connect(addr).await?;
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
 
-    writer.write_all(format!("NICK {nick}\r\nUSER {nick} 0 * :test\r\n").as_bytes()).await?;
+    writer
+        .write_all(format!("NICK {nick}\r\nUSER {nick} 0 * :test\r\n").as_bytes())
+        .await?;
 
     let mut registered = false;
     let mut ticket: Option<String> = None;
@@ -545,14 +682,20 @@ async fn start_av_session_tcp(addr: &str, nick: &str) -> Result<(String, String)
     let result = timeout(Duration::from_secs(10), async {
         while let Some(line) = lines.next_line().await? {
             if line.starts_with("PING") {
-                writer.write_all(format!("{}\r\n", line.replace("PING", "PONG")).as_bytes()).await?;
+                writer
+                    .write_all(format!("{}\r\n", line.replace("PING", "PONG")).as_bytes())
+                    .await?;
                 continue;
             }
             if !registered && line.contains(" 001 ") {
                 registered = true;
-                writer.write_all(format!("CAP REQ :message-tags\r\nJOIN {channel}\r\n").as_bytes()).await?;
+                writer
+                    .write_all(format!("CAP REQ :message-tags\r\nJOIN {channel}\r\n").as_bytes())
+                    .await?;
                 tokio::time::sleep(Duration::from_millis(200)).await;
-                writer.write_all(format!("@+freeq.at/av-start TAGMSG {channel}\r\n").as_bytes()).await?;
+                writer
+                    .write_all(format!("@+freeq.at/av-start TAGMSG {channel}\r\n").as_bytes())
+                    .await?;
             }
             if line.contains("AV session started:") {
                 if let Some(id) = line.split("AV session started: ").nth(1) {
@@ -564,13 +707,19 @@ async fn start_av_session_tcp(addr: &str, nick: &str) -> Result<(String, String)
                     ticket = Some(t.trim().to_string());
                 }
             }
-            if ticket.is_some() && session_id.is_some() { break; }
+            if ticket.is_some() && session_id.is_some() {
+                break;
+            }
         }
         Ok::<_, anyhow::Error>((session_id, ticket))
-    }).await??;
+    })
+    .await??;
 
     tokio::spawn(async move {
-        loop { tokio::time::sleep(Duration::from_secs(30)).await; let _ = writer.write_all(b"PING :k\r\n").await; }
+        loop {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            let _ = writer.write_all(b"PING :k\r\n").await;
+        }
     });
 
     match result {
@@ -583,17 +732,33 @@ async fn start_av_session_ws(web_url: &str, nick: &str) -> Result<(String, Strin
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
 
-    let channel = &format!("#d-{}-{}", std::process::id(), nick.chars().filter(|c| c.is_alphanumeric()).collect::<String>());
+    let channel = &format!(
+        "#d-{}-{}",
+        std::process::id(),
+        nick.chars()
+            .filter(|c| c.is_alphanumeric())
+            .collect::<String>()
+    );
     let ws_url = if web_url.starts_with("https://") {
-        format!("wss://{}/irc", web_url.trim_start_matches("https://").trim_end_matches('/'))
+        format!(
+            "wss://{}/irc",
+            web_url.trim_start_matches("https://").trim_end_matches('/')
+        )
     } else {
-        format!("ws://{}/irc", web_url.trim_start_matches("http://").trim_end_matches('/'))
+        format!(
+            "ws://{}/irc",
+            web_url.trim_start_matches("http://").trim_end_matches('/')
+        )
     };
 
     let (ws, _) = tokio_tungstenite::connect_async(&ws_url).await?;
     let (mut ws_write, mut ws_read) = ws.split();
 
-    ws_write.send(Message::Text(format!("NICK {nick}\r\nUSER {nick} 0 * :test\r\n").into())).await?;
+    ws_write
+        .send(Message::Text(
+            format!("NICK {nick}\r\nUSER {nick} 0 * :test\r\n").into(),
+        ))
+        .await?;
 
     let mut registered = false;
     let mut ticket: Option<String> = None;
@@ -608,16 +773,30 @@ async fn start_av_session_ws(web_url: &str, nick: &str) -> Result<(String, Strin
             };
             for line in text.lines() {
                 let line = line.trim();
-                if line.is_empty() { continue; }
+                if line.is_empty() {
+                    continue;
+                }
                 if line.starts_with("PING") {
-                    ws_write.send(Message::Text(format!("{}\r\n", line.replace("PING", "PONG")).into())).await?;
+                    ws_write
+                        .send(Message::Text(
+                            format!("{}\r\n", line.replace("PING", "PONG")).into(),
+                        ))
+                        .await?;
                     continue;
                 }
                 if !registered && line.contains(" 001 ") {
                     registered = true;
-                    ws_write.send(Message::Text(format!("CAP REQ :message-tags\r\nJOIN {channel}\r\n").into())).await?;
+                    ws_write
+                        .send(Message::Text(
+                            format!("CAP REQ :message-tags\r\nJOIN {channel}\r\n").into(),
+                        ))
+                        .await?;
                     tokio::time::sleep(Duration::from_millis(200)).await;
-                    ws_write.send(Message::Text(format!("@+freeq.at/av-start TAGMSG {channel}\r\n").into())).await?;
+                    ws_write
+                        .send(Message::Text(
+                            format!("@+freeq.at/av-start TAGMSG {channel}\r\n").into(),
+                        ))
+                        .await?;
                 }
                 if line.contains("AV session started:") {
                     if let Some(id) = line.split("AV session started: ").nth(1) {
@@ -629,15 +808,29 @@ async fn start_av_session_ws(web_url: &str, nick: &str) -> Result<(String, Strin
                         ticket = Some(t.trim().to_string());
                     }
                 }
-                if ticket.is_some() && session_id.is_some() { break; }
+                if ticket.is_some() && session_id.is_some() {
+                    break;
+                }
             }
-            if ticket.is_some() && session_id.is_some() { break; }
+            if ticket.is_some() && session_id.is_some() {
+                break;
+            }
         }
         Ok::<_, anyhow::Error>((session_id, ticket))
-    }).await??;
+    })
+    .await??;
 
     tokio::spawn(async move {
-        loop { tokio::time::sleep(Duration::from_secs(30)).await; if ws_write.send(Message::Text("PING :k\r\n".into())).await.is_err() { break; } }
+        loop {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            if ws_write
+                .send(Message::Text("PING :k\r\n".into()))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
     });
 
     match result {
@@ -666,7 +859,9 @@ async fn publish_moq(moq_url: &url::Url, broadcast_name: &str, marker: u8) -> Re
     let ct = moq_lite::Track::new("catalog.json");
     let mut cw = producer.create_track(ct)?;
     let mut g = cw.create_group(moq_lite::Group { sequence: 0 })?;
-    g.write_frame(moq_lite::bytes::Bytes::from(hang_catalog.as_bytes().to_vec()))?;
+    g.write_frame(moq_lite::bytes::Bytes::from(
+        hang_catalog.as_bytes().to_vec(),
+    ))?;
     g.finish().ok();
 
     let at = moq_lite::Track::new("audio");
@@ -696,7 +891,9 @@ async fn publish_moq(moq_url: &url::Url, broadcast_name: &str, marker: u8) -> Re
     })
 }
 
-async fn subscribe_moq(moq_url: &url::Url) -> Result<(moq_lite::Session, moq_lite::OriginConsumer)> {
+async fn subscribe_moq(
+    moq_url: &url::Url,
+) -> Result<(moq_lite::Session, moq_lite::OriginConsumer)> {
     let mut cfg = moq_native::ClientConfig::default();
     cfg.tls.disable_verify = Some(true);
     cfg.backend = Some(moq_native::QuicBackend::Noq);

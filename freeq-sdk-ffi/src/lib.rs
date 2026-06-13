@@ -12,8 +12,9 @@ fn install_tracing_subscriber() {
     ONCE.call_once(|| {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("freeq_sdk=debug,freeq_sdk_ffi=debug,info")),
+                tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                    tracing_subscriber::EnvFilter::new("freeq_sdk=debug,freeq_sdk_ffi=debug,info")
+                }),
             )
             .with_writer(std::io::stderr)
             .with_target(true)
@@ -32,7 +33,6 @@ static RUNTIME: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
 });
 
 uniffi::include_scaffolding!("freeq");
-
 
 // ── Types (must match UDL exactly) ──
 
@@ -400,7 +400,10 @@ impl FreeqClient {
         let (tx, rx) = std::sync::mpsc::channel();
         let line_clone = line.clone();
         RUNTIME.spawn(async move {
-            let result = handle.raw(&line_clone).await.map_err(|_| FreeqError::SendFailed);
+            let result = handle
+                .raw(&line_clone)
+                .await
+                .map_err(|_| FreeqError::SendFailed);
             let _ = tx.send(result);
         });
         match rx.recv() {
@@ -625,7 +628,9 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
             nick: nick.clone(),
             info: info.clone(),
         },
-        Event::RawLine(_) => FreeqEvent::Notice { text: String::new() },
+        Event::RawLine(_) => FreeqEvent::Notice {
+            text: String::new(),
+        },
     }
 }
 
@@ -1018,20 +1023,36 @@ impl FreeqP2p {
 
 pub enum AvEvent {
     Connected,
-    Disconnected { reason: String },
-    ParticipantJoined { nick: String },
-    ParticipantLeft { nick: String },
-    AudioTrackStarted { nick: String },
-    AudioTrackStopped { nick: String },
-    VideoTrackStarted { nick: String },
-    VideoTrackStopped { nick: String },
+    Disconnected {
+        reason: String,
+    },
+    ParticipantJoined {
+        nick: String,
+    },
+    ParticipantLeft {
+        nick: String,
+    },
+    AudioTrackStarted {
+        nick: String,
+    },
+    AudioTrackStopped {
+        nick: String,
+    },
+    VideoTrackStarted {
+        nick: String,
+    },
+    VideoTrackStopped {
+        nick: String,
+    },
     VideoFrame {
         nick: String,
         bgra: Vec<u8>,
         width: u32,
         height: u32,
     },
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 pub trait AvEventHandler: Send + Sync + 'static {
@@ -1041,8 +1062,8 @@ pub trait AvEventHandler: Send + Sync + 'static {
 #[cfg(feature = "av")]
 mod av_impl {
     use super::{AvEvent, AvEventHandler, FreeqError, RUNTIME};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::sync::Mutex;
     use std::time::Duration;
 
@@ -1657,7 +1678,9 @@ impl FreeqAv {
     }
     fn push_video_frame(&self, _bgra: Vec<u8>, _w: u32, _h: u32, _ts: u64) {}
     fn push_audio_frame(&self, _samples: Vec<f32>) {}
-    fn is_connected(&self) -> bool { false }
+    fn is_connected(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -1697,26 +1720,44 @@ mod tests {
     fn av_event_types_exist() {
         // Verify all event variants can be constructed
         let _ = AvEvent::Connected;
-        let _ = AvEvent::Disconnected { reason: "test".to_string() };
-        let _ = AvEvent::ParticipantJoined { nick: "alice".to_string() };
-        let _ = AvEvent::ParticipantLeft { nick: "bob".to_string() };
-        let _ = AvEvent::AudioTrackStarted { nick: "carol".to_string() };
-        let _ = AvEvent::AudioTrackStopped { nick: "dave".to_string() };
-        let _ = AvEvent::VideoTrackStarted { nick: "eve".to_string() };
-        let _ = AvEvent::VideoTrackStopped { nick: "frank".to_string() };
+        let _ = AvEvent::Disconnected {
+            reason: "test".to_string(),
+        };
+        let _ = AvEvent::ParticipantJoined {
+            nick: "alice".to_string(),
+        };
+        let _ = AvEvent::ParticipantLeft {
+            nick: "bob".to_string(),
+        };
+        let _ = AvEvent::AudioTrackStarted {
+            nick: "carol".to_string(),
+        };
+        let _ = AvEvent::AudioTrackStopped {
+            nick: "dave".to_string(),
+        };
+        let _ = AvEvent::VideoTrackStarted {
+            nick: "eve".to_string(),
+        };
+        let _ = AvEvent::VideoTrackStopped {
+            nick: "frank".to_string(),
+        };
         let _ = AvEvent::VideoFrame {
             nick: "grace".to_string(),
             bgra: vec![0; 4],
             width: 1,
             height: 1,
         };
-        let _ = AvEvent::Error { message: "test error".to_string() };
+        let _ = AvEvent::Error {
+            message: "test error".to_string(),
+        };
     }
 
     #[test]
     fn av_handler_trait_works() {
         let connected = Arc::new(AtomicBool::new(false));
-        let handler = TestAvHandler { connected: connected.clone() };
+        let handler = TestAvHandler {
+            connected: connected.clone(),
+        };
         handler.on_av_event(AvEvent::Connected);
         assert!(connected.load(Ordering::Relaxed));
     }
@@ -1750,7 +1791,10 @@ mod tests {
         let tallies = parse_reactions_tag("👍:alice,bob;❤️:carol");
         assert_eq!(tallies.len(), 2);
         assert_eq!(tallies[0].emoji, "👍");
-        assert_eq!(tallies[0].nicks, vec!["alice".to_string(), "bob".to_string()]);
+        assert_eq!(
+            tallies[0].nicks,
+            vec!["alice".to_string(), "bob".to_string()]
+        );
         assert_eq!(tallies[1].emoji, "❤️");
         assert_eq!(tallies[1].nicks, vec!["carol".to_string()]);
     }
@@ -1773,7 +1817,10 @@ mod tests {
     fn convert_event_message_populates_reactions_from_tag() {
         let mut tags = std::collections::HashMap::new();
         tags.insert("msgid".to_string(), "01ABC".to_string());
-        tags.insert("+freeq.at/reactions".to_string(), "👍:alice,bob;🎉:carol".to_string());
+        tags.insert(
+            "+freeq.at/reactions".to_string(),
+            "👍:alice,bob;🎉:carol".to_string(),
+        );
         let ev = freeq_sdk::event::Event::Message {
             from: "smoke-tx".to_string(),
             target: "#naptest".to_string(),
@@ -1785,8 +1832,14 @@ mod tests {
             panic!("expected Message variant");
         };
         assert_eq!(msg.reactions.len(), 2);
-        assert!(msg.reactions.iter().any(|r| r.emoji == "👍" && r.nicks == vec!["alice".to_string(), "bob".to_string()]));
-        assert!(msg.reactions.iter().any(|r| r.emoji == "🎉" && r.nicks == vec!["carol".to_string()]));
+        assert!(msg
+            .reactions
+            .iter()
+            .any(|r| r.emoji == "👍" && r.nicks == vec!["alice".to_string(), "bob".to_string()]));
+        assert!(msg
+            .reactions
+            .iter()
+            .any(|r| r.emoji == "🎉" && r.nicks == vec!["carol".to_string()]));
     }
 
     #[test]

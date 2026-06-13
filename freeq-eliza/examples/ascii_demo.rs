@@ -15,7 +15,9 @@ use freeq_eliza::video::{VIDEO_H, VIDEO_W};
 use freeq_eliza::video_ascii::AsciiRenderer;
 
 fn main() {
-    let out = std::env::args().nth(1).unwrap_or_else(|| "/tmp/ascii_frames".into());
+    let out = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "/tmp/ascii_frames".into());
     std::fs::create_dir_all(&out).expect("create out dir");
 
     let fps = 15.0f32;
@@ -33,7 +35,9 @@ fn main() {
         let path = format!("{out}/f{f:04}.png");
         img.save(&path).expect("save png");
     }
-    println!("done. encode with:\n  ffmpeg -y -framerate 15 -i {out}/f%04d.png -c:v libx264 -pix_fmt yuv420p -movflags +faststart ascii.mp4");
+    println!(
+        "done. encode with:\n  ffmpeg -y -framerate 15 -i {out}/f%04d.png -c:v libx264 -pix_fmt yuv420p -movflags +faststart ascii.mp4"
+    );
 }
 
 /// Synthetic (level, peer) timeline.

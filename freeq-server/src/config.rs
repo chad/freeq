@@ -244,17 +244,15 @@ impl ServerConfig {
         #[cfg(target_os = "macos")]
         {
             if let Some(home) = std::env::var_os("HOME") {
-                return Some(
-                    std::path::PathBuf::from(home).join("Library/Application Support"),
-                );
+                return Some(std::path::PathBuf::from(home).join("Library/Application Support"));
             }
         }
         #[cfg(not(target_os = "macos"))]
         {
-            if let Ok(xdg) = std::env::var("XDG_STATE_HOME") {
-                if !xdg.is_empty() {
-                    return Some(std::path::PathBuf::from(xdg));
-                }
+            if let Ok(xdg) = std::env::var("XDG_STATE_HOME")
+                && !xdg.is_empty()
+            {
+                return Some(std::path::PathBuf::from(xdg));
             }
             if let Some(home) = std::env::var_os("HOME") {
                 return Some(std::path::PathBuf::from(home).join(".local/state"));

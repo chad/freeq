@@ -85,8 +85,12 @@ pub(crate) async fn summarize_against(
         .bytes()
         .await
         .context("anthropic response body read failed")?;
-    let parsed: ApiResponse = serde_json::from_slice(&bytes)
-        .with_context(|| format!("anthropic response parse failed (body: {} bytes)", bytes.len()))?;
+    let parsed: ApiResponse = serde_json::from_slice(&bytes).with_context(|| {
+        format!(
+            "anthropic response parse failed (body: {} bytes)",
+            bytes.len()
+        )
+    })?;
     Ok(parsed
         .content
         .into_iter()
@@ -100,7 +104,11 @@ pub(crate) async fn summarize_against(
 
 /// Build the Anthropic Messages API request body. Pulled out so tests
 /// can pin its shape without needing a live HTTP round-trip.
-pub(crate) fn build_request_body(model: &str, channel: &str, transcript: &str) -> serde_json::Value {
+pub(crate) fn build_request_body(
+    model: &str,
+    channel: &str,
+    transcript: &str,
+) -> serde_json::Value {
     serde_json::json!({
         "model": model,
         "max_tokens": 1024,
@@ -150,8 +158,7 @@ mod tests {
                 if let Some(pos) = find_crlf2(&buf[..total]) {
                     let headers = &buf[..pos];
                     let body_start = pos + 4;
-                    let content_length =
-                        parse_content_length(headers).unwrap_or(0);
+                    let content_length = parse_content_length(headers).unwrap_or(0);
                     if total >= body_start + content_length {
                         break buf[..body_start + content_length].to_vec();
                     }
@@ -204,7 +211,12 @@ mod tests {
         assert_eq!(body["max_tokens"], 1024);
         // The system prompt must be sent so Claude knows the output
         // shape; without it the bot posts free-form text.
-        assert!(body["system"].as_str().unwrap().contains("meeting note-taker"));
+        assert!(
+            body["system"]
+                .as_str()
+                .unwrap()
+                .contains("meeting note-taker")
+        );
         let content = body["messages"][0]["content"].as_str().unwrap();
         assert!(content.contains("Channel: #foo"));
         assert!(content.contains("alice: hi"));
@@ -224,14 +236,18 @@ mod tests {
         let body = build_request_body("claude-sonnet-4-5", "#foo", &transcript);
         let content = body["messages"][0]["content"].as_str().unwrap();
         // Should be at least as long as the input transcript.
-        assert!(content.len() >= transcript.len(), "transcript was truncated");
+        assert!(
+            content.len() >= transcript.len(),
+            "transcript was truncated"
+        );
     }
 
     // ---------- HTTP round-trips ----------
 
     #[tokio::test]
     async fn happy_path_returns_concatenated_text_blocks() {
-        let response = r#"{"content":[{"type":"text","text":"Hello "},{"type":"text","text":"world"}]}"#;
+        let response =
+            r#"{"content":[{"type":"text","text":"Hello "},{"type":"text","text":"world"}]}"#;
         let (url, captured) = one_shot_server("200 OK", response).await;
         let out = summarize_against(&url, "sk-test", "claude-x", "#c", "alice: hi")
             .await
@@ -241,7 +257,10 @@ mod tests {
         // Inspect the captured request: headers + body sanity check.
         let req = captured.lock().await.clone().unwrap();
         let req_str = String::from_utf8_lossy(&req);
-        assert!(req_str.contains("x-api-key: sk-test"), "missing api key header");
+        assert!(
+            req_str.contains("x-api-key: sk-test"),
+            "missing api key header"
+        );
         assert!(req_str.contains("anthropic-version: 2023-06-01"));
         assert!(req_str.contains("content-type: application/json"));
         let body = extract_body(&req).unwrap();

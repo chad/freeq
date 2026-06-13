@@ -134,7 +134,10 @@ async fn version_includes_git_hash() {
     .await;
 
     if let Event::RawLine(line) = &version_evt {
-        assert!(line.contains("freeq-"), "VERSION should contain 'freeq-', got: {line}");
+        assert!(
+            line.contains("freeq-"),
+            "VERSION should contain 'freeq-', got: {line}"
+        );
         // Should have version-hash format (e.g. freeq-0.1.0-3a6d138)
         assert!(
             line.contains("freeq-0.") && line.matches('-').count() >= 2,
@@ -1521,7 +1524,10 @@ async fn invite_exception_list_via_mode() {
     .await;
 
     // Add two entries.
-    handle.raw("MODE #invex-list +I *!*@a.example").await.unwrap();
+    handle
+        .raw("MODE #invex-list +I *!*@a.example")
+        .await
+        .unwrap();
     expect_event(
         &mut events,
         2000,
@@ -1529,7 +1535,10 @@ async fn invite_exception_list_via_mode() {
         "+I a set",
     )
     .await;
-    handle.raw("MODE #invex-list +I *!*@b.example").await.unwrap();
+    handle
+        .raw("MODE #invex-list +I *!*@b.example")
+        .await
+        .unwrap();
     expect_event(
         &mut events,
         2000,
@@ -1852,7 +1861,10 @@ async fn invite_exception_duplicate_prevented() {
     .await;
 
     // Set the same mask twice.
-    handle.raw("MODE #invex-dup +I *!*@x.example").await.unwrap();
+    handle
+        .raw("MODE #invex-dup +I *!*@x.example")
+        .await
+        .unwrap();
     expect_event(
         &mut events,
         2000,
@@ -1860,7 +1872,10 @@ async fn invite_exception_duplicate_prevented() {
         "first +I",
     )
     .await;
-    handle.raw("MODE #invex-dup +I *!*@x.example").await.unwrap();
+    handle
+        .raw("MODE #invex-dup +I *!*@x.example")
+        .await
+        .unwrap();
     // Sleep instead of waiting for a ModeChanged: the duplicate path skips
     // the broadcast (the list didn't actually change), so no event fires.
     tokio::time::sleep(Duration::from_millis(150)).await;
@@ -1870,8 +1885,7 @@ async fn invite_exception_duplicate_prevented() {
     let mut count = 0;
     let deadline = std::time::Instant::now() + Duration::from_millis(500);
     while std::time::Instant::now() < deadline {
-        if let Ok(Some(evt)) =
-            tokio::time::timeout(Duration::from_millis(100), events.recv()).await
+        if let Ok(Some(evt)) = tokio::time::timeout(Duration::from_millis(100), events.recv()).await
         {
             match evt {
                 Event::RawLine(line)
@@ -1929,8 +1943,7 @@ async fn invite_exception_empty_mask_dropped() {
     let mut entries = 0;
     let deadline = std::time::Instant::now() + Duration::from_millis(500);
     while std::time::Instant::now() < deadline {
-        if let Ok(Some(evt)) =
-            tokio::time::timeout(Duration::from_millis(100), events.recv()).await
+        if let Ok(Some(evt)) = tokio::time::timeout(Duration::from_millis(100), events.recv()).await
         {
             match evt {
                 Event::RawLine(line) if line.contains(" 346 ") => entries += 1,
@@ -1939,7 +1952,10 @@ async fn invite_exception_empty_mask_dropped() {
             }
         }
     }
-    assert_eq!(entries, 0, "empty mask must not create an entry, found {entries}");
+    assert_eq!(
+        entries, 0,
+        "empty mask must not create an entry, found {entries}"
+    );
 
     handle.quit(None).await.unwrap();
     server_handle.abort();
@@ -2130,8 +2146,10 @@ async fn founder_bypasses_moderated_on_speak() {
     expect_event(
         &mut events,
         2000,
-        |e| matches!(e, Event::Message { from, target, text, .. }
-                     if from == "alice" && target == "#founder-m" && text == "hello"),
+        |e| {
+            matches!(e, Event::Message { from, target, text, .. }
+                     if from == "alice" && target == "#founder-m" && text == "hello")
+        },
         "founder spoke in +m channel",
     )
     .await;
@@ -3084,8 +3102,7 @@ async fn tagmsg_unreact_removes_persisted_reaction() {
     let db_path = dir.path().join("unreact.db");
     let db_str = db_path.to_str().unwrap();
 
-    let (addr, server_handle) =
-        start_test_server_with_db(empty_resolver(), db_str).await;
+    let (addr, server_handle) = start_test_server_with_db(empty_resolver(), db_str).await;
 
     let config_alice = ConnectConfig {
         server_addr: addr.to_string(),
@@ -3152,13 +3169,17 @@ async fn tagmsg_unreact_removes_persisted_reaction() {
     let msg_evt = expect_event(
         &mut events_bob,
         2000,
-        |e| matches!(e, Event::Message { from, target, text, .. }
-            if from == "alice" && target == "#unreact" && text == "react to me"),
+        |e| {
+            matches!(e, Event::Message { from, target, text, .. }
+            if from == "alice" && target == "#unreact" && text == "react to me")
+        },
         "Bob receives Alice's message",
     )
     .await;
     let msgid = if let Event::Message { tags, .. } = &msg_evt {
-        tags.get("msgid").cloned().expect("server should attach msgid")
+        tags.get("msgid")
+            .cloned()
+            .expect("server should attach msgid")
     } else {
         unreachable!()
     };
@@ -3167,14 +3188,19 @@ async fn tagmsg_unreact_removes_persisted_reaction() {
     let mut react_tags = HashMap::new();
     react_tags.insert("+react".to_string(), "🔥".to_string());
     react_tags.insert("+reply".to_string(), msgid.clone());
-    handle_bob.send_tagmsg("#unreact", react_tags).await.unwrap();
+    handle_bob
+        .send_tagmsg("#unreact", react_tags)
+        .await
+        .unwrap();
 
     // Alice sees Bob's reaction relay (sanity).
     expect_event(
         &mut events_alice,
         2000,
-        |e| matches!(e, Event::TagMsg { from, tags, .. }
-            if from == "bob" && tags.get("+react").map(|s| s.as_str()) == Some("🔥")),
+        |e| {
+            matches!(e, Event::TagMsg { from, tags, .. }
+            if from == "bob" && tags.get("+react").map(|s| s.as_str()) == Some("🔥"))
+        },
         "Alice receives Bob's reaction",
     )
     .await;
@@ -3192,9 +3218,11 @@ async fn tagmsg_unreact_removes_persisted_reaction() {
     expect_event(
         &mut events_alice,
         2000,
-        |e| matches!(e, Event::TagMsg { from, tags, .. }
+        |e| {
+            matches!(e, Event::TagMsg { from, tags, .. }
             if from == "bob"
-            && tags.get("+freeq.at/unreact").map(|s| s.as_str()) == Some("🔥")),
+            && tags.get("+freeq.at/unreact").map(|s| s.as_str()) == Some("🔥"))
+        },
         "Alice receives Bob's unreact",
     )
     .await;
@@ -3203,15 +3231,14 @@ async fn tagmsg_unreact_removes_persisted_reaction() {
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     // CHATHISTORY should now show the message with no 🔥 in +freeq.at/reactions.
-    handle_alice
-        .history_latest("#unreact", 50)
-        .await
-        .unwrap();
+    handle_alice.history_latest("#unreact", 50).await.unwrap();
     expect_event(
         &mut events_alice,
         2000,
-        |e| matches!(e, Event::BatchStart { batch_type, .. }
-            if batch_type == "chathistory"),
+        |e| {
+            matches!(e, Event::BatchStart { batch_type, .. }
+            if batch_type == "chathistory")
+        },
         "history batch start",
     )
     .await;
@@ -3224,9 +3251,7 @@ async fn tagmsg_unreact_removes_persisted_reaction() {
     .await;
     if let Event::Message { tags, .. } = &hist {
         let reactions = tags.get("+freeq.at/reactions");
-        let still_has_fire = reactions
-            .map(|s| s.contains("🔥"))
-            .unwrap_or(false);
+        let still_has_fire = reactions.map(|s| s.contains("🔥")).unwrap_or(false);
         assert!(
             !still_has_fire,
             "after unreact, history should not carry 🔥 in +freeq.at/reactions; got: {reactions:?}"
@@ -4019,10 +4044,7 @@ async fn account_tag_on_channel_and_dm() {
     while events_auth.try_recv().is_ok() {}
     while events_recv.try_recv().is_ok() {}
 
-    handle_auth
-        .privmsg("#acct", "channel hello")
-        .await
-        .unwrap();
+    handle_auth.privmsg("#acct", "channel hello").await.unwrap();
 
     let chan_msg = expect_event(
         &mut events_recv,
@@ -4043,10 +4065,7 @@ async fn account_tag_on_channel_and_dm() {
     }
 
     // ── DM case ──
-    handle_auth
-        .privmsg("receiver", "dm hello")
-        .await
-        .unwrap();
+    handle_auth.privmsg("receiver", "dm hello").await.unwrap();
 
     let dm_msg = expect_event(
         &mut events_recv,
@@ -4069,10 +4088,7 @@ async fn account_tag_on_channel_and_dm() {
     // ── Negative case: guest sender ──
     // The receiver should NOT see an account tag for messages from a guest
     // (no DID = no account tag), even though it negotiated account-tag.
-    handle_recv
-        .privmsg("#acct", "from guest")
-        .await
-        .unwrap();
+    handle_recv.privmsg("#acct", "from guest").await.unwrap();
     let guest_msg = expect_event(
         &mut events_auth,
         2000,
@@ -4292,10 +4308,7 @@ async fn dm_history_authenticated() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Alice requests DM history with Bob
-    handle_alice
-        .history_latest("dmbob", 50)
-        .await
-        .unwrap();
+    handle_alice.history_latest("dmbob", 50).await.unwrap();
 
     // Alice should receive a batch with the DM
     expect_event(
@@ -4314,7 +4327,10 @@ async fn dm_history_authenticated() {
     )
     .await;
     if let Event::Message { tags, .. } = &hist_msg {
-        assert!(tags.contains_key("batch"), "History message should have batch tag");
+        assert!(
+            tags.contains_key("batch"),
+            "History message should have batch tag"
+        );
     }
 
     expect_event(
@@ -4384,14 +4400,14 @@ async fn chathistory_includes_account_tag() {
     )
     .await;
 
-    handle_alice.privmsg("#accttest", "hello from alice").await.unwrap();
+    handle_alice
+        .privmsg("#accttest", "hello from alice")
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Request CHATHISTORY
-    handle_alice
-        .history_latest("#accttest", 50)
-        .await
-        .unwrap();
+    handle_alice.history_latest("#accttest", 50).await.unwrap();
 
     expect_event(
         &mut events_alice,
@@ -4483,7 +4499,10 @@ async fn join_history_includes_account_tag() {
     )
     .await;
 
-    handle_alice.privmsg("#joinhisttest", "hello from alice").await.unwrap();
+    handle_alice
+        .privmsg("#joinhisttest", "hello from alice")
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Bob joins as guest — should see Alice's message in JOIN history replay

@@ -327,9 +327,7 @@ async fn verify_github(
     // Validate GitHub username and org name to prevent URL injection.
     // GitHub names: 1-39 chars, alphanumeric or hyphens, no path separators.
     fn is_valid_github_name(s: &str) -> bool {
-        !s.is_empty()
-            && s.len() <= 39
-            && s.chars().all(|c| c.is_alphanumeric() || c == '-')
+        !s.is_empty() && s.len() <= 39 && s.chars().all(|c| c.is_alphanumeric() || c == '-')
     }
 
     if !is_valid_github_name(&req.org) || !is_valid_github_name(&req.github_username) {

@@ -258,10 +258,10 @@ impl LlmClient {
                             if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
                                 match event.event_type.as_str() {
                                     "content_block_delta" => {
-                                        if let Some(delta) = event.delta {
-                                            if let Some(text) = delta.text {
-                                                let _ = tx.send(StreamDelta::Text(text)).await;
-                                            }
+                                        if let Some(delta) = event.delta
+                                            && let Some(text) = delta.text
+                                        {
+                                            let _ = tx.send(StreamDelta::Text(text)).await;
                                         }
                                     }
                                     "message_stop" => {

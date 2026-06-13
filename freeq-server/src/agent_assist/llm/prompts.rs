@@ -36,7 +36,10 @@ pub fn system_prompt(ctx: &ClassificationContext) -> String {
     s.push_str("):\n\n");
 
     for t in &ctx.available_tools {
-        s.push_str(&format!("- name: {}\n  description: {}\n  args_hint: {}\n\n", t.name, t.description, t.args_hint));
+        s.push_str(&format!(
+            "- name: {}\n  description: {}\n  args_hint: {}\n\n",
+            t.name, t.description, t.args_hint
+        ));
     }
 
     s.push_str(

@@ -91,10 +91,7 @@ impl ParticleControl {
     /// model deliberately put up.
     pub fn set_overlay_if_idle_or_graph(&self, overlay: TileOverlay) -> bool {
         if let Ok(mut g) = self.overlay.lock() {
-            let replaceable = matches!(
-                *g,
-                TileOverlay::None | TileOverlay::Graph { .. }
-            );
+            let replaceable = matches!(*g, TileOverlay::None | TileOverlay::Graph { .. });
             if replaceable {
                 *g = overlay;
                 return true;
@@ -212,15 +209,12 @@ fn render_loop(
         let t = started.elapsed().as_secs_f32();
 
         let peer = f32::from_bits(control.peer_level.load(Ordering::Relaxed)).clamp(0.0, 1.0);
-        let self_level =
-            f32::from_bits(control.self_level.load(Ordering::Relaxed)).clamp(0.0, 1.0);
+        let self_level = f32::from_bits(control.self_level.load(Ordering::Relaxed)).clamp(0.0, 1.0);
         let thinking = control.thinking.load(Ordering::Relaxed);
 
         let emotion = if self_level > 0.03 {
             Emotion::Passion
-        } else if thinking {
-            Emotion::Curiosity
-        } else if peer > 0.03 {
+        } else if thinking || peer > 0.03 {
             Emotion::Curiosity
         } else {
             Emotion::Calm

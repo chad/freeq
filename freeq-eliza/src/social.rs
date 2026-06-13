@@ -54,9 +54,7 @@ pub const DISCUSSION_TRIGGER_PHRASES: &[&str] = &[
 /// Case-insensitive whole-phrase substring match.
 pub fn is_discussion_trigger(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
-    DISCUSSION_TRIGGER_PHRASES
-        .iter()
-        .any(|p| lower.contains(p))
+    DISCUSSION_TRIGGER_PHRASES.iter().any(|p| lower.contains(p))
 }
 
 /// Scan `answer_text` for a trailing peer hand-off and return
@@ -84,8 +82,7 @@ pub fn extract_peer_handoff(
         while let Some(rel) = lower[from..].find(peer.as_str()) {
             let pos = from + rel;
             // Word boundary check on both sides.
-            let left_ok =
-                pos == 0 || !lower.as_bytes()[pos - 1].is_ascii_alphanumeric();
+            let left_ok = pos == 0 || !lower.as_bytes()[pos - 1].is_ascii_alphanumeric();
             let right_ok = pos + peer.len() == lower.len()
                 || !lower.as_bytes()[pos + peer.len()].is_ascii_alphanumeric();
             if left_ok && right_ok {
@@ -102,9 +99,7 @@ pub fn extract_peer_handoff(
     // and whitespace.
     let after = &answer_text[pos + peer.len()..];
     let body: String = after
-        .trim_start_matches(|c: char| {
-            c.is_ascii_punctuation() || c.is_whitespace()
-        })
+        .trim_start_matches(|c: char| c.is_ascii_punctuation() || c.is_whitespace())
         .trim_end()
         .to_string();
     Some((peer.to_string(), body))
@@ -216,8 +211,7 @@ pub fn mention_without_address(text: &str, my_nick: &str) -> bool {
     for i in 0..=bytes.len() - nlen {
         if &bytes[i..i + nlen] == needle {
             let left_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
-            let right_ok =
-                i + nlen == bytes.len() || !bytes[i + nlen].is_ascii_alphanumeric();
+            let right_ok = i + nlen == bytes.len() || !bytes[i + nlen].is_ascii_alphanumeric();
             if left_ok && right_ok {
                 return true;
             }
@@ -293,7 +287,7 @@ pub fn format_session_recall(recs: &[Recollection]) -> Option<String> {
     sorted.sort_by_key(|r| std::cmp::Reverse(r.ts));
     let top = sorted[0];
     // Strip trailing punctuation + truncate to one breath worth.
-    let q = top.question.trim_end_matches(|c: char| c == '?' || c == '.').trim();
+    let q = top.question.trim_end_matches(['?', '.']).trim();
     let q_short: String = q.chars().take(80).collect();
     Some(format!("Last time, you asked about {q_short}. I remember."))
 }
@@ -339,7 +333,10 @@ mod tests {
             "A live voice call with the assistant Yokota.",
             &["olive", "utopia"],
         );
-        assert!(r.is_none(), "fuzzy near-miss must not register as an address");
+        assert!(
+            r.is_none(),
+            "fuzzy near-miss must not register as an address"
+        );
         // Exact spelling still routes.
         let r = extract_addressee("olive, what's 2+2", &["olive", "utopia"]);
         assert_eq!(r.as_deref(), Some("olive"));
@@ -415,7 +412,10 @@ mod tests {
     #[test]
     fn backchannel_unknown_character_uses_default_pool() {
         let r = pick_backchannel("eliza", 10.0, 5.0, 0);
-        assert!(r.is_some(), "should still return something for unknown chars");
+        assert!(
+            r.is_some(),
+            "should still return something for unknown chars"
+        );
     }
 
     // ── 4. merge_diagrams ─────────────────────────────────────────
@@ -471,7 +471,10 @@ mod tests {
             rec("chad", "how does fts5 rank", "...", 200),
         ];
         let s = format_session_recall(&recs).unwrap();
-        assert!(s.contains("fts5"), "expected most recent question, got {s:?}");
+        assert!(
+            s.contains("fts5"),
+            "expected most recent question, got {s:?}"
+        );
         assert!(!s.contains("voronoi"));
     }
 
@@ -515,11 +518,8 @@ mod tests {
     #[test]
     fn handoff_prefers_last_peer_when_multiple() {
         let p = peers(&["utopia", "narrator"]);
-        let r = extract_peer_handoff(
-            "Utopia made a point earlier. Narrator, your read?",
-            &p,
-        )
-        .unwrap();
+        let r =
+            extract_peer_handoff("Utopia made a point earlier. Narrator, your read?", &p).unwrap();
         assert_eq!(r.0, "narrator");
     }
 
@@ -528,8 +528,7 @@ mod tests {
         // "...Utopia?" — body is empty. Caller will synthesise a
         // generic continuation.
         let p = peers(&["utopia", "narrator"]);
-        let r =
-            extract_peer_handoff("The disagreement is legible. Utopia?", &p).unwrap();
+        let r = extract_peer_handoff("The disagreement is legible. Utopia?", &p).unwrap();
         assert_eq!(r.0, "utopia");
         assert!(r.1.is_empty(), "got body {:?}", r.1);
     }

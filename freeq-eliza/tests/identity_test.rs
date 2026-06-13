@@ -20,10 +20,15 @@ fn mints_fresh_identity_on_first_run() {
     let seed = std::fs::read(&key_path).unwrap();
     assert_eq!(seed.len(), 32, "ed25519 seed must be exactly 32 bytes");
 
-    assert!(ident.did.starts_with("did:key:z"), "DID is not did:key: {}", ident.did);
+    assert!(
+        ident.did.starts_with("did:key:z"),
+        "DID is not did:key: {}",
+        ident.did
+    );
 
     // identity.json is valid JSON and contains the DID we returned.
-    let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&id_path).unwrap()).unwrap();
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&id_path).unwrap()).unwrap();
     assert_eq!(json["id"].as_str(), Some(ident.did.as_str()));
 
     #[cfg(unix)]
@@ -97,7 +102,10 @@ fn corrupted_seed_errors_with_path() {
         .map(|_| ())
         .expect_err("must reject short seed");
     let msg = format!("{err:#}");
-    assert!(msg.contains("32-byte"), "error should mention 32-byte: {msg}");
+    assert!(
+        msg.contains("32-byte"),
+        "error should mention 32-byte: {msg}"
+    );
     assert!(
         msg.contains(&key_path.display().to_string()),
         "error should name the bad path: {msg}",

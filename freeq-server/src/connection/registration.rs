@@ -483,7 +483,10 @@ pub(super) fn try_complete_registration(
             &format!("Your host is {server_name}, running freeq 0.1"),
         ],
     );
-    let boot_str = state.boot_timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string();
+    let boot_str = state
+        .boot_timestamp
+        .format("%Y-%m-%d %H:%M:%S UTC")
+        .to_string();
     let created = Message::from_server(
         server_name,
         irc::RPL_CREATED,

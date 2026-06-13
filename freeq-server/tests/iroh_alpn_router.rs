@@ -106,8 +106,7 @@ async fn bug_repro_iroh_live_with_router_stomps_freeq_alpns() {
         Err(_) => panic!("dial timed out (expected an ALPN reject, not a timeout)"),
     };
     assert!(
-        err.to_string().contains("error 120")
-            || err.to_string().contains("application protocol"),
+        err.to_string().contains("error 120") || err.to_string().contains("application protocol"),
         "expected `no_application_protocol` TLS abort, got: {err}"
     );
 }

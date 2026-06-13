@@ -29,7 +29,10 @@ fn main() {
     std::fs::create_dir_all(&out).expect("create out dir");
 
     let backend = match backend_name.as_str() {
-        "particles" => Backend::Particles { character: character.clone(), ghostly_pack: None },
+        "particles" => Backend::Particles {
+            character: character.clone(),
+            ghostly_pack: None,
+        },
         _ => Backend::Svg,
     };
     let tile = VideoTile::with_backend(backend);
@@ -84,7 +87,10 @@ fn envelope(t: f32) -> (f32, f32) {
         (((syl * 0.85 + micro) * phrase).clamp(0.0, 1.0), 0.0)
     } else if (9.0..12.0).contains(&t) {
         let s = t - 9.0;
-        (0.0, (0.35 + 0.25 * ((s * 5.0).sin() * 0.5 + 0.5)).clamp(0.0, 1.0))
+        (
+            0.0,
+            (0.35 + 0.25 * ((s * 5.0).sin() * 0.5 + 0.5)).clamp(0.0, 1.0),
+        )
     } else {
         (0.0, 0.0)
     }

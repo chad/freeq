@@ -377,7 +377,13 @@ mod tests {
 
         // Alice initiates
         let alice_identity = IdentityKeyPair::generate();
-        let result = initiate(&alice_identity, "did:plc:alice", &bob_bundle, &bob_verify_key).unwrap();
+        let result = initiate(
+            &alice_identity,
+            "did:plc:alice",
+            &bob_bundle,
+            &bob_verify_key,
+        )
+        .unwrap();
 
         // Bob responds
         let (bob_shared, bob_ratchet_secret) =

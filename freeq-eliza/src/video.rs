@@ -156,7 +156,7 @@ impl Ambient {
 /// points for answer-driven informational cards). Ambient images are
 /// pure visual cues: faded, no overlay text — the topic name lives in
 /// the [`Ambient`] HUD chip instead.
-struct AmbientImage {
+pub(crate) struct AmbientImage {
     image: Option<(String, Instant)>,
     set_at: Instant,
 }
@@ -215,8 +215,9 @@ impl Scene {
 ///   whiteboards, and the ambient HUD are NO-OPS on this path (the
 ///   particle render is a single-layer face, not a UI). Mood + audio
 ///   level still drive palette and breath.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum Backend {
+    #[default]
     Svg,
     Particles {
         character: String,
@@ -265,12 +266,6 @@ pub enum Backend {
     /// and pulses flow outward while speaking. Single-layer; overlays
     /// are NO-OPS.
     Alexandria,
-}
-
-impl Default for Backend {
-    fn default() -> Self {
-        Backend::Svg
-    }
 }
 
 /// Shared handle to eliza's video tile. Clone-cheap.
@@ -426,10 +421,10 @@ impl VideoTile {
     /// ambient slot. Ignored if there's no slot or the slot has aged
     /// out — late images for a stale ambient pick get dropped.
     pub fn set_ambient_image(&self, data_uri: String) {
-        if let Ok(mut g) = self.ambient_image.lock() {
-            if let Some(ai) = g.as_mut() {
-                ai.image = Some((data_uri, Instant::now()));
-            }
+        if let Ok(mut g) = self.ambient_image.lock()
+            && let Some(ai) = g.as_mut()
+        {
+            ai.image = Some((data_uri, Instant::now()));
         }
     }
 
@@ -468,7 +463,9 @@ impl VideoTile {
     /// `None` if no flash has ever been requested. Used by the
     /// particles renderer to decay the visual.
     pub fn hand_raise_seconds_ago(&self) -> Option<f32> {
-        let stamp = self.hand_raise_at.load(std::sync::atomic::Ordering::Relaxed);
+        let stamp = self
+            .hand_raise_at
+            .load(std::sync::atomic::Ordering::Relaxed);
         if stamp == 0 {
             return None;
         }
@@ -508,10 +505,10 @@ impl VideoTile {
     /// newer answer.
     pub fn set_scene_image(&self, id: u64, data_uri: String) {
         let mut guard = self.scene.lock().expect("scene lock");
-        if let Some(scene) = guard.as_mut() {
-            if scene.id == id {
-                scene.image = Some((data_uri, Instant::now()));
-            }
+        if let Some(scene) = guard.as_mut()
+            && scene.id == id
+        {
+            scene.image = Some((data_uri, Instant::now()));
         }
     }
 
@@ -541,43 +538,48 @@ impl VideoTile {
                     libc::nice(10);
                 }
                 match backend {
-                Backend::Svg => tile.render_loop(),
-                Backend::Particles { character, ghostly_pack } => {
-                    crate::video_particles::render_loop(tile, &character, ghostly_pack.as_deref())
+                    Backend::Svg => tile.render_loop(),
+                    Backend::Particles {
+                        character,
+                        ghostly_pack,
+                    } => crate::video_particles::render_loop(
+                        tile,
+                        &character,
+                        ghostly_pack.as_deref(),
+                    ),
+                    Backend::Ascii => crate::video_ascii::render_loop(tile),
+                    Backend::AsciiRain => crate::video_ascii::render_loop_rain(tile),
+                    Backend::AsciiGlitch => crate::video_ascii::render_loop_glitch(tile),
+                    Backend::AsciiBot => crate::video_ascii::render_loop_bot(tile),
+                    Backend::Vector => crate::video_vector::render_loop(tile),
+                    Backend::SouthPark => crate::video_southpark::render_loop(tile),
+                    Backend::SouthParkGoofy => crate::video_southpark::render_loop_with(
+                        tile,
+                        crate::video_southpark::SpStyle::Goofy,
+                    ),
+                    Backend::SouthParkStoner => crate::video_southpark::render_loop_with(
+                        tile,
+                        crate::video_southpark::SpStyle::Stoner,
+                    ),
+                    Backend::Face3d => crate::video_face3d::render_loop(tile),
+                    Backend::Face3dAngry => crate::video_face3d::render_loop_with(
+                        tile,
+                        crate::video_face3d::Persona3d::fat_angry(),
+                    ),
+                    Backend::Face3dJoy => crate::video_face3d::render_loop_with(
+                        tile,
+                        crate::video_face3d::Persona3d::slender_joy(),
+                    ),
+                    Backend::Face3dEye => crate::video_face3d::render_loop_with(
+                        tile,
+                        crate::video_face3d::Persona3d::cyclops(),
+                    ),
+                    Backend::Face3dShard => crate::video_face3d::render_loop_with(
+                        tile,
+                        crate::video_face3d::Persona3d::shard(),
+                    ),
+                    Backend::Alexandria => crate::video_alexandria::render_loop(tile),
                 }
-                Backend::Ascii => crate::video_ascii::render_loop(tile),
-                Backend::AsciiRain => crate::video_ascii::render_loop_rain(tile),
-                Backend::AsciiGlitch => crate::video_ascii::render_loop_glitch(tile),
-                Backend::AsciiBot => crate::video_ascii::render_loop_bot(tile),
-                Backend::Vector => crate::video_vector::render_loop(tile),
-                Backend::SouthPark => crate::video_southpark::render_loop(tile),
-                Backend::SouthParkGoofy => crate::video_southpark::render_loop_with(
-                    tile,
-                    crate::video_southpark::SpStyle::Goofy,
-                ),
-                Backend::SouthParkStoner => crate::video_southpark::render_loop_with(
-                    tile,
-                    crate::video_southpark::SpStyle::Stoner,
-                ),
-                Backend::Face3d => crate::video_face3d::render_loop(tile),
-                Backend::Face3dAngry => crate::video_face3d::render_loop_with(
-                    tile,
-                    crate::video_face3d::Persona3d::fat_angry(),
-                ),
-                Backend::Face3dJoy => crate::video_face3d::render_loop_with(
-                    tile,
-                    crate::video_face3d::Persona3d::slender_joy(),
-                ),
-                Backend::Face3dEye => crate::video_face3d::render_loop_with(
-                    tile,
-                    crate::video_face3d::Persona3d::cyclops(),
-                ),
-                Backend::Face3dShard => crate::video_face3d::render_loop_with(
-                    tile,
-                    crate::video_face3d::Persona3d::shard(),
-                ),
-                Backend::Alexandria => crate::video_alexandria::render_loop(tile),
-            }
             })
             .expect("spawn video renderer");
     }
@@ -610,20 +612,12 @@ impl VideoTile {
             let level = f32::from_bits(self.level.load(Ordering::Relaxed)).clamp(0.0, 1.0);
             let peer = f32::from_bits(self.peer_level.load(Ordering::Relaxed)).clamp(0.0, 1.0);
             let thinking = self.thinking.load(Ordering::Relaxed);
-            let vision_thumb = self
-                .vision_thumb
-                .lock()
-                .ok()
-                .and_then(|g| g.clone());
-            let ambient = self
-                .ambient
-                .lock()
-                .ok()
-                .and_then(|g| {
-                    g.as_ref()
-                        .filter(|a| a.is_visible())
-                        .map(|a| (a.concept.clone(), a.accent.clone()))
-                });
+            let vision_thumb = self.vision_thumb.lock().ok().and_then(|g| g.clone());
+            let ambient = self.ambient.lock().ok().and_then(|g| {
+                g.as_ref()
+                    .filter(|a| a.is_visible())
+                    .map(|a| (a.concept.clone(), a.accent.clone()))
+            });
 
             // Vision overrides everything — when she's analyzing a frame,
             // that's the most important thing for the viewer to see, even
@@ -671,9 +665,7 @@ impl VideoTile {
                 peer_history: &ph,
                 glitch,
                 vision_thumb: vision_thumb.as_deref(),
-                ambient: ambient
-                    .as_ref()
-                    .map(|(c, a)| (c.as_str(), a.as_str())),
+                ambient: ambient.as_ref().map(|(c, a)| (c.as_str(), a.as_str())),
             };
 
             let svg = {
@@ -805,9 +797,7 @@ fn mood_label(mood: Mood) -> &'static str {
 /// else (a name, bad length, non-hex) falls back to [`DEFAULT_ACCENT`].
 fn validate_accent(s: &str) -> String {
     let t = s.trim();
-    let ok = t.len() == 7
-        && t.starts_with('#')
-        && t[1..].chars().all(|c| c.is_ascii_hexdigit());
+    let ok = t.len() == 7 && t.starts_with('#') && t[1..].chars().all(|c| c.is_ascii_hexdigit());
     if ok {
         t.to_string()
     } else {
@@ -1183,7 +1173,11 @@ fn state_sticker(mood: Mood, accent: &str) -> String {
 /// ambient accent — so the tile keeps showing she's tracking the
 /// conversation even when she isn't speaking.
 fn hud_sticker(s: &PresenceState) -> String {
-    let tick = if (s.t * 1.5).sin() > 0.0 { "●" } else { "○" };
+    let tick = if (s.t * 1.5).sin() > 0.0 {
+        "●"
+    } else {
+        "○"
+    };
     let (text, accent): (String, &str) = match s.ambient {
         Some((concept, accent)) => (
             concept.chars().take(22).collect::<String>().to_uppercase(),
@@ -1525,7 +1519,13 @@ fn render_step(step: &Step, progress: f32, accent: &str) -> String {
                 label = xml_escape(label),
             )
         }
-        Step::Arrow { x1, y1, x2, y2, label } => {
+        Step::Arrow {
+            x1,
+            y1,
+            x2,
+            y2,
+            label,
+        } => {
             // Arrowhead as an inline triangle at (x2,y2).
             let dx = x2 - x1;
             let dy = y2 - y1;
@@ -1566,7 +1566,12 @@ fn render_step(step: &Step, progress: f32, accent: &str) -> String {
 </g>"##,
             )
         }
-        Step::Text { x, y, content, size } => {
+        Step::Text {
+            x,
+            y,
+            content,
+            size,
+        } => {
             let fs = size.px();
             let weight = if matches!(size, crate::whiteboard::TextSize::Large) {
                 900
@@ -1654,10 +1659,7 @@ fn key_points_body(s: &SceneSpec, e: f32, accent: &str) -> String {
 /// Stat: a single big number with a label above and context below. The
 /// number's font size auto-fits its width so long values still fit.
 fn stat_body(s: &SceneSpec, e: f32, accent: &str) -> String {
-    let value = truncate(
-        s.points.first().map(String::as_str).unwrap_or("—"),
-        18,
-    );
+    let value = truncate(s.points.first().map(String::as_str).unwrap_or("—"), 18);
     let label = s.title.to_uppercase();
     let lp = reveal(e, 0.05, 0.4);
     let np = reveal(e, 0.16, 0.6);
@@ -1751,7 +1753,17 @@ fn timeline_body(s: &SceneSpec, e: f32, accent: &str) -> String {
         }
         let label = wrap(pt, 40);
         let labelsvg = lines_svg(
-            &label, 104.0, cy + 6.0, 22.0, 18.0, 500, "#dce6ff", "start", e, delay + 0.06, 0.05,
+            &label,
+            104.0,
+            cy + 6.0,
+            22.0,
+            18.0,
+            500,
+            "#dce6ff",
+            "start",
+            e,
+            delay + 0.06,
+            0.05,
         );
         nodes.push_str(&format!(
             r##"<g opacity="{p:.3}">
@@ -1825,7 +1837,9 @@ pub(crate) fn overlay_svg_for_particles(tile: &VideoTile, time: f32) -> Option<S
     });
     let ambient_image_uri = tile.ambient_image.lock().ok().and_then(|g| {
         g.as_ref().filter(|ai| ai.is_visible()).and_then(|ai| {
-            ai.image.as_ref().map(|(uri, at)| (uri.clone(), at.elapsed().as_secs_f32()))
+            ai.image
+                .as_ref()
+                .map(|(uri, at)| (uri.clone(), at.elapsed().as_secs_f32()))
         })
     });
     let vision_thumb = tile.vision_thumb.lock().ok().and_then(|g| g.clone());
@@ -1895,12 +1909,12 @@ pub(crate) fn overlay_svg_for_particles(tile: &VideoTile, time: f32) -> Option<S
     // Ambient HUD chip — inlined from `hud_sticker` so we don't need
     // a full PresenceState.
     if let Some((concept, amb_accent)) = ambient {
-        let tick = if (time * 1.5).sin() > 0.0 { "●" } else { "○" };
-        let text: String = concept
-            .chars()
-            .take(22)
-            .collect::<String>()
-            .to_uppercase();
+        let tick = if (time * 1.5).sin() > 0.0 {
+            "●"
+        } else {
+            "○"
+        };
+        let text: String = concept.chars().take(22).collect::<String>().to_uppercase();
         let chars = 2 + text.chars().count() as i32;
         let w = (24 + chars * 11).max(120);
         svg.push_str(&format!(
@@ -1950,8 +1964,12 @@ mod tests {
         let mut pixmap = resvg::tiny_skia::Pixmap::new(VIDEO_W, VIDEO_H).unwrap();
         // A bit of history so the EQ strip actually has bars to draw,
         // and a tiny vision thumb so the PiP branch renders too.
-        let lh: Vec<f32> = (0..EQ_BARS).map(|i| (i as f32 * 0.1).sin().abs() * 0.5).collect();
-        let ph: Vec<f32> = (0..EQ_BARS).map(|i| (i as f32 * 0.13).cos().abs() * 0.4).collect();
+        let lh: Vec<f32> = (0..EQ_BARS)
+            .map(|i| (i as f32 * 0.1).sin().abs() * 0.5)
+            .collect();
+        let ph: Vec<f32> = (0..EQ_BARS)
+            .map(|i| (i as f32 * 0.13).cos().abs() * 0.4)
+            .collect();
         // A 1×1 black JPEG (smallest valid encode), as a data URI.
         let tiny_thumb = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/2wBDAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQH/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/8AAA/9k=";
         for mood in [
@@ -1971,7 +1989,11 @@ mod tests {
                 level_history: &lh,
                 peer_history: &ph,
                 glitch: 0.6,
-                vision_thumb: if mood == Mood::Vision { Some(tiny_thumb) } else { None },
+                vision_thumb: if mood == Mood::Vision {
+                    Some(tiny_thumb)
+                } else {
+                    None
+                },
                 ambient: None,
             };
             let frame = rasterize(&presence_svg(&state), &opt, &mut pixmap)
@@ -2036,7 +2058,11 @@ mod tests {
     fn wrap_breaks_on_word_boundaries() {
         let lines = wrap("one two three four five six", 9);
         assert!(lines.len() >= 3, "should wrap into several lines");
-        assert!(lines.iter().all(|l| !l.starts_with(' ') && !l.ends_with(' ')));
+        assert!(
+            lines
+                .iter()
+                .all(|l| !l.starts_with(' ') && !l.ends_with(' '))
+        );
     }
 
     #[test]
@@ -2135,17 +2161,17 @@ mod tests {
                     image: Some((uri.clone(), Instant::now() - Duration::from_secs_f32(5.0))),
                 };
                 let state = PresenceState {
-                mood: Mood::Speaking,
-                t: 2.0,
-                level: 0.45,
-                peer: 0.0,
-                level_history: &[],
-                peer_history: &[],
-                glitch: 0.0,
-                vision_thumb: None,
-                ambient: None,
-            };
-            let svg = scene_svg(&scene, &state);
+                    mood: Mood::Speaking,
+                    t: 2.0,
+                    level: 0.45,
+                    peer: 0.0,
+                    level_history: &[],
+                    peer_history: &[],
+                    glitch: 0.0,
+                    vision_thumb: None,
+                    ambient: None,
+                };
+                let svg = scene_svg(&scene, &state);
                 rasterize(&svg, &opt, &mut pixmap).expect("must rasterize");
                 pixmap
                     .save_png(format!("/tmp/eliza-{name}-img.png"))

@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::net::{TcpStream, SocketAddr};
+use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 use freeq_sdk::did::DidResolver;
@@ -21,7 +21,9 @@ async fn start() -> (SocketAddr, tokio::task::JoinHandle<anyhow::Result<()>>) {
     };
     let resolver = DidResolver::static_map(HashMap::new());
     freeq_server::server::Server::with_resolver(config, resolver)
-        .start().await.unwrap()
+        .start()
+        .await
+        .unwrap()
 }
 
 async fn run(f: impl FnOnce(SocketAddr) + Send + 'static) {
@@ -40,7 +42,10 @@ impl C {
         s.set_read_timeout(Some(Duration::from_secs(5))).ok();
         let w = s.try_clone().unwrap();
         let r = BufReader::new(s);
-        let mut c = Self { reader: r, writer: w };
+        let mut c = Self {
+            reader: r,
+            writer: w,
+        };
         c.tx(&format!("NICK {nick}"));
         c.tx(&format!("USER {nick} 0 * :test"));
         c
@@ -50,7 +55,10 @@ impl C {
         let s = TcpStream::connect(addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).ok();
         let w = s.try_clone().unwrap();
-        Self { reader: BufReader::new(s), writer: w }
+        Self {
+            reader: BufReader::new(s),
+            writer: w,
+        }
     }
 
     fn tx(&mut self, l: &str) {
@@ -72,11 +80,16 @@ impl C {
                         let _ = self.writer.flush();
                         continue;
                     }
-                    if pred(l) { return l.to_string(); }
+                    if pred(l) {
+                        return l.to_string();
+                    }
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::TimedOut
-                       || e.kind() == std::io::ErrorKind::WouldBlock =>
-                    panic!("Timeout: {desc}"),
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::TimedOut
+                        || e.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    panic!("Timeout: {desc}")
+                }
                 Err(e) => panic!("{desc}: {e}"),
             }
         }
@@ -86,28 +99,44 @@ impl C {
         self.rx(|l| l.split_whitespace().nth(1) == Some(c), c)
     }
 
-    fn reg(&mut self) { self.num("001"); }
+    fn reg(&mut self) {
+        self.num("001");
+    }
 
     fn drain(&mut self) {
-        self.writer.try_clone().unwrap().set_read_timeout(Some(Duration::from_millis(200))).ok();
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .ok();
         let mut b = String::new();
         loop {
             b.clear();
             match self.reader.read_line(&mut b) {
                 Ok(0) => break,
-                Ok(_) => if b.starts_with("PING") {
-                    let t = b.trim_end().strip_prefix("PING ").unwrap_or(":x");
-                    let _ = writeln!(self.writer, "PONG {t}\r");
-                    let _ = self.writer.flush();
-                },
+                Ok(_) => {
+                    if b.starts_with("PING") {
+                        let t = b.trim_end().strip_prefix("PING ").unwrap_or(":x");
+                        let _ = writeln!(self.writer, "PONG {t}\r");
+                        let _ = self.writer.flush();
+                    }
+                }
                 Err(_) => break,
             }
         }
-        self.writer.try_clone().unwrap().set_read_timeout(Some(Duration::from_secs(5))).ok();
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .ok();
     }
 
     fn maybe(&mut self, pred: impl Fn(&str) -> bool, ms: u64) -> Option<String> {
-        self.writer.try_clone().unwrap().set_read_timeout(Some(Duration::from_millis(ms))).ok();
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_millis(ms)))
+            .ok();
         let mut b = String::new();
         let result = loop {
             b.clear();
@@ -121,12 +150,18 @@ impl C {
                         let _ = self.writer.flush();
                         continue;
                     }
-                    if pred(l) { break Some(l.to_string()); }
+                    if pred(l) {
+                        break Some(l.to_string());
+                    }
                 }
                 Err(_) => break None,
             }
         };
-        self.writer.try_clone().unwrap().set_read_timeout(Some(Duration::from_secs(5))).ok();
+        self.writer
+            .try_clone()
+            .unwrap()
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .ok();
         result
     }
 }
@@ -139,14 +174,16 @@ impl C {
 async fn join_without_hash_prefix() {
     run(|addr| {
         let mut c = C::new(addr, "nohash");
-        c.reg(); c.drain();
+        c.reg();
+        c.drain();
         // JOIN a channel name with no # or & prefix
         c.tx("JOIN test");
         // The server should either reject this or auto-prefix with #.
         // Check what happens:
-        let result = c.maybe(|l| {
-            l.contains("JOIN") || l.contains("403") || l.contains("479")
-        }, 1000);
+        let result = c.maybe(
+            |l| l.contains("JOIN") || l.contains("403") || l.contains("479"),
+            1000,
+        );
         match result {
             Some(line) if line.contains("JOIN") => {
                 // Server accepted it — this is a protocol gap. The channel
@@ -154,12 +191,13 @@ async fn join_without_hash_prefix() {
                 // Not a crash, but documents the behavior.
             }
             Some(_) => {} // Error returned, good
-            None => {} // Silently dropped, acceptable
+            None => {}    // Silently dropped, acceptable
         }
         // Server must still be alive
         c.tx("JOIN #valid");
         c.num("366");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -170,13 +208,18 @@ async fn join_without_hash_prefix() {
 async fn double_hash_channel() {
     run(|addr| {
         let mut c = C::new(addr, "dblhash");
-        c.reg(); c.drain();
+        c.reg();
+        c.drain();
         // ## channels are valid in some IRC servers (freenode used them)
         c.tx("JOIN ##meta");
         // Should work (## is a valid IRC channel prefix on some networks)
         let result = c.maybe(|l| l.contains("JOIN") || l.contains("366"), 1000);
-        assert!(result.is_some(), "## channel should be accepted or rejected cleanly");
-    }).await;
+        assert!(
+            result.is_some(),
+            "## channel should be accepted or rejected cleanly"
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -187,11 +230,17 @@ async fn double_hash_channel() {
 async fn privmsg_multiple_spaces() {
     run(|addr| {
         let mut a = C::new(addr, "space_a");
-        a.reg(); a.drain();
+        a.reg();
+        a.drain();
         let mut b = C::new(addr, "space_b");
-        b.reg(); b.drain();
-        a.tx("JOIN #spaces"); a.num("366"); a.drain();
-        b.tx("JOIN #spaces"); b.num("366"); b.drain();
+        b.reg();
+        b.drain();
+        a.tx("JOIN #spaces");
+        a.num("366");
+        a.drain();
+        b.tx("JOIN #spaces");
+        b.num("366");
+        b.drain();
 
         // Message with many consecutive spaces
         a.tx("PRIVMSG #spaces :hello     world    test");
@@ -200,8 +249,12 @@ async fn privmsg_multiple_spaces() {
             "spaced message",
         );
         // Spaces after the colon should be preserved in trailing param
-        assert!(msg.contains("hello     world"), "Spaces should be preserved: {msg}");
-    }).await;
+        assert!(
+            msg.contains("hello     world"),
+            "Spaces should be preserved: {msg}"
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -212,23 +265,33 @@ async fn privmsg_multiple_spaces() {
 async fn invite_user_already_in_channel() {
     run(|addr| {
         let mut own = C::new(addr, "inv2_own");
-        own.reg(); own.drain();
-        own.tx("JOIN #inv2"); own.num("366"); own.drain();
+        own.reg();
+        own.drain();
+        own.tx("JOIN #inv2");
+        own.num("366");
+        own.drain();
 
         let mut usr = C::new(addr, "inv2_usr");
-        usr.reg(); usr.drain();
-        usr.tx("JOIN #inv2"); usr.num("366"); usr.drain();
+        usr.reg();
+        usr.drain();
+        usr.tx("JOIN #inv2");
+        usr.num("366");
+        usr.drain();
 
         // Owner invites user who is already in the channel
         own.tx("INVITE inv2_usr #inv2");
         // Should get 443 ERR_USERONCHANNEL per RFC 2812
-        let result = own.maybe(|l| {
-            let n = l.split_whitespace().nth(1).unwrap_or("");
-            n == "443" || n == "341" // 341 = RPL_INVITING (success)
-        }, 1000);
+        let result = own.maybe(
+            |l| {
+                let n = l.split_whitespace().nth(1).unwrap_or("");
+                n == "443" || n == "341" // 341 = RPL_INVITING (success)
+            },
+            1000,
+        );
         // Either 443 (correct) or 341 (suboptimal but not a crash)
         assert!(result.is_some(), "Should get a response to INVITE");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -239,18 +302,23 @@ async fn invite_user_already_in_channel() {
 async fn nick_no_param() {
     run(|addr| {
         let mut c = C::new(addr, "nickparam");
-        c.reg(); c.drain();
+        c.reg();
+        c.drain();
         // NICK with no argument
         c.tx("NICK");
         // Should get 431 ERR_NONICKNAMEGIVEN
-        let _ = c.maybe(|l| {
-            let n = l.split_whitespace().nth(1).unwrap_or("");
-            n == "431"
-        }, 1000);
+        let _ = c.maybe(
+            |l| {
+                let n = l.split_whitespace().nth(1).unwrap_or("");
+                n == "431"
+            },
+            1000,
+        );
         // Either gets 431 or is silently ignored — server must not crash
         c.tx("PING :alive");
         c.rx(|l| l.contains("PONG"), "server alive after NICK no param");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -271,7 +339,8 @@ async fn raw_garbage_input() {
         c.tx("NICK garbtest");
         c.tx("USER garbtest 0 * :test");
         c.reg(); // Should still work
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -282,16 +351,21 @@ async fn raw_garbage_input() {
 async fn kick_from_channel_not_in() {
     run(|addr| {
         let mut own = C::new(addr, "kickown2");
-        own.reg(); own.drain();
-        own.tx("JOIN #kickext"); own.num("366"); own.drain();
+        own.reg();
+        own.drain();
+        own.tx("JOIN #kickext");
+        own.num("366");
+        own.drain();
 
         let mut outsider = C::new(addr, "kickext");
-        outsider.reg(); outsider.drain();
+        outsider.reg();
+        outsider.drain();
         // Don't join — try to kick from outside
         outsider.tx("KICK #kickext kickown2 :haha");
         // Should get 442 ERR_NOTONCHANNEL
         outsider.num("442");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -302,12 +376,16 @@ async fn kick_from_channel_not_in() {
 async fn kick_nonexistent_user() {
     run(|addr| {
         let mut c = C::new(addr, "kickghost");
-        c.reg(); c.drain();
-        c.tx("JOIN #kickg"); c.num("366"); c.drain();
+        c.reg();
+        c.drain();
+        c.tx("JOIN #kickg");
+        c.num("366");
+        c.drain();
         c.tx("KICK #kickg nobody99 :go away");
         // Should get 441 ERR_USERNOTINCHANNEL
         c.num("441");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -318,16 +396,23 @@ async fn kick_nonexistent_user() {
 async fn mutual_deop_war() {
     run(|addr| {
         let mut a = C::new(addr, "war_a");
-        a.reg(); a.drain();
-        a.tx("JOIN #war"); a.num("366"); a.drain();
+        a.reg();
+        a.drain();
+        a.tx("JOIN #war");
+        a.num("366");
+        a.drain();
 
         let mut b = C::new(addr, "war_b");
-        b.reg(); b.drain();
-        b.tx("JOIN #war"); b.num("366"); b.drain();
+        b.reg();
+        b.drain();
+        b.tx("JOIN #war");
+        b.num("366");
+        b.drain();
 
         // A (founder/op) gives B ops
         a.tx("MODE #war +o war_b");
-        a.drain(); b.drain();
+        a.drain();
+        b.drain();
         std::thread::sleep(Duration::from_millis(50));
 
         // B tries to deop A (founder) — should be blocked for DID founders,
@@ -338,7 +423,8 @@ async fn mutual_deop_war() {
 
         // A tries to deop B
         a.tx("MODE #war -o war_b");
-        a.drain(); b.drain();
+        a.drain();
+        b.drain();
         std::thread::sleep(Duration::from_millis(50));
 
         // Check final state: at least the founder should be op
@@ -346,9 +432,16 @@ async fn mutual_deop_war() {
         let names = a.num("353");
         let nick_part = names.splitn(2, " :").nth(1).unwrap_or("");
         // At minimum, the channel shouldn't be in a broken state
-        assert!(nick_part.contains("war_a"), "Founder should be listed: {names}");
-        assert!(nick_part.contains("war_b"), "Other user should be listed: {names}");
-    }).await;
+        assert!(
+            nick_part.contains("war_a"),
+            "Founder should be listed: {names}"
+        );
+        assert!(
+            nick_part.contains("war_b"),
+            "Other user should be listed: {names}"
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -359,19 +452,29 @@ async fn mutual_deop_war() {
 async fn channel_case_insensitive() {
     run(|addr| {
         let mut a = C::new(addr, "case_a");
-        a.reg(); a.drain();
+        a.reg();
+        a.drain();
         let mut b = C::new(addr, "case_b");
-        b.reg(); b.drain();
+        b.reg();
+        b.drain();
 
         // Alice joins #CaseTest
-        a.tx("JOIN #CaseTest"); a.num("366"); a.drain();
+        a.tx("JOIN #CaseTest");
+        a.num("366");
+        a.drain();
         // Bob joins #casetest (different case)
-        b.tx("JOIN #casetest"); b.num("366"); b.drain();
+        b.tx("JOIN #casetest");
+        b.num("366");
+        b.drain();
 
         // Should be the same channel — Alice sends, Bob should receive
         a.tx("PRIVMSG #CASETEST :hello case");
-        b.rx(|l| l.contains("PRIVMSG") && l.contains("hello case"), "case-insensitive msg");
-    }).await;
+        b.rx(
+            |l| l.contains("PRIVMSG") && l.contains("hello case"),
+            "case-insensitive msg",
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -382,11 +485,16 @@ async fn channel_case_insensitive() {
 async fn nick_case_change() {
     run(|addr| {
         let mut c = C::new(addr, "lowercase");
-        c.reg(); c.drain();
+        c.reg();
+        c.drain();
         // Change nick to different case only
         c.tx("NICK LowerCase");
-        c.rx(|l| l.contains("NICK") && l.contains("LowerCase"), "case change");
-    }).await;
+        c.rx(
+            |l| l.contains("NICK") && l.contains("LowerCase"),
+            "case change",
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -396,12 +504,15 @@ async fn nick_case_change() {
 #[tokio::test]
 async fn hundred_users_channel() {
     run(|addr| {
-        let mut clients: Vec<C> = (0..50).map(|i| {
-            let mut c = C::new(addr, &format!("u{i:03}"));
-            c.reg(); c.drain();
-            c.tx("JOIN #big");
-            c
-        }).collect();
+        let mut clients: Vec<C> = (0..50)
+            .map(|i| {
+                let mut c = C::new(addr, &format!("u{i:03}"));
+                c.reg();
+                c.drain();
+                c.tx("JOIN #big");
+                c
+            })
+            .collect();
 
         // Wait for all joins to complete
         for c in &mut clients {
@@ -414,8 +525,12 @@ async fn hundred_users_channel() {
         let names = clients[0].num("353");
         let nick_part = names.splitn(2, " :").nth(1).unwrap_or("");
         let count = nick_part.split_whitespace().count();
-        assert!(count >= 50, "Should have at least 50 nicks in NAMES, got {count}: {nick_part}");
-    }).await;
+        assert!(
+            count >= 50,
+            "Should have at least 50 nicks in NAMES, got {count}: {nick_part}"
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -426,15 +541,18 @@ async fn hundred_users_channel() {
 async fn who_wildcard() {
     run(|addr| {
         let mut a = C::new(addr, "who_a");
-        a.reg(); a.drain();
+        a.reg();
+        a.drain();
         let mut b = C::new(addr, "who_b");
-        b.reg(); b.drain();
+        b.reg();
+        b.drain();
 
         a.tx("WHO *");
         // Should get 352 for at least our own nick, then 315 endofwho
         // It might or might not include other users depending on implementation
         a.num("315"); // At minimum, end of who
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -445,20 +563,30 @@ async fn who_wildcard() {
 async fn client_sent_tags() {
     run(|addr| {
         let mut a = C::new(addr, "tag_a");
-        a.reg(); a.drain();
+        a.reg();
+        a.drain();
         let mut b = C::new(addr, "tag_b");
-        b.reg(); b.drain();
-        a.tx("JOIN #tags"); a.num("366"); a.drain();
-        b.tx("JOIN #tags"); b.num("366"); b.drain();
+        b.reg();
+        b.drain();
+        a.tx("JOIN #tags");
+        a.num("366");
+        a.drain();
+        b.tx("JOIN #tags");
+        b.num("366");
+        b.drain();
 
         // Client sends a message with a forged msgid tag
         a.tx("@msgid=FORGED123 PRIVMSG #tags :tagged msg");
-        let msg = b.rx(|l| l.contains("PRIVMSG") && l.contains("tagged msg"), "tagged msg");
+        let msg = b.rx(
+            |l| l.contains("PRIVMSG") && l.contains("tagged msg"),
+            "tagged msg",
+        );
         // The server should have replaced the msgid with its own, NOT used FORGED123
         if msg.contains("FORGED123") {
             panic!("Server used client-forged msgid! Tag injection vulnerability: {msg}");
         }
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -469,20 +597,30 @@ async fn client_sent_tags() {
 async fn forged_signature_tag() {
     run(|addr| {
         let mut a = C::new(addr, "sig_a");
-        a.reg(); a.drain();
+        a.reg();
+        a.drain();
         let mut b = C::new(addr, "sig_b");
-        b.reg(); b.drain();
-        a.tx("JOIN #sigtest"); a.num("366"); a.drain();
-        b.tx("JOIN #sigtest"); b.num("366"); b.drain();
+        b.reg();
+        b.drain();
+        a.tx("JOIN #sigtest");
+        a.num("366");
+        a.drain();
+        b.tx("JOIN #sigtest");
+        b.num("366");
+        b.drain();
 
         // Client sends a message with a forged signature tag
         a.tx("@+freeq.at/sig=FORGEDSIG PRIVMSG #sigtest :forged sig msg");
-        let msg = b.rx(|l| l.contains("PRIVMSG") && l.contains("forged sig"), "forged sig msg");
+        let msg = b.rx(
+            |l| l.contains("PRIVMSG") && l.contains("forged sig"),
+            "forged sig msg",
+        );
         // Server should NOT pass through the forged signature
         if msg.contains("FORGEDSIG") {
             panic!("Server relayed forged +freeq.at/sig tag! {msg}");
         }
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -493,8 +631,11 @@ async fn forged_signature_tag() {
 async fn mode_minus_k_no_param() {
     run(|addr| {
         let mut c = C::new(addr, "keymod");
-        c.reg(); c.drain();
-        c.tx("JOIN #keymod"); c.num("366"); c.drain();
+        c.reg();
+        c.drain();
+        c.tx("JOIN #keymod");
+        c.num("366");
+        c.drain();
         c.tx("MODE #keymod +k secret");
         c.drain();
         std::thread::sleep(Duration::from_millis(50));
@@ -506,15 +647,15 @@ async fn mode_minus_k_no_param() {
 
         // Now try joining without key from another client
         let mut other = C::new(addr, "keymod2");
-        other.reg(); other.drain();
+        other.reg();
+        other.drain();
         other.tx("JOIN #keymod");
         // If -k worked without param, this should succeed
-        let result = other.maybe(|l| {
-            l.contains("JOIN") || l.contains("475")
-        }, 2000);
+        let result = other.maybe(|l| l.contains("JOIN") || l.contains("475"), 2000);
         // Document what happened
         let _ = result;
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -525,14 +666,18 @@ async fn mode_minus_k_no_param() {
 async fn notice_no_error_reply() {
     run(|addr| {
         let mut c = C::new(addr, "noticeerr");
-        c.reg(); c.drain();
+        c.reg();
+        c.drain();
         // NOTICE to nonexistent nick — should NOT get 401 (per RFC)
         c.tx("NOTICE nobody123 :hello");
         // Wait briefly — should get nothing back (NOTICE must not generate errors)
-        let result = c.maybe(|l| {
-            let n = l.split_whitespace().nth(1).unwrap_or("");
-            n == "401" || n == "404"
-        }, 500);
+        let result = c.maybe(
+            |l| {
+                let n = l.split_whitespace().nth(1).unwrap_or("");
+                n == "401" || n == "404"
+            },
+            500,
+        );
         // If we get an error, that's a protocol violation
         if let Some(line) = result {
             // Document: server sends error for NOTICE (violation of RFC 2812 3.3.2)
@@ -541,7 +686,8 @@ async fn notice_no_error_reply() {
         // Server still alive
         c.tx("PING :alive");
         c.rx(|l| l.contains("PONG"), "alive");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -552,18 +698,28 @@ async fn notice_no_error_reply() {
 async fn irc_formatting_codes() {
     run(|addr| {
         let mut a = C::new(addr, "fmt_a");
-        a.reg(); a.drain();
+        a.reg();
+        a.drain();
         let mut b = C::new(addr, "fmt_b");
-        b.reg(); b.drain();
-        a.tx("JOIN #fmt"); a.num("366"); a.drain();
-        b.tx("JOIN #fmt"); b.num("366"); b.drain();
+        b.reg();
+        b.drain();
+        a.tx("JOIN #fmt");
+        a.num("366");
+        a.drain();
+        b.tx("JOIN #fmt");
+        b.num("366");
+        b.drain();
 
         // Bold (\x02), color (\x03), underline (\x1F), reverse (\x16), reset (\x0F)
         a.tx("PRIVMSG #fmt :\x02bold\x02 \x0304red\x03 \x1Funderline\x0F normal");
-        let msg = b.rx(|l| l.contains("PRIVMSG") && l.contains("bold"), "formatted msg");
+        let msg = b.rx(
+            |l| l.contains("PRIVMSG") && l.contains("bold"),
+            "formatted msg",
+        );
         // Formatting codes should be preserved (they're valid IRC)
         assert!(msg.contains("bold"), "bold text preserved");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -574,18 +730,23 @@ async fn irc_formatting_codes() {
 async fn nick_empty_string() {
     run(|addr| {
         let mut c = C::new(addr, "emptytest");
-        c.reg(); c.drain();
+        c.reg();
+        c.drain();
         // Try changing to empty nick via trailing colon
         c.tx("NICK :");
         // Should get 431 ERR_NONICKNAMEGIVEN or 432 ERR_ERRONEUSNICKNAME
-        let _ = c.maybe(|l| {
-            let n = l.split_whitespace().nth(1).unwrap_or("");
-            n == "431" || n == "432"
-        }, 1000);
+        let _ = c.maybe(
+            |l| {
+                let n = l.split_whitespace().nth(1).unwrap_or("");
+                n == "431" || n == "432"
+            },
+            1000,
+        );
         // Either error or silently ignored — must not crash
         c.tx("PING :alive");
         c.rx(|l| l.contains("PONG"), "alive after empty nick");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -596,11 +757,13 @@ async fn nick_empty_string() {
 async fn per_ip_connection_limit() {
     run(|addr| {
         // Open 20 connections (the per-IP limit)
-        let clients: Vec<C> = (0..20).map(|i| {
-            let mut c = C::new(addr, &format!("iplim{i:02}"));
-            c.reg();
-            c
-        }).collect();
+        let clients: Vec<C> = (0..20)
+            .map(|i| {
+                let mut c = C::new(addr, &format!("iplim{i:02}"));
+                c.reg();
+                c
+            })
+            .collect();
 
         // 21st connection should be refused
         let result = std::panic::catch_unwind(|| {
@@ -612,7 +775,7 @@ async fn per_ip_connection_limit() {
                     let mut buf = String::new();
                     // Try to read — connection should be immediately closed
                     match r.read_line(&mut buf) {
-                        Ok(0) => true, // Connection closed — correct
+                        Ok(0) => true,  // Connection closed — correct
                         Err(_) => true, // Error — correct
                         Ok(_) => false, // Got data — limit not enforced
                     }
@@ -632,7 +795,8 @@ async fn per_ip_connection_limit() {
 
         // Clean up — drop all clients
         drop(clients);
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -643,16 +807,26 @@ async fn per_ip_connection_limit() {
 async fn ampersand_channel() {
     run(|addr| {
         let mut a = C::new(addr, "amp_a");
-        a.reg(); a.drain();
+        a.reg();
+        a.drain();
         let mut b = C::new(addr, "amp_b");
-        b.reg(); b.drain();
+        b.reg();
+        b.drain();
 
-        a.tx("JOIN &local"); a.num("366"); a.drain();
-        b.tx("JOIN &local"); b.num("366"); b.drain();
+        a.tx("JOIN &local");
+        a.num("366");
+        a.drain();
+        b.tx("JOIN &local");
+        b.num("366");
+        b.drain();
 
         a.tx("PRIVMSG &local :ampersand channel works");
-        b.rx(|l| l.contains("PRIVMSG") && l.contains("ampersand"), "& channel msg");
-    }).await;
+        b.rx(
+            |l| l.contains("PRIVMSG") && l.contains("ampersand"),
+            "& channel msg",
+        );
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -663,12 +837,18 @@ async fn ampersand_channel() {
 async fn compound_mode_changes() {
     run(|addr| {
         let mut own = C::new(addr, "cmode_own");
-        own.reg(); own.drain();
-        own.tx("JOIN #cmode"); own.num("366"); own.drain();
+        own.reg();
+        own.drain();
+        own.tx("JOIN #cmode");
+        own.num("366");
+        own.drain();
 
         let mut usr = C::new(addr, "cmode_usr");
-        usr.reg(); usr.drain();
-        usr.tx("JOIN #cmode"); usr.num("366"); usr.drain();
+        usr.reg();
+        usr.drain();
+        usr.tx("JOIN #cmode");
+        usr.num("366");
+        usr.drain();
 
         // Compound mode: +ov (op and voice at once)
         own.tx("MODE #cmode +ov cmode_usr cmode_usr");
@@ -685,7 +865,8 @@ async fn compound_mode_changes() {
             nick_part.contains("@cmode_usr") || nick_part.contains("+cmode_usr"),
             "User should have a prefix: {names}"
         );
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -696,17 +877,22 @@ async fn compound_mode_changes() {
 async fn userhost_command() {
     run(|addr| {
         let mut c = C::new(addr, "uhtest");
-        c.reg(); c.drain();
+        c.reg();
+        c.drain();
         c.tx("USERHOST uhtest");
         // Should get 302 RPL_USERHOST or be silently dropped
-        let _ = c.maybe(|l| {
-            let n = l.split_whitespace().nth(1).unwrap_or("");
-            n == "302" || n == "421" // 421 = ERR_UNKNOWNCOMMAND
-        }, 1000);
+        let _ = c.maybe(
+            |l| {
+                let n = l.split_whitespace().nth(1).unwrap_or("");
+                n == "302" || n == "421" // 421 = ERR_UNKNOWNCOMMAND
+            },
+            1000,
+        );
         // Either works or unknown — must not crash
         c.tx("PING :alive");
         c.rx(|l| l.contains("PONG"), "alive");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -717,7 +903,8 @@ async fn userhost_command() {
 async fn misc_info_commands() {
     run(|addr| {
         let mut c = C::new(addr, "infocmd");
-        c.reg(); c.drain();
+        c.reg();
+        c.drain();
         // Fire off a bunch of info commands — none should crash the server
         c.tx("VERSION");
         c.tx("TIME");
@@ -730,7 +917,8 @@ async fn misc_info_commands() {
         // Server still alive
         c.tx("PING :alive");
         c.rx(|l| l.contains("PONG"), "alive after info commands");
-    }).await;
+    })
+    .await;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -741,31 +929,54 @@ async fn misc_info_commands() {
 async fn nick_change_multi_channel_broadcast() {
     run(|addr| {
         let mut a = C::new(addr, "mc_alice");
-        a.reg(); a.drain();
+        a.reg();
+        a.drain();
         let mut b = C::new(addr, "mc_bob");
-        b.reg(); b.drain();
+        b.reg();
+        b.drain();
         let mut c = C::new(addr, "mc_carol");
-        c.reg(); c.drain();
+        c.reg();
+        c.drain();
 
         // All three join #ch1
-        a.tx("JOIN #ch1"); a.num("366"); a.drain();
-        b.tx("JOIN #ch1"); b.num("366"); b.drain();
-        c.tx("JOIN #ch1"); c.num("366"); c.drain();
+        a.tx("JOIN #ch1");
+        a.num("366");
+        a.drain();
+        b.tx("JOIN #ch1");
+        b.num("366");
+        b.drain();
+        c.tx("JOIN #ch1");
+        c.num("366");
+        c.drain();
 
         // Only Alice and Carol in #ch2
-        a.tx("JOIN #ch2"); a.num("366"); a.drain();
-        c.tx("JOIN #ch2"); c.num("366"); c.drain();
+        a.tx("JOIN #ch2");
+        a.num("366");
+        a.drain();
+        c.tx("JOIN #ch2");
+        c.num("366");
+        c.drain();
 
         // Alice changes nick
         a.tx("NICK mc_alice_new");
 
         // Bob (only in #ch1) should see it
-        b.rx(|l| l.contains("NICK") && l.contains("mc_alice_new"), "Bob sees nick change");
+        b.rx(
+            |l| l.contains("NICK") && l.contains("mc_alice_new"),
+            "Bob sees nick change",
+        );
 
         // Carol (in both channels) should see it exactly once
-        c.rx(|l| l.contains("NICK") && l.contains("mc_alice_new"), "Carol sees nick change");
+        c.rx(
+            |l| l.contains("NICK") && l.contains("mc_alice_new"),
+            "Carol sees nick change",
+        );
         // Carol should NOT get a duplicate
         let dup = c.maybe(|l| l.contains("NICK") && l.contains("mc_alice_new"), 300);
-        assert!(dup.is_none(), "Carol should NOT get duplicate nick change notification");
-    }).await;
+        assert!(
+            dup.is_none(),
+            "Carol should NOT get duplicate nick change notification"
+        );
+    })
+    .await;
 }

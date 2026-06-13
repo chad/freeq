@@ -268,9 +268,7 @@ pub fn convert_event(event: &freeq_sdk::event::Event) -> DomainEvent {
         Event::ChatHistoryTarget { nick, timestamp } => DomainEvent::Notice {
             text: format!("DM: {nick} (last: {})", timestamp.as_deref().unwrap_or("?")),
         },
-        Event::RawLine(line) => DomainEvent::Notice {
-            text: line.clone(),
-        },
+        Event::RawLine(line) => DomainEvent::Notice { text: line.clone() },
     }
 }
 
@@ -283,10 +281,7 @@ mod tests {
     fn test_convert_simple_message() {
         let mut tags = HashMap::new();
         tags.insert("msgid".to_string(), "abc123".to_string());
-        tags.insert(
-            "time".to_string(),
-            "2025-01-01T00:00:00.000Z".to_string(),
-        );
+        tags.insert("time".to_string(), "2025-01-01T00:00:00.000Z".to_string());
 
         let event = freeq_sdk::event::Event::Message {
             from: "alice".to_string(),

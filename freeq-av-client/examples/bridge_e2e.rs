@@ -13,7 +13,7 @@
 
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use tokio::time::timeout;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
@@ -101,9 +101,7 @@ async fn main() -> Result<()> {
                     tracing::info!(%name, %remote, "Peer joined Room");
                     println!("  Peer joined: {name} ({remote})");
                 }
-                Some(iroh_live::rooms::RoomEvent::BroadcastSubscribed {
-                    broadcast, ..
-                }) => {
+                Some(iroh_live::rooms::RoomEvent::BroadcastSubscribed { broadcast, .. }) => {
                     let name = broadcast.broadcast_name().to_string();
                     println!("  Broadcast received: {name}");
 
@@ -175,7 +173,9 @@ async fn main() -> Result<()> {
     let catalog_track = moq_lite::Track::new("catalog.json");
     let mut cw = native_producer.create_track(catalog_track)?;
     let mut g = cw.create_group(moq_lite::Group { sequence: 0 })?;
-    g.write_frame(moq_lite::bytes::Bytes::from(hang_catalog.as_bytes().to_vec()))?;
+    g.write_frame(moq_lite::bytes::Bytes::from(
+        hang_catalog.as_bytes().to_vec(),
+    ))?;
     g.finish().ok();
 
     let audio_track = moq_lite::Track::new("audio");
@@ -289,9 +289,7 @@ async fn start_av_session_tcp(addr: &str) -> Result<(String, String)> {
         while let Some(line) = lines.next_line().await? {
             if line.starts_with("PING") {
                 let pong = line.replace("PING", "PONG");
-                writer
-                    .write_all(format!("{pong}\r\n").as_bytes())
-                    .await?;
+                writer.write_all(format!("{pong}\r\n").as_bytes()).await?;
                 continue;
             }
 
@@ -337,11 +335,7 @@ async fn start_av_session_tcp(addr: &str) -> Result<(String, String)> {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         loop {
             interval.tick().await;
-            if writer
-                .write_all(b"PING :keepalive\r\n")
-                .await
-                .is_err()
-            {
+            if writer.write_all(b"PING :keepalive\r\n").await.is_err() {
                 break;
             }
         }
@@ -380,7 +374,9 @@ async fn start_av_session_ws(web_url: &str) -> Result<(String, String)> {
     let (mut ws_write, mut ws_read) = ws.split();
 
     ws_write
-        .send(Message::Text(format!("NICK {nick}\r\nUSER {nick} 0 * :e2e test\r\n").into()))
+        .send(Message::Text(
+            format!("NICK {nick}\r\nUSER {nick} 0 * :e2e test\r\n").into(),
+        ))
         .await?;
 
     let mut registered = false;
@@ -500,7 +496,9 @@ async fn publish_synthetic_moq(
     let catalog_track = moq_lite::Track::new("catalog.json");
     let mut cw = producer.create_track(catalog_track)?;
     let mut g = cw.create_group(moq_lite::Group { sequence: 0 })?;
-    g.write_frame(moq_lite::bytes::Bytes::from(hang_catalog.as_bytes().to_vec()))?;
+    g.write_frame(moq_lite::bytes::Bytes::from(
+        hang_catalog.as_bytes().to_vec(),
+    ))?;
     g.finish().ok();
 
     let audio_track = moq_lite::Track::new("audio");

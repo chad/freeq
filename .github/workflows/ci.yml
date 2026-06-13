@@ -19,6 +19,9 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Linux audio dev packages
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
       - uses: Swatinem/rust-cache@v2
 
       - name: Check
@@ -36,6 +39,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+
+      - name: Install Linux audio dev packages
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
 
       - uses: Swatinem/rust-cache@v2
 

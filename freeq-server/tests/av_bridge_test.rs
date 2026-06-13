@@ -69,7 +69,9 @@ async fn moq_forwarding_preserves_all_tracks() {
 
     // audio track with synthetic Opus-sized frames
     let audio_track = moq_lite::Track::new("audio");
-    let mut audio_writer = producer.create_track(audio_track).expect("create audio track");
+    let mut audio_writer = producer
+        .create_track(audio_track)
+        .expect("create audio track");
     for seq in 0..5u64 {
         let mut group = audio_writer
             .create_group(moq_lite::Group { sequence: seq })
@@ -336,7 +338,9 @@ async fn demo3_p2p_room_forwarding() {
     let mut alice_producer = moq_lite::Broadcast::produce();
     let catalog_track = moq_lite::Track::new("catalog.json");
     let mut cw = alice_producer.create_track(catalog_track).expect("catalog");
-    let mut g = cw.create_group(moq_lite::Group { sequence: 0 }).expect("group");
+    let mut g = cw
+        .create_group(moq_lite::Group { sequence: 0 })
+        .expect("group");
     g.write_frame(moq_lite::bytes::Bytes::from_static(
         b"{\"audio\":{\"renditions\":{\"audio\":{\"codec\":\"opus\",\"sampleRate\":48000,\"numberOfChannels\":1,\"bitrate\":128000,\"container\":{\"kind\":\"legacy\"}}}}}",
     )).expect("write catalog");
@@ -345,8 +349,11 @@ async fn demo3_p2p_room_forwarding() {
     let audio_track = moq_lite::Track::new("audio");
     let mut aw = alice_producer.create_track(audio_track).expect("audio");
     for seq in 0..5u64 {
-        let mut g = aw.create_group(moq_lite::Group { sequence: seq }).expect("group");
-        g.write_frame(moq_lite::bytes::Bytes::from(vec![0xAAu8; 960])).expect("write");
+        let mut g = aw
+            .create_group(moq_lite::Group { sequence: seq })
+            .expect("group");
+        g.write_frame(moq_lite::bytes::Bytes::from(vec![0xAAu8; 960]))
+            .expect("write");
         g.finish().ok();
     }
 
@@ -358,7 +365,9 @@ async fn demo3_p2p_room_forwarding() {
 
     // Read catalog
     let catalog_track = moq_lite::Track::new("catalog.json");
-    let mut track = alice_consumer.subscribe_track(&catalog_track).expect("subscribe catalog");
+    let mut track = alice_consumer
+        .subscribe_track(&catalog_track)
+        .expect("subscribe catalog");
     let mut group = track.next_group().await.expect("next").expect("group");
     let frame = group.read_frame().await.expect("read").expect("frame");
     let text = String::from_utf8_lossy(&frame);
@@ -367,7 +376,9 @@ async fn demo3_p2p_room_forwarding() {
 
     // Read audio
     let audio_track = moq_lite::Track::new("audio");
-    let mut track = alice_consumer.subscribe_track(&audio_track).expect("subscribe audio");
+    let mut track = alice_consumer
+        .subscribe_track(&audio_track)
+        .expect("subscribe audio");
     let mut group = track.next_group().await.expect("next").expect("group");
     let frame = group.read_frame().await.expect("read").expect("frame");
     assert_eq!(frame.len(), 960);
@@ -378,7 +389,9 @@ async fn demo3_p2p_room_forwarding() {
     let mut bob_producer = moq_lite::Broadcast::produce();
     let catalog_track = moq_lite::Track::new("catalog.json");
     let mut cw = bob_producer.create_track(catalog_track).expect("catalog");
-    let mut g = cw.create_group(moq_lite::Group { sequence: 0 }).expect("group");
+    let mut g = cw
+        .create_group(moq_lite::Group { sequence: 0 })
+        .expect("group");
     g.write_frame(moq_lite::bytes::Bytes::from_static(
         b"{\"audio\":{\"renditions\":{\"audio\":{\"codec\":\"opus\",\"sampleRate\":48000,\"numberOfChannels\":1,\"bitrate\":128000,\"container\":{\"kind\":\"legacy\"}}}}}",
     )).expect("write");
@@ -387,8 +400,11 @@ async fn demo3_p2p_room_forwarding() {
     let audio_track = moq_lite::Track::new("audio");
     let mut aw2 = bob_producer.create_track(audio_track).expect("audio");
     for seq in 0..3u64 {
-        let mut g = aw2.create_group(moq_lite::Group { sequence: seq }).expect("group");
-        g.write_frame(moq_lite::bytes::Bytes::from(vec![0xBBu8; 480])).expect("write");
+        let mut g = aw2
+            .create_group(moq_lite::Group { sequence: seq })
+            .expect("group");
+        g.write_frame(moq_lite::bytes::Bytes::from(vec![0xBBu8; 480]))
+            .expect("write");
         g.finish().ok();
     }
 
@@ -396,7 +412,9 @@ async fn demo3_p2p_room_forwarding() {
 
     // ── Alice subscribes to Bob ───────────────────────────────────
     let audio_track = moq_lite::Track::new("audio");
-    let mut track = bob_consumer.subscribe_track(&audio_track).expect("subscribe");
+    let mut track = bob_consumer
+        .subscribe_track(&audio_track)
+        .expect("subscribe");
     let mut group = track.next_group().await.expect("next").expect("group");
     let frame = group.read_frame().await.expect("read").expect("frame");
     assert_eq!(frame.len(), 480);
@@ -436,25 +454,36 @@ async fn demo4_mixed_call_three_participants() {
 
     let cluster = moq_relay::Cluster::new(moq_relay::ClusterConfig::default(), client);
     let cluster_run = cluster.clone();
-    tokio::spawn(async move { let _ = cluster_run.run().await; });
+    tokio::spawn(async move {
+        let _ = cluster_run.run().await;
+    });
 
-    let token = auth.verify(&moq_relay::AuthParams {
-        path: String::new(), jwt: None, register: None,
-    }).expect("auth token");
+    let token = auth
+        .verify(&moq_relay::AuthParams {
+            path: String::new(),
+            jwt: None,
+            register: None,
+        })
+        .expect("auth token");
 
     // ── Browser A publishes ───────────────────────────────────────
     let browser_a_path = format!("{session}/browser-alice");
     let mut prod_a = moq_lite::Broadcast::produce();
     let ct = moq_lite::Track::new("catalog.json");
     let mut cw = prod_a.create_track(ct).expect("track");
-    let mut g = cw.create_group(moq_lite::Group { sequence: 0 }).expect("group");
+    let mut g = cw
+        .create_group(moq_lite::Group { sequence: 0 })
+        .expect("group");
     g.write_frame(moq_lite::bytes::Bytes::from_static(b"{\"audio\":{\"renditions\":{\"audio\":{\"codec\":\"opus\",\"sampleRate\":48000,\"numberOfChannels\":2,\"bitrate\":128000,\"container\":{\"kind\":\"legacy\"}}}}}")).ok();
     g.finish().ok();
     let at = moq_lite::Track::new("audio");
     let mut aw = prod_a.create_track(at).expect("track");
     for seq in 0..3u64 {
-        let mut g = aw.create_group(moq_lite::Group { sequence: seq }).expect("group");
-        g.write_frame(moq_lite::bytes::Bytes::from(vec![0xA1u8; 960])).ok();
+        let mut g = aw
+            .create_group(moq_lite::Group { sequence: seq })
+            .expect("group");
+        g.write_frame(moq_lite::bytes::Bytes::from(vec![0xA1u8; 960]))
+            .ok();
         g.finish().ok();
     }
     let pub_a = cluster.publisher(&token).expect("publisher");
@@ -466,14 +495,19 @@ async fn demo4_mixed_call_three_participants() {
     let mut prod_b = moq_lite::Broadcast::produce();
     let ct = moq_lite::Track::new("catalog.json");
     let mut cw2 = prod_b.create_track(ct).expect("track");
-    let mut g = cw2.create_group(moq_lite::Group { sequence: 0 }).expect("group");
+    let mut g = cw2
+        .create_group(moq_lite::Group { sequence: 0 })
+        .expect("group");
     g.write_frame(moq_lite::bytes::Bytes::from_static(b"{\"audio\":{\"renditions\":{\"audio\":{\"codec\":\"opus\",\"sampleRate\":48000,\"numberOfChannels\":2,\"bitrate\":128000,\"container\":{\"kind\":\"legacy\"}}}}}")).ok();
     g.finish().ok();
     let at = moq_lite::Track::new("audio");
     let mut aw2 = prod_b.create_track(at).expect("track");
     for seq in 0..3u64 {
-        let mut g = aw2.create_group(moq_lite::Group { sequence: seq }).expect("group");
-        g.write_frame(moq_lite::bytes::Bytes::from(vec![0xB2u8; 960])).ok();
+        let mut g = aw2
+            .create_group(moq_lite::Group { sequence: seq })
+            .expect("group");
+        g.write_frame(moq_lite::bytes::Bytes::from(vec![0xB2u8; 960]))
+            .ok();
         g.finish().ok();
     }
     let pub_b = cluster.publisher(&token).expect("publisher");
@@ -485,14 +519,19 @@ async fn demo4_mixed_call_three_participants() {
     let mut prod_n = moq_lite::Broadcast::produce();
     let ct = moq_lite::Track::new("catalog.json");
     let mut cw3 = prod_n.create_track(ct).expect("track");
-    let mut g = cw3.create_group(moq_lite::Group { sequence: 0 }).expect("group");
+    let mut g = cw3
+        .create_group(moq_lite::Group { sequence: 0 })
+        .expect("group");
     g.write_frame(moq_lite::bytes::Bytes::from_static(b"{\"audio\":{\"renditions\":{\"audio\":{\"codec\":\"opus\",\"sampleRate\":48000,\"numberOfChannels\":1,\"bitrate\":128000,\"container\":{\"kind\":\"legacy\"}}}}}")).ok();
     g.finish().ok();
     let at = moq_lite::Track::new("audio");
     let mut aw3 = prod_n.create_track(at).expect("track");
     for seq in 0..3u64 {
-        let mut g = aw3.create_group(moq_lite::Group { sequence: seq }).expect("group");
-        g.write_frame(moq_lite::bytes::Bytes::from(vec![0xC3u8; 480])).ok();
+        let mut g = aw3
+            .create_group(moq_lite::Group { sequence: seq })
+            .expect("group");
+        g.write_frame(moq_lite::bytes::Bytes::from(vec![0xC3u8; 480]))
+            .ok();
         g.finish().ok();
     }
     let pub_n = cluster.publisher(&token).expect("publisher");
@@ -524,7 +563,11 @@ async fn demo4_mixed_call_three_participants() {
                                     continue;
                                 };
                                 assert_eq!(marker, expected, "Wrong data for {path_str}");
-                                tracing::info!("✓ {path_str}: {} bytes, marker 0x{:02X}", frame.len(), marker);
+                                tracing::info!(
+                                    "✓ {path_str}: {} bytes, marker 0x{:02X}",
+                                    frame.len(),
+                                    marker
+                                );
                                 seen.insert(path_str);
                             }
                         }
@@ -538,7 +581,10 @@ async fn demo4_mixed_call_three_participants() {
     })
     .await;
 
-    assert!(result.expect("timeout"), "Should see all 3 broadcasts, saw: {seen:?}");
+    assert!(
+        result.expect("timeout"),
+        "Should see all 3 broadcasts, saw: {seen:?}"
+    );
     assert!(seen.contains(&browser_a_path), "Missing browser Alice");
     assert!(seen.contains(&browser_b_path), "Missing browser Bob");
     assert!(seen.contains(&native_path), "Missing native Carol");
@@ -572,44 +618,68 @@ async fn demo5_latecomer_sees_existing_broadcasts() {
 
     let cluster = moq_relay::Cluster::new(moq_relay::ClusterConfig::default(), client);
     let cluster_run = cluster.clone();
-    tokio::spawn(async move { let _ = cluster_run.run().await; });
+    tokio::spawn(async move {
+        let _ = cluster_run.run().await;
+    });
 
-    let token = auth.verify(&moq_relay::AuthParams {
-        path: String::new(), jwt: None, register: None,
-    }).expect("auth token");
+    let token = auth
+        .verify(&moq_relay::AuthParams {
+            path: String::new(),
+            jwt: None,
+            register: None,
+        })
+        .expect("auth token");
 
     // ── Early bird: publish two broadcasts BEFORE latecomer subscribes ─
     let alice_path = format!("{session}/alice");
     let mut prod_a = moq_lite::Broadcast::produce();
     let ct = moq_lite::Track::new("catalog.json");
     let mut cw = prod_a.create_track(ct).expect("track");
-    let mut g = cw.create_group(moq_lite::Group { sequence: 0 }).expect("group");
-    g.write_frame(moq_lite::bytes::Bytes::from_static(b"{\"test\":\"alice\"}")).ok();
+    let mut g = cw
+        .create_group(moq_lite::Group { sequence: 0 })
+        .expect("group");
+    g.write_frame(moq_lite::bytes::Bytes::from_static(b"{\"test\":\"alice\"}"))
+        .ok();
     g.finish().ok();
     let at = moq_lite::Track::new("audio");
     let mut aw = prod_a.create_track(at).expect("track");
     for seq in 0..3u64 {
-        let mut g = aw.create_group(moq_lite::Group { sequence: seq }).expect("group");
-        g.write_frame(moq_lite::bytes::Bytes::from(vec![0xAAu8; 100])).ok();
+        let mut g = aw
+            .create_group(moq_lite::Group { sequence: seq })
+            .expect("group");
+        g.write_frame(moq_lite::bytes::Bytes::from(vec![0xAAu8; 100]))
+            .ok();
         g.finish().ok();
     }
-    cluster.publisher(&token).expect("pub").publish_broadcast(&alice_path, prod_a.consume());
+    cluster
+        .publisher(&token)
+        .expect("pub")
+        .publish_broadcast(&alice_path, prod_a.consume());
 
     let bob_path = format!("{session}/bob");
     let mut prod_b = moq_lite::Broadcast::produce();
     let ct = moq_lite::Track::new("catalog.json");
     let mut cw2 = prod_b.create_track(ct).expect("track");
-    let mut g = cw2.create_group(moq_lite::Group { sequence: 0 }).expect("group");
-    g.write_frame(moq_lite::bytes::Bytes::from_static(b"{\"test\":\"bob\"}")).ok();
+    let mut g = cw2
+        .create_group(moq_lite::Group { sequence: 0 })
+        .expect("group");
+    g.write_frame(moq_lite::bytes::Bytes::from_static(b"{\"test\":\"bob\"}"))
+        .ok();
     g.finish().ok();
     let at = moq_lite::Track::new("audio");
     let mut aw2 = prod_b.create_track(at).expect("track");
     for seq in 0..3u64 {
-        let mut g = aw2.create_group(moq_lite::Group { sequence: seq }).expect("group");
-        g.write_frame(moq_lite::bytes::Bytes::from(vec![0xBBu8; 100])).ok();
+        let mut g = aw2
+            .create_group(moq_lite::Group { sequence: seq })
+            .expect("group");
+        g.write_frame(moq_lite::bytes::Bytes::from(vec![0xBBu8; 100]))
+            .ok();
         g.finish().ok();
     }
-    cluster.publisher(&token).expect("pub").publish_broadcast(&bob_path, prod_b.consume());
+    cluster
+        .publisher(&token)
+        .expect("pub")
+        .publish_broadcast(&bob_path, prod_b.consume());
 
     tracing::info!("Published Alice and Bob BEFORE latecomer subscribes");
 
@@ -633,7 +703,10 @@ async fn demo5_latecomer_sees_existing_broadcasts() {
     })
     .await;
 
-    assert!(result.expect("timeout"), "Latecomer should see both existing broadcasts, saw: {seen:?}");
+    assert!(
+        result.expect("timeout"),
+        "Latecomer should see both existing broadcasts, saw: {seen:?}"
+    );
     assert!(seen.contains(&alice_path), "Missing Alice");
     assert!(seen.contains(&bob_path), "Missing Bob");
     tracing::info!("✓ Demo 5 latecomer test PASSED — sees {seen:?}");
@@ -664,30 +737,48 @@ async fn demo6_broadcast_cleanup_on_disconnect() {
 
     let cluster = moq_relay::Cluster::new(moq_relay::ClusterConfig::default(), client);
     let cluster_run = cluster.clone();
-    tokio::spawn(async move { let _ = cluster_run.run().await; });
+    tokio::spawn(async move {
+        let _ = cluster_run.run().await;
+    });
 
-    let token = auth.verify(&moq_relay::AuthParams {
-        path: String::new(), jwt: None, register: None,
-    }).expect("auth token");
+    let token = auth
+        .verify(&moq_relay::AuthParams {
+            path: String::new(),
+            jwt: None,
+            register: None,
+        })
+        .expect("auth token");
 
     // ── Publish two broadcasts ────────────────────────────────────
     let alice_path = format!("{session}/alice");
     let mut prod_a = moq_lite::Broadcast::produce();
     let ct = moq_lite::Track::new("audio");
     let mut aw = prod_a.create_track(ct).expect("track");
-    let mut g = aw.create_group(moq_lite::Group { sequence: 0 }).expect("group");
-    g.write_frame(moq_lite::bytes::Bytes::from(vec![0xAAu8; 100])).ok();
+    let mut g = aw
+        .create_group(moq_lite::Group { sequence: 0 })
+        .expect("group");
+    g.write_frame(moq_lite::bytes::Bytes::from(vec![0xAAu8; 100]))
+        .ok();
     g.finish().ok();
-    cluster.publisher(&token).expect("pub").publish_broadcast(&alice_path, prod_a.consume());
+    cluster
+        .publisher(&token)
+        .expect("pub")
+        .publish_broadcast(&alice_path, prod_a.consume());
 
     let bob_path = format!("{session}/bob");
     let mut prod_b = moq_lite::Broadcast::produce();
     let ct = moq_lite::Track::new("audio");
     let mut aw2 = prod_b.create_track(ct).expect("track");
-    let mut g = aw2.create_group(moq_lite::Group { sequence: 0 }).expect("group");
-    g.write_frame(moq_lite::bytes::Bytes::from(vec![0xBBu8; 100])).ok();
+    let mut g = aw2
+        .create_group(moq_lite::Group { sequence: 0 })
+        .expect("group");
+    g.write_frame(moq_lite::bytes::Bytes::from(vec![0xBBu8; 100]))
+        .ok();
     g.finish().ok();
-    cluster.publisher(&token).expect("pub").publish_broadcast(&bob_path, prod_b.consume());
+    cluster
+        .publisher(&token)
+        .expect("pub")
+        .publish_broadcast(&bob_path, prod_b.consume());
 
     // ── Subscribe and see both ────────────────────────────────────
     let mut subscriber = cluster.subscriber(&token).expect("subscriber");
@@ -697,10 +788,16 @@ async fn demo6_broadcast_cleanup_on_disconnect() {
         while seen_active.len() < 2 {
             if let Some((path, Some(_))) = subscriber.announced().await {
                 let p = path.to_string();
-                if p.starts_with(session) { seen_active.insert(p); }
-            } else { break; }
+                if p.starts_with(session) {
+                    seen_active.insert(p);
+                }
+            } else {
+                break;
+            }
         }
-    }).await.ok();
+    })
+    .await
+    .ok();
     assert_eq!(seen_active.len(), 2, "Should see both broadcasts initially");
 
     // ── Drop Alice (simulates disconnect) ─────────────────────────
@@ -723,13 +820,19 @@ async fn demo6_broadcast_cleanup_on_disconnect() {
     })
     .await;
 
-    assert!(unannounce.expect("timeout"), "Should receive unannounce for Alice");
+    assert!(
+        unannounce.expect("timeout"),
+        "Should receive unannounce for Alice"
+    );
     tracing::info!("✓ Alice unannounced after disconnect");
 
     // ── Bob is still readable ─────────────────────────────────────
     // Bob's broadcast should still be in the cluster
     let bob_consumer = cluster.get(&bob_path);
-    assert!(bob_consumer.is_some(), "Bob's broadcast should still be available");
+    assert!(
+        bob_consumer.is_some(),
+        "Bob's broadcast should still be available"
+    );
     tracing::info!("✓ Bob still available after Alice disconnects");
 
     tracing::info!("✓ Demo 6 cleanup test PASSED");
@@ -755,8 +858,13 @@ async fn stale_session_auto_ends_on_new_create() {
     tracing::info!("Created session {s1_id}");
 
     // Alice leaves — session has 0 active participants but is still "Active"
-    let (_, should_end) = mgr.leave_session(&s1_id, "did:plc:alice", None).expect("leave");
-    assert!(should_end, "Session should auto-end when last participant leaves");
+    let (_, should_end) = mgr
+        .leave_session(&s1_id, "did:plc:alice", None)
+        .expect("leave");
+    assert!(
+        should_end,
+        "Session should auto-end when last participant leaves"
+    );
 
     // But if leave_session auto-ends, the second create should just work.
     // The bug case is when a participant disconnects WITHOUT calling leave_session
@@ -771,7 +879,8 @@ async fn stale_session_auto_ends_on_new_create() {
     let s2_id = s2.id.clone();
 
     // Bob "leaves" properly
-    mgr2.leave_session(&s2_id, "did:plc:bob", None).expect("leave");
+    mgr2.leave_session(&s2_id, "did:plc:bob", None)
+        .expect("leave");
 
     // Now Carol can create a new session on the same channel
     let s3 = mgr2
@@ -793,9 +902,14 @@ async fn active_session_blocks_new_create() {
 
     // Alice is still active — creating another should fail
     let result = mgr.create_session(Some("#test"), "did:plc:bob", "bob", None, None);
-    assert!(result.is_err(), "Should fail: channel already has active session");
     assert!(
-        result.unwrap_err().contains("already has an active session"),
+        result.is_err(),
+        "Should fail: channel already has active session"
+    );
+    assert!(
+        result
+            .unwrap_err()
+            .contains("already has an active session"),
         "Error should mention existing session"
     );
 }
@@ -849,7 +963,8 @@ async fn rejoin_after_leave() {
     let sid = s.id.clone();
 
     // Bob joins
-    mgr.join_session(&sid, "did:plc:bob", "bob", None).expect("join");
+    mgr.join_session(&sid, "did:plc:bob", "bob", None)
+        .expect("join");
     assert_eq!(mgr.active_participant_count(&sid), 2);
 
     // Bob leaves
@@ -857,7 +972,8 @@ async fn rejoin_after_leave() {
     assert_eq!(mgr.active_participant_count(&sid), 1);
 
     // Bob rejoins
-    mgr.join_session(&sid, "did:plc:bob", "bob", None).expect("rejoin should work");
+    mgr.join_session(&sid, "did:plc:bob", "bob", None)
+        .expect("rejoin should work");
     assert_eq!(mgr.active_participant_count(&sid), 2);
 }
 
@@ -874,11 +990,19 @@ async fn multiple_leave_rejoin_cycles() {
     for i in 0..5 {
         mgr.join_session(&sid, "did:plc:bob", "bob", None)
             .unwrap_or_else(|e| panic!("join cycle {i}: {e}"));
-        assert_eq!(mgr.active_participant_count(&sid), 2, "cycle {i}: after join");
+        assert_eq!(
+            mgr.active_participant_count(&sid),
+            2,
+            "cycle {i}: after join"
+        );
 
         mgr.leave_session(&sid, "did:plc:bob", None)
             .unwrap_or_else(|e| panic!("leave cycle {i}: {e}"));
-        assert_eq!(mgr.active_participant_count(&sid), 1, "cycle {i}: after leave");
+        assert_eq!(
+            mgr.active_participant_count(&sid),
+            1,
+            "cycle {i}: after leave"
+        );
     }
 }
 
@@ -907,11 +1031,17 @@ async fn bridge_prevents_bidirectional_loop() {
     let auth = moq_relay::Auth::new(auth_config).await.expect("auth init");
     let cluster = moq_relay::Cluster::new(moq_relay::ClusterConfig::default(), client);
     let cluster_run = cluster.clone();
-    tokio::spawn(async move { let _ = cluster_run.run().await; });
+    tokio::spawn(async move {
+        let _ = cluster_run.run().await;
+    });
 
-    let token = auth.verify(&moq_relay::AuthParams {
-        path: String::new(), jwt: None, register: None,
-    }).expect("auth token");
+    let token = auth
+        .verify(&moq_relay::AuthParams {
+            path: String::new(),
+            jwt: None,
+            register: None,
+        })
+        .expect("auth token");
 
     // Simulate Room→MoQ: publish a "native" broadcast to the cluster
     // (as if the Room→MoQ bridge published it)
@@ -919,8 +1049,11 @@ async fn bridge_prevents_bidirectional_loop() {
     let mut prod = moq_lite::Broadcast::produce();
     let ct = moq_lite::Track::new("audio");
     let mut aw = prod.create_track(ct).expect("track");
-    let mut g = aw.create_group(moq_lite::Group { sequence: 0 }).expect("group");
-    g.write_frame(moq_lite::bytes::Bytes::from(vec![0xAAu8; 100])).ok();
+    let mut g = aw
+        .create_group(moq_lite::Group { sequence: 0 })
+        .expect("group");
+    g.write_frame(moq_lite::bytes::Bytes::from(vec![0xAAu8; 100]))
+        .ok();
     g.finish().ok();
     let publisher = cluster.publisher(&token).expect("publisher");
     publisher.publish_broadcast(&native_path, prod.consume());
@@ -941,9 +1074,13 @@ async fn bridge_prevents_bidirectional_loop() {
             }
         }
         false
-    }).await;
+    })
+    .await;
 
-    assert!(result.expect("timeout"), "Broadcast should be visible in cluster");
+    assert!(
+        result.expect("timeout"),
+        "Broadcast should be visible in cluster"
+    );
 
     // The test passes if we get here — the broadcast exists in the cluster.
     // The bridge's loop prevention (shared set) must ensure MoQ→Room skips

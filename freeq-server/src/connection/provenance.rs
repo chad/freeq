@@ -81,13 +81,19 @@ pub(super) fn verify_provenance(
     // Required fields for verification
     let creator_did = match json.get("creator_did").and_then(|v| v.as_str()) {
         Some(s) if !s.is_empty() => s.to_string(),
-        _ => return Ok(VerificationOutcome::unverified("Cert is missing creator_did")),
+        _ => {
+            return Ok(VerificationOutcome::unverified(
+                "Cert is missing creator_did",
+            ));
+        }
     };
     let sig_b64 = match json.get("signature").and_then(|v| v.as_str()) {
         Some(s) if !s.is_empty() => s.to_string(),
-        _ => return Ok(VerificationOutcome::unverified(
-            "Cert has no signature; declarative only",
-        )),
+        _ => {
+            return Ok(VerificationOutcome::unverified(
+                "Cert has no signature; declarative only",
+            ));
+        }
     };
 
     // Look up the creator's registered ed25519 signing key

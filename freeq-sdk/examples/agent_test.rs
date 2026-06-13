@@ -24,12 +24,13 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter("info")
-        .init();
+    tracing_subscriber::fmt().with_env_filter("info").init();
 
     let args = Args::parse();
-    println!("Connecting to {} as {} (tls={})...", args.server, args.nick, args.tls);
+    println!(
+        "Connecting to {} as {} (tls={})...",
+        args.server, args.nick, args.tls
+    );
 
     let config = ConnectConfig {
         server_addr: args.server.clone(),
@@ -68,7 +69,13 @@ async fn main() -> Result<()> {
         tokio::time::sleep(Duration::from_secs(1)).await;
 
         println!("Sending test message...");
-        if let Err(e) = h.privmsg(&channel, "🤖 Agent registration test — can you see the robot icon in the web app?").await {
+        if let Err(e) = h
+            .privmsg(
+                &channel,
+                "🤖 Agent registration test — can you see the robot icon in the web app?",
+            )
+            .await
+        {
             eprintln!("Failed to send: {e}");
         }
 
@@ -88,7 +95,9 @@ async fn main() -> Result<()> {
                     Event::Connected => println!("✓ Connected"),
                     Event::Registered { nick } => println!("✓ Registered as {nick}"),
                     Event::Joined { channel, .. } => println!("✓ Joined {channel}"),
-                    Event::Message { from, target, text, .. } => {
+                    Event::Message {
+                        from, target, text, ..
+                    } => {
                         println!("  [{target}] <{from}> {text}");
                     }
                     Event::ServerNotice { text } => {
@@ -97,7 +106,11 @@ async fn main() -> Result<()> {
                     Event::RawLine(line) => {
                         // Show agent-related raw lines
                         let l = line.as_str();
-                        if l.contains("AGENT") || l.contains("actor") || l.contains("673") || l.contains("NOTICE") {
+                        if l.contains("AGENT")
+                            || l.contains("actor")
+                            || l.contains("673")
+                            || l.contains("NOTICE")
+                        {
                             println!("  RAW: {}", l.trim());
                         }
                     }

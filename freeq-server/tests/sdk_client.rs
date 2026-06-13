@@ -17,7 +17,10 @@ use tokio::time::timeout;
 
 const DID: &str = "did:plc:sdk_test";
 
-async fn start() -> (std::net::SocketAddr, tokio::task::JoinHandle<anyhow::Result<()>>) {
+async fn start() -> (
+    std::net::SocketAddr,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
     let resolver = DidResolver::static_map(HashMap::new());
     let config = freeq_server::config::ServerConfig {
         listen_addr: "127.0.0.1:0".to_string(),
@@ -26,10 +29,17 @@ async fn start() -> (std::net::SocketAddr, tokio::task::JoinHandle<anyhow::Resul
         ..Default::default()
     };
     freeq_server::server::Server::with_resolver(config, resolver)
-        .start().await.unwrap()
+        .start()
+        .await
+        .unwrap()
 }
 
-async fn start_with_did(key: &PrivateKey) -> (std::net::SocketAddr, tokio::task::JoinHandle<anyhow::Result<()>>) {
+async fn start_with_did(
+    key: &PrivateKey,
+) -> (
+    std::net::SocketAddr,
+    tokio::task::JoinHandle<anyhow::Result<()>>,
+) {
     let doc = did::make_test_did_document(DID, &key.public_key_multibase());
     let mut docs = HashMap::new();
     docs.insert(DID.to_string(), doc);
@@ -40,7 +50,9 @@ async fn start_with_did(key: &PrivateKey) -> (std::net::SocketAddr, tokio::task:
         ..Default::default()
     };
     freeq_server::server::Server::with_resolver(config, DidResolver::static_map(docs))
-        .start().await.unwrap()
+        .start()
+        .await
+        .unwrap()
 }
 
 async fn wait(rx: &mut mpsc::Receiver<Event>, pred: impl Fn(&Event) -> bool, desc: &str) -> Event {
@@ -52,7 +64,9 @@ async fn wait(rx: &mut mpsc::Receiver<Event>, pred: impl Fn(&Event) -> bool, des
                 None => panic!("Closed: {desc}"),
             }
         }
-    }).await.unwrap_or_else(|_| panic!("Timeout: {desc}"))
+    })
+    .await
+    .unwrap_or_else(|_| panic!("Timeout: {desc}"))
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -157,7 +171,12 @@ async fn guest_connect_register() {
     };
     let (_handle, mut rx) = client::connect(config, None);
     wait(&mut rx, |e| matches!(e, Event::Connected), "Connected").await;
-    let reg = wait(&mut rx, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+    let reg = wait(
+        &mut rx,
+        |e| matches!(e, Event::Registered { .. }),
+        "Registered",
+    )
+    .await;
     if let Event::Registered { nick } = reg {
         assert_eq!(nick, "sdkguest");
     }
@@ -174,9 +193,19 @@ async fn guest_join_channel() {
         ..Default::default()
     };
     let (handle, mut rx) = client::connect(config, None);
-    wait(&mut rx, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+    wait(
+        &mut rx,
+        |e| matches!(e, Event::Registered { .. }),
+        "Registered",
+    )
+    .await;
     handle.join("#sdktest").await.unwrap();
-    wait(&mut rx, |e| matches!(e, Event::Joined { channel, .. } if channel == "#sdktest"), "Joined").await;
+    wait(
+        &mut rx,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#sdktest"),
+        "Joined",
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -185,12 +214,16 @@ async fn guest_send_receive_message() {
     // Two clients in same channel
     let c1 = ConnectConfig {
         server_addr: addr.to_string(),
-        nick: "sdk1".to_string(), user: "sdk1".to_string(), realname: "t".to_string(),
+        nick: "sdk1".to_string(),
+        user: "sdk1".to_string(),
+        realname: "t".to_string(),
         ..Default::default()
     };
     let c2 = ConnectConfig {
         server_addr: addr.to_string(),
-        nick: "sdk2".to_string(), user: "sdk2".to_string(), realname: "t".to_string(),
+        nick: "sdk2".to_string(),
+        user: "sdk2".to_string(),
+        realname: "t".to_string(),
         ..Default::default()
     };
     let (h1, mut rx1) = client::connect(c1, None);
@@ -199,12 +232,27 @@ async fn guest_send_receive_message() {
     wait(&mut rx2, |e| matches!(e, Event::Registered { .. }), "Reg2").await;
     h1.join("#sdkmsg").await.unwrap();
     h2.join("#sdkmsg").await.unwrap();
-    wait(&mut rx1, |e| matches!(e, Event::Joined { channel, .. } if channel == "#sdkmsg"), "J1").await;
-    wait(&mut rx2, |e| matches!(e, Event::Joined { channel, .. } if channel == "#sdkmsg"), "J2").await;
+    wait(
+        &mut rx1,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#sdkmsg"),
+        "J1",
+    )
+    .await;
+    wait(
+        &mut rx2,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#sdkmsg"),
+        "J2",
+    )
+    .await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     h1.privmsg("#sdkmsg", "hello from sdk").await.unwrap();
-    let msg = wait(&mut rx2, |e| matches!(e, Event::Message { text, .. } if text == "hello from sdk"), "Msg").await;
+    let msg = wait(
+        &mut rx2,
+        |e| matches!(e, Event::Message { text, .. } if text == "hello from sdk"),
+        "Msg",
+    )
+    .await;
     if let Event::Message { from, text, .. } = msg {
         assert_eq!(from, "sdk1");
         assert_eq!(text, "hello from sdk");
@@ -216,13 +264,20 @@ async fn guest_quit() {
     let (addr, _h) = start().await;
     let config = ConnectConfig {
         server_addr: addr.to_string(),
-        nick: "sdkquit".to_string(), user: "sdkquit".to_string(), realname: "t".to_string(),
+        nick: "sdkquit".to_string(),
+        user: "sdkquit".to_string(),
+        realname: "t".to_string(),
         ..Default::default()
     };
     let (handle, mut rx) = client::connect(config, None);
     wait(&mut rx, |e| matches!(e, Event::Registered { .. }), "Reg").await;
     handle.quit(Some("goodbye")).await.unwrap();
-    wait(&mut rx, |e| matches!(e, Event::Disconnected { .. }), "Disconnected").await;
+    wait(
+        &mut rx,
+        |e| matches!(e, Event::Disconnected { .. }),
+        "Disconnected",
+    )
+    .await;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -236,13 +291,25 @@ async fn authenticated_connect() {
     let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(DID.to_string(), key));
     let config = ConnectConfig {
         server_addr: addr.to_string(),
-        nick: "sdkauth".to_string(), user: "sdkauth".to_string(), realname: "t".to_string(),
+        nick: "sdkauth".to_string(),
+        user: "sdkauth".to_string(),
+        realname: "t".to_string(),
         ..Default::default()
     };
     let (_handle, mut rx) = client::connect(config, Some(signer));
     wait(&mut rx, |e| matches!(e, Event::Connected), "Connected").await;
-    wait(&mut rx, |e| matches!(e, Event::Authenticated { .. }), "Authenticated").await;
-    let reg = wait(&mut rx, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+    wait(
+        &mut rx,
+        |e| matches!(e, Event::Authenticated { .. }),
+        "Authenticated",
+    )
+    .await;
+    let reg = wait(
+        &mut rx,
+        |e| matches!(e, Event::Registered { .. }),
+        "Registered",
+    )
+    .await;
     if let Event::Registered { nick } = reg {
         assert_eq!(nick, "sdkauth");
     }
@@ -257,7 +324,9 @@ async fn handle_raw_command() {
     let (addr, _h) = start().await;
     let config = ConnectConfig {
         server_addr: addr.to_string(),
-        nick: "sdkraw".to_string(), user: "sdkraw".to_string(), realname: "t".to_string(),
+        nick: "sdkraw".to_string(),
+        user: "sdkraw".to_string(),
+        realname: "t".to_string(),
         ..Default::default()
     };
     let (handle, mut rx) = client::connect(config, None);
@@ -273,13 +342,18 @@ async fn handle_raw_crlf_stripped() {
     let (addr, _h) = start().await;
     let config = ConnectConfig {
         server_addr: addr.to_string(),
-        nick: "sdkcrlf".to_string(), user: "sdkcrlf".to_string(), realname: "t".to_string(),
+        nick: "sdkcrlf".to_string(),
+        user: "sdkcrlf".to_string(),
+        realname: "t".to_string(),
         ..Default::default()
     };
     let (handle, mut rx) = client::connect(config, None);
     wait(&mut rx, |e| matches!(e, Event::Registered { .. }), "Reg").await;
     // CRLF injection attempt — should be stripped
-    handle.raw("PRIVMSG #test :hello\r\nQUIT :pwned").await.unwrap();
+    handle
+        .raw("PRIVMSG #test :hello\r\nQUIT :pwned")
+        .await
+        .unwrap();
     // Should NOT disconnect (QUIT stripped)
     tokio::time::sleep(Duration::from_millis(500)).await;
     // Verify still connected by sending another command
@@ -292,7 +366,9 @@ async fn handle_typing_indicators() {
     let (addr, _h) = start().await;
     let config = ConnectConfig {
         server_addr: addr.to_string(),
-        nick: "sdktype".to_string(), user: "sdktype".to_string(), realname: "t".to_string(),
+        nick: "sdktype".to_string(),
+        user: "sdktype".to_string(),
+        realname: "t".to_string(),
         ..Default::default()
     };
     let (handle, mut rx) = client::connect(config, None);
@@ -309,7 +385,9 @@ async fn handle_reply() {
     let (addr, _h) = start().await;
     let config = ConnectConfig {
         server_addr: addr.to_string(),
-        nick: "sdkreply".to_string(), user: "sdkreply".to_string(), realname: "t".to_string(),
+        nick: "sdkreply".to_string(),
+        user: "sdkreply".to_string(),
+        realname: "t".to_string(),
         ..Default::default()
     };
     let (handle, mut rx) = client::connect(config, None);
@@ -317,7 +395,10 @@ async fn handle_reply() {
     handle.join("#sdkreply").await.unwrap();
     wait(&mut rx, |e| matches!(e, Event::Joined { .. }), "Joined").await;
     // Reply with msgid tag
-    handle.reply("#sdkreply", "test-msgid-123", "this is a reply").await.unwrap();
+    handle
+        .reply("#sdkreply", "test-msgid-123", "this is a reply")
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
 }
 
@@ -326,7 +407,9 @@ async fn handle_react() {
     let (addr, _h) = start().await;
     let config = ConnectConfig {
         server_addr: addr.to_string(),
-        nick: "sdkreact".to_string(), user: "sdkreact".to_string(), realname: "t".to_string(),
+        nick: "sdkreact".to_string(),
+        user: "sdkreact".to_string(),
+        realname: "t".to_string(),
         ..Default::default()
     };
     let (handle, mut rx) = client::connect(config, None);
@@ -347,7 +430,9 @@ async fn nick_collision_gets_alternate() {
     // First client takes the nick
     let c1 = ConnectConfig {
         server_addr: addr.to_string(),
-        nick: "taken".to_string(), user: "u".to_string(), realname: "t".to_string(),
+        nick: "taken".to_string(),
+        user: "u".to_string(),
+        realname: "t".to_string(),
         ..Default::default()
     };
     let (_h1, mut rx1) = client::connect(c1, None);
@@ -356,7 +441,9 @@ async fn nick_collision_gets_alternate() {
     // Second client tries the same nick
     let c2 = ConnectConfig {
         server_addr: addr.to_string(),
-        nick: "taken".to_string(), user: "u".to_string(), realname: "t".to_string(),
+        nick: "taken".to_string(),
+        user: "u".to_string(),
+        realname: "t".to_string(),
         ..Default::default()
     };
     let (_h2, mut rx2) = client::connect(c2, None);
@@ -364,6 +451,9 @@ async fn nick_collision_gets_alternate() {
     if let Event::Registered { nick } = reg {
         // Should get an alternate nick (taken + suffix)
         assert_ne!(nick, "taken", "Should get alternate nick, got: {nick}");
-        assert!(nick.starts_with("taken"), "Alternate should be based on original: {nick}");
+        assert!(
+            nick.starts_with("taken"),
+            "Alternate should be based on original: {nick}"
+        );
     }
 }

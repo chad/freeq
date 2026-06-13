@@ -14,9 +14,7 @@
 //! unclear"), which the router maps to a helpful diagnosis listing the
 //! available tools.
 
-use super::{
-    BoxFuture, ClassificationContext, LlmError, LlmProvider, ToolIntent,
-};
+use super::{BoxFuture, ClassificationContext, LlmError, LlmProvider, ToolIntent};
 use crate::agent_assist::types::{Confidence, FactBundle};
 use serde_json::json;
 
@@ -57,7 +55,11 @@ impl LlmProvider for MockProvider {
 
 fn classify(message: &str, ctx: &ClassificationContext) -> Option<ToolIntent> {
     let lower = message.to_lowercase();
-    let names: Vec<&str> = ctx.available_tools.iter().map(|t| t.name.as_str()).collect();
+    let names: Vec<&str> = ctx
+        .available_tools
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect();
 
     // Rule 1: explicit msgid pattern + ordering keywords →
     // diagnose_message_ordering.
@@ -92,23 +94,20 @@ fn classify(message: &str, ctx: &ClassificationContext) -> Option<ToolIntent> {
             || lower.contains("sync")
             || lower.contains("replay")
             || lower.contains("missed messages"))
+        && let Some(account) = extract_did(message)
     {
-        if let Some(account) = extract_did(message) {
-            let channel = extract_channel(message);
-            let mut args = json!({ "account": account });
-            if let Some(c) = channel {
-                args["channel"] = json!(c);
-            }
-            args["symptom"] = json!(short_summary(message));
-            return Some(ToolIntent {
-                tool: "diagnose_sync".into(),
-                args,
-                confidence: Confidence::Medium,
-                summary: Some(
-                    "Report active session/channel-join state for the account.".into(),
-                ),
-            });
+        let channel = extract_channel(message);
+        let mut args = json!({ "account": account });
+        if let Some(c) = channel {
+            args["channel"] = json!(c);
         }
+        args["symptom"] = json!(short_summary(message));
+        return Some(ToolIntent {
+            tool: "diagnose_sync".into(),
+            args,
+            confidence: Confidence::Medium,
+            summary: Some("Report active session/channel-join state for the account.".into()),
+        });
     }
 
     // Rule 3: config / capability words → validate_client_config.
@@ -181,9 +180,10 @@ fn extract_msgid_candidates(s: &str) -> Vec<String> {
 }
 
 fn push_if_msgid(buf: &str, out: &mut Vec<String>) {
-    if buf.len() == 26 && buf.chars().all(|c| c.is_ascii_alphanumeric()) {
-        out.push(buf.to_string());
-    } else if buf.starts_with("msg_") && buf.len() > 4 && buf[4..].chars().all(|c| c.is_ascii_digit())
+    if (buf.len() == 26 && buf.chars().all(|c| c.is_ascii_alphanumeric()))
+        || (buf.starts_with("msg_")
+            && buf.len() > 4
+            && buf[4..].chars().all(|c| c.is_ascii_digit()))
     {
         out.push(buf.to_string());
     }
@@ -284,13 +284,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(intent.tool, "diagnose_sync");
-        assert!(intent.args["account"].as_str().unwrap().starts_with("did:plc:"));
+        assert!(
+            intent.args["account"]
+                .as_str()
+                .unwrap()
+                .starts_with("did:plc:")
+        );
     }
 
     #[test]
     fn config_word_routes_to_validator() {
-        let intent =
-            classify("can you validate this client config?", &ctx()).unwrap();
+        let intent = classify("can you validate this client config?", &ctx()).unwrap();
         assert_eq!(intent.tool, "validate_client_config");
     }
 

@@ -117,9 +117,8 @@ impl VideoHandle {
     /// no frame has arrived within [`FRAME_FRESHNESS`].
     pub fn latest(&self) -> Option<VideoFrame> {
         self.latest.lock().ok().and_then(|g| {
-            g.as_ref().and_then(|(at, frame)| {
-                (at.elapsed() < FRAME_FRESHNESS).then(|| frame.clone())
-            })
+            g.as_ref()
+                .and_then(|(at, frame)| (at.elapsed() < FRAME_FRESHNESS).then(|| frame.clone()))
         })
     }
 
@@ -161,18 +160,17 @@ impl AvSession {
     /// consumes its [`VideoSource`], so each connection attempt needs a
     /// fresh one. For a shared renderer this is typically a cheap handle
     /// clone (`move || tile.source()`).
-    pub fn connect<V, MkV>(
-        config: AvConfig,
-        audio: PushAudioSource,
-        make_video: MkV,
-    ) -> AvSession
+    pub fn connect<V, MkV>(config: AvConfig, audio: PushAudioSource, make_video: MkV) -> AvSession
     where
         V: VideoSource + Send + 'static,
         MkV: FnMut() -> V + Send + 'static,
     {
         let (tx, rx) = mpsc::channel(32);
         let task = tokio::spawn(run_subscriber(config, audio, make_video, tx));
-        AvSession { participants: rx, task }
+        AvSession {
+            participants: rx,
+            task,
+        }
     }
 
     /// Receive the next participant the session has started tapping.
@@ -606,7 +604,12 @@ mod tests {
     #[test]
     fn should_tap_self_filter_is_case_insensitive() {
         assert_eq!(
-            should_tap("sess/Eliza~deadbeef", "sess", "sess/eliza~11223344", "eliza"),
+            should_tap(
+                "sess/Eliza~deadbeef",
+                "sess",
+                "sess/eliza~11223344",
+                "eliza"
+            ),
             None,
         );
     }

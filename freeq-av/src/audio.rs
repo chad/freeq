@@ -79,7 +79,9 @@ struct TapSink {
 
 impl AudioSinkHandle for TapSink {
     fn cloned_boxed(&self) -> Box<dyn AudioSinkHandle> {
-        Box::new(NullHandle { paused: self.paused.clone() })
+        Box::new(NullHandle {
+            paused: self.paused.clone(),
+        })
     }
     fn pause(&self) {
         self.paused.store(true, Ordering::Relaxed);
@@ -112,7 +114,9 @@ impl AudioSink for TapSink {
         Ok(())
     }
     fn handle(&self) -> Box<dyn AudioSinkHandle> {
-        Box::new(NullHandle { paused: self.paused.clone() })
+        Box::new(NullHandle {
+            paused: self.paused.clone(),
+        })
     }
 }
 
@@ -122,7 +126,9 @@ struct NullHandle {
 
 impl AudioSinkHandle for NullHandle {
     fn cloned_boxed(&self) -> Box<dyn AudioSinkHandle> {
-        Box::new(NullHandle { paused: self.paused.clone() })
+        Box::new(NullHandle {
+            paused: self.paused.clone(),
+        })
     }
     fn pause(&self) {
         self.paused.store(true, Ordering::Relaxed);
@@ -225,7 +231,9 @@ impl Speaker {
     pub fn new(level: Arc<std::sync::atomic::AtomicU32>) -> (Speaker, PushAudioSource) {
         let queue = Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
         (
-            Speaker { queue: queue.clone() },
+            Speaker {
+                queue: queue.clone(),
+            },
             PushAudioSource { queue, level },
         )
     }
@@ -499,7 +507,10 @@ mod tests {
     fn tap_sink_pause_resume_toggle_state() {
         Runtime::new().unwrap().block_on(async {
             let (backend, _rx) = TapBackend::channel();
-            let sink = backend.create_output(AudioFormat::mono_48k()).await.unwrap();
+            let sink = backend
+                .create_output(AudioFormat::mono_48k())
+                .await
+                .unwrap();
             assert!(!sink.is_paused());
             sink.pause();
             assert!(sink.is_paused());
@@ -516,7 +527,10 @@ mod tests {
     fn tap_sink_push_after_receiver_drop_does_not_error() {
         Runtime::new().unwrap().block_on(async {
             let (backend, rx) = TapBackend::channel();
-            let mut sink = backend.create_output(AudioFormat::mono_48k()).await.unwrap();
+            let mut sink = backend
+                .create_output(AudioFormat::mono_48k())
+                .await
+                .unwrap();
             drop(rx);
             for _ in 0..1000 {
                 sink.push_samples(&[0.0; 480]).unwrap();
@@ -528,13 +542,19 @@ mod tests {
     fn tap_sink_handle_clone_shares_pause_state() {
         Runtime::new().unwrap().block_on(async {
             let (backend, _rx) = TapBackend::channel();
-            let sink = backend.create_output(AudioFormat::mono_48k()).await.unwrap();
+            let sink = backend
+                .create_output(AudioFormat::mono_48k())
+                .await
+                .unwrap();
             let handle = sink.handle();
             handle.pause();
             assert!(sink.is_paused(), "handle.pause() did not affect sink");
             let cloned = handle.cloned_boxed();
             cloned.resume();
-            assert!(!sink.is_paused(), "cloned handle.resume() did not affect sink");
+            assert!(
+                !sink.is_paused(),
+                "cloned handle.resume() did not affect sink"
+            );
         });
     }
 

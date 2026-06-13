@@ -81,10 +81,8 @@ pub(crate) fn relay_to_nick(
         let origin = state.server_iroh_id.lock().clone().unwrap_or_default();
         let manager = state.s2s_manager.lock().clone();
         if let Some(m) = manager {
-            let (s2s_text, s2s_tags) = crate::s2s::encode_privmsg_text_for_s2s(
-                text,
-                std::collections::HashMap::new(),
-            );
+            let (s2s_text, s2s_tags) =
+                crate::s2s::encode_privmsg_text_for_s2s(text, std::collections::HashMap::new());
             m.broadcast(crate::s2s::S2sMessage::Privmsg {
                 event_id,
                 from: from.to_string(),

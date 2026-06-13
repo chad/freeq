@@ -8,10 +8,7 @@
 
 use anyhow::Result;
 use iroh_live::media::{
-    audio_backend::AudioBackend,
-    codec::AudioCodec,
-    format::AudioPreset,
-    publish::LocalBroadcast,
+    audio_backend::AudioBackend, codec::AudioCodec, format::AudioPreset, publish::LocalBroadcast,
     subscribe::RemoteBroadcast,
 };
 
@@ -36,11 +33,17 @@ pub async fn run_sfu(sfu_url: &str, session: &str, nick: &str) -> Result<()> {
     let inputs = AudioBackend::list_inputs();
     let outputs = AudioBackend::list_outputs();
     println!("\n  Audio devices:");
-    for d in &inputs { println!("    Input:  {}", d.name); }
-    for d in &outputs { println!("    Output: {}", d.name); }
+    for d in &inputs {
+        println!("    Input:  {}", d.name);
+    }
+    for d in &outputs {
+        println!("    Output: {}", d.name);
+    }
 
     let mic = audio_backend.default_input().await?;
-    broadcast.audio().set(mic, AudioCodec::Opus, [AudioPreset::Hq])?;
+    broadcast
+        .audio()
+        .set(mic, AudioCodec::Opus, [AudioPreset::Hq])?;
     println!("  Microphone active (Opus).");
     println!("  NOTE: Echo cancellation is disabled — use headphones to avoid feedback.");
 
@@ -88,7 +91,10 @@ pub async fn run_sfu(sfu_url: &str, session: &str, nick: &str) -> Result<()> {
                     let path_str = path.to_string();
 
                     // Skip our own broadcast to avoid feedback loop
-                    if path_str == our_name || path_str.ends_with(&format!("/{}", our_name.split('/').last().unwrap_or(""))) {
+                    if path_str == our_name
+                        || path_str
+                            .ends_with(&format!("/{}", our_name.split('/').last().unwrap_or("")))
+                    {
                         tracing::debug!("Skipping own broadcast: {path_str}");
                         continue;
                     }
@@ -108,7 +114,9 @@ pub async fn run_sfu(sfu_url: &str, session: &str, nick: &str) -> Result<()> {
                                         let _track = audio_track;
                                         tokio::signal::ctrl_c().await.ok();
                                     }
-                                    Err(e) => tracing::warn!(%ps, "Failed to subscribe to audio: {e}"),
+                                    Err(e) => {
+                                        tracing::warn!(%ps, "Failed to subscribe to audio: {e}")
+                                    }
                                 }
                             }
                             Err(e) => tracing::warn!(%ps, "Failed to read catalog: {e}"),

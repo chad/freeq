@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use freeq_server::db::{canonical_dm_key, Db};
+use freeq_server::db::{Db, canonical_dm_key};
 
 fn make_db() -> Db {
     Db::open_memory().unwrap()
@@ -20,7 +20,10 @@ fn make_db() -> Db {
 fn canonical_key_alphabetical_order() {
     let k1 = canonical_dm_key("did:plc:alice", "did:plc:bob");
     let k2 = canonical_dm_key("did:plc:bob", "did:plc:alice");
-    assert_eq!(k1, k2, "Key should be the same regardless of argument order");
+    assert_eq!(
+        k1, k2,
+        "Key should be the same regardless of argument order"
+    );
     assert_eq!(k1, "dm:did:plc:alice,did:plc:bob");
 }
 
@@ -42,10 +45,26 @@ fn dm_messages_stored_and_retrieved() {
     let db = make_db();
     let key = canonical_dm_key("did:plc:alice", "did:plc:bob");
 
-    db.insert_message(&key, "alice!user@host", "hello bob", 1000, &HashMap::new(), Some("msg1"), None)
-        .unwrap();
-    db.insert_message(&key, "bob!user@host", "hi alice", 1001, &HashMap::new(), Some("msg2"), None)
-        .unwrap();
+    db.insert_message(
+        &key,
+        "alice!user@host",
+        "hello bob",
+        1000,
+        &HashMap::new(),
+        Some("msg1"),
+        None,
+    )
+    .unwrap();
+    db.insert_message(
+        &key,
+        "bob!user@host",
+        "hi alice",
+        1001,
+        &HashMap::new(),
+        Some("msg2"),
+        None,
+    )
+    .unwrap();
 
     let msgs = db.get_messages(&key, 10, None).unwrap();
     assert_eq!(msgs.len(), 2);
@@ -58,10 +77,26 @@ fn dm_messages_isolated_from_channels() {
     let db = make_db();
     let dm_key = canonical_dm_key("did:plc:alice", "did:plc:bob");
 
-    db.insert_message(&dm_key, "alice!user@host", "dm message", 1000, &HashMap::new(), Some("msg1"), None)
-        .unwrap();
-    db.insert_message("#general", "alice!user@host", "channel message", 1001, &HashMap::new(), Some("msg2"), None)
-        .unwrap();
+    db.insert_message(
+        &dm_key,
+        "alice!user@host",
+        "dm message",
+        1000,
+        &HashMap::new(),
+        Some("msg1"),
+        None,
+    )
+    .unwrap();
+    db.insert_message(
+        "#general",
+        "alice!user@host",
+        "channel message",
+        1001,
+        &HashMap::new(),
+        Some("msg2"),
+        None,
+    )
+    .unwrap();
 
     let dm_msgs = db.get_messages(&dm_key, 10, None).unwrap();
     let ch_msgs = db.get_messages("#general", 10, None).unwrap();
@@ -77,10 +112,26 @@ fn dm_messages_isolated_between_conversations() {
     let key_ab = canonical_dm_key("did:plc:alice", "did:plc:bob");
     let key_ac = canonical_dm_key("did:plc:alice", "did:plc:charlie");
 
-    db.insert_message(&key_ab, "alice", "to bob", 1000, &HashMap::new(), Some("msg1"), None)
-        .unwrap();
-    db.insert_message(&key_ac, "alice", "to charlie", 1001, &HashMap::new(), Some("msg2"), None)
-        .unwrap();
+    db.insert_message(
+        &key_ab,
+        "alice",
+        "to bob",
+        1000,
+        &HashMap::new(),
+        Some("msg1"),
+        None,
+    )
+    .unwrap();
+    db.insert_message(
+        &key_ac,
+        "alice",
+        "to charlie",
+        1001,
+        &HashMap::new(),
+        Some("msg2"),
+        None,
+    )
+    .unwrap();
 
     let ab = db.get_messages(&key_ab, 10, None).unwrap();
     let ac = db.get_messages(&key_ac, 10, None).unwrap();
@@ -97,9 +148,36 @@ fn dm_conversations_lists_for_did() {
     let key_ac = canonical_dm_key("did:plc:alice", "did:plc:charlie");
     let key_bc = canonical_dm_key("did:plc:bob", "did:plc:charlie");
 
-    db.insert_message(&key_ab, "alice", "hi bob", 1000, &HashMap::new(), None, None).unwrap();
-    db.insert_message(&key_ac, "alice", "hi charlie", 2000, &HashMap::new(), None, None).unwrap();
-    db.insert_message(&key_bc, "bob", "hi charlie", 3000, &HashMap::new(), None, None).unwrap();
+    db.insert_message(
+        &key_ab,
+        "alice",
+        "hi bob",
+        1000,
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
+    db.insert_message(
+        &key_ac,
+        "alice",
+        "hi charlie",
+        2000,
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
+    db.insert_message(
+        &key_bc,
+        "bob",
+        "hi charlie",
+        3000,
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
 
     // Alice should see 2 conversations (ab, ac) but not bc
     let alice_convos = db.dm_conversations("did:plc:alice", 50).unwrap();
@@ -125,8 +203,16 @@ fn dm_conversations_respects_limit() {
     for i in 0..5 {
         let partner = format!("did:plc:partner{i}");
         let key = canonical_dm_key("did:plc:alice", &partner);
-        db.insert_message(&key, "alice", &format!("msg {i}"), 1000 + i, &HashMap::new(), None, None)
-            .unwrap();
+        db.insert_message(
+            &key,
+            "alice",
+            &format!("msg {i}"),
+            1000 + i,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap();
     }
 
     let convos = db.dm_conversations("did:plc:alice", 3).unwrap();
@@ -137,7 +223,8 @@ fn dm_conversations_respects_limit() {
 fn dm_conversations_empty_for_unknown_did() {
     let db = make_db();
     let key = canonical_dm_key("did:plc:alice", "did:plc:bob");
-    db.insert_message(&key, "alice", "hello", 1000, &HashMap::new(), None, None).unwrap();
+    db.insert_message(&key, "alice", "hello", 1000, &HashMap::new(), None, None)
+        .unwrap();
 
     let convos = db.dm_conversations("did:plc:nobody", 50).unwrap();
     assert!(convos.is_empty());
@@ -147,8 +234,26 @@ fn dm_conversations_empty_for_unknown_did() {
 fn dm_conversations_excludes_channels() {
     let db = make_db();
     let dm_key = canonical_dm_key("did:plc:alice", "did:plc:bob");
-    db.insert_message(&dm_key, "alice", "dm msg", 1000, &HashMap::new(), None, None).unwrap();
-    db.insert_message("#general", "alice", "channel msg", 2000, &HashMap::new(), None, None).unwrap();
+    db.insert_message(
+        &dm_key,
+        "alice",
+        "dm msg",
+        1000,
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
+    db.insert_message(
+        "#general",
+        "alice",
+        "channel msg",
+        2000,
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let convos = db.dm_conversations("did:plc:alice", 50).unwrap();
     assert_eq!(convos.len(), 1);
@@ -159,8 +264,26 @@ fn dm_conversations_excludes_channels() {
 fn dm_conversations_excludes_deleted() {
     let db = make_db();
     let key = canonical_dm_key("did:plc:alice", "did:plc:bob");
-    db.insert_message(&key, "alice", "msg1", 1000, &HashMap::new(), Some("del1"), None).unwrap();
-    db.insert_message(&key, "alice", "msg2", 2000, &HashMap::new(), Some("keep1"), None).unwrap();
+    db.insert_message(
+        &key,
+        "alice",
+        "msg1",
+        1000,
+        &HashMap::new(),
+        Some("del1"),
+        None,
+    )
+    .unwrap();
+    db.insert_message(
+        &key,
+        "alice",
+        "msg2",
+        2000,
+        &HashMap::new(),
+        Some("keep1"),
+        None,
+    )
+    .unwrap();
 
     // Delete one message
     db.soft_delete_message(&key, "del1").unwrap();
@@ -176,8 +299,16 @@ fn dm_history_before_after_latest() {
     let db = make_db();
     let key = canonical_dm_key("did:plc:alice", "did:plc:bob");
     for i in 0..10 {
-        db.insert_message(&key, "alice", &format!("msg-{i}"), 1000 + i, &HashMap::new(), None, None)
-            .unwrap();
+        db.insert_message(
+            &key,
+            "alice",
+            &format!("msg-{i}"),
+            1000 + i,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap();
     }
 
     // BEFORE ts=1005 limit=3 -> messages at 1002,1003,1004
@@ -211,8 +342,16 @@ fn dm_with_tags_and_msgid() {
     tags.insert("msgid".to_string(), "dm001".to_string());
     tags.insert("+freeq.at/sig".to_string(), "sig123".to_string());
 
-    db.insert_message(&key, "alice!user@host", "signed dm", 1000, &tags, Some("dm001"), None)
-        .unwrap();
+    db.insert_message(
+        &key,
+        "alice!user@host",
+        "signed dm",
+        1000,
+        &tags,
+        Some("dm001"),
+        None,
+    )
+    .unwrap();
 
     let msgs = db.get_messages(&key, 10, None).unwrap();
     assert_eq!(msgs.len(), 1);
@@ -227,7 +366,16 @@ fn dm_encrypted_roundtrip() {
     let db = Db::open_encrypted_memory(key).unwrap();
     let dm_key = canonical_dm_key("did:plc:alice", "did:plc:bob");
 
-    db.insert_message(&dm_key, "alice", "secret dm", 1000, &HashMap::new(), None, None).unwrap();
+    db.insert_message(
+        &dm_key,
+        "alice",
+        "secret dm",
+        1000,
+        &HashMap::new(),
+        None,
+        None,
+    )
+    .unwrap();
 
     let msgs = db.get_messages(&dm_key, 10, None).unwrap();
     assert_eq!(msgs[0].text, "secret dm");

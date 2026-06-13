@@ -83,9 +83,12 @@ impl SttEngine {
             return Ok(String::new());
         }
         match self {
-            SttEngine::Groq { client, api_key, model, prompt } => {
-                groq_transcribe(client, api_key, model, prompt, pcm_16k_mono).await
-            }
+            SttEngine::Groq {
+                client,
+                api_key,
+                model,
+                prompt,
+            } => groq_transcribe(client, api_key, model, prompt, pcm_16k_mono).await,
             #[cfg(feature = "stt")]
             SttEngine::Local(whisper) => {
                 let whisper = whisper.clone();
@@ -131,7 +134,10 @@ pub(crate) fn vocab_prompt(vocab_names: &[String]) -> String {
             names.push(n);
         }
     }
-    let first = names.first().cloned().unwrap_or_else(|| "Eliza".to_string());
+    let first = names
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "Eliza".to_string());
     let mut prompt = format!(
         "A live voice call with the assistant {first}. \
          People say \"{first}\" to ask it questions."
@@ -310,9 +316,12 @@ mod imp {
             let path_str = path
                 .to_str()
                 .context("whisper model path is not valid UTF-8")?;
-            let ctx = WhisperContext::new_with_params(path_str, WhisperContextParameters::default())
-                .context("WhisperContext::new failed; is the model path correct?")?;
-            Ok(Self { ctx: Mutex::new(ctx) })
+            let ctx =
+                WhisperContext::new_with_params(path_str, WhisperContextParameters::default())
+                    .context("WhisperContext::new failed; is the model path correct?")?;
+            Ok(Self {
+                ctx: Mutex::new(ctx),
+            })
         }
 
         pub fn transcribe(&self, pcm_16k_mono: &[f32]) -> Result<String> {
@@ -553,8 +562,14 @@ mod tests {
     #[test]
     fn vocab_prompt_names_the_agent() {
         let p = vocab_prompt(&["yokota".to_string()]);
-        assert!(p.contains("Yokota"), "prompt should carry the agent's name: {p}");
-        assert!(!p.contains("Eliza"), "no hardcoded Eliza when a name is given: {p}");
+        assert!(
+            p.contains("Yokota"),
+            "prompt should carry the agent's name: {p}"
+        );
+        assert!(
+            !p.contains("Eliza"),
+            "no hardcoded Eliza when a name is given: {p}"
+        );
     }
 
     #[test]

@@ -74,9 +74,7 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
-        )
+        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()))
         .init();
 
     let args = Args::parse();
@@ -156,7 +154,9 @@ async fn run_once(args: &Args, llm: &LlmClient, ctx: &Arc<AgentContext>) -> Resu
     wait_for_join(&mut events, &args.channel).await?;
 
     // ── Tier 3: Fetch and ingest CHATHISTORY ──────────────────────────
-    let count = ctx.fetch_and_ingest(&handle, &mut events, &args.channel).await?;
+    let count = ctx
+        .fetch_and_ingest(&handle, &mut events, &args.channel)
+        .await?;
     tracing::info!(channel = %args.channel, count, "Ingested history");
 
     // Announce presence
@@ -237,10 +237,7 @@ async fn run_once(args: &Args, llm: &LlmClient, ctx: &Arc<AgentContext>) -> Resu
                             }
                             Err(e) => {
                                 handle
-                                    .privmsg(
-                                        &args.channel,
-                                        &format!("Summary failed: {e}"),
-                                    )
+                                    .privmsg(&args.channel, &format!("Summary failed: {e}"))
                                     .await?;
                             }
                         }
@@ -277,11 +274,7 @@ async fn run_once(args: &Args, llm: &LlmClient, ctx: &Arc<AgentContext>) -> Resu
 
                     if query_lower.starts_with("forget ") {
                         let key = query_lower.strip_prefix("forget ").unwrap().trim();
-                        ctx.clear(
-                            args.channel.trim_start_matches('#'),
-                            "fact",
-                            key,
-                        )?;
+                        ctx.clear(args.channel.trim_start_matches('#'), "fact", key)?;
                         handle
                             .privmsg(&args.channel, &format!("Forgot: {key}"))
                             .await?;
@@ -322,9 +315,8 @@ async fn run_once(args: &Args, llm: &LlmClient, ctx: &Arc<AgentContext>) -> Resu
                             if exchanges_since_extract >= args.extract_every as u32 {
                                 let exchange =
                                     format!("<{from}> {query}\n<{}> {response}", args.nick);
-                                if let Err(e) = ctx
-                                    .extract_facts(&args.channel, None, &exchange, llm)
-                                    .await
+                                if let Err(e) =
+                                    ctx.extract_facts(&args.channel, None, &exchange, llm).await
                                 {
                                     tracing::warn!(error = %e, "Fact extraction failed");
                                 }
@@ -348,12 +340,11 @@ async fn run_once(args: &Args, llm: &LlmClient, ctx: &Arc<AgentContext>) -> Resu
 
             Event::Disconnected { reason } => {
                 // Export context file before disconnecting
-                let path = std::env::temp_dir()
-                    .join(format!("freeq-context-{}.md", args.channel.replace('#', "")));
-                if let Err(e) = ctx
-                    .export_context_file(&args.channel, None, &path)
-                    .await
-                {
+                let path = std::env::temp_dir().join(format!(
+                    "freeq-context-{}.md",
+                    args.channel.replace('#', "")
+                ));
+                if let Err(e) = ctx.export_context_file(&args.channel, None, &path).await {
                     tracing::warn!(error = %e, "Failed to export context file");
                 } else {
                     tracing::info!(path = %path.display(), "Exported context file");
@@ -400,9 +391,7 @@ fn split_irc_message(text: &str, max_len: usize) -> Vec<String> {
         } else {
             let mut remaining = line;
             while remaining.len() > max_len {
-                let split_at = remaining[..max_len]
-                    .rfind(' ')
-                    .unwrap_or(max_len);
+                let split_at = remaining[..max_len].rfind(' ').unwrap_or(max_len);
                 lines.push(remaining[..split_at].to_string());
                 remaining = remaining[split_at..].trim_start();
             }
@@ -423,7 +412,9 @@ async fn wait_for_registration(events: &mut mpsc::Receiver<Event>) -> Result<()>
         match tokio::time::timeout(timeout, events.recv()).await {
             Ok(Some(Event::Registered { .. })) => return Ok(()),
             Ok(Some(Event::Disconnected { reason })) => {
-                return Err(anyhow::anyhow!("Disconnected during registration: {reason}"));
+                return Err(anyhow::anyhow!(
+                    "Disconnected during registration: {reason}"
+                ));
             }
             Ok(Some(_)) => continue,
             Ok(None) => return Err(anyhow::anyhow!("Event channel closed")),

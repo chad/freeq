@@ -5,7 +5,7 @@
 //! into this crate verbatim so we don't depend on `pub(crate)` symbols
 //! over there.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 /// Derive the MoQ SFU URL from the IRC server URL.
 /// `wss://host/irc` → `https://host/av/moq`.

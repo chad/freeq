@@ -59,13 +59,20 @@ async fn main() -> Result<()> {
         websocket_url: None,
     };
     let conn = client::establish_connection(&config).await?;
-    let (handle, mut events) = client::connect_with_stream(conn, config, Some(std::sync::Arc::new(signer)));
+    let (handle, mut events) =
+        client::connect_with_stream(conn, config, Some(std::sync::Arc::new(signer)));
 
     // Wait for registration
     loop {
         match events.recv().await {
-            Some(Event::Registered { nick }) => { println!("✓ Registered as {nick}"); break; }
-            Some(Event::Disconnected { reason }) => { eprintln!("✗ {reason}"); return Ok(()); }
+            Some(Event::Registered { nick }) => {
+                println!("✓ Registered as {nick}");
+                break;
+            }
+            Some(Event::Disconnected { reason }) => {
+                eprintln!("✗ {reason}");
+                return Ok(());
+            }
             _ => continue,
         }
     }
@@ -73,7 +80,9 @@ async fn main() -> Result<()> {
     // Setup: register as agent, provenance, join
     handle.register_agent("agent").await?;
     handle.raw("HEARTBEAT 60").await?;
-    handle.raw("PRESENCE :state=active;status=Spawn test").await?;
+    handle
+        .raw("PRESENCE :state=active;status=Spawn test")
+        .await?;
 
     let provenance = serde_json::json!({
         "actor_did": did,
@@ -96,18 +105,32 @@ async fn main() -> Result<()> {
 
     // Spawn a child agent
     println!("Spawning child agent...");
-    handle.raw(&format!(
-        "AGENT SPAWN {ch} :nick=factory-worker;capabilities=post_message;ttl=600;task=css-build"
-    )).await?;
+    handle
+        .raw(&format!(
+            "AGENT SPAWN {ch} :nick=factory-worker;capabilities=post_message;ttl=600;task=css-build"
+        ))
+        .await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    handle.privmsg(ch, "👋 factory here. I just spawned factory-worker as a child agent.").await?;
+    handle
+        .privmsg(
+            ch,
+            "👋 factory here. I just spawned factory-worker as a child agent.",
+        )
+        .await?;
     tokio::time::sleep(Duration::from_millis(400)).await;
     handle.raw(&format!("AGENT MSG factory-worker {ch} :🔨 Hi! I'm factory-worker, a spawned child of factory. Click my name to see my identity card.")).await?;
     tokio::time::sleep(Duration::from_millis(400)).await;
-    handle.privmsg(ch, "Both of us will stay connected. Click our names in the member list to inspect.").await?;
+    handle
+        .privmsg(
+            ch,
+            "Both of us will stay connected. Click our names in the member list to inspect.",
+        )
+        .await?;
     tokio::time::sleep(Duration::from_millis(400)).await;
-    handle.privmsg(ch, "Say 'quit' when you're done looking.").await?;
+    handle
+        .privmsg(ch, "Say 'quit' when you're done looking.")
+        .await?;
 
     println!("Both agents connected. Waiting for 'quit'...");
 
@@ -116,11 +139,22 @@ async fn main() -> Result<()> {
     loop {
         let remaining = Duration::from_secs(25).saturating_sub(last_hb.elapsed());
         match timeout(remaining, events.recv()).await {
-            Ok(Some(Event::Message { from, target, text, tags })) => {
-                if tags.contains_key("batch") { continue; }
+            Ok(Some(Event::Message {
+                from,
+                target,
+                text,
+                tags,
+            })) => {
+                if tags.contains_key("batch") {
+                    continue;
+                }
                 if target.eq_ignore_ascii_case(ch) && from.eq_ignore_ascii_case(OWNER) {
                     let lower = text.trim().to_lowercase();
-                    if lower == "quit" || lower == "q" || lower.ends_with(": quit") || lower.ends_with(", quit") {
+                    if lower == "quit"
+                        || lower == "q"
+                        || lower.ends_with(": quit")
+                        || lower.ends_with(", quit")
+                    {
                         break;
                     }
                 }
@@ -139,7 +173,9 @@ async fn main() -> Result<()> {
     }
 
     println!("Cleaning up...");
-    handle.privmsg(ch, "👋 Despawning factory-worker and signing off.").await?;
+    handle
+        .privmsg(ch, "👋 Despawning factory-worker and signing off.")
+        .await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
     handle.raw("AGENT DESPAWN factory-worker").await?;
     tokio::time::sleep(Duration::from_millis(500)).await;

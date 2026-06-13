@@ -179,11 +179,10 @@ impl Reaction {
 pub async fn fetch_link_preview(url: &str) -> Result<LinkPreview> {
     // SSRF protection: resolve hostname and reject private IPs
     let parsed = url::Url::parse(url).context("Invalid URL for link preview")?;
-    let host = parsed
-        .host_str()
-        .context("URL has no host")?
-        .to_string();
-    let port = parsed.port().unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
+    let host = parsed.host_str().context("URL has no host")?.to_string();
+    let port = parsed
+        .port()
+        .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
     let addrs = crate::ssrf::resolve_and_check(&host, port)
         .await
         .context("Link preview SSRF check failed")?;
@@ -667,16 +666,27 @@ mod tests {
             format!("{pds_url}/xrpc/com.atproto.sync.getBlob?did={did}&cid={cid}")
         };
 
-        assert!(url.contains("com.atproto.sync.getBlob"), "PDF should use raw PDS blob URL");
+        assert!(
+            url.contains("com.atproto.sync.getBlob"),
+            "PDF should use raw PDS blob URL"
+        );
         assert!(!url.contains("cdn.bsky.app"), "PDF must NOT use CDN URL");
     }
 
     #[test]
     fn pdf_in_allowed_types() {
         // Verify PDF MIME type is accepted (matches client-side whitelist)
-        let allowed = ["image/jpeg", "image/png", "image/gif", "image/webp",
-                       "video/mp4", "video/webm", "audio/mpeg", "audio/ogg",
-                       "application/pdf"];
+        let allowed = [
+            "image/jpeg",
+            "image/png",
+            "image/gif",
+            "image/webp",
+            "video/mp4",
+            "video/webm",
+            "audio/mpeg",
+            "audio/ogg",
+            "application/pdf",
+        ];
         assert!(allowed.contains(&"application/pdf"));
     }
 }

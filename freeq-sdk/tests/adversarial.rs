@@ -111,7 +111,10 @@ mod e2ee_security {
         let k2 = e2ee::derive_key("secret", "#channel-b");
         assert_ne!(k1, k2);
         let ct = e2ee::encrypt(&k1, "private to channel A").unwrap();
-        assert!(e2ee::decrypt(&k2, &ct).is_err(), "Ciphertext must be bound to channel");
+        assert!(
+            e2ee::decrypt(&k2, &ct).is_err(),
+            "Ciphertext must be bound to channel"
+        );
     }
 
     #[test]
@@ -128,7 +131,10 @@ mod e2ee_security {
         // Forge a ciphertext with wrong version prefix
         let ct = e2ee::encrypt(&k, "test").unwrap();
         let fake = ct.replace("ENC1:", "ENC2:");
-        assert!(e2ee::decrypt(&k, &fake).is_err(), "Unknown version must be rejected");
+        assert!(
+            e2ee::decrypt(&k, &fake).is_err(),
+            "Unknown version must be rejected"
+        );
     }
 
     #[test]
@@ -293,25 +299,33 @@ mod ssrf_real {
     #[test]
     fn cgnat_blocked() {
         // 100.64.0.0/10 — Carrier-Grade NAT
-        assert!(ssrf::is_private_ip(&IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1))));
+        assert!(ssrf::is_private_ip(&IpAddr::V4(Ipv4Addr::new(
+            100, 64, 0, 1
+        ))));
     }
 
     #[test]
     fn documentation_range_1_blocked() {
         // 192.0.2.0/24 — TEST-NET-1
-        assert!(ssrf::is_private_ip(&IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1))));
+        assert!(ssrf::is_private_ip(&IpAddr::V4(Ipv4Addr::new(
+            192, 0, 2, 1
+        ))));
     }
 
     #[test]
     fn documentation_range_2_blocked() {
         // 198.51.100.0/24 — TEST-NET-2
-        assert!(ssrf::is_private_ip(&IpAddr::V4(Ipv4Addr::new(198, 51, 100, 1))));
+        assert!(ssrf::is_private_ip(&IpAddr::V4(Ipv4Addr::new(
+            198, 51, 100, 1
+        ))));
     }
 
     #[test]
     fn documentation_range_3_blocked() {
         // 203.0.113.0/24 — TEST-NET-3
-        assert!(ssrf::is_private_ip(&IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1))));
+        assert!(ssrf::is_private_ip(&IpAddr::V4(Ipv4Addr::new(
+            203, 0, 113, 1
+        ))));
     }
 
     // ── resolve_and_check (async) ──
@@ -334,14 +348,17 @@ mod ssrf_real {
 // ═══════════════════════════════════════════════════════════════
 
 mod ratchet_adversarial {
-    use freeq_sdk::ratchet::{Session, Header};
-    use x25519_dalek::{StaticSecret, PublicKey};
+    use freeq_sdk::ratchet::{Header, Session};
+    use x25519_dalek::{PublicKey, StaticSecret};
 
     fn pair() -> (Session, Session) {
         let ss = [42u8; 32];
         let bob_secret = StaticSecret::from([7u8; 32]);
         let bob_public = PublicKey::from(&bob_secret);
-        (Session::init_alice(ss, bob_public.to_bytes()), Session::init_bob(ss, [7u8; 32]))
+        (
+            Session::init_alice(ss, bob_public.to_bytes()),
+            Session::init_bob(ss, [7u8; 32]),
+        )
     }
 
     #[test]
@@ -355,7 +372,10 @@ mod ratchet_adversarial {
         }
         // Decrypting the 1002nd message requires skipping 1001 → must fail
         let result = b.decrypt(cts.last().unwrap());
-        assert!(result.is_err(), "Must reject >MAX_SKIP(1000) skipped messages");
+        assert!(
+            result.is_err(),
+            "Must reject >MAX_SKIP(1000) skipped messages"
+        );
     }
 
     #[test]
@@ -377,7 +397,10 @@ mod ratchet_adversarial {
         // Bob tries fork2 — same message number, different ciphertext
         // This SHOULD fail (replay/fork protection)
         let result = b.decrypt(&ct2);
-        assert!(result.is_err(), "Forked session ciphertext must not decrypt");
+        assert!(
+            result.is_err(),
+            "Forked session ciphertext must not decrypt"
+        );
     }
 
     #[test]
@@ -407,7 +430,9 @@ mod ratchet_adversarial {
         let result = b_old_session.decrypt(&ct_new);
         // BUG if old state can still decrypt — forward secrecy violated
         if result.is_ok() {
-            panic!("BUG: Old ratchet state (round 5) can decrypt new message (round 10) — forward secrecy violated");
+            panic!(
+                "BUG: Old ratchet state (round 5) can decrypt new message (round 10) — forward secrecy violated"
+            );
         }
     }
 
@@ -418,7 +443,11 @@ mod ratchet_adversarial {
 
     #[test]
     fn header_from_bytes_correct_length() {
-        let h = Header { ratchet_key: [1u8; 32], prev_chain_len: 5, msg_num: 10 };
+        let h = Header {
+            ratchet_key: [1u8; 32],
+            prev_chain_len: 5,
+            msg_num: 10,
+        };
         let bytes = h.to_bytes();
         assert_eq!(bytes.len(), 40);
         let h2 = Header::from_bytes(&bytes).unwrap();
@@ -432,7 +461,10 @@ mod ratchet_adversarial {
         let ss2 = [99u8; 32];
         let bob2_secret = StaticSecret::from([88u8; 32]);
         let bob2_public = PublicKey::from(&bob2_secret);
-        let (_, mut b2) = (Session::init_alice(ss2, bob2_public.to_bytes()), Session::init_bob(ss2, [88u8; 32]));
+        let (_, mut b2) = (
+            Session::init_alice(ss2, bob2_public.to_bytes()),
+            Session::init_bob(ss2, [88u8; 32]),
+        );
         let ct = a1.encrypt("wrong session").unwrap();
         assert!(b2.decrypt(&ct).is_err());
     }
@@ -491,7 +523,10 @@ mod irc_canonical {
         let m = Message::new("PRIVMSG", vec!["#ch", "hello\r\nQUIT"]);
         let s = m.to_string();
         // Serialized form must NOT contain raw CRLF (would be protocol injection)
-        assert!(!s.contains("\r\n"), "Serialized message must not contain CRLF: {s}");
+        assert!(
+            !s.contains("\r\n"),
+            "Serialized message must not contain CRLF: {s}"
+        );
     }
 
     #[test]
@@ -499,7 +534,10 @@ mod irc_canonical {
         let mut m = Message::new("CMD", vec![]);
         m.prefix = Some("nick\r\nQUIT".to_string());
         let s = m.to_string();
-        assert!(!s[..s.len()-2].contains("\r\n"), "Prefix must not contain CRLF");
+        assert!(
+            !s[..s.len() - 2].contains("\r\n"),
+            "Prefix must not contain CRLF"
+        );
     }
 
     #[test]
@@ -520,7 +558,10 @@ mod irc_canonical {
 
     #[test]
     fn many_params_no_blowup() {
-        let params = (0..500).map(|i| format!("p{i}")).collect::<Vec<_>>().join(" ");
+        let params = (0..500)
+            .map(|i| format!("p{i}"))
+            .collect::<Vec<_>>()
+            .join(" ");
         let m = Message::parse(&format!(":n CMD {params}"));
         assert!(m.is_some());
     }
@@ -573,7 +614,7 @@ mod irc_canonical {
 // ═══════════════════════════════════════════════════════════════
 
 mod auth_adversarial {
-    use freeq_sdk::auth::{self, KeySigner, ChallengeSigner, ChallengeResponse};
+    use freeq_sdk::auth::{self, ChallengeResponse, ChallengeSigner, KeySigner};
     use freeq_sdk::crypto::PrivateKey;
 
     #[test]
@@ -584,7 +625,10 @@ mod auth_adversarial {
         let s2 = KeySigner::new("did:key:b".into(), k2);
         let r1 = s1.respond(b"challenge").unwrap();
         let r2 = s2.respond(b"challenge").unwrap();
-        assert_ne!(r1.signature, r2.signature, "Different keys must produce different sigs");
+        assert_ne!(
+            r1.signature, r2.signature,
+            "Different keys must produce different sigs"
+        );
     }
 
     #[test]
@@ -597,7 +641,10 @@ mod auth_adversarial {
         let s2 = KeySigner::new("did:key:x".into(), k2);
         let r1 = s1.respond(b"challenge").unwrap();
         let r2 = s2.respond(b"challenge").unwrap();
-        assert_eq!(r1.signature, r2.signature, "Same key+challenge must produce same sig (ed25519)");
+        assert_eq!(
+            r1.signature, r2.signature,
+            "Same key+challenge must produce same sig (ed25519)"
+        );
     }
 
     #[test]
@@ -606,7 +653,10 @@ mod auth_adversarial {
         let s = KeySigner::new("did:key:x".into(), k);
         let r1 = s.respond(b"challenge_1").unwrap();
         let r2 = s.respond(b"challenge_2").unwrap();
-        assert_ne!(r1.signature, r2.signature, "Different challenges must produce different sigs");
+        assert_ne!(
+            r1.signature, r2.signature,
+            "Different challenges must produce different sigs"
+        );
     }
 
     #[test]
@@ -620,7 +670,8 @@ mod auth_adversarial {
     #[test]
     fn challenge_decode_extracts_fields() {
         use base64::Engine;
-        let raw = serde_json::json!({"session_id":"sess123","nonce":"nonce456","timestamp":1700000000});
+        let raw =
+            serde_json::json!({"session_id":"sess123","nonce":"nonce456","timestamp":1700000000});
         let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(serde_json::to_vec(&raw).unwrap());
         let challenge = auth::decode_challenge(&encoded).unwrap();
@@ -650,8 +701,12 @@ mod auth_adversarial {
     #[test]
     fn response_encoding_is_base64url() {
         let r = ChallengeResponse {
-            did: "did:plc:test".into(), signature: "sig==data".into(),
-            method: None, pds_url: None, dpop_proof: None, challenge_nonce: None,
+            did: "did:plc:test".into(),
+            signature: "sig==data".into(),
+            method: None,
+            pds_url: None,
+            dpop_proof: None,
+            challenge_nonce: None,
         };
         let encoded = auth::encode_response(&r);
         assert!(!encoded.contains('+'), "Must be URL-safe base64");
@@ -666,7 +721,10 @@ mod auth_adversarial {
 
 mod rate_limiter_adversarial {
     use freeq_sdk::bot::RateLimiter;
-    use std::sync::{Arc, atomic::{AtomicU32, Ordering}};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    };
     use std::time::Duration;
 
     #[test]
@@ -685,9 +743,14 @@ mod rate_limiter_adversarial {
                 }
             }));
         }
-        for h in handles { h.join().unwrap(); }
+        for h in handles {
+            h.join().unwrap();
+        }
         let total = allowed.load(Ordering::Relaxed);
-        assert!(total <= limit, "Concurrent allows ({total}) must not exceed limit ({limit})");
+        assert!(
+            total <= limit,
+            "Concurrent allows ({total}) must not exceed limit ({limit})"
+        );
     }
 
     #[test]
@@ -728,8 +791,11 @@ mod did_adversarial {
     fn authentication_keys_from_empty_doc() {
         let doc = DidDocument {
             id: "did:key:z6Mk...".into(),
-            also_known_as: vec![], verification_method: vec![],
-            authentication: vec![], assertion_method: vec![], service: vec![],
+            also_known_as: vec![],
+            verification_method: vec![],
+            authentication: vec![],
+            assertion_method: vec![],
+            service: vec![],
         };
         assert!(doc.authentication_keys().is_empty());
     }
@@ -739,8 +805,10 @@ mod did_adversarial {
         let doc = DidDocument {
             id: "did:plc:test".into(),
             also_known_as: vec!["https://evil.com".into(), "at://real.bsky".into()],
-            verification_method: vec![], authentication: vec![],
-            assertion_method: vec![], service: vec![],
+            verification_method: vec![],
+            authentication: vec![],
+            assertion_method: vec![],
+            service: vec![],
         };
         // Only at:// entries should be treated as AT handles
         assert!(doc.also_known_as.iter().any(|a| a.starts_with("at://")));
@@ -752,8 +820,10 @@ mod did_adversarial {
         let doc = DidDocument {
             id: "did:plc:test".into(),
             also_known_as: vec!["at://alice.bsky.social".into()],
-            verification_method: vec![], authentication: vec![],
-            assertion_method: vec![], service: vec![],
+            verification_method: vec![],
+            authentication: vec![],
+            assertion_method: vec![],
+            service: vec![],
         };
         let json = serde_json::to_string(&doc).unwrap();
         let doc2: DidDocument = serde_json::from_str(&json).unwrap();

@@ -11,24 +11,22 @@ use std::time::Duration;
 /// Checks every 500ms and panics with thread info on deadlock.
 fn start_deadlock_detector() {
     use std::thread;
-    thread::spawn(move || loop {
-        thread::sleep(Duration::from_millis(500));
-        let deadlocks = parking_lot::deadlock::check_deadlock();
-        if deadlocks.is_empty() {
-            continue;
-        }
-        eprintln!("!!! DEADLOCK DETECTED ({} threads):", deadlocks.len());
-        for (i, threads) in deadlocks.iter().enumerate() {
-            eprintln!("Deadlock #{i}:");
-            for t in threads {
-                eprintln!(
-                    "  Thread {:?}:\n{:?}",
-                    t.thread_id(),
-                    t.backtrace()
-                );
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_millis(500));
+            let deadlocks = parking_lot::deadlock::check_deadlock();
+            if deadlocks.is_empty() {
+                continue;
             }
+            eprintln!("!!! DEADLOCK DETECTED ({} threads):", deadlocks.len());
+            for (i, threads) in deadlocks.iter().enumerate() {
+                eprintln!("Deadlock #{i}:");
+                for t in threads {
+                    eprintln!("  Thread {:?}:\n{:?}", t.thread_id(), t.backtrace());
+                }
+            }
+            std::process::abort();
         }
-        std::process::abort();
     });
 }
 
@@ -62,7 +60,11 @@ async fn start_test_server_with_db(
         listen_addr: "127.0.0.1:0".to_string(),
         server_name: "test-server".to_string(),
         challenge_timeout_secs: 60,
-        db_path: if enable_db { Some(":memory:".to_string()) } else { None },
+        db_path: if enable_db {
+            Some(":memory:".to_string())
+        } else {
+            None
+        },
         ..Default::default()
     };
     let server = freeq_server::server::Server::with_resolver(config, resolver);
@@ -97,8 +99,7 @@ fn make_did_key_signer() -> (String, Arc<dyn ChallengeSigner>) {
     let private_key = PrivateKey::generate_ed25519();
     let multibase = private_key.public_key_multibase();
     let did = format!("did:key:{multibase}");
-    let signer: Arc<dyn ChallengeSigner> =
-        Arc::new(KeySigner::new(did.clone(), private_key));
+    let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(did.clone(), private_key));
     (did, signer)
 }
 
@@ -106,11 +107,7 @@ fn make_did_key_signer() -> (String, Arc<dyn ChallengeSigner>) {
 async fn connect_did_key(
     addr: std::net::SocketAddr,
     nick: &str,
-) -> (
-    String,
-    client::ClientHandle,
-    mpsc::Receiver<Event>,
-) {
+) -> (String, client::ClientHandle, mpsc::Receiver<Event>) {
     let (did, signer) = make_did_key_signer();
     let config = ConnectConfig {
         server_addr: addr.to_string(),
@@ -121,9 +118,27 @@ async fn connect_did_key(
     };
     let (handle, mut events) = client::connect(config, Some(signer));
 
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Authenticated { .. }), "Authenticated").await;
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Connected),
+        "Connected",
+    )
+    .await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Authenticated { .. }),
+        "Authenticated",
+    )
+    .await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Registered",
+    )
+    .await;
 
     (did, handle, events)
 }
@@ -142,8 +157,20 @@ async fn connect_guest(
     };
     let (handle, mut events) = client::connect(config, None);
 
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Connected),
+        "Connected",
+    )
+    .await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Registered",
+    )
+    .await;
 
     (handle, events)
 }
@@ -202,10 +229,7 @@ async fn expect_no_event(
     loop {
         match timeout(deadline.saturating_sub(start.elapsed()), events.recv()).await {
             Ok(Some(event)) => {
-                assert!(
-                    !predicate(&event),
-                    "Unexpected event received: {event:?}"
-                );
+                assert!(!predicate(&event), "Unexpected event received: {event:?}");
             }
             Ok(None) | Err(_) => return, // timeout = good, no matching event
         }
@@ -237,8 +261,7 @@ async fn did_key_auth_wrong_key_fails() {
     let did = format!("did:key:{multibase}");
 
     // Sign with wrong_key but claim real_key's DID
-    let signer: Arc<dyn ChallengeSigner> =
-        Arc::new(KeySigner::new(did.clone(), wrong_key));
+    let signer: Arc<dyn ChallengeSigner> = Arc::new(KeySigner::new(did.clone(), wrong_key));
 
     let config = ConnectConfig {
         server_addr: addr.to_string(),
@@ -250,7 +273,13 @@ async fn did_key_auth_wrong_key_fails() {
 
     let (_handle, mut events) = client::connect(config, Some(signer));
 
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Connected),
+        "Connected",
+    )
+    .await;
 
     // Should get SASL failure (904), not success
     expect_raw_line(&mut events, 2000, "904", "SASL failure").await;
@@ -328,7 +357,13 @@ async fn agent_class_in_whois() {
     // Connect bot and register as agent
     let (_did, bot_handle, mut bot_events) = connect_did_key(addr, "whobot").await;
     bot_handle.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER",
+    )
+    .await;
 
     // Connect observer
     let (obs_handle, mut obs_events) = connect_guest(addr, "observer").await;
@@ -430,9 +465,27 @@ async fn register_creator_msgsig(
         ..Default::default()
     };
     let (handle, mut events) = client::connect(config, Some(signer));
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Authenticated { .. }), "Authenticated").await;
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Connected),
+        "Connected",
+    )
+    .await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Authenticated { .. }),
+        "Authenticated",
+    )
+    .await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Registered",
+    )
+    .await;
 
     // Overwrite SDK's auto-MSGSIG with our known key
     let pubkey_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -644,7 +697,10 @@ async fn provenance_invalid_format() {
     let (addr, server_handle) = start_test_server(empty_resolver()).await;
     let (_did, handle, mut events) = connect_did_key(addr, "badfmt").await;
 
-    handle.raw("PROVENANCE :not-valid-json-or-base64!!!").await.unwrap();
+    handle
+        .raw("PROVENANCE :not-valid-json-or-base64!!!")
+        .await
+        .unwrap();
 
     expect_raw_line(
         &mut events,
@@ -691,16 +747,34 @@ async fn presence_sets_away_for_non_active_states() {
 
     // Both join a channel
     bot_handle.join("#test").await.unwrap();
-    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+    expect_event(
+        &mut bot_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bot joined",
+    )
+    .await;
     obs_handle.join("#test").await.unwrap();
-    expect_event(&mut obs_events, 2000, |e| matches!(e, Event::Joined { .. }), "Obs joined").await;
+    expect_event(
+        &mut obs_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Obs joined",
+    )
+    .await;
 
     // Bot sets presence to executing (non-active → should trigger AWAY)
     bot_handle
         .set_presence("blocked_on_permission", Some("Waiting for approval"), None)
         .await
         .unwrap();
-    expect_raw_line(&mut bot_events, 2000, "Presence updated", "PRESENCE confirmation").await;
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "Presence updated",
+        "PRESENCE confirmation",
+    )
+    .await;
 
     // Small delay for AWAY state to propagate
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -722,11 +796,23 @@ async fn presence_online_clears_away() {
 
     // Set to executing (away)
     handle.set_presence("executing", None, None).await.unwrap();
-    expect_raw_line(&mut events, 2000, "Presence updated: executing", "PRESENCE executing").await;
+    expect_raw_line(
+        &mut events,
+        2000,
+        "Presence updated: executing",
+        "PRESENCE executing",
+    )
+    .await;
 
     // Clear back to online
     handle.set_presence("online", None, None).await.unwrap();
-    expect_raw_line(&mut events, 2000, "Presence updated: online", "PRESENCE online").await;
+    expect_raw_line(
+        &mut events,
+        2000,
+        "Presence updated: online",
+        "PRESENCE online",
+    )
+    .await;
 
     handle.quit(None).await.unwrap();
     server_handle.abort();
@@ -779,20 +865,41 @@ async fn agent_and_guest_coexist_in_channel() {
     // Connect agent
     let (_did, bot_handle, mut bot_events) = connect_did_key(addr, "chanbot").await;
     bot_handle.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER",
+    )
+    .await;
 
     // Connect guest
     let (guest_handle, mut guest_events) = connect_guest(addr, "changuest").await;
 
     // Both join #test
     bot_handle.join("#agenttest").await.unwrap();
-    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+    expect_event(
+        &mut bot_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bot joined",
+    )
+    .await;
 
     guest_handle.join("#agenttest").await.unwrap();
-    expect_event(&mut guest_events, 2000, |e| matches!(e, Event::Joined { .. }), "Guest joined").await;
+    expect_event(
+        &mut guest_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Guest joined",
+    )
+    .await;
 
     // Bot sends a message
-    bot_handle.privmsg("#agenttest", "Hello from agent!").await.unwrap();
+    bot_handle
+        .privmsg("#agenttest", "Hello from agent!")
+        .await
+        .unwrap();
 
     // Guest should receive it
     let msg = expect_event(
@@ -805,7 +912,10 @@ async fn agent_and_guest_coexist_in_channel() {
     assert!(matches!(msg, Event::Message { from, .. } if from == "chanbot"));
 
     // Guest sends a message back
-    guest_handle.privmsg("#agenttest", "Hello from guest!").await.unwrap();
+    guest_handle
+        .privmsg("#agenttest", "Hello from guest!")
+        .await
+        .unwrap();
 
     // Bot should receive it
     let msg = expect_event(
@@ -835,11 +945,23 @@ async fn multiple_agents_different_classes() {
     expect_raw_line(&mut ev1, 2000, "registered as agent", "Bot1 registered").await;
 
     bot2.register_agent("external_agent").await.unwrap();
-    expect_raw_line(&mut ev2, 2000, "registered as external_agent", "Bot2 registered").await;
+    expect_raw_line(
+        &mut ev2,
+        2000,
+        "registered as external_agent",
+        "Bot2 registered",
+    )
+    .await;
 
     // WHOIS each other
     bot1.raw("WHOIS agent2").await.unwrap();
-    expect_raw_line(&mut ev1, 2000, "actor_class=external_agent", "WHOIS agent2 class").await;
+    expect_raw_line(
+        &mut ev1,
+        2000,
+        "actor_class=external_agent",
+        "WHOIS agent2 class",
+    )
+    .await;
 
     bot2.raw("WHOIS agent1").await.unwrap();
     expect_raw_line(&mut ev2, 2000, "actor_class=agent", "WHOIS agent1 class").await;
@@ -870,21 +992,39 @@ async fn full_agent_lifecycle() {
         }))
         .await
         .unwrap();
-    expect_raw_line(&mut events, 2000, "Provenance stored (unverified)", "Step 2: provenance").await;
+    expect_raw_line(
+        &mut events,
+        2000,
+        "Provenance stored (unverified)",
+        "Step 2: provenance",
+    )
+    .await;
 
     // 3. Set presence
     handle
         .set_presence("active", Some("Running lifecycle test"), None)
         .await
         .unwrap();
-    expect_raw_line(&mut events, 2000, "Presence updated: active", "Step 3: presence").await;
+    expect_raw_line(
+        &mut events,
+        2000,
+        "Presence updated: active",
+        "Step 3: presence",
+    )
+    .await;
 
     // 4. Send heartbeat
     handle.send_heartbeat("active", 30).await.unwrap();
 
     // 5. Join a channel and communicate
     handle.join("#lifecycle").await.unwrap();
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Joined { .. }), "Step 5: joined").await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Step 5: joined",
+    )
+    .await;
 
     handle
         .privmsg("#lifecycle", "Lifecycle test complete")
@@ -896,11 +1036,23 @@ async fn full_agent_lifecycle() {
         .set_presence("executing", Some("Processing task"), Some("task-42"))
         .await
         .unwrap();
-    expect_raw_line(&mut events, 2000, "Presence updated: executing", "Step 6: executing").await;
+    expect_raw_line(
+        &mut events,
+        2000,
+        "Presence updated: executing",
+        "Step 6: executing",
+    )
+    .await;
 
     // 7. WHOIS self to verify everything
     handle.raw("WHOIS lifecycle").await.unwrap();
-    expect_raw_line(&mut events, 2000, "actor_class=agent", "Step 7: WHOIS actor_class").await;
+    expect_raw_line(
+        &mut events,
+        2000,
+        "actor_class=agent",
+        "Step 7: WHOIS actor_class",
+    )
+    .await;
     expect_raw_line(&mut events, 2000, "318", "Step 7: End of WHOIS").await;
 
     handle.quit(None).await.unwrap();
@@ -963,26 +1115,65 @@ async fn governance_pause_resume() {
     // Agent
     let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "govbot").await;
     bot_handle.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER",
+    )
+    .await;
 
     // Both join channel — op gets ops as first joiner
     op_handle.join("#governed").await.unwrap();
-    expect_event(&mut op_events, 2000, |e| matches!(e, Event::Joined { .. }), "Op joined").await;
+    expect_event(
+        &mut op_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Op joined",
+    )
+    .await;
     bot_handle.join("#governed").await.unwrap();
-    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+    expect_event(
+        &mut bot_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bot joined",
+    )
+    .await;
 
     // Op pauses the bot
-    op_handle.pause_agent("govbot", Some("maintenance")).await.unwrap();
+    op_handle
+        .pause_agent("govbot", Some("maintenance"))
+        .await
+        .unwrap();
 
     // Bot should receive governance TAGMSG
-    expect_raw_line(&mut bot_events, 2000, "governance=pause", "Bot receives PAUSE").await;
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "governance=pause",
+        "Bot receives PAUSE",
+    )
+    .await;
 
     // Op should see the channel notice
-    expect_raw_line(&mut op_events, 2000, "paused by operator", "Channel PAUSE notice").await;
+    expect_raw_line(
+        &mut op_events,
+        2000,
+        "paused by operator",
+        "Channel PAUSE notice",
+    )
+    .await;
 
     // Op resumes the bot
     op_handle.resume_agent("govbot").await.unwrap();
-    expect_raw_line(&mut bot_events, 2000, "governance=resume", "Bot receives RESUME").await;
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "governance=resume",
+        "Bot receives RESUME",
+    )
+    .await;
 
     bot_handle.quit(None).await.unwrap();
     op_handle.quit(None).await.unwrap();
@@ -997,18 +1188,42 @@ async fn governance_revoke_disconnects() {
     let (_op_did, op_handle, mut op_events) = connect_did_key(addr, "revoker").await;
     let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "revbot").await;
     bot_handle.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER",
+    )
+    .await;
 
     op_handle.join("#revtest").await.unwrap();
-    expect_event(&mut op_events, 2000, |e| matches!(e, Event::Joined { .. }), "Op joined").await;
+    expect_event(
+        &mut op_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Op joined",
+    )
+    .await;
     bot_handle.join("#revtest").await.unwrap();
-    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+    expect_event(
+        &mut bot_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bot joined",
+    )
+    .await;
 
     // Op revokes the bot
     op_handle.revoke_agent("revbot", Some("bye")).await.unwrap();
 
     // Bot should receive ERROR (force disconnect)
-    expect_raw_line(&mut bot_events, 2000, "ERROR", "Bot receives ERROR/disconnect").await;
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "ERROR",
+        "Bot receives ERROR/disconnect",
+    )
+    .await;
 
     op_handle.quit(None).await.unwrap();
     server_handle.abort();
@@ -1027,10 +1242,22 @@ async fn governance_requires_op() {
 
     // user2 creates a channel (gets ops)
     user2.join("#botchan").await.unwrap();
-    expect_event(&mut ev2, 2000, |e| matches!(e, Event::Joined { .. }), "User2 joined").await;
+    expect_event(
+        &mut ev2,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "User2 joined",
+    )
+    .await;
     // user1 joins (not op)
     user1.join("#botchan").await.unwrap();
-    expect_event(&mut ev1, 2000, |e| matches!(e, Event::Joined { .. }), "User1 joined").await;
+    expect_event(
+        &mut ev1,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "User1 joined",
+    )
+    .await;
 
     // user1 tries to pause user2 — should fail
     user1.pause_agent("target", None).await.unwrap();
@@ -1049,18 +1276,45 @@ async fn approval_request_and_grant() {
     let (_op_did, op_handle, mut op_events) = connect_did_key(addr, "approver").await;
     let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "reqbot").await;
     bot_handle.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER",
+    )
+    .await;
 
     op_handle.join("#approval").await.unwrap();
-    expect_event(&mut op_events, 2000, |e| matches!(e, Event::Joined { .. }), "Op joined").await;
+    expect_event(
+        &mut op_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Op joined",
+    )
+    .await;
     bot_handle.join("#approval").await.unwrap();
-    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+    expect_event(
+        &mut bot_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bot joined",
+    )
+    .await;
 
     // Bot requests deploy approval
-    bot_handle.request_approval("#approval", "deploy", Some("landing-page")).await.unwrap();
+    bot_handle
+        .request_approval("#approval", "deploy", Some("landing-page"))
+        .await
+        .unwrap();
 
     // Bot gets confirmation
-    expect_raw_line(&mut bot_events, 2000, "Approval requested", "Request confirmed").await;
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "Approval requested",
+        "Request confirmed",
+    )
+    .await;
 
     // Op sees notification in channel
     expect_raw_line(&mut op_events, 2000, "requests approval", "Op sees request").await;
@@ -1069,7 +1323,13 @@ async fn approval_request_and_grant() {
     op_handle.approve_agent("reqbot", "deploy").await.unwrap();
 
     // Bot gets approval granted TAGMSG
-    expect_raw_line(&mut bot_events, 2000, "approval_granted", "Bot gets approval").await;
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "approval_granted",
+        "Bot gets approval",
+    )
+    .await;
 
     // Channel sees approval notice
     expect_raw_line(&mut op_events, 2000, "approved", "Channel sees approval").await;
@@ -1087,19 +1347,49 @@ async fn approval_request_and_deny() {
     let (_op_did, op_handle, mut op_events) = connect_did_key(addr, "denier").await;
     let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "denybot").await;
     bot_handle.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER",
+    )
+    .await;
 
     op_handle.join("#denytest").await.unwrap();
-    expect_event(&mut op_events, 2000, |e| matches!(e, Event::Joined { .. }), "Op joined").await;
+    expect_event(
+        &mut op_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Op joined",
+    )
+    .await;
     bot_handle.join("#denytest").await.unwrap();
-    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+    expect_event(
+        &mut bot_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bot joined",
+    )
+    .await;
 
-    bot_handle.request_approval("#denytest", "deploy", None).await.unwrap();
-    expect_raw_line(&mut bot_events, 2000, "Approval requested", "Request confirmed").await;
+    bot_handle
+        .request_approval("#denytest", "deploy", None)
+        .await
+        .unwrap();
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "Approval requested",
+        "Request confirmed",
+    )
+    .await;
     expect_raw_line(&mut op_events, 2000, "requests approval", "Op sees request").await;
 
     // Op denies
-    op_handle.deny_agent("denybot", "deploy", Some("not ready")).await.unwrap();
+    op_handle
+        .deny_agent("denybot", "deploy", Some("not ready"))
+        .await
+        .unwrap();
 
     // Bot gets denial
     expect_raw_line(&mut bot_events, 2000, "approval_denied", "Bot gets denial").await;
@@ -1117,9 +1407,19 @@ async fn presence_all_states() {
     let (_did, handle, mut events) = connect_did_key(addr, "allstates").await;
 
     let states = [
-        "online", "idle", "active", "executing", "waiting_for_input",
-        "blocked_on_permission", "blocked_on_budget", "degraded",
-        "paused", "sandboxed", "rate_limited", "revoked", "offline",
+        "online",
+        "idle",
+        "active",
+        "executing",
+        "waiting_for_input",
+        "blocked_on_permission",
+        "blocked_on_budget",
+        "degraded",
+        "paused",
+        "sandboxed",
+        "rate_limited",
+        "revoked",
+        "offline",
     ];
 
     for state in &states {
@@ -1151,19 +1451,46 @@ async fn coordination_create_task() {
     let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "taskbot").await;
     let (_user_did, user_handle, mut user_events) = connect_did_key(addr, "watcher").await;
     bot_handle.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER",
+    )
+    .await;
 
     bot_handle.join("#tasks").await.unwrap();
-    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+    expect_event(
+        &mut bot_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bot joined",
+    )
+    .await;
     user_handle.join("#tasks").await.unwrap();
-    expect_event(&mut user_events, 2000, |e| matches!(e, Event::Joined { .. }), "User joined").await;
+    expect_event(
+        &mut user_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "User joined",
+    )
+    .await;
 
     // Bot creates a task
-    let task_id = bot_handle.create_task("#tasks", "Build a todo app").await.unwrap();
+    let task_id = bot_handle
+        .create_task("#tasks", "Build a todo app")
+        .await
+        .unwrap();
     assert!(!task_id.is_empty(), "Task ID should be non-empty");
 
     // User sees the human-readable PRIVMSG
-    expect_raw_line(&mut user_events, 2000, "New task: Build a todo app", "User sees task creation").await;
+    expect_raw_line(
+        &mut user_events,
+        2000,
+        "New task: Build a todo app",
+        "User sees task creation",
+    )
+    .await;
 
     bot_handle.quit(None).await.unwrap();
     user_handle.quit(None).await.unwrap();
@@ -1178,35 +1505,91 @@ async fn coordination_full_task_lifecycle() {
     let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "lifecycle").await;
     let (_user_did, user_handle, mut user_events) = connect_did_key(addr, "observer").await;
     bot_handle.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER",
+    )
+    .await;
 
     bot_handle.join("#lifecycle").await.unwrap();
-    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+    expect_event(
+        &mut bot_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bot joined",
+    )
+    .await;
     user_handle.join("#lifecycle").await.unwrap();
-    expect_event(&mut user_events, 2000, |e| matches!(e, Event::Joined { .. }), "User joined").await;
+    expect_event(
+        &mut user_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "User joined",
+    )
+    .await;
 
     // Create task
-    let task_id = bot_handle.create_task("#lifecycle", "Build something").await.unwrap();
+    let task_id = bot_handle
+        .create_task("#lifecycle", "Build something")
+        .await
+        .unwrap();
     expect_raw_line(&mut user_events, 3000, "New task", "User sees task").await;
 
     // Update task through phases (small delays to avoid message ordering issues)
     tokio::time::sleep(Duration::from_millis(50)).await;
-    bot_handle.update_task("#lifecycle", &task_id, "designing", "Chose React stack").await.unwrap();
-    expect_raw_line(&mut user_events, 3000, "designing", "User sees designing phase").await;
+    bot_handle
+        .update_task("#lifecycle", &task_id, "designing", "Chose React stack")
+        .await
+        .unwrap();
+    expect_raw_line(
+        &mut user_events,
+        3000,
+        "designing",
+        "User sees designing phase",
+    )
+    .await;
 
     tokio::time::sleep(Duration::from_millis(50)).await;
-    bot_handle.update_task("#lifecycle", &task_id, "building", "Writing code").await.unwrap();
-    expect_raw_line(&mut user_events, 3000, "building", "User sees building phase").await;
+    bot_handle
+        .update_task("#lifecycle", &task_id, "building", "Writing code")
+        .await
+        .unwrap();
+    expect_raw_line(
+        &mut user_events,
+        3000,
+        "building",
+        "User sees building phase",
+    )
+    .await;
 
     // Attach evidence
     tokio::time::sleep(Duration::from_millis(50)).await;
-    bot_handle.attach_evidence("#lifecycle", &task_id, "test_result", "12/12 passed", None).await.unwrap();
+    bot_handle
+        .attach_evidence("#lifecycle", &task_id, "test_result", "12/12 passed", None)
+        .await
+        .unwrap();
     expect_raw_line(&mut user_events, 3000, "12/12 passed", "User sees evidence").await;
 
     // Complete task
     tokio::time::sleep(Duration::from_millis(50)).await;
-    bot_handle.complete_task("#lifecycle", &task_id, "All done", Some("https://example.com")).await.unwrap();
-    expect_raw_line(&mut user_events, 3000, "Task complete", "User sees completion").await;
+    bot_handle
+        .complete_task(
+            "#lifecycle",
+            &task_id,
+            "All done",
+            Some("https://example.com"),
+        )
+        .await
+        .unwrap();
+    expect_raw_line(
+        &mut user_events,
+        3000,
+        "Task complete",
+        "User sees completion",
+    )
+    .await;
 
     bot_handle.quit(None).await.unwrap();
     user_handle.quit(None).await.unwrap();
@@ -1221,17 +1604,41 @@ async fn coordination_task_failure() {
     let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "failbot").await;
     let (_user_did, user_handle, mut user_events) = connect_did_key(addr, "failwatch").await;
     bot_handle.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER",
+    )
+    .await;
 
     bot_handle.join("#failtest").await.unwrap();
-    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+    expect_event(
+        &mut bot_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bot joined",
+    )
+    .await;
     user_handle.join("#failtest").await.unwrap();
-    expect_event(&mut user_events, 2000, |e| matches!(e, Event::Joined { .. }), "User joined").await;
+    expect_event(
+        &mut user_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "User joined",
+    )
+    .await;
 
-    let task_id = bot_handle.create_task("#failtest", "Doomed task").await.unwrap();
+    let task_id = bot_handle
+        .create_task("#failtest", "Doomed task")
+        .await
+        .unwrap();
     expect_raw_line(&mut user_events, 2000, "New task", "User sees task").await;
 
-    bot_handle.fail_task("#failtest", &task_id, "Out of memory").await.unwrap();
+    bot_handle
+        .fail_task("#failtest", &task_id, "Out of memory")
+        .await
+        .unwrap();
     expect_raw_line(&mut user_events, 2000, "Task failed", "User sees failure").await;
 
     bot_handle.quit(None).await.unwrap();
@@ -1246,16 +1653,34 @@ async fn coordination_events_rest_api() {
 
     let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "restbot").await;
     bot_handle.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER",
+    )
+    .await;
 
     bot_handle.join("#resttest").await.unwrap();
-    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+    expect_event(
+        &mut bot_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bot joined",
+    )
+    .await;
 
-    let task_id = bot_handle.create_task("#resttest", "REST test task").await.unwrap();
+    let task_id = bot_handle
+        .create_task("#resttest", "REST test task")
+        .await
+        .unwrap();
     // Wait for processing
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    bot_handle.update_task("#resttest", &task_id, "building", "Making it").await.unwrap();
+    bot_handle
+        .update_task("#resttest", &task_id, "building", "Making it")
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Query events via REST
@@ -1268,7 +1693,12 @@ async fn coordination_events_rest_api() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     let events = body["events"].as_array().unwrap();
-    assert!(events.len() >= 2, "Expected at least 2 events, got {}: {:?}", events.len(), events);
+    assert!(
+        events.len() >= 2,
+        "Expected at least 2 events, got {}: {:?}",
+        events.len(),
+        events
+    );
 
     // Query task detail
     let resp = client
@@ -1291,19 +1721,49 @@ async fn coordination_evidence_rest_api() {
 
     let (_bot_did, bot_handle, mut bot_events) = connect_did_key(addr, "evbot").await;
     bot_handle.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut bot_events, 2000, "registered as agent", "AGENT REGISTER").await;
+    expect_raw_line(
+        &mut bot_events,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER",
+    )
+    .await;
 
     bot_handle.join("#evidence").await.unwrap();
-    expect_event(&mut bot_events, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+    expect_event(
+        &mut bot_events,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bot joined",
+    )
+    .await;
 
-    let task_id = bot_handle.create_task("#evidence", "Evidence test").await.unwrap();
+    let task_id = bot_handle
+        .create_task("#evidence", "Evidence test")
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    bot_handle.attach_evidence("#evidence", &task_id, "test_result", "All pass", Some("https://ci.example.com")).await.unwrap();
-    bot_handle.attach_evidence("#evidence", &task_id, "deploy_log", "Deployed", None).await.unwrap();
+    bot_handle
+        .attach_evidence(
+            "#evidence",
+            &task_id,
+            "test_result",
+            "All pass",
+            Some("https://ci.example.com"),
+        )
+        .await
+        .unwrap();
+    bot_handle
+        .attach_evidence("#evidence", &task_id, "deploy_log", "Deployed", None)
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    bot_handle.complete_task("#evidence", &task_id, "Done", None).await.unwrap();
+    bot_handle
+        .complete_task("#evidence", &task_id, "Done", None)
+        .await
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Check task detail
@@ -1316,7 +1776,13 @@ async fn coordination_evidence_rest_api() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "task_complete");
     let evidence = body["evidence"].as_array().unwrap();
-    assert_eq!(evidence.len(), 2, "Expected 2 evidence items, got {}: {:?}", evidence.len(), evidence);
+    assert_eq!(
+        evidence.len(),
+        2,
+        "Expected 2 evidence items, got {}: {:?}",
+        evidence.len(),
+        evidence
+    );
 
     bot_handle.quit(None).await.unwrap();
     server_handle.abort();
@@ -1354,7 +1820,13 @@ default = ["post_message", "read_channel"]
 heartbeat_interval_seconds = 15
 "#;
     handle.submit_manifest(manifest_toml).await.unwrap();
-    expect_raw_line(&mut events, 2000, "Manifest registered", "Manifest accepted").await;
+    expect_raw_line(
+        &mut events,
+        2000,
+        "Manifest registered",
+        "Manifest accepted",
+    )
+    .await;
 
     handle.quit(None).await.unwrap();
     server_handle.abort();
@@ -1368,27 +1840,69 @@ async fn spawn_and_despawn() {
     let (_did, parent, mut parent_ev) = connect_did_key(addr, "factory").await;
     let (_did2, watcher, mut watch_ev) = connect_did_key(addr, "watcher2").await;
     parent.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut parent_ev, 2000, "registered as agent", "AGENT REGISTER").await;
+    expect_raw_line(
+        &mut parent_ev,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER",
+    )
+    .await;
 
     parent.join("#spawn").await.unwrap();
-    expect_event(&mut parent_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Parent joined").await;
+    expect_event(
+        &mut parent_ev,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Parent joined",
+    )
+    .await;
     watcher.join("#spawn").await.unwrap();
-    expect_event(&mut watch_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Watcher joined").await;
+    expect_event(
+        &mut watch_ev,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Watcher joined",
+    )
+    .await;
 
     // Spawn a child agent
-    parent.spawn_agent("#spawn", "qa-worker", &["post_message", "call_tool"], Some(60), Some("TASK123")).await.unwrap();
+    parent
+        .spawn_agent(
+            "#spawn",
+            "qa-worker",
+            &["post_message", "call_tool"],
+            Some(60),
+            Some("TASK123"),
+        )
+        .await
+        .unwrap();
     expect_raw_line(&mut parent_ev, 2000, "Spawned qa-worker", "Spawn confirmed").await;
 
     // Watcher sees child JOIN
     expect_raw_line(&mut watch_ev, 2000, "qa-worker", "Watcher sees child JOIN").await;
 
     // Parent sends message as child
-    parent.send_as_child("qa-worker", "#spawn", "Running tests...").await.unwrap();
-    expect_raw_line(&mut watch_ev, 2000, "Running tests", "Watcher sees child message").await;
+    parent
+        .send_as_child("qa-worker", "#spawn", "Running tests...")
+        .await
+        .unwrap();
+    expect_raw_line(
+        &mut watch_ev,
+        2000,
+        "Running tests",
+        "Watcher sees child message",
+    )
+    .await;
 
     // Despawn
     parent.despawn_agent("qa-worker").await.unwrap();
-    expect_raw_line(&mut parent_ev, 2000, "Despawned qa-worker", "Despawn confirmed").await;
+    expect_raw_line(
+        &mut parent_ev,
+        2000,
+        "Despawned qa-worker",
+        "Despawn confirmed",
+    )
+    .await;
 
     // Watcher sees QUIT
     expect_raw_line(&mut watch_ev, 2000, "qa-worker", "Watcher sees child QUIT").await;
@@ -1406,14 +1920,35 @@ async fn spawn_nick_conflict() {
     let (_did, parent, mut parent_ev) = connect_did_key(addr, "spawner").await;
     let (_did2, _other, _other_ev) = connect_did_key(addr, "taken").await;
     parent.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut parent_ev, 2000, "registered as agent", "AGENT REGISTER").await;
+    expect_raw_line(
+        &mut parent_ev,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER",
+    )
+    .await;
 
     parent.join("#nicktest").await.unwrap();
-    expect_event(&mut parent_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Joined").await;
+    expect_event(
+        &mut parent_ev,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Joined",
+    )
+    .await;
 
     // Try to spawn with an existing nick
-    parent.spawn_agent("#nicktest", "taken", &[], None, None).await.unwrap();
-    expect_raw_line(&mut parent_ev, 2000, "already in use", "Nick conflict detected").await;
+    parent
+        .spawn_agent("#nicktest", "taken", &[], None, None)
+        .await
+        .unwrap();
+    expect_raw_line(
+        &mut parent_ev,
+        2000,
+        "already in use",
+        "Nick conflict detected",
+    )
+    .await;
 
     parent.quit(None).await.unwrap();
     server_handle.abort();
@@ -1427,15 +1962,36 @@ async fn spawn_ttl_expiry() {
     let (_did, parent, mut parent_ev) = connect_did_key(addr, "ttlparent").await;
     let (_did2, watcher, mut watch_ev) = connect_did_key(addr, "ttlwatch").await;
     parent.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut parent_ev, 2000, "registered as agent", "AGENT REGISTER").await;
+    expect_raw_line(
+        &mut parent_ev,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER",
+    )
+    .await;
 
     parent.join("#ttltest").await.unwrap();
-    expect_event(&mut parent_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Parent joined").await;
+    expect_event(
+        &mut parent_ev,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Parent joined",
+    )
+    .await;
     watcher.join("#ttltest").await.unwrap();
-    expect_event(&mut watch_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Watcher joined").await;
+    expect_event(
+        &mut watch_ev,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Watcher joined",
+    )
+    .await;
 
     // Spawn with 1-second TTL
-    parent.spawn_agent("#ttltest", "ephemeral", &[], Some(1), None).await.unwrap();
+    parent
+        .spawn_agent("#ttltest", "ephemeral", &[], Some(1), None)
+        .await
+        .unwrap();
     expect_raw_line(&mut parent_ev, 2000, "Spawned ephemeral", "Spawn confirmed").await;
     expect_raw_line(&mut watch_ev, 2000, "ephemeral", "Watcher sees spawn JOIN").await;
 
@@ -1476,7 +2032,13 @@ default = ["post_message"]
 heartbeat_interval_seconds = 30
 "#;
     handle.submit_manifest(manifest_toml).await.unwrap();
-    expect_raw_line(&mut events, 2000, "Manifest registered", "Manifest accepted").await;
+    expect_raw_line(
+        &mut events,
+        2000,
+        "Manifest registered",
+        "Manifest accepted",
+    )
+    .await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // List manifests
@@ -1502,13 +2064,34 @@ async fn spawned_agents_rest_api() {
 
     let (_did, parent, mut parent_ev) = connect_did_key(addr, "restspawn").await;
     parent.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut parent_ev, 2000, "registered as agent", "AGENT REGISTER").await;
+    expect_raw_line(
+        &mut parent_ev,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER",
+    )
+    .await;
 
     parent.join("#restspawnch").await.unwrap();
-    expect_event(&mut parent_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Joined").await;
+    expect_event(
+        &mut parent_ev,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Joined",
+    )
+    .await;
 
-    parent.spawn_agent("#restspawnch", "rest-child", &["post_message"], None, None).await.unwrap();
-    expect_raw_line(&mut parent_ev, 2000, "Spawned rest-child", "Spawn confirmed").await;
+    parent
+        .spawn_agent("#restspawnch", "rest-child", &["post_message"], None, None)
+        .await
+        .unwrap();
+    expect_raw_line(
+        &mut parent_ev,
+        2000,
+        "Spawned rest-child",
+        "Spawn confirmed",
+    )
+    .await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let client = reqwest::Client::new();
@@ -1538,15 +2121,29 @@ async fn budget_set_and_query() {
 
     let (_did, op, mut op_ev) = connect_did_key(addr, "budgetop").await;
     op.join("#budgettest").await.unwrap();
-    expect_event(&mut op_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Joined").await;
+    expect_event(
+        &mut op_ev,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Joined",
+    )
+    .await;
 
     // Set budget
-    op.set_budget("#budgettest", 50.0, "usd", "per_day", "did:plc:sponsor").await.unwrap();
+    op.set_budget("#budgettest", 50.0, "usd", "per_day", "did:plc:sponsor")
+        .await
+        .unwrap();
     expect_raw_line(&mut op_ev, 2000, "Budget set", "Budget set confirmed").await;
 
     // Query budget
     op.query_budget("#budgettest").await.unwrap();
-    expect_raw_line(&mut op_ev, 2000, "0.00/50.00 usd", "Budget query shows 0 spend").await;
+    expect_raw_line(
+        &mut op_ev,
+        2000,
+        "0.00/50.00 usd",
+        "Budget query shows 0 spend",
+    )
+    .await;
 
     op.quit(None).await.unwrap();
     server_handle.abort();
@@ -1562,14 +2159,30 @@ async fn spend_reporting() {
     expect_raw_line(&mut bot_ev, 2000, "registered as agent", "AGENT REGISTER").await;
 
     bot.join("#spendtest").await.unwrap();
-    expect_event(&mut bot_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Joined").await;
+    expect_event(
+        &mut bot_ev,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Joined",
+    )
+    .await;
 
     // Set budget first
-    bot.set_budget("#spendtest", 10.0, "usd", "per_day", "did:plc:sponsor").await.unwrap();
+    bot.set_budget("#spendtest", 10.0, "usd", "per_day", "did:plc:sponsor")
+        .await
+        .unwrap();
     expect_raw_line(&mut bot_ev, 2000, "Budget set", "Budget set").await;
 
     // Report spend
-    bot.report_spend("#spendtest", 1.50, "usd", "claude-sonnet-4-20250514: 500 tokens", None).await.unwrap();
+    bot.report_spend(
+        "#spendtest",
+        1.50,
+        "usd",
+        "claude-sonnet-4-20250514: 500 tokens",
+        None,
+    )
+    .await
+    .unwrap();
     expect_raw_line(&mut bot_ev, 2000, "Recorded: 1.5", "Spend recorded").await;
 
     // Query to verify
@@ -1591,21 +2204,39 @@ async fn budget_warning_threshold() {
     expect_raw_line(&mut bot_ev, 2000, "registered as agent", "AGENT REGISTER").await;
 
     bot.join("#warntest").await.unwrap();
-    expect_event(&mut bot_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Bot joined").await;
+    expect_event(
+        &mut bot_ev,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Bot joined",
+    )
+    .await;
     watcher.join("#warntest").await.unwrap();
-    expect_event(&mut watch_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Watcher joined").await;
+    expect_event(
+        &mut watch_ev,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Watcher joined",
+    )
+    .await;
 
     // Set budget with 0.8 warn threshold (default)
-    bot.set_budget("#warntest", 10.0, "usd", "per_day", "did:plc:sponsor").await.unwrap();
+    bot.set_budget("#warntest", 10.0, "usd", "per_day", "did:plc:sponsor")
+        .await
+        .unwrap();
     expect_raw_line(&mut bot_ev, 2000, "Budget set", "Budget set").await;
 
     // Spend below threshold
-    bot.report_spend("#warntest", 7.0, "usd", "big call", None).await.unwrap();
+    bot.report_spend("#warntest", 7.0, "usd", "big call", None)
+        .await
+        .unwrap();
     expect_raw_line(&mut bot_ev, 2000, "Recorded", "Spend 1 recorded").await;
 
     // This spend should cross the 80% threshold (7.0 + 2.0 = 9.0 = 90%)
     tokio::time::sleep(Duration::from_millis(50)).await;
-    bot.report_spend("#warntest", 2.0, "usd", "another call", None).await.unwrap();
+    bot.report_spend("#warntest", 2.0, "usd", "another call", None)
+        .await
+        .unwrap();
 
     // Watcher should see the warning
     expect_raw_line(&mut watch_ev, 3000, "Budget", "Watcher sees budget warning").await;
@@ -1625,17 +2256,33 @@ async fn budget_hard_limit_blocks() {
     expect_raw_line(&mut bot_ev, 2000, "registered as agent", "AGENT REGISTER").await;
 
     bot.join("#limitest").await.unwrap();
-    expect_event(&mut bot_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Joined").await;
+    expect_event(
+        &mut bot_ev,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Joined",
+    )
+    .await;
 
     // Set a small budget
-    bot.set_budget("#limitest", 5.0, "usd", "per_day", "did:plc:sponsor").await.unwrap();
+    bot.set_budget("#limitest", 5.0, "usd", "per_day", "did:plc:sponsor")
+        .await
+        .unwrap();
     expect_raw_line(&mut bot_ev, 2000, "Budget set", "Budget set").await;
 
     // Exceed the budget
-    bot.report_spend("#limitest", 6.0, "usd", "expensive call", None).await.unwrap();
+    bot.report_spend("#limitest", 6.0, "usd", "expensive call", None)
+        .await
+        .unwrap();
 
     // Bot should receive budget_exceeded governance signal
-    expect_raw_line(&mut bot_ev, 3000, "budget_exceeded", "Bot receives budget block signal").await;
+    expect_raw_line(
+        &mut bot_ev,
+        3000,
+        "budget_exceeded",
+        "Bot receives budget block signal",
+    )
+    .await;
 
     bot.quit(None).await.unwrap();
     server_handle.abort();
@@ -1651,13 +2298,23 @@ async fn budget_rest_api() {
     expect_raw_line(&mut bot_ev, 2000, "registered as agent", "AGENT REGISTER").await;
 
     bot.join("#budgetapi").await.unwrap();
-    expect_event(&mut bot_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Joined").await;
+    expect_event(
+        &mut bot_ev,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Joined",
+    )
+    .await;
 
     // Set budget and report spend
-    bot.set_budget("#budgetapi", 100.0, "usd", "per_day", "did:plc:sponsor").await.unwrap();
+    bot.set_budget("#budgetapi", 100.0, "usd", "per_day", "did:plc:sponsor")
+        .await
+        .unwrap();
     expect_raw_line(&mut bot_ev, 2000, "Budget set", "Budget set").await;
 
-    bot.report_spend("#budgetapi", 3.50, "usd", "test spend", Some("TASK001")).await.unwrap();
+    bot.report_spend("#budgetapi", 3.50, "usd", "test spend", Some("TASK001"))
+        .await
+        .unwrap();
     expect_raw_line(&mut bot_ev, 2000, "Recorded", "Spend recorded").await;
     tokio::time::sleep(Duration::from_millis(300)).await;
 
@@ -1665,7 +2322,9 @@ async fn budget_rest_api() {
 
     // Check budget endpoint
     let resp = client
-        .get(format!("http://{web_addr}/api/v1/channels/budgetapi/budget"))
+        .get(format!(
+            "http://{web_addr}/api/v1/channels/budgetapi/budget"
+        ))
         .send()
         .await
         .unwrap();
@@ -1698,16 +2357,38 @@ async fn budget_requires_op() {
     let (_did2, pleb, mut pleb_ev) = connect_did_key(addr, "budgetpleb").await;
 
     op.join("#oponly").await.unwrap();
-    expect_event(&mut op_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Op joined").await;
+    expect_event(
+        &mut op_ev,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Op joined",
+    )
+    .await;
     pleb.join("#oponly").await.unwrap();
-    expect_event(&mut pleb_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Pleb joined").await;
+    expect_event(
+        &mut pleb_ev,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Pleb joined",
+    )
+    .await;
 
     // Non-op tries to set budget — should fail
-    pleb.set_budget("#oponly", 50.0, "usd", "per_day", "did:plc:test").await.unwrap();
-    expect_raw_line(&mut pleb_ev, 2000, "operator", "Budget set rejected for non-op").await;
+    pleb.set_budget("#oponly", 50.0, "usd", "per_day", "did:plc:test")
+        .await
+        .unwrap();
+    expect_raw_line(
+        &mut pleb_ev,
+        2000,
+        "operator",
+        "Budget set rejected for non-op",
+    )
+    .await;
 
     // Op sets budget — should succeed
-    op.set_budget("#oponly", 50.0, "usd", "per_day", "did:plc:test").await.unwrap();
+    op.set_budget("#oponly", 50.0, "usd", "per_day", "did:plc:test")
+        .await
+        .unwrap();
     expect_raw_line(&mut op_ev, 2000, "Budget set", "Op can set budget").await;
 
     op.quit(None).await.unwrap();
@@ -1732,9 +2413,27 @@ async fn connect_did_key_with_signer(
     };
     let (handle, mut events) = client::connect(config, Some(signer));
 
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Connected), "Connected").await;
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Authenticated { .. }), "Authenticated").await;
-    expect_event(&mut events, 2000, |e| matches!(e, Event::Registered { .. }), "Registered").await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Connected),
+        "Connected",
+    )
+    .await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Authenticated { .. }),
+        "Authenticated",
+    )
+    .await;
+    expect_event(
+        &mut events,
+        2000,
+        |e| matches!(e, Event::Registered { .. }),
+        "Registered",
+    )
+    .await;
 
     (handle, events)
 }
@@ -1755,35 +2454,49 @@ async fn part_clears_auto_rejoin() {
     // ── First connection ─────────────────────────────────────────────────
     let (agent, mut agent_ev) = connect_did_key_with_signer(addr, "yokota", signer.clone()).await;
     agent.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut agent_ev, 2000, "registered as agent", "AGENT REGISTER #1").await;
+    expect_raw_line(
+        &mut agent_ev,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER #1",
+    )
+    .await;
 
     // Join two channels
     agent.join("#chad-dev").await.unwrap();
     expect_event(
-        &mut agent_ev, 2000,
+        &mut agent_ev,
+        2000,
         |e| matches!(e, Event::Joined { channel, .. } if channel == "#chad-dev"),
         "Joined #chad-dev",
-    ).await;
+    )
+    .await;
     agent.join("#chad-mess").await.unwrap();
     expect_event(
-        &mut agent_ev, 2000,
+        &mut agent_ev,
+        2000,
         |e| matches!(e, Event::Joined { channel, .. } if channel == "#chad-mess"),
         "Joined #chad-mess",
-    ).await;
+    )
+    .await;
 
     // Explicitly PART both channels (no `part()` on ClientHandle — use raw IRC)
     agent.raw("PART #chad-dev :leaving").await.unwrap();
     expect_event(
-        &mut agent_ev, 2000,
+        &mut agent_ev,
+        2000,
         |e| matches!(e, Event::Parted { channel, .. } if channel == "#chad-dev"),
         "Parted #chad-dev",
-    ).await;
+    )
+    .await;
     agent.raw("PART #chad-mess :leaving").await.unwrap();
     expect_event(
-        &mut agent_ev, 2000,
+        &mut agent_ev,
+        2000,
         |e| matches!(e, Event::Parted { channel, .. } if channel == "#chad-mess"),
         "Parted #chad-mess",
-    ).await;
+    )
+    .await;
 
     // Disconnect — server enters ghost mode for this DID
     agent.quit(None).await.unwrap();
@@ -1792,7 +2505,13 @@ async fn part_clears_auto_rejoin() {
     // ── Second connection: same DID + same nick ──────────────────────────
     let (agent2, mut agent2_ev) = connect_did_key_with_signer(addr, "yokota", signer.clone()).await;
     agent2.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut agent2_ev, 2000, "registered as agent", "AGENT REGISTER #2").await;
+    expect_raw_line(
+        &mut agent2_ev,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER #2",
+    )
+    .await;
 
     // Let the event loop drain any pending server messages
     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -1801,14 +2520,21 @@ async fn part_clears_auto_rejoin() {
     expect_no_event(&mut agent2_ev, 500, |e| {
         matches!(e, Event::Joined { channel, .. }
             if channel == "#chad-dev" || channel == "#chad-mess")
-    }).await;
+    })
+    .await;
 
     // Cross-check with an observer: yokota should not appear in #chad-dev NAMES
     let (_obs_did, obs_signer) = make_did_key_signer();
     let (obs, mut obs_ev) = connect_did_key_with_signer(addr, "observer", obs_signer).await;
     obs.join("#chad-dev").await.unwrap();
     // Collect the NAMES reply that arrives automatically on JOIN
-    expect_event(&mut obs_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Observer joined").await;
+    expect_event(
+        &mut obs_ev,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Observer joined",
+    )
+    .await;
     let names_line = expect_raw_line(&mut obs_ev, 2000, "353", "NAMES reply for #chad-dev").await;
     assert!(
         !names_line.contains("yokota"),
@@ -1835,10 +2561,22 @@ async fn part_removes_from_user_channels_db() {
     expect_raw_line(&mut agent_ev, 2000, "registered as agent", "AGENT REGISTER").await;
 
     agent.join("#testchan").await.unwrap();
-    expect_event(&mut agent_ev, 2000, |e| matches!(e, Event::Joined { .. }), "Joined").await;
+    expect_event(
+        &mut agent_ev,
+        2000,
+        |e| matches!(e, Event::Joined { .. }),
+        "Joined",
+    )
+    .await;
 
     agent.raw("PART #testchan").await.unwrap();
-    expect_event(&mut agent_ev, 2000, |e| matches!(e, Event::Parted { .. }), "Parted").await;
+    expect_event(
+        &mut agent_ev,
+        2000,
+        |e| matches!(e, Event::Parted { .. }),
+        "Parted",
+    )
+    .await;
 
     agent.quit(None).await.unwrap();
     tokio::time::sleep(Duration::from_millis(150)).await;
@@ -1846,21 +2584,32 @@ async fn part_removes_from_user_channels_db() {
     // ── Reconnect: should NOT be auto-joined to #testchan ────────────────
     let (agent2, mut agent2_ev) = connect_did_key_with_signer(addr, "yokota2", signer).await;
     agent2.register_agent("agent").await.unwrap();
-    expect_raw_line(&mut agent2_ev, 2000, "registered as agent", "AGENT REGISTER #2").await;
+    expect_raw_line(
+        &mut agent2_ev,
+        2000,
+        "registered as agent",
+        "AGENT REGISTER #2",
+    )
+    .await;
 
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    expect_no_event(&mut agent2_ev, 500, |e| {
-        matches!(e, Event::Joined { channel, .. } if channel == "#testchan")
-    }).await;
+    expect_no_event(
+        &mut agent2_ev,
+        500,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#testchan"),
+    )
+    .await;
 
     // Manual join should still work (the channel is not blocked, just not auto-joined)
     agent2.join("#testchan").await.unwrap();
     expect_event(
-        &mut agent2_ev, 2000,
+        &mut agent2_ev,
+        2000,
         |e| matches!(e, Event::Joined { channel, .. } if channel == "#testchan"),
         "Manual join after PART+reconnect succeeds",
-    ).await;
+    )
+    .await;
 
     agent2.quit(None).await.unwrap();
     server_handle.abort();
@@ -1882,10 +2631,12 @@ async fn agent_join_visible_to_observer() {
     let (obs, mut obs_ev) = connect_did_key_with_signer(addr, "observer", obs_signer).await;
     obs.join("#testchan").await.unwrap();
     expect_event(
-        &mut obs_ev, 2000,
+        &mut obs_ev,
+        2000,
         |e| matches!(e, Event::Joined { channel, .. } if channel == "#testchan"),
         "Observer joined #testchan",
-    ).await;
+    )
+    .await;
 
     // Agent: connects, registers, and joins #testchan
     let (_agent_did, agent_signer) = make_did_key_signer();
@@ -1894,17 +2645,21 @@ async fn agent_join_visible_to_observer() {
     expect_raw_line(&mut agent_ev, 2000, "registered as agent", "AGENT REGISTER").await;
     agent.join("#testchan").await.unwrap();
     expect_event(
-        &mut agent_ev, 2000,
+        &mut agent_ev,
+        2000,
         |e| matches!(e, Event::Joined { channel, .. } if channel == "#testchan"),
         "Agent joined #testchan",
-    ).await;
+    )
+    .await;
 
     // Observer must see the agent's JOIN (as a RawLine containing "yokota" and "JOIN")
     let join_line = expect_raw_line(
-        &mut obs_ev, 2000,
+        &mut obs_ev,
+        2000,
         "JOIN",
         "Observer sees agent JOIN broadcast",
-    ).await;
+    )
+    .await;
     assert!(
         join_line.contains("yokota"),
         "JOIN broadcast must contain agent nick 'yokota', got: {join_line}",
@@ -1934,22 +2689,32 @@ async fn ghost_reclaim_cleans_stale_sessions() {
     let (_user_did, user_signer) = make_did_key_signer();
 
     // ── First connection: user joins #testchan ──
-    let (user1, mut user1_ev) = connect_did_key_with_signer(addr, "webuser", user_signer.clone()).await;
+    let (user1, mut user1_ev) =
+        connect_did_key_with_signer(addr, "webuser", user_signer.clone()).await;
     user1.join("#testchan").await.unwrap();
     expect_event(
-        &mut user1_ev, 2000,
+        &mut user1_ev,
+        2000,
         |e| matches!(e, Event::Joined { channel, .. } if channel == "#testchan"),
         "User joined #testchan",
-    ).await;
+    )
+    .await;
 
     // Disconnect (triggers ghost mode)
     user1.quit(None).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // ── Second connection: same DID reconnects (ghost reclaim) ──
-    let (user2, mut user2_ev) = connect_did_key_with_signer(addr, "webuser", user_signer.clone()).await;
+    let (user2, mut user2_ev) =
+        connect_did_key_with_signer(addr, "webuser", user_signer.clone()).await;
     // Ghost reclaim should restore channel membership — look for synthetic NAMES
-    expect_raw_line(&mut user2_ev, 2000, "353", "Ghost reclaim NAMES for #testchan").await;
+    expect_raw_line(
+        &mut user2_ev,
+        2000,
+        "353",
+        "Ghost reclaim NAMES for #testchan",
+    )
+    .await;
 
     // Now an agent joins #testchan — the reconnected user must see it
     let (_agent_did, agent_signer) = make_did_key_signer();
@@ -1958,17 +2723,21 @@ async fn ghost_reclaim_cleans_stale_sessions() {
     expect_raw_line(&mut agent_ev, 2000, "registered as agent", "AGENT REGISTER").await;
     agent.join("#testchan").await.unwrap();
     expect_event(
-        &mut agent_ev, 2000,
+        &mut agent_ev,
+        2000,
         |e| matches!(e, Event::Joined { channel, .. } if channel == "#testchan"),
         "Agent joined #testchan",
-    ).await;
+    )
+    .await;
 
     // Reconnected user must see the agent's JOIN broadcast
     let join_line = expect_raw_line(
-        &mut user2_ev, 2000,
+        &mut user2_ev,
+        2000,
         "JOIN",
         "Reconnected user sees agent JOIN after ghost reclaim",
-    ).await;
+    )
+    .await;
     assert!(
         join_line.contains("agentbot"),
         "JOIN broadcast must contain agent nick 'agentbot', got: {join_line}",
@@ -2221,14 +2990,29 @@ async fn commit_reveal_actor_mismatch_e2e() {
 
     // All three join.
     alice.join("#crtest").await.unwrap();
-    expect_event(&mut alice_ev, 2000,
-        |e| matches!(e, Event::Joined { channel, .. } if channel == "#crtest"), "alice joined").await;
+    expect_event(
+        &mut alice_ev,
+        2000,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#crtest"),
+        "alice joined",
+    )
+    .await;
     bob.join("#crtest").await.unwrap();
-    expect_event(&mut bob_ev, 2000,
-        |e| matches!(e, Event::Joined { channel, .. } if channel == "#crtest"), "bob joined").await;
+    expect_event(
+        &mut bob_ev,
+        2000,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#crtest"),
+        "bob joined",
+    )
+    .await;
     observer.join("#crtest").await.unwrap();
-    expect_event(&mut obs_ev, 2000,
-        |e| matches!(e, Event::Joined { channel, .. } if channel == "#crtest"), "observer joined").await;
+    expect_event(
+        &mut obs_ev,
+        2000,
+        |e| matches!(e, Event::Joined { channel, .. } if channel == "#crtest"),
+        "observer joined",
+    )
+    .await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     while alice_ev.try_recv().is_ok() {}
     while bob_ev.try_recv().is_ok() {}

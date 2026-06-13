@@ -48,6 +48,4 @@ pub mod tools;
 pub mod types;
 
 pub use recorder::{DiagnosticEvent, EventKind, record};
-pub use types::{
-    AssistResponse, Caller, DisclosureLevel, FactBundle,
-};
+pub use types::{AssistResponse, Caller, DisclosureLevel, FactBundle};

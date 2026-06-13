@@ -11,10 +11,10 @@
 //! Usage:
 //!   cargo run --example browser_to_native_e2e -- [--web-url http://127.0.0.1:8080]
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use anyhow::{Result, bail};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use anyhow::{bail, Result};
 use tokio::time::timeout;
 
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -102,7 +102,9 @@ async fn main() -> Result<()> {
             }
         }
         false
-    }).await.unwrap_or(false);
+    })
+    .await
+    .unwrap_or(false);
 
     if found_broadcast {
         println!("  Browser's broadcast IS in MoQ cluster");
@@ -118,8 +120,13 @@ async fn main() -> Result<()> {
     let room_ticket: iroh_live::rooms::RoomTicket = iroh_ticket
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid ticket: {e}"))?;
-    let ep = iroh::Endpoint::builder(iroh::endpoint::presets::N0).bind().await?;
-    let live = iroh_live::Live::builder(ep).with_router().with_gossip().spawn();
+    let ep = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+        .bind()
+        .await?;
+    let live = iroh_live::Live::builder(ep)
+        .with_router()
+        .with_gossip()
+        .spawn();
     let room = iroh_live::rooms::Room::new(&live, room_ticket).await?;
     let (mut events, handle) = room.split();
     handle.set_display_name("native-listener").await?;
@@ -152,7 +159,10 @@ async fn main() -> Result<()> {
                             match timeout(Duration::from_secs(5), track.next_group()).await {
                                 Ok(Ok(Some(mut g))) => {
                                     if let Ok(Some(frame)) = g.read_frame().await {
-                                        println!("  catalog.json: {}", String::from_utf8_lossy(&frame));
+                                        println!(
+                                            "  catalog.json: {}",
+                                            String::from_utf8_lossy(&frame)
+                                        );
                                     }
                                 }
                                 _ => println!("  catalog.json: no data (timeout or empty)"),
@@ -186,13 +196,25 @@ async fn main() -> Result<()> {
                                         while let Ok(Some(frame)) = g.read_frame().await {
                                             let count = fr.fetch_add(1, Ordering::Relaxed);
                                             if count == 0 {
-                                                println!("  FIRST audio frame: {} bytes", frame.len());
+                                                println!(
+                                                    "  FIRST audio frame: {} bytes",
+                                                    frame.len()
+                                                );
                                             }
                                         }
                                     }
-                                    Ok(Ok(None)) => { println!("  Audio track ended"); break; }
-                                    Ok(Err(e)) => { println!("  Audio error: {e}"); break; }
-                                    Err(_) => { println!("  Audio timeout (3s no frames)"); break; }
+                                    Ok(Ok(None)) => {
+                                        println!("  Audio track ended");
+                                        break;
+                                    }
+                                    Ok(Err(e)) => {
+                                        println!("  Audio error: {e}");
+                                        break;
+                                    }
+                                    Err(_) => {
+                                        println!("  Audio timeout (3s no frames)");
+                                        break;
+                                    }
                                 }
                             }
                             return true;
@@ -204,10 +226,14 @@ async fn main() -> Result<()> {
                     }
                 }
                 Some(_) => {}
-                None => { println!("  Room events closed"); return false; }
+                None => {
+                    println!("  Room events closed");
+                    return false;
+                }
             }
         }
-    }).await;
+    })
+    .await;
 
     // ── Results ───────────────────────────────────────────────
     let received = frames_received.load(Ordering::Relaxed);
@@ -215,7 +241,10 @@ async fn main() -> Result<()> {
 
     println!("\n=== Results ===");
     println!("  Browser broadcast in MoQ: YES");
-    println!("  Broadcast arrived in Room: {}", if got_broadcast { "YES" } else { "NO" });
+    println!(
+        "  Broadcast arrived in Room: {}",
+        if got_broadcast { "YES" } else { "NO" }
+    );
     println!("  Audio frames received: {received}");
 
     if received > 10 {
@@ -259,14 +288,24 @@ async fn start_session(web_url: &str) -> Result<(String, String)> {
     let channel = &format!("#btn-{}", std::process::id());
 
     let ws_url = if web_url.starts_with("https://") {
-        format!("wss://{}/irc", web_url.trim_start_matches("https://").trim_end_matches('/'))
+        format!(
+            "wss://{}/irc",
+            web_url.trim_start_matches("https://").trim_end_matches('/')
+        )
     } else {
-        format!("ws://{}/irc", web_url.trim_start_matches("http://").trim_end_matches('/'))
+        format!(
+            "ws://{}/irc",
+            web_url.trim_start_matches("http://").trim_end_matches('/')
+        )
     };
 
     let (ws, _) = tokio_tungstenite::connect_async(&ws_url).await?;
     let (mut ws_write, mut ws_read) = ws.split();
-    ws_write.send(Message::Text(format!("NICK {nick}\r\nUSER {nick} 0 * :test\r\n").into())).await?;
+    ws_write
+        .send(Message::Text(
+            format!("NICK {nick}\r\nUSER {nick} 0 * :test\r\n").into(),
+        ))
+        .await?;
 
     let mut registered = false;
     let mut ticket = None;
@@ -274,27 +313,75 @@ async fn start_session(web_url: &str) -> Result<(String, String)> {
 
     let result = timeout(Duration::from_secs(10), async {
         while let Some(msg) = ws_read.next().await {
-            let text = match msg? { Message::Text(t) => t.to_string(), Message::Close(_) => break, _ => continue };
+            let text = match msg? {
+                Message::Text(t) => t.to_string(),
+                Message::Close(_) => break,
+                _ => continue,
+            };
             for line in text.lines() {
                 let line = line.trim();
-                if line.is_empty() { continue; }
-                if line.starts_with("PING") { ws_write.send(Message::Text(format!("{}\r\n", line.replace("PING", "PONG")).into())).await?; continue; }
+                if line.is_empty() {
+                    continue;
+                }
+                if line.starts_with("PING") {
+                    ws_write
+                        .send(Message::Text(
+                            format!("{}\r\n", line.replace("PING", "PONG")).into(),
+                        ))
+                        .await?;
+                    continue;
+                }
                 if !registered && line.contains(" 001 ") {
                     registered = true;
-                    ws_write.send(Message::Text(format!("CAP REQ :message-tags\r\nJOIN {channel}\r\n").into())).await?;
+                    ws_write
+                        .send(Message::Text(
+                            format!("CAP REQ :message-tags\r\nJOIN {channel}\r\n").into(),
+                        ))
+                        .await?;
                     tokio::time::sleep(Duration::from_millis(200)).await;
-                    ws_write.send(Message::Text(format!("@+freeq.at/av-start TAGMSG {channel}\r\n").into())).await?;
+                    ws_write
+                        .send(Message::Text(
+                            format!("@+freeq.at/av-start TAGMSG {channel}\r\n").into(),
+                        ))
+                        .await?;
                 }
-                if line.contains("AV session started:") { if let Some(id) = line.split("AV session started: ").nth(1) { session_id = Some(id.trim().to_string()); } }
-                if line.contains("AV ticket:") { if let Some(t) = line.split("AV ticket: ").nth(1) { ticket = Some(t.trim().to_string()); } }
-                if ticket.is_some() && session_id.is_some() { break; }
+                if line.contains("AV session started:") {
+                    if let Some(id) = line.split("AV session started: ").nth(1) {
+                        session_id = Some(id.trim().to_string());
+                    }
+                }
+                if line.contains("AV ticket:") {
+                    if let Some(t) = line.split("AV ticket: ").nth(1) {
+                        ticket = Some(t.trim().to_string());
+                    }
+                }
+                if ticket.is_some() && session_id.is_some() {
+                    break;
+                }
             }
-            if ticket.is_some() && session_id.is_some() { break; }
+            if ticket.is_some() && session_id.is_some() {
+                break;
+            }
         }
         Ok::<_, anyhow::Error>((session_id, ticket))
-    }).await??;
+    })
+    .await??;
 
-    tokio::spawn(async move { loop { tokio::time::sleep(Duration::from_secs(30)).await; if ws_write.send(Message::Text("PING :k\r\n".into())).await.is_err() { break; } } });
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            if ws_write
+                .send(Message::Text("PING :k\r\n".into()))
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
 
-    match result { (Some(s), Some(t)) => Ok((s, t)), _ => bail!("No session ID or ticket") }
+    match result {
+        (Some(s), Some(t)) => Ok((s, t)),
+        _ => bail!("No session ID or ticket"),
+    }
 }

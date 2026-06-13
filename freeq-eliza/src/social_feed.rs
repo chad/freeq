@@ -28,7 +28,10 @@ pub async fn did_for_handle(http: &reqwest::Client, handle: &str) -> Option<Stri
 
 async fn profile_field(http: &reqwest::Client, actor: &str, field: &str) -> Option<String> {
     let url = format!("{APPVIEW}/app.bsky.actor.getProfile?actor={actor}");
-    let resp = tokio::time::timeout(TIMEOUT, http.get(&url).send()).await.ok()?.ok()?;
+    let resp = tokio::time::timeout(TIMEOUT, http.get(&url).send())
+        .await
+        .ok()?
+        .ok()?;
     if !resp.status().is_success() {
         return None;
     }
@@ -70,7 +73,11 @@ pub fn context_block(label: &str, posts: &[String]) -> Option<String> {
     if posts.is_empty() {
         return None;
     }
-    let lines: String = posts.iter().map(|p| format!("- {p}")).collect::<Vec<_>>().join("\n");
+    let lines: String = posts
+        .iter()
+        .map(|p| format!("- {p}"))
+        .collect::<Vec<_>>()
+        .join("\n");
     Some(format!(
         "Recent public Bluesky posts by {label} — use to be personal and specific (react, don't recite):\n{lines}"
     ))
@@ -113,14 +120,19 @@ mod tests {
     #[tokio::test]
     async fn recent_posts_returns_real_content() {
         let posts = recent_posts(&http(), "chadfowler.com", 4).await;
-        assert!(!posts.is_empty(), "expected public posts for chadfowler.com");
+        assert!(
+            !posts.is_empty(),
+            "expected public posts for chadfowler.com"
+        );
         assert!(posts.iter().all(|p| !p.is_empty()));
     }
 
     #[tokio::test]
     async fn did_handle_round_trip() {
         let h = http();
-        let did = did_for_handle(&h, "chadfowler.com").await.expect("handle → did");
+        let did = did_for_handle(&h, "chadfowler.com")
+            .await
+            .expect("handle → did");
         assert!(did.starts_with("did:"), "got {did}");
         let handle = handle_for_did(&h, &did).await.expect("did → handle");
         assert_eq!(handle, "chadfowler.com");

@@ -48,7 +48,8 @@ pub fn validate_client_config(input: &ValidateClientConfigInput) -> FactBundle {
                 .into(),
         );
         fixes.push(SuggestedFix {
-            summary: "Negotiate the `message-tags` IRCv3 capability before joining channels.".into(),
+            summary: "Negotiate the `message-tags` IRCv3 capability before joining channels."
+                .into(),
             details: Some(
                 "Send `CAP LS 302`, then `CAP REQ :message-tags server-time batch` and wait for \
                  `CAP ACK` before sending USER/NICK or any JOIN."
@@ -111,7 +112,8 @@ pub fn validate_client_config(input: &ValidateClientConfigInput) -> FactBundle {
                 .into(),
         );
         fixes.push(SuggestedFix {
-            summary: "Implement session resume so reconnects don't churn presence and replay.".into(),
+            summary: "Implement session resume so reconnects don't churn presence and replay."
+                .into(),
             details: Some(
                 "Persist the last server `msgid` you observed per channel and request \
                  `CHATHISTORY AFTER #ch msgid=<...>` on reconnect."
@@ -146,7 +148,10 @@ pub fn validate_client_config(input: &ValidateClientConfigInput) -> FactBundle {
     } else {
         (
             "CONFIG_HAS_WARNINGS".to_string(),
-            format!("Client configuration has {} compatibility warning(s).", warnings.len()),
+            format!(
+                "Client configuration has {} compatibility warning(s).",
+                warnings.len()
+            ),
             Confidence::High,
         )
     };
@@ -263,7 +268,8 @@ pub fn diagnose_message_ordering(
                 input.message_ids.len()
             )],
             suggested_fixes: vec![SuggestedFix {
-                summary: "Confirm the msgids and channel name match what the server emitted.".into(),
+                summary: "Confirm the msgids and channel name match what the server emitted."
+                    .into(),
                 details: None,
             }],
             redactions: vec!["Message bodies omitted.".into()],
@@ -306,7 +312,10 @@ pub fn diagnose_message_ordering(
             .join(", ")
     ));
     if let Some(symptom) = &input.symptom {
-        safe_facts.push(format!("Caller-reported symptom: {}", quote_user_text(symptom)));
+        safe_facts.push(format!(
+            "Caller-reported symptom: {}",
+            quote_user_text(symptom)
+        ));
     }
 
     let (code, summary, confidence, fixes) = if order_matches {
@@ -444,7 +453,12 @@ pub fn diagnose_sync(
             .channels
             .lock()
             .get(&normalized)
-            .map(|ch| sessions.iter().filter(|sid| ch.members.contains(*sid)).count())
+            .map(|ch| {
+                sessions
+                    .iter()
+                    .filter(|sid| ch.members.contains(*sid))
+                    .count()
+            })
             .unwrap_or(0);
         safe_facts.push(format!(
             "{joined} of those {} session(s) are joined to `{safe_channel}`.",
@@ -497,8 +511,9 @@ pub fn diagnose_sync(
         ],
         followups: vec![Followup {
             tool: "diagnose_message_ordering".into(),
-            reason: "Compare canonical order against your client-observed order for specific msgids."
-                .into(),
+            reason:
+                "Compare canonical order against your client-observed order for specific msgids."
+                    .into(),
         }],
         min_disclosure: DisclosureLevel::Account,
     }
@@ -561,15 +576,13 @@ pub fn inspect_my_session(
     // multi-device sessions so the bot doesn't need to know which sid
     // it's on.
     let caps_per_session = collect_caps(state, &session_ids);
-    let nick = session_ids
-        .first()
-        .and_then(|sid| {
-            state
-                .nick_to_session
-                .lock()
-                .get_nick(sid.as_str())
-                .map(|s| s.to_string())
-        });
+    let nick = session_ids.first().and_then(|sid| {
+        state
+            .nick_to_session
+            .lock()
+            .get_nick(sid.as_str())
+            .map(|s| s.to_string())
+    });
     let handle = session_ids
         .first()
         .and_then(|sid| state.session_handles.lock().get(sid).cloned());
@@ -647,7 +660,9 @@ pub fn inspect_my_session(
         && nick.as_deref().is_some_and(|n| !n.is_empty())
     {
         fixes.push(SuggestedFix {
-            summary: "If this is a bot/agent, declare actor class via `+freeq.at/actor-class=agent`.".into(),
+            summary:
+                "If this is a bot/agent, declare actor class via `+freeq.at/actor-class=agent`."
+                    .into(),
             details: Some(
                 "Other clients flag undeclared agents that look like humans. \
                  Set the cap via your IRCv3 message-tags during JOIN."
@@ -683,20 +698,41 @@ pub fn inspect_my_session(
 /// how a bot developer thinks ("does the server see my caps?").
 fn collect_caps(state: &Arc<SharedState>, sids: &[String]) -> String {
     // Per-cap presence: if ANY session has the cap, count it.
-    fn any_in(set: &parking_lot::Mutex<std::collections::HashSet<String>>, sids: &[String]) -> bool {
+    fn any_in(
+        set: &parking_lot::Mutex<std::collections::HashSet<String>>,
+        sids: &[String],
+    ) -> bool {
         let s = set.lock();
         sids.iter().any(|sid| s.contains(sid))
     }
     let mut caps: Vec<&'static str> = Vec::new();
-    if any_in(&state.cap_message_tags, sids) { caps.push("message-tags"); }
-    if any_in(&state.cap_server_time, sids) { caps.push("server-time"); }
-    if any_in(&state.cap_batch, sids) { caps.push("batch"); }
-    if any_in(&state.cap_echo_message, sids) { caps.push("echo-message"); }
-    if any_in(&state.cap_account_notify, sids) { caps.push("account-notify"); }
-    if any_in(&state.cap_extended_join, sids) { caps.push("extended-join"); }
-    if any_in(&state.cap_away_notify, sids) { caps.push("away-notify"); }
-    if any_in(&state.cap_account_tag, sids) { caps.push("account-tag"); }
-    if any_in(&state.cap_multi_prefix, sids) { caps.push("multi-prefix"); }
+    if any_in(&state.cap_message_tags, sids) {
+        caps.push("message-tags");
+    }
+    if any_in(&state.cap_server_time, sids) {
+        caps.push("server-time");
+    }
+    if any_in(&state.cap_batch, sids) {
+        caps.push("batch");
+    }
+    if any_in(&state.cap_echo_message, sids) {
+        caps.push("echo-message");
+    }
+    if any_in(&state.cap_account_notify, sids) {
+        caps.push("account-notify");
+    }
+    if any_in(&state.cap_extended_join, sids) {
+        caps.push("extended-join");
+    }
+    if any_in(&state.cap_away_notify, sids) {
+        caps.push("away-notify");
+    }
+    if any_in(&state.cap_account_tag, sids) {
+        caps.push("account-tag");
+    }
+    if any_in(&state.cap_multi_prefix, sids) {
+        caps.push("multi-prefix");
+    }
     if caps.is_empty() {
         "(none — your client did not negotiate any IRCv3 capabilities)".into()
     } else {
@@ -788,7 +824,9 @@ pub fn diagnose_join_failure(
                  the invite list."
             ));
             fixes.push(SuggestedFix {
-                summary: format!("Ask a channel operator to send `INVITE {safe_account} {safe_channel}`."),
+                summary: format!(
+                    "Ask a channel operator to send `INVITE {safe_account} {safe_channel}`."
+                ),
                 details: None,
             });
         }
@@ -824,12 +862,24 @@ pub fn diagnose_join_failure(
         ch.members.len()
     ));
     let mut mode_chars: Vec<&str> = Vec::new();
-    if ch.invite_only { mode_chars.push("+i"); }
-    if ch.key.is_some() { mode_chars.push("+k"); }
-    if ch.no_ext_msg { mode_chars.push("+n"); }
-    if ch.moderated { mode_chars.push("+m"); }
-    if ch.encrypted_only { mode_chars.push("+E"); }
-    if ch.topic_locked { mode_chars.push("+t"); }
+    if ch.invite_only {
+        mode_chars.push("+i");
+    }
+    if ch.key.is_some() {
+        mode_chars.push("+k");
+    }
+    if ch.no_ext_msg {
+        mode_chars.push("+n");
+    }
+    if ch.moderated {
+        mode_chars.push("+m");
+    }
+    if ch.encrypted_only {
+        mode_chars.push("+E");
+    }
+    if ch.topic_locked {
+        mode_chars.push("+t");
+    }
     if !mode_chars.is_empty() {
         safe_facts.push(format!("Channel modes: {}.", mode_chars.join(" ")));
     }
@@ -1070,7 +1120,11 @@ pub fn replay_missed_messages(
     if let Some(first) = rows.first() {
         safe_facts.push(format!(
             "First missed: msgid=`{}`, seq={}, time={}.",
-            first.msgid.as_deref().map(sanitize_label).unwrap_or_else(|| "(no msgid)".into()),
+            first
+                .msgid
+                .as_deref()
+                .map(sanitize_label)
+                .unwrap_or_else(|| "(no msgid)".into()),
             first.id,
             first.timestamp,
         ));
@@ -1078,7 +1132,10 @@ pub fn replay_missed_messages(
     if let Some(last) = rows.last() {
         safe_facts.push(format!(
             "Last missed: msgid=`{}`, seq={}, time={}.",
-            last.msgid.as_deref().map(sanitize_label).unwrap_or_else(|| "(no msgid)".into()),
+            last.msgid
+                .as_deref()
+                .map(sanitize_label)
+                .unwrap_or_else(|| "(no msgid)".into()),
             last.id,
             last.timestamp,
         ));
@@ -1177,7 +1234,11 @@ pub fn predict_message_outcome(
         for sid in &session_ids {
             let recent = map
                 .get(sid)
-                .map(|v| v.iter().filter(|t| now_ms.saturating_sub(**t) < 2000).count())
+                .map(|v| {
+                    v.iter()
+                        .filter(|t| now_ms.saturating_sub(**t) < 2000)
+                        .count()
+                })
                 .unwrap_or(0);
             let room = 5_i32 - recent as i32;
             if room > best.2 {
@@ -1197,9 +1258,11 @@ pub fn predict_message_outcome(
 
     let mut blockers: Vec<String> = Vec::new();
     if room_left <= 0 {
-        blockers.push("RATE_LIMITED: every session is at the per-2s flood cap. Wait at \
+        blockers.push(
+            "RATE_LIMITED: every session is at the per-2s flood cap. Wait at \
                        least one second and retry."
-            .into());
+                .into(),
+        );
     }
 
     if is_channel {
@@ -1256,7 +1319,10 @@ pub fn predict_message_outcome(
         safe_facts.extend(blockers.iter().cloned());
         (
             "PREDICTED_REJECTED".to_string(),
-            format!("A PRIVMSG to `{safe_target}` would be rejected for {} reason(s).", blockers.len()),
+            format!(
+                "A PRIVMSG to `{safe_target}` would be rejected for {} reason(s).",
+                blockers.len()
+            ),
             Confidence::High,
         )
     };
@@ -1335,7 +1401,12 @@ pub fn explain_message_routing(input: &ExplainMessageRoutingInput) -> FactBundle
     };
 
     let cmd = msg.command.to_uppercase();
-    let prefix_nick = msg.prefix.as_deref().and_then(|p| p.split('!').next()).unwrap_or("").to_string();
+    let prefix_nick = msg
+        .prefix
+        .as_deref()
+        .and_then(|p| p.split('!').next())
+        .unwrap_or("")
+        .to_string();
     let from_safe = sanitize_label(&prefix_nick);
     let my_nick_safe = sanitize_label(&input.my_nick);
     let target = msg.params.first().map(String::as_str).unwrap_or("");
@@ -1358,14 +1429,16 @@ pub fn explain_message_routing(input: &ExplainMessageRoutingInput) -> FactBundle
     if !target.is_empty() {
         safe_facts.push(format!(
             "Target: `{safe_target}` ({}).",
-            if is_channel_target { "channel" } else { "user / DM" }
+            if is_channel_target {
+                "channel"
+            } else {
+                "user / DM"
+            }
         ));
     }
 
     // Buffer name the bot should route this into.
-    let buffer = if is_channel_target {
-        target.to_string()
-    } else if is_self {
+    let buffer = if is_channel_target || is_self {
         target.to_string()
     } else {
         prefix_nick.clone()
@@ -1405,7 +1478,8 @@ pub fn explain_message_routing(input: &ExplainMessageRoutingInput) -> FactBundle
                 .into(),
         );
     }
-    let is_action = text.starts_with('\u{0001}') && text.ends_with('\u{0001}') && text.contains("ACTION");
+    let is_action =
+        text.starts_with('\u{0001}') && text.ends_with('\u{0001}') && text.contains("ACTION");
     if is_action {
         safe_facts.push(
             "Action: a `/me` message — render as third-person (`* nick text`), \
@@ -1449,7 +1523,9 @@ pub fn explain_message_routing(input: &ExplainMessageRoutingInput) -> FactBundle
     FactBundle {
         ok: true,
         code: "ROUTING_EXPLAINED".into(),
-        summary: format!("Parsed `{cmd}` with target `{safe_target}` — see facts for routing implications."),
+        summary: format!(
+            "Parsed `{cmd}` with target `{safe_target}` — see facts for routing implications."
+        ),
         confidence: Confidence::High,
         safe_facts,
         suggested_fixes: vec![],
@@ -1477,8 +1553,23 @@ fn contains_word_boundary(hay: &str, needle: &str) -> bool {
     fn is_mention_boundary(b: u8) -> bool {
         matches!(
             b,
-            b' ' | b'\t' | b'\n' | b'\r' | b',' | b'.' | b'?' | b'!'
-            | b':' | b';' | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'"' | b'\''
+            b' ' | b'\t'
+                | b'\n'
+                | b'\r'
+                | b','
+                | b'.'
+                | b'?'
+                | b'!'
+                | b':'
+                | b';'
+                | b'('
+                | b')'
+                | b'['
+                | b']'
+                | b'{'
+                | b'}'
+                | b'"'
+                | b'\''
         )
     }
     let mut i = 0;
@@ -1585,11 +1676,7 @@ pub fn diagnose_av_session(
                 Some(i) => format!("`#{}`", hash(i)),
                 None => "`<no-instance>`".into(),
             };
-            (
-                hash(&p.did),
-                inst_label,
-                caller.is_self(&p.did),
-            )
+            (hash(&p.did), inst_label, caller.is_self(&p.did))
         })
         .collect();
 
@@ -1739,9 +1826,8 @@ pub fn diagnose_av_session(
 
     let mut redactions = vec!["Raw MoQ broadcast paths omitted.".into()];
     if detailed {
-        redactions.push(
-            "DIDs and instance ids of other participants are hashed (`#xxxxxxxx`).".into(),
-        );
+        redactions
+            .push("DIDs and instance ids of other participants are hashed (`#xxxxxxxx`).".into());
     } else {
         redactions.push(
             "Per-slot listings withheld at Public disclosure level — counts and the \

@@ -46,9 +46,7 @@ impl IrohLiveBackend {
         // `crate::iroh::spawn_router`, which calls
         // `Live::register_protocols` on the shared RouterBuilder so
         // gossip + MoQ are mounted alongside freeq's protocols.
-        let live = iroh_live::Live::builder(endpoint)
-            .with_gossip()
-            .spawn();
+        let live = iroh_live::Live::builder(endpoint).with_gossip().spawn();
         tracing::info!(
             endpoint_id = %live.endpoint().id(),
             "iroh-live media backend initialized"
@@ -65,7 +63,10 @@ impl IrohLiveBackend {
     }
 
     /// Take the Room handle and events for a session (for bridge setup).
-    pub fn take_room_for_bridge(&self, session_id: &str) -> Option<(iroh_live::rooms::RoomHandle, iroh_live::rooms::RoomEvents)> {
+    pub fn take_room_for_bridge(
+        &self,
+        session_id: &str,
+    ) -> Option<(iroh_live::rooms::RoomHandle, iroh_live::rooms::RoomEvents)> {
         let handle = self.rooms.lock().get(session_id)?.handle.clone();
         let events = self.pending_events.lock().remove(session_id)?;
         Some((handle, events))
@@ -77,7 +78,8 @@ impl MediaBackend for IrohLiveBackend {
     fn create_room(
         &self,
         session_id: &str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<MediaTicket, String>> + Send + '_>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<MediaTicket, String>> + Send + '_>>
+    {
         let session_id = session_id.to_string();
         let live = self.live.clone();
         Box::pin(async move {
@@ -90,13 +92,18 @@ impl MediaBackend for IrohLiveBackend {
             let (events, handle) = room.split();
 
             // Store room — events are consumed by the bridge (av_bridge.rs)
-            self.rooms.lock().insert(session_id.clone(), ActiveRoom {
-                ticket: ticket_str.clone(),
-                handle: handle.clone(),
-            });
+            self.rooms.lock().insert(
+                session_id.clone(),
+                ActiveRoom {
+                    ticket: ticket_str.clone(),
+                    handle: handle.clone(),
+                },
+            );
 
             // Store events separately for the bridge to consume
-            self.pending_events.lock().insert(session_id.clone(), events);
+            self.pending_events
+                .lock()
+                .insert(session_id.clone(), events);
 
             tracing::info!(session_id = %session_id, ticket = %ticket_str, "Created iroh-live media room");
             Ok(ticket_str)
@@ -126,6 +133,12 @@ pub struct IrohLiveBackend {
 }
 
 #[cfg(not(feature = "av-native"))]
+impl Default for IrohLiveBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl IrohLiveBackend {
     pub fn new() -> Self {
         Self {
@@ -139,7 +152,8 @@ impl MediaBackend for IrohLiveBackend {
     fn create_room(
         &self,
         session_id: &str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<MediaTicket, String>> + Send + '_>> {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<MediaTicket, String>> + Send + '_>>
+    {
         let session_id = session_id.to_string();
         Box::pin(async move {
             let ticket = format!("webrtc://{session_id}");

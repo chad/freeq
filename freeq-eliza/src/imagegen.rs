@@ -106,7 +106,10 @@ async fn wikipedia(client: &reqwest::Client, query: &str) -> Result<Option<Vec<u
     if !resp.status().is_success() {
         bail!("wikipedia query {}", resp.status());
     }
-    let json: serde_json::Value = resp.json().await.context("wikipedia: response was not JSON")?;
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .context("wikipedia: response was not JSON")?;
     let Some(url) = json["query"]["pages"][0]["thumbnail"]["source"].as_str() else {
         return Ok(None);
     };
@@ -227,8 +230,11 @@ pub fn to_data_uri(bytes: &[u8]) -> Result<String> {
     let img = image::load_from_memory(bytes).context("decode generated image")?;
     let img = img.resize_to_fill(768, 432, image::imageops::FilterType::Lanczos3);
     let mut jpeg = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg)
-        .context("re-encode generated image as jpeg")?;
+    img.write_to(
+        &mut std::io::Cursor::new(&mut jpeg),
+        image::ImageFormat::Jpeg,
+    )
+    .context("re-encode generated image as jpeg")?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&jpeg);
     Ok(format!("data:image/jpeg;base64,{b64}"))
 }

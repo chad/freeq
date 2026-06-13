@@ -206,8 +206,14 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/signing-keys/{did}", get(api_did_signing_key))
         .route("/api/v1/verify/{msgid}", get(api_verify_message))
         .route("/api/v1/actors/{did}", get(api_actor_identity))
-        .route("/api/v1/channels/{name}/agent-capabilities", get(api_agent_capabilities))
-        .route("/api/v1/channels/{name}/approvals", get(api_pending_approvals))
+        .route(
+            "/api/v1/channels/{name}/agent-capabilities",
+            get(api_agent_capabilities),
+        )
+        .route(
+            "/api/v1/channels/{name}/approvals",
+            get(api_pending_approvals),
+        )
         .route("/api/v1/channels/{name}/events", get(api_channel_events))
         .route("/api/v1/channels/{name}/audit", get(api_channel_audit))
         .route("/api/v1/tasks/{task_id}", get(api_task))
@@ -226,8 +232,14 @@ pub fn router(state: Arc<SharedState>) -> Router {
         // AV sessions
         .route("/api/v1/sessions", get(api_sessions_list))
         .route("/api/v1/sessions/{id}", get(api_session_detail))
-        .route("/api/v1/sessions/{id}/artifacts", get(api_session_artifacts).post(api_create_artifact))
-        .route("/api/v1/channels/{name}/sessions", get(api_channel_sessions))
+        .route(
+            "/api/v1/sessions/{id}/artifacts",
+            get(api_session_artifacts).post(api_create_artifact),
+        )
+        .route(
+            "/api/v1/channels/{name}/sessions",
+            get(api_channel_sessions),
+        )
         .route("/auth/mobile", get(auth_mobile_redirect))
         .route("/join/{channel}", get(channel_invite_page))
         .layer(axum::extract::DefaultBodyLimit::max(12 * 1024 * 1024)) // 12MB
@@ -479,13 +491,17 @@ async fn api_agent_capabilities(
             // Get all agents in the channel
             let members: Vec<String> = {
                 let channels = state.channels.lock();
-                channels.get(&channel.to_lowercase())
+                channels
+                    .get(&channel.to_lowercase())
                     .map(|ch| ch.members.iter().cloned().collect())
                     .unwrap_or_default()
             };
             let dids: Vec<String> = {
                 let sd = state.session_dids.lock();
-                members.iter().filter_map(|sid| sd.get(sid).cloned()).collect()
+                members
+                    .iter()
+                    .filter_map(|sid| sd.get(sid).cloned())
+                    .collect()
             };
             let mut all = Vec::new();
             for did in &dids {
@@ -518,7 +534,8 @@ async fn api_pending_approvals(
     let channel = format!("#{name}");
     let approvals: Vec<serde_json::Value> = state
         .with_db(|db| {
-            Ok(db.get_pending_approvals(&channel.to_lowercase())
+            Ok(db
+                .get_pending_approvals(&channel.to_lowercase())
                 .into_iter()
                 .map(|a| {
                     serde_json::json!({
@@ -547,10 +564,15 @@ async fn api_channel_events(
     let ref_id = params.get("ref_id").map(|s| s.as_str());
     let actor = params.get("actor").map(|s| s.as_str());
     let since = params.get("since").and_then(|s| {
-        chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.timestamp())
+        chrono::DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|dt| dt.timestamp())
             .or_else(|| s.parse::<i64>().ok())
     });
-    let limit = params.get("limit").and_then(|s| s.parse().ok()).unwrap_or(100usize);
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100usize);
 
     let events: Vec<serde_json::Value> = state
         .with_db(|db| {
@@ -585,7 +607,9 @@ async fn api_task(
 
     match result {
         Some((Some(task), events)) => {
-            let status = events.iter().rev()
+            let status = events
+                .iter()
+                .rev()
                 .find(|e| e.event_type == "task_complete" || e.event_type == "task_failed")
                 .map(|e| e.event_type.clone())
                 .unwrap_or_else(|| "in_progress".to_string());
@@ -633,10 +657,15 @@ async fn api_channel_audit(
     let channel = format!("#{name}");
     let actor = params.get("actor").map(|s| s.as_str());
     let since = params.get("since").and_then(|s| {
-        chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.timestamp())
+        chrono::DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|dt| dt.timestamp())
             .or_else(|| s.parse::<i64>().ok())
     });
-    let limit = params.get("limit").and_then(|s| s.parse().ok()).unwrap_or(200usize);
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(200usize);
 
     let mut timeline: Vec<serde_json::Value> = Vec::new();
 
@@ -659,18 +688,21 @@ async fn api_channel_audit(
 
     // 2. Governance log
     if let Some(entries) = state.with_db(|db| {
-        Ok(db.query_governance_log(Some(&channel), limit)
+        Ok(db
+            .query_governance_log(Some(&channel), limit)
             .into_iter()
-            .map(|e| serde_json::json!({
-                "timestamp": e.timestamp,
-                "category": "governance",
-                "event": e.action,
-                "actor_did": e.target_did,
-                "details": {
-                    "issued_by": e.issued_by,
-                    "reason": e.reason,
-                },
-            }))
+            .map(|e| {
+                serde_json::json!({
+                    "timestamp": e.timestamp,
+                    "category": "governance",
+                    "event": e.action,
+                    "actor_did": e.target_did,
+                    "details": {
+                        "issued_by": e.issued_by,
+                        "reason": e.reason,
+                    },
+                })
+            })
             .collect::<Vec<_>>())
     }) {
         timeline.extend(entries);
@@ -690,20 +722,22 @@ async fn api_channel_audit(
 }
 
 /// GET /api/v1/agents/manifests — list all registered manifests.
-async fn api_list_manifests(
-    State(state): State<Arc<SharedState>>,
-) -> Json<serde_json::Value> {
+async fn api_list_manifests(State(state): State<Arc<SharedState>>) -> Json<serde_json::Value> {
     let manifests: Vec<serde_json::Value> = state
         .with_db(|db| {
-            Ok(db.list_manifests().into_iter().map(|(did, json, ts)| {
-                let parsed = serde_json::from_str::<serde_json::Value>(&json)
-                    .unwrap_or(serde_json::json!({}));
-                serde_json::json!({
-                    "agent_did": did,
-                    "manifest": parsed,
-                    "registered_at": ts,
+            Ok(db
+                .list_manifests()
+                .into_iter()
+                .map(|(did, json, ts)| {
+                    let parsed = serde_json::from_str::<serde_json::Value>(&json)
+                        .unwrap_or(serde_json::json!({}));
+                    serde_json::json!({
+                        "agent_did": did,
+                        "manifest": parsed,
+                        "registered_at": ts,
+                    })
                 })
-            }).collect::<Vec<_>>())
+                .collect::<Vec<_>>())
         })
         .unwrap_or_default();
     Json(serde_json::json!({ "manifests": manifests }))
@@ -717,8 +751,8 @@ async fn api_get_manifest(
     let did_decoded = did.replace("%3A", ":").replace("%3a", ":");
     match state.with_db(|db| Ok(db.get_manifest(&did_decoded))) {
         Some(Some(json)) => {
-            let parsed = serde_json::from_str::<serde_json::Value>(&json)
-                .unwrap_or(serde_json::json!({}));
+            let parsed =
+                serde_json::from_str::<serde_json::Value>(&json).unwrap_or(serde_json::json!({}));
             Json(serde_json::json!({ "agent_did": did_decoded, "manifest": parsed }))
         }
         _ => Json(serde_json::json!({ "error": "Manifest not found" })),
@@ -726,21 +760,23 @@ async fn api_get_manifest(
 }
 
 /// GET /api/v1/agents/spawned — list all active spawned agents.
-async fn api_spawned_agents(
-    State(state): State<Arc<SharedState>>,
-) -> Json<serde_json::Value> {
-    let agents: Vec<serde_json::Value> = state.spawned_agents.lock()
+async fn api_spawned_agents(State(state): State<Arc<SharedState>>) -> Json<serde_json::Value> {
+    let agents: Vec<serde_json::Value> = state
+        .spawned_agents
+        .lock()
         .values()
-        .map(|sa| serde_json::json!({
-            "child_did": sa.child_did,
-            "parent_did": sa.parent_did,
-            "nick": sa.nick,
-            "channel": sa.channel,
-            "capabilities": sa.capabilities,
-            "ttl": sa.ttl,
-            "task_ref": sa.task_ref,
-            "spawned_at": sa.spawned_at,
-        }))
+        .map(|sa| {
+            serde_json::json!({
+                "child_did": sa.child_did,
+                "parent_did": sa.parent_did,
+                "nick": sa.nick,
+                "channel": sa.channel,
+                "capabilities": sa.capabilities,
+                "ttl": sa.ttl,
+                "task_ref": sa.task_ref,
+                "spawned_at": sa.spawned_at,
+            })
+        })
         .collect();
     Json(serde_json::json!({ "spawned_agents": agents }))
 }
@@ -751,25 +787,39 @@ async fn api_channel_budget(
     axum::extract::Path(name): axum::extract::Path<String>,
 ) -> Json<serde_json::Value> {
     let channel = format!("#{name}");
-    let budget_json = state.with_db(|db| Ok(db.get_budget(&channel.to_lowercase(), None))).flatten();
+    let budget_json = state
+        .with_db(|db| Ok(db.get_budget(&channel.to_lowercase(), None)))
+        .flatten();
     match budget_json {
         Some(bj) => {
             if let Ok(budget) = serde_json::from_str::<crate::policy::types::BudgetPolicy>(&bj) {
                 let period_start = crate::connection::budget_period_start(&budget.period);
-                let total_spent = state.with_db(|db| Ok(db.sum_spend(&channel.to_lowercase(), None, &budget.unit, period_start)))
+                let total_spent = state
+                    .with_db(|db| {
+                        Ok(db.sum_spend(&channel.to_lowercase(), None, &budget.unit, period_start))
+                    })
                     .unwrap_or(0.0);
-                let by_agent: Vec<serde_json::Value> = state.with_db(|db| {
-                    Ok(db.spend_by_agent(&channel.to_lowercase(), &budget.unit, period_start)
-                        .into_iter()
-                        .map(|(did, spent, count)| serde_json::json!({
-                            "agent_did": did,
-                            "spent": spent,
-                            "items": count,
-                        }))
-                        .collect::<Vec<_>>())
-                }).unwrap_or_default();
+                let by_agent: Vec<serde_json::Value> = state
+                    .with_db(|db| {
+                        Ok(db
+                            .spend_by_agent(&channel.to_lowercase(), &budget.unit, period_start)
+                            .into_iter()
+                            .map(|(did, spent, count)| {
+                                serde_json::json!({
+                                    "agent_did": did,
+                                    "spent": spent,
+                                    "items": count,
+                                })
+                            })
+                            .collect::<Vec<_>>())
+                    })
+                    .unwrap_or_default();
                 let remaining = budget.max_amount - total_spent;
-                let pct = if budget.max_amount > 0.0 { total_spent / budget.max_amount * 100.0 } else { 0.0 };
+                let pct = if budget.max_amount > 0.0 {
+                    total_spent / budget.max_amount * 100.0
+                } else {
+                    0.0
+                };
                 Json(serde_json::json!({
                     "channel": channel,
                     "policy": serde_json::from_str::<serde_json::Value>(&bj).unwrap_or_default(),
@@ -797,25 +847,35 @@ async fn api_channel_spend(
     let channel = format!("#{name}");
     let agent = params.get("agent").map(|s| s.as_str());
     let since = params.get("since").and_then(|s| {
-        chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.timestamp())
+        chrono::DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|dt| dt.timestamp())
             .or_else(|| s.parse::<i64>().ok())
     });
-    let limit = params.get("limit").and_then(|s| s.parse().ok()).unwrap_or(100usize);
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100usize);
 
-    let records: Vec<serde_json::Value> = state.with_db(|db| {
-        Ok(db.query_spend(&channel.to_lowercase(), agent, since, limit)
-            .into_iter()
-            .map(|r| serde_json::json!({
-                "id": r.id,
-                "agent_did": r.agent_did,
-                "amount": r.amount,
-                "unit": r.unit,
-                "description": r.description,
-                "task_ref": r.task_ref,
-                "timestamp": r.timestamp,
-            }))
-            .collect::<Vec<_>>())
-    }).unwrap_or_default();
+    let records: Vec<serde_json::Value> = state
+        .with_db(|db| {
+            Ok(db
+                .query_spend(&channel.to_lowercase(), agent, since, limit)
+                .into_iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "id": r.id,
+                        "agent_did": r.agent_did,
+                        "amount": r.amount,
+                        "unit": r.unit,
+                        "description": r.description,
+                        "task_ref": r.task_ref,
+                        "timestamp": r.timestamp,
+                    })
+                })
+                .collect::<Vec<_>>())
+        })
+        .unwrap_or_default();
     Json(serde_json::json!({ "channel": channel, "spend": records }))
 }
 
@@ -825,7 +885,9 @@ async fn api_actor_identity(
     axum::extract::Path(did): axum::extract::Path<String>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
     // URL-decode the DID (colons may be encoded)
-    let did = urlencoding::decode(&did).unwrap_or(std::borrow::Cow::Borrowed(&did)).to_string();
+    let did = urlencoding::decode(&did)
+        .unwrap_or(std::borrow::Cow::Borrowed(&did))
+        .to_string();
 
     // Find session(s) for this DID
     let sessions: Vec<String> = state
@@ -902,7 +964,10 @@ async fn api_actor_identity(
     });
 
     // Check if this is a spawned agent (by DID or nick)
-    let spawned = state.spawned_agents.lock().values()
+    let spawned = state
+        .spawned_agents
+        .lock()
+        .values()
         .find(|sa| sa.child_did == did || sa.nick.eq_ignore_ascii_case(&did))
         .cloned();
 
@@ -912,7 +977,11 @@ async fn api_actor_identity(
             let nts = state.nick_to_session.lock();
             nts.get_nick(&sa.parent_session).map(|n| n.to_string())
         };
-        let parent_provenance = state.provenance_declarations.lock().get(&sa.parent_did).cloned();
+        let parent_provenance = state
+            .provenance_declarations
+            .lock()
+            .get(&sa.parent_did)
+            .cloned();
         let result = serde_json::json!({
             "did": sa.child_did,
             "actor_class": "agent",
@@ -951,7 +1020,10 @@ async fn api_actor_identity(
         obj.insert("provenance".into(), prov);
     }
     if let Some(pres) = presence {
-        obj.insert("presence".into(), serde_json::to_value(&pres).unwrap_or_default());
+        obj.insert(
+            "presence".into(),
+            serde_json::to_value(&pres).unwrap_or_default(),
+        );
     }
     if let Some(hb) = heartbeat {
         obj.insert("heartbeat".into(), hb);
@@ -983,17 +1055,19 @@ async fn api_verify_message(
     drop(channels);
 
     // Fall back to database if not in memory
-    if found.is_none() {
-        if let Some(row) = state.with_db(|db| db.find_message_by_msgid(&msgid)).flatten() {
-            found = Some(crate::server::HistoryMessage {
-                from: row.sender,
-                text: row.text,
-                timestamp: row.timestamp,
-                tags: row.tags,
-                msgid: row.msgid,
-            });
-            found_channel = row.channel;
-        }
+    if found.is_none()
+        && let Some(row) = state
+            .with_db(|db| db.find_message_by_msgid(&msgid))
+            .flatten()
+    {
+        found = Some(crate::server::HistoryMessage {
+            from: row.sender,
+            text: row.text,
+            timestamp: row.timestamp,
+            tags: row.tags,
+            msgid: row.msgid,
+        });
+        found_channel = row.channel;
     }
 
     let msg = found.ok_or((
@@ -1160,10 +1234,10 @@ async fn api_channel_history(
     // These channels require membership to read history — use IRC CHATHISTORY instead.
     {
         let channels = state.channels.lock();
-        if let Some(ch) = channels.get(&channel.to_lowercase()) {
-            if ch.invite_only || ch.key.is_some() {
-                return Err(StatusCode::FORBIDDEN);
-            }
+        if let Some(ch) = channels.get(&channel.to_lowercase())
+            && (ch.invite_only || ch.key.is_some())
+        {
+            return Err(StatusCode::FORBIDDEN);
         }
     }
 
@@ -1309,7 +1383,10 @@ async fn api_channel_export(
 
     match params.format.as_deref().unwrap_or("json") {
         "markdown" | "md" => Ok((
-            [(axum::http::header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+            [(
+                axum::http::header::CONTENT_TYPE,
+                "text/markdown; charset=utf-8",
+            )],
             format_export_markdown(&channel, &rows),
         )
             .into_response()),
@@ -1488,15 +1565,25 @@ async fn api_channel_pins(
             let channels = state.channels.lock();
             let ch = channels.get(&channel);
             ch.and_then(|c| {
-                c.history.iter().find(|m| m.msgid.as_deref() == Some(&p.msgid)).map(|msg| {
-                    (msg.from.clone(), msg.text.clone(), msg.timestamp)
-                })
+                c.history
+                    .iter()
+                    .find(|m| m.msgid.as_deref() == Some(&p.msgid))
+                    .map(|msg| (msg.from.clone(), msg.text.clone(), msg.timestamp))
             })
-        }.or_else(|| {
-            state.with_db(|db| db.find_message_by_msgid(&p.msgid))
+        }
+        .or_else(|| {
+            state
+                .with_db(|db| db.find_message_by_msgid(&p.msgid))
                 .flatten()
                 .map(|row| (row.sender, row.text, row.timestamp))
-        }).unwrap_or_else(|| ("unknown".to_string(), "[message not found]".to_string(), p.pinned_at));
+        })
+        .unwrap_or_else(|| {
+            (
+                "unknown".to_string(),
+                "[message not found]".to_string(),
+                p.pinned_at,
+            )
+        });
 
         pins.push(serde_json::json!({
             "msgid": p.msgid,
@@ -1510,7 +1597,9 @@ async fn api_channel_pins(
         }));
     }
 
-    Ok(Json(serde_json::json!({ "channel": channel, "pins": pins })))
+    Ok(Json(
+        serde_json::json!({ "channel": channel, "pins": pins }),
+    ))
 }
 
 async fn api_user(
@@ -1838,7 +1927,12 @@ async fn safe_outbound_client(
         .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
     let addrs = freeq_sdk::ssrf::resolve_and_check(&host, port)
         .await
-        .map_err(|_| (StatusCode::BAD_REQUEST, "Refused: target is not publicly routable"))?;
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                "Refused: target is not publicly routable",
+            )
+        })?;
 
     let mut builder = reqwest::Client::builder()
         .timeout(timeout)
@@ -2025,10 +2119,20 @@ async fn auth_login(
         .get(&pr_url)
         .send()
         .await
-        .map_err(|_| (StatusCode::BAD_GATEWAY, "PDS metadata fetch failed".to_string()))?
+        .map_err(|_| {
+            (
+                StatusCode::BAD_GATEWAY,
+                "PDS metadata fetch failed".to_string(),
+            )
+        })?
         .json()
         .await
-        .map_err(|_| (StatusCode::BAD_GATEWAY, "PDS metadata parse failed".to_string()))?;
+        .map_err(|_| {
+            (
+                StatusCode::BAD_GATEWAY,
+                "PDS metadata parse failed".to_string(),
+            )
+        })?;
 
     let auth_server = pr_meta["authorization_servers"][0]
         .as_str()
@@ -2050,10 +2154,20 @@ async fn auth_login(
         .get(&as_url)
         .send()
         .await
-        .map_err(|_| (StatusCode::BAD_GATEWAY, "Auth server metadata failed".to_string()))?
+        .map_err(|_| {
+            (
+                StatusCode::BAD_GATEWAY,
+                "Auth server metadata failed".to_string(),
+            )
+        })?
         .json()
         .await
-        .map_err(|_| (StatusCode::BAD_GATEWAY, "Auth server metadata parse failed".to_string()))?;
+        .map_err(|_| {
+            (
+                StatusCode::BAD_GATEWAY,
+                "Auth server metadata parse failed".to_string(),
+            )
+        })?;
 
     let authorization_endpoint = auth_meta["authorization_endpoint"]
         .as_str()
@@ -2141,7 +2255,12 @@ async fn auth_login(
         let nonce = dpop_nonce.as_deref().unwrap();
         let dpop_proof2 = dpop_key
             .proof("POST", par_endpoint, Some(nonce), None)
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DPoP retry failed".to_string()))?;
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DPoP retry failed".to_string(),
+                )
+            })?;
         let resp2 = par_client
             .post(par_endpoint)
             .header("DPoP", &dpop_proof2)
@@ -2235,7 +2354,7 @@ async fn auth_step_up(
 ) -> Result<Redirect, (StatusCode, String)> {
     // Validate the requested purpose. Login is *not* a valid step-up
     // purpose — that's what `/auth/login` is for.
-    let purpose = crate::server::OauthPurpose::from_str(&q.purpose).ok_or((
+    let purpose = crate::server::OauthPurpose::parse(&q.purpose).ok_or((
         StatusCode::BAD_REQUEST,
         format!("Unknown purpose: {}", q.purpose),
     ))?;
@@ -2282,40 +2401,60 @@ async fn auth_step_up(
         "{}/.well-known/oauth-protected-resource",
         pds_url.trim_end_matches('/')
     );
-    let (_pr_parsed, pr_client) =
-        safe_outbound_client(&pr_url, std::time::Duration::from_secs(8))
-            .await
-            .map_err(|(s, m)| (s, m.to_string()))?;
+    let (_pr_parsed, pr_client) = safe_outbound_client(&pr_url, std::time::Duration::from_secs(8))
+        .await
+        .map_err(|(s, m)| (s, m.to_string()))?;
     let pr_meta: serde_json::Value = pr_client
         .get(&pr_url)
         .send()
         .await
-        .map_err(|_| (StatusCode::BAD_GATEWAY, "PDS metadata fetch failed".to_string()))?
+        .map_err(|_| {
+            (
+                StatusCode::BAD_GATEWAY,
+                "PDS metadata fetch failed".to_string(),
+            )
+        })?
         .json()
         .await
-        .map_err(|_| (StatusCode::BAD_GATEWAY, "PDS metadata parse failed".to_string()))?;
-    let auth_server = pr_meta["authorization_servers"][0]
-        .as_str()
-        .ok_or((StatusCode::BAD_GATEWAY, "No authorization server".to_string()))?;
+        .map_err(|_| {
+            (
+                StatusCode::BAD_GATEWAY,
+                "PDS metadata parse failed".to_string(),
+            )
+        })?;
+    let auth_server = pr_meta["authorization_servers"][0].as_str().ok_or((
+        StatusCode::BAD_GATEWAY,
+        "No authorization server".to_string(),
+    ))?;
     let as_url = format!(
         "{}/.well-known/oauth-authorization-server",
         auth_server.trim_end_matches('/')
     );
-    let (_as_parsed, as_client) =
-        safe_outbound_client(&as_url, std::time::Duration::from_secs(8))
-            .await
-            .map_err(|(s, m)| (s, m.to_string()))?;
+    let (_as_parsed, as_client) = safe_outbound_client(&as_url, std::time::Duration::from_secs(8))
+        .await
+        .map_err(|(s, m)| (s, m.to_string()))?;
     let auth_meta: serde_json::Value = as_client
         .get(&as_url)
         .send()
         .await
-        .map_err(|_| (StatusCode::BAD_GATEWAY, "Auth server metadata failed".to_string()))?
+        .map_err(|_| {
+            (
+                StatusCode::BAD_GATEWAY,
+                "Auth server metadata failed".to_string(),
+            )
+        })?
         .json()
         .await
-        .map_err(|_| (StatusCode::BAD_GATEWAY, "Auth server metadata parse failed".to_string()))?;
-    let authorization_endpoint = auth_meta["authorization_endpoint"]
-        .as_str()
-        .ok_or((StatusCode::BAD_GATEWAY, "No authorization_endpoint".to_string()))?;
+        .map_err(|_| {
+            (
+                StatusCode::BAD_GATEWAY,
+                "Auth server metadata parse failed".to_string(),
+            )
+        })?;
+    let authorization_endpoint = auth_meta["authorization_endpoint"].as_str().ok_or((
+        StatusCode::BAD_GATEWAY,
+        "No authorization_endpoint".to_string(),
+    ))?;
     let token_endpoint = auth_meta["token_endpoint"]
         .as_str()
         .ok_or((StatusCode::BAD_GATEWAY, "No token_endpoint".to_string()))?;
@@ -2365,7 +2504,12 @@ async fn auth_step_up(
     // reflect attacker-controlled URLs back in the response body.
     let dpop_proof = dpop_key
         .proof("POST", par_endpoint, None, None)
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DPoP proof failed".to_string()))?;
+        .map_err(|_| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DPoP proof failed".to_string(),
+            )
+        })?;
     let resp = par_client
         .post(par_endpoint)
         .header("DPoP", &dpop_proof)
@@ -2384,7 +2528,12 @@ async fn auth_step_up(
         let nonce = dpop_nonce.as_deref().unwrap();
         let dpop_proof2 = dpop_key
             .proof("POST", par_endpoint, Some(nonce), None)
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "DPoP retry failed".to_string()))?;
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "DPoP retry failed".to_string(),
+                )
+            })?;
         let resp2 = par_client
             .post(par_endpoint)
             .header("DPoP", &dpop_proof2)
@@ -2695,7 +2844,10 @@ p {{ color: #a0a0b0; margin: 8px 0; }}
             return Ok((
                 [
                     ("content-type", "text/html; charset=utf-8"),
-                    ("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'"),
+                    (
+                        "content-security-policy",
+                        "default-src 'none'; style-src 'unsafe-inline'",
+                    ),
                 ],
                 html,
             ));
@@ -2965,7 +3117,10 @@ async fn api_upload(
     mut multipart: axum::extract::Multipart,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     if !state.rest_rate_limiter.check(addr.ip()) {
-        return Err((StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded".to_string()));
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            "Rate limit exceeded".to_string(),
+        ));
     }
     let mut file_data: Option<Vec<u8>> = None;
     let mut content_type = String::from("application/octet-stream");
@@ -3086,8 +3241,7 @@ async fn api_upload(
             let purpose = crate::server::OauthPurpose::BlobUpload;
             if let Some(s) = sessions.get(&(did.clone(), purpose)) {
                 Some(s.clone())
-            } else if let Some(s) =
-                sessions.get(&(did.clone(), crate::server::OauthPurpose::Login))
+            } else if let Some(s) = sessions.get(&(did.clone(), crate::server::OauthPurpose::Login))
                 && crate::server::scope_satisfies_purpose(&s.granted_scope, purpose)
             {
                 Some(s.clone())
@@ -3118,7 +3272,11 @@ async fn api_upload(
                 };
                 tracing::warn!(did = %did, has_login, "Share denied: no blob-upload-capable session");
                 return Err((
-                    if has_login { StatusCode::FORBIDDEN } else { StatusCode::UNAUTHORIZED },
+                    if has_login {
+                        StatusCode::FORBIDDEN
+                    } else {
+                        StatusCode::UNAUTHORIZED
+                    },
                     body.to_string(),
                 ));
             }
@@ -3144,7 +3302,10 @@ async fn api_upload(
     let scope = channel.clone().unwrap_or_default();
     store.put(&media_id, &file_data).map_err(|e| {
         tracing::error!(media_id = %media_id, error = %e, "Failed to write private media blob");
-        (StatusCode::INTERNAL_SERVER_ERROR, "Failed to store media".into())
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to store media".into(),
+        )
     })?;
     let created_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -3163,7 +3324,10 @@ async fn api_upload(
         // Roll back the orphaned blob so we don't leave unreferenced bytes.
         store.remove(&media_id);
         tracing::error!(media_id = %media_id, error = %e, "Failed to record media metadata");
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to store media".into()));
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to store media".into(),
+        ));
     }
     let (origin, _) = derive_web_origin(&headers);
     let client_url = store.capability_url(&origin, &media_id, &stored_filename);
@@ -3279,13 +3443,17 @@ async fn av_moq_ws_root(
         None => (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             "SFU not initialized",
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
 #[cfg(not(feature = "av-native"))]
 async fn av_moq_ws_root() -> impl IntoResponse {
-    (axum::http::StatusCode::SERVICE_UNAVAILABLE, "AV not enabled")
+    (
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        "AV not enabled",
+    )
 }
 
 /// WebSocket MoQ endpoint with path — upgrades to MoQ session through the SFU cluster.
@@ -3307,13 +3475,17 @@ async fn av_moq_ws(
         None => (
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             "SFU not initialized",
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
 #[cfg(not(feature = "av-native"))]
 async fn av_moq_ws() -> impl IntoResponse {
-    (axum::http::StatusCode::SERVICE_UNAVAILABLE, "AV not enabled")
+    (
+        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+        "AV not enabled",
+    )
 }
 
 /// Serve the AV call page (SFU web UI for browser audio).
@@ -3323,7 +3495,10 @@ async fn av_call_page() -> impl IntoResponse {
         axum::http::StatusCode::OK,
         [
             ("content-type", "text/html; charset=utf-8"),
-            ("content-security-policy", "default-src 'self'; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: https:; media-src 'self' blob:; img-src 'self' data:; worker-src 'self' blob:"),
+            (
+                "content-security-policy",
+                "default-src 'self'; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: https:; media-src 'self' blob:; img-src 'self' data:; worker-src 'self' blob:",
+            ),
         ],
         include_str!("../static/av/call.html"),
     )
@@ -3351,28 +3526,54 @@ async fn av_asset(Path(filename): Path<String>) -> impl IntoResponse {
         // just `import "@moq/{publish,watch}/element"`). Built with
         // @moq/hang pinned to 0.2.5 because 0.2.6 transitively
         // depends on @moq/loc which is unpublished on npm.
-        ("watch-CTz_Tjt7.js", include_str!("../static/av/assets/watch-CTz_Tjt7.js")),
-        ("publish-Du5ksDQe.js", include_str!("../static/av/assets/publish-Du5ksDQe.js")),
-        ("time-D4Xqna_f.js", include_str!("../static/av/assets/time-D4Xqna_f.js")),
-        ("main-DGBFe0O7-CIZu5tmC.js", include_str!("../static/av/assets/main-DGBFe0O7-CIZu5tmC.js")),
-        ("main-DGBFe0O7-DQ8if_La.js", include_str!("../static/av/assets/main-DGBFe0O7-DQ8if_La.js")),
-        ("libav-opus-af-BlMWboA7-B4GfDr9_.js", include_str!("../static/av/assets/libav-opus-af-BlMWboA7-B4GfDr9_.js")),
-        ("libav-opus-af-BlMWboA7-CFTeN5TA.js", include_str!("../static/av/assets/libav-opus-af-BlMWboA7-CFTeN5TA.js")),
+        (
+            "watch-CTz_Tjt7.js",
+            include_str!("../static/av/assets/watch-CTz_Tjt7.js"),
+        ),
+        (
+            "publish-Du5ksDQe.js",
+            include_str!("../static/av/assets/publish-Du5ksDQe.js"),
+        ),
+        (
+            "time-D4Xqna_f.js",
+            include_str!("../static/av/assets/time-D4Xqna_f.js"),
+        ),
+        (
+            "main-DGBFe0O7-CIZu5tmC.js",
+            include_str!("../static/av/assets/main-DGBFe0O7-CIZu5tmC.js"),
+        ),
+        (
+            "main-DGBFe0O7-DQ8if_La.js",
+            include_str!("../static/av/assets/main-DGBFe0O7-DQ8if_La.js"),
+        ),
+        (
+            "libav-opus-af-BlMWboA7-B4GfDr9_.js",
+            include_str!("../static/av/assets/libav-opus-af-BlMWboA7-B4GfDr9_.js"),
+        ),
+        (
+            "libav-opus-af-BlMWboA7-CFTeN5TA.js",
+            include_str!("../static/av/assets/libav-opus-af-BlMWboA7-CFTeN5TA.js"),
+        ),
     ];
     for (name, body) in files {
         if filename == *name {
             return (
                 axum::http::StatusCode::OK,
-                [("content-type", "application/javascript; charset=utf-8".to_string())],
+                [(
+                    "content-type",
+                    "application/javascript; charset=utf-8".to_string(),
+                )],
                 body.to_string(),
-            ).into_response();
+            )
+                .into_response();
         }
     }
     (
         axum::http::StatusCode::NOT_FOUND,
         [("content-type", "text/plain".to_string())],
         "not found".to_string(),
-    ).into_response()
+    )
+        .into_response()
 }
 
 async fn channel_invite_page(
@@ -3733,7 +3934,9 @@ async fn api_og_preview(
                 .into_response();
         }
     };
-    let port = url.port().unwrap_or(if url.scheme() == "https" { 443 } else { 80 });
+    let port = url
+        .port()
+        .unwrap_or(if url.scheme() == "https" { 443 } else { 80 });
     let addrs = match freeq_sdk::ssrf::resolve_and_check(&host, port).await {
         Ok(a) => a,
         Err(e) => {
@@ -4005,9 +4208,7 @@ async fn security_headers(
 // ── AV Sessions REST API ────────────────────────────────────────────
 
 /// GET /api/v1/sessions — list all active sessions.
-async fn api_sessions_list(
-    State(state): State<Arc<SharedState>>,
-) -> Json<serde_json::Value> {
+async fn api_sessions_list(State(state): State<Arc<SharedState>>) -> Json<serde_json::Value> {
     let mgr = state.av_sessions.lock();
     let sessions: Vec<serde_json::Value> = mgr
         .active_sessions()
@@ -4067,7 +4268,10 @@ async fn api_create_artifact(
     {
         let mgr = state.av_sessions.lock();
         if mgr.get(&id).is_none() {
-            return Err((axum::http::StatusCode::NOT_FOUND, "Session not found".to_string()));
+            return Err((
+                axum::http::StatusCode::NOT_FOUND,
+                "Session not found".to_string(),
+            ));
         }
     }
 
@@ -4075,12 +4279,14 @@ async fn api_create_artifact(
     let kind: crate::av::ArtifactKind = serde_json::from_str(&format!("\"{kind_str}\""))
         .unwrap_or(crate::av::ArtifactKind::Summary);
     let content_ref = body["content_ref"].as_str().ok_or((
-        axum::http::StatusCode::BAD_REQUEST, "content_ref required".to_string(),
+        axum::http::StatusCode::BAD_REQUEST,
+        "content_ref required".to_string(),
     ))?;
     let content_type = body["content_type"].as_str().unwrap_or("text/plain");
     let visibility_str = body["visibility"].as_str().unwrap_or("participants");
-    let visibility: crate::av::ArtifactVisibility = serde_json::from_str(&format!("\"{visibility_str}\""))
-        .unwrap_or(crate::av::ArtifactVisibility::Participants);
+    let visibility: crate::av::ArtifactVisibility =
+        serde_json::from_str(&format!("\"{visibility_str}\""))
+            .unwrap_or(crate::av::ArtifactVisibility::Participants);
     let title = body["title"].as_str();
     let created_by = body["created_by"].as_str();
 
@@ -4107,7 +4313,8 @@ async fn api_create_artifact(
         let kind_label = kind_str;
         let title_display = title.unwrap_or(kind_label);
         crate::connection::messaging::broadcast_av_notice(
-            &state, &channel,
+            &state,
+            &channel,
             &format!("Session artifact available: {title_display} ({kind_label})"),
         );
     }
@@ -4128,7 +4335,9 @@ async fn api_channel_sessions(
     let mgr = state.av_sessions.lock();
 
     // Active session (if any)
-    let active = mgr.active_session_for_channel(&name).map(|s| session_to_json(s, &mgr));
+    let active = mgr
+        .active_session_for_channel(&name)
+        .map(|s| session_to_json(s, &mgr));
 
     // Recent ended sessions from DB
     let recent = state
@@ -4153,19 +4362,26 @@ async fn api_channel_sessions(
     }))
 }
 
-fn session_to_json(s: &crate::av::AvSession, mgr: &crate::av::AvSessionManager) -> serde_json::Value {
-    let participants: Vec<serde_json::Value> = s.participants.values()
+fn session_to_json(
+    s: &crate::av::AvSession,
+    mgr: &crate::av::AvSessionManager,
+) -> serde_json::Value {
+    let participants: Vec<serde_json::Value> = s
+        .participants
+        .values()
         .filter(|p| p.left_at.is_none())
-        .map(|p| serde_json::json!({
-            "did": p.did,
-            "nick": p.nick,
-            "role": p.role,
-            "joined_at": p.joined_at,
-            // Per-device suffix; required by the web client to build the
-            // MoQ broadcast path `{session_id}/{nick}~{instance_id}` so
-            // two devices on one DID get distinct watch subscriptions.
-            "instance_id": p.instance_id,
-        }))
+        .map(|p| {
+            serde_json::json!({
+                "did": p.did,
+                "nick": p.nick,
+                "role": p.role,
+                "joined_at": p.joined_at,
+                // Per-device suffix; required by the web client to build the
+                // MoQ broadcast path `{session_id}/{nick}~{instance_id}` so
+                // two devices on one DID get distinct watch subscriptions.
+                "instance_id": p.instance_id,
+            })
+        })
         .collect();
     serde_json::json!({
         "id": s.id,
@@ -4242,8 +4458,14 @@ mod metrics_tests {
             "freeq_sasl_failure_total",
             "freeq_uptime_seconds",
         ] {
-            assert!(out.contains(&format!("# HELP {name} ")), "missing HELP for {name}");
-            assert!(out.contains(&format!("# TYPE {name} ")), "missing TYPE for {name}");
+            assert!(
+                out.contains(&format!("# HELP {name} ")),
+                "missing HELP for {name}"
+            );
+            assert!(
+                out.contains(&format!("# TYPE {name} ")),
+                "missing TYPE for {name}"
+            );
         }
         assert!(out.ends_with('\n'));
     }

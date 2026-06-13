@@ -180,11 +180,16 @@ pub(super) fn broadcast_to_channel(state: &Arc<SharedState>, channel: &str, msg:
 
     let conns = state.connections.lock();
     for member_session in &members {
-        if let Some(tx) = conns.get(member_session) {
-            if let Err(_e) = tx.try_send(msg.to_string()) {
-                let nick = state.nick_to_session.lock().get_nick(member_session).map(|s| s.to_string()).unwrap_or_default();
-                tracing::warn!(session = %member_session, nick = %nick, channel = %channel, "Broadcast: send buffer full, message dropped");
-            }
+        if let Some(tx) = conns.get(member_session)
+            && let Err(_e) = tx.try_send(msg.to_string())
+        {
+            let nick = state
+                .nick_to_session
+                .lock()
+                .get_nick(member_session)
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            tracing::warn!(session = %member_session, nick = %nick, channel = %channel, "Broadcast: send buffer full, message dropped");
         }
     }
 }
@@ -245,7 +250,9 @@ pub(crate) fn make_extended_join_with_class(
 ) -> String {
     let account = did.unwrap_or("*");
     if actor_class != super::ActorClass::Human {
-        format!("@+freeq.at/actor-class={actor_class} :{hostmask} JOIN {channel} {account} :{realname}\r\n")
+        format!(
+            "@+freeq.at/actor-class={actor_class} :{hostmask} JOIN {channel} {account} :{realname}\r\n"
+        )
     } else {
         format!(":{hostmask} JOIN {channel} {account} :{realname}\r\n")
     }
