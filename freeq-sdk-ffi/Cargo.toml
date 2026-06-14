@@ -40,7 +40,7 @@ aes-gcm = "0.10"
 #                handles rendering via AVSampleBufferDisplayLayer
 moq-native = { git = "https://github.com/Frando/moq", branch = "deps/iroh-main", default-features = false, features = ["noq", "websocket", "aws-lc-rs"], optional = true }
 moq-lite = { git = "https://github.com/Frando/moq", branch = "deps/iroh-main", optional = true }
-iroh-live = { git = "https://github.com/n0-computer/iroh-live", default-features = false, features = ["opus", "h264", "videotoolbox"], optional = true }
+iroh-live = { git = "https://github.com/n0-computer/iroh-live", rev = "edd9bcc530a615f3ab3a6919e96790a077905376", default-features = false, features = ["opus", "h264", "videotoolbox"], optional = true }
 rustls = { version = "0.23", features = ["aws-lc-rs"], default-features = false, optional = true }
 url = { version = "2", optional = true }
 anyhow = { workspace = true, optional = true }

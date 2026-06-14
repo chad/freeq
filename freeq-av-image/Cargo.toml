@@ -12,7 +12,7 @@ path = "src/main.rs"
 freeq-av = { path = "../freeq-av" }
 # iroh-live for the VideoSource trait + VideoFrame the H.264 encoder pulls
 # (same spec freeq-eliza uses, so the workspace resolves one copy).
-iroh-live = { git = "https://github.com/n0-computer/iroh-live", default-features = false, features = ["opus", "h264"] }
+iroh-live = { git = "https://github.com/n0-computer/iroh-live", rev = "edd9bcc530a615f3ab3a6919e96790a077905376", default-features = false, features = ["opus", "h264"] }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }

@@ -47,7 +47,7 @@ iroh-quinn = { workspace = true }
 parking_lot = { version = "0.12", features = ["deadlock_detection"] }
 automerge = { workspace = true }
 ulid = "1"
-iroh-live = { git = "https://github.com/n0-computer/iroh-live", default-features = false, features = ["opus"], optional = true }
+iroh-live = { git = "https://github.com/n0-computer/iroh-live", rev = "edd9bcc530a615f3ab3a6919e96790a077905376", default-features = false, features = ["opus"], optional = true }
 moq-relay = { git = "https://github.com/Frando/moq", branch = "deps/iroh-main", default-features = false, optional = true }
 moq-native = { git = "https://github.com/Frando/moq", branch = "deps/iroh-main", default-features = false, features = ["noq", "iroh", "aws-lc-rs"], optional = true }
 moq-lite = { git = "https://github.com/Frando/moq", branch = "deps/iroh-main", optional = true }
