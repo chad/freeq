@@ -23,6 +23,18 @@ Status legend: ☐ todo · ◐ in progress · ☑ done · ⛔ blocked
 
 ---
 
+## 2026-06-14 finish-the-plan checklist
+
+- ☑ Add macOS voice-message recording from the compose bar.
+- ☑ Add on-device Speech transcription for recorded voice messages.
+- ☑ Upload recorded audio through the existing `/api/v1/upload` path and send the canonical voice-message text.
+- ☑ Add macOS channel policy/join-gate controls to Channel Settings using the existing `POLICY` protocol.
+- ☑ Re-run SwiftPM tests and full Xcode build.
+- ☑ Commit the remaining parity work.
+- ☑ Launch the macOS app locally.
+
+---
+
 ## Method
 
 Four feature inventories were assembled (macOS / iOS / web / TUI) and ground-truthed
@@ -58,7 +70,7 @@ The macOS `FreeqSDK.xcframework` was built **without** the `av` cargo feature
 - ☑ Inline `VideoPlayer` (AVKit) for `.mp4/.webm/.mov`
 - ☑ Inline audio player for `.m4a/.mp3/.ogg/.wav`
 - ☑ Voice message rendering (🎤) with playback
-- ☐ (stretch) Voice message recording + on-device transcription — deferred
+- ☑ Voice message recording + on-device transcription
 
 ### 3. Slash-command parity (TUI is richest) — ☑ DONE
 Added as typed commands + autocomplete + help:
@@ -79,7 +91,7 @@ Added as typed commands + autocomplete + help:
 - ☑ Step-up auth: NOT needed on macOS. macOS uploads via the server's own
       `/api/v1/upload` (DID-based), not direct PDS blob upload, so the
       incremental-OAuth `blob_upload` scope dance iOS/web do doesn't apply.
-- ☐ Channel join-gates / policy editor — web-unique UX; deferred (niche).
+- ☑ Channel join-gates / policy editor
 
 ### Already present on macOS (verified, not gaps)
 Image lightbox, Bluesky embeds, YouTube thumbnails, link previews, drag-and-drop

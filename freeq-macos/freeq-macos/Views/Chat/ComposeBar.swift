@@ -1,3 +1,5 @@
+import AVFoundation
+@preconcurrency import Speech
 import SwiftUI
 
 struct ComposeBar: View {
@@ -11,6 +13,14 @@ struct ComposeBar: View {
     @State private var pendingUpload: PendingUpload?
     @State private var isUploading = false
     @State private var autocompleteIndex: Int = 0
+    @State private var voiceRecorder: AVAudioRecorder?
+    @State private var voiceRecordingURL: URL?
+    @State private var voiceRecordingTime: TimeInterval = 0
+    @State private var voiceTimer: Timer?
+    @State private var isRecordingVoice = false
+    @State private var isUploadingVoice = false
+    @State private var isTranscribingVoice = false
+    @State private var voiceError: String?
     @AppStorage("freeq.crossPostBluesky") private var crossPostBluesky = false
 
     private var isEditing: Bool { appState.editingMessageId != nil }
@@ -108,6 +118,41 @@ struct ComposeBar: View {
                 .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
             }
 
+            if isRecordingVoice || isUploadingVoice || voiceError != nil {
+                HStack(spacing: 8) {
+                    Image(systemName: isRecordingVoice ? "record.circle.fill" : (voiceError == nil ? "waveform" : "exclamationmark.triangle.fill"))
+                        .foregroundStyle(isRecordingVoice ? .red : (voiceError == nil ? .blue : .orange))
+                    if isRecordingVoice {
+                        Text("Recording \(formatDuration(voiceRecordingTime))")
+                            .font(.caption.weight(.medium))
+                    } else if isUploadingVoice {
+                        ProgressView()
+                            .scaleEffect(0.6)
+                        Text(isTranscribingVoice ? "Transcribing and sending voice message..." : "Sending voice message...")
+                            .font(.caption)
+                    } else if let voiceError {
+                        Text(voiceError)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                    Spacer()
+                    if isRecordingVoice {
+                        Button("Cancel") { cancelVoiceRecording() }
+                            .font(.caption)
+                    } else if voiceError != nil {
+                        Button {
+                            self.voiceError = nil
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.65))
+            }
+
             // Autocomplete popup
             AutocompletePopup(text: $text, selectedIndex: $autocompleteIndex, anchor: .zero)
 
@@ -121,6 +166,17 @@ struct ComposeBar: View {
                 .buttonStyle(.plain)
                 .help("Attach file (images)")
                 .disabled(appState.authenticatedDID == nil)
+
+                Button {
+                    toggleVoiceRecording()
+                } label: {
+                    Image(systemName: isRecordingVoice ? "stop.circle.fill" : "mic.circle")
+                        .font(.title3)
+                        .foregroundStyle(isRecordingVoice ? .red : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help(isRecordingVoice ? "Stop and send voice message" : "Record voice message")
+                .disabled(appState.authenticatedDID == nil || isUploadingVoice || pendingUpload != nil)
 
                 // Text editor
                 ZStack(alignment: .topLeading) {
@@ -212,6 +268,10 @@ struct ComposeBar: View {
         .onChange(of: appState.activeChannel) { _, _ in
             focusToken &+= 1
         }
+        .onDisappear {
+            voiceTimer?.invalidate()
+            voiceRecorder?.stop()
+        }
     }
 
     // Input history
@@ -255,7 +315,7 @@ struct ComposeBar: View {
 
     private func pickFile() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image, .png, .jpeg, .gif]
+        panel.allowedContentTypes = [.image, .png, .jpeg, .gif, .mpeg4Movie, .movie, .mp3, .wav, .mpeg4Audio, .pdf]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         if panel.runModal() == .OK, let url = panel.url {
@@ -300,6 +360,13 @@ struct ComposeBar: View {
         case "jpg", "jpeg": contentType = "image/jpeg"
         case "gif": contentType = "image/gif"
         case "webp": contentType = "image/webp"
+        case "mp4", "m4v": contentType = "video/mp4"
+        case "mov": contentType = "video/quicktime"
+        case "mp3": contentType = "audio/mpeg"
+        case "m4a": contentType = "audio/mp4"
+        case "wav": contentType = "audio/wav"
+        case "ogg": contentType = "audio/ogg"
+        case "pdf": contentType = "application/pdf"
         default: contentType = "application/octet-stream"
         }
         let preview = NSImage(contentsOf: url)
@@ -338,6 +405,194 @@ struct ComposeBar: View {
         }
     }
 
+    // MARK: - Voice Recording
+
+    private func toggleVoiceRecording() {
+        if isRecordingVoice {
+            stopVoiceRecordingAndSend()
+        } else {
+            startVoiceRecording()
+        }
+    }
+
+    private func startVoiceRecording() {
+        guard appState.authenticatedDID != nil else {
+            voiceError = "Voice messages require AT Protocol authentication."
+            return
+        }
+        voiceError = nil
+        let begin = {
+            do {
+                let url = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("freeq-voice-\(UUID().uuidString).m4a")
+                let settings: [String: Any] = [
+                    AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+                    AVSampleRateKey: 44_100,
+                    AVNumberOfChannelsKey: 1,
+                    AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
+                ]
+                let recorder = try AVAudioRecorder(url: url, settings: settings)
+                recorder.isMeteringEnabled = true
+                recorder.record()
+                voiceRecorder = recorder
+                voiceRecordingURL = url
+                voiceRecordingTime = 0
+                isRecordingVoice = true
+                voiceTimer?.invalidate()
+                voiceTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+                    voiceRecordingTime = recorder.currentTime
+                    if voiceRecordingTime >= 300 {
+                        stopVoiceRecordingAndSend()
+                    }
+                }
+            } catch {
+                voiceError = "Could not start recording: \(error.localizedDescription)"
+            }
+        }
+
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            begin()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                DispatchQueue.main.async {
+                    if granted { begin() }
+                    else { voiceError = "Microphone access is required to record voice messages." }
+                }
+            }
+        default:
+            voiceError = "Microphone access is required to record voice messages."
+        }
+    }
+
+    private func stopVoiceRecordingAndSend() {
+        voiceTimer?.invalidate()
+        voiceTimer = nil
+        guard let recorder = voiceRecorder, isRecordingVoice else { return }
+        recorder.stop()
+        voiceRecorder = nil
+        isRecordingVoice = false
+        let duration = recorder.currentTime
+        let url = recorder.url
+        if duration < 0.5 {
+            try? FileManager.default.removeItem(at: url)
+            voiceRecordingURL = nil
+            voiceRecordingTime = 0
+            voiceError = "Voice message was too short."
+            return
+        }
+        sendVoiceRecording(url: url, duration: duration)
+    }
+
+    private func cancelVoiceRecording() {
+        voiceTimer?.invalidate()
+        voiceTimer = nil
+        voiceRecorder?.stop()
+        if let url = voiceRecordingURL {
+            try? FileManager.default.removeItem(at: url)
+        }
+        voiceRecorder = nil
+        voiceRecordingURL = nil
+        voiceRecordingTime = 0
+        isRecordingVoice = false
+        voiceError = nil
+    }
+
+    private func sendVoiceRecording(url: URL, duration: TimeInterval) {
+        guard let did = appState.authenticatedDID,
+              let target = appState.activeChannel,
+              let data = try? Data(contentsOf: url) else { return }
+        let durationLabel = formatDuration(duration)
+        isUploadingVoice = true
+        isTranscribingVoice = true
+        Task {
+            async let transcript = MacVoiceTranscriber.transcribe(url)
+            do {
+                let uploaded = try await FileUploader.upload(
+                    data: data,
+                    filename: url.lastPathComponent,
+                    contentType: "audio/mp4",
+                    did: did,
+                    channel: target.hasPrefix("#") ? target : nil
+                )
+                let cleanedTranscript = (await transcript)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let body: String
+                if let cleanedTranscript, !cleanedTranscript.isEmpty {
+                    body = "🎤 Voice message (\(durationLabel)) \(uploaded)\n💬 \(cleanedTranscript)"
+                } else {
+                    body = "🎤 Voice message (\(durationLabel)) \(uploaded)"
+                }
+                await MainActor.run {
+                    appState.sendMessage(to: target, text: body)
+                    isUploadingVoice = false
+                    isTranscribingVoice = false
+                    voiceRecordingURL = nil
+                    voiceRecordingTime = 0
+                    voiceError = nil
+                }
+            } catch {
+                _ = await transcript
+                await MainActor.run {
+                    isUploadingVoice = false
+                    isTranscribingVoice = false
+                    voiceError = "Voice upload failed: \(error.localizedDescription)"
+                }
+            }
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    private func formatDuration(_ duration: TimeInterval) -> String {
+        let total = max(0, Int(duration.rounded()))
+        return "\(total / 60):\(String(format: "%02d", total % 60))"
+    }
+
+}
+
+enum MacVoiceTranscriber {
+    static func requestAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
+        if SFSpeechRecognizer.authorizationStatus() != .notDetermined {
+            return SFSpeechRecognizer.authorizationStatus()
+        }
+        return await withCheckedContinuation { continuation in
+            SFSpeechRecognizer.requestAuthorization { status in
+                continuation.resume(returning: status)
+            }
+        }
+    }
+
+    static func transcribe(_ url: URL) async -> String? {
+        let status = await requestAuthorization()
+        guard status == .authorized else { return nil }
+        guard let recognizer = SFSpeechRecognizer(locale: .current),
+              recognizer.isAvailable,
+              recognizer.supportsOnDeviceRecognition else { return nil }
+
+        let request = SFSpeechURLRecognitionRequest(url: url)
+        request.requiresOnDeviceRecognition = true
+        request.shouldReportPartialResults = false
+
+        return await withCheckedContinuation { continuation in
+            var resumed = false
+            let task = recognizer.recognitionTask(with: request) { result, error in
+                if let result, result.isFinal, !resumed {
+                    resumed = true
+                    continuation.resume(returning: result.bestTranscription.formattedString)
+                } else if error != nil, !resumed {
+                    resumed = true
+                    continuation.resume(returning: nil)
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+                if !resumed {
+                    resumed = true
+                    task.cancel()
+                    continuation.resume(returning: nil)
+                }
+            }
+        }
+    }
 }
 
 /// NSTextView wrapper that handles Enter vs Shift+Enter, Up arrow, and Tab completion.

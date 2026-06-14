@@ -387,6 +387,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_NSCameraUsageDescription = "freeq uses your camera for video calls.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "freeq uses your microphone for voice and video calls.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "freeq uses on-device speech recognition to transcribe voice messages.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -403,6 +404,8 @@
 					AVFoundation,
 					"-framework",
 					AVKit,
+					"-framework",
+					Speech,
 					"-framework",
 					AudioToolbox,
 					"-framework",
@@ -559,6 +562,7 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_NSCameraUsageDescription = "freeq uses your camera for video calls.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "freeq uses your microphone for voice and video calls.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "freeq uses on-device speech recognition to transcribe voice messages.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -575,6 +579,8 @@
 					AVFoundation,
 					"-framework",
 					AVKit,
+					"-framework",
+					Speech,
 					"-framework",
 					AudioToolbox,
 					"-framework",
