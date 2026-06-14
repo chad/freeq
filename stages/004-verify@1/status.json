@@ -1,0 +1,6 @@
+{
+  "outcome": "failed",
+  "notes": null,
+  "failure_reason": "I/O error: creating command log directory /home/boxd/.fabro/storage/scratch/20260614-01KV3NKZEPD4365M9HVDDD07N7/runtime/stages/verify@0001: No space left on device (os error 28)",
+  "timestamp": "2026-06-14T18:52:26.940417250Z"
+}
