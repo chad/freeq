@@ -118,6 +118,17 @@ export function reconnect() {
   const opts = client['opts']; // access private opts for url/nick
   client.disconnect();
   client = null;
+  // For an authenticated, broker-backed (web) session, force a fresh broker
+  // session refresh instead of replaying the in-memory token: web tokens are
+  // single-use, so a manual reconnect with the stale token would just fail
+  // SASL and bounce us back to guest. Clearing the token + skipBrokerRefresh
+  // makes the SDK re-mint via /session on (re)connect.
+  const hasBroker =
+    !!localStorage.getItem('freeq-broker-token') &&
+    !!localStorage.getItem('freeq-broker-base');
+  if (saslState.did && hasBroker) {
+    saslState = { ...saslState, token: '', skipBrokerRefresh: false };
+  }
   const store = useStore.getState();
   store.reset();
   connect(opts.url, opts.nick, channels);

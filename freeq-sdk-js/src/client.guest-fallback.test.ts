@@ -354,6 +354,98 @@ describe('silent guest fallback after stale SASL (regression)', () => {
   });
 });
 
+// ── Silent guest fallback via broker-refresh failure (no 904) ─────
+//
+// The original regression above covers the path where the server actively
+// sends 904. But on an idle reconnect the SDK first tries to refresh the
+// broker session, and a SLOW or FAILED broker refresh used to register us as
+// a guest *client-side* — without any 904, so `_saslFailed` stayed false,
+// `authenticated('')` never fired (store kept the stale DID → verified badge
+// next to a Guest nick), and PRIVMSGs leaked under the guest identity.
+
+describe('silent guest fallback via broker-refresh failure (no 904)', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  async function connectAuthedWithBroker() {
+    const { FreeqClient } = await import('./client.js');
+    const client = new FreeqClient({
+      url: 'wss://test/irc',
+      nick: 'chad',
+      brokerUrl: 'https://broker.example',
+      brokerToken: 'broker-tok',
+      // No token + skipInitialBrokerRefresh=false → the connected handler takes
+      // the broker-refresh branch (this is the idle-reconnect shape).
+    });
+    client.setSaslCredentials({
+      token: '',
+      did: 'did:plc:chad',
+      pdsUrl: '',
+      method: 'web-token',
+    });
+    return client;
+  }
+
+  it('rejecting broker refresh must NOT register as guest; it tears down + clears auth', async () => {
+    vi.useFakeTimers();
+    globalThis.fetch = vi.fn(() => Promise.reject(new Error('network down'))) as any;
+
+    const client = await connectAuthedWithBroker();
+    const authErrors: string[] = [];
+    const authEvents: string[] = [];
+    const registeredAs: string[] = [];
+    client.on('authError', (e) => authErrors.push(e));
+    client.on('authenticated', (did) => authEvents.push(did));
+    client.on('registered', (n) => registeredAs.push(n));
+
+    client.connect();
+    // Drive the rejected fetch + its retry backoffs (500ms, 1000ms) to exhaustion.
+    await vi.advanceTimersByTimeAsync(5000);
+    vi.useRealTimers();
+
+    expect(authErrors.length, 'should surface an auth error').toBeGreaterThan(0);
+    expect(authEvents.some((d) => !d), 'must emit authenticated("") so the store clears authDid').toBe(true);
+    expect(client.authDid, 'authDid must be cleared').toBeNull();
+    expect(registeredAs.find((n) => /^Guest\d+$/.test(n)), 'must not register as a guest').toBeUndefined();
+    expect((client as unknown as { sasl: unknown }).sasl, 'stale creds dropped').toBeNull();
+  });
+
+  it('a guest-degraded socket must not let sendMessage leak a PRIVMSG', async () => {
+    vi.useFakeTimers();
+    globalThis.fetch = vi.fn(() => Promise.reject(new Error('network down'))) as any;
+
+    const client = await connectAuthedWithBroker();
+    client.connect();
+    await vi.advanceTimersByTimeAsync(5000);
+    vi.useRealTimers();
+
+    const ws = MockWebSocket.instances[0];
+    const before = ws.sent.length;
+    client.sendMessage('#general', 'good morning');
+    await flushAsync();
+    const leaked = ws.sent.slice(before).find((l) => /^(@[^ ]* )?PRIVMSG /i.test(l));
+    expect(leaked, 'PRIVMSG must not leak under the guest identity').toBeUndefined();
+  });
+
+  it('genuine guest reconnect (no DID) is unaffected — still registers normally', async () => {
+    // No sasl set at all → the broker branch is skipped and a guest registers.
+    const { FreeqClient } = await import('./client.js');
+    const client = new FreeqClient({ url: 'wss://test/irc', nick: 'visitor' });
+    const registeredAs: string[] = [];
+    client.on('registered', (n) => registeredAs.push(n));
+
+    client.connect();
+    await flushAsync();
+    const ws = MockWebSocket.instances[0];
+    ws.recv(':srv CAP * LS :message-tags server-time');
+    await flushAsync();
+    ws.recv(':srv 001 visitor :Welcome');
+    await flushAsync();
+
+    expect(registeredAs).toContain('visitor');
+  });
+});
+
 // ── Verifies the server NOTICE pattern that signals guest rename ──
 
 describe('Guest rename detection', () => {
