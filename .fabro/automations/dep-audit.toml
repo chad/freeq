@@ -1,0 +1,25 @@
+# Automation: dep-audit — triage + patch one dependency advisory.
+# https://docs.fabro.sh/execution/automations
+#
+# `api` trigger on (manual/test runs). `schedule` trigger DISABLED — flip to
+# true to run weekly (Mondays 06:00 UTC); dependency advisories move slower
+# than code, so weekly is plenty.
+
+name = "dep-audit"
+description = "Resolve one actionable dependency security advisory with the smallest viable bump; open a ready-for-review PR."
+
+[target]
+repository = "chad/freeq"
+ref = "main"
+workflow = "dep-audit"
+
+[[triggers]]
+type = "api"
+id = "manual"
+enabled = true
+
+[[triggers]]
+type = "schedule"
+id = "weekly"
+enabled = false             # ← set true to go live
+expression = "0 6 * * 1"    # 06:00 UTC every Monday

@@ -1,0 +1,20 @@
+// dep-audit — triage a dependency vulnerability and patch it safely.
+//
+// audit (read-only): run cargo audit + npm audit, pick ONE actionable finding.
+// patch: bump/patch the dependency with the smallest viable change.
+// verify: authoritative CI-mirror gate (goal_gate) — proves nothing broke.
+// pr_body: report the advisory, the bump, and the verification.
+digraph DepAudit {
+    graph [goal="Resolve one actionable dependency security advisory in freeq with the smallest viable version bump or patch, and prove the build + tests still pass. Never force a major/breaking upgrade blindly — if the only fix is breaking, report it instead of shipping it."]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    audit     [shape=box, label="Audit + triage", prompt="@prompts/audit.md", thread_id="dep", fidelity="full", reasoning_effort="medium", timeout="1800s"]
+    patch     [shape=box, label="Patch dep",      prompt="@prompts/patch.md", thread_id="dep", fidelity="full", reasoning_effort="high", timeout="2400s"]
+    verify    [shape=parallelogram, label="CI gate", script="bash .fabro/verify.sh", goal_gate=true, retry_target="patch", max_retries=2, timeout="3600s"]
+    pr_body   [shape=tab, label="PR description", prompt="@prompts/pr_body.md", thread_id="dep", fidelity="full"]
+
+    start -> audit -> patch -> verify -> pr_body -> exit
+}

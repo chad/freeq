@@ -1,0 +1,8 @@
+_version = 1
+
+[workflow]
+graph = "workflow.fabro"
+
+# Inherits PR policy and the boxd-local environment from .fabro/project.toml.
+# The hunt node overrides the model to opus in the graph (deep reasoning);
+# everything else uses the project default (sonnet).

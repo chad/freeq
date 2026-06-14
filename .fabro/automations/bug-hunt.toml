@@ -1,0 +1,25 @@
+# Automation: bug-hunt — find + fix one real correctness bug.
+# https://docs.fabro.sh/execution/automations
+#
+# `api` trigger on (manual/test runs). `schedule` trigger DISABLED — flip to
+# true to run nightly at 04:00 UTC (staggered 2h after test-coverage so the
+# single-clone executor never runs two at once).
+
+name = "bug-hunt"
+description = "Find one genuine correctness bug in freeq, pin it with a failing test, fix it, open a ready-for-review PR."
+
+[target]
+repository = "chad/freeq"
+ref = "main"
+workflow = "bug-hunt"
+
+[[triggers]]
+type = "api"
+id = "manual"
+enabled = true
+
+[[triggers]]
+type = "schedule"
+id = "nightly"
+enabled = false           # ← set true to go live
+expression = "0 4 * * *"  # 04:00 UTC daily

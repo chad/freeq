@@ -1,0 +1,25 @@
+# Automation: test-coverage — raise coverage on an undertested hotspot.
+# https://docs.fabro.sh/execution/automations
+#
+# The `api` trigger is enabled so you can launch it on demand / for the first
+# test run. The `schedule` trigger is DISABLED — flip `enabled = true` once
+# you've seen a PR you like, and it will run nightly at 02:00 UTC.
+
+name = "test-coverage"
+description = "Add tests for one of freeq's high-risk, undertested files; open a ready-for-review PR."
+
+[target]
+repository = "chad/freeq"
+ref = "main"
+workflow = "test-coverage"
+
+[[triggers]]
+type = "api"
+id = "manual"
+enabled = true
+
+[[triggers]]
+type = "schedule"
+id = "nightly"
+enabled = false           # ← set true to go live
+expression = "0 2 * * *"  # 02:00 UTC daily (five-field cron, UTC)

@@ -1,0 +1,44 @@
+# Fabro project configuration for freeq.
+# https://docs.fabro.sh/execution/run-configuration
+#
+# These are PROJECT-WIDE DEFAULTS. Each workflow's workflow.toml inherits
+# them and may override per-key. The goal of this setup is a fleet of agents
+# that improve freeq around the clock, each opening a reviewable PR.
+
+_version = 1
+
+# ── Pull requests ────────────────────────────────────────────────────────
+# Every successful run opens a PR from the agent's branch. Ready for review
+# (not draft) so CI runs and you get pinged — but never auto-merged: a human
+# clicks merge.
+[run.pull_request]
+enabled = true
+draft = false
+auto_merge = false
+merge_strategy = "squash"
+
+# ── Default model ────────────────────────────────────────────────────────
+# Sonnet is the default workhorse (good quality/cost). Individual nodes that
+# need deeper reasoning (e.g. the bug-hunt finder) override to opus in their
+# graph via `model=`.
+[run.model]
+name = "claude-sonnet-4-6"
+
+# ── Execution environment ────────────────────────────────────────────────
+# Runs execute on the always-on boxd VM that hosts the Fabro server, in a
+# warm freeq clone with a hot cargo cache (fast, cheap repeat runs). The VM
+# is the isolation boundary from your laptop.
+#
+# `clone.enabled = false`: we do NOT re-clone per run. The server operates in
+# its persistent working copy and creates a fresh branch per run. Keep runs
+# from overlapping (the automations are staggered) — for true concurrency,
+# switch this environment to `provider = "docker"` (boxd ships Docker), which
+# gives each run its own containerized clone. See .fabro/README.md.
+[run.environment]
+id = "boxd-local"
+
+[environments.boxd-local]
+provider = "local"
+
+[run.clone]
+enabled = false

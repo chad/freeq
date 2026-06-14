@@ -1,0 +1,7 @@
+_version = 1
+
+[workflow]
+graph = "workflow.fabro"
+
+# Inherits PR policy, default model, and the boxd-local environment from
+# .fabro/project.toml. Nothing to override here.
