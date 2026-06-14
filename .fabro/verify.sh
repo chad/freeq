@@ -11,6 +11,16 @@
 # extended gate (see .fabro/README.md).
 set -uo pipefail
 
+# Locate cargo on PATH. Fabro `command` nodes run in a bare shell that may not
+# inherit the container/VM's cargo location (rust:1-bookworm puts it at
+# /usr/local/cargo/bin; rustup uses ~/.cargo/bin). Prepend the known spots so
+# the gate finds cargo whether it runs in the docker sandbox or on the VM.
+for d in "${CARGO_HOME:-$HOME/.cargo}/bin" "$HOME/.cargo/bin" /usr/local/cargo/bin /root/.cargo/bin; do
+  [ -d "$d" ] && case ":$PATH:" in *":$d:"*) ;; *) PATH="$d:$PATH" ;; esac
+done
+[ -f "${CARGO_HOME:-$HOME/.cargo}/env" ] && . "${CARGO_HOME:-$HOME/.cargo}/env"
+export PATH
+
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
