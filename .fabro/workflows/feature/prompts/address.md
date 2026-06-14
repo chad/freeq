@@ -11,9 +11,15 @@ Two independent reviewers — correctness and security — have reviewed your di
 3. If a finding is wrong (the reviewer misread the code), say so explicitly with the evidence rather than making a needless change.
 4. Stay inside the scope fence (no native-client / AV-crate edits) and keep the diff coherent — honor `-D warnings`, rustfmt + clippy clean.
 
-## Self-verify
+## Build discipline
 
-Run the gate and don't finish until it's green:
+Iterate with targeted commands (`cargo test -p <crate> <name>`, `cargo check -p
+<crate>`); don't loop full-workspace builds, and don't touch build config
+(`.cargo/config.toml`, `[profile.*]`, `CARGO_*`) — the environment is tuned.
+
+## Self-verify once, at the end
+
+When the must-fixes are in, run the gate **once** to confirm green:
 
 ```
 bash .fabro/verify.sh

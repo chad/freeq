@@ -34,18 +34,38 @@ laptop — the laptop need not stay awake.
 
 Runs execute via the **docker provider** (boxd ships Docker, no sudo). It's
 clone-based: each run gets its own fresh clone on a run branch, so Fabro owns the
-branch → commit → push → PR lifecycle and runs can safely overlap. The base
-image is official `rust:1-bookworm`; `[[run.prepare.steps]]` in `project.toml`
-add cmake / libasound2-dev / Node after clone (and `cargo-audit` for dep-audit).
+branch → commit → push → PR lifecycle and runs can safely overlap.
 
-> **Cold builds:** the Docker image layer caches on the VM, but the cargo build
-> is currently cold per run (~10-15 min on 2 vCPU). Fine for the nightly cadence.
-> A persistent cargo-cache volume is a follow-up once Fabro documents the volume
-> mount syntax.
+The base image is **`freeq-fabro:tools`** (`.fabro/Dockerfile.tools`) — a slim
+image with just the toolchain (rustfmt/clippy, cmake, libasound2-dev, Node,
+cargo-audit), no baked source/target. Build/rebuild it on the VM:
+
+```bash
+boxd exec fabro-freeq -- 'cd ~/freeq && git pull && docker build -f .fabro/Dockerfile.tools -t freeq-fabro:tools .'
+```
+
+Runs set `CARGO_PROFILE_DEV_DEBUG=0` / `CARGO_PROFILE_TEST_DEBUG=0` (debug
+symbols off). This doesn't change check/clippy/test correctness — it just keeps
+the workspace build small and link-safe.
+
+> **The executor is a fixed 2 vCPU / 8 GB / 98 GB boxd VM** (boxd can't resize),
+> which is marginal for repeatedly building freeq's large Rust workspace. Two
+> things this surfaced and how it's handled:
+> - **debug=2 binaries blew the disk and bus-errored the linker** → `debug=0`
+>   (above) keeps builds small/reliable. Each run cold-builds in ~20-30 min.
+> - **Slow builds tempted the agent to yak-shave on build config** → every
+>   implement/fix prompt now says: iterate with targeted `cargo test -p <crate>`,
+>   run the full `.fabro/verify.sh` gate **once** at the end, and never touch
+>   build config.
 >
-> **Note:** the very first setup used `provider = "local"` + `clone.enabled =
-> false` for a warm cache, but that bypassed Fabro's managed branch/PR machinery
-> (work landed uncommitted on `main`, no PR). The docker provider is the fix.
+> **Follow-up (warmth):** a persistent host-mounted cache (`CARGO_TARGET_DIR` +
+> registry as a docker volume) would make repeat builds incremental, once
+> Fabro's volume-mount syntax is pinned down. Baking the target into the image
+> is NOT the way (the layer commit needs ~2× disk and overflows the VM).
+>
+> **History:** the first setup used `provider = "local"` + `clone.enabled =
+> false`, which bypassed Fabro's branch/PR machinery (work landed uncommitted on
+> `main`). The docker provider fixed that.
 
 ## Running them
 

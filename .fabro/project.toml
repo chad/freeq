@@ -35,10 +35,16 @@ name = "claude-sonnet-4-6"
 # branch/PR machinery — work landed uncommitted on main and no PR opened. The
 # clone-based docker provider is the correct path.)
 #
-# Base image: official Rust (has cargo/rustfmt/clippy). The prepare steps add
-# the rest of freeq's toolchain after clone. The Docker image layer caches on
-# the VM across runs; the cargo build itself is cold per run (a persistent
-# build-cache volume is a follow-up once Fabro documents the volume syntax).
+# Base image: `freeq-fabro:tools` (.fabro/Dockerfile.tools) — a SLIM image with
+# just the toolchain baked (rustfmt/clippy, cmake, libasound2-dev, node,
+# cargo-audit), no source/target. Build/rebuild it on the VM:
+#   boxd exec fabro-freeq -- 'cd ~/freeq && git pull && docker build -f .fabro/Dockerfile.tools -t freeq-fabro:tools .'
+#
+# Build profile: CARGO_PROFILE_*_DEBUG=0 turns OFF debug symbols. On this fixed
+# 2 vCPU / 8 GB / 98 GB boxd VM, debug=2 binaries blew the disk and bus-errored
+# the linker; debug=0 keeps the workspace build small and link-safe, and doesn't
+# change check/clippy/test correctness. Builds are cold per run (~20-30 min) but
+# reliable; a persistent cache for warmth is a follow-up (see README).
 [run.environment]
 id = "boxd-docker"
 
@@ -46,7 +52,7 @@ id = "boxd-docker"
 provider = "docker"
 
 [environments.boxd-docker.image]
-docker = "rust:1-bookworm"
+docker = "freeq-fabro:tools"
 
 [environments.boxd-docker.resources]
 cpu = 2
@@ -54,12 +60,7 @@ memory = "7GB"
 
 [environments.boxd-docker.env]
 CARGO_TERM_COLOR = "always"
+CARGO_PROFILE_DEV_DEBUG = "0"
+CARGO_PROFILE_TEST_DEBUG = "0"
 
-# Toolchain freeq's CI gate needs, installed in the container after clone.
-# rustfmt + clippy components, cmake + libasound2-dev for the workspace build,
-# and Node for the freeq-app vitest gate (only triggered on app changes).
-[[run.prepare.steps]]
-script = "rustup component add clippy rustfmt"
-
-[[run.prepare.steps]]
-script = "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cmake pkg-config libasound2-dev nodejs npm >/dev/null && echo toolchain-ready"
+# No prepare steps: the toolchain is baked into freeq-fabro:tools.

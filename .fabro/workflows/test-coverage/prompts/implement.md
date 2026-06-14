@@ -19,18 +19,28 @@ increase that lands as a clean, mergeable PR.
 - **Do not weaken `-D warnings`.** No `#[allow(...)]` to paper over lints; no
   `console.log`/dead code. New test code must be clippy-clean and rustfmt-clean.
 
-## Self-verify before finishing (required)
+## Build discipline (important — the workspace is large)
 
-Run the same gate CI will run, and do not finish until it passes:
+- **Iterate with TARGETED commands**, not the whole workspace: while developing,
+  use `cargo test -p <crate> <test_name>`, `cargo check -p <crate>`,
+  `cargo clippy -p <crate>`. These are fast; a full-workspace build is slow.
+- **Do NOT touch build configuration.** No `.cargo/config.toml`, no `[profile.*]`
+  edits, no changing `debuginfo`/`strip`/`opt-level`, no `CARGO_*` fiddling. The
+  environment is already tuned for speed. If a compile feels slow, just let it
+  run — optimizing the build is not your task and wastes the run.
+
+## Self-verify once, at the end (required)
+
+When your tests are written and passing under targeted runs, run the full gate
+**exactly once** to confirm it's green before finishing:
 
 ```
 bash .fabro/verify.sh
 ```
 
-If it fails, read the output and fix your tests (or back out an over-broad
-change) until it's green. The next node runs this exact gate as a hard gate —
-if it fails there, the run produces no PR and the work is wasted, so make it
-pass here first.
+Fix anything it surfaces, then you're done — don't loop the full gate
+repeatedly. The next node runs this same gate authoritatively; if it fails
+there the run produces no PR, so make this final check pass.
 
 Keep the diff focused: one file's worth of new tests (plus its minimal seam if
 any). Don't reformat unrelated code or bundle drive-by changes.

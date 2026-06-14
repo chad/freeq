@@ -18,12 +18,21 @@ Apply the smallest change that resolves the advisory you chose.
 - Re-run the relevant audit (`cargo audit` / `npm audit`) and confirm the
   advisory is actually gone.
 
-## Self-verify before finishing (required)
+## Build discipline (important — the workspace is large)
+
+- While checking the bump, prefer targeted commands (`cargo check -p <crate>`,
+  `cargo test -p <crate>`) over repeated full-workspace builds.
+- **Do NOT touch build configuration** to speed things up — no
+  `.cargo/config.toml`, no `[profile.*]`/`debuginfo`/`strip` edits, no `CARGO_*`
+  changes. The environment is already tuned; let slow compiles run.
+
+## Self-verify once, at the end (required)
+
+After the bump, run the full gate **exactly once** to prove nothing broke:
 
 ```
 bash .fabro/verify.sh
 ```
 
-This proves the bump didn't break the build, lints, or tests. Do not finish
-until it's green; the next node runs it as a hard gate and a failure opens no
-PR.
+Don't loop the full gate. The next node runs it authoritatively; a failure
+opens no PR.

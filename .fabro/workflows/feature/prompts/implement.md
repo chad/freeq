@@ -12,9 +12,14 @@ Implement the approved plan (in `/tmp/plan.md` and the context above).
 - **Write the tests the plan specified** — server/SDK unit + integration, web vitest — so each success criterion is pinned by a deterministic, offline test.
 - Keep the diff coherent and reviewable. No drive-by reformatting of untouched code.
 
-## Work incrementally and self-verify
+## Build discipline (important — the workspace is large)
 
-Build in plan order, compiling as you go. Before finishing, run the full gate and do not stop until it passes:
+- **Iterate with TARGETED commands** as you build: `cargo check -p <crate>`, `cargo test -p <crate> <name>`, `cargo clippy -p <crate>`, and scoped `npm run test` in `freeq-app`. Full-workspace builds are slow — don't loop them.
+- **Do NOT touch build configuration** to speed things up — no `.cargo/config.toml`, no `[profile.*]` / `debuginfo` / `strip` edits, no `CARGO_*` changes. The environment is already tuned; let slow compiles run. Optimizing the build is not the task.
+
+## Work incrementally, self-verify once at the end
+
+Build in plan order, checking each crate with targeted commands as you go. When the slice is complete, run the full gate **exactly once** to confirm it's green:
 
 ```
 bash .fabro/verify.sh

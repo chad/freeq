@@ -1,0 +1,13 @@
+# Slim toolchain image for Fabro runs — NO baked source/target (baking the
+# target as an image layer needs ~2x disk and overflowed the VM). Per-run
+# builds use CARGO_PROFILE_*_DEBUG=0 (set in the run env) to stay small and
+# avoid the linker bus-error from huge debug binaries.
+#
+# Build/rebuild on the VM:
+#   boxd exec fabro-freeq -- 'cd ~/freeq && git pull && docker build -f .fabro/Dockerfile.tools -t freeq-fabro:tools .'
+FROM rust:1-bookworm
+RUN apt-get update -qq \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cmake pkg-config libasound2-dev nodejs npm \
+ && rm -rf /var/lib/apt/lists/*
+RUN rustup component add clippy rustfmt
+RUN cargo install cargo-audit --locked

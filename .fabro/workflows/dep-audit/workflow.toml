@@ -4,16 +4,5 @@ _version = 1
 graph = "workflow.fabro"
 
 # Inherits PR policy, default model (sonnet), and the boxd-docker environment
-# from .fabro/project.toml.
-#
-# dep-audit additionally needs cargo-audit. prepare.steps may replace (not
-# merge with) the project-level steps, so we repeat the toolchain setup here
-# and append the cargo-audit install.
-[[run.prepare.steps]]
-script = "rustup component add clippy rustfmt"
-
-[[run.prepare.steps]]
-script = "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cmake pkg-config libasound2-dev nodejs npm >/dev/null && echo toolchain-ready"
-
-[[run.prepare.steps]]
-script = "cargo install cargo-audit --locked >/dev/null 2>&1 && echo cargo-audit-ready"
+# from .fabro/project.toml. The warm image (freeq-fabro:warm) already bakes
+# cargo-audit + the full toolchain, so no per-workflow prepare steps are needed.

@@ -21,11 +21,23 @@ Now prove and fix the bug you identified.
   is intended elsewhere), back out and clearly report that the hunt was a false
   alarm rather than forcing a change.
 
-## Self-verify before finishing (required)
+## Build discipline (important — the workspace is large)
+
+- **Iterate with TARGETED commands** while developing: `cargo test -p <crate>
+  <test_name>`, `cargo check -p <crate>`, `cargo clippy -p <crate>`. A full
+  workspace build is slow; don't run it repeatedly.
+- **Do NOT touch build configuration** to speed things up — no
+  `.cargo/config.toml`, no `[profile.*]` / `debuginfo` / `strip` edits, no
+  `CARGO_*` changes. The environment is already tuned. Let slow compiles run.
+
+## Self-verify once, at the end (required)
+
+When the regression test fails-before / passes-after and your fix is in, run the
+full gate **exactly once** to confirm it's green:
 
 ```
 bash .fabro/verify.sh
 ```
 
-Do not finish until it's green. The next node runs this exact gate as a hard
-gate; a failure there produces no PR.
+Don't loop the full gate. The next node runs this same gate authoritatively; a
+failure there produces no PR.
