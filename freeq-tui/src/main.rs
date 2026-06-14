@@ -2778,7 +2778,8 @@ fn try_nick_complete(app: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_join_prefix;
+    use super::{extract_url, format_file_size, parse_join_prefix, try_nick_complete};
+    use crate::app::App;
 
     #[test]
     fn parse_join_prefix_basic() {
@@ -2870,5 +2871,216 @@ mod tests {
         let huge_nick = "n".repeat(8192);
         let line = format!(":{huge_nick}!~u@freeq/plc/abc JOIN #room");
         assert!(parse_join_prefix(&line).is_none(), "must reject giant nick");
+    }
+
+    // ── extract_url ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn extract_url_returns_plain_https_url() {
+        assert_eq!(
+            extract_url("check out https://example.com today"),
+            Some("https://example.com".to_string()),
+        );
+    }
+
+    #[test]
+    fn extract_url_returns_plain_http_url() {
+        assert_eq!(
+            extract_url("see http://example.org/page"),
+            Some("http://example.org/page".to_string()),
+        );
+    }
+
+    #[test]
+    fn extract_url_strips_trailing_punctuation() {
+        for suffix in [".", ",", ")", "]", ";"] {
+            let text = format!("visit https://example.com{suffix}");
+            assert_eq!(
+                extract_url(&text),
+                Some("https://example.com".to_string()),
+                "suffix {suffix:?} should be stripped",
+            );
+        }
+    }
+
+    #[test]
+    fn extract_url_returns_first_url_when_multiple_present() {
+        let text = "see https://first.example.com and https://second.example.org";
+        assert_eq!(
+            extract_url(text),
+            Some("https://first.example.com".to_string()),
+        );
+    }
+
+    #[test]
+    fn extract_url_suppresses_cdn_bsky_app() {
+        assert_eq!(
+            extract_url("img https://cdn.bsky.app/img/feed_thumbnail/plain/foo"),
+            None,
+        );
+    }
+
+    #[test]
+    fn extract_url_suppresses_xrpc_urls() {
+        assert_eq!(
+            extract_url("https://bsky.social/xrpc/com.atproto.repo.getRecord"),
+            None,
+        );
+    }
+
+    #[test]
+    fn extract_url_rejects_too_short_url() {
+        // "https://x" is 9 chars — below the > 10 threshold.
+        assert_eq!(extract_url("https://x"), None);
+        // "https://xy" is 10 chars — still not > 10.
+        assert_eq!(extract_url("https://xy"), None);
+        // "https://xyz" is 11 chars — valid.
+        assert_eq!(extract_url("https://xyz"), Some("https://xyz".to_string()),);
+    }
+
+    #[test]
+    fn extract_url_returns_none_for_plain_text() {
+        assert_eq!(extract_url("no urls here at all"), None);
+    }
+
+    #[test]
+    fn extract_url_returns_none_for_empty_string() {
+        assert_eq!(extract_url(""), None);
+    }
+
+    // ── format_file_size ────────────────────────────────────────────────────
+
+    #[test]
+    fn format_file_size_zero_bytes() {
+        assert_eq!(format_file_size(0), "0B");
+    }
+
+    #[test]
+    fn format_file_size_sub_kilobyte() {
+        assert_eq!(format_file_size(1), "1B");
+        assert_eq!(format_file_size(512), "512B");
+        assert_eq!(format_file_size(1023), "1023B");
+    }
+
+    #[test]
+    fn format_file_size_kilobyte_boundary() {
+        assert_eq!(format_file_size(1024), "1.0KB");
+        assert_eq!(format_file_size(1536), "1.5KB");
+        // 1 MB - 1 byte: still in the KB range.
+        assert_eq!(format_file_size(1024 * 1024 - 1), "1024.0KB");
+    }
+
+    #[test]
+    fn format_file_size_megabyte_boundary() {
+        assert_eq!(format_file_size(1024 * 1024), "1.0MB");
+        assert_eq!(format_file_size(1024 * 1024 * 2), "2.0MB");
+        assert_eq!(format_file_size(1024 * 1024 * 10), "10.0MB");
+    }
+
+    // ── try_nick_complete ────────────────────────────────────────────────────
+
+    /// Build a minimal App wired up with a single channel buffer that has
+    /// the given nick list set as the active buffer.
+    fn make_app_with_nicks(nicks: &[&str]) -> App {
+        let mut app = App::new("me", false);
+        let buf = app.buffer_mut("#test");
+        for n in nicks {
+            buf.nicks.push(n.to_string());
+        }
+        app.active_buffer = "#test".to_string();
+        app
+    }
+
+    #[test]
+    fn nick_complete_first_word_appends_colon_space_suffix() {
+        let mut app = make_app_with_nicks(&["alice", "bob"]);
+        app.editor.text = "ali".to_string();
+        app.editor.cursor = 3;
+        try_nick_complete(&mut app);
+        assert_eq!(app.editor.text, "alice: ");
+        assert_eq!(app.editor.cursor, "alice: ".len());
+    }
+
+    #[test]
+    fn nick_complete_mid_sentence_appends_space_suffix() {
+        let mut app = make_app_with_nicks(&["alice"]);
+        app.editor.text = "hey ali".to_string();
+        app.editor.cursor = 7;
+        try_nick_complete(&mut app);
+        assert_eq!(app.editor.text, "hey alice ");
+        assert_eq!(app.editor.cursor, "hey alice ".len());
+    }
+
+    #[test]
+    fn nick_complete_is_case_insensitive() {
+        let mut app = make_app_with_nicks(&["Alice"]);
+        app.editor.text = "ali".to_string();
+        app.editor.cursor = 3;
+        try_nick_complete(&mut app);
+        // completion uses the bare nick (sans sigil) as stored
+        assert_eq!(app.editor.text, "Alice: ");
+    }
+
+    #[test]
+    fn nick_complete_strips_op_sigil_from_nick() {
+        let mut app = make_app_with_nicks(&["@alice"]);
+        app.editor.text = "ali".to_string();
+        app.editor.cursor = 3;
+        try_nick_complete(&mut app);
+        // bare name without '@' is inserted
+        assert_eq!(app.editor.text, "alice: ");
+    }
+
+    #[test]
+    fn nick_complete_strips_voice_sigil_from_nick() {
+        let mut app = make_app_with_nicks(&["+bob"]);
+        app.editor.text = "bo".to_string();
+        app.editor.cursor = 2;
+        try_nick_complete(&mut app);
+        assert_eq!(app.editor.text, "bob: ");
+    }
+
+    #[test]
+    fn nick_complete_no_match_leaves_editor_unchanged() {
+        let mut app = make_app_with_nicks(&["alice", "bob"]);
+        app.editor.text = "xyz".to_string();
+        app.editor.cursor = 3;
+        try_nick_complete(&mut app);
+        assert_eq!(app.editor.text, "xyz");
+        assert_eq!(app.editor.cursor, 3);
+    }
+
+    #[test]
+    fn nick_complete_empty_fragment_leaves_editor_unchanged() {
+        // Cursor is right after a space — fragment is empty.
+        let mut app = make_app_with_nicks(&["alice"]);
+        app.editor.text = "hey ".to_string();
+        app.editor.cursor = 4;
+        try_nick_complete(&mut app);
+        assert_eq!(app.editor.text, "hey ");
+        assert_eq!(app.editor.cursor, 4);
+    }
+
+    #[test]
+    fn nick_complete_preserves_text_after_cursor() {
+        let mut app = make_app_with_nicks(&["alice"]);
+        // Cursor is in the middle of the word; text after cursor is " rest".
+        app.editor.text = "ali rest".to_string();
+        app.editor.cursor = 3;
+        try_nick_complete(&mut app);
+        assert_eq!(app.editor.text, "alice:  rest");
+        assert_eq!(app.editor.cursor, "alice: ".len());
+    }
+
+    #[test]
+    fn nick_complete_no_buffer_leaves_editor_unchanged() {
+        // active_buffer points to a non-existent buffer → graceful no-op.
+        let mut app = App::new("me", false);
+        app.active_buffer = "#nowhere".to_string();
+        app.editor.text = "ali".to_string();
+        app.editor.cursor = 3;
+        try_nick_complete(&mut app);
+        assert_eq!(app.editor.text, "ali");
+        assert_eq!(app.editor.cursor, 3);
     }
 }
