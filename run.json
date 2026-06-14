@@ -1,0 +1,356 @@
+{
+  "title": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only,...",
+  "spec": {
+    "run_id": "01KV3K2MJRGH4JS4MPPEWMQ91K",
+    "settings": {
+      "project": {
+        "name": null,
+        "description": null,
+        "metadata": {}
+      },
+      "workflow": {
+        "name": null,
+        "description": null,
+        "graph": "workflow.fabro",
+        "metadata": {}
+      },
+      "run": {
+        "goal": {
+          "type": "inline",
+          "value": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code."
+        },
+        "working_dir": null,
+        "metadata": {},
+        "inputs": {},
+        "model": {
+          "provider": "anthropic",
+          "name": "claude-sonnet-4-6",
+          "fallbacks": [],
+          "controls": {
+            "reasoning_effort": null,
+            "speed": null
+          }
+        },
+        "git": {
+          "author": null
+        },
+        "prepare": {
+          "commands": [
+            "rustup component add clippy rustfmt",
+            "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cmake pkg-config libasound2-dev nodejs npm >/dev/null && echo toolchain-ready"
+          ],
+          "timeout_ms": 300000
+        },
+        "execution": {
+          "mode": "normal",
+          "approval": "prompt"
+        },
+        "checkpoint": {
+          "exclude_globs": [],
+          "skip_git_hooks": false
+        },
+        "clone": {
+          "enabled": true
+        },
+        "run_branch": {
+          "enabled": true,
+          "push": true
+        },
+        "meta_branch": {
+          "enabled": true,
+          "push": true
+        },
+        "environment": {
+          "id": "boxd-docker",
+          "provider": "docker",
+          "image": {
+            "docker": "rust:1-bookworm",
+            "dockerfile": null
+          },
+          "resources": {
+            "cpu": 2,
+            "memory": "7GB",
+            "disk": null
+          },
+          "network": {
+            "mode": "allow_all",
+            "allow": []
+          },
+          "lifecycle": {
+            "preserve": false,
+            "stop_on_terminal": true,
+            "auto_stop": null
+          },
+          "labels": {},
+          "volumes": [],
+          "env": {
+            "CARGO_TERM_COLOR": "always"
+          }
+        },
+        "notifications": {},
+        "interviews": {
+          "provider": null,
+          "slack": null
+        },
+        "agent": {
+          "fabro_tools": false,
+          "permissions": null,
+          "mcps": {}
+        },
+        "hooks": [],
+        "scm": {
+          "provider": null,
+          "owner": null,
+          "repository": null,
+          "github": null
+        },
+        "pull_request": {
+          "enabled": true,
+          "draft": false,
+          "auto_merge": false,
+          "merge_strategy": "squash"
+        },
+        "artifacts": {
+          "include": []
+        },
+        "integrations": {
+          "github": {
+            "permissions": {}
+          }
+        }
+      }
+    },
+    "graph": {
+      "name": "TestCoverage",
+      "nodes": {
+        "verify": {
+          "id": "verify",
+          "attrs": {
+            "label": {
+              "String": "CI gate"
+            },
+            "timeout": {
+              "Duration": {
+                "secs": 3600,
+                "nanos": 0
+              }
+            },
+            "retry_target": {
+              "String": "implement"
+            },
+            "max_retries": {
+              "Integer": 2
+            },
+            "shape": {
+              "String": "parallelogram"
+            },
+            "script": {
+              "String": "bash .fabro/verify.sh"
+            },
+            "goal_gate": {
+              "Boolean": true
+            }
+          }
+        },
+        "implement": {
+          "id": "implement",
+          "attrs": {
+            "fidelity": {
+              "String": "full"
+            },
+            "thread_id": {
+              "String": "cov"
+            },
+            "shape": {
+              "String": "box"
+            },
+            "label": {
+              "String": "Write tests"
+            },
+            "timeout": {
+              "Duration": {
+                "secs": 2400,
+                "nanos": 0
+              }
+            },
+            "reasoning_effort": {
+              "String": "high"
+            },
+            "prompt": {
+              "String": "Now add the tests for the file you chose. Goal: a tight, high-signal coverage\nincrease that lands as a clean, mergeable PR.\n\n## Rules\n\n- **Tests only.** Do not change production behavior. The only production edits\n  allowed are *minimal, behavior-preserving* testability seams (e.g. making a\n  pure helper `pub(crate)`, extracting an existing expression into a named\n  function) — and only if genuinely necessary. If a target can't be tested\n  without real behavior change, narrow your scope to what can.\n- **Follow existing conventions.** Match the sibling test file's structure,\n  naming, imports, and assertion style. Rust: a `#[cfg(test)] mod tests` block\n  or a `tests/` integration file as the crate already does. TS/React:\n  `*.test.ts(x)` with the same test runner (vitest) and helpers already in use.\n- **Pin real behavior, including edge cases**: error paths, boundary inputs,\n  empty/oversized/malformed inputs, and the specific behaviors you listed.\n  Prefer deterministic, offline tests — no live network, no sleeps, no clock\n  flakiness.\n- **Do not weaken `-D warnings`.** No `#[allow(...)]` to paper over lints; no\n  `console.log`/dead code. New test code must be clippy-clean and rustfmt-clean.\n\n## Self-verify before finishing (required)\n\nRun the same gate CI will run, and do not finish until it passes:\n\n```\nbash .fabro/verify.sh\n```\n\nIf it fails, read the output and fix your tests (or back out an over-broad\nchange) until it's green. The next node runs this exact gate as a hard gate —\nif it fails there, the run produces no PR and the work is wasted, so make it\npass here first.\n\nKeep the diff focused: one file's worth of new tests (plus its minimal seam if\nany). Don't reformat unrelated code or bundle drive-by changes.\n"
+            }
+          }
+        },
+        "exit": {
+          "id": "exit",
+          "attrs": {
+            "label": {
+              "String": "Exit"
+            },
+            "shape": {
+              "String": "Msquare"
+            }
+          }
+        },
+        "start": {
+          "id": "start",
+          "attrs": {
+            "label": {
+              "String": "Start"
+            },
+            "shape": {
+              "String": "Mdiamond"
+            }
+          }
+        },
+        "select": {
+          "id": "select",
+          "attrs": {
+            "reasoning_effort": {
+              "String": "medium"
+            },
+            "prompt": {
+              "String": "You are picking ONE file in the freeq repository whose risk-to-coverage ratio is\nworst — high-churn / high-complexity but undertested — and that you can\nmeaningfully add tests for in a single focused change.\n\nThis step is **read-only**. Do not edit any files. Investigate, then report a choice.\n\n## How to choose\n\n1. Run the repo's own hotspot analysis and read the curated list:\n   - `bash scripts/hotspots.sh --top 25` — high \"gamma\" = high risk.\n   - The \"Hotspot Analysis\" section of `CLAUDE.md` names specific UNDERTESTED\n     files (e.g. `irc/client.ts`, `MessageList.tsx`, `sdk/client.rs`). Prefer\n     these — they are explicitly flagged as needing tests.\n2. For your top candidates, gauge existing coverage: look for a sibling test\n   module / `#[cfg(test)]` block / `*.test.ts(x)` file and how much it covers.\n3. Stay inside the CI-covered surface. AVOID the heavy AV crates that CI\n   excludes: `freeq-av`, `freeq-eliza`, `freeq-av-client`, `freeq-av-image`.\n   Good targets live in `freeq-server`, `freeq-sdk`, `freeq-sdk-ffi`,\n   `freeq-app`, `freeq-tui`, `freeq-windows-core`, or `freeq-bots`.\n4. Pick something with a clear, pure-ish functional core you can pin with\n   tests without standing up a network/server — the highest-signal, lowest-\n   flake tests.\n\n## Report\n\nState clearly:\n- The exact file you chose and its language/crate.\n- Why it's high-risk and undertested (cite the hotspot score or CLAUDE.md).\n- 3–6 specific behaviors/edge cases you intend to pin with tests.\n- The existing test convention you'll follow (point to a sibling test file).\n\nDo not write tests yet — the next step does that.\n"
+            },
+            "shape": {
+              "String": "box"
+            },
+            "label": {
+              "String": "Select target"
+            },
+            "fidelity": {
+              "String": "full"
+            },
+            "thread_id": {
+              "String": "cov"
+            }
+          }
+        },
+        "pr_body": {
+          "id": "pr_body",
+          "attrs": {
+            "fidelity": {
+              "String": "full"
+            },
+            "shape": {
+              "String": "tab"
+            },
+            "label": {
+              "String": "PR description"
+            },
+            "prompt": {
+              "String": "Write the pull-request description for the test coverage you just added. Fabro\nopens the PR from your branch; this is its body. Base it strictly on what you\nactually changed (`git diff --stat` and `git diff`).\n\nUse this structure, in GitHub-flavored markdown:\n\n## Summary\nOne or two sentences: which file/area gained coverage and why it mattered\n(cite the hotspot score or the CLAUDE.md flag).\n\n## What's tested\nA bulleted list of the behaviors/edge cases now pinned by tests.\n\n## Notes\n- Confirm this is tests-only, or describe precisely any minimal testability\n  seam you added and why it's behavior-preserving.\n- State that `.fabro/verify.sh` (rustfmt + check + clippy -D warnings + test,\n  CI-mirrored) passes.\n\nKeep it factual and concise. No marketing language. Do not claim anything you\ndidn't verify.\n"
+            },
+            "thread_id": {
+              "String": "cov"
+            }
+          }
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "select",
+          "attrs": {}
+        },
+        {
+          "from": "select",
+          "to": "implement",
+          "attrs": {}
+        },
+        {
+          "from": "implement",
+          "to": "verify",
+          "attrs": {}
+        },
+        {
+          "from": "verify",
+          "to": "pr_body",
+          "attrs": {}
+        },
+        {
+          "from": "pr_body",
+          "to": "exit",
+          "attrs": {}
+        }
+      ],
+      "attrs": {
+        "rankdir": {
+          "String": "LR"
+        },
+        "goal": {
+          "String": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code."
+        }
+      }
+    },
+    "graph_source": "// test-coverage — raise test coverage on freeq's undertested hotspots.\n//\n// select (read-only): run scripts/hotspots.sh + read CLAUDE.md's hotspot list,\n//   pick ONE high-risk, undertested file.\n// implement: write focused tests following existing conventions; self-verify.\n// verify: authoritative CI-mirror gate (goal_gate — a failure opens no PR).\n// pr_body: compose the PR description from what actually changed.\ndigraph TestCoverage {\n    graph [goal=\"Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code.\"]\n    rankdir=LR\n\n    start [shape=Mdiamond, label=\"Start\"]\n    exit  [shape=Msquare, label=\"Exit\"]\n\n    select    [shape=box, label=\"Select target\", prompt=\"@prompts/select.md\", thread_id=\"cov\", fidelity=\"full\", reasoning_effort=\"medium\"]\n    implement [shape=box, label=\"Write tests\",  prompt=\"@prompts/implement.md\", thread_id=\"cov\", fidelity=\"full\", reasoning_effort=\"high\", timeout=\"2400s\"]\n    verify    [shape=parallelogram, label=\"CI gate\", script=\"bash .fabro/verify.sh\", goal_gate=true, retry_target=\"implement\", max_retries=2, timeout=\"3600s\"]\n    pr_body   [shape=tab, label=\"PR description\", prompt=\"@prompts/pr_body.md\", thread_id=\"cov\", fidelity=\"full\"]\n\n    start -> select -> implement -> verify -> pr_body -> exit\n}\n",
+    "workflow_slug": "test-coverage",
+    "source_directory": "/home/boxd/freeq",
+    "provenance": {
+      "server": {
+        "version": "0.254.0"
+      },
+      "client": {
+        "user_agent": "fabro-cli/0.254.0",
+        "name": "fabro-cli",
+        "version": "0.254.0"
+      },
+      "subject": {
+        "kind": "user",
+        "identity": {
+          "issuer": "fabro:dev",
+          "subject": "dev"
+        },
+        "login": "dev",
+        "auth_method": "dev_token"
+      }
+    },
+    "manifest_blob": "b046bafc12c9e99c08d00eeffbb15c3b9c4980d2653efca3a7ed9844d34395d9",
+    "definition_blob": "b30926c124c88ff9773e0be0f9fe0404370d08e215cd8694b26c656c7bbf09b5",
+    "git": {
+      "origin_url": "https://github.com/chad/freeq",
+      "branch": "main",
+      "sha": "c5f057b72261f09cfc330bea0aacde8f29798b87",
+      "dirty": "clean",
+      "push_outcome": {
+        "type": "not_attempted"
+      }
+    }
+  },
+  "web_url": "http://127.0.0.1:32276/runs/01KV3K2MJRGH4JS4MPPEWMQ91K",
+  "start": null,
+  "status": {
+    "kind": "starting"
+  },
+  "status_updated_at": "2026-06-14T17:32:39.290101685Z",
+  "last_event_at": "2026-06-14T17:34:53.553119509Z",
+  "pending_control": null,
+  "checkpoints": [],
+  "conclusion": null,
+  "sandbox": {
+    "kind": "ready",
+    "plan": {
+      "provider": "docker",
+      "image": "rust:1-bookworm"
+    },
+    "instance": {
+      "provider": "docker",
+      "image": "rust:1-bookworm",
+      "runtime": {
+        "id": "5af4de7cd0ae14c7ea9bda90f37a53433f7889e592d3ae8fe1ac6d44ba7a562d",
+        "working_directory": "/workspace/freeq",
+        "repo_cloned": true,
+        "clone_origin_url": "https://github.com/chad/freeq",
+        "clone_branch": "main",
+        "workspace_root": "/workspace",
+        "repos_root": "/repos",
+        "primary_repo_path": "/repos/chad/freeq",
+        "primary_repo_link": "/workspace/freeq"
+      }
+    }
+  },
+  "pull_request": null,
+  "superseded_by": null,
+  "pending_interviews": {},
+  "stages": {}
+}
