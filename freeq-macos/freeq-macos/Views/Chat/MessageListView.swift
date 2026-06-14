@@ -656,7 +656,9 @@ struct FlowLayout: Layout {
 
 private func fullTimestamp(_ date: Date) -> String {
     let formatter = DateFormatter()
-    formatter.dateFormat = "EEEE, MMM d, yyyy 'at' HH:mm:ss"
+    formatter.locale = .current
+    formatter.dateStyle = .full
+    formatter.timeStyle = .medium
     return formatter.string(from: date)
 }
 
@@ -675,11 +677,14 @@ private func extractFirstURL(from text: String) -> String? {
 
 func formatTime(_ date: Date) -> String {
     let formatter = DateFormatter()
+    formatter.locale = .current
     let calendar = Calendar.current
     if calendar.isDateInToday(date) {
-        formatter.dateFormat = "HH:mm"
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
     } else {
-        formatter.dateFormat = "MMM d, HH:mm"
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
     }
     return formatter.string(from: date)
 }

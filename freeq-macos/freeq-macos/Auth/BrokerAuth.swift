@@ -33,12 +33,18 @@ enum BrokerAuth {
                 throw BrokerError.sessionFailed("Non-HTTP retry response from broker")
             }
             guard retryHttp.statusCode == 200 else {
+                if retryHttp.statusCode == 401 {
+                    throw BrokerError.invalidToken
+                }
                 throw BrokerError.sessionFailed("Status \(retryHttp.statusCode)")
             }
             return try parseSession(retryData)
         }
 
         guard httpResponse.statusCode == 200 else {
+            if httpResponse.statusCode == 401 {
+                throw BrokerError.invalidToken
+            }
             throw BrokerError.sessionFailed("Status \(httpResponse.statusCode)")
         }
         return try parseSession(data)
@@ -84,8 +90,8 @@ enum BrokerAuth {
                 guard let url = callbackURL,
                       let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
                       let token = components.queryItems?.first(where: { $0.name == "broker_token" })?.value,
-                      let did = components.queryItems?.first(where: { $0.name == "did" })?.value,
-                      let nick = components.queryItems?.first(where: { $0.name == "nick" })?.value else {
+                      components.queryItems?.contains(where: { $0.name == "did" }) == true,
+                      components.queryItems?.contains(where: { $0.name == "nick" }) == true else {
                     continuation.resume(throwing: BrokerError.sessionFailed("No token in callback"))
                     return
                 }
@@ -127,5 +133,6 @@ class MacPresentationContextProvider: NSObject, ASWebAuthenticationPresentationC
 }
 
 enum BrokerError: Error {
+    case invalidToken
     case sessionFailed(String)
 }

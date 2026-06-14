@@ -281,10 +281,7 @@ struct DMRow: View {
         }
         .contextMenu {
             Button("Close DM") {
-                appState.dmBuffers.removeAll { $0.name.lowercased() == dm.name.lowercased() }
-                if appState.activeChannel?.lowercased() == dm.name.lowercased() {
-                    appState.activeChannel = appState.channels.first?.name
-                }
+                appState.closeDM(dm.name)
             }
         }
     }

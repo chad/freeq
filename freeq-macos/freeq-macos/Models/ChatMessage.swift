@@ -15,6 +15,15 @@ struct ChatMessage: Identifiable, Equatable {
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
         lhs.id == rhs.id
+            && lhs.from == rhs.from
+            && lhs.text == rhs.text
+            && lhs.isAction == rhs.isAction
+            && lhs.timestamp == rhs.timestamp
+            && lhs.replyTo == rhs.replyTo
+            && lhs.isEdited == rhs.isEdited
+            && lhs.isDeleted == rhs.isDeleted
+            && lhs.isSigned == rhs.isSigned
+            && lhs.reactions == rhs.reactions
     }
 }
 

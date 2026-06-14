@@ -224,12 +224,11 @@ extension AppState {
         let matches = ch.messages.filter {
             !$0.isDeleted && ($0.text.lowercased().contains(q) || $0.from.lowercased().contains(q))
         }
-        let fmt = DateFormatter(); fmt.dateFormat = "HH:mm"
         appendSystem(matches.isEmpty
             ? "No matches for \"\(query)\""
             : "── \(matches.count) match(es) for \"\(query)\" ──")
         for m in matches.suffix(20) {
-            appendSystem("[\(fmt.string(from: m.timestamp))] \(m.from): \(m.text)")
+            appendSystem("[\(formatTime(m.timestamp))] \(m.from): \(m.text)")
         }
     }
 }

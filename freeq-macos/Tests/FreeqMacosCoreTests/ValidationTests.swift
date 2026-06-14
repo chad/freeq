@@ -4,6 +4,66 @@ import XCTest
 
 final class ValidationTests: XCTestCase {
 
+    // MARK: - Chat message display state
+
+    func testChatMessageEqualityIncludesMutableDisplayFields() {
+        var lhs = ChatMessage(
+            id: "m1",
+            from: "alice",
+            text: "hello",
+            isAction: false,
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            replyTo: nil
+        )
+        var rhs = lhs
+        XCTAssertEqual(lhs, rhs)
+
+        rhs.reactions["👍"] = ["bob"]
+        XCTAssertNotEqual(lhs, rhs)
+
+        lhs.reactions["👍"] = ["bob"]
+        XCTAssertEqual(lhs, rhs)
+
+        rhs.isDeleted = true
+        XCTAssertNotEqual(lhs, rhs)
+    }
+
+    func testChannelReactionOperationsAreIdempotentAndRemovable() {
+        let channel = ChannelState(name: "#react")
+        channel.appendIfNew(ChatMessage(
+            id: "m1",
+            from: "alice",
+            text: "react to me",
+            isAction: false,
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            replyTo: nil
+        ))
+
+        channel.addReaction(msgId: "m1", emoji: "👍", from: "bob")
+        channel.addReaction(msgId: "m1", emoji: "👍", from: "bob")
+        XCTAssertTrue(channel.hasReaction(msgId: "m1", emoji: "👍", from: "bob"))
+        XCTAssertEqual(channel.messages.first?.reactions["👍"]?.count, 1)
+
+        channel.removeReaction(msgId: "m1", emoji: "👍", from: "bob")
+        XCTAssertFalse(channel.hasReaction(msgId: "m1", emoji: "👍", from: "bob"))
+        XCTAssertNil(channel.messages.first?.reactions["👍"])
+    }
+
+    func testChannelReactionRejectsEmptyEmoji() {
+        let channel = ChannelState(name: "#react")
+        channel.appendIfNew(ChatMessage(
+            id: "m1",
+            from: "alice",
+            text: "react to me",
+            isAction: false,
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            replyTo: nil
+        ))
+
+        channel.addReaction(msgId: "m1", emoji: "   ", from: "bob")
+        XCTAssertTrue(channel.messages.first?.reactions.isEmpty ?? false)
+    }
+
     // MARK: - Bluesky profile URL
 
     func testBlueSkyProfileURLBasic() {

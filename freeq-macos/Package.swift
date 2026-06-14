@@ -23,7 +23,7 @@ let package = Package(
         .target(
             name: "FreeqMacosCore",
             path: "freeq-macos/Models",
-            sources: ["Validation.swift"]
+            sources: ["Validation.swift", "ChatMessage.swift", "ChannelState.swift"]
         ),
         .testTarget(
             name: "FreeqMacosCoreTests",

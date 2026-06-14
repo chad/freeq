@@ -7,6 +7,22 @@ Status legend: ☐ todo · ◐ in progress · ☑ done · ⛔ blocked
 
 ---
 
+## 2026-06-14 deep-dive execution checklist
+
+- ☑ Re-audit macOS against the current iOS/web/protocol reaction, DM, and date-format paths.
+- ☑ Verify the full macOS Xcode target, not only the lightweight SwiftPM validation harness.
+- ☑ Fix build break from missing `ChannelState.addReaction/removeReaction/hasReaction` methods.
+- ☑ Make `ChatMessage.==` include mutable display fields so edits, deletes, signatures, and reactions redraw.
+- ☑ Persist user-closed DMs locally and suppress stale `CHATHISTORY TARGETS` re-creation.
+- ☑ Seed DM `lastActivity` from `CHATHISTORY TARGETS` timestamps so DM order is recent-first on reload.
+- ☑ Route self-authored DM `TAGMSG` events to the peer buffer, matching the iOS fix.
+- ☑ Use locale-aware macOS date/time formatting instead of hard-coded 24-hour strings.
+- ☑ Add focused SwiftPM model tests for message equality and reaction state.
+- ☑ Re-run SwiftPM and Xcode build verification.
+- ☑ Commit the macOS parity fixes.
+
+---
+
 ## Method
 
 Four feature inventories were assembled (macOS / iOS / web / TUI) and ground-truthed

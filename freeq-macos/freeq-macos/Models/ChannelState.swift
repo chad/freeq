@@ -86,4 +86,30 @@ class ChannelState: Identifiable {
             messages[idx].reactions = reactions
         }
     }
+
+    func addReaction(msgId: String, emoji: String, from: String) {
+        guard !emoji.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let idx = findMessage(byId: msgId) else { return }
+        var reactions = messages[idx].reactions
+        var nicks = reactions[emoji] ?? Set()
+        nicks.insert(from)
+        reactions[emoji] = nicks
+        messages[idx].reactions = reactions
+    }
+
+    func removeReaction(msgId: String, emoji: String, from: String) {
+        guard let idx = findMessage(byId: msgId),
+              var nicks = messages[idx].reactions[emoji] else { return }
+        nicks.remove(from)
+        if nicks.isEmpty {
+            messages[idx].reactions.removeValue(forKey: emoji)
+        } else {
+            messages[idx].reactions[emoji] = nicks
+        }
+    }
+
+    func hasReaction(msgId: String, emoji: String, from: String) -> Bool {
+        guard let idx = findMessage(byId: msgId) else { return false }
+        return messages[idx].reactions[emoji]?.contains(from) ?? false
+    }
 }

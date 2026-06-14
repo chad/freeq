@@ -3,6 +3,14 @@ import SwiftUI
 import UserNotifications
 import AVFoundation
 
+extension ISO8601DateFormatter {
+    static let freeqTargets: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+}
+
 /// Connection transport type.
 enum TransportType: Equatable {
     case tcp
@@ -37,6 +45,9 @@ class AppState {
     var unreadCounts: [String: Int] = [:]
     var mentionCounts: [String: Int] = [:]
     var autoJoinChannels: [String] = ["#freeq"]
+    var closedDMs: Set<String> = [] {
+        didSet { UserDefaults.standard.set(Array(closedDMs), forKey: "freeq.closedDMs") }
+    }
 
     // MARK: - Favorites, Muted, Bookmarks
     var favorites: Set<String> = []  // lowercase channel names
@@ -177,6 +188,7 @@ class AppState {
         if let saved = UserDefaults.standard.stringArray(forKey: "freeq.channels"), !saved.isEmpty {
             autoJoinChannels = saved
         }
+        closedDMs = Set(UserDefaults.standard.stringArray(forKey: "freeq.closedDMs") ?? [])
         // In test mode we connect as a guest and don't need the saved
         // credentials — skip the keychain reads, which on ad-hoc-signed dev
         // builds pop a blocking "allow keychain access" dialog every rebuild.
@@ -255,6 +267,7 @@ class AppState {
         channels.removeAll()
         dmBuffers.removeAll()
         activeChannel = nil
+        closedDMs.removeAll()
     }
 
     /// Called once on launch. Honors a test/guest auto-connect env var, then
@@ -323,6 +336,10 @@ class AppState {
     // MARK: - Send
 
     func sendMessage(to target: String, text: String) {
+        if !target.hasPrefix("#") {
+            closedDMs.remove(target.lowercased())
+        }
+
         // Try P2P first for DMs
         if !target.hasPrefix("#"),
            let peerEndpoint = p2pEndpointForNick(target) {
@@ -556,6 +573,17 @@ class AppState {
         }
         dmBuffers.append(dm)
         return dm
+    }
+
+    func closeDM(_ nick: String) {
+        let lower = nick.lowercased()
+        closedDMs.insert(lower)
+        dmBuffers.removeAll { $0.name.lowercased() == lower }
+        unreadCounts.removeValue(forKey: lower)
+        mentionCounts.removeValue(forKey: lower)
+        if activeChannel?.lowercased() == lower {
+            activeChannel = channels.first?.name
+        }
     }
 
     func switchToChannelByIndex(_ index: Int) {
@@ -892,6 +920,7 @@ extension AppState {
                 }
             } else {
                 let bufName = isSelf ? target : msg.fromNick
+                closedDMs.remove(bufName.lowercased())
                 let dm = getOrCreateDM(bufName)
                 dm.appendIfNew(message)
                 incrementUnread(bufName)
@@ -907,11 +936,13 @@ extension AppState {
             let tags = Dictionary(uniqueKeysWithValues: tagMsg.tags.map { ($0.key, $0.value) })
             let target = tagMsg.target
             let from = tagMsg.from
+            let isSelf = from.lowercased() == nick.lowercased()
+            let dmBuffer = isSelf ? target : from
+            let bufferName = target.hasPrefix("#") ? target : dmBuffer
 
             // Typing indicators
             if let typing = tags["+typing"] {
-                if from.lowercased() != nick.lowercased() {
-                    let bufferName = target.hasPrefix("#") ? target : from
+                if !isSelf {
                     let ch = bufferName.hasPrefix("#") ? getOrCreateChannel(bufferName) : getOrCreateDM(bufferName)
                     if typing == "active" {
                         ch.typingUsers[from] = Date()
@@ -923,7 +954,6 @@ extension AppState {
 
             // Message deletion
             if let deleteId = tags["+draft/delete"] {
-                let bufferName = target.hasPrefix("#") ? target : from
                 let ch = bufferName.hasPrefix("#") ? getOrCreateChannel(bufferName) : getOrCreateDM(bufferName)
                 ch.applyDelete(msgId: deleteId)
                 Task { await MessageStore.shared.markDeleted(msgId: deleteId) }
@@ -931,14 +961,12 @@ extension AppState {
 
             // Reactions — idempotent add (a self-echo or duplicate is a no-op).
             if let emoji = tags["+react"], let replyId = tags["+reply"] {
-                let bufferName = target.hasPrefix("#") ? target : from
                 let ch = bufferName.hasPrefix("#") ? getOrCreateChannel(bufferName) : getOrCreateDM(bufferName)
                 ch.addReaction(msgId: replyId, emoji: emoji, from: from)
             }
 
             // Reaction removal (toggle off)
             if let emoji = tags["+freeq.at/unreact"], let replyId = tags["+reply"] {
-                let bufferName = target.hasPrefix("#") ? target : from
                 let ch = bufferName.hasPrefix("#") ? getOrCreateChannel(bufferName) : getOrCreateDM(bufferName)
                 ch.removeReaction(msgId: replyId, emoji: emoji, from: from)
             }
@@ -1054,8 +1082,15 @@ extension AppState {
                 ch.appendIfNew(msg)
             }
 
-        case .chatHistoryTarget(let targetNick, _):
-            let _ = getOrCreateDM(targetNick)
+        case .chatHistoryTarget(let targetNick, let timestamp):
+            if closedDMs.contains(targetNick.lowercased()) { return }
+            let dm = getOrCreateDM(targetNick)
+            if let ts = timestamp,
+               let parsed = ISO8601DateFormatter.freeqTargets.date(from: ts) {
+                if dm.messages.isEmpty || parsed > dm.lastActivity {
+                    dm.lastActivity = parsed
+                }
+            }
 
         case .whoisReply(let whoisNick, let info):
             // Parse WHOIS for DID: "nick is authenticated as did:plc:xxx"

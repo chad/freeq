@@ -1,28 +1,18 @@
 import SwiftUI
+import AVKit
 
 // MARK: - URL pattern detection
 
 private let imageExtensions = Set(["jpg", "jpeg", "png", "gif", "webp"])
+private let videoExtensions = Set(["mp4", "m4v", "mov", "webm"])
+private let audioExtensions = Set(["m4a", "mp3", "ogg", "wav", "aac"])
 private let cdnImagePattern = try! NSRegularExpression(pattern: "https?://cdn\\.bsky\\.app/img/[^\\s<]+", options: .caseInsensitive)
 private let youtubePattern = try! NSRegularExpression(pattern: "(?:youtube\\.com/watch\\?v=|youtu\\.be/)([a-zA-Z0-9_-]{11})", options: .caseInsensitive)
 private let bskyPostPattern = try! NSRegularExpression(pattern: "https?://bsky\\.app/profile/([^/]+)/post/([a-zA-Z0-9]+)", options: .caseInsensitive)
 
 /// Extract image URLs from message text.
 func extractImageURLs(from text: String) -> [String] {
-    var urls: [String] = []
-
-    // Standard image URLs (.jpg, .png, etc.)
-    let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-    if let matches = detector?.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-        for match in matches {
-            guard let range = Range(match.range, in: text), let url = match.url else { continue }
-            let path = url.pathExtension.lowercased()
-            if imageExtensions.contains(path) {
-                urls.append(String(text[range]))
-            }
-        }
-    }
-
+    var urls = extractMediaURLs(from: text, matching: imageExtensions)
     // CDN image URLs (no extension)
     let cdnMatches = cdnImagePattern.matches(in: text, range: NSRange(text.startIndex..., in: text))
     for match in cdnMatches {
@@ -31,7 +21,33 @@ func extractImageURLs(from text: String) -> [String] {
             if !urls.contains(url) { urls.append(url) }
         }
     }
+    return urls
+}
 
+/// Extract video URLs from message text.
+func extractVideoURLs(from text: String) -> [String] {
+    extractMediaURLs(from: text, matching: videoExtensions)
+}
+
+/// Extract audio URLs from message text.
+func extractAudioURLs(from text: String) -> [String] {
+    extractMediaURLs(from: text, matching: audioExtensions)
+}
+
+private func extractMediaURLs(from text: String, matching extensions: Set<String>) -> [String] {
+    var urls: [String] = []
+
+    // Standard image URLs (.jpg, .png, etc.)
+    let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    if let matches = detector?.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+        for match in matches {
+            guard let range = Range(match.range, in: text), let url = match.url else { continue }
+            let path = url.pathExtension.lowercased()
+            if extensions.contains(path) {
+                urls.append(String(text[range]))
+            }
+        }
+    }
     return urls
 }
 
@@ -62,7 +78,91 @@ func textWithoutImages(_ text: String, imageURLs: [String]) -> String {
 
 /// Check if text has any media (images, YouTube, Bluesky) that we should show separately.
 func hasMedia(in text: String) -> Bool {
-    !extractImageURLs(from: text).isEmpty || extractYouTubeID(from: text) != nil
+    !extractImageURLs(from: text).isEmpty
+        || !extractVideoURLs(from: text).isEmpty
+        || !extractAudioURLs(from: text).isEmpty
+        || extractBskyPost(from: text) != nil
+        || extractYouTubeID(from: text) != nil
+}
+
+/// Voice messages are sent as audio attachments with a small marker in text.
+func isVoiceMessage(_ text: String) -> Bool {
+    text.localizedCaseInsensitiveContains("voice message")
+        || text.contains("🎤")
+}
+
+// MARK: - Inline Video/Audio Views
+
+struct InlineVideoView: View {
+    let url: String
+
+    var body: some View {
+        if let parsed = URL(string: url) {
+            VideoPlayer(player: AVPlayer(url: parsed))
+                .frame(width: 420, height: 236)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                )
+                .padding(.top, 4)
+        }
+    }
+}
+
+struct InlineAudioView: View {
+    let url: String
+    let isVoice: Bool
+    @State private var player: AVPlayer?
+    @State private var isPlaying = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button {
+                togglePlayback()
+            } label: {
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    .frame(width: 18, height: 18)
+            }
+            .buttonStyle(.borderless)
+            .help(isPlaying ? "Pause" : "Play")
+
+            Image(systemName: isVoice ? "waveform" : "speaker.wave.2")
+                .foregroundStyle(isVoice ? .blue : .secondary)
+
+            Text(isVoice ? "Voice message" : URL(string: url)?.lastPathComponent ?? "Audio")
+                .font(.caption)
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: 340)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        )
+        .padding(.top, 4)
+        .onDisappear {
+            player?.pause()
+            isPlaying = false
+        }
+    }
+
+    private func togglePlayback() {
+        if player == nil, let parsed = URL(string: url) {
+            player = AVPlayer(url: parsed)
+        }
+        guard let player else { return }
+        if isPlaying {
+            player.pause()
+        } else {
+            player.play()
+        }
+        isPlaying.toggle()
+    }
 }
 
 // MARK: - Inline Image View
