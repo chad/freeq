@@ -1099,17 +1099,12 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                         None => (String::new(), None),
                     }
                 };
-                // External-brain mode: forward the addressed text question
-                // to yokota instead of answering with the local model.
-                // Off-flag (default) keeps the normal answer path below.
+                // External-brain mode: the main yokota daemon is in this same
+                // channel and owns ALL typed text — it answers there directly.
+                // eliza only handles SPOKEN audio in external-brain mode, so
+                // ignore typed questions here; forwarding them too would make
+                // the bot answer twice (text reply + spoken/seam reply).
                 if cfg.external_brain {
-                    if let Some(seam) = cfg.brain_seam.get() {
-                        seam.send(crate::brain_seam::Outbound::Utterance {
-                            nick: from.clone(),
-                            text: question.clone(),
-                        });
-                        tracing::info!(nick = %from, %question, "external-brain: forwarded text utterance to yokota");
-                    }
                     continue;
                 }
                 let cfg = cfg.clone();
@@ -1400,6 +1395,10 @@ fn spawn_join_greeting(
     channel: String,
     nick: String,
 ) {
+    // External-brain mode: yokota owns all speech — no autonomous greetings.
+    if cfg.external_brain {
+        return;
+    }
     let key = nick.to_ascii_lowercase();
     // Skip self and known peer agents.
     let self_canonical = cfg
