@@ -327,7 +327,7 @@
     "kind": "running"
   },
   "status_updated_at": "2026-06-14T17:34:53.570306967Z",
-  "last_event_at": "2026-06-14T17:36:10.881777Z",
+  "last_event_at": "2026-06-14T18:00:54.811448556Z",
   "pending_control": null,
   "checkpoints": [
     {
@@ -367,9 +367,9 @@
       "diff": {}
     },
     {
-      "seq": 0,
+      "seq": 121,
       "checkpoint": {
-        "timestamp": "2026-06-14T17:36:10.890356894Z",
+        "timestamp": "2026-06-14T17:36:16.044424049Z",
         "current_node": "select",
         "completed_nodes": [
           "start",
@@ -377,22 +377,22 @@
         ],
         "node_retries": {},
         "context_values": {
-          "graph.rankdir": "LR",
-          "last_stage": "select",
           "outcome": "succeeded",
-          "last_response": "Now I have a complete picture. Let me summarize my findings.\n\n---\n\n## My Choice: `freeq-tui/src/main.rs`\n\n**File:** `freeq-tui/src/main.rs` — Rust, `freeq-tui` crate\n\n### Why it's high-risk and unde",
-          "internal.run_id": "01KV3K2MJRGH4JS4MPPEWMQ91K",
-          "internal.work_dir": "/workspace/freeq",
-          "internal.fidelity": "full",
-          "internal.retry_count.select": 0,
           "response.select": "Now I have a complete picture. Let me summarize my findings.\n\n---\n\n## My Choice: `freeq-tui/src/main.rs`\n\n**File:** `freeq-tui/src/main.rs` — Rust, `freeq-tui` crate\n\n### Why it's high-risk and undertested\n\nThe hotspot analysis gives it a **gamma score of 9** (2,874 lines, 28 tracked functions, churn ×3) — putting it firmly in the top 15 risky files. More critically:\n\n- The `#[cfg(test)] mod tests` block at line 2779 covers **only one thing**: the `parse_join_prefix` function (9 test cases). That's 9 tests pinning a ~30-line helper.\n- Every other non-trivial free function in the file — `extract_url`, `format_file_size`, `format_link_preview`, `try_nick_complete`, `format_timestamp`/`parse_timestamp_ms` — has **zero dedicated tests**.\n- These functions contain real logic and real edge-case behavior (stripping punctuation from URLs, skipping freeq-internal URLs, byte-level size formatting, word-boundary nick completion, RFC 3339 timestamp parsing/fallback).\n- `freeq-tui/src/app.rs` (gamma 7) does have 42 tests but they cover `app.rs`'s structs, not `main.rs`'s helpers.\n\n### 3–6 specific behaviors I intend to pin\n\n1. **`extract_url` — trailing punctuation stripping.** A URL followed by `)`, `.`, `,` or `]` must return the URL without the trailing char. A \"URL\" shorter than 10 chars must not be returned.\n2. **`extract_url` — internal URL suppression.** URLs containing `cdn.bsky.app` or `/xrpc/` must return `None` even when they are otherwise valid.\n3. **`format_file_size` — boundary conditions.** 0 B → `\"0B\"`, 1023 B → `\"1023B\"`, 1024 B → `\"1.0KB\"`, 1024·1024 B → `\"1.0MB\"`, fractional MB case.\n4. **`try_nick_complete` — first-word completion adds `: ` suffix; mid-sentence completion adds space.** Input `\"ali\"` at cursor 3 with `[\"alice\", \"bob\"]` in nicks → `\"alice: \"`.\n5. **`try_nick_complete` — no match leaves editor unchanged.** Fragment not matching any nick must not corrupt `editor.text` or `editor.cursor`.\n6. **`extract_url` — multiple words; returns only the first valid URL.** Input `\"see https://example.com and https://other.org\"` → `\"https://example.com\"`.\n\n### Existing test convention to follow\n\nThe sibling test module lives at the bottom of `freeq-tui/src/main.rs` (line 2779):\n\n```rust\n#[cfg(test)]\nmod tests {\n    use super::parse_join_prefix;\n    …\n}\n```\n\nNew tests go in that same `mod tests` block. The pattern is: `use super::<fn>`, then plain `#[test]` functions with `assert_eq!` / `assert!`. No async, no network — purely functional unit tests. That matches `freeq-tui/src/app.rs`'s test style too.",
-          "internal.retry_count.start": 0,
-          "thread.cov.current_node": "select",
-          "graph.goal": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code.",
-          "internal.node_visit_count": 1,
+          "internal.work_dir": "/workspace/freeq",
           "internal.thread_id": "cov",
-          "failure_class": "",
           "failure_signature": "",
+          "graph.goal": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code.",
+          "last_response": "Now I have a complete picture. Let me summarize my findings.\n\n---\n\n## My Choice: `freeq-tui/src/main.rs`\n\n**File:** `freeq-tui/src/main.rs` — Rust, `freeq-tui` crate\n\n### Why it's high-risk and unde",
+          "graph.rankdir": "LR",
+          "internal.run_id": "01KV3K2MJRGH4JS4MPPEWMQ91K",
+          "internal.node_visit_count": 1,
+          "failure_class": "",
+          "internal.retry_count.start": 0,
+          "internal.retry_count.select": 0,
+          "last_stage": "select",
+          "internal.fidelity": "full",
+          "thread.cov.current_node": "select",
           "current_node": "select"
         },
         "node_outcomes": {
@@ -440,7 +440,140 @@
           }
         },
         "next_node_id": "implement",
+        "git_commit_sha": "9500c713a68439e230d05b8bd6e37857f2d8743b",
         "node_visits": {
+          "start": 1,
+          "select": 1
+        }
+      },
+      "diff": {
+        "summary": {
+          "files_changed": 0,
+          "additions": 0,
+          "deletions": 0
+        }
+      }
+    },
+    {
+      "seq": 0,
+      "checkpoint": {
+        "timestamp": "2026-06-14T18:00:54.890251259Z",
+        "current_node": "implement",
+        "completed_nodes": [
+          "start",
+          "select",
+          "implement"
+        ],
+        "node_retries": {},
+        "context_values": {
+          "graph.rankdir": "LR",
+          "last_stage": "implement",
+          "outcome": "succeeded",
+          "response.implement": "**All gates pass.** Here's what was added:\n\n## Summary\n\n**File modified:** `freeq-tui/src/main.rs`\n\n**Changes:** 26 new tests added to the existing `#[cfg(test)] mod tests` block. Zero production code changed. One import fix (removed unused `Buffer` from the test import).\n\n### New tests by function:\n\n**`extract_url` (9 tests)**\n- Returns plain `https://` and `http://` URLs\n- Strips all 5 trailing punctuation chars (`.`, `,`, `)`, `]`, `;`)\n- Returns the *first* URL when multiple are present\n- Suppresses `cdn.bsky.app` URLs → `None`\n- Suppresses `/xrpc/` URLs → `None`\n- Enforces the `> 10` length threshold boundary (9, 10, 11 chars)\n- Returns `None` for plain text and empty string\n\n**`format_file_size` (4 tests)**\n- Zero bytes → `\"0B\"`\n- Sub-KB range: 1, 512, 1023 B\n- KB boundary: 1024 B → `\"1.0KB\"`, 1536 → `\"1.5KB\"`, 1 MB−1 → `\"1024.0KB\"`\n- MB boundary: 1 MB → `\"1.0MB\"`, 2 MB, 10 MB\n\n**`try_nick_complete` (9 tests)**\n- First-word completion appends `\": \"` suffix\n- Mid-sentence completion appends `\" \"` suffix\n- Case-insensitive fragment matching\n- `@` op sigil stripped before insertion\n- `+` voice sigil stripped before insertion\n- No match → editor text and cursor unchanged\n- Empty fragment (cursor after space) → no-op\n- Text after cursor is preserved intact\n- Non-existent buffer → graceful no-op",
+          "last_response": "**All gates pass.** Here's what was added:\n\n## Summary\n\n**File modified:** `freeq-tui/src/main.rs`\n\n**Changes:** 26 new tests added to the existing `#[cfg(test)] mod tests` block. Zero production code",
+          "internal.run_id": "01KV3K2MJRGH4JS4MPPEWMQ91K",
+          "internal.retry_count.implement": 0,
+          "internal.work_dir": "/workspace/freeq",
+          "internal.fidelity": "full",
+          "internal.retry_count.select": 0,
+          "response.select": "Now I have a complete picture. Let me summarize my findings.\n\n---\n\n## My Choice: `freeq-tui/src/main.rs`\n\n**File:** `freeq-tui/src/main.rs` — Rust, `freeq-tui` crate\n\n### Why it's high-risk and undertested\n\nThe hotspot analysis gives it a **gamma score of 9** (2,874 lines, 28 tracked functions, churn ×3) — putting it firmly in the top 15 risky files. More critically:\n\n- The `#[cfg(test)] mod tests` block at line 2779 covers **only one thing**: the `parse_join_prefix` function (9 test cases). That's 9 tests pinning a ~30-line helper.\n- Every other non-trivial free function in the file — `extract_url`, `format_file_size`, `format_link_preview`, `try_nick_complete`, `format_timestamp`/`parse_timestamp_ms` — has **zero dedicated tests**.\n- These functions contain real logic and real edge-case behavior (stripping punctuation from URLs, skipping freeq-internal URLs, byte-level size formatting, word-boundary nick completion, RFC 3339 timestamp parsing/fallback).\n- `freeq-tui/src/app.rs` (gamma 7) does have 42 tests but they cover `app.rs`'s structs, not `main.rs`'s helpers.\n\n### 3–6 specific behaviors I intend to pin\n\n1. **`extract_url` — trailing punctuation stripping.** A URL followed by `)`, `.`, `,` or `]` must return the URL without the trailing char. A \"URL\" shorter than 10 chars must not be returned.\n2. **`extract_url` — internal URL suppression.** URLs containing `cdn.bsky.app` or `/xrpc/` must return `None` even when they are otherwise valid.\n3. **`format_file_size` — boundary conditions.** 0 B → `\"0B\"`, 1023 B → `\"1023B\"`, 1024 B → `\"1.0KB\"`, 1024·1024 B → `\"1.0MB\"`, fractional MB case.\n4. **`try_nick_complete` — first-word completion adds `: ` suffix; mid-sentence completion adds space.** Input `\"ali\"` at cursor 3 with `[\"alice\", \"bob\"]` in nicks → `\"alice: \"`.\n5. **`try_nick_complete` — no match leaves editor unchanged.** Fragment not matching any nick must not corrupt `editor.text` or `editor.cursor`.\n6. **`extract_url` — multiple words; returns only the first valid URL.** Input `\"see https://example.com and https://other.org\"` → `\"https://example.com\"`.\n\n### Existing test convention to follow\n\nThe sibling test module lives at the bottom of `freeq-tui/src/main.rs` (line 2779):\n\n```rust\n#[cfg(test)]\nmod tests {\n    use super::parse_join_prefix;\n    …\n}\n```\n\nNew tests go in that same `mod tests` block. The pattern is: `use super::<fn>`, then plain `#[test]` functions with `assert_eq!` / `assert!`. No async, no network — purely functional unit tests. That matches `freeq-tui/src/app.rs`'s test style too.",
+          "internal.retry_count.start": 0,
+          "thread.cov.current_node": "implement",
+          "graph.goal": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code.",
+          "internal.node_visit_count": 1,
+          "internal.thread_id": "cov",
+          "failure_class": "",
+          "failure_signature": "",
+          "current_node": "implement"
+        },
+        "node_outcomes": {
+          "implement": {
+            "status": "succeeded",
+            "context_updates": {
+              "last_response": "**All gates pass.** Here's what was added:\n\n## Summary\n\n**File modified:** `freeq-tui/src/main.rs`\n\n**Changes:** 26 new tests added to the existing `#[cfg(test)] mod tests` block. Zero production code",
+              "response.implement": "**All gates pass.** Here's what was added:\n\n## Summary\n\n**File modified:** `freeq-tui/src/main.rs`\n\n**Changes:** 26 new tests added to the existing `#[cfg(test)] mod tests` block. Zero production code changed. One import fix (removed unused `Buffer` from the test import).\n\n### New tests by function:\n\n**`extract_url` (9 tests)**\n- Returns plain `https://` and `http://` URLs\n- Strips all 5 trailing punctuation chars (`.`, `,`, `)`, `]`, `;`)\n- Returns the *first* URL when multiple are present\n- Suppresses `cdn.bsky.app` URLs → `None`\n- Suppresses `/xrpc/` URLs → `None`\n- Enforces the `> 10` length threshold boundary (9, 10, 11 chars)\n- Returns `None` for plain text and empty string\n\n**`format_file_size` (4 tests)**\n- Zero bytes → `\"0B\"`\n- Sub-KB range: 1, 512, 1023 B\n- KB boundary: 1024 B → `\"1.0KB\"`, 1536 → `\"1.5KB\"`, 1 MB−1 → `\"1024.0KB\"`\n- MB boundary: 1 MB → `\"1.0MB\"`, 2 MB, 10 MB\n\n**`try_nick_complete` (9 tests)**\n- First-word completion appends `\": \"` suffix\n- Mid-sentence completion appends `\" \"` suffix\n- Case-insensitive fragment matching\n- `@` op sigil stripped before insertion\n- `+` voice sigil stripped before insertion\n- No match → editor text and cursor unchanged\n- Empty fragment (cursor after space) → no-op\n- Text after cursor is preserved intact\n- Non-existent buffer → graceful no-op",
+              "last_stage": "implement"
+            },
+            "notes": "Stage completed: implement",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "anthropic",
+                    "model_id": "claude-sonnet-4-6"
+                  },
+                  "tokens": {
+                    "input_tokens": 20280,
+                    "output_tokens": 6145,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 792166,
+                    "cache_write_tokens": 128826
+                  }
+                },
+                "facts": {
+                  "algorithm": "anthropic",
+                  "cache_write_5m_tokens": 128826,
+                  "cache_write_1h_tokens": 0
+                }
+              },
+              "total_usd_micros": 873761
+            },
+            "files_touched": [
+              "/workspace/freeq/freeq-tui/src/main.rs"
+            ],
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 113659,
+              "tool_time_ms": 1365026,
+              "active_time_ms": 1478685
+            }
+          },
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          },
+          "select": {
+            "status": "succeeded",
+            "context_updates": {
+              "last_stage": "select",
+              "last_response": "Now I have a complete picture. Let me summarize my findings.\n\n---\n\n## My Choice: `freeq-tui/src/main.rs`\n\n**File:** `freeq-tui/src/main.rs` — Rust, `freeq-tui` crate\n\n### Why it's high-risk and unde",
+              "response.select": "Now I have a complete picture. Let me summarize my findings.\n\n---\n\n## My Choice: `freeq-tui/src/main.rs`\n\n**File:** `freeq-tui/src/main.rs` — Rust, `freeq-tui` crate\n\n### Why it's high-risk and undertested\n\nThe hotspot analysis gives it a **gamma score of 9** (2,874 lines, 28 tracked functions, churn ×3) — putting it firmly in the top 15 risky files. More critically:\n\n- The `#[cfg(test)] mod tests` block at line 2779 covers **only one thing**: the `parse_join_prefix` function (9 test cases). That's 9 tests pinning a ~30-line helper.\n- Every other non-trivial free function in the file — `extract_url`, `format_file_size`, `format_link_preview`, `try_nick_complete`, `format_timestamp`/`parse_timestamp_ms` — has **zero dedicated tests**.\n- These functions contain real logic and real edge-case behavior (stripping punctuation from URLs, skipping freeq-internal URLs, byte-level size formatting, word-boundary nick completion, RFC 3339 timestamp parsing/fallback).\n- `freeq-tui/src/app.rs` (gamma 7) does have 42 tests but they cover `app.rs`'s structs, not `main.rs`'s helpers.\n\n### 3–6 specific behaviors I intend to pin\n\n1. **`extract_url` — trailing punctuation stripping.** A URL followed by `)`, `.`, `,` or `]` must return the URL without the trailing char. A \"URL\" shorter than 10 chars must not be returned.\n2. **`extract_url` — internal URL suppression.** URLs containing `cdn.bsky.app` or `/xrpc/` must return `None` even when they are otherwise valid.\n3. **`format_file_size` — boundary conditions.** 0 B → `\"0B\"`, 1023 B → `\"1023B\"`, 1024 B → `\"1.0KB\"`, 1024·1024 B → `\"1.0MB\"`, fractional MB case.\n4. **`try_nick_complete` — first-word completion adds `: ` suffix; mid-sentence completion adds space.** Input `\"ali\"` at cursor 3 with `[\"alice\", \"bob\"]` in nicks → `\"alice: \"`.\n5. **`try_nick_complete` — no match leaves editor unchanged.** Fragment not matching any nick must not corrupt `editor.text` or `editor.cursor`.\n6. **`extract_url` — multiple words; returns only the first valid URL.** Input `\"see https://example.com and https://other.org\"` → `\"https://example.com\"`.\n\n### Existing test convention to follow\n\nThe sibling test module lives at the bottom of `freeq-tui/src/main.rs` (line 2779):\n\n```rust\n#[cfg(test)]\nmod tests {\n    use super::parse_join_prefix;\n    …\n}\n```\n\nNew tests go in that same `mod tests` block. The pattern is: `use super::<fn>`, then plain `#[test]` functions with `assert_eq!` / `assert!`. No async, no network — purely functional unit tests. That matches `freeq-tui/src/app.rs`'s test style too."
+            },
+            "notes": "Stage completed: select",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "anthropic",
+                    "model_id": "claude-sonnet-4-6"
+                  },
+                  "tokens": {
+                    "input_tokens": 20469,
+                    "output_tokens": 3499,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 240054,
+                    "cache_write_tokens": 39421
+                  }
+                },
+                "facts": {
+                  "algorithm": "anthropic",
+                  "cache_write_5m_tokens": 39421,
+                  "cache_write_1h_tokens": 0
+                }
+              },
+              "total_usd_micros": 333736
+            },
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 64590,
+              "tool_time_ms": 9352,
+              "active_time_ms": 73942
+            }
+          }
+        },
+        "next_node_id": "verify",
+        "node_visits": {
+          "implement": 1,
           "select": 1,
           "start": 1
         }
@@ -479,7 +612,12 @@
       "first_event_seq": 27,
       "prompt": null,
       "response": null,
-      "completion": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": "Stage completed: select",
+        "failure_reason": null,
+        "timestamp": "2026-06-14T17:36:10.889702973Z"
+      },
       "provider_used": {
         "mode": "agent",
         "provider": "anthropic",
@@ -493,17 +631,37 @@
       "output": null,
       "started_at": "2026-06-14T17:34:54.891079429Z",
       "handler": "agent",
+      "timing": {
+        "wall_time_ms": 75998,
+        "inference_time_ms": 64590,
+        "tool_time_ms": 9352,
+        "active_time_ms": 73942
+      },
       "usage": {
-        "input_tokens": 20469,
-        "output_tokens": 3499,
-        "total_tokens": 303443,
+        "input_tokens": 40749,
+        "output_tokens": 9644,
+        "total_tokens": 1250860,
         "reasoning_tokens": 0,
-        "cache_read_tokens": 240054,
-        "cache_write_tokens": 39421
+        "cache_read_tokens": 1032220,
+        "cache_write_tokens": 168247,
+        "total_usd_micros": 333736
       },
       "model": {
         "provider": "anthropic",
         "model_id": "claude-sonnet-4-6"
+      },
+      "todos": {
+        "kind": "anthropic_tasks",
+        "list_id": "anthropic_tasks:a4003479-fa9d-4654-a2bb-c0e0d3602ea2",
+        "items": [
+          {
+            "id": "1",
+            "status": "completed",
+            "order": 0,
+            "subject": "Add tests for extract_url, format_file_size, try_nick_complete in freeq-tui/src/main.rs",
+            "description": "Add targeted unit tests inside the existing #[cfg(test)] mod tests block for the three untested pure helpers: extract_url, format_file_size, and try_nick_complete. Then make functions pub(crate) if needed and run verify.sh."
+          }
+        ]
       },
       "permission_level": "full",
       "agent_tools": [
@@ -523,7 +681,7 @@
             "kind": "native"
           },
           "category": "other",
-          "invoked": false
+          "invoked": true
         },
         {
           "name": "TaskGet",
@@ -550,7 +708,7 @@
             "kind": "native"
           },
           "category": "other",
-          "invoked": false
+          "invoked": true
         },
         {
           "name": "close_agent",
@@ -568,7 +726,7 @@
             "kind": "native"
           },
           "category": "write",
-          "invoked": false
+          "invoked": true
         },
         {
           "name": "glob",
@@ -595,7 +753,7 @@
             "kind": "native"
           },
           "category": "read",
-          "invoked": false
+          "invoked": true
         },
         {
           "name": "send_input",
@@ -665,32 +823,32 @@
         "provider": "anthropic",
         "model": "claude-sonnet-4-6",
         "context_window_tokens": 200000,
-        "input_tokens": 28039,
-        "usage_percent": 14.0195,
+        "input_tokens": 48400,
+        "usage_percent": 24.2,
         "count_method": "response_usage_scaled_breakdown",
         "staleness": "live",
-        "generated_at": "2026-06-14T17:36:10.881568471Z",
-        "event_seq": 115,
+        "generated_at": "2026-06-14T18:00:54.809978016Z",
+        "event_seq": 282,
         "breakdown": [
           {
             "category": "system_prompt",
-            "tokens": 2028,
-            "usage_percent": 1.014
+            "tokens": 1971,
+            "usage_percent": 0.9855
           },
           {
             "category": "tools",
-            "tokens": 2342,
-            "usage_percent": 1.171
+            "tokens": 2276,
+            "usage_percent": 1.138
           },
           {
             "category": "memory",
-            "tokens": 3239,
-            "usage_percent": 1.6195
+            "tokens": 3147,
+            "usage_percent": 1.5735
           },
           {
             "category": "conversation",
-            "tokens": 20421,
-            "usage_percent": 10.2105
+            "tokens": 40997,
+            "usage_percent": 20.4985
           },
           {
             "category": "other",
@@ -700,7 +858,7 @@
         ],
         "warnings": []
       },
-      "state": "running"
+      "state": "succeeded"
     },
     "start@1": {
       "first_event_seq": 23,
@@ -735,6 +893,91 @@
         "cache_write_tokens": 0
       },
       "state": "succeeded"
+    },
+    "implement@1": {
+      "first_event_seq": 124,
+      "prompt": null,
+      "response": null,
+      "completion": null,
+      "provider_used": {
+        "mode": "agent",
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "reasoning_effort": "medium"
+      },
+      "diff": null,
+      "script_invocation": null,
+      "script_timing": null,
+      "parallel_results": null,
+      "output": null,
+      "started_at": "2026-06-14T17:36:16.044828780Z",
+      "handler": "agent",
+      "usage": {
+        "input_tokens": 20280,
+        "output_tokens": 6145,
+        "total_tokens": 947417,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 792166,
+        "cache_write_tokens": 128826
+      },
+      "model": {
+        "provider": "anthropic",
+        "model_id": "claude-sonnet-4-6"
+      },
+      "todos": {
+        "kind": "anthropic_tasks",
+        "list_id": "anthropic_tasks:a4003479-fa9d-4654-a2bb-c0e0d3602ea2",
+        "items": [
+          {
+            "id": "1",
+            "status": "completed",
+            "order": 0,
+            "subject": "Add tests for extract_url, format_file_size, try_nick_complete in freeq-tui/src/main.rs",
+            "description": "Add targeted unit tests inside the existing #[cfg(test)] mod tests block for the three untested pure helpers: extract_url, format_file_size, and try_nick_complete. Then make functions pub(crate) if needed and run verify.sh."
+          }
+        ]
+      },
+      "permission_level": "full",
+      "context_window": {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "context_window_tokens": 200000,
+        "input_tokens": 48400,
+        "usage_percent": 24.2,
+        "count_method": "response_usage_scaled_breakdown",
+        "staleness": "live",
+        "generated_at": "2026-06-14T18:00:54.809978016Z",
+        "event_seq": 283,
+        "breakdown": [
+          {
+            "category": "system_prompt",
+            "tokens": 1971,
+            "usage_percent": 0.9855
+          },
+          {
+            "category": "tools",
+            "tokens": 2276,
+            "usage_percent": 1.138
+          },
+          {
+            "category": "memory",
+            "tokens": 3147,
+            "usage_percent": 1.5735
+          },
+          {
+            "category": "conversation",
+            "tokens": 40997,
+            "usage_percent": 20.4985
+          },
+          {
+            "category": "other",
+            "tokens": 9,
+            "usage_percent": 0.0045
+          }
+        ],
+        "warnings": []
+      },
+      "state": "running"
     }
   }
 }
