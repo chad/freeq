@@ -326,7 +326,7 @@
     "kind": "running"
   },
   "status_updated_at": "2026-06-14T19:38:59.757817352Z",
-  "last_event_at": "2026-06-14T20:10:27.148193349Z",
+  "last_event_at": "2026-06-14T20:14:04.671866899Z",
   "pending_control": null,
   "checkpoints": [
     {
@@ -454,9 +454,9 @@
       }
     },
     {
-      "seq": 0,
+      "seq": 1038,
       "checkpoint": {
-        "timestamp": "2026-06-14T20:10:27.206751663Z",
+        "timestamp": "2026-06-14T20:10:32.072257914Z",
         "current_node": "implement",
         "completed_nodes": [
           "start",
@@ -465,27 +465,31 @@
         ],
         "node_retries": {},
         "context_values": {
-          "current_node": "implement",
-          "last_response": "Here's a summary of what was done:\n\n## Summary\n\n**File added:** `freeq-app/src/irc/client-wiring.test.ts`\n\n**22 new tests** across 7 `describe` blocks, all passing:\n\n### Section A — Exported action ",
-          "failure_signature": "",
-          "last_stage": "implement",
-          "internal.run_id": "01KV3T9RKNBZGM0HAN0F9FNW1C",
-          "internal.retry_count.select": 0,
-          "response.implement": "Here's a summary of what was done:\n\n## Summary\n\n**File added:** `freeq-app/src/irc/client-wiring.test.ts`\n\n**22 new tests** across 7 `describe` blocks, all passing:\n\n### Section A — Exported action functions (store side-effects)\n| Test | What it pins |\n|------|-------------|\n| `sendMessage` × 4 | DM buffer created for nick targets; not created for `#channel`; works with null client |\n| `sendReply` × 2 | Same buffer logic for reply targets |\n| `joinChannel` × 2 | Channel added to store; set as active channel |\n| `partChannel` × 2 | Channel removed from store; `saveJoinedChannels` writes to localStorage |\n\n### Section B — wireEvents real dispatch chain (via `__wireEventsForTests`)\n| Test | What it pins |\n|------|-------------|\n| `'message'` × 4 | DM auto-creates buffer; increments `mentionCount`; self-DMs don't increment; message added to buffer |\n| `'error'` × 2 | Exact \"same identity reconnected\" string → `fullReset`; other errors do nothing |\n| `'pinAdded'`/`'pinRemoved'` × 3 | Pin appended; pin removed; idempotent on duplicate add |\n| `'motdStart'`/`'motd'` × 2 | Buffer reset + `motdDismissed` cleared; lines appended in order |\n| `'historyBatch'` × 1 | Messages merged into channel |\n\n**Convention followed:** matches `client-av.test.ts` exactly — `makeEventStub()` with `on`/`emit`, `vi.mock('@freeq/sdk')`, `vi.mock('../lib/notifications')`, same `globalThis` setup, `__setClientForTests` / `__wireEventsForTests` seams, no jsdom directive (runs in node environment like the passing `client-state.test.ts`).",
           "internal.retry_count.implement": 0,
-          "thread.cov.current_node": "implement",
-          "internal.work_dir": "/workspace/freeq",
-          "internal.fidelity": "full",
           "internal.thread_id": "cov",
-          "graph.goal": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code.",
-          "outcome": "succeeded",
-          "response.select": "I now have a comprehensive picture. Here is my analysis and recommendation:\n\n---\n\n## Chosen File: `freeq-app/src/irc/client.ts`\n\n**Language/crate:** TypeScript, `freeq-app` (Vite + Vitest)\n\n---\n\n### Why it's high-risk and undertested\n\nCLAUDE.md explicitly flags it: **`irc/client.ts` (gamma 133) — UNDERTESTED — needs dedicated unit tests**.\n\nThe current hotspot run confirms it at gamma 5 (3rd after server-side files), making it the highest-risk file within the CI-covered TypeScript surface. The gap between what the file does and what tests cover is large:\n\n- The file exposes ~30 exported functions (`sendMessage`, `sendReply`, `sendEdit`, `sendDelete`, `joinChannel`, `partChannel`, `reconnect`, `setSaslCredentials`, `pinMessage`, `unpinMessage`, etc.) that contain **store-mutation side effects beyond the SDK call** — e.g. `sendMessage` creates a DM buffer, `joinChannel` calls both `addChannel` and `setActiveChannel`, `partChannel` calls `saveJoinedChannels`.\n- The `wireEvents` function (~230 lines, ~25 event handlers) routes every inbound SDK event to the Zustand store. The `__wireEventsForTests` escape hatch exists precisely to enable testing this, but most handlers remain uncovered.\n- Existing tests (`client.test.ts` = parser tests, `client-state.test.ts` = store simulations that manually replicate what the handlers do, `client-reconnect.test.ts` = 96 lines on broker token), **none of them exercise `wireEvents` via `__wireEventsForTests`**, meaning the real dispatch chain is untested.\n- `client-av.test.ts` uses `__wireEventsForTests` but only for the three `avSession*` event handlers (lines 377–460).\n\n---\n\n### 3–6 specific behaviors to pin\n\n1. **`sendMessage` to a DM target creates the buffer** — when `target` is a nick (not `#channel`), the store should have a channel entry for that nick after the call, even if the SDK client is null. Currently there's no test that exercises this exported function at all.\n\n2. **`sendReply` to a DM target also creates the buffer** — same logic branch exists in `sendReply`, equally untested.\n\n3. **`wireEvents: 'message'` handler for a DM creates the buffer and increments mentions** — when a PRIVMSG arrives in a non-channel buffer that doesn't yet exist in the store, `wireEvents` must auto-create it via `addChannel`. The handler also calls `incrementMentions` for DMs. This path is *simulated* in `client-state.test.ts` but never run through the real handler.\n\n4. **`wireEvents: 'error'` with \"same identity reconnected\" triggers `fullReset`** — this specific error string branches to `fullReset()` (which wipes all state) vs. doing nothing for other errors. One wrong `includes()` string breaks the entire re-auth recovery flow. Not tested anywhere.\n\n5. **`wireEvents: 'pinAdded'` / `'pinRemoved'`** — these call `addPin`/`removePin` on the store. No pin-related events are tested in the `wireEvents` layer (the store methods themselves are tested separately).\n\n6. **`joinChannel` sets the channel as active; `partChannel` persists to localStorage** — `joinChannel` calls `setActiveChannel` in addition to `addChannel`; `partChannel` calls `saveJoinedChannels` which writes to `localStorage`. Neither is covered.\n\n---\n\n### Test convention to follow\n\nThe existing sibling file **`freeq-app/src/irc/client-av.test.ts`** sets the pattern for `wireEvents` integration tests: it stubs a `FreeqClient`-shaped EventEmitter with `vi.fn()` methods, calls `__wireEventsForTests(stub)`, then emits events on the stub and asserts store state. The `__setClientForTests` export in `client.ts` enables injecting a stub client for the exported-function tests. Both patterns are established and the new tests should follow them exactly, importing from `vitest` and using the same `localStorage` mock setup seen in `client-state.test.ts`.",
+          "response.implement": "Here's a summary of what was done:\n\n## Summary\n\n**File added:** `freeq-app/src/irc/client-wiring.test.ts`\n\n**22 new tests** across 7 `describe` blocks, all passing:\n\n### Section A — Exported action functions (store side-effects)\n| Test | What it pins |\n|------|-------------|\n| `sendMessage` × 4 | DM buffer created for nick targets; not created for `#channel`; works with null client |\n| `sendReply` × 2 | Same buffer logic for reply targets |\n| `joinChannel` × 2 | Channel added to store; set as active channel |\n| `partChannel` × 2 | Channel removed from store; `saveJoinedChannels` writes to localStorage |\n\n### Section B — wireEvents real dispatch chain (via `__wireEventsForTests`)\n| Test | What it pins |\n|------|-------------|\n| `'message'` × 4 | DM auto-creates buffer; increments `mentionCount`; self-DMs don't increment; message added to buffer |\n| `'error'` × 2 | Exact \"same identity reconnected\" string → `fullReset`; other errors do nothing |\n| `'pinAdded'`/`'pinRemoved'` × 3 | Pin appended; pin removed; idempotent on duplicate add |\n| `'motdStart'`/`'motd'` × 2 | Buffer reset + `motdDismissed` cleared; lines appended in order |\n| `'historyBatch'` × 1 | Messages merged into channel |\n\n**Convention followed:** matches `client-av.test.ts` exactly — `makeEventStub()` with `on`/`emit`, `vi.mock('@freeq/sdk')`, `vi.mock('../lib/notifications')`, same `globalThis` setup, `__setClientForTests` / `__wireEventsForTests` seams, no jsdom directive (runs in node environment like the passing `client-state.test.ts`).",
+          "internal.retry_count.select": 0,
+          "internal.fidelity": "full",
           "internal.node_visit_count": 1,
-          "failure_class": "",
+          "failure_signature": "",
+          "outcome": "succeeded",
+          "graph.rankdir": "LR",
+          "thread.cov.current_node": "implement",
+          "last_stage": "implement",
+          "last_response": "Here's a summary of what was done:\n\n## Summary\n\n**File added:** `freeq-app/src/irc/client-wiring.test.ts`\n\n**22 new tests** across 7 `describe` blocks, all passing:\n\n### Section A — Exported action ",
           "internal.retry_count.start": 0,
-          "graph.rankdir": "LR"
+          "graph.goal": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code.",
+          "failure_class": "",
+          "internal.run_id": "01KV3T9RKNBZGM0HAN0F9FNW1C",
+          "internal.work_dir": "/workspace/freeq",
+          "response.select": "I now have a comprehensive picture. Here is my analysis and recommendation:\n\n---\n\n## Chosen File: `freeq-app/src/irc/client.ts`\n\n**Language/crate:** TypeScript, `freeq-app` (Vite + Vitest)\n\n---\n\n### Why it's high-risk and undertested\n\nCLAUDE.md explicitly flags it: **`irc/client.ts` (gamma 133) — UNDERTESTED — needs dedicated unit tests**.\n\nThe current hotspot run confirms it at gamma 5 (3rd after server-side files), making it the highest-risk file within the CI-covered TypeScript surface. The gap between what the file does and what tests cover is large:\n\n- The file exposes ~30 exported functions (`sendMessage`, `sendReply`, `sendEdit`, `sendDelete`, `joinChannel`, `partChannel`, `reconnect`, `setSaslCredentials`, `pinMessage`, `unpinMessage`, etc.) that contain **store-mutation side effects beyond the SDK call** — e.g. `sendMessage` creates a DM buffer, `joinChannel` calls both `addChannel` and `setActiveChannel`, `partChannel` calls `saveJoinedChannels`.\n- The `wireEvents` function (~230 lines, ~25 event handlers) routes every inbound SDK event to the Zustand store. The `__wireEventsForTests` escape hatch exists precisely to enable testing this, but most handlers remain uncovered.\n- Existing tests (`client.test.ts` = parser tests, `client-state.test.ts` = store simulations that manually replicate what the handlers do, `client-reconnect.test.ts` = 96 lines on broker token), **none of them exercise `wireEvents` via `__wireEventsForTests`**, meaning the real dispatch chain is untested.\n- `client-av.test.ts` uses `__wireEventsForTests` but only for the three `avSession*` event handlers (lines 377–460).\n\n---\n\n### 3–6 specific behaviors to pin\n\n1. **`sendMessage` to a DM target creates the buffer** — when `target` is a nick (not `#channel`), the store should have a channel entry for that nick after the call, even if the SDK client is null. Currently there's no test that exercises this exported function at all.\n\n2. **`sendReply` to a DM target also creates the buffer** — same logic branch exists in `sendReply`, equally untested.\n\n3. **`wireEvents: 'message'` handler for a DM creates the buffer and increments mentions** — when a PRIVMSG arrives in a non-channel buffer that doesn't yet exist in the store, `wireEvents` must auto-create it via `addChannel`. The handler also calls `incrementMentions` for DMs. This path is *simulated* in `client-state.test.ts` but never run through the real handler.\n\n4. **`wireEvents: 'error'` with \"same identity reconnected\" triggers `fullReset`** — this specific error string branches to `fullReset()` (which wipes all state) vs. doing nothing for other errors. One wrong `includes()` string breaks the entire re-auth recovery flow. Not tested anywhere.\n\n5. **`wireEvents: 'pinAdded'` / `'pinRemoved'`** — these call `addPin`/`removePin` on the store. No pin-related events are tested in the `wireEvents` layer (the store methods themselves are tested separately).\n\n6. **`joinChannel` sets the channel as active; `partChannel` persists to localStorage** — `joinChannel` calls `setActiveChannel` in addition to `addChannel`; `partChannel` calls `saveJoinedChannels` which writes to `localStorage`. Neither is covered.\n\n---\n\n### Test convention to follow\n\nThe existing sibling file **`freeq-app/src/irc/client-av.test.ts`** sets the pattern for `wireEvents` integration tests: it stubs a `FreeqClient`-shaped EventEmitter with `vi.fn()` methods, calls `__wireEventsForTests(stub)`, then emits events on the stub and asserts store state. The `__setClientForTests` export in `client.ts` enables injecting a stub client for the exported-function tests. Both patterns are established and the new tests should follow them exactly, importing from `vitest` and using the same `localStorage` mock setup seen in `client-state.test.ts`.",
+          "current_node": "implement"
         },
         "node_outcomes": {
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          },
           "implement": {
             "status": "succeeded",
             "context_updates": {
@@ -564,17 +568,169 @@
               "tool_time_ms": 10730,
               "active_time_ms": 108133
             }
+          }
+        },
+        "next_node_id": "verify",
+        "git_commit_sha": "b19264b03f1f90403e31d966eeff5807539fc3d4",
+        "node_visits": {
+          "implement": 1,
+          "start": 1,
+          "select": 1
+        }
+      },
+      "diff": {
+        "patch": "diff --git a/freeq-app/src/irc/client-wiring.test.ts b/freeq-app/src/irc/client-wiring.test.ts\nnew file mode 100644\nindex 0000000..c7e58ef\n--- /dev/null\n+++ b/freeq-app/src/irc/client-wiring.test.ts\n@@ -0,0 +1,407 @@\n+/**\n+ * Wiring tests for irc/client.ts (hotspot, gamma 133).\n+ *\n+ * Covers two orthogonal seams:\n+ *\n+ * A) Exported action functions (sendMessage, sendReply, joinChannel,\n+ *    partChannel) — these have side effects on the Zustand store *beyond*\n+ *    the SDK call that were not previously tested.\n+ *\n+ * B) wireEvents integration — exercised through __wireEventsForTests so we\n+ *    drive the real dispatch chain (not the hand-rolled simulation in\n+ *    client-state.test.ts). Covers:\n+ *      • 'message' DM auto-creates the buffer + increments mentions\n+ *      • 'error' \"same identity reconnected\" triggers fullReset\n+ *      • 'pinAdded' / 'pinRemoved' dispatches to store\n+ *      • 'motdStart' / 'motd' append to the MOTD accumulator\n+ *      • 'historyBatch' merges into existing channel history\n+ *\n+ * Pattern: use __setClientForTests to inject a stub, use __wireEventsForTests\n+ * to attach handlers to the stub, then emit events and assert store state.\n+ * Runs in the default node environment (no jsdom) — same as client-state.test.ts.\n+ */\n+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';\n+\n+// ── Global mocks (must come before any module import) ──\n+// Mirrors the setup in client-state.test.ts and client-reconnect.test.ts.\n+const storage = new Map<string, string>();\n+// @ts-expect-error mock\n+globalThis.localStorage = {\n+  getItem: (k: string) => storage.get(k) ?? null,\n+  setItem: (k: string, v: string) => storage.set(k, v),\n+  removeItem: (k: string) => { storage.delete(k); },\n+  clear: () => storage.clear(),\n+  get length() { return storage.size; },\n+  key: (i: number) => [...storage.keys()][i] ?? null,\n+};\n+Object.defineProperty(globalThis, 'crypto', {\n+  value: {\n+    randomUUID: () => 'uuid-' + Math.random().toString(36).slice(2),\n+    getRandomValues: (buf: Uint8Array) => {\n+      for (let i = 0; i < buf.length; i++) buf[i] = Math.floor(Math.random() * 256);\n+      return buf;\n+    },\n+    subtle: {},\n+  },\n+  writable: true, configurable: true,\n+});\n+// @ts-expect-error mock\n+globalThis.window = {\n+  localStorage: globalThis.localStorage,\n+  location: { hash: '', origin: 'http://localhost' },\n+  addEventListener: () => {},\n+};\n+\n+// Mock notifications so the module-level `document.title` access doesn't throw\n+// in the node environment.\n+vi.mock('../lib/notifications', () => ({\n+  notify: vi.fn(),\n+  setNotificationsEnabled: vi.fn(),\n+  setSoundEnabled: vi.fn(),\n+  requestPermission: vi.fn(),\n+}));\n+\n+// Mock @freeq/sdk so we control FreeqClient construction.  The mock client is\n+// only needed for tests in Section A where the production `connect()` path is\n+// not exercised; for wireEvents tests we inject our own stub via\n+// __setClientForTests / __wireEventsForTests.\n+vi.mock('@freeq/sdk', () => ({\n+  FreeqClient: class MockFreeqClient {\n+    nick = 'me';\n+    joinedChannels = new Set<string>();\n+    nickToDid: unknown = null;\n+    opts: Record<string, unknown> = {};\n+    on() { /* stub */ }\n+    connect() { /* stub */ }\n+    disconnect() { /* stub */ }\n+    setSaslCredentials() { /* stub */ }\n+    sendMessage = vi.fn();\n+    sendReply = vi.fn();\n+    join = vi.fn();\n+    part = vi.fn();\n+  },\n+  format: {},\n+  prefetchProfiles: vi.fn(),\n+}));\n+\n+const { useStore } = await import('../store');\n+const {\n+  sendMessage,\n+  sendReply,\n+  joinChannel,\n+  partChannel,\n+  __setClientForTests,\n+  __wireEventsForTests,\n+} = await import('./client');\n+\n+// ── Stub FreeqClient for wireEvents tests ────────────────────────────────────\n+// Mirrors the pattern from client-av.test.ts: record `.on` subscriptions and\n+// provide an `emit` helper so tests can fire synthetic SDK events.\n+function makeEventStub(nick = 'me') {\n+  const handlers = new Map<string, Array<(...args: unknown[]) => void>>();\n+  return {\n+    nick,\n+    joinedChannels: new Set<string>(),\n+    sendMessage: vi.fn(),\n+    sendReply: vi.fn(),\n+    join: vi.fn(),\n+    part: vi.fn(),\n+    on(event: string, fn: (...args: unknown[]) => void) {\n+      const list = handlers.get(event) ?? [];\n+      list.push(fn);\n+      handlers.set(event, list);\n+    },\n+    emit(event: string, ...args: unknown[]) {\n+      for (const fn of handlers.get(event) ?? []) fn(...args);\n+    },\n+  };\n+}\n+\n+const s = () => useStore.getState();\n+\n+beforeEach(() => {\n+  storage.clear();\n+  s().reset();\n+  vi.restoreAllMocks();\n+});\n+\n+afterEach(() => {\n+  __setClientForTests(null);\n+});\n+\n+// ═══════════════════════════════════════════════════════════════════════════════\n+// Section A — Exported action functions\n+// ═══════════════════════════════════════════════════════════════════════════════\n+\n+describe('sendMessage', () => {\n+  it('creates a DM buffer when the target is a nick (not a channel)', () => {\n+    const stub = makeEventStub('me');\n+    __setClientForTests(stub as never);\n+\n+    sendMessage('alice', 'hello');\n+\n+    expect(s().channels.has('alice'), 'DM buffer should exist after sendMessage').toBe(true);\n+  });\n+\n+  it('does not create an extra entry when the DM buffer already exists', () => {\n+    const stub = makeEventStub('me');\n+    __setClientForTests(stub as never);\n+    s().addChannel('alice');\n+    const before = s().channels.size;\n+\n+    sendMessage('alice', 'hello again');\n+\n+    expect(s().channels.size).toBe(before);\n+  });\n+\n+  it('does NOT create a buffer for a channel target (#)', () => {\n+    const stub = makeEventStub('me');\n+    __setClientForTests(stub as never);\n+\n+    sendMessage('#general', 'hello channel');\n+\n+    expect(s().channels.has('#general')).toBe(false);\n+  });\n+\n+  it('still creates the DM buffer when no SDK client is connected', () => {\n+    __setClientForTests(null);\n+\n+    sendMessage('bob', 'offline DM');\n+\n+    expect(s().channels.has('bob')).toBe(true);\n+  });\n+});\n+\n+describe('sendReply', () => {\n+  it('creates a DM buffer when the target is a nick', () => {\n+    const stub = makeEventStub('me');\n+    __setClientForTests(stub as never);\n+\n+    sendReply('alice', 'msg-001', 'replying to you');\n+\n+    expect(s().channels.has('alice')).toBe(true);\n+  });\n+\n+  it('does not add a buffer for a channel reply', () => {\n+    const stub = makeEventStub('me');\n+    __setClientForTests(stub as never);\n+\n+    sendReply('#general', 'msg-002', 'replying in channel');\n+\n+    expect(s().channels.has('#general')).toBe(false);\n+  });\n+});\n+\n+describe('joinChannel', () => {\n+  it('adds the channel to the store', () => {\n+    const stub = makeEventStub('me');\n+    __setClientForTests(stub as never);\n+\n+    joinChannel('#news');\n+\n+    expect(s().channels.has('#news')).toBe(true);\n+  });\n+\n+  it('sets the joined channel as active', () => {\n+    const stub = makeEventStub('me');\n+    __setClientForTests(stub as never);\n+    // addChannel first so setActiveChannel accepts it, then joinChannel does both\n+    s().addChannel('#news');\n+    joinChannel('#news');\n+\n+    expect(s().activeChannel.toLowerCase()).toBe('#news');\n+  });\n+});\n+\n+describe('partChannel', () => {\n+  it('removes the channel from the store', () => {\n+    const stub = makeEventStub('me');\n+    __setClientForTests(stub as never);\n+    s().addChannel('#temp');\n+\n+    partChannel('#temp');\n+\n+    expect(s().channels.has('#temp')).toBe(false);\n+  });\n+\n+  it('persists remaining joined channels to localStorage', () => {\n+    const stub = makeEventStub('me');\n+    stub.joinedChannels.add('#stay');\n+    __setClientForTests(stub as never);\n+    s().addChannel('#temp');\n+    s().addChannel('#stay');\n+\n+    partChannel('#temp');\n+\n+    const saved = storage.get('freeq-joined-channels');\n+    expect(saved).toBeDefined();\n+    const parsed = JSON.parse(saved!) as string[];\n+    expect(parsed).toContain('#stay');\n+  });\n+});\n+\n+// ═══════════════════════════════════════════════════════════════════════════════\n+// Section B — wireEvents integration (real dispatch chain)\n+// ═══════════════════════════════════════════════════════════════════════════════\n+\n+describe(\"wireEvents 'message' — DM buffer auto-creation\", () => {\n+  it('creates a buffer for a DM that arrives in an unknown buffer', () => {\n+    const stub = makeEventStub('me');\n+    __wireEventsForTests(stub as never);\n+\n+    stub.emit('message', 'carol', {\n+      id: 'msg-1', from: 'carol', text: 'hey', timestamp: new Date(), isSelf: false, tags: {},\n+    });\n+\n+    expect(s().channels.has('carol'), 'DM buffer auto-created on inbound message').toBe(true);\n+  });\n+\n+  it('increments mention count for an inbound DM', () => {\n+    const stub = makeEventStub('me');\n+    __wireEventsForTests(stub as never);\n+    s().addChannel('carol');\n+    // Ensure carol is not the active channel so incrementMentions fires\n+    s().setActiveChannel('server');\n+    const before = s().channels.get('carol')?.mentionCount ?? 0;\n+\n+    stub.emit('message', 'carol', {\n+      id: 'msg-2', from: 'carol', text: 'ping', timestamp: new Date(), isSelf: false, tags: {},\n+    });\n+\n+    const after = s().channels.get('carol')?.mentionCount ?? 0;\n+    expect(after).toBeGreaterThan(before);\n+  });\n+\n+  it('does NOT increment mention count for a self-sent DM', () => {\n+    const stub = makeEventStub('me');\n+    __wireEventsForTests(stub as never);\n+    s().addChannel('dave');\n+    s().setActiveChannel('server');\n+\n+    stub.emit('message', 'dave', {\n+      id: 'msg-3', from: 'me', text: 'sent by self', timestamp: new Date(), isSelf: true, tags: {},\n+    });\n+\n+    expect(s().channels.get('dave')?.mentionCount ?? 0).toBe(0);\n+  });\n+\n+  it('adds the message to the channel buffer', () => {\n+    const stub = makeEventStub('me');\n+    __wireEventsForTests(stub as never);\n+    s().addChannel('#room');\n+\n+    stub.emit('message', '#room', {\n+      id: 'msg-4', from: 'alice', text: 'hello room', timestamp: new Date(), isSelf: false, tags: {},\n+    });\n+\n+    const msgs = s().channels.get('#room')?.messages ?? [];\n+    expect(msgs.some((m) => (m as { id: string }).id === 'msg-4')).toBe(true);\n+  });\n+});\n+\n+describe(\"wireEvents 'error' — same identity reconnected\", () => {\n+  it('calls fullReset when the error contains the sentinel string', () => {\n+    const stub = makeEventStub('me');\n+    __wireEventsForTests(stub as never);\n+    // Put some state in the store so we can verify it gets wiped\n+    s().addChannel('#test');\n+    s().setNick('me');\n+\n+    stub.emit('error', 'same identity reconnected from another location');\n+\n+    // fullReset clears channels and resets nick to ''\n+    expect(s().nick).toBe('');\n+    expect(s().channels.size).toBe(0);\n+  });\n+\n+  it('does NOT call fullReset for an unrelated error string', () => {\n+    const stub = makeEventStub('me');\n+    __wireEventsForTests(stub as never);\n+    s().addChannel('#test');\n+\n+    stub.emit('error', 'connection refused by server');\n+\n+    // Channel should still be there — fullReset was not called\n+    expect(s().channels.has('#test')).toBe(true);\n+  });\n+});\n+\n+describe(\"wireEvents 'pinAdded' / 'pinRemoved'\", () => {\n+  it('pinAdded appends the pin to the channel', () => {\n+    const stub = makeEventStub('me');\n+    __wireEventsForTests(stub as never);\n+    s().addChannel('#pinroom');\n+\n+    stub.emit('pinAdded', '#pinroom', 'ulid-001', 'alice');\n+\n+    const pins = s().channels.get('#pinroom')?.pins ?? [];\n+    expect(pins.some((p) => p.msgid === 'ulid-001')).toBe(true);\n+  });\n+\n+  it('pinRemoved removes the pin from the channel', () => {\n+    const stub = makeEventStub('me');\n+    __wireEventsForTests(stub as never);\n+    s().addChannel('#pinroom');\n+    s().addPin('#pinroom', 'ulid-002', 'alice');\n+\n+    stub.emit('pinRemoved', '#pinroom', 'ulid-002');\n+\n+    const pins = s().channels.get('#pinroom')?.pins ?? [];\n+    expect(pins.some((p) => p.msgid === 'ulid-002')).toBe(false);\n+  });\n+\n+  it('pinAdded is idempotent — duplicate pin is not added twice', () => {\n+    const stub = makeEventStub('me');\n+    __wireEventsForTests(stub as never);\n+    s().addChannel('#pinroom');\n+\n+    stub.emit('pinAdded', '#pinroom', 'ulid-003', 'bob');\n+    stub.emit('pinAdded', '#pinroom', 'ulid-003', 'bob');\n+\n+    const pins = s().channels.get('#pinroom')?.pins ?? [];\n+    expect(pins.filter((p) => p.msgid === 'ulid-003').length).toBe(1);\n+  });\n+});\n+\n+describe(\"wireEvents 'motdStart' / 'motd'\", () => {\n+  it('motdStart resets the MOTD buffer and clears dismissed flag', () => {\n+    const stub = makeEventStub('me');\n+    __wireEventsForTests(stub as never);\n+    // Pre-populate stale MOTD\n+    useStore.setState({ motd: ['old line'], motdDismissed: true });\n+\n+    stub.emit('motdStart');\n+\n+    expect(s().motd).toEqual([]);\n+    expect(s().motdDismissed).toBe(false);\n+  });\n+\n+  it('motd lines are appended in order', () => {\n+    const stub = makeEventStub('me');\n+    __wireEventsForTests(stub as never);\n+    stub.emit('motdStart');\n+\n+    stub.emit('motd', 'Welcome to freeq');\n+    stub.emit('motd', 'Have fun!');\n+\n+    expect(s().motd).toEqual(['Welcome to freeq', 'Have fun!']);\n+  });\n+});\n+\n+describe(\"wireEvents 'historyBatch'\", () => {\n+  it('merges history messages into the channel', () => {\n+    const stub = makeEventStub('me');\n+    __wireEventsForTests(stub as never);\n+    s().addChannel('#hist');\n+\n+    const msgs = [\n+      { id: 'h-1', from: 'alice', text: 'old message', timestamp: new Date(), isSelf: false, tags: {} },\n+      { id: 'h-2', from: 'bob',   text: 'older message', timestamp: new Date(), isSelf: false, tags: {} },\n+    ];\n+    stub.emit('historyBatch', '#hist', msgs);\n+\n+    const stored = s().channels.get('#hist')?.messages ?? [];\n+    expect(stored.some((m) => (m as { id: string }).id === 'h-1')).toBe(true);\n+    expect(stored.some((m) => (m as { id: string }).id === 'h-2')).toBe(true);\n+  });\n+});\n",
+        "summary": {
+          "files_changed": 1,
+          "additions": 407,
+          "deletions": 0
+        }
+      }
+    },
+    {
+      "seq": 0,
+      "checkpoint": {
+        "timestamp": "2026-06-14T20:14:04.678640049Z",
+        "current_node": "verify",
+        "completed_nodes": [
+          "start",
+          "select",
+          "implement",
+          "verify"
+        ],
+        "node_retries": {},
+        "context_values": {
+          "current_node": "verify",
+          "last_response": "Here's a summary of what was done:\n\n## Summary\n\n**File added:** `freeq-app/src/irc/client-wiring.test.ts`\n\n**22 new tests** across 7 `describe` blocks, all passing:\n\n### Section A — Exported action ",
+          "failure_signature": "verify|deterministic|script failed with exit code: <n> ## output :tests::markdown_rejects_whitespace_adjacent_delimiter ... ok test ui::tests::markdown_plain_text_is_one_span ... ok test ui::tests::markdown_unmatched_delimiter_stays_literal ... ok test ui::test",
+          "last_stage": "implement",
+          "internal.run_id": "01KV3T9RKNBZGM0HAN0F9FNW1C",
+          "internal.retry_count.select": 0,
+          "thread.implement.current_node": "verify",
+          "response.implement": "Here's a summary of what was done:\n\n## Summary\n\n**File added:** `freeq-app/src/irc/client-wiring.test.ts`\n\n**22 new tests** across 7 `describe` blocks, all passing:\n\n### Section A — Exported action functions (store side-effects)\n| Test | What it pins |\n|------|-------------|\n| `sendMessage` × 4 | DM buffer created for nick targets; not created for `#channel`; works with null client |\n| `sendReply` × 2 | Same buffer logic for reply targets |\n| `joinChannel` × 2 | Channel added to store; set as active channel |\n| `partChannel` × 2 | Channel removed from store; `saveJoinedChannels` writes to localStorage |\n\n### Section B — wireEvents real dispatch chain (via `__wireEventsForTests`)\n| Test | What it pins |\n|------|-------------|\n| `'message'` × 4 | DM auto-creates buffer; increments `mentionCount`; self-DMs don't increment; message added to buffer |\n| `'error'` × 2 | Exact \"same identity reconnected\" string → `fullReset`; other errors do nothing |\n| `'pinAdded'`/`'pinRemoved'` × 3 | Pin appended; pin removed; idempotent on duplicate add |\n| `'motdStart'`/`'motd'` × 2 | Buffer reset + `motdDismissed` cleared; lines appended in order |\n| `'historyBatch'` × 1 | Messages merged into channel |\n\n**Convention followed:** matches `client-av.test.ts` exactly — `makeEventStub()` with `on`/`emit`, `vi.mock('@freeq/sdk')`, `vi.mock('../lib/notifications')`, same `globalThis` setup, `__setClientForTests` / `__wireEventsForTests` seams, no jsdom directive (runs in node environment like the passing `client-state.test.ts`).",
+          "internal.retry_count.implement": 0,
+          "thread.cov.current_node": "implement",
+          "internal.work_dir": "/workspace/freeq",
+          "internal.fidelity": "compact",
+          "internal.thread_id": "implement",
+          "graph.goal": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code.",
+          "outcome": "failed",
+          "response.select": "I now have a comprehensive picture. Here is my analysis and recommendation:\n\n---\n\n## Chosen File: `freeq-app/src/irc/client.ts`\n\n**Language/crate:** TypeScript, `freeq-app` (Vite + Vitest)\n\n---\n\n### Why it's high-risk and undertested\n\nCLAUDE.md explicitly flags it: **`irc/client.ts` (gamma 133) — UNDERTESTED — needs dedicated unit tests**.\n\nThe current hotspot run confirms it at gamma 5 (3rd after server-side files), making it the highest-risk file within the CI-covered TypeScript surface. The gap between what the file does and what tests cover is large:\n\n- The file exposes ~30 exported functions (`sendMessage`, `sendReply`, `sendEdit`, `sendDelete`, `joinChannel`, `partChannel`, `reconnect`, `setSaslCredentials`, `pinMessage`, `unpinMessage`, etc.) that contain **store-mutation side effects beyond the SDK call** — e.g. `sendMessage` creates a DM buffer, `joinChannel` calls both `addChannel` and `setActiveChannel`, `partChannel` calls `saveJoinedChannels`.\n- The `wireEvents` function (~230 lines, ~25 event handlers) routes every inbound SDK event to the Zustand store. The `__wireEventsForTests` escape hatch exists precisely to enable testing this, but most handlers remain uncovered.\n- Existing tests (`client.test.ts` = parser tests, `client-state.test.ts` = store simulations that manually replicate what the handlers do, `client-reconnect.test.ts` = 96 lines on broker token), **none of them exercise `wireEvents` via `__wireEventsForTests`**, meaning the real dispatch chain is untested.\n- `client-av.test.ts` uses `__wireEventsForTests` but only for the three `avSession*` event handlers (lines 377–460).\n\n---\n\n### 3–6 specific behaviors to pin\n\n1. **`sendMessage` to a DM target creates the buffer** — when `target` is a nick (not `#channel`), the store should have a channel entry for that nick after the call, even if the SDK client is null. Currently there's no test that exercises this exported function at all.\n\n2. **`sendReply` to a DM target also creates the buffer** — same logic branch exists in `sendReply`, equally untested.\n\n3. **`wireEvents: 'message'` handler for a DM creates the buffer and increments mentions** — when a PRIVMSG arrives in a non-channel buffer that doesn't yet exist in the store, `wireEvents` must auto-create it via `addChannel`. The handler also calls `incrementMentions` for DMs. This path is *simulated* in `client-state.test.ts` but never run through the real handler.\n\n4. **`wireEvents: 'error'` with \"same identity reconnected\" triggers `fullReset`** — this specific error string branches to `fullReset()` (which wipes all state) vs. doing nothing for other errors. One wrong `includes()` string breaks the entire re-auth recovery flow. Not tested anywhere.\n\n5. **`wireEvents: 'pinAdded'` / `'pinRemoved'`** — these call `addPin`/`removePin` on the store. No pin-related events are tested in the `wireEvents` layer (the store methods themselves are tested separately).\n\n6. **`joinChannel` sets the channel as active; `partChannel` persists to localStorage** — `joinChannel` calls `setActiveChannel` in addition to `addChannel`; `partChannel` calls `saveJoinedChannels` which writes to `localStorage`. Neither is covered.\n\n---\n\n### Test convention to follow\n\nThe existing sibling file **`freeq-app/src/irc/client-av.test.ts`** sets the pattern for `wireEvents` integration tests: it stubs a `FreeqClient`-shaped EventEmitter with `vi.fn()` methods, calls `__wireEventsForTests(stub)`, then emits events on the stub and asserts store state. The `__setClientForTests` export in `client.ts` enables injecting a stub client for the exported-function tests. Both patterns are established and the new tests should follow them exactly, importing from `vitest` and using the same `localStorage` mock setup seen in `client-state.test.ts`.",
+          "command.output": "blob://sha256/d5276cc27e37225bcf6e3def3aa5247c78d0b48daaf887e9e92ed44dfe50033c",
+          "internal.retry_count.verify": 0,
+          "internal.node_visit_count": 1,
+          "failure_class": "deterministic",
+          "internal.retry_count.start": 0,
+          "graph.rankdir": "LR"
+        },
+        "node_outcomes": {
+          "implement": {
+            "status": "succeeded",
+            "context_updates": {
+              "response.implement": "Here's a summary of what was done:\n\n## Summary\n\n**File added:** `freeq-app/src/irc/client-wiring.test.ts`\n\n**22 new tests** across 7 `describe` blocks, all passing:\n\n### Section A — Exported action functions (store side-effects)\n| Test | What it pins |\n|------|-------------|\n| `sendMessage` × 4 | DM buffer created for nick targets; not created for `#channel`; works with null client |\n| `sendReply` × 2 | Same buffer logic for reply targets |\n| `joinChannel` × 2 | Channel added to store; set as active channel |\n| `partChannel` × 2 | Channel removed from store; `saveJoinedChannels` writes to localStorage |\n\n### Section B — wireEvents real dispatch chain (via `__wireEventsForTests`)\n| Test | What it pins |\n|------|-------------|\n| `'message'` × 4 | DM auto-creates buffer; increments `mentionCount`; self-DMs don't increment; message added to buffer |\n| `'error'` × 2 | Exact \"same identity reconnected\" string → `fullReset`; other errors do nothing |\n| `'pinAdded'`/`'pinRemoved'` × 3 | Pin appended; pin removed; idempotent on duplicate add |\n| `'motdStart'`/`'motd'` × 2 | Buffer reset + `motdDismissed` cleared; lines appended in order |\n| `'historyBatch'` × 1 | Messages merged into channel |\n\n**Convention followed:** matches `client-av.test.ts` exactly — `makeEventStub()` with `on`/`emit`, `vi.mock('@freeq/sdk')`, `vi.mock('../lib/notifications')`, same `globalThis` setup, `__setClientForTests` / `__wireEventsForTests` seams, no jsdom directive (runs in node environment like the passing `client-state.test.ts`).",
+              "last_response": "Here's a summary of what was done:\n\n## Summary\n\n**File added:** `freeq-app/src/irc/client-wiring.test.ts`\n\n**22 new tests** across 7 `describe` blocks, all passing:\n\n### Section A — Exported action ",
+              "last_stage": "implement"
+            },
+            "notes": "Stage completed: implement",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "anthropic",
+                    "model_id": "claude-sonnet-4-6"
+                  },
+                  "tokens": {
+                    "input_tokens": 80616,
+                    "output_tokens": 29991,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 8724004,
+                    "cache_write_tokens": 1130890
+                  }
+                },
+                "facts": {
+                  "algorithm": "anthropic",
+                  "cache_write_5m_tokens": 1130890,
+                  "cache_write_1h_tokens": 0
+                }
+              },
+              "total_usd_micros": 7549751
+            },
+            "files_touched": [
+              "/workspace/freeq/freeq-app/src/irc/client-wiring.test.ts"
+            ],
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 629204,
+              "tool_time_ms": 1140082,
+              "active_time_ms": 1769286
+            }
+          },
+          "verify": {
+            "status": "failed",
+            "context_updates": {
+              "command.output": "blob://sha256/d5276cc27e37225bcf6e3def3aa5247c78d0b48daaf887e9e92ed44dfe50033c"
+            },
+            "failure": {
+              "message": "Script failed with exit code: 1\n\n## output\n:tests::markdown_rejects_whitespace_adjacent_delimiter ... ok\ntest ui::tests::markdown_plain_text_is_one_span ... ok\ntest ui::tests::markdown_unmatched_delimiter_stays_literal ... ok\ntest ui::tests::markdown_skips_in_word_delimiter ... ok\ntest ui::tests::reply_label_collapses_newlines_in_snippet ... ok\ntest ui::tests::reply_label_for_deleted_parent_says_deleted ... ok\ntest ui::tests::reply_label_for_unknown_parent_says_unknown ... ok\ntest ui::tests::reply_label_for_present_parent_includes_snippet ... ok\ntest ui::tests::wrapped_height_edited_suffix_only_on_last_line ... ok\ntest ui::tests::wrapped_height_empty_body_one_row ... ok\ntest ui::tests::wrapped_height_multiline_each_wraps_independently ... ok\ntest ui::tests::wrapped_height_long_single_line_wraps ... ok\ntest ui::tests::wrapped_height_reply_indicator_adds_one_row ... ok\ntest ui::tests::wrapped_height_single_line_fits ... ok\ntest ui::tests::wrapped_height_three_source_lines ... ok\n\ntest result: ok. 72 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s\n\n\u001b[1m\u001b[92m     Running\u001b[0m unittests src/lib.rs (target/debug/deps/freeq_windows_core-5e5096eb1d92c18f)\n\nrunning 23 tests\ntest bridge::abi::tests::test_create_and_destroy ... ok\ntest bridge::abi::tests::test_config_defaults ... ok\ntest bridge::abi::tests::test_create_null_config ... ok\ntest bridge::abi::tests::test_create_invalid_json ... ok\ntest bridge::abi::tests::test_double_destroy ... ok\ntest bridge::abi::tests::test_free_null_string ... ok\ntest bridge::abi::tests::test_invalid_handle_returns_error ... ok\ntest bridge::abi::tests::test_null_args_return_invalid_argument ... ok\ntest bridge::abi::tests::test_operations_not_connected ... ok\ntest bridge::abi::tests::test_set_web_token ... ok\ntest bridge::abi::tests::test_snapshot_invalid_handle ... ok\ntest bridge::abi::tests::test_snapshot_json ... ok\ntest bridge::abi::tests::test_subscribe_events ... ok\ntest bridge::callback::tests::test_callback_dispatch ... ok\ntest bridge::envelope::tests::test_envelope_serialization ... ok\ntest bridge::envelope::tests::test_envelope_with_message_event ... ok\ntest event::tests::test_convert_action_message ... ok\ntest event::tests::test_convert_connected ... ok\ntest event::tests::test_convert_disconnected ... ok\ntest event::tests::test_convert_invited ... ok\ntest event::tests::test_convert_message_with_edit_tag ... ok\ntest event::tests::test_convert_names_with_prefixes ... ok\ntest event::tests::test_convert_simple_message ... ok\n\ntest result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\u001b[1m\u001b[92m   Doc-tests\u001b[0m freeq_agent_kit\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\u001b[1m\u001b[92m   Doc-tests\u001b[0m freeq_bots\n\nrunning 1 test\ntest freeq-bots/src/context.rs - context (line 15) ... ignored\n\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\nall doctests ran in 0.14s; merged doctests compilation took 0.13s\n\u001b[1m\u001b[92m   Doc-tests\u001b[0m freeq_claude_mcp\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\u001b[1m\u001b[92m   Doc-tests\u001b[0m freeq_sdk\n\nrunning 5 tests\ntest freeq-sdk/src/bot.rs - bot (line 7) - compile ... ok\ntest freeq-sdk/src/client.rs - client::run_with_reconnect (line 2429) - compile ... ok\ntest freeq-sdk/src/oauth.rs - oauth::derive_session_key (line 220) ... ignored\ntest freeq-sdk/src/streaming.rs - streaming (line 10) - compile ... ok\ntest freeq-sdk/src/bot.rs - bot::Bot::rate_limit (line 234) ... ok\n\ntest result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\nall doctests ran in 0.87s; merged doctests compilation took 0.86s\n\u001b[1m\u001b[92m   Doc-tests\u001b[0m freeq_server\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\u001b[1m\u001b[92m   Doc-tests\u001b[0m freeq_windows_core\n\nrunning 0 tests\n\ntest result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n\n❌ verify.sh: one or more gates failed\n",
+              "category": "deterministic"
+            },
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 212550,
+              "active_time_ms": 212550
+            }
+          },
+          "select": {
+            "status": "succeeded",
+            "context_updates": {
+              "last_response": "I now have a comprehensive picture. Here is my analysis and recommendation:\n\n---\n\n## Chosen File: `freeq-app/src/irc/client.ts`\n\n**Language/crate:** TypeScript, `freeq-app` (Vite + Vitest)\n\n---\n\n### W",
+              "last_stage": "select",
+              "response.select": "I now have a comprehensive picture. Here is my analysis and recommendation:\n\n---\n\n## Chosen File: `freeq-app/src/irc/client.ts`\n\n**Language/crate:** TypeScript, `freeq-app` (Vite + Vitest)\n\n---\n\n### Why it's high-risk and undertested\n\nCLAUDE.md explicitly flags it: **`irc/client.ts` (gamma 133) — UNDERTESTED — needs dedicated unit tests**.\n\nThe current hotspot run confirms it at gamma 5 (3rd after server-side files), making it the highest-risk file within the CI-covered TypeScript surface. The gap between what the file does and what tests cover is large:\n\n- The file exposes ~30 exported functions (`sendMessage`, `sendReply`, `sendEdit`, `sendDelete`, `joinChannel`, `partChannel`, `reconnect`, `setSaslCredentials`, `pinMessage`, `unpinMessage`, etc.) that contain **store-mutation side effects beyond the SDK call** — e.g. `sendMessage` creates a DM buffer, `joinChannel` calls both `addChannel` and `setActiveChannel`, `partChannel` calls `saveJoinedChannels`.\n- The `wireEvents` function (~230 lines, ~25 event handlers) routes every inbound SDK event to the Zustand store. The `__wireEventsForTests` escape hatch exists precisely to enable testing this, but most handlers remain uncovered.\n- Existing tests (`client.test.ts` = parser tests, `client-state.test.ts` = store simulations that manually replicate what the handlers do, `client-reconnect.test.ts` = 96 lines on broker token), **none of them exercise `wireEvents` via `__wireEventsForTests`**, meaning the real dispatch chain is untested.\n- `client-av.test.ts` uses `__wireEventsForTests` but only for the three `avSession*` event handlers (lines 377–460).\n\n---\n\n### 3–6 specific behaviors to pin\n\n1. **`sendMessage` to a DM target creates the buffer** — when `target` is a nick (not `#channel`), the store should have a channel entry for that nick after the call, even if the SDK client is null. Currently there's no test that exercises this exported function at all.\n\n2. **`sendReply` to a DM target also creates the buffer** — same logic branch exists in `sendReply`, equally untested.\n\n3. **`wireEvents: 'message'` handler for a DM creates the buffer and increments mentions** — when a PRIVMSG arrives in a non-channel buffer that doesn't yet exist in the store, `wireEvents` must auto-create it via `addChannel`. The handler also calls `incrementMentions` for DMs. This path is *simulated* in `client-state.test.ts` but never run through the real handler.\n\n4. **`wireEvents: 'error'` with \"same identity reconnected\" triggers `fullReset`** — this specific error string branches to `fullReset()` (which wipes all state) vs. doing nothing for other errors. One wrong `includes()` string breaks the entire re-auth recovery flow. Not tested anywhere.\n\n5. **`wireEvents: 'pinAdded'` / `'pinRemoved'`** — these call `addPin`/`removePin` on the store. No pin-related events are tested in the `wireEvents` layer (the store methods themselves are tested separately).\n\n6. **`joinChannel` sets the channel as active; `partChannel` persists to localStorage** — `joinChannel` calls `setActiveChannel` in addition to `addChannel`; `partChannel` calls `saveJoinedChannels` which writes to `localStorage`. Neither is covered.\n\n---\n\n### Test convention to follow\n\nThe existing sibling file **`freeq-app/src/irc/client-av.test.ts`** sets the pattern for `wireEvents` integration tests: it stubs a `FreeqClient`-shaped EventEmitter with `vi.fn()` methods, calls `__wireEventsForTests(stub)`, then emits events on the stub and asserts store state. The `__setClientForTests` export in `client.ts` enables injecting a stub client for the exported-function tests. Both patterns are established and the new tests should follow them exactly, importing from `vitest` and using the same `localStorage` mock setup seen in `client-state.test.ts`."
+            },
+            "notes": "Stage completed: select",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "anthropic",
+                    "model_id": "claude-sonnet-4-6"
+                  },
+                  "tokens": {
+                    "input_tokens": 19830,
+                    "output_tokens": 4891,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 270281,
+                    "cache_write_tokens": 61998
+                  }
+                },
+                "facts": {
+                  "algorithm": "anthropic",
+                  "cache_write_5m_tokens": 61998,
+                  "cache_write_1h_tokens": 0
+                }
+              },
+              "total_usd_micros": 446431
+            },
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 97403,
+              "tool_time_ms": 10730,
+              "active_time_ms": 108133
+            }
           },
           "start": {
             "status": "succeeded",
             "usage": null
           }
         },
-        "next_node_id": "verify",
+        "next_node_id": "pr_body",
         "node_visits": {
           "implement": 1,
+          "select": 1,
           "start": 1,
-          "select": 1
+          "verify": 1
         }
       },
       "diff": {}
@@ -859,30 +1015,34 @@
       },
       "state": "succeeded"
     },
-    "start@1": {
-      "first_event_seq": 17,
+    "verify@1": {
+      "first_event_seq": 1041,
       "prompt": null,
       "response": null,
-      "completion": {
-        "outcome": "succeeded",
-        "notes": null,
-        "failure_reason": null,
-        "timestamp": "2026-06-14T19:39:01.199228582Z"
-      },
+      "completion": null,
       "provider_used": null,
       "diff": null,
-      "script_invocation": null,
-      "script_timing": null,
+      "script_invocation": {
+        "script": "bash .fabro/verify.sh",
+        "command": "exec 2>&1\nbash .fabro/verify.sh",
+        "language": "shell",
+        "timeout_ms": 3600000
+      },
+      "script_timing": {
+        "output": "blob://sha256/d5276cc27e37225bcf6e3def3aa5247c78d0b48daaf887e9e92ed44dfe50033c",
+        "exit_code": 1,
+        "duration_ms": 212550,
+        "termination": "exited",
+        "output_bytes": 97853,
+        "live_streaming": true
+      },
       "parallel_results": null,
       "output": null,
-      "started_at": "2026-06-14T19:39:01.180881089Z",
-      "handler": "start",
-      "timing": {
-        "wall_time_ms": 29,
-        "inference_time_ms": 0,
-        "tool_time_ms": 0,
-        "active_time_ms": 0
-      },
+      "output_bytes": 97853,
+      "live_streaming": true,
+      "termination": "exited",
+      "started_at": "2026-06-14T20:10:32.072956235Z",
+      "handler": "command",
       "usage": {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -891,13 +1051,18 @@
         "cache_read_tokens": 0,
         "cache_write_tokens": 0
       },
-      "state": "succeeded"
+      "state": "running"
     },
     "implement@1": {
       "first_event_seq": 133,
       "prompt": null,
       "response": null,
-      "completion": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": "Stage completed: implement",
+        "failure_reason": null,
+        "timestamp": "2026-06-14T20:10:27.206308602Z"
+      },
       "provider_used": {
         "mode": "agent",
         "provider": "anthropic",
@@ -911,13 +1076,19 @@
       "output": null,
       "started_at": "2026-06-14T19:40:57.584024932Z",
       "handler": "agent",
+      "timing": {
+        "wall_time_ms": 1769621,
+        "inference_time_ms": 629204,
+        "tool_time_ms": 1140082,
+        "active_time_ms": 1769286
+      },
       "usage": {
-        "input_tokens": 80714,
-        "output_tokens": 30486,
-        "total_tokens": 10074609,
+        "input_tokens": 80616,
+        "output_tokens": 29991,
+        "total_tokens": 9965501,
         "reasoning_tokens": 0,
-        "cache_read_tokens": 8830597,
-        "cache_write_tokens": 1132812,
+        "cache_read_tokens": 8724004,
+        "cache_write_tokens": 1130890,
         "total_usd_micros": 7549751
       },
       "model": {
@@ -977,7 +1148,41 @@
         ],
         "warnings": []
       },
-      "state": "running"
+      "state": "succeeded"
+    },
+    "start@1": {
+      "first_event_seq": 17,
+      "prompt": null,
+      "response": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": null,
+        "failure_reason": null,
+        "timestamp": "2026-06-14T19:39:01.199228582Z"
+      },
+      "provider_used": null,
+      "diff": null,
+      "script_invocation": null,
+      "script_timing": null,
+      "parallel_results": null,
+      "output": null,
+      "started_at": "2026-06-14T19:39:01.180881089Z",
+      "handler": "start",
+      "timing": {
+        "wall_time_ms": 29,
+        "inference_time_ms": 0,
+        "tool_time_ms": 0,
+        "active_time_ms": 0
+      },
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "state": "succeeded"
     }
   }
 }
