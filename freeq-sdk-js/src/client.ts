@@ -698,6 +698,33 @@ export class FreeqClient extends EventEmitter {
 
   // ── Internals ──
 
+  /**
+   * A reconnect could not re-establish the authenticated identity *before any
+   * SASL attempt* — the broker session refresh timed out or failed and we have
+   * no usable token to fall back on. The user intended to be logged in
+   * (`sasl.did` is set), so we MUST NOT silently complete registration as a
+   * guest: that would rename us to GuestNNNNN, leave the app's stale `authDid`
+   * in place (verified badge next to a Guest nick), and let PRIVMSGs leak under
+   * the guest identity.
+   *
+   * Mirror the 904 teardown: drop the dead credentials, mark `_saslFailed` so
+   * any in-flight 001 is suppressed and outgoing PRIVMSGs are blocked, notify
+   * the app (so its store clears `authDid` and surfaces "session expired"), and
+   * tear the socket down so the next user action is an explicit re-auth.
+   */
+  private failReconnectAuth(reason: string): void {
+    this.sasl = null;
+    this._authDid = null;
+    this._apiBearer = null;
+    this._saslFailed = true;
+    this.emit('authError', reason);
+    this.emit('authenticated', '', reason);
+    this.transport?.disconnect();
+    this.transport = null;
+    this._connectionState = 'disconnected';
+    this.emit('connectionStateChanged', 'disconnected');
+  }
+
   private onTransportStateChange(state: TransportState): void {
     const prev = this._connectionState;
     this._connectionState = state;
@@ -715,7 +742,10 @@ export class FreeqClient extends EventEmitter {
       let registrationSent = false;
 
       const sendRegistration = (token?: string) => {
-        if (registrationSent) return;
+        // A late broker resolution can fire after we've already torn the
+        // socket down (failReconnectAuth nulls `transport`). Don't register
+        // onto a dead/replaced transport.
+        if (registrationSent || !this.transport) return;
         registrationSent = true;
         if (token && this.sasl) this.sasl.token = token;
         this.raw('CAP LS 302');
@@ -723,13 +753,21 @@ export class FreeqClient extends EventEmitter {
         this.raw(`USER ${this._nick} 0 * :freeq sdk`);
       };
 
+      // Safety net so we never hang forever waiting on the broker. Must out-wait
+      // the broker fetch (its own AbortController fires at 8s) so the broker
+      // path's .then/.catch wins the race and we get a clean SASL attempt or a
+      // clean failure — never a guest registration racing in underneath.
       const safetyTimer = setTimeout(() => {
-        if (!registrationSent) {
-          console.warn('[freeq-sdk] Registration safety timeout — sending as guest');
-          this.sasl = null;
-          sendRegistration();
+        if (registrationSent) return;
+        // The user authenticated: refuse to silently downgrade to a guest.
+        if (this.sasl?.did) {
+          this.failReconnectAuth('Could not re-establish your session (timed out). Please sign in again.');
+          return;
         }
-      }, 8000);
+        console.warn('[freeq-sdk] Registration safety timeout — sending as guest');
+        this.sasl = null;
+        sendRegistration();
+      }, 15000);
 
       const brokerToken = this.opts.brokerToken;
       const brokerBase = this.opts.brokerUrl;
@@ -783,7 +821,15 @@ export class FreeqClient extends EventEmitter {
             clearTimeout(tm);
             clearTimeout(safetyTimer);
             if (this.sasl?.token) {
+              // We still hold a (possibly stale) token — let the server be the
+              // judge. If it's dead the 904 path tears down cleanly. Better to
+              // try than to assume failure.
               sendRegistration();
+            } else if (this.sasl?.did) {
+              // Authenticated user, broker refresh failed, no token to fall
+              // back on: refuse to register as a guest. Surface + teardown so
+              // the app re-auths instead of silently posting as GuestNNNNN.
+              this.failReconnectAuth('Could not refresh your session. Please sign in again.');
             } else {
               this.sasl = null;
               sendRegistration();
