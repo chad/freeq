@@ -212,6 +212,30 @@ struct Cli {
     /// (the default) = lone agent, no special handling.
     #[arg(long, value_delimiter = ',', num_args = 0..)]
     peer_agents: Vec<String>,
+
+    /// External-brain mode: don't answer addressed questions with the
+    /// local model. Instead forward each addressed utterance to yokota
+    /// over the unix socket given by `--brain-sock`, and speak only the
+    /// lines yokota sends back. Also disables proactive/ambient/hello/
+    /// backchannel self-speech. Default off = unchanged behavior.
+    #[arg(long)]
+    external_brain: bool,
+
+    /// Unix socket path to CONNECT to for external-brain mode (yokota
+    /// is the server). Only used with `--external-brain`.
+    #[arg(long)]
+    brain_sock: Option<String>,
+
+    /// Disable the per-character voice DSP — speak with a dry/neutral
+    /// profile instead of the ghostly EQ/reverb chain.
+    #[arg(long)]
+    no_voice_dsp: bool,
+
+    /// Load the bot identity from this 64-hex-char (32-byte) ed25519
+    /// seed instead of minting a fresh one — so eliza can share yokota's
+    /// DID. The seed is persisted to the standard key file location.
+    #[arg(long)]
+    identity_seed_hex: Option<String>,
 }
 
 #[tokio::main]
@@ -262,8 +286,17 @@ async fn main() -> Result<()> {
     // identity advertises itself as `oblivion` on the channel.
     let nick = cli.nick.clone().unwrap_or_else(|| identity_name.clone());
 
-    // Load or create the bot's did:key identity.
-    let ident = identity::load_or_create(&identity_name).context("loading bot identity")?;
+    // Load or create the bot's did:key identity. When an explicit seed
+    // is supplied (`--identity-seed-hex`), load from THAT seed so eliza
+    // shares yokota's DID; otherwise load-or-mint the per-name identity.
+    let ident = match cli.identity_seed_hex.as_deref() {
+        Some(hex) => {
+            let seed = decode_seed_hex(hex.trim()).context("decoding --identity-seed-hex")?;
+            identity::load_or_create_with_seed(&identity_name, seed)
+                .context("loading bot identity from seed")?
+        }
+        None => identity::load_or_create(&identity_name).context("loading bot identity")?,
+    };
     tracing::info!(did = %ident.did, "bot identity ready");
 
     // Pick the STT backend. Priority: Groq (hosted, fast, no local
@@ -428,8 +461,34 @@ async fn main() -> Result<()> {
             prompt
         }),
         peer_agents: cli.peer_agents,
+        external_brain: cli.external_brain,
+        brain_sock: cli.brain_sock,
+        no_voice_dsp: cli.no_voice_dsp,
     })
     .await
+}
+
+/// Decode a 64-hex-char (32-byte) ed25519 seed string. Kept local (no
+/// `hex` dependency) — accepts upper/lowercase, rejects anything that
+/// isn't exactly 32 bytes of hex.
+fn decode_seed_hex(s: &str) -> Result<[u8; 32]> {
+    let bytes = s.as_bytes();
+    if bytes.len() != 64 {
+        anyhow::bail!("expected 64 hex chars (32 bytes), got {} chars", bytes.len());
+    }
+    let nibble = |c: u8| -> Result<u8> {
+        match c {
+            b'0'..=b'9' => Ok(c - b'0'),
+            b'a'..=b'f' => Ok(c - b'a' + 10),
+            b'A'..=b'F' => Ok(c - b'A' + 10),
+            other => anyhow::bail!("invalid hex character {:?}", other as char),
+        }
+    };
+    let mut out = [0u8; 32];
+    for (i, pair) in bytes.chunks_exact(2).enumerate() {
+        out[i] = (nibble(pair[0])? << 4) | nibble(pair[1])?;
+    }
+    Ok(out)
 }
 
 /// Choose the STT backend. Groq wins when `GROQ_API_KEY` is present.

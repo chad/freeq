@@ -61,10 +61,54 @@ pub fn load_or_create_in(name: &str, home: &Path) -> Result<Identity> {
         s
     };
 
-    let signing_key = SigningKey::from_bytes(&seed);
+    identity_from_seed(&seed, &id_path)
+}
+
+/// Load `~/.freeq/bots/<name>/` from an EXPLICIT 32-byte ed25519 seed
+/// instead of minting (or reading an existing key file). The seed is
+/// persisted to the standard key-file location so the identity is stable
+/// across restarts — letting eliza share yokota's DID by passing yokota's
+/// seed once. If a key file already exists with a DIFFERENT seed, it is
+/// overwritten with the supplied seed (the explicit seed is authoritative).
+pub fn load_or_create_with_seed(name: &str, seed: [u8; 32]) -> Result<Identity> {
+    let home = dirs::home_dir().context("locating home directory")?;
+    load_or_create_with_seed_in(name, seed, &home)
+}
+
+/// Tempdir-rootable variant of [`load_or_create_with_seed`].
+pub fn load_or_create_with_seed_in(name: &str, seed: [u8; 32], home: &Path) -> Result<Identity> {
+    validate_bot_name(name)?;
+    let dir = home.join(".freeq").join("bots").join(name);
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+
+    let key_path = dir.join("key.ed25519");
+    let id_path = dir.join("identity.json");
+
+    // Persist the supplied seed. If the file already holds this exact
+    // seed, leave it; otherwise (re)write it so the explicit seed wins.
+    let needs_write = match std::fs::read(&key_path) {
+        Ok(existing) => existing != seed,
+        Err(_) => true,
+    };
+    if needs_write {
+        // `write_secret` is create-new (0600); remove any stale file first.
+        let _ = std::fs::remove_file(&key_path);
+        write_secret(&key_path, &seed)
+            .with_context(|| format!("writing {}", key_path.display()))?;
+    }
+
+    identity_from_seed(&seed, &id_path)
+}
+
+/// Derive the [`Identity`] from a known seed and write `identity.json`
+/// (the DID document) next to the key if it isn't there yet. Shared by
+/// both the mint/load path and the explicit-seed path so the seed→DID
+/// conversion lives in exactly one place.
+fn identity_from_seed(seed: &[u8; 32], id_path: &Path) -> Result<Identity> {
+    let signing_key = SigningKey::from_bytes(seed);
     let did = did_key_from_pubkey(signing_key.verifying_key().to_bytes());
     let private_key =
-        PrivateKey::ed25519_from_bytes(&seed).context("constructing PrivateKey from seed")?;
+        PrivateKey::ed25519_from_bytes(seed).context("constructing PrivateKey from seed")?;
 
     if !id_path.exists() {
         let doc = serde_json::json!({
@@ -72,7 +116,7 @@ pub fn load_or_create_in(name: &str, home: &Path) -> Result<Identity> {
             "createdAt": chrono::Utc::now().to_rfc3339(),
             "note": "Minted by freeq-eliza. Compatible with freeq-bot-id and @freeq/bot-kit layouts.",
         });
-        std::fs::write(&id_path, serde_json::to_vec_pretty(&doc)?)
+        std::fs::write(id_path, serde_json::to_vec_pretty(&doc)?)
             .with_context(|| format!("writing {}", id_path.display()))?;
     }
 

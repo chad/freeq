@@ -5,6 +5,7 @@
 //! --lib` against them without dragging in `tokio::main`.
 
 pub mod ambient;
+pub mod brain_seam;
 pub mod character_profile;
 pub mod decisions;
 pub mod diagram;

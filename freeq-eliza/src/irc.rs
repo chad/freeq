@@ -210,6 +210,20 @@ pub struct RunConfig {
     /// without a human break, the bot stops responding until a human
     /// addresses it again.
     pub peer_agents: Vec<String>,
+    /// External-brain mode. When true the bot does NOT answer addressed
+    /// questions with its own model — it forwards them to yokota over a
+    /// unix socket (see [`Self::brain_sock`]) and speaks only the lines
+    /// yokota sends back. Also disables all self-initiated speaking
+    /// (proactive, ambient, hello-on-join, backchannels). Off (default)
+    /// = unchanged behavior.
+    pub external_brain: bool,
+    /// Path to the unix socket yokota listens on; eliza CONNECTS to it
+    /// as a client. Only used when [`Self::external_brain`] is set.
+    pub brain_sock: Option<String>,
+    /// Disable the per-character voice DSP (the ghostly EQ/reverb chain)
+    /// — speak with the neutral/dry profile instead. Off (default) =
+    /// unchanged behavior.
+    pub no_voice_dsp: bool,
 }
 
 /// Subset of [`RunConfig`] shared with inner tasks. Excludes the
@@ -324,6 +338,18 @@ pub(crate) struct SharedConfig {
     /// [`is_own_echo`]) before being treated as human speech.
     pub(crate) recent_tts:
         std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(Instant, String)>>>,
+    /// External-brain mode (see [`RunConfig::external_brain`]). When set,
+    /// the bot forwards addressed utterances to yokota over the seam
+    /// instead of answering itself, and suppresses self-initiated speech.
+    pub(crate) external_brain: bool,
+    /// Disable per-character voice DSP — speak with the dry/neutral
+    /// profile (see [`RunConfig::no_voice_dsp`]).
+    pub(crate) no_voice_dsp: bool,
+    /// The external-brain seam sender, set after the live-call slot
+    /// exists (it needs both the [`SharedConfig`] and the `active`
+    /// handle). Empty unless `external_brain && brain_sock.is_some()`.
+    /// The emit site reads it to forward addressed utterances to yokota.
+    pub(crate) brain_seam: std::sync::OnceLock<crate::brain_seam::SeamHandle>,
 }
 
 /// Active-call state. Held inside an `Arc<AsyncMutex<Option<...>>>`
@@ -441,6 +467,9 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         character_system_prompt,
         persona_hello_line,
         peer_agents,
+        external_brain,
+        brain_sock,
+        no_voice_dsp,
     } = cfg;
 
     // Pick websocket vs raw-TCP transport based on URL scheme — mirrors
@@ -550,8 +579,11 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         elevenlabs_voice_id,
         elevenlabs_model,
         image_ai,
-        proactive_enabled,
-        ambient_enabled,
+        // External-brain mode owns all speaking: the local model never
+        // initiates. Force the proactive + ambient monitors off so they
+        // can't talk over yokota's lines (off-flag = unchanged).
+        proactive_enabled: proactive_enabled && !external_brain,
+        ambient_enabled: ambient_enabled && !external_brain,
         render_backend,
         ghostly_character,
         ghostly_pack,
@@ -577,8 +609,27 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         http: reqwest::Client::new(),
         started_at: Instant::now(),
         recent_tts: std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+        external_brain,
+        no_voice_dsp,
+        brain_seam: std::sync::OnceLock::new(),
     });
     let handle_arc = Arc::new(handle);
+
+    // External-brain seam — connect to yokota's unix socket as a client.
+    // Stored on the (Arc'd) SharedConfig so the emit site can forward
+    // addressed utterances, and given the live-call slot so an inbound
+    // "say" speaks against whatever call is active. No-op unless both
+    // `--external-brain` and `--brain-sock` are set.
+    if external_brain {
+        if let Some(sock) = brain_sock.clone() {
+            let seam = crate::brain_seam::connect(cfg.clone(), sock, active.clone());
+            let _ = cfg.brain_seam.set(seam);
+        } else {
+            tracing::warn!(
+                "--external-brain set but --brain-sock missing; bot will stay silent on addressed questions"
+            );
+        }
+    }
 
     // Discover-or-start. If `--start-session-in` is set we want a call
     // running — but a blind `av-start` is rejected by the server when
@@ -1048,6 +1099,19 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                         None => (String::new(), None),
                     }
                 };
+                // External-brain mode: forward the addressed text question
+                // to yokota instead of answering with the local model.
+                // Off-flag (default) keeps the normal answer path below.
+                if cfg.external_brain {
+                    if let Some(seam) = cfg.brain_seam.get() {
+                        seam.send(crate::brain_seam::Outbound::Utterance {
+                            nick: from.clone(),
+                            text: question.clone(),
+                        });
+                        tracing::info!(nick = %from, %question, "external-brain: forwarded text utterance to yokota");
+                    }
+                    continue;
+                }
                 let cfg = cfg.clone();
                 let handle = handle_arc.clone();
                 let channel = target.clone();
@@ -1403,6 +1467,102 @@ fn spawn_join_greeting(
     });
 }
 
+/// Resolve the ghostly voice-DSP profile for THIS bot's speech, honoring
+/// the `--no-voice-dsp` override (dry/neutral profile) when set.
+fn resolve_speak_profile(cfg: &SharedConfig) -> ghostly::audio::profile::VoiceProfile {
+    if cfg.no_voice_dsp {
+        ghostly::audio::profile::VoiceProfile::NEUTRAL
+    } else {
+        crate::persona::resolve_voice_profile(&cfg.ghostly_character, cfg.ghostly_pack.as_deref())
+    }
+}
+
+/// Synthesize one sentence and enqueue its audio on `speaker`, running it
+/// through the voice-DSP `chain`. Shared by the streaming answer path and
+/// [`speak_text`] so there is a single TTS → DSP → enqueue pipeline.
+/// `on_first_audio` fires once, the first time any PCM is enqueued.
+async fn synth_and_enqueue(
+    http: &reqwest::Client,
+    el_key: &str,
+    voice: &str,
+    model: &str,
+    chain: &mut ghostly::audio::VoiceChain,
+    work: &mut Vec<f32>,
+    recent_tts: &std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(Instant, String)>>>,
+    speaker: &Speaker,
+    sentence: &str,
+    mut on_first_audio: impl FnMut(),
+) -> Result<()> {
+    // URLs are unpronounceable — strip them from speech; the channel
+    // gets them as text instead.
+    let (spoken, _) = split_speech_and_links(sentence);
+    if !spoken.chars().any(char::is_alphanumeric) {
+        return Ok(());
+    }
+    // Log what we're about to say so a participant's speaker→mic leak
+    // (no AEC) transcribed back at us can be recognized and dropped.
+    note_spoken(recent_tts, &spoken);
+    let mut fired = false;
+    tts::synthesize_streaming(http, el_key, voice, model, &spoken, |pcm| {
+        if !fired {
+            fired = true;
+            on_first_audio();
+        }
+        work.clear();
+        work.extend_from_slice(pcm);
+        chain.process(work);
+        speaker.enqueue(work, tts::ELEVENLABS_PCM_RATE);
+    })
+    .await?;
+    Ok(())
+}
+
+/// Speak `text` aloud through the full TTS → voice-DSP → speaker
+/// pipeline — the ONE speak path shared by the local answer flow and the
+/// external-brain seam (yokota's `say` lines). Chunks `text` into
+/// sentences and synthesizes them in order. No-op (returns `Ok`) when
+/// there's no ElevenLabs key configured.
+pub(crate) async fn speak_text(
+    cfg: &SharedConfig,
+    speaker: &Speaker,
+    _video: Option<&VideoTile>,
+    text: &str,
+) -> Result<()> {
+    let Some(el_key) = cfg.elevenlabs_api_key.as_deref() else {
+        return Ok(());
+    };
+    let voice = cfg.elevenlabs_voice_id.clone();
+    let model = cfg.elevenlabs_model.clone();
+    let voice_profile = resolve_speak_profile(cfg);
+    let mut chain =
+        ghostly::audio::VoiceChain::new(voice_profile, tts::ELEVENLABS_PCM_RATE as f32);
+    let mut work: Vec<f32> = Vec::with_capacity(4096);
+    let mut chunker = qa::SentenceChunker::new();
+    let mut sentences: Vec<String> = chunker.push(text);
+    if let Some(last) = chunker.flush() {
+        sentences.push(last);
+    }
+    for sentence in sentences {
+        if let Err(e) = synth_and_enqueue(
+            &cfg.http,
+            el_key,
+            &voice,
+            &model,
+            &mut chain,
+            &mut work,
+            &cfg.recent_tts,
+            speaker,
+            &sentence,
+            || {},
+        )
+        .await
+        {
+            tracing::warn!(error = ?e, "speak_text: streaming TTS failed");
+        }
+    }
+    Ok(())
+}
+
 async fn answer_and_speak(
     cfg: Arc<SharedConfig>,
     handle: Arc<ClientHandle>,
@@ -1469,11 +1629,9 @@ async fn answer_and_speak(
             let http = cfg.http.clone();
             let voice = cfg.elevenlabs_voice_id.clone();
             let model = cfg.elevenlabs_model.clone();
-            // Per-character voice chain — see proactive.rs for design intent.
-            let voice_profile = crate::persona::resolve_voice_profile(
-                &cfg.ghostly_character,
-                cfg.ghostly_pack.as_deref(),
-            );
+            // Per-character voice chain — see proactive.rs for design
+            // intent. `--no-voice-dsp` swaps in the dry/neutral profile.
+            let voice_profile = resolve_speak_profile(&cfg);
             // Peer-loudness handle for the don't-talk-over gate.
             // `peer_level` is the loudest of all OTHER participants
             // (humans + other agents) on this tile; the bot is
@@ -1488,19 +1646,19 @@ async fn answer_and_speak(
                 let mut first = true;
                 let mut first_audio_logged = false;
                 while let Some(sentence) = rx.recv().await {
-                    // URLs are unpronounceable — strip them from
-                    // speech; the channel gets them as text instead.
-                    let (spoken, _) = split_speech_and_links(&sentence);
-                    if !spoken.chars().any(char::is_alphanumeric) {
-                        continue;
-                    }
                     // Wait-for-quiet gate: before STARTING to speak,
                     // hold until no peer is talking. Applied only at
                     // the first sentence of the answer — once the
                     // bot has the floor, subsequent sentences stream
                     // immediately. Prevents the cross-talk where two
                     // agents both got addressed and stepped on each
-                    // other's first words.
+                    // other's first words. Skipped for non-pronounceable
+                    // segments so a URL-only "sentence" doesn't burn the
+                    // gate; the helper also no-ops those.
+                    let (spoken_probe, _) = split_speech_and_links(&sentence);
+                    if !spoken_probe.chars().any(char::is_alphanumeric) {
+                        continue;
+                    }
                     if first {
                         if let Some(pl) = &peer_level {
                             wait_for_room_quiet(pl).await;
@@ -1511,16 +1669,18 @@ async fn answer_and_speak(
                         );
                         first = false;
                     }
-                    // Log what we're about to say so a participant's
-                    // speaker→mic leak (no AEC) transcribed back at us
-                    // can be recognized and dropped (see is_own_echo).
-                    note_spoken(&recent_tts, &spoken);
-                    let chain_ref = &mut chain;
-                    let work_ref = &mut work;
-                    let sp_ref = &sp;
                     let first_audio_ref = &mut first_audio_logged;
-                    if let Err(e) =
-                        tts::synthesize_streaming(&http, &el_key, &voice, &model, &spoken, |pcm| {
+                    if let Err(e) = synth_and_enqueue(
+                        &http,
+                        &el_key,
+                        &voice,
+                        &model,
+                        &mut chain,
+                        &mut work,
+                        &recent_tts,
+                        &sp,
+                        &sentence,
+                        || {
                             if !*first_audio_ref {
                                 *first_audio_ref = true;
                                 tracing::info!(
@@ -1528,12 +1688,9 @@ async fn answer_and_speak(
                                     "latency: first TTS audio enqueued"
                                 );
                             }
-                            work_ref.clear();
-                            work_ref.extend_from_slice(pcm);
-                            chain_ref.process(work_ref);
-                            sp_ref.enqueue(work_ref, tts::ELEVENLABS_PCM_RATE);
-                        })
-                        .await
+                        },
+                    )
+                    .await
                     {
                         tracing::warn!(error = ?e, "streaming TTS failed");
                     }
@@ -2140,6 +2297,10 @@ fn spawn_backchannel_loop(
     peer_level: Arc<std::sync::atomic::AtomicU32>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        // External-brain mode: yokota owns all speech — no backchannels.
+        if cfg.external_brain {
+            return;
+        }
         let Some(el_key) = cfg.elevenlabs_api_key.clone() else {
             return;
         };
@@ -2238,6 +2399,10 @@ fn spawn_hello_on_join(
     speaker: freeq_av::Speaker,
     peer_level: Arc<std::sync::atomic::AtomicU32>,
 ) {
+    // External-brain mode: yokota owns ALL speech, including greetings.
+    if cfg.external_brain {
+        return;
+    }
     let Some(el_key) = cfg.elevenlabs_api_key.clone() else {
         tracing::info!("hello-on-join skipped — no ELEVENLABS_API_KEY");
         return;
@@ -3439,6 +3604,24 @@ async fn transcribe_participant(
                         "voice addressing decision"
                     );
                     if let Some(question) = inferred {
+                        // External-brain mode: eliza does NOT answer with
+                        // its own model. Forward the addressed utterance to
+                        // yokota over the seam and stop — yokota decides
+                        // what (if anything) to say back, which arrives as
+                        // a `say` line and is spoken via the seam reader.
+                        // Off-flag (default) = unchanged behavior below.
+                        if cfg.external_brain {
+                            if let Some(seam) = cfg.brain_seam.get() {
+                                seam.send(crate::brain_seam::Outbound::Utterance {
+                                    nick: nick.clone(),
+                                    text: question.clone(),
+                                });
+                                tracing::info!(%nick, %question, "external-brain: forwarded utterance to yokota");
+                            } else {
+                                tracing::debug!(%nick, "external-brain: no seam handle; dropping utterance");
+                            }
+                            return;
+                        }
                         // Multi-agent chatter guard: see is_address_allowed.
                         if !is_address_allowed(&cfg, &nick) {
                             tracing::info!(
