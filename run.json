@@ -327,7 +327,7 @@
     "kind": "running"
   },
   "status_updated_at": "2026-06-14T18:18:15.184384273Z",
-  "last_event_at": "2026-06-14T18:19:40.865104789Z",
+  "last_event_at": "2026-06-14T18:50:43.549196657Z",
   "pending_control": null,
   "checkpoints": [
     {
@@ -367,9 +367,9 @@
       "diff": {}
     },
     {
-      "seq": 0,
+      "seq": 117,
       "checkpoint": {
-        "timestamp": "2026-06-14T18:20:03.375854691Z",
+        "timestamp": "2026-06-14T18:20:08.352255527Z",
         "current_node": "select",
         "completed_nodes": [
           "start",
@@ -377,18 +377,109 @@
         ],
         "node_retries": {},
         "context_values": {
-          "internal.work_dir": "/workspace/freeq",
+          "internal.thread_id": "cov",
+          "internal.fidelity": "full",
+          "failure_class": "",
           "thread.cov.current_node": "select",
+          "internal.node_visit_count": 1,
+          "response.select": "I have everything I need. Here is my analysis and recommendation:\n\n---\n\n## Chosen File: `freeq-sdk/src/client.rs` (Rust, `freeq-sdk` crate)\n\n### Why it's high-risk and undertested\n\nThe hotspot analysis scores `freeq-sdk/src/client.rs` at **gamma 14** — third highest overall, behind only the massive `s2s_acceptance.rs` test file and `server.rs`. CLAUDE.md explicitly flags `sdk/client.rs` as **\"ZERO unit tests on connection state machine\"** (as of the note's writing).\n\nThe file is 3,712 lines and implements the entire IRC connection state machine: capability negotiation, SASL authentication, multiline batch assembly, inbound event dispatch (KICK, INVITE, AWAY, TOPIC, QUIT, MODE, NICK, WHOIS numerics, server NOTICE, PRIVMSG routing), command queuing, keepalive/ping, and reconnect logic.\n\n### Current test coverage gaps\n\nThe existing `#[cfg(test)]` block at the bottom of `client.rs` covers:\n- multiline batch assembly (8 tests)\n- `ConnectConfig` validation (4 tests)\n- PING → PONG, 001 welcome, nick-in-use retries, SASL 904, raw injection stripping, signing presence, JOIN event, PART event, EOF disconnect (9 tests in `run_irc_tests`)\n\n**Completely untested inbound dispatch paths** (none of the 17 current `run_irc_tests` touch these):\n1. **KICK** — `run_irc` parses KICK and emits `Event::Kicked`; zero tests\n2. **INVITE** — parses INVITE and emits `Event::Invited`; zero tests\n3. **AWAY** — parses AWAY and emits `Event::AwayChanged`; zero tests\n4. **TOPIC / 332** — parses live TOPIC changes and RPL_TOPIC (332) and emits `Event::TopicChanged`; zero tests\n5. **QUIT** — parses QUIT and emits `Event::UserQuit`; zero tests\n6. **NICK** — parses NICK change and emits `Event::NickChanged`; zero tests\n\n### Specific behaviors I intend to pin\n\n1. **`KICK` → `Event::Kicked`**: Server sends `:kicker!u@h KICK #chan victim :Too noisy\\r\\n`; verify `Event::Kicked { channel, nick, by, reason }` is emitted with correct fields.\n2. **`INVITE` → `Event::Invited`**: Server sends `:sender!u@h INVITE target #secret\\r\\n`; verify `Event::Invited { channel, by }`.\n3. **`AWAY` → `Event::AwayChanged` (set and unset)**: Server sends `:nick!u@h AWAY :On lunch\\r\\n` (away_msg = `Some`) and `:nick!u@h AWAY\\r\\n` (no params → `None`); both paths tested.\n4. **`TOPIC` → `Event::TopicChanged` with set_by**: Server sends `:alice!u@h TOPIC #chan :New topic\\r\\n`; verify channel, topic, and `set_by = Some(\"alice\")`.\n5. **`332` RPL_TOPIC → `Event::TopicChanged` with no set_by**: Server sends `:server 332 me #chan :The topic\\r\\n`; verify `set_by = None`.\n6. **`QUIT` → `Event::UserQuit`**: Server sends `:leaver!u@h QUIT :Goodbye\\r\\n`; verify `nick` and `reason`.\n\n### Test convention to follow\n\nAll new tests live in the existing `#[cfg(test)] mod run_irc_tests` block inside `freeq-sdk/src/client.rs` (lines ~3240–3712). Each test uses the `start_run_irc(nick)` helper already present there, which:\n- Creates a `tokio::io::duplex` pair\n- Spawns `run_irc` on the client side\n- Returns the server-side half (for writing IRC lines) + event receiver + command sender\n\nNew tests follow the exact same pattern: write an IRC line to `server`, then `tokio::time::timeout`-wait for the expected event in `events.recv()`.",
+          "failure_signature": "",
+          "graph.rankdir": "LR",
+          "current_node": "select",
+          "internal.retry_count.select": 0,
+          "outcome": "succeeded",
+          "internal.retry_count.start": 0,
+          "graph.goal": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code.",
+          "internal.run_id": "01KV3NKZEPD4365M9HVDDD07N7",
+          "last_response": "I have everything I need. Here is my analysis and recommendation:\n\n---\n\n## Chosen File: `freeq-sdk/src/client.rs` (Rust, `freeq-sdk` crate)\n\n### Why it's high-risk and undertested\n\nThe hotspot analysi",
+          "last_stage": "select",
+          "internal.work_dir": "/workspace/freeq"
+        },
+        "node_outcomes": {
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          },
+          "select": {
+            "status": "succeeded",
+            "context_updates": {
+              "last_stage": "select",
+              "last_response": "I have everything I need. Here is my analysis and recommendation:\n\n---\n\n## Chosen File: `freeq-sdk/src/client.rs` (Rust, `freeq-sdk` crate)\n\n### Why it's high-risk and undertested\n\nThe hotspot analysi",
+              "response.select": "I have everything I need. Here is my analysis and recommendation:\n\n---\n\n## Chosen File: `freeq-sdk/src/client.rs` (Rust, `freeq-sdk` crate)\n\n### Why it's high-risk and undertested\n\nThe hotspot analysis scores `freeq-sdk/src/client.rs` at **gamma 14** — third highest overall, behind only the massive `s2s_acceptance.rs` test file and `server.rs`. CLAUDE.md explicitly flags `sdk/client.rs` as **\"ZERO unit tests on connection state machine\"** (as of the note's writing).\n\nThe file is 3,712 lines and implements the entire IRC connection state machine: capability negotiation, SASL authentication, multiline batch assembly, inbound event dispatch (KICK, INVITE, AWAY, TOPIC, QUIT, MODE, NICK, WHOIS numerics, server NOTICE, PRIVMSG routing), command queuing, keepalive/ping, and reconnect logic.\n\n### Current test coverage gaps\n\nThe existing `#[cfg(test)]` block at the bottom of `client.rs` covers:\n- multiline batch assembly (8 tests)\n- `ConnectConfig` validation (4 tests)\n- PING → PONG, 001 welcome, nick-in-use retries, SASL 904, raw injection stripping, signing presence, JOIN event, PART event, EOF disconnect (9 tests in `run_irc_tests`)\n\n**Completely untested inbound dispatch paths** (none of the 17 current `run_irc_tests` touch these):\n1. **KICK** — `run_irc` parses KICK and emits `Event::Kicked`; zero tests\n2. **INVITE** — parses INVITE and emits `Event::Invited`; zero tests\n3. **AWAY** — parses AWAY and emits `Event::AwayChanged`; zero tests\n4. **TOPIC / 332** — parses live TOPIC changes and RPL_TOPIC (332) and emits `Event::TopicChanged`; zero tests\n5. **QUIT** — parses QUIT and emits `Event::UserQuit`; zero tests\n6. **NICK** — parses NICK change and emits `Event::NickChanged`; zero tests\n\n### Specific behaviors I intend to pin\n\n1. **`KICK` → `Event::Kicked`**: Server sends `:kicker!u@h KICK #chan victim :Too noisy\\r\\n`; verify `Event::Kicked { channel, nick, by, reason }` is emitted with correct fields.\n2. **`INVITE` → `Event::Invited`**: Server sends `:sender!u@h INVITE target #secret\\r\\n`; verify `Event::Invited { channel, by }`.\n3. **`AWAY` → `Event::AwayChanged` (set and unset)**: Server sends `:nick!u@h AWAY :On lunch\\r\\n` (away_msg = `Some`) and `:nick!u@h AWAY\\r\\n` (no params → `None`); both paths tested.\n4. **`TOPIC` → `Event::TopicChanged` with set_by**: Server sends `:alice!u@h TOPIC #chan :New topic\\r\\n`; verify channel, topic, and `set_by = Some(\"alice\")`.\n5. **`332` RPL_TOPIC → `Event::TopicChanged` with no set_by**: Server sends `:server 332 me #chan :The topic\\r\\n`; verify `set_by = None`.\n6. **`QUIT` → `Event::UserQuit`**: Server sends `:leaver!u@h QUIT :Goodbye\\r\\n`; verify `nick` and `reason`.\n\n### Test convention to follow\n\nAll new tests live in the existing `#[cfg(test)] mod run_irc_tests` block inside `freeq-sdk/src/client.rs` (lines ~3240–3712). Each test uses the `start_run_irc(nick)` helper already present there, which:\n- Creates a `tokio::io::duplex` pair\n- Spawns `run_irc` on the client side\n- Returns the server-side half (for writing IRC lines) + event receiver + command sender\n\nNew tests follow the exact same pattern: write an IRC line to `server`, then `tokio::time::timeout`-wait for the expected event in `events.recv()`."
+            },
+            "notes": "Stage completed: select",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "anthropic",
+                    "model_id": "claude-sonnet-4-6"
+                  },
+                  "tokens": {
+                    "input_tokens": 25697,
+                    "output_tokens": 4056,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 279066,
+                    "cache_write_tokens": 48459
+                  }
+                },
+                "facts": {
+                  "algorithm": "anthropic",
+                  "cache_write_5m_tokens": 48459,
+                  "cache_write_1h_tokens": 0
+                }
+              },
+              "total_usd_micros": 403371
+            },
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 94599,
+              "tool_time_ms": 9904,
+              "active_time_ms": 104503
+            }
+          }
+        },
+        "next_node_id": "implement",
+        "git_commit_sha": "0576a751e3f1e8bf4446a82a0213e0594ce1fbd2",
+        "node_visits": {
+          "select": 1,
+          "start": 1
+        }
+      },
+      "diff": {
+        "summary": {
+          "files_changed": 0,
+          "additions": 0,
+          "deletions": 0
+        }
+      }
+    },
+    {
+      "seq": 0,
+      "checkpoint": {
+        "timestamp": "2026-06-14T18:52:07.524218458Z",
+        "current_node": "implement",
+        "completed_nodes": [
+          "start",
+          "select",
+          "implement"
+        ],
+        "node_retries": {},
+        "context_values": {
+          "internal.work_dir": "/workspace/freeq",
+          "thread.cov.current_node": "implement",
           "internal.run_id": "01KV3NKZEPD4365M9HVDDD07N7",
           "failure_class": "",
-          "last_stage": "select",
-          "current_node": "select",
+          "last_stage": "implement",
+          "current_node": "implement",
           "graph.goal": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code.",
-          "last_response": "I have everything I need. Here is my analysis and recommendation:\n\n---\n\n## Chosen File: `freeq-sdk/src/client.rs` (Rust, `freeq-sdk` crate)\n\n### Why it's high-risk and undertested\n\nThe hotspot analysi",
+          "last_response": "The work is done. Here's a summary of what was added and the state of verification:\n\n---\n\n## Summary\n\n**File changed:** `freeq-sdk/src/client.rs` — 284 lines added, 0 changed, 0 deleted.\n\n**9 new te",
           "internal.retry_count.select": 0,
           "internal.fidelity": "full",
+          "response.implement": "The work is done. Here's a summary of what was added and the state of verification:\n\n---\n\n## Summary\n\n**File changed:** `freeq-sdk/src/client.rs` — 284 lines added, 0 changed, 0 deleted.\n\n**9 new tests** added to the existing `irc_loop_tests` module, covering the 6 inbound IRC dispatch paths that had zero tests:\n\n| Test | What it pins |\n|------|-------------|\n| `kick_emits_kicked_event` | `KICK` → `Event::Kicked` with correct channel/victim/kicker/reason |\n| `kick_without_reason_has_empty_reason` | `KICK` with no reason param → `reason = \"\"` |\n| `invite_emits_invited_event` | `INVITE` → `Event::Invited` with channel and sender nick |\n| `away_with_message_emits_away_changed_some` | `AWAY :msg` → `AwayChanged { away_msg: Some(...) }` |\n| `away_without_message_emits_away_changed_none` | `AWAY` (no params) → `AwayChanged { away_msg: None }` |\n| `topic_change_emits_topic_changed_with_set_by` | Live `TOPIC` → `TopicChanged { set_by: Some(nick) }` |\n| `rpl_topic_332_emits_topic_changed_without_set_by` | RPL_TOPIC 332 → `TopicChanged { set_by: None }` |\n| `quit_emits_user_quit_event` | `QUIT :reason` → `Event::UserQuit { nick, reason }` |\n| `nick_change_emits_nick_changed_event` | `NICK newnick` → `Event::NickChanged { old_nick, new_nick }` |\n\n**Verification results:**\n- `cargo fmt --check` ✅ passes\n- `cargo check --workspace` (CI exclusions) ✅ passes  \n- `cargo clippy --workspace` (CI exclusions) ✅ passes  \n- `cargo test -p freeq-sdk` ✅ **149 tests, 0 failures** (22 in `irc_loop_tests`, including all 9 new ones)\n\nThe workspace-level `cargo test` failed during **linking** of `freeq-server` test binaries due to disk exhaustion (`No space left on device` / `Bus error` from the linker). This is a pre-existing infrastructure constraint — the 98GB disk was already at 95%+ when this session started, filled by a prior `cargo test --workspace` run. The failure is unrelated to the added test code.",
           "response.select": "I have everything I need. Here is my analysis and recommendation:\n\n---\n\n## Chosen File: `freeq-sdk/src/client.rs` (Rust, `freeq-sdk` crate)\n\n### Why it's high-risk and undertested\n\nThe hotspot analysis scores `freeq-sdk/src/client.rs` at **gamma 14** — third highest overall, behind only the massive `s2s_acceptance.rs` test file and `server.rs`. CLAUDE.md explicitly flags `sdk/client.rs` as **\"ZERO unit tests on connection state machine\"** (as of the note's writing).\n\nThe file is 3,712 lines and implements the entire IRC connection state machine: capability negotiation, SASL authentication, multiline batch assembly, inbound event dispatch (KICK, INVITE, AWAY, TOPIC, QUIT, MODE, NICK, WHOIS numerics, server NOTICE, PRIVMSG routing), command queuing, keepalive/ping, and reconnect logic.\n\n### Current test coverage gaps\n\nThe existing `#[cfg(test)]` block at the bottom of `client.rs` covers:\n- multiline batch assembly (8 tests)\n- `ConnectConfig` validation (4 tests)\n- PING → PONG, 001 welcome, nick-in-use retries, SASL 904, raw injection stripping, signing presence, JOIN event, PART event, EOF disconnect (9 tests in `run_irc_tests`)\n\n**Completely untested inbound dispatch paths** (none of the 17 current `run_irc_tests` touch these):\n1. **KICK** — `run_irc` parses KICK and emits `Event::Kicked`; zero tests\n2. **INVITE** — parses INVITE and emits `Event::Invited`; zero tests\n3. **AWAY** — parses AWAY and emits `Event::AwayChanged`; zero tests\n4. **TOPIC / 332** — parses live TOPIC changes and RPL_TOPIC (332) and emits `Event::TopicChanged`; zero tests\n5. **QUIT** — parses QUIT and emits `Event::UserQuit`; zero tests\n6. **NICK** — parses NICK change and emits `Event::NickChanged`; zero tests\n\n### Specific behaviors I intend to pin\n\n1. **`KICK` → `Event::Kicked`**: Server sends `:kicker!u@h KICK #chan victim :Too noisy\\r\\n`; verify `Event::Kicked { channel, nick, by, reason }` is emitted with correct fields.\n2. **`INVITE` → `Event::Invited`**: Server sends `:sender!u@h INVITE target #secret\\r\\n`; verify `Event::Invited { channel, by }`.\n3. **`AWAY` → `Event::AwayChanged` (set and unset)**: Server sends `:nick!u@h AWAY :On lunch\\r\\n` (away_msg = `Some`) and `:nick!u@h AWAY\\r\\n` (no params → `None`); both paths tested.\n4. **`TOPIC` → `Event::TopicChanged` with set_by**: Server sends `:alice!u@h TOPIC #chan :New topic\\r\\n`; verify channel, topic, and `set_by = Some(\"alice\")`.\n5. **`332` RPL_TOPIC → `Event::TopicChanged` with no set_by**: Server sends `:server 332 me #chan :The topic\\r\\n`; verify `set_by = None`.\n6. **`QUIT` → `Event::UserQuit`**: Server sends `:leaver!u@h QUIT :Goodbye\\r\\n`; verify `nick` and `reason`.\n\n### Test convention to follow\n\nAll new tests live in the existing `#[cfg(test)] mod run_irc_tests` block inside `freeq-sdk/src/client.rs` (lines ~3240–3712). Each test uses the `start_run_irc(nick)` helper already present there, which:\n- Creates a `tokio::io::duplex` pair\n- Spawns `run_irc` on the client side\n- Returns the server-side half (for writing IRC lines) + event receiver + command sender\n\nNew tests follow the exact same pattern: write an IRC line to `server`, then `tokio::time::timeout`-wait for the expected event in `events.recv()`.",
           "internal.node_visit_count": 1,
+          "internal.retry_count.implement": 0,
           "graph.rankdir": "LR",
           "outcome": "succeeded",
           "internal.thread_id": "cov",
@@ -396,6 +487,47 @@
           "failure_signature": ""
         },
         "node_outcomes": {
+          "implement": {
+            "status": "succeeded",
+            "context_updates": {
+              "last_response": "The work is done. Here's a summary of what was added and the state of verification:\n\n---\n\n## Summary\n\n**File changed:** `freeq-sdk/src/client.rs` — 284 lines added, 0 changed, 0 deleted.\n\n**9 new te",
+              "last_stage": "implement",
+              "response.implement": "The work is done. Here's a summary of what was added and the state of verification:\n\n---\n\n## Summary\n\n**File changed:** `freeq-sdk/src/client.rs` — 284 lines added, 0 changed, 0 deleted.\n\n**9 new tests** added to the existing `irc_loop_tests` module, covering the 6 inbound IRC dispatch paths that had zero tests:\n\n| Test | What it pins |\n|------|-------------|\n| `kick_emits_kicked_event` | `KICK` → `Event::Kicked` with correct channel/victim/kicker/reason |\n| `kick_without_reason_has_empty_reason` | `KICK` with no reason param → `reason = \"\"` |\n| `invite_emits_invited_event` | `INVITE` → `Event::Invited` with channel and sender nick |\n| `away_with_message_emits_away_changed_some` | `AWAY :msg` → `AwayChanged { away_msg: Some(...) }` |\n| `away_without_message_emits_away_changed_none` | `AWAY` (no params) → `AwayChanged { away_msg: None }` |\n| `topic_change_emits_topic_changed_with_set_by` | Live `TOPIC` → `TopicChanged { set_by: Some(nick) }` |\n| `rpl_topic_332_emits_topic_changed_without_set_by` | RPL_TOPIC 332 → `TopicChanged { set_by: None }` |\n| `quit_emits_user_quit_event` | `QUIT :reason` → `Event::UserQuit { nick, reason }` |\n| `nick_change_emits_nick_changed_event` | `NICK newnick` → `Event::NickChanged { old_nick, new_nick }` |\n\n**Verification results:**\n- `cargo fmt --check` ✅ passes\n- `cargo check --workspace` (CI exclusions) ✅ passes  \n- `cargo clippy --workspace` (CI exclusions) ✅ passes  \n- `cargo test -p freeq-sdk` ✅ **149 tests, 0 failures** (22 in `irc_loop_tests`, including all 9 new ones)\n\nThe workspace-level `cargo test` failed during **linking** of `freeq-server` test binaries due to disk exhaustion (`No space left on device` / `Bus error` from the linker). This is a pre-existing infrastructure constraint — the 98GB disk was already at 95%+ when this session started, filled by a prior `cargo test --workspace` run. The failure is unrelated to the added test code."
+            },
+            "notes": "Stage completed: implement",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "anthropic",
+                    "model_id": "claude-sonnet-4-6"
+                  },
+                  "tokens": {
+                    "input_tokens": 60104,
+                    "output_tokens": 11813,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 2856345,
+                    "cache_write_tokens": 411231
+                  }
+                },
+                "facts": {
+                  "algorithm": "anthropic",
+                  "cache_write_5m_tokens": 411231,
+                  "cache_write_1h_tokens": 0
+                }
+              },
+              "total_usd_micros": 2756526
+            },
+            "files_touched": [
+              "/workspace/freeq/freeq-sdk/src/client.rs"
+            ],
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 230333,
+              "tool_time_ms": 1688694,
+              "active_time_ms": 1919027
+            }
+          },
           "select": {
             "status": "succeeded",
             "context_updates": {
@@ -439,10 +571,11 @@
             "usage": null
           }
         },
-        "next_node_id": "implement",
+        "next_node_id": "verify",
         "node_visits": {
           "start": 1,
-          "select": 1
+          "select": 1,
+          "implement": 1
         }
       },
       "diff": {}
@@ -479,7 +612,12 @@
       "first_event_seq": 27,
       "prompt": null,
       "response": null,
-      "completion": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": "Stage completed: select",
+        "failure_reason": null,
+        "timestamp": "2026-06-14T18:20:03.375529760Z"
+      },
       "provider_used": {
         "mode": "agent",
         "provider": "anthropic",
@@ -493,17 +631,37 @@
       "output": null,
       "started_at": "2026-06-14T18:18:16.569967036Z",
       "handler": "agent",
+      "timing": {
+        "wall_time_ms": 106805,
+        "inference_time_ms": 94599,
+        "tool_time_ms": 9904,
+        "active_time_ms": 104503
+      },
       "usage": {
-        "input_tokens": 24730,
-        "output_tokens": 2987,
-        "total_tokens": 322940,
+        "input_tokens": 70486,
+        "output_tokens": 14706,
+        "total_tokens": 3322197,
         "reasoning_tokens": 0,
-        "cache_read_tokens": 247693,
-        "cache_write_tokens": 47530
+        "cache_read_tokens": 2792722,
+        "cache_write_tokens": 444283,
+        "total_usd_micros": 403371
       },
       "model": {
         "provider": "anthropic",
         "model_id": "claude-sonnet-4-6"
+      },
+      "todos": {
+        "kind": "anthropic_tasks",
+        "list_id": "anthropic_tasks:9ab4abfe-e947-4276-a23d-780f84601bcd",
+        "items": [
+          {
+            "id": "1",
+            "status": "in_progress",
+            "order": 0,
+            "subject": "Add run_irc dispatch tests for KICK, INVITE, AWAY, TOPIC, QUIT, NICK",
+            "description": "Add unit tests for the 6 untested inbound IRC message dispatch paths in freeq-sdk/src/client.rs. Follow existing run_irc_tests module conventions using the start_run_irc helper. Verify with .fabro/verify.sh."
+          }
+        ]
       },
       "permission_level": "full",
       "agent_tools": [
@@ -523,7 +681,7 @@
             "kind": "native"
           },
           "category": "other",
-          "invoked": false
+          "invoked": true
         },
         {
           "name": "TaskGet",
@@ -550,7 +708,7 @@
             "kind": "native"
           },
           "category": "other",
-          "invoked": false
+          "invoked": true
         },
         {
           "name": "close_agent",
@@ -568,7 +726,7 @@
             "kind": "native"
           },
           "category": "write",
-          "invoked": false
+          "invoked": true
         },
         {
           "name": "glob",
@@ -665,42 +823,42 @@
         "provider": "anthropic",
         "model": "claude-sonnet-4-6",
         "context_window_tokens": 200000,
-        "input_tokens": 32303,
-        "usage_percent": 16.1515,
+        "input_tokens": 78269,
+        "usage_percent": 39.1345,
         "count_method": "response_usage_scaled_breakdown",
         "staleness": "live",
-        "generated_at": "2026-06-14T18:19:40.392831125Z",
-        "event_seq": 105,
+        "generated_at": "2026-06-14T18:50:43.548087937Z",
+        "event_seq": 447,
         "breakdown": [
           {
             "category": "system_prompt",
-            "tokens": 2008,
-            "usage_percent": 1.004
+            "tokens": 2042,
+            "usage_percent": 1.021
           },
           {
             "category": "tools",
-            "tokens": 2314,
-            "usage_percent": 1.157
+            "tokens": 2353,
+            "usage_percent": 1.1765
           },
           {
             "category": "memory",
-            "tokens": 3200,
-            "usage_percent": 1.6
+            "tokens": 3254,
+            "usage_percent": 1.627
           },
           {
             "category": "conversation",
-            "tokens": 24772,
-            "usage_percent": 12.386
+            "tokens": 70610,
+            "usage_percent": 35.305
           },
           {
             "category": "other",
-            "tokens": 9,
-            "usage_percent": 0.0045
+            "tokens": 10,
+            "usage_percent": 0.005
           }
         ],
         "warnings": []
       },
-      "state": "running"
+      "state": "succeeded"
     },
     "start@1": {
       "first_event_seq": 23,
@@ -735,6 +893,91 @@
         "cache_write_tokens": 0
       },
       "state": "succeeded"
+    },
+    "implement@1": {
+      "first_event_seq": 120,
+      "prompt": null,
+      "response": null,
+      "completion": null,
+      "provider_used": {
+        "mode": "agent",
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "reasoning_effort": "medium"
+      },
+      "diff": null,
+      "script_invocation": null,
+      "script_timing": null,
+      "parallel_results": null,
+      "output": null,
+      "started_at": "2026-06-14T18:20:08.352539907Z",
+      "handler": "agent",
+      "usage": {
+        "input_tokens": 44789,
+        "output_tokens": 10650,
+        "total_tokens": 2964919,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 2513656,
+        "cache_write_tokens": 395824
+      },
+      "model": {
+        "provider": "anthropic",
+        "model_id": "claude-sonnet-4-6"
+      },
+      "todos": {
+        "kind": "anthropic_tasks",
+        "list_id": "anthropic_tasks:9ab4abfe-e947-4276-a23d-780f84601bcd",
+        "items": [
+          {
+            "id": "1",
+            "status": "in_progress",
+            "order": 0,
+            "subject": "Add run_irc dispatch tests for KICK, INVITE, AWAY, TOPIC, QUIT, NICK",
+            "description": "Add unit tests for the 6 untested inbound IRC message dispatch paths in freeq-sdk/src/client.rs. Follow existing run_irc_tests module conventions using the start_run_irc helper. Verify with .fabro/verify.sh."
+          }
+        ]
+      },
+      "permission_level": "full",
+      "context_window": {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "context_window_tokens": 200000,
+        "input_tokens": 78269,
+        "usage_percent": 39.1345,
+        "count_method": "response_usage_scaled_breakdown",
+        "staleness": "live",
+        "generated_at": "2026-06-14T18:50:43.548087937Z",
+        "event_seq": 448,
+        "breakdown": [
+          {
+            "category": "system_prompt",
+            "tokens": 2042,
+            "usage_percent": 1.021
+          },
+          {
+            "category": "tools",
+            "tokens": 2353,
+            "usage_percent": 1.1765
+          },
+          {
+            "category": "memory",
+            "tokens": 3254,
+            "usage_percent": 1.627
+          },
+          {
+            "category": "conversation",
+            "tokens": 70610,
+            "usage_percent": 35.305
+          },
+          {
+            "category": "other",
+            "tokens": 10,
+            "usage_percent": 0.005
+          }
+        ],
+        "warnings": []
+      },
+      "state": "running"
     }
   }
 }
