@@ -1,0 +1,23 @@
+Implement the approved plan (in `/tmp/plan.md` and the context above).
+
+## The feature
+
+{{ goal }}
+
+## Rules
+
+- **Build only the in-scope work**: CI-buildable Rust crates (`freeq-server`, `freeq-sdk`, `freeq-sdk-ffi`, `freeq-tui`, `freeq-bots`, `freeq-windows-core`), the web app `freeq-app`, and protocol/docs. **Do NOT touch** `freeq-ios/`, `freeq-macos/`, `Freeq.WinUI/`, `freeq-windows-app/`, or the AV crates — they can't be compiled or verified here, so editing them would ship unverified code.
+- **Follow the plan.** If you discover the plan is wrong mid-build, make the smallest correct deviation and note it clearly in your final message — don't silently rewrite the design.
+- **Match the codebase**: existing patterns, error handling, naming. Honor `-D warnings` (no `#[allow]` to dodge lints; rustfmt + clippy clean). Keep protocol changes additive and versioned per the plan.
+- **Write the tests the plan specified** — server/SDK unit + integration, web vitest — so each success criterion is pinned by a deterministic, offline test.
+- Keep the diff coherent and reviewable. No drive-by reformatting of untouched code.
+
+## Work incrementally and self-verify
+
+Build in plan order, compiling as you go. Before finishing, run the full gate and do not stop until it passes:
+
+```
+bash .fabro/verify.sh
+```
+
+If the feature is large, it's fine to land a coherent, gate-passing **first slice** that fully implements part of the plan rather than a broken attempt at all of it — but say exactly what you did and didn't implement in your final message, so the PR and any follow-up run are honest about remaining work.

@@ -1,0 +1,16 @@
+_version = 1
+
+[workflow]
+graph = "workflow.fabro"
+
+# Long-horizon, multi-agent feature development. Parameterized by --goal.
+#
+#   fabro run .fabro/workflows/feature/workflow.toml \
+#     --goal "harden and enhance file upload across server + web, on-server storage default"
+#
+# Inherits the boxd-docker environment, PR policy, and toolchain prepare steps
+# from .fabro/project.toml. The human plan-approval gate pauses the run until
+# you approve; add --auto-approve for a fully autonomous run.
+#
+# No schedule/automation for this one — it's run on demand with a goal, not on
+# a cron.
