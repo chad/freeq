@@ -23,6 +23,7 @@
 		58358188E47643126CBEE786 /* MessageListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FEA777B589463007FF478DC /* MessageListView.swift */; };
 		6DDB3CED329F29FC4C691EAD /* FormatToolbar.swift in Sources */ = {isa = PBXBuildFile; fileRef = F95B3DDDA0598080AE7E870C /* FormatToolbar.swift */; };
 		721B0A530115B270B487BF92 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 932AFF9B3AF0BCF257A2DCE2 /* AppState.swift */; };
+		72420D42F44D4D54B64DF630 /* ChannelHydration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72420D41F44D4D54B64DF630 /* ChannelHydration.swift */; };
 		728190EB3B8C571044EBDE73 /* ChannelState.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED9F5A69D81B1BA80FC4782A /* ChannelState.swift */; };
 		814109482C3020E4DFB6F5DC /* FreeqSDK.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BCCB41ADB5F3934945B6E85 /* FreeqSDK.xcframework */; };
 		87278B03BA72D53ADC27DB97 /* MainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61EB9E0F12CF280B8BADFA41 /* MainView.swift */; };
@@ -75,6 +76,7 @@
 		61EB9E0F12CF280B8BADFA41 /* MainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainView.swift; sourceTree = "<group>"; };
 		68D19F735EC72757A61B1D6C /* DetailPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailPanel.swift; sourceTree = "<group>"; };
 		6D0D657E5F637E5EFD232E19 /* KeychainHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainHelper.swift; sourceTree = "<group>"; };
+		72420D41F44D4D54B64DF630 /* ChannelHydration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChannelHydration.swift; sourceTree = "<group>"; };
 		7340BE5C80B24DD16B066ABC /* ChannelSettingsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChannelSettingsSheet.swift; sourceTree = "<group>"; };
 		7BD3C7CC942BA721E1572347 /* JoinChannelSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JoinChannelSheet.swift; sourceTree = "<group>"; };
 		878F66C1A9A17E125322D5CF /* FileUpload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileUpload.swift; sourceTree = "<group>"; };
@@ -217,6 +219,7 @@
 				272F2E7627007A625AE37DA8 /* CallCameraCapture.swift */,
 				BA939865F12BCD7A51A4E5D0 /* CallController.swift */,
 				BF84986DB3E316AB54CFA706 /* CallMicCapture.swift */,
+				72420D41F44D4D54B64DF630 /* ChannelHydration.swift */,
 				ED9F5A69D81B1BA80FC4782A /* ChannelState.swift */,
 				DA3E838FFB8176761B9DAA50 /* ChatMessage.swift */,
 				D90D45494AECECE10448CB0E /* ComposeCommands.swift */,
@@ -333,6 +336,7 @@
 				2DE20508FB26A54D6DC4847B /* CallMicCapture.swift in Sources */,
 				53219C77DD566736E0DBD0F1 /* CallView.swift in Sources */,
 				DE8F1528542FEB83C2A987CE /* ChannelListBrowser.swift in Sources */,
+				72420D42F44D4D54B64DF630 /* ChannelHydration.swift in Sources */,
 				9F958D5ED5FB22C5E40774A7 /* ChannelSettingsSheet.swift in Sources */,
 				728190EB3B8C571044EBDE73 /* ChannelState.swift in Sources */,
 				95713207153A9DD7BAB5955A /* ChatMessage.swift in Sources */,

@@ -64,6 +64,17 @@ final class ValidationTests: XCTestCase {
         XCTAssertTrue(channel.messages.first?.reactions.isEmpty ?? false)
     }
 
+    func testSelfJoinRequestsLatestChannelHistory() {
+        XCTAssertEqual(
+            ChannelHydration.historyCommand(for: "#has-messages"),
+            "CHATHISTORY LATEST #has-messages * 50"
+        )
+    }
+
+    func testSelfJoinDoesNotRequestChannelHistoryForDMTarget() {
+        XCTAssertNil(ChannelHydration.historyCommand(for: "alice"))
+    }
+
     // MARK: - Bluesky profile URL
 
     func testBlueSkyProfileURLBasic() {

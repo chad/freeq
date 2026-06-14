@@ -806,6 +806,9 @@ extension AppState {
                 }
                 // Load any pinned messages for the channel's pinned bar.
                 fetchPins(channel: channel)
+                if let historyCommand = ChannelHydration.historyCommand(for: channel) {
+                    sendRaw(historyCommand)
+                }
             } else {
                 if let ch = channels.first(where: { $0.name.lowercased() == channel.lowercased() }) {
                     if !ch.members.contains(where: { $0.nick.lowercased() == joinNick.lowercased() }) {

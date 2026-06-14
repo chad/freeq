@@ -35,6 +35,16 @@ Status legend: ☐ todo · ◐ in progress · ☑ done · ⛔ blocked
 
 ---
 
+## 2026-06-14 channel-history regression
+
+- ☑ Add a failing regression test proving self-join must request latest channel history.
+- ☑ Fix channel hydration command generation.
+- ☑ Wire successful macOS self-join to `CHATHISTORY LATEST <channel> * 50`.
+- ☑ Re-run SwiftPM regression/full suite and Xcode build.
+- ☑ Commit the channel-history fix.
+
+---
+
 ## Method
 
 Four feature inventories were assembled (macOS / iOS / web / TUI) and ground-truthed
