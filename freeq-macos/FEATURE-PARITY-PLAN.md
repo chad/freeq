@@ -45,6 +45,14 @@ Status legend: ☐ todo · ◐ in progress · ☑ done · ⛔ blocked
 
 ---
 
+## 2026-06-14 toolbar clarity
+
+- ☑ Replace the abstract top-toolbar P2P glyph with a labeled connection status pill.
+- ☑ Rebuild macOS app and relaunch.
+- ☑ Commit toolbar clarity fix.
+
+---
+
 ## Method
 
 Four feature inventories were assembled (macOS / iOS / web / TUI) and ground-truthed

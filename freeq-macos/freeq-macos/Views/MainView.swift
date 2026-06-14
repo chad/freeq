@@ -107,24 +107,35 @@ struct MainView: View {
 
     @ViewBuilder
     private var connectionIndicator: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
-
-            if appState.isP2pActive {
-                Image(systemName: "point.3.connected.trianglepath.dotted")
-                    .font(.caption2)
+        HStack(spacing: 8) {
+            Label {
+                Text(statusText)
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
-                    .help("P2P active via iroh")
+            } icon: {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 8, height: 8)
             }
 
-            if appState.transportType == .iroh {
-                Text("iroh")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            if appState.isP2pActive || appState.transportType == .iroh {
+                Divider()
+                    .frame(height: 12)
+                Label {
+                    Text(p2pStatusText)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                } icon: {
+                    Image(systemName: "lock.shield")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Capsule().fill(Color(nsColor: .controlBackgroundColor)))
+        .help(connectionHelp)
     }
 
     private var statusColor: Color {
@@ -133,6 +144,40 @@ struct MainView: View {
         case .connected: .yellow
         case .connecting: .orange
         case .disconnected: .red
+        }
+    }
+
+    private var statusText: String {
+        switch appState.connectionState {
+        case .registered: "Online"
+        case .connected: "Connected"
+        case .connecting: "Connecting"
+        case .disconnected: "Offline"
+        }
+    }
+
+    private var p2pStatusText: String {
+        let count = appState.p2pConnectedPeers.count
+        if count == 1 { return "P2P 1 peer" }
+        if count > 1 { return "P2P \(count) peers" }
+        return "P2P ready"
+    }
+
+    private var connectionHelp: String {
+        var parts = ["IRC \(statusText.lowercased()) via \(appState.transportType.label)"]
+        if appState.isP2pActive {
+            parts.append("P2P active via iroh")
+        }
+        return parts.joined(separator: " • ")
+    }
+}
+
+private extension TransportType {
+    var label: String {
+        switch self {
+        case .tcp: "TCP"
+        case .tls: "TLS"
+        case .iroh: "iroh"
         }
     }
 }
