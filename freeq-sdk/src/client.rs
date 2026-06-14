@@ -3229,3 +3229,484 @@ mod connect_config_tests {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests for the run_irc protocol loop and execute_command wire formatting.
+//
+// These complement multiline_tests (which pin batch assembly) by covering the
+// core IRC state-machine paths that previously had zero dedicated tests:
+//   • PING keepalive → PONG reply
+//   • 001 RPL_WELCOME → Event::Registered + pending-command flush
+//   • 433 ERR_NICKNAMEINUSE → suffix retry / eventual Disconnected
+//   • 904 SASL failure → Event::AuthFailed + CAP END sent
+//   • Command::Raw injection stripping (\r \n \0 removed)
+//   • Command::Privmsg wire format without / with signing key
+//   • JOIN / PART → Event::Joined / Event::Parted
+//   • Server EOF → Event::Disconnected
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod irc_loop_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+
+    /// Build a minimal ConnectConfig suitable for unit tests.
+    fn test_config(nick: &str) -> ConnectConfig {
+        ConnectConfig {
+            server_addr: "test:6667".to_string(),
+            nick: nick.to_string(),
+            user: "tester".to_string(),
+            realname: "Test User".to_string(),
+            tls: false,
+            tls_insecure: false,
+            web_token: None,
+            websocket_url: None,
+        }
+    }
+
+    /// Spin up run_irc over a tokio duplex and drain the startup bytes
+    /// (CAP LS / NICK / USER) that run_irc writes immediately.
+    async fn start_run_irc(
+        nick: &str,
+    ) -> (
+        tokio::io::DuplexStream, // "server side" – we write IRC lines here
+        mpsc::Receiver<Event>,
+        mpsc::Sender<Command>,
+    ) {
+        let (client_side, server_side) = tokio::io::duplex(16_384);
+        let (event_tx, event_rx) = mpsc::channel::<Event>(64);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Command>(64);
+        let echo_registry: EchoRegistry = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let caps_acked: CapsAcked = Arc::new(parking_lot::Mutex::new(HashSet::new()));
+        let config = test_config(nick);
+
+        let (reader, writer) = tokio::io::split(client_side);
+        tokio::spawn(async move {
+            let _ = run_irc(
+                BufReader::new(reader),
+                writer,
+                &config,
+                None,
+                event_tx,
+                cmd_rx,
+                echo_registry,
+                caps_acked,
+            )
+            .await;
+        });
+
+        // Drain the startup burst (CAP LS / NICK / USER) so the duplex
+        // buffer doesn't fill and block the spawned run_irc task.
+        let mut server_side = server_side;
+        let mut drain = vec![0u8; 512];
+        let _ = tokio::time::timeout(
+            tokio::time::Duration::from_millis(150),
+            server_side.read(&mut drain),
+        )
+        .await;
+
+        (server_side, event_rx, cmd_tx)
+    }
+
+    // ── PING → PONG ──────────────────────────────────────────────────────────
+
+    /// When the server sends a PING, run_irc must reply with PONG :<token>.
+    #[tokio::test]
+    async fn ping_elicits_pong_reply() {
+        let (mut server, _events, _cmd) = start_run_irc("pinger").await;
+
+        server
+            .write_all(b":srv PING :abc123\r\n")
+            .await
+            .expect("write PING");
+        server.flush().await.unwrap();
+
+        // Read back whatever run_irc writes. PONG should appear quickly.
+        let mut buf = vec![0u8; 256];
+        let n = tokio::time::timeout(
+            tokio::time::Duration::from_millis(400),
+            server.read(&mut buf),
+        )
+        .await
+        .expect("timeout waiting for PONG")
+        .expect("read error");
+
+        let wire = String::from_utf8_lossy(&buf[..n]);
+        assert!(
+            wire.contains("PONG :abc123"),
+            "expected PONG :abc123 in:\n{wire}"
+        );
+    }
+
+    /// PONG must also be sent when the PING token is empty.
+    #[tokio::test]
+    async fn ping_with_empty_token_sends_pong() {
+        let (mut server, _events, _cmd) = start_run_irc("pinger2").await;
+
+        server.write_all(b"PING :\r\n").await.unwrap();
+        server.flush().await.unwrap();
+
+        let mut buf = vec![0u8; 256];
+        let n = tokio::time::timeout(
+            tokio::time::Duration::from_millis(400),
+            server.read(&mut buf),
+        )
+        .await
+        .expect("timeout waiting for PONG")
+        .expect("read error");
+
+        let wire = String::from_utf8_lossy(&buf[..n]);
+        assert!(wire.contains("PONG :"), "expected PONG : in:\n{wire}");
+    }
+
+    // ── 001 RPL_WELCOME → Registered ─────────────────────────────────────────
+
+    /// 001 must emit Event::Registered with the nick the server assigned.
+    #[tokio::test]
+    async fn welcome_001_emits_registered_event() {
+        let (mut server, mut events, _cmd) = start_run_irc("alice").await;
+
+        server
+            .write_all(b":srv 001 alice :Welcome to IRC\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::Registered { nick } = ev {
+                    return nick;
+                }
+            }
+            String::new()
+        })
+        .await
+        .expect("timeout waiting for Registered");
+
+        assert_eq!(got, "alice");
+    }
+
+    /// Commands sent via the cmd channel BEFORE 001 are queued and flushed
+    /// to the wire once registration completes (IRC servers drop JOIN etc.
+    /// sent before 001).
+    #[tokio::test]
+    async fn commands_queued_before_001_are_flushed_after_registration() {
+        let (mut server, mut events, cmd_tx) = start_run_irc("bob").await;
+
+        // Queue a JOIN before the server sends 001.
+        cmd_tx
+            .send(Command::Join("#lobby".to_string()))
+            .await
+            .unwrap();
+
+        // Give run_irc time to enqueue it (it can't write yet — not registered).
+        tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+
+        // Now send 001 to trigger registration.
+        server
+            .write_all(b":srv 001 bob :Welcome\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        // Wait for the Registered event so we know run_irc processed 001.
+        let _ = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if matches!(ev, Event::Registered { .. }) {
+                    break;
+                }
+            }
+        })
+        .await;
+
+        // Now read everything run_irc wrote back to us.
+        let mut buf = vec![0u8; 512];
+        let n = tokio::time::timeout(
+            tokio::time::Duration::from_millis(400),
+            server.read(&mut buf),
+        )
+        .await
+        .expect("timeout waiting for JOIN")
+        .unwrap_or(0);
+
+        let wire = String::from_utf8_lossy(&buf[..n]);
+        assert!(
+            wire.contains("JOIN #lobby"),
+            "queued JOIN should appear after 001, got:\n{wire}"
+        );
+    }
+
+    // ── 433 ERR_NICKNAMEINUSE ─────────────────────────────────────────────────
+
+    /// On the first 433, run_irc should try nick+"1".
+    #[tokio::test]
+    async fn nick_in_use_first_retry_appends_1() {
+        let (mut server, _events, _cmd) = start_run_irc("charlie").await;
+
+        server
+            .write_all(b":srv 433 * charlie :Nickname is already in use\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let mut buf = vec![0u8; 256];
+        let n = tokio::time::timeout(
+            tokio::time::Duration::from_millis(400),
+            server.read(&mut buf),
+        )
+        .await
+        .expect("timeout waiting for NICK retry")
+        .unwrap_or(0);
+
+        let wire = String::from_utf8_lossy(&buf[..n]);
+        assert!(
+            wire.contains("NICK charlie1"),
+            "expected NICK charlie1, got:\n{wire}"
+        );
+    }
+
+    /// After 6 consecutive 433s (exceeding the 5-retry cap), run_irc should
+    /// emit Event::Disconnected rather than looping forever.
+    #[tokio::test]
+    async fn nick_in_use_too_many_retries_disconnects() {
+        let (mut server, mut events, _cmd) = start_run_irc("dave").await;
+
+        // Send 6 × 433.  run_irc allows up to 5 retries; the 6th hits the
+        // `give up` branch and emits Disconnected.
+        for i in 0..6u8 {
+            let nick_attempt = if i == 0 {
+                "dave".to_string()
+            } else {
+                format!("dave{i}")
+            };
+            let line = format!(":srv 433 * {nick_attempt} :Nickname is already in use\r\n");
+            server.write_all(line.as_bytes()).await.unwrap();
+            server.flush().await.unwrap();
+            // Small pause so run_irc's select! can process each line.
+            tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+        }
+
+        let got_disconnect = tokio::time::timeout(tokio::time::Duration::from_millis(500), async {
+            while let Some(ev) = events.recv().await {
+                if matches!(ev, Event::Disconnected { .. }) {
+                    return true;
+                }
+            }
+            false
+        })
+        .await
+        .unwrap_or(false);
+
+        assert!(
+            got_disconnect,
+            "expected Event::Disconnected after 6 nick-in-use errors"
+        );
+    }
+
+    // ── 904 SASL failure ─────────────────────────────────────────────────────
+
+    /// 904 must emit Event::AuthFailed and send CAP END so the server can
+    /// finish registration (without CAP END the session hangs).
+    #[tokio::test]
+    async fn sasl_904_emits_auth_failed_and_sends_cap_end() {
+        let (mut server, mut events, _cmd) = start_run_irc("eve").await;
+
+        server
+            .write_all(b":srv 904 eve :SASL authentication failed\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        // Collect the AuthFailed event.
+        let got_auth_failed =
+            tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+                while let Some(ev) = events.recv().await {
+                    if matches!(ev, Event::AuthFailed { .. }) {
+                        return true;
+                    }
+                }
+                false
+            })
+            .await
+            .unwrap_or(false);
+
+        assert!(got_auth_failed, "expected Event::AuthFailed after 904");
+
+        // run_irc must also send CAP END on the wire.
+        let mut buf = vec![0u8; 256];
+        let n = tokio::time::timeout(
+            tokio::time::Duration::from_millis(400),
+            server.read(&mut buf),
+        )
+        .await
+        .expect("timeout waiting for CAP END")
+        .unwrap_or(0);
+
+        let wire = String::from_utf8_lossy(&buf[..n]);
+        assert!(
+            wire.contains("CAP END"),
+            "expected CAP END after 904, got:\n{wire}"
+        );
+    }
+
+    // ── execute_command wire formatting ──────────────────────────────────────
+
+    /// Command::Raw strips \r, \n, and \0 to prevent protocol injection.
+    #[tokio::test]
+    async fn raw_command_strips_injection_chars() {
+        let mut buf: Vec<u8> = Vec::new();
+        let cmd = Command::Raw("PRIVMSG #ch :hello\r\nEVIL LINE\0".to_string());
+        execute_command(&mut buf, cmd, &None, &None)
+            .await
+            .expect("execute_command");
+
+        let wire = String::from_utf8(buf).expect("utf8");
+        // Injected \r, inner \n, and \0 must be stripped from the payload.
+        // Only the appended CRLF terminator from execute_command itself
+        // may remain.
+        let payload = wire.trim_end_matches("\r\n");
+        assert!(
+            !payload.contains('\r'),
+            "\\r must be stripped from payload, got:\n{wire:?}"
+        );
+        assert!(
+            !payload.contains('\n'),
+            "\\n must be stripped from payload, got:\n{wire:?}"
+        );
+        assert!(!wire.contains('\0'), "\\0 must be stripped, got:\n{wire:?}");
+        // The sanitised content must still be present.
+        assert!(
+            wire.contains("PRIVMSG #ch :helloEVIL LINE"),
+            "sanitised body missing, got:\n{wire}"
+        );
+    }
+
+    /// Command::Privmsg without a signing key writes a plain
+    /// "PRIVMSG <target> :<text>\r\n" line with no tag prefix.
+    #[tokio::test]
+    async fn privmsg_without_signing_key_is_plain_wire() {
+        let mut buf: Vec<u8> = Vec::new();
+        let cmd = Command::Privmsg {
+            target: "#general".to_string(),
+            text: "hello world".to_string(),
+        };
+        execute_command(&mut buf, cmd, &None, &None)
+            .await
+            .expect("execute_command");
+
+        let wire = String::from_utf8(buf).expect("utf8");
+        assert_eq!(
+            wire, "PRIVMSG #general :hello world\r\n",
+            "unsigned PRIVMSG must be a bare line, got:\n{wire:?}"
+        );
+    }
+
+    /// Command::Privmsg with a signing key prepends a @+freeq.at/sig=... tag.
+    #[tokio::test]
+    async fn privmsg_with_signing_key_adds_sig_tag() {
+        use ed25519_dalek::SigningKey;
+        use ed25519_dalek::ed25519::signature::rand_core::OsRng;
+
+        let key = SigningKey::generate(&mut OsRng);
+        let did = Some("did:plc:testuser".to_string());
+
+        let mut buf: Vec<u8> = Vec::new();
+        let cmd = Command::Privmsg {
+            target: "#secret".to_string(),
+            text: "signed message".to_string(),
+        };
+        execute_command(&mut buf, cmd, &Some(key), &did)
+            .await
+            .expect("execute_command");
+
+        let wire = String::from_utf8(buf).expect("utf8");
+        assert!(
+            wire.starts_with("@+freeq.at/sig="),
+            "signed PRIVMSG must start with sig tag, got:\n{wire:?}"
+        );
+        assert!(
+            wire.contains("PRIVMSG #secret :signed message"),
+            "target and body must be present, got:\n{wire:?}"
+        );
+    }
+
+    // ── JOIN and PART events ──────────────────────────────────────────────────
+
+    /// JOIN from another user emits Event::Joined with correct nick + channel.
+    #[tokio::test]
+    async fn server_join_emits_joined_event() {
+        let (mut server, mut events, _cmd) = start_run_irc("host").await;
+
+        server
+            .write_all(b":guest!u@h JOIN #lobby\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::Joined { nick, channel, .. } = ev {
+                    return Some((nick, channel));
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let (nick, channel) = got.expect("expected Joined event");
+        assert_eq!(nick, "guest");
+        assert_eq!(channel, "#lobby");
+    }
+
+    /// PART emits Event::Parted with correct nick + channel.
+    #[tokio::test]
+    async fn server_part_emits_parted_event() {
+        let (mut server, mut events, _cmd) = start_run_irc("host2").await;
+
+        server
+            .write_all(b":leaver!u@h PART #lobby :bye\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::Parted { nick, channel } = ev {
+                    return Some((nick, channel));
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let (nick, channel) = got.expect("expected Parted event");
+        assert_eq!(nick, "leaver");
+        assert_eq!(channel, "#lobby");
+    }
+
+    // ── EOF / disconnect ──────────────────────────────────────────────────────
+
+    /// Closing the server-side of the duplex (EOF) must produce
+    /// Event::Disconnected so callers know to reconnect.
+    #[tokio::test]
+    async fn server_eof_emits_disconnected_event() {
+        let (server, mut events, _cmd) = start_run_irc("eof_test").await;
+
+        // Drop the server side → run_irc sees EOF on read.
+        drop(server);
+
+        let got_disconnect = tokio::time::timeout(tokio::time::Duration::from_millis(500), async {
+            while let Some(ev) = events.recv().await {
+                if matches!(ev, Event::Disconnected { .. }) {
+                    return true;
+                }
+            }
+            false
+        })
+        .await
+        .unwrap_or(false);
+
+        assert!(got_disconnect, "expected Event::Disconnected on server EOF");
+    }
+}
