@@ -1,0 +1,3 @@
+I can't write this accurately. The prompt says to base the description strictly on `git diff --stat` and `git diff`, and to not claim anything I didn't verify — but I don't have that diff output. No code changes were made in this conversation; there is no branch, no diff, and no test run I can truthfully report on.
+
+If you want an accurate PR body, share the actual diff (paste the output of `git diff main...HEAD` or equivalent) and I'll write it against the real content. I won't fabricate file names, test case names, or a `.fabro/verify.sh` passing claim for work I can't see.
