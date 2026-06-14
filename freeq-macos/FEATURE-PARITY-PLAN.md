@@ -51,6 +51,14 @@ Status legend: ☐ todo · ◐ in progress · ☑ done · ⛔ blocked
 - ☑ Rebuild macOS app and relaunch.
 - ☑ Commit toolbar clarity fix.
 
+## 2026-06-14 MOTD placement
+
+- ☑ Move MOTD out of the global top overlay that collides with window chrome/sidebar.
+- ☑ Render MOTD as an inline notice inside the active chat pane.
+- ☑ Cap expanded MOTD height so long server text does not displace the whole chat.
+- ☑ Rebuild macOS app and relaunch.
+- ☑ Commit MOTD placement fix.
+
 ---
 
 ## Method

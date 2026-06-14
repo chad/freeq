@@ -9,6 +9,11 @@ struct ChatView: View {
             TopBarView()
             Divider()
 
+            if appState.showMotd && !appState.motd.isEmpty {
+                MotdBanner()
+                Divider()
+            }
+
             // Pinned messages bar
             if let pins = appState.activeChannelState?.pinnedMessages, !pins.isEmpty {
                 PinnedMessagesBar(pins: pins)
@@ -51,6 +56,82 @@ struct ChatView: View {
         case 2: return "\(typers[0]) and \(typers[1]) are typing…"
         default: return "Several people are typing…"
         }
+    }
+}
+
+// MARK: - MOTD Banner
+
+struct MotdBanner: View {
+    @Environment(AppState.self) private var appState
+    @State private var expanded = false
+
+    private var motdText: String {
+        appState.motd.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var previewText: String {
+        motdText
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .first
+            .map(String.init) ?? "Server announcement"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: expanded ? 8 : 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text("MOTD")
+                    .font(.caption.weight(.semibold))
+
+                if !expanded {
+                    Text(previewText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+
+                Spacer(minLength: 8)
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        expanded.toggle()
+                    }
+                } label: {
+                    Label(expanded ? "Hide" : "Show", systemImage: expanded ? "chevron.up" : "chevron.down")
+                        .labelStyle(.titleAndIcon)
+                }
+                .font(.caption)
+                .buttonStyle(.plain)
+                .help(expanded ? "Hide message of the day" : "Show message of the day")
+
+                Button {
+                    appState.showMotd = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption2)
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss message of the day")
+            }
+
+            if expanded {
+                ScrollView {
+                    Text(motdText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 180)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 }
 
