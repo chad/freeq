@@ -457,41 +457,82 @@
     {
       "seq": 0,
       "checkpoint": {
-        "timestamp": "2026-06-14T18:52:26.940854631Z",
-        "current_node": "verify",
+        "timestamp": "2026-06-14T18:52:46.014806941Z",
+        "current_node": "pr_body",
         "completed_nodes": [
           "start",
           "select",
           "implement",
-          "verify"
+          "verify",
+          "pr_body"
         ],
         "node_retries": {
           "verify": 2
         },
         "context_values": {
           "internal.work_dir": "/workspace/freeq",
-          "thread.cov.current_node": "implement",
+          "thread.cov.current_node": "pr_body",
           "internal.run_id": "01KV3NKZEPD4365M9HVDDD07N7",
-          "failure_class": "transient_infra",
-          "last_stage": "implement",
-          "current_node": "verify",
+          "failure_class": "",
+          "internal.retry_count.pr_body": 0,
+          "last_stage": "pr_body",
+          "response.pr_body": "I can't write this PR description accurately.\n\nThe instructions say to base it strictly on `git diff --stat` and `git diff`, and to not claim anything I didn't verify. In this conversation I haven't made any changes — no files were edited, no tests were written, no commits were made. There's no diff to describe.\n\nIf I wrote a PR body now I'd be fabricating it, which is exactly what the final line of the template warns against.\n\n**To get an accurate PR description, either:**\n\n1. Share the actual diff output here (`git diff --stat HEAD~1` and `git diff HEAD~1`) and I'll write the description from that, or\n2. Point me at the specific files you want test coverage added to (the hotspot list in CLAUDE.md flags `irc/client.ts`, `MessageList.tsx`, and `sdk/client.rs` as the highest-priority gaps), let me do the work, and then I'll write the PR body from the real changes.",
+          "current_node": "pr_body",
           "graph.goal": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code.",
-          "last_response": "The work is done. Here's a summary of what was added and the state of verification:\n\n---\n\n## Summary\n\n**File changed:** `freeq-sdk/src/client.rs` — 284 lines added, 0 changed, 0 deleted.\n\n**9 new te",
+          "last_response": "I can't write this PR description accurately.\n\nThe instructions say to base it strictly on `git diff --stat` and `git diff`, and to not claim anything I didn't verify. In this conversation I haven't m",
           "internal.retry_count.select": 0,
-          "internal.fidelity": "compact",
+          "internal.fidelity": "full",
           "response.implement": "The work is done. Here's a summary of what was added and the state of verification:\n\n---\n\n## Summary\n\n**File changed:** `freeq-sdk/src/client.rs` — 284 lines added, 0 changed, 0 deleted.\n\n**9 new tests** added to the existing `irc_loop_tests` module, covering the 6 inbound IRC dispatch paths that had zero tests:\n\n| Test | What it pins |\n|------|-------------|\n| `kick_emits_kicked_event` | `KICK` → `Event::Kicked` with correct channel/victim/kicker/reason |\n| `kick_without_reason_has_empty_reason` | `KICK` with no reason param → `reason = \"\"` |\n| `invite_emits_invited_event` | `INVITE` → `Event::Invited` with channel and sender nick |\n| `away_with_message_emits_away_changed_some` | `AWAY :msg` → `AwayChanged { away_msg: Some(...) }` |\n| `away_without_message_emits_away_changed_none` | `AWAY` (no params) → `AwayChanged { away_msg: None }` |\n| `topic_change_emits_topic_changed_with_set_by` | Live `TOPIC` → `TopicChanged { set_by: Some(nick) }` |\n| `rpl_topic_332_emits_topic_changed_without_set_by` | RPL_TOPIC 332 → `TopicChanged { set_by: None }` |\n| `quit_emits_user_quit_event` | `QUIT :reason` → `Event::UserQuit { nick, reason }` |\n| `nick_change_emits_nick_changed_event` | `NICK newnick` → `Event::NickChanged { old_nick, new_nick }` |\n\n**Verification results:**\n- `cargo fmt --check` ✅ passes\n- `cargo check --workspace` (CI exclusions) ✅ passes  \n- `cargo clippy --workspace` (CI exclusions) ✅ passes  \n- `cargo test -p freeq-sdk` ✅ **149 tests, 0 failures** (22 in `irc_loop_tests`, including all 9 new ones)\n\nThe workspace-level `cargo test` failed during **linking** of `freeq-server` test binaries due to disk exhaustion (`No space left on device` / `Bus error` from the linker). This is a pre-existing infrastructure constraint — the 98GB disk was already at 95%+ when this session started, filled by a prior `cargo test --workspace` run. The failure is unrelated to the added test code.",
           "response.select": "I have everything I need. Here is my analysis and recommendation:\n\n---\n\n## Chosen File: `freeq-sdk/src/client.rs` (Rust, `freeq-sdk` crate)\n\n### Why it's high-risk and undertested\n\nThe hotspot analysis scores `freeq-sdk/src/client.rs` at **gamma 14** — third highest overall, behind only the massive `s2s_acceptance.rs` test file and `server.rs`. CLAUDE.md explicitly flags `sdk/client.rs` as **\"ZERO unit tests on connection state machine\"** (as of the note's writing).\n\nThe file is 3,712 lines and implements the entire IRC connection state machine: capability negotiation, SASL authentication, multiline batch assembly, inbound event dispatch (KICK, INVITE, AWAY, TOPIC, QUIT, MODE, NICK, WHOIS numerics, server NOTICE, PRIVMSG routing), command queuing, keepalive/ping, and reconnect logic.\n\n### Current test coverage gaps\n\nThe existing `#[cfg(test)]` block at the bottom of `client.rs` covers:\n- multiline batch assembly (8 tests)\n- `ConnectConfig` validation (4 tests)\n- PING → PONG, 001 welcome, nick-in-use retries, SASL 904, raw injection stripping, signing presence, JOIN event, PART event, EOF disconnect (9 tests in `run_irc_tests`)\n\n**Completely untested inbound dispatch paths** (none of the 17 current `run_irc_tests` touch these):\n1. **KICK** — `run_irc` parses KICK and emits `Event::Kicked`; zero tests\n2. **INVITE** — parses INVITE and emits `Event::Invited`; zero tests\n3. **AWAY** — parses AWAY and emits `Event::AwayChanged`; zero tests\n4. **TOPIC / 332** — parses live TOPIC changes and RPL_TOPIC (332) and emits `Event::TopicChanged`; zero tests\n5. **QUIT** — parses QUIT and emits `Event::UserQuit`; zero tests\n6. **NICK** — parses NICK change and emits `Event::NickChanged`; zero tests\n\n### Specific behaviors I intend to pin\n\n1. **`KICK` → `Event::Kicked`**: Server sends `:kicker!u@h KICK #chan victim :Too noisy\\r\\n`; verify `Event::Kicked { channel, nick, by, reason }` is emitted with correct fields.\n2. **`INVITE` → `Event::Invited`**: Server sends `:sender!u@h INVITE target #secret\\r\\n`; verify `Event::Invited { channel, by }`.\n3. **`AWAY` → `Event::AwayChanged` (set and unset)**: Server sends `:nick!u@h AWAY :On lunch\\r\\n` (away_msg = `Some`) and `:nick!u@h AWAY\\r\\n` (no params → `None`); both paths tested.\n4. **`TOPIC` → `Event::TopicChanged` with set_by**: Server sends `:alice!u@h TOPIC #chan :New topic\\r\\n`; verify channel, topic, and `set_by = Some(\"alice\")`.\n5. **`332` RPL_TOPIC → `Event::TopicChanged` with no set_by**: Server sends `:server 332 me #chan :The topic\\r\\n`; verify `set_by = None`.\n6. **`QUIT` → `Event::UserQuit`**: Server sends `:leaver!u@h QUIT :Goodbye\\r\\n`; verify `nick` and `reason`.\n\n### Test convention to follow\n\nAll new tests live in the existing `#[cfg(test)] mod run_irc_tests` block inside `freeq-sdk/src/client.rs` (lines ~3240–3712). Each test uses the `start_run_irc(nick)` helper already present there, which:\n- Creates a `tokio::io::duplex` pair\n- Spawns `run_irc` on the client side\n- Returns the server-side half (for writing IRC lines) + event receiver + command sender\n\nNew tests follow the exact same pattern: write an IRC line to `server`, then `tokio::time::timeout`-wait for the expected event in `events.recv()`.",
           "internal.node_visit_count": 1,
           "internal.retry_count.implement": 0,
           "graph.rankdir": "LR",
-          "outcome": "failed",
-          "internal.thread_id": "implement",
+          "outcome": "succeeded",
+          "internal.thread_id": "cov",
           "internal.retry_count.start": 0,
           "thread.implement.current_node": "verify",
           "internal.retry_count.verify": 2,
-          "failure_signature": "verify|transient_infra|i/o error: creating command log directory /home/boxd/.fabro/storage/scratch/<hex>-01kv3nkzepd4365m9hvddd07n7/runtime/stages/verify@<n>: no space left on device (os error <n>)"
+          "failure_signature": ""
         },
         "node_outcomes": {
+          "pr_body": {
+            "status": "succeeded",
+            "context_updates": {
+              "last_response": "I can't write this PR description accurately.\n\nThe instructions say to base it strictly on `git diff --stat` and `git diff`, and to not claim anything I didn't verify. In this conversation I haven't m",
+              "last_stage": "pr_body",
+              "response.pr_body": "I can't write this PR description accurately.\n\nThe instructions say to base it strictly on `git diff --stat` and `git diff`, and to not claim anything I didn't verify. In this conversation I haven't made any changes — no files were edited, no tests were written, no commits were made. There's no diff to describe.\n\nIf I wrote a PR body now I'd be fabricating it, which is exactly what the final line of the template warns against.\n\n**To get an accurate PR description, either:**\n\n1. Share the actual diff output here (`git diff --stat HEAD~1` and `git diff HEAD~1`) and I'll write the description from that, or\n2. Point me at the specific files you want test coverage added to (the hotspot list in CLAUDE.md flags `irc/client.ts`, `MessageList.tsx`, and `sdk/client.rs` as the highest-priority gaps), let me do the work, and then I'll write the PR body from the real changes."
+            },
+            "notes": "Stage completed: pr_body",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "anthropic",
+                    "model_id": "claude-sonnet-4-6"
+                  },
+                  "tokens": {
+                    "input_tokens": 220,
+                    "output_tokens": 647,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "cache_write_tokens": 3494
+                  }
+                },
+                "facts": {
+                  "algorithm": "anthropic",
+                  "cache_write_5m_tokens": 3494,
+                  "cache_write_1h_tokens": 0
+                }
+              },
+              "total_usd_micros": 23467
+            },
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 13785,
+              "tool_time_ms": 0,
+              "active_time_ms": 13785
+            }
+          },
           "implement": {
             "status": "succeeded",
             "context_updates": {
@@ -584,9 +625,10 @@
             "usage": null
           }
         },
-        "next_node_id": "pr_body",
+        "next_node_id": "exit",
         "node_visits": {
           "implement": 1,
+          "pr_body": 1,
           "start": 1,
           "select": 1,
           "verify": 1
