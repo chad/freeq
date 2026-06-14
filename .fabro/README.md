@@ -29,18 +29,23 @@ model is `claude-sonnet-4-6`; the bug-hunt finder overrides to `claude-opus-4-8`
 ## Where it runs
 
 An always-on **boxd VM** (`fabro-freeq`, auto-suspend disabled so cron fires)
-hosts the Fabro server and a warm freeq clone with a hot cargo cache. The VM is
-the isolation boundary from your laptop — the laptop need not stay awake.
+hosts the Fabro server under systemd. The VM is the isolation boundary from your
+laptop — the laptop need not stay awake.
 
-The environment is `provider = "local"` with `clone.enabled = false`: the server
-works in its persistent clone and branches per run. The automations are
-**staggered** (2h apart) so the single working copy never runs two at once.
+Runs execute via the **docker provider** (boxd ships Docker, no sudo). It's
+clone-based: each run gets its own fresh clone on a run branch, so Fabro owns the
+branch → commit → push → PR lifecycle and runs can safely overlap. The base
+image is official `rust:1-bookworm`; `[[run.prepare.steps]]` in `project.toml`
+add cmake / libasound2-dev / Node after clone (and `cargo-audit` for dep-audit).
 
-> **Scaling to true concurrency:** switch `[environments.boxd-local]` in
-> `project.toml` to `provider = "docker"` (boxd ships Docker, no sudo). Each run
-> then gets its own containerized clone, so workflows can overlap. Costs a cold
-> build per run unless you bake a toolchain image — worth it only once you want
-> many parallel runs.
+> **Cold builds:** the Docker image layer caches on the VM, but the cargo build
+> is currently cold per run (~10-15 min on 2 vCPU). Fine for the nightly cadence.
+> A persistent cargo-cache volume is a follow-up once Fabro documents the volume
+> mount syntax.
+>
+> **Note:** the very first setup used `provider = "local"` + `clone.enabled =
+> false` for a warm cache, but that bypassed Fabro's managed branch/PR machinery
+> (work landed uncommitted on `main`, no PR). The docker provider is the fix.
 
 ## Running them
 

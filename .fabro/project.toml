@@ -25,20 +25,41 @@ merge_strategy = "squash"
 name = "claude-sonnet-4-6"
 
 # ── Execution environment ────────────────────────────────────────────────
-# Runs execute on the always-on boxd VM that hosts the Fabro server, in a
-# warm freeq clone with a hot cargo cache (fast, cheap repeat runs). The VM
-# is the isolation boundary from your laptop.
+# Runs execute in a Docker container on the always-on boxd VM that hosts the
+# Fabro server (boxd ships Docker, no sudo). The docker provider is
+# clone-based: each run gets its own fresh clone on a run branch, so Fabro
+# owns the branch → commit → push → PR lifecycle and runs can safely overlap.
 #
-# `clone.enabled = false`: we do NOT re-clone per run. The server operates in
-# its persistent working copy and creates a fresh branch per run. Keep runs
-# from overlapping (the automations are staggered) — for true concurrency,
-# switch this environment to `provider = "docker"` (boxd ships Docker), which
-# gives each run its own containerized clone. See .fabro/README.md.
+# (An earlier `provider = "local"` + `clone.enabled = false` setup reused a
+# warm checkout for build-cache speed, but that bypasses Fabro's managed
+# branch/PR machinery — work landed uncommitted on main and no PR opened. The
+# clone-based docker provider is the correct path.)
+#
+# Base image: official Rust (has cargo/rustfmt/clippy). The prepare steps add
+# the rest of freeq's toolchain after clone. The Docker image layer caches on
+# the VM across runs; the cargo build itself is cold per run (a persistent
+# build-cache volume is a follow-up once Fabro documents the volume syntax).
 [run.environment]
-id = "boxd-local"
+id = "boxd-docker"
 
-[environments.boxd-local]
-provider = "local"
+[environments.boxd-docker]
+provider = "docker"
 
-[run.clone]
-enabled = false
+[environments.boxd-docker.image]
+docker = "rust:1-bookworm"
+
+[environments.boxd-docker.resources]
+cpu = 2
+memory = "7GB"
+
+[environments.boxd-docker.env]
+CARGO_TERM_COLOR = "always"
+
+# Toolchain freeq's CI gate needs, installed in the container after clone.
+# rustfmt + clippy components, cmake + libasound2-dev for the workspace build,
+# and Node for the freeq-app vitest gate (only triggered on app changes).
+[[run.prepare.steps]]
+script = "rustup component add clippy rustfmt"
+
+[[run.prepare.steps]]
+script = "apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cmake pkg-config libasound2-dev nodejs npm >/dev/null && echo toolchain-ready"
