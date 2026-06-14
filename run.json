@@ -318,14 +318,136 @@
     }
   },
   "web_url": "http://127.0.0.1:32276/runs/01KV3K2MJRGH4JS4MPPEWMQ91K",
-  "start": null,
-  "status": {
-    "kind": "starting"
+  "start": {
+    "start_time": "2026-06-14T17:34:53.570110537Z",
+    "run_branch": "fabro/run/01KV3K2MJRGH4JS4MPPEWMQ91K",
+    "base_sha": "c5f057b72261f09cfc330bea0aacde8f29798b87"
   },
-  "status_updated_at": "2026-06-14T17:32:39.290101685Z",
-  "last_event_at": "2026-06-14T17:34:53.553119509Z",
+  "status": {
+    "kind": "running"
+  },
+  "status_updated_at": "2026-06-14T17:34:53.570306967Z",
+  "last_event_at": "2026-06-14T17:36:10.881777Z",
   "pending_control": null,
-  "checkpoints": [],
+  "checkpoints": [
+    {
+      "seq": 26,
+      "checkpoint": {
+        "timestamp": "2026-06-14T17:34:54.890886579Z",
+        "current_node": "start",
+        "completed_nodes": [
+          "start"
+        ],
+        "node_retries": {},
+        "context_values": {
+          "internal.retry_count.start": 0,
+          "internal.thread_id": null,
+          "internal.work_dir": "/workspace/freeq",
+          "failure_class": "",
+          "internal.fidelity": "compact",
+          "failure_signature": "",
+          "current_node": "start",
+          "internal.run_id": "01KV3K2MJRGH4JS4MPPEWMQ91K",
+          "graph.rankdir": "LR",
+          "outcome": "succeeded",
+          "graph.goal": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code.",
+          "internal.node_visit_count": 1
+        },
+        "node_outcomes": {
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          }
+        },
+        "next_node_id": "select",
+        "node_visits": {
+          "start": 1
+        }
+      },
+      "diff": {}
+    },
+    {
+      "seq": 0,
+      "checkpoint": {
+        "timestamp": "2026-06-14T17:36:10.890356894Z",
+        "current_node": "select",
+        "completed_nodes": [
+          "start",
+          "select"
+        ],
+        "node_retries": {},
+        "context_values": {
+          "graph.rankdir": "LR",
+          "last_stage": "select",
+          "outcome": "succeeded",
+          "last_response": "Now I have a complete picture. Let me summarize my findings.\n\n---\n\n## My Choice: `freeq-tui/src/main.rs`\n\n**File:** `freeq-tui/src/main.rs` — Rust, `freeq-tui` crate\n\n### Why it's high-risk and unde",
+          "internal.run_id": "01KV3K2MJRGH4JS4MPPEWMQ91K",
+          "internal.work_dir": "/workspace/freeq",
+          "internal.fidelity": "full",
+          "internal.retry_count.select": 0,
+          "response.select": "Now I have a complete picture. Let me summarize my findings.\n\n---\n\n## My Choice: `freeq-tui/src/main.rs`\n\n**File:** `freeq-tui/src/main.rs` — Rust, `freeq-tui` crate\n\n### Why it's high-risk and undertested\n\nThe hotspot analysis gives it a **gamma score of 9** (2,874 lines, 28 tracked functions, churn ×3) — putting it firmly in the top 15 risky files. More critically:\n\n- The `#[cfg(test)] mod tests` block at line 2779 covers **only one thing**: the `parse_join_prefix` function (9 test cases). That's 9 tests pinning a ~30-line helper.\n- Every other non-trivial free function in the file — `extract_url`, `format_file_size`, `format_link_preview`, `try_nick_complete`, `format_timestamp`/`parse_timestamp_ms` — has **zero dedicated tests**.\n- These functions contain real logic and real edge-case behavior (stripping punctuation from URLs, skipping freeq-internal URLs, byte-level size formatting, word-boundary nick completion, RFC 3339 timestamp parsing/fallback).\n- `freeq-tui/src/app.rs` (gamma 7) does have 42 tests but they cover `app.rs`'s structs, not `main.rs`'s helpers.\n\n### 3–6 specific behaviors I intend to pin\n\n1. **`extract_url` — trailing punctuation stripping.** A URL followed by `)`, `.`, `,` or `]` must return the URL without the trailing char. A \"URL\" shorter than 10 chars must not be returned.\n2. **`extract_url` — internal URL suppression.** URLs containing `cdn.bsky.app` or `/xrpc/` must return `None` even when they are otherwise valid.\n3. **`format_file_size` — boundary conditions.** 0 B → `\"0B\"`, 1023 B → `\"1023B\"`, 1024 B → `\"1.0KB\"`, 1024·1024 B → `\"1.0MB\"`, fractional MB case.\n4. **`try_nick_complete` — first-word completion adds `: ` suffix; mid-sentence completion adds space.** Input `\"ali\"` at cursor 3 with `[\"alice\", \"bob\"]` in nicks → `\"alice: \"`.\n5. **`try_nick_complete` — no match leaves editor unchanged.** Fragment not matching any nick must not corrupt `editor.text` or `editor.cursor`.\n6. **`extract_url` — multiple words; returns only the first valid URL.** Input `\"see https://example.com and https://other.org\"` → `\"https://example.com\"`.\n\n### Existing test convention to follow\n\nThe sibling test module lives at the bottom of `freeq-tui/src/main.rs` (line 2779):\n\n```rust\n#[cfg(test)]\nmod tests {\n    use super::parse_join_prefix;\n    …\n}\n```\n\nNew tests go in that same `mod tests` block. The pattern is: `use super::<fn>`, then plain `#[test]` functions with `assert_eq!` / `assert!`. No async, no network — purely functional unit tests. That matches `freeq-tui/src/app.rs`'s test style too.",
+          "internal.retry_count.start": 0,
+          "thread.cov.current_node": "select",
+          "graph.goal": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code.",
+          "internal.node_visit_count": 1,
+          "internal.thread_id": "cov",
+          "failure_class": "",
+          "failure_signature": "",
+          "current_node": "select"
+        },
+        "node_outcomes": {
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          },
+          "select": {
+            "status": "succeeded",
+            "context_updates": {
+              "last_stage": "select",
+              "last_response": "Now I have a complete picture. Let me summarize my findings.\n\n---\n\n## My Choice: `freeq-tui/src/main.rs`\n\n**File:** `freeq-tui/src/main.rs` — Rust, `freeq-tui` crate\n\n### Why it's high-risk and unde",
+              "response.select": "Now I have a complete picture. Let me summarize my findings.\n\n---\n\n## My Choice: `freeq-tui/src/main.rs`\n\n**File:** `freeq-tui/src/main.rs` — Rust, `freeq-tui` crate\n\n### Why it's high-risk and undertested\n\nThe hotspot analysis gives it a **gamma score of 9** (2,874 lines, 28 tracked functions, churn ×3) — putting it firmly in the top 15 risky files. More critically:\n\n- The `#[cfg(test)] mod tests` block at line 2779 covers **only one thing**: the `parse_join_prefix` function (9 test cases). That's 9 tests pinning a ~30-line helper.\n- Every other non-trivial free function in the file — `extract_url`, `format_file_size`, `format_link_preview`, `try_nick_complete`, `format_timestamp`/`parse_timestamp_ms` — has **zero dedicated tests**.\n- These functions contain real logic and real edge-case behavior (stripping punctuation from URLs, skipping freeq-internal URLs, byte-level size formatting, word-boundary nick completion, RFC 3339 timestamp parsing/fallback).\n- `freeq-tui/src/app.rs` (gamma 7) does have 42 tests but they cover `app.rs`'s structs, not `main.rs`'s helpers.\n\n### 3–6 specific behaviors I intend to pin\n\n1. **`extract_url` — trailing punctuation stripping.** A URL followed by `)`, `.`, `,` or `]` must return the URL without the trailing char. A \"URL\" shorter than 10 chars must not be returned.\n2. **`extract_url` — internal URL suppression.** URLs containing `cdn.bsky.app` or `/xrpc/` must return `None` even when they are otherwise valid.\n3. **`format_file_size` — boundary conditions.** 0 B → `\"0B\"`, 1023 B → `\"1023B\"`, 1024 B → `\"1.0KB\"`, 1024·1024 B → `\"1.0MB\"`, fractional MB case.\n4. **`try_nick_complete` — first-word completion adds `: ` suffix; mid-sentence completion adds space.** Input `\"ali\"` at cursor 3 with `[\"alice\", \"bob\"]` in nicks → `\"alice: \"`.\n5. **`try_nick_complete` — no match leaves editor unchanged.** Fragment not matching any nick must not corrupt `editor.text` or `editor.cursor`.\n6. **`extract_url` — multiple words; returns only the first valid URL.** Input `\"see https://example.com and https://other.org\"` → `\"https://example.com\"`.\n\n### Existing test convention to follow\n\nThe sibling test module lives at the bottom of `freeq-tui/src/main.rs` (line 2779):\n\n```rust\n#[cfg(test)]\nmod tests {\n    use super::parse_join_prefix;\n    …\n}\n```\n\nNew tests go in that same `mod tests` block. The pattern is: `use super::<fn>`, then plain `#[test]` functions with `assert_eq!` / `assert!`. No async, no network — purely functional unit tests. That matches `freeq-tui/src/app.rs`'s test style too."
+            },
+            "notes": "Stage completed: select",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "anthropic",
+                    "model_id": "claude-sonnet-4-6"
+                  },
+                  "tokens": {
+                    "input_tokens": 20469,
+                    "output_tokens": 3499,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 240054,
+                    "cache_write_tokens": 39421
+                  }
+                },
+                "facts": {
+                  "algorithm": "anthropic",
+                  "cache_write_5m_tokens": 39421,
+                  "cache_write_1h_tokens": 0
+                }
+              },
+              "total_usd_micros": 333736
+            },
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 64590,
+              "tool_time_ms": 9352,
+              "active_time_ms": 73942
+            }
+          }
+        },
+        "next_node_id": "implement",
+        "node_visits": {
+          "select": 1,
+          "start": 1
+        }
+      },
+      "diff": {}
+    }
+  ],
   "conclusion": null,
   "sandbox": {
     "kind": "ready",
@@ -352,5 +474,267 @@
   "pull_request": null,
   "superseded_by": null,
   "pending_interviews": {},
-  "stages": {}
+  "stages": {
+    "select@1": {
+      "first_event_seq": 27,
+      "prompt": null,
+      "response": null,
+      "completion": null,
+      "provider_used": {
+        "mode": "agent",
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "reasoning_effort": "medium"
+      },
+      "diff": null,
+      "script_invocation": null,
+      "script_timing": null,
+      "parallel_results": null,
+      "output": null,
+      "started_at": "2026-06-14T17:34:54.891079429Z",
+      "handler": "agent",
+      "usage": {
+        "input_tokens": 20469,
+        "output_tokens": 3499,
+        "total_tokens": 303443,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 240054,
+        "cache_write_tokens": 39421
+      },
+      "model": {
+        "provider": "anthropic",
+        "model_id": "claude-sonnet-4-6"
+      },
+      "permission_level": "full",
+      "agent_tools": [
+        {
+          "name": "AskUserQuestion",
+          "description": "Ask the human one or more questions and wait for their answers before continuing this stage.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "TaskCreate",
+          "description": "Create pending tasks in the current session. Use concise subjects, descriptions, optional activeForm text, and metadata. Check TaskList first to avoid duplicate tasks.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "TaskGet",
+          "description": "Get one task by taskId, including subject, status, description, owner, blockedBy, and blocks.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "TaskList",
+          "description": "List tasks for the current session, including status, owner, and blocking dependencies. Use TaskGet with a taskId for full description and dependency details.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "TaskUpdate",
+          "description": "Update an existing task's status, text, owner, metadata, or dependencies. Valid statuses are pending, in_progress, completed, and deleted. After completing a task, call TaskList to find newly unblocked work.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "close_agent",
+          "description": "Close a running subagent that is no longer needed.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "subagent",
+          "invoked": false
+        },
+        {
+          "name": "edit_file",
+          "description": "Edit a file by replacing an exact string. The old_string must be an exact match and unique unless replace_all is true; include surrounding context when needed. Read the file first and preserve existing indentation.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "write",
+          "invoked": false
+        },
+        {
+          "name": "glob",
+          "description": "Find files by file names using a glob pattern. Use path to choose the search root. Prefer this over shell find or ls when locating repository files.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "read",
+          "invoked": true
+        },
+        {
+          "name": "grep",
+          "description": "Search file contents with a regex pattern. Use path to choose the search root, glob_filter to limit matching files, case_insensitive for case folding, and max_results to cap output.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "read",
+          "invoked": false
+        },
+        {
+          "name": "read_file",
+          "description": "Read files before editing them. Returns line-numbered text and supports offset/limit for large files. Use this instead of shell cat, head, tail, or sed when inspecting repository files.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "read",
+          "invoked": false
+        },
+        {
+          "name": "send_input",
+          "description": "Send a follow-up message to a running subagent when new information or corrected instructions are needed.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "subagent",
+          "invoked": false
+        },
+        {
+          "name": "shell",
+          "description": "Execute shell commands for terminal operations, package managers, tests and builds. Use dedicated tools for file reads, file edits, filename searches, and content searches. Provide timeout_ms for long-running commands.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "shell",
+          "invoked": true
+        },
+        {
+          "name": "spawn_agent",
+          "description": "Spawn a subagent for independent work or context isolation. Use it for tasks that can proceed separately, and avoid duplicating the same work in the parent session.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "subagent",
+          "invoked": false
+        },
+        {
+          "name": "wait",
+          "description": "Wait for a subagent to complete, then use the result to synthesize the outcome for the user.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "subagent",
+          "invoked": false
+        },
+        {
+          "name": "web_fetch",
+          "description": "Fetch content from a URL that starts with http:// or https://. Pass a prompt to extract specific information or summarize the page; omit prompt to return the page content.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "web_search",
+          "description": "Search the web using Brave Search when current external information is needed. Returns result titles, URLs, and descriptions; use web_fetch for a specific URL.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "write_file",
+          "description": "Create new files, or overwrite an existing file only when replacement is explicitly intended. Prefer edit_file for targeted changes to existing files because write_file overwrites the full file content.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "write",
+          "invoked": false
+        }
+      ],
+      "context_window": {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-6",
+        "context_window_tokens": 200000,
+        "input_tokens": 28039,
+        "usage_percent": 14.0195,
+        "count_method": "response_usage_scaled_breakdown",
+        "staleness": "live",
+        "generated_at": "2026-06-14T17:36:10.881568471Z",
+        "event_seq": 115,
+        "breakdown": [
+          {
+            "category": "system_prompt",
+            "tokens": 2028,
+            "usage_percent": 1.014
+          },
+          {
+            "category": "tools",
+            "tokens": 2342,
+            "usage_percent": 1.171
+          },
+          {
+            "category": "memory",
+            "tokens": 3239,
+            "usage_percent": 1.6195
+          },
+          {
+            "category": "conversation",
+            "tokens": 20421,
+            "usage_percent": 10.2105
+          },
+          {
+            "category": "other",
+            "tokens": 9,
+            "usage_percent": 0.0045
+          }
+        ],
+        "warnings": []
+      },
+      "state": "running"
+    },
+    "start@1": {
+      "first_event_seq": 23,
+      "prompt": null,
+      "response": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": null,
+        "failure_reason": null,
+        "timestamp": "2026-06-14T17:34:54.889705307Z"
+      },
+      "provider_used": null,
+      "diff": null,
+      "script_invocation": null,
+      "script_timing": null,
+      "parallel_results": null,
+      "output": null,
+      "started_at": "2026-06-14T17:34:54.889377766Z",
+      "handler": "start",
+      "timing": {
+        "wall_time_ms": 0,
+        "inference_time_ms": 0,
+        "tool_time_ms": 0,
+        "active_time_ms": 0
+      },
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "state": "succeeded"
+    }
+  }
 }
