@@ -16,7 +16,7 @@ struct DetailPanel: View {
                 }
             }
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(Theme.detailBackground)
     }
 }
 
@@ -37,26 +37,28 @@ struct MemberListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Search
             HStack(spacing: 6) {
                 Image(systemName: "magnifyingglass")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.textTertiary)
                 TextField("Search members", text: $searchText)
                     .textFieldStyle(.plain)
                     .font(.caption)
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: 9).fill(Theme.surface))
+            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Theme.borderSoft, lineWidth: 1))
             .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
+            .padding(.top, 12)
+            .padding(.bottom, 8)
 
-            Divider()
+            Divider().overlay(Theme.borderSoft)
 
-            // Total member count header
             HStack {
-                Text("\(channel.members.count) Members")
+                Text("\(channel.members.count) members")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.textSecondary)
                 Spacer()
             }
             .padding(.horizontal, 12)
@@ -77,13 +79,14 @@ struct MemberListView: View {
                 .padding(.vertical, 4)
             }
         }
+        .background(Theme.detailBackground)
     }
 
     @ViewBuilder
     func memberSection(_ title: String, members: [MemberInfo]) -> some View {
         Text(title)
-            .font(.caption.weight(.bold))
-            .foregroundStyle(.tertiary)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(Theme.textTertiary)
             .textCase(.uppercase)
             .padding(.horizontal, 12)
             .padding(.top, 12)
@@ -115,10 +118,10 @@ struct MemberRow: View {
             AvatarView(nick: member.nick, size: 28)
                 .overlay(alignment: .bottomTrailing) {
                     Circle()
-                        .fill(member.isAway ? .orange : .green)
+                        .fill(member.isAway ? Theme.warning : Theme.success)
                         .frame(width: 8, height: 8)
                         .overlay(
-                            Circle().strokeBorder(Color(nsColor: .windowBackgroundColor), lineWidth: 1.5)
+                            Circle().strokeBorder(Theme.detailBackground, lineWidth: 1.5)
                         )
                 }
 
@@ -127,27 +130,27 @@ struct MemberRow: View {
                     if member.isOp {
                         Image(systemName: "shield.fill")
                             .font(.system(size: 9))
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(Theme.warning)
                     } else if member.isHalfop {
                         Image(systemName: "shield.lefthalf.filled")
                             .font(.system(size: 9))
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(Theme.blue)
                     } else if !member.prefix.isEmpty {
                         Text(member.prefix)
                             .font(.caption.weight(.bold))
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(Theme.warning)
                     }
 
                     // Display name or nick
                     if let displayName = profile?.displayName, !displayName.isEmpty {
                         Text(displayName)
                             .font(.system(.body, weight: member.isAway ? .regular : .medium))
-                            .foregroundStyle(member.isAway ? .secondary : .primary)
+                            .foregroundStyle(member.isAway ? Theme.textSecondary : Theme.textPrimary)
                             .lineLimit(1)
                     } else {
                         Text(member.nick)
                             .font(.system(.body, weight: member.isAway ? .regular : .medium))
-                            .foregroundStyle(member.isAway ? .secondary : .primary)
+                            .foregroundStyle(member.isAway ? Theme.textSecondary : Theme.textPrimary)
                             .lineLimit(1)
                     }
 
@@ -155,17 +158,17 @@ struct MemberRow: View {
                     if hasDid {
                         Image(systemName: "checkmark.seal.fill")
                             .font(.caption2)
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(Theme.verified)
                             .help("AT Protocol verified identity")
                     }
 
                     if member.isAway {
                         Text("Away")
                             .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(Theme.warning)
                             .padding(.horizontal, 4)
                             .padding(.vertical, 1)
-                            .background(Color.orange.opacity(0.15))
+                            .background(Theme.warning.opacity(0.14))
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
                 }
@@ -174,20 +177,21 @@ struct MemberRow: View {
                 if let handle = profile?.handle {
                     Text("@\(handle)")
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Theme.textTertiary)
                         .lineLimit(1)
                 } else if member.isAway, let away = member.awayMsg {
                     Text(away)
                         .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Theme.textTertiary)
                         .lineLimit(1)
                 }
             }
             Spacer()
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
         .contentShape(Rectangle())
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.clear))
         .onTapGesture {
             if member.nick.lowercased() != appState.nick.lowercased() {
                 showProfile = true

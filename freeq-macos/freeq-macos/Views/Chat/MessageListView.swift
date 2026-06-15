@@ -36,10 +36,15 @@ struct MessageListView: View {
                                 Spacer()
                             }
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.textSecondary)
                         }
                         .buttonStyle(.plain)
                         .padding(.vertical, 8)
+                        .background(
+                            Capsule()
+                                .fill(Theme.surfaceSoft)
+                                .padding(.horizontal, 220)
+                        )
                         .id("load-more")
                     }
 
@@ -112,7 +117,7 @@ struct MessageListView: View {
                 }
             }
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(Theme.chatBackground)
     }
 
     private func loadOlderHistory() {
@@ -133,17 +138,20 @@ struct SystemMessageRow: View {
             HStack(spacing: 4) {
                 Image(systemName: systemIcon)
                     .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.textTertiary)
                 Text(message.text)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Theme.textSecondary)
                 Text(formatTime(message.timestamp))
                     .font(.caption2)
-                    .foregroundStyle(.quaternary)
+                    .foregroundStyle(Theme.textTertiary.opacity(0.75))
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(Theme.systemPill))
             .padding(.horizontal, 16)
-            .padding(.vertical, 2)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 3)
+            .frame(maxWidth: .infinity, alignment: .center)
         }
     }
 
@@ -196,15 +204,15 @@ struct MessageRow: View {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(formatTime(message.timestamp))
                         .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.quaternary)
+                        .foregroundStyle(Theme.textTertiary.opacity(0.75))
                         .frame(width: 36, alignment: .trailing)
                     Text(message.from)
                         .font(.system(.caption, weight: .bold))
-                        .foregroundStyle(isSystem ? .secondary : Theme.nickColor(for: message.from))
+                        .foregroundStyle(isSystem ? Theme.textSecondary : Theme.nickColor(for: message.from))
                     if hasDid {
                         Image(systemName: "checkmark.seal.fill")
                             .font(.system(size: 8))
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(Theme.verified)
                     }
                 }
             } else if showHeader {
@@ -221,36 +229,36 @@ struct MessageRow: View {
                                     .foregroundStyle(Theme.nickColor(for: message.from))
                                 Text(message.from)
                                     .font(.caption)
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(Theme.textTertiary)
                             } else {
                                 Text(message.from)
                                     .font(.system(.body, weight: .semibold))
-                                    .foregroundStyle(isSystem ? .secondary : Theme.nickColor(for: message.from))
+                                    .foregroundStyle(isSystem ? Theme.textSecondary : Theme.nickColor(for: message.from))
                             }
 
                             if hasDid {
                                 Image(systemName: "checkmark.seal.fill")
                                     .font(.caption2)
-                                    .foregroundStyle(.blue)
+                                    .foregroundStyle(Theme.verified)
                                     .help("AT Protocol verified identity")
                             }
 
                             if message.isSigned {
                                 Image(systemName: "lock.fill")
                                     .font(.system(size: 9))
-                                    .foregroundStyle(.green)
+                                    .foregroundStyle(Theme.success)
                                     .help("Cryptographically signed message")
                             }
 
                             Text(formatTime(message.timestamp))
                                 .font(.caption)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(Theme.textTertiary)
                                 .help(fullTimestamp(message.timestamp))
 
                             if message.isEdited {
                                 Text("(edited)")
                                     .font(.caption2)
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(Theme.textTertiary)
                             }
                         }
                     }
@@ -279,7 +287,7 @@ struct MessageRow: View {
                                 .font(.caption2)
                         }
                     }
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.textSecondary)
                     .padding(.leading, 2)
                 }
                 .buttonStyle(.plain)
@@ -289,12 +297,12 @@ struct MessageRow: View {
             if message.isAction {
                 Text("• \(message.from) \(message.text)")
                     .italic()
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.textSecondary)
                     .textSelection(.enabled)
             } else if isSystem {
                 Text(message.text)
                     .font(.system(.body, design: .monospaced).weight(.light))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.textSecondary)
                     .textSelection(.enabled)
             } else {
                 let imageURLs = extractImageURLs(from: message.text)
@@ -375,8 +383,8 @@ struct MessageRow: View {
         .contentShape(Rectangle())
         .background(
             appState.scrollToMessageId == message.id
-                ? Color.accentColor.opacity(0.1)
-                : isHovered ? Color(nsColor: .textBackgroundColor).opacity(0.5) : Color.clear
+                ? Theme.accent.opacity(0.10)
+                : isHovered ? Theme.surfaceSoft.opacity(0.80) : Color.clear
         )
         .onHover { isHovered = $0 }
         .overlay(alignment: .topTrailing) {

@@ -13,6 +13,7 @@ struct FreeqApp: App {
             MainView()
                 .environment(appState)
                 .frame(minWidth: 700, minHeight: 400)
+                .preferredColorScheme(.light)
                 .sheet(isPresented: $showQuickSwitcher) {
                     QuickSwitcher()
                         .environment(appState)
@@ -29,6 +30,7 @@ struct FreeqApp: App {
                     OnboardingView()
                 }
                 .onAppear {
+                    NSApplication.shared.appearance = NSAppearance(named: .aqua)
                     if appState.hasSavedSession && appState.connectionState == .disconnected {
                         appState.reconnectIfSaved()
                     }

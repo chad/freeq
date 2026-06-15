@@ -39,8 +39,9 @@ struct FormatButton: View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
                 .frame(width: 24, height: 24)
+                .background(Circle().fill(Color.clear))
         }
         .buttonStyle(.plain)
         .help(tooltip)

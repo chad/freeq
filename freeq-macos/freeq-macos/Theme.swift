@@ -2,27 +2,41 @@ import SwiftUI
 
 /// Design tokens for freeq macOS — follows system appearance automatically.
 enum Theme {
-    // Backgrounds
-    static let bgPrimary = Color("bgPrimary", bundle: nil)
-    static let bgSecondary = Color(nsColor: .controlBackgroundColor)
-    static let bgTertiary = Color(nsColor: .underPageBackgroundColor)
-    static let surface = Color(nsColor: .windowBackgroundColor)
+    // Brand
+    static let accent = Color(red: 0.00, green: 0.58, blue: 0.50)
+    static let accentSoft = Color(red: 0.88, green: 0.97, blue: 0.95)
+    static let blue = Color(red: 0.22, green: 0.47, blue: 0.88)
+    static let purple = Color(red: 0.48, green: 0.38, blue: 0.86)
+
+    // Backgrounds — warm light by default.
+    static let appBackground = Color(red: 0.965, green: 0.965, blue: 0.950)
+    static let sidebarBackground = Color(red: 0.945, green: 0.948, blue: 0.930)
+    static let chatBackground = Color(red: 0.992, green: 0.990, blue: 0.980)
+    static let detailBackground = Color(red: 0.972, green: 0.972, blue: 0.955)
+    static let surface = Color.white
+    static let surfaceSoft = Color(red: 0.982, green: 0.980, blue: 0.966)
+    static let surfaceElevated = Color.white
 
     // Text
-    static let textPrimary = Color(nsColor: .labelColor)
-    static let textSecondary = Color(nsColor: .secondaryLabelColor)
-    static let textTertiary = Color(nsColor: .tertiaryLabelColor)
-
-    // Accent — uses system accent color
-    static let accent = Color.accentColor
+    static let textPrimary = Color(red: 0.105, green: 0.110, blue: 0.125)
+    static let textSecondary = Color(red: 0.390, green: 0.400, blue: 0.430)
+    static let textTertiary = Color(red: 0.575, green: 0.580, blue: 0.610)
 
     // Semantic
-    static let success = Color.green
-    static let warning = Color.orange
-    static let danger = Color.red
+    static let success = Color(red: 0.10, green: 0.68, blue: 0.34)
+    static let warning = Color(red: 0.88, green: 0.50, blue: 0.12)
+    static let danger = Color(red: 0.84, green: 0.18, blue: 0.20)
+    static let verified = Color(red: 0.18, green: 0.42, blue: 0.92)
 
     // Border
-    static let border = Color(nsColor: .separatorColor)
+    static let border = Color(red: 0.845, green: 0.845, blue: 0.825)
+    static let borderSoft = Color(red: 0.910, green: 0.908, blue: 0.890)
+    static let hairline = Color.black.opacity(0.06)
+
+    // Messages
+    static let outgoingBubble = Color(red: 0.220, green: 0.455, blue: 0.835)
+    static let incomingBubble = Color(red: 0.935, green: 0.932, blue: 0.910)
+    static let systemPill = Color(red: 0.925, green: 0.940, blue: 0.955)
 
     // Nick colors (consistent with web + iOS)
     static let nickColors: [Color] = [

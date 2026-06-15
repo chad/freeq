@@ -21,10 +21,11 @@ struct MainView: View {
                                 ChatView()
                                 if let threadRoot = appState.threadRootMessage,
                                    let channel = appState.activeChannel {
-                                    Divider()
+                                    Divider().overlay(Theme.borderSoft)
                                     ThreadView(rootMessage: threadRoot, channel: channel)
                                 }
                                 if appState.showDetailPanel {
+                                    Divider().overlay(Theme.borderSoft)
                                     DetailPanel()
                                         .frame(width: 260)
                                 }
@@ -49,6 +50,7 @@ struct MainView: View {
                         GuestUpgradeBanner()
                     }
                 }
+                .background(Theme.appBackground)
             }
         }
         .sheet(isPresented: Binding(
@@ -77,27 +79,52 @@ struct MainView: View {
             ProgressView()
                 .scaleEffect(1.5)
             Text("Connecting to \(appState.serverAddress)…")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.textSecondary)
         }
+        .padding(32)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(Theme.surface)
+                .shadow(color: .black.opacity(0.06), radius: 18, y: 8)
+        )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.chatBackground)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "bubble.left.and.bubble.right")
-                .font(.system(size: 48))
-                .foregroundStyle(.tertiary)
-            Text("Select a channel to start chatting")
-                .foregroundStyle(.secondary)
+        VStack(spacing: 18) {
+            ZStack {
+                Circle()
+                    .fill(Theme.accentSoft)
+                    .frame(width: 76, height: 76)
+                Image(systemName: "bubble.left.and.bubble.right.fill")
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+            }
+            VStack(spacing: 6) {
+                Text("Choose a conversation")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                Text("Channels and DMs are identity-backed, searchable, and ready when you are.")
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+            }
 
             if appState.channels.isEmpty {
-                Button("Join #freeq") {
+                Button {
                     appState.joinChannel("#freeq")
+                } label: {
+                    Label("Join #freeq", systemImage: "plus.bubble.fill")
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(Theme.accent)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.chatBackground)
     }
 
     @ViewBuilder
@@ -106,7 +133,7 @@ struct MainView: View {
             Label {
                 Text(statusText)
                     .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.textSecondary)
             } icon: {
                 Circle()
                     .fill(statusColor)
@@ -119,26 +146,27 @@ struct MainView: View {
                 Label {
                     Text(p2pStatusText)
                         .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.textSecondary)
                 } icon: {
                     Image(systemName: "lock.shield")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.textTertiary)
                 }
             }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background(Capsule().fill(Color(nsColor: .controlBackgroundColor)))
+        .background(Capsule().fill(Theme.surfaceSoft))
+        .overlay(Capsule().strokeBorder(Theme.borderSoft, lineWidth: 1))
         .help(connectionHelp)
     }
 
     private var statusColor: Color {
         switch appState.connectionState {
-        case .registered: .green
-        case .connected: .yellow
-        case .connecting: .orange
-        case .disconnected: .red
+        case .registered: Theme.success
+        case .connected: Theme.warning
+        case .connecting: Theme.warning
+        case .disconnected: Theme.danger
         }
     }
 

@@ -33,7 +33,7 @@ struct ComposeBar: View {
                 HStack(spacing: 6) {
                     Image(systemName: "arrowshape.turn.up.left.fill")
                         .font(.caption)
-                        .foregroundColor(.accentColor)
+                        .foregroundColor(Theme.accent)
                     Text("Replying to **\(reply.from)**")
                         .font(.caption)
                     Text(reply.text)
@@ -50,17 +50,17 @@ struct ComposeBar: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
-                .background(Color.accentColor.opacity(0.05))
+                .background(Theme.accentSoft)
             }
 
             if isEditing {
                 HStack(spacing: 6) {
                     Image(systemName: "pencil")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.warning)
                     Text("Editing message")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.warning)
                     Spacer()
                     Button {
                         appState.editingMessageId = nil
@@ -75,7 +75,7 @@ struct ComposeBar: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
-                .background(Color.orange.opacity(0.05))
+                .background(Theme.warning.opacity(0.08))
             }
 
             // Upload preview
@@ -115,13 +115,13 @@ struct ComposeBar: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
-                .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                .background(Theme.surfaceSoft)
             }
 
             if isRecordingVoice || isUploadingVoice || voiceError != nil {
                 HStack(spacing: 8) {
                     Image(systemName: isRecordingVoice ? "record.circle.fill" : (voiceError == nil ? "waveform" : "exclamationmark.triangle.fill"))
-                        .foregroundStyle(isRecordingVoice ? .red : (voiceError == nil ? .blue : .orange))
+                        .foregroundStyle(isRecordingVoice ? Theme.danger : (voiceError == nil ? Theme.blue : Theme.warning))
                     if isRecordingVoice {
                         Text("Recording \(formatDuration(voiceRecordingTime))")
                             .font(.caption.weight(.medium))
@@ -150,18 +150,19 @@ struct ComposeBar: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 6)
-                .background(Color(nsColor: .controlBackgroundColor).opacity(0.65))
+                .background(Theme.surfaceSoft)
             }
 
             // Autocomplete popup
             AutocompletePopup(text: $text, selectedIndex: $autocompleteIndex, anchor: .zero)
 
-            HStack(alignment: .bottom, spacing: 6) {
+            HStack(alignment: .bottom, spacing: 8) {
                 // File picker button
                 Button { pickFile() } label: {
                     Image(systemName: "plus.circle")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(appState.authenticatedDID == nil ? Theme.textTertiary.opacity(0.45) : Theme.textSecondary)
+                        .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.plain)
                 .help("Attach file (images)")
@@ -171,8 +172,9 @@ struct ComposeBar: View {
                     toggleVoiceRecording()
                 } label: {
                     Image(systemName: isRecordingVoice ? "stop.circle.fill" : "mic.circle")
-                        .font(.title3)
-                        .foregroundStyle(isRecordingVoice ? .red : .secondary)
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(isRecordingVoice ? Theme.danger : Theme.textSecondary)
+                        .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.plain)
                 .help(isRecordingVoice ? "Stop and send voice message" : "Record voice message")
@@ -182,7 +184,7 @@ struct ComposeBar: View {
                 ZStack(alignment: .topLeading) {
                     if text.isEmpty {
                         Text("Message \(appState.activeChannel ?? "")…")
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Theme.textTertiary)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 8)
                     }
@@ -198,12 +200,12 @@ struct ComposeBar: View {
                 }
                 .padding(4)
                 .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color(nsColor: .controlBackgroundColor))
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Theme.surfaceSoft)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(isFocused ? Theme.accent.opacity(0.35) : Theme.borderSoft, lineWidth: 1)
                 )
 
                 // Format toolbar
@@ -214,8 +216,9 @@ struct ComposeBar: View {
                     NSApp.orderFrontCharacterPalette(nil)
                 } label: {
                     Image(systemName: "face.smiling")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 18, weight: .medium))
+                        .foregroundStyle(Theme.textSecondary)
+                        .frame(width: 28, height: 28)
                 }
                 .buttonStyle(.plain)
                 .help("Emoji (⌘⌃Space)")
@@ -227,7 +230,8 @@ struct ComposeBar: View {
                     } label: {
                         Image(systemName: crossPostBluesky ? "cloud.fill" : "cloud")
                             .font(.caption)
-                            .foregroundStyle(crossPostBluesky ? .blue : .secondary)
+                            .foregroundStyle(crossPostBluesky ? Theme.blue : Theme.textSecondary)
+                            .frame(width: 24, height: 28)
                     }
                     .buttonStyle(.plain)
                     .help(crossPostBluesky ? "Cross-posting to Bluesky (click to disable)" : "Cross-post to Bluesky")
@@ -236,17 +240,27 @@ struct ComposeBar: View {
                 // Send button
                 Button { send() } label: {
                     Image(systemName: isEditing ? "checkmark.circle.fill" : "arrow.up.circle.fill")
-                        .font(.title2)
+                        .font(.system(size: 24, weight: .semibold))
                         .symbolRenderingMode(.hierarchical)
-                        .foregroundColor(text.isEmpty && pendingUpload == nil ? .gray : (isEditing ? .orange : .accentColor))
+                        .foregroundColor(text.isEmpty && pendingUpload == nil ? Theme.textTertiary.opacity(0.55) : (isEditing ? Theme.warning : Theme.accent))
                 }
                 .buttonStyle(.plain)
                 .disabled(text.isEmpty && pendingUpload == nil)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(Theme.surfaceElevated)
+                    .shadow(color: .black.opacity(0.06), radius: 14, y: 5)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .strokeBorder(Theme.borderSoft, lineWidth: 1)
+            )
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
         }
-        .background(.bar)
+        .background(Theme.chatBackground)
         .onDrop(of: [.image, .fileURL], isTargeted: nil) { providers in
             handleDrop(providers)
             return true

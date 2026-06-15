@@ -133,6 +133,15 @@ P2 design work:
 - Build a proper identity inspector for technical protocol details.
 - Revisit dark mode after the light hierarchy works.
 
+## 2026-06-15 P0 visual refresh implementation
+
+- ◐ Apply a light, warm native macOS visual system as the default.
+- ☐ Add a real empty-channel welcome/context state.
+- ☐ Rework the composer into a unified message surface.
+- ☐ Improve sidebar and member panel hierarchy.
+- ☐ Make DM profiles friendlier and move protocol details behind disclosure.
+- ☐ Rebuild, screenshot, and commit the first visual refresh.
+
 ---
 
 ## Method

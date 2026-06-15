@@ -7,17 +7,17 @@ struct ChatView: View {
     var body: some View {
         VStack(spacing: 0) {
             TopBarView()
-            Divider()
+            Divider().overlay(Theme.borderSoft)
 
             if appState.showMotd && !appState.motd.isEmpty {
                 MotdBanner()
-                Divider()
+                Divider().overlay(Theme.borderSoft)
             }
 
             // Pinned messages bar
             if let pins = appState.activeChannelState?.pinnedMessages, !pins.isEmpty {
                 PinnedMessagesBar(pins: pins)
-                Divider()
+                Divider().overlay(Theme.borderSoft)
             }
 
             // Search bar
@@ -26,11 +26,16 @@ struct ChatView: View {
                     get: { appState.showSearch },
                     set: { appState.showSearch = $0 }
                 ))
-                Divider()
+                Divider().overlay(Theme.borderSoft)
             }
 
-            MessageListView()
-            Divider()
+            ZStack {
+                MessageListView()
+                if appState.activeChannelState?.messages.isEmpty ?? true {
+                    ChannelWelcomeView()
+                }
+            }
+            Divider().overlay(Theme.borderSoft)
 
             // Typing indicator bar
             if let typers = appState.activeChannelState?.activeTypers, !typers.isEmpty {
@@ -43,11 +48,12 @@ struct ChatView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 4)
-                .background(.bar)
+                .background(Theme.surfaceSoft)
             }
             ComposeBar()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.chatBackground)
     }
 
     private func typingText(_ typers: [String]) -> String {
@@ -131,7 +137,78 @@ struct MotdBanner: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(Theme.surface)
+    }
+}
+
+struct ChannelWelcomeView: View {
+    @Environment(AppState.self) private var appState
+
+    private var channel: ChannelState? { appState.activeChannelState }
+    private var isChannel: Bool { channel?.isChannel ?? false }
+    private var displayName: String {
+        guard let name = channel?.name else { return "freeq" }
+        return isChannel ? name.replacingOccurrences(of: "#", with: "") : name
+    }
+
+    var body: some View {
+        VStack(spacing: 18) {
+            ZStack {
+                Circle()
+                    .fill(isChannel ? Theme.accentSoft : Theme.blue.opacity(0.10))
+                    .frame(width: 84, height: 84)
+                Image(systemName: isChannel ? "number" : "person.crop.circle.fill")
+                    .font(.system(size: 34, weight: .semibold))
+                    .foregroundStyle(isChannel ? Theme.accent : Theme.blue)
+            }
+
+            VStack(spacing: 6) {
+                Text(isChannel ? "#\(displayName)" : displayName)
+                    .font(.title.weight(.semibold))
+                    .foregroundStyle(Theme.textPrimary)
+                Text(subtitle)
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 460)
+            }
+
+            HStack(spacing: 10) {
+                if isChannel {
+                    contextPill(icon: "person.2.fill", text: "\(channel?.members.count ?? 0) members")
+                    if let topic = channel?.topic, !topic.isEmpty {
+                        contextPill(icon: "quote.bubble.fill", text: topic)
+                    }
+                } else if let did = ProfileCache.shared.did(for: displayName) {
+                    contextPill(icon: "checkmark.seal.fill", text: did.hasPrefix("did:key:") ? "Verified identity" : "Bluesky identity")
+                }
+            }
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.chatBackground)
+        .allowsHitTesting(false)
+    }
+
+    private var subtitle: String {
+        if isChannel {
+            if let topic = channel?.topic, !topic.isEmpty {
+                return topic
+            }
+            return "No messages here yet. Start the conversation, pin the important bits, and let identity do the quiet trust work."
+        }
+        return "This direct message is private to the two of you. Say hello when you are ready."
+    }
+
+    private func contextPill(icon: String, text: String) -> some View {
+        Label(text, systemImage: icon)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(Theme.textSecondary)
+            .lineLimit(1)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(Theme.surface))
+            .overlay(Capsule().strokeBorder(Theme.borderSoft, lineWidth: 1))
     }
 }
 
@@ -146,32 +223,45 @@ struct TopBarView: View {
         HStack(spacing: 10) {
             // Channel/DM name
             if isChannel {
-                Image(systemName: "number")
-                    .foregroundStyle(.secondary)
-                Text(channel?.name.replacingOccurrences(of: "#", with: "") ?? "")
-                    .font(.headline)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Theme.accentSoft)
+                        .frame(width: 30, height: 30)
+                    Image(systemName: "number")
+                        .font(.headline)
+                        .foregroundStyle(Theme.accent)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(channel?.name.replacingOccurrences(of: "#", with: "") ?? "")
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(Theme.textPrimary)
+                    Text("\(channel?.members.count ?? 0) members")
+                        .font(.caption2)
+                        .foregroundStyle(Theme.textTertiary)
+                }
             } else {
                 Circle()
-                    .fill(isOnline ? .green : Color.secondary.opacity(0.3))
+                    .fill(isOnline ? Theme.success : Theme.textTertiary.opacity(0.35))
                     .frame(width: 10, height: 10)
                 Text(channel?.name ?? "")
-                    .font(.headline)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(Theme.textPrimary)
 
                 // P2P badge
                 if let name = channel?.name,
                    appState.p2pDMActive.contains(name.lowercased()) {
                     Label("Direct", systemImage: "point.3.connected.trianglepath.dotted")
                         .font(.caption2)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(Theme.success)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Capsule().fill(.green.opacity(0.1)))
+                        .background(Capsule().fill(Theme.success.opacity(0.10)))
                 }
 
                 if !isChannel {
                     Text(isOnline ? (awayMsg != nil ? "away" : "online") : "offline")
                         .font(.caption)
-                        .foregroundStyle(isOnline ? (awayMsg != nil ? .orange : .green) : .secondary)
+                        .foregroundStyle(isOnline ? (awayMsg != nil ? Theme.warning : Theme.success) : Theme.textSecondary)
 
                     // E2EE badge for DMs
                     if let did = ProfileCache.shared.did(for: channel?.name ?? ""),
@@ -182,10 +272,10 @@ struct TopBarView: View {
                             Text("Encrypted")
                                 .font(.caption2)
                         }
-                        .foregroundStyle(.green)
+                        .foregroundStyle(Theme.success)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Capsule().fill(.green.opacity(0.1)))
+                        .background(Capsule().fill(Theme.success.opacity(0.10)))
                     }
                 }
             }
@@ -194,7 +284,7 @@ struct TopBarView: View {
                 Divider().frame(height: 16)
                 Text(topic)
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.textSecondary)
                     .lineLimit(1)
                     .help(topic)
             }
@@ -206,7 +296,7 @@ struct TopBarView: View {
                 appState.showSearch.toggle()
             } label: {
                 Image(systemName: "magnifyingglass")
-                    .foregroundStyle(appState.showSearch ? .primary : .secondary)
+                    .foregroundStyle(appState.showSearch ? Theme.textPrimary : Theme.textTertiary)
             }
             .buttonStyle(.plain)
             .help("Search (⌘F)")
@@ -218,7 +308,7 @@ struct TopBarView: View {
                 } label: {
                     Label("\(channel?.members.count ?? 0)", systemImage: "person.2")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.textSecondary)
                 }
                 .buttonStyle(.plain)
                 .help("Channel settings")
@@ -235,14 +325,14 @@ struct TopBarView: View {
                 appState.showDetailPanel.toggle()
             } label: {
                 Image(systemName: "sidebar.trailing")
-                    .foregroundStyle(appState.showDetailPanel ? .primary : .secondary)
+                    .foregroundStyle(appState.showDetailPanel ? Theme.textPrimary : Theme.textTertiary)
             }
             .buttonStyle(.plain)
             .help("Toggle detail panel")
         }
         .padding(.horizontal, 16)
-        .frame(height: 44)
-        .background(.bar)
+        .frame(height: 58)
+        .background(Theme.surface)
     }
 
     private var isOnline: Bool {
