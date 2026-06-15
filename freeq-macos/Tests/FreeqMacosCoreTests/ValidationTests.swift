@@ -64,6 +64,24 @@ final class ValidationTests: XCTestCase {
         XCTAssertTrue(channel.messages.first?.reactions.isEmpty ?? false)
     }
 
+    func testChannelVisibleMessagesIgnoreDeletedMessages() {
+        let channel = ChannelState(name: "#visible")
+        XCTAssertFalse(channel.hasVisibleMessages)
+
+        channel.appendIfNew(ChatMessage(
+            id: "m1",
+            from: "alice",
+            text: "this should render",
+            isAction: false,
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            replyTo: nil
+        ))
+        XCTAssertTrue(channel.hasVisibleMessages)
+
+        channel.applyDelete(msgId: "m1")
+        XCTAssertFalse(channel.hasVisibleMessages)
+    }
+
     func testSelfJoinRequestsLatestChannelHistory() {
         XCTAssertEqual(
             ChannelHydration.historyCommand(for: "#has-messages"),

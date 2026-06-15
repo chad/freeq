@@ -29,12 +29,7 @@ struct ChatView: View {
                 Divider().overlay(Theme.borderSoft)
             }
 
-            ZStack {
-                MessageListView()
-                if appState.activeChannelState?.messages.isEmpty ?? true {
-                    ChannelWelcomeView()
-                }
-            }
+            MessageListView()
             Divider().overlay(Theme.borderSoft)
 
             // Typing indicator bar

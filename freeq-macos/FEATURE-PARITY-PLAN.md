@@ -142,6 +142,12 @@ P2 design work:
 - ☑ Make DM profiles friendlier and move protocol details behind disclosure.
 - ☑ Rebuild, screenshot, and commit the first visual refresh.
 
+## 2026-06-15 empty-channel overlay regression
+
+- ☑ Add model coverage for "visible messages" versus deleted/empty history.
+- ☑ Move the welcome overlay behind the message list's visible-message rule.
+- ☑ Rebuild, relaunch, screenshot, and commit the regression fix.
+
 ---
 
 ## Method

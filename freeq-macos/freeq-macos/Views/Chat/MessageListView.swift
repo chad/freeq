@@ -8,8 +8,16 @@ struct MessageListView: View {
     /// channel get the gentle scroll animation.
     @State private var lastRenderedChannel: String?
 
+    private var channel: ChannelState? {
+        appState.activeChannelState
+    }
+
     private var messages: [ChatMessage] {
-        appState.activeChannelState?.messages ?? []
+        channel?.messages ?? []
+    }
+
+    private var shouldShowWelcome: Bool {
+        !(channel?.hasVisibleMessages ?? false)
     }
 
     /// Stable sentinel ID for the bottom anchor — scrolling to a fixed
@@ -21,100 +29,106 @@ struct MessageListView: View {
     private let bottomAnchorID = "__bottom"
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    // Load more history button
-                    if !messages.isEmpty {
-                        Button {
-                            loadOlderHistory()
-                        } label: {
-                            HStack {
-                                Spacer()
-                                Image(systemName: "arrow.up.circle")
-                                Text("Load older messages")
-                                Spacer()
+        ZStack {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        // Load more history button
+                        if !messages.isEmpty {
+                            Button {
+                                loadOlderHistory()
+                            } label: {
+                                HStack {
+                                    Spacer()
+                                    Image(systemName: "arrow.up.circle")
+                                    Text("Load older messages")
+                                    Spacer()
+                                }
+                                .font(.caption)
+                                .foregroundStyle(Theme.textSecondary)
                             }
-                            .font(.caption)
-                            .foregroundStyle(Theme.textSecondary)
+                            .buttonStyle(.plain)
+                            .padding(.vertical, 8)
+                            .background(
+                                Capsule()
+                                    .fill(Theme.surfaceSoft)
+                                    .padding(.horizontal, 220)
+                            )
+                            .id("load-more")
                         }
-                        .buttonStyle(.plain)
-                        .padding(.vertical, 8)
-                        .background(
-                            Capsule()
-                                .fill(Theme.surfaceSoft)
-                                .padding(.horizontal, 220)
-                        )
-                        .id("load-more")
-                    }
 
-                    ForEach(messages) { msg in
-                        if !msg.isDeleted {
-                            if msg.from.isEmpty {
-                                SystemMessageRow(message: msg)
-                                    .id(msg.id)
-                            } else {
-                                MessageRow(message: msg)
-                                    .id(msg.id)
+                        ForEach(messages) { msg in
+                            if !msg.isDeleted {
+                                if msg.from.isEmpty {
+                                    SystemMessageRow(message: msg)
+                                        .id(msg.id)
+                                } else {
+                                    MessageRow(message: msg)
+                                        .id(msg.id)
+                                }
                             }
                         }
-                    }
 
-                    // Invisible bottom-of-list anchor. Reserved height
-                    // gives the last real message room so it doesn't hug
-                    // the divider above the compose bar (the "half off
-                    // the bottom" symptom was the last row landing at
-                    // the very edge of the scroll viewport with no breathing
-                    // room).
-                    Color.clear
-                        .frame(height: 12)
-                        .id(bottomAnchorID)
+                        // Invisible bottom-of-list anchor. Reserved height
+                        // gives the last real message room so it doesn't hug
+                        // the divider above the compose bar (the "half off
+                        // the bottom" symptom was the last row landing at
+                        // the very edge of the scroll viewport with no breathing
+                        // room).
+                        Color.clear
+                            .frame(height: 12)
+                            .id(bottomAnchorID)
+                    }
+                    .padding(.top, 8)
                 }
-                .padding(.top, 8)
-            }
-            .onChange(of: messages.count) { oldCount, newCount in
-                // If this count change is the initial load for a newly-
-                // selected channel, snap with no animation — otherwise
-                // the user sees a fast visual scroll from top to bottom
-                // as the rows render.
-                let isInitialLoadForCurrentChannel =
-                    lastRenderedChannel != appState.activeChannel
-                guard newCount > 0 else { return }
-                if isInitialLoadForCurrentChannel {
-                    proxy.scrollTo(bottomAnchorID, anchor: .bottom)
-                    lastRenderedChannel = appState.activeChannel
-                } else if newCount > oldCount {
-                    withAnimation(.easeOut(duration: 0.15)) {
+                .onChange(of: messages.count) { oldCount, newCount in
+                    // If this count change is the initial load for a newly-
+                    // selected channel, snap with no animation — otherwise
+                    // the user sees a fast visual scroll from top to bottom
+                    // as the rows render.
+                    let isInitialLoadForCurrentChannel =
+                        lastRenderedChannel != appState.activeChannel
+                    guard newCount > 0 else { return }
+                    if isInitialLoadForCurrentChannel {
                         proxy.scrollTo(bottomAnchorID, anchor: .bottom)
+                        lastRenderedChannel = appState.activeChannel
+                    } else if newCount > oldCount {
+                        withAnimation(.easeOut(duration: 0.15)) {
+                            proxy.scrollTo(bottomAnchorID, anchor: .bottom)
+                        }
                     }
                 }
-            }
-            .onChange(of: appState.activeChannel) { _, _ in
-                // Channel switch — snap to bottom on the next runloop
-                // tick so the LazyVStack has populated its rows. Without
-                // the deferral, scrollTo runs against an empty stack
-                // and the view appears at the top, then the count-onChange
-                // visibly catches up by animating down.
-                DispatchQueue.main.async {
+                .onChange(of: appState.activeChannel) { _, _ in
+                    // Channel switch — snap to bottom on the next runloop
+                    // tick so the LazyVStack has populated its rows. Without
+                    // the deferral, scrollTo runs against an empty stack
+                    // and the view appears at the top, then the count-onChange
+                    // visibly catches up by animating down.
+                    DispatchQueue.main.async {
+                        proxy.scrollTo(bottomAnchorID, anchor: .bottom)
+                        lastRenderedChannel = appState.activeChannel
+                    }
+                }
+                .onAppear {
+                    // First mount — snap immediately, no animation.
                     proxy.scrollTo(bottomAnchorID, anchor: .bottom)
                     lastRenderedChannel = appState.activeChannel
                 }
-            }
-            .onAppear {
-                // First mount — snap immediately, no animation.
-                proxy.scrollTo(bottomAnchorID, anchor: .bottom)
-                lastRenderedChannel = appState.activeChannel
-            }
-            .onChange(of: appState.scrollToMessageId) { _, newId in
-                if let id = newId {
-                    withAnimation(.easeInOut(duration: 0.3)) {
-                        proxy.scrollTo(id, anchor: .center)
-                    }
-                    // Flash highlight
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        appState.scrollToMessageId = nil
+                .onChange(of: appState.scrollToMessageId) { _, newId in
+                    if let id = newId {
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            proxy.scrollTo(id, anchor: .center)
+                        }
+                        // Flash highlight
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            appState.scrollToMessageId = nil
+                        }
                     }
                 }
+            }
+
+            if shouldShowWelcome {
+                ChannelWelcomeView()
             }
         }
         .background(Theme.chatBackground)

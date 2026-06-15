@@ -17,6 +17,7 @@ class ChannelState: Identifiable {
     var id: String { name }
     var isChannel: Bool { name.hasPrefix("#") }
     var isDM: Bool { !name.hasPrefix("#") }
+    var hasVisibleMessages: Bool { messages.contains { !$0.isDeleted } }
 
     var activeTypers: [String] {
         let cutoff = Date().addingTimeInterval(-5)
