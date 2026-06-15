@@ -19,15 +19,21 @@ pub const ELEVENLABS_PCM_RATE: u32 = 48_000;
 /// The ElevenLabs request body — shared by the buffered and streaming
 /// synthesizers.
 fn tts_body(model: &str, text: &str) -> serde_json::Value {
+    // Playback speed (ElevenLabs voice_settings.speed, range ~0.7–1.2).
+    // Overridable per-launch via ELEVENLABS_SPEED so a deployment can make the
+    // voice snappier without a rebuild; defaults to the prior 1.02.
+    let speed: f32 = std::env::var("ELEVENLABS_SPEED")
+        .ok()
+        .and_then(|s| s.trim().parse::<f32>().ok())
+        .map(|s| s.clamp(0.7, 1.2))
+        .unwrap_or(1.02);
     serde_json::json!({
         "text": text,
         "model_id": model,
         "voice_settings": {
             "stability": 0.7,
             "similarity_boost": 0.75,
-            // 0.85 (the avatar app's calm default) sped up ~20% — the
-            // bot reads quick answers, not narration.
-            "speed": 1.02,
+            "speed": speed,
         },
     })
 }
