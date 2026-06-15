@@ -107,6 +107,25 @@ final class ValidationTests: XCTestCase {
         XCTAssertEqual(DmTargetBootstrap.command, "CHATHISTORY TARGETS * * 50")
     }
 
+    // MARK: - Bluesky profile bootstrap
+
+    func testBlueskyProfileBootstrapPrefersPlcDid() {
+        XCTAssertEqual(
+            BlueskyProfileBootstrap.actor(nick: "jessmart.in", did: "did:plc:ydmqzovfn7leytozprtjyOox".lowercased()),
+            "did:plc:ydmqzovfn7leytozprtjyoox"
+        )
+    }
+
+    func testBlueskyProfileBootstrapUsesHandleLikeDmNickWithoutDid() {
+        XCTAssertEqual(BlueskyProfileBootstrap.actor(nick: "jessmart.in", did: nil), "jessmart.in")
+    }
+
+    func testBlueskyProfileBootstrapSkipsDidKeyAndPlainIrcNick() {
+        XCTAssertNil(BlueskyProfileBootstrap.actor(nick: "agent", did: "did:key:z6Mkabc"))
+        XCTAssertNil(BlueskyProfileBootstrap.actor(nick: "plainnick", did: nil))
+        XCTAssertNil(BlueskyProfileBootstrap.actor(nick: "#freeq", did: nil))
+    }
+
     // MARK: - Bluesky profile URL
 
     func testBlueSkyProfileURLBasic() {

@@ -20,3 +20,34 @@ struct DmTargetBootstrap {
         isRegistered && authenticatedDID != nil && !alreadyRequested
     }
 }
+
+enum BlueskyProfileBootstrap {
+    static func actor(nick: String, did: String?) -> String? {
+        if let did, did.hasPrefix("did:plc:") {
+            return did
+        }
+        if let did, did.hasPrefix("did:key:") {
+            return nil
+        }
+
+        let trimmed = nick.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard looksLikeHandle(trimmed) else { return nil }
+        return trimmed
+    }
+
+    static func looksLikeHandle(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.contains("."),
+              !trimmed.contains(" "),
+              !trimmed.hasPrefix("."),
+              !trimmed.hasSuffix("."),
+              !trimmed.hasPrefix("#"),
+              !trimmed.hasPrefix("&"),
+              !trimmed.hasPrefix("did:") else {
+            return false
+        }
+        return trimmed.allSatisfy { char in
+            char.isLetter || char.isNumber || char == "." || char == "-"
+        }
+    }
+}

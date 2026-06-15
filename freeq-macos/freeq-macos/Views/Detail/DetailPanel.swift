@@ -237,13 +237,7 @@ struct DMProfilePanel: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                // Banner
-                LinearGradient(
-                    colors: [Theme.nickColor(for: nick).opacity(0.3), .clear],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                .frame(height: 80)
+                DMProfileBanner(nick: nick, bannerURL: profile?.bannerURL)
                 .overlay(alignment: .bottom) {
                     AvatarView(nick: nick, size: 56)
                         .overlay(alignment: .bottomTrailing) {
@@ -369,15 +363,63 @@ struct DMProfilePanel: View {
                 .padding(16)
             }
         }
+        .task(id: nick) {
+            appState.sendWhois(nick)
+            ProfileCache.shared.fetchProfileIfPossible(nick: nick)
+        }
     }
 
     private func statItem(count: Int, label: String) -> some View {
         VStack(spacing: 1) {
-            Text("\(count)")
+            Text(formatCount(count))
                 .font(.caption.weight(.bold))
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
+    }
+
+    private func formatCount(_ count: Int) -> String {
+        if count >= 1_000_000 {
+            return String(format: "%.1fM", Double(count) / 1_000_000).replacingOccurrences(of: ".0", with: "")
+        }
+        if count >= 1_000 {
+            return String(format: "%.1fK", Double(count) / 1_000).replacingOccurrences(of: ".0", with: "")
+        }
+        return "\(count)"
+    }
+}
+
+private struct DMProfileBanner: View {
+    let nick: String
+    let bannerURL: URL?
+
+    var body: some View {
+        Group {
+            if let bannerURL {
+                AsyncImage(url: bannerURL) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    default:
+                        fallback
+                    }
+                }
+            } else {
+                fallback
+            }
+        }
+        .frame(height: 96)
+        .clipped()
+    }
+
+    private var fallback: some View {
+        LinearGradient(
+            colors: [Theme.nickColor(for: nick).opacity(0.35), .clear],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
     }
 }

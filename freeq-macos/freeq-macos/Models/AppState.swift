@@ -1100,6 +1100,7 @@ extension AppState {
         case .chatHistoryTarget(let targetNick, let timestamp):
             if closedDMs.contains(targetNick.lowercased()) { return }
             let dm = getOrCreateDM(targetNick)
+            profileCache.fetchProfileIfPossible(nick: targetNick)
             if let ts = timestamp,
                let parsed = ISO8601DateFormatter.freeqTargets.date(from: ts) {
                 if dm.messages.isEmpty || parsed > dm.lastActivity {

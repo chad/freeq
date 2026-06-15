@@ -67,6 +67,15 @@ Status legend: ☐ todo · ◐ in progress · ☑ done · ⛔ blocked
 - ☑ Re-run SwiftPM tests and full Xcode build.
 - ☑ Commit DM list bootstrap fix.
 
+## 2026-06-15 Bluesky profile parity
+
+- ☑ Trace why macOS DM detail falls back to initials while web shows Bluesky profile data.
+- ☑ Add regression coverage for handle/DID profile lookup actor selection.
+- ☑ Fetch Bluesky profiles for handle-like DM nicks even before WHOIS learns a DID.
+- ☑ Backfill DID mappings from fetched Bluesky profiles.
+- ☑ Re-run SwiftPM tests and full Xcode build.
+- ☑ Commit Bluesky profile parity fix.
+
 ---
 
 ## Method

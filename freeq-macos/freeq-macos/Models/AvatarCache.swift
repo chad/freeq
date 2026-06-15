@@ -11,6 +11,7 @@ class ProfileCache {
         let handle: String?
         let displayName: String?
         let avatarURL: URL?
+        let bannerURL: URL?
         let description: String?
         let followersCount: Int?
         let followsCount: Int?
@@ -70,16 +71,23 @@ class ProfileCache {
 
     /// Fetch profile from Bluesky public API.
     func fetchProfile(nick: String, did: String) {
+        fetchProfile(nick: nick, actor: did)
+    }
+
+    /// Fetch profile by DID or handle. The public Bluesky actor API accepts
+    /// both, which lets DM-only handles hydrate before WHOIS learns their DID.
+    func fetchProfile(nick: String, actor: String) {
         let lower = nick.lowercased()
         fetching.insert(lower)
 
-        Task { [weak self] in
+        Task { [lower, actor, nick] in
             defer {
-                DispatchQueue.main.async { self?.fetching.remove(lower) }
+                DispatchQueue.main.async { ProfileCache.shared.fetching.remove(lower) }
             }
 
-            let urlString = "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=\(did)"
-            guard let url = URL(string: urlString) else { return }
+            var components = URLComponents(string: "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile")
+            components?.queryItems = [URLQueryItem(name: "actor", value: actor)]
+            guard let url = components?.url else { return }
 
             do {
                 let (data, response) = try await URLSession.shared.data(from: url)
@@ -92,6 +100,7 @@ class ProfileCache {
                     handle: json["handle"] as? String,
                     displayName: json["displayName"] as? String,
                     avatarURL: (json["avatar"] as? String).flatMap(URL.init(string:)),
+                    bannerURL: (json["banner"] as? String).flatMap(URL.init(string:)),
                     description: json["description"] as? String,
                     followersCount: json["followersCount"] as? Int,
                     followsCount: json["followsCount"] as? Int,
@@ -99,12 +108,23 @@ class ProfileCache {
                 )
 
                 await MainActor.run {
-                    self?.cache[lower] = profile
+                    ProfileCache.shared.cache[lower] = profile
+                    if let did = profile.did {
+                        ProfileCache.shared.didMap[lower] = did
+                        ProfileCache.shared.nickForDid[did] = nick
+                    }
                 }
             } catch {
                 // Silent failure — profile fetch is best-effort
             }
         }
+    }
+
+    func fetchProfileIfPossible(nick: String) {
+        let lower = nick.lowercased()
+        guard cache[lower] == nil, !fetching.contains(lower) else { return }
+        guard let actor = BlueskyProfileBootstrap.actor(nick: nick, did: didMap[lower]) else { return }
+        fetchProfile(nick: nick, actor: actor)
     }
 }
 
