@@ -1,0 +1,749 @@
+{
+  "title": "harden and enhance file upload across the freeq server and web app, with on-freeq-server storage ...",
+  "spec": {
+    "run_id": "01KV6F3HHVEBBBFYF9Y032HF92",
+    "settings": {
+      "project": {
+        "name": null,
+        "description": null,
+        "metadata": {}
+      },
+      "workflow": {
+        "name": null,
+        "description": null,
+        "graph": "workflow.fabro",
+        "metadata": {}
+      },
+      "run": {
+        "goal": {
+          "type": "inline",
+          "value": "harden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default"
+        },
+        "working_dir": null,
+        "metadata": {},
+        "inputs": {},
+        "model": {
+          "provider": "anthropic",
+          "name": "claude-sonnet-4-6",
+          "fallbacks": [],
+          "controls": {
+            "reasoning_effort": null,
+            "speed": null
+          }
+        },
+        "git": {
+          "author": null
+        },
+        "prepare": {
+          "commands": [],
+          "timeout_ms": 300000
+        },
+        "execution": {
+          "mode": "normal",
+          "approval": "prompt"
+        },
+        "checkpoint": {
+          "exclude_globs": [],
+          "skip_git_hooks": false
+        },
+        "clone": {
+          "enabled": true
+        },
+        "run_branch": {
+          "enabled": true,
+          "push": true
+        },
+        "meta_branch": {
+          "enabled": true,
+          "push": true
+        },
+        "environment": {
+          "id": "boxd-docker",
+          "provider": "docker",
+          "image": {
+            "docker": "freeq-fabro:tools",
+            "dockerfile": null
+          },
+          "resources": {
+            "cpu": 2,
+            "memory": "7GB",
+            "disk": null
+          },
+          "network": {
+            "mode": "allow_all",
+            "allow": []
+          },
+          "lifecycle": {
+            "preserve": false,
+            "stop_on_terminal": true,
+            "auto_stop": null
+          },
+          "labels": {},
+          "volumes": [],
+          "env": {
+            "CARGO_TERM_COLOR": "always",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0"
+          }
+        },
+        "notifications": {},
+        "interviews": {
+          "provider": null,
+          "slack": null
+        },
+        "agent": {
+          "fabro_tools": false,
+          "permissions": null,
+          "mcps": {}
+        },
+        "hooks": [],
+        "scm": {
+          "provider": null,
+          "owner": null,
+          "repository": null,
+          "github": null
+        },
+        "pull_request": {
+          "enabled": true,
+          "draft": false,
+          "auto_merge": false,
+          "merge_strategy": "squash"
+        },
+        "artifacts": {
+          "include": []
+        },
+        "integrations": {
+          "github": {
+            "permissions": {}
+          }
+        }
+      }
+    },
+    "graph": {
+      "name": "Feature",
+      "nodes": {
+        "verify2": {
+          "id": "verify2",
+          "attrs": {
+            "max_retries": {
+              "Integer": 1
+            },
+            "label": {
+              "String": "Final CI gate"
+            },
+            "goal_gate": {
+              "Boolean": true
+            },
+            "timeout": {
+              "Duration": {
+                "secs": 5400,
+                "nanos": 0
+              }
+            },
+            "shape": {
+              "String": "parallelogram"
+            },
+            "retry_target": {
+              "String": "address"
+            },
+            "script": {
+              "String": "bash .fabro/verify.sh"
+            }
+          }
+        },
+        "implement": {
+          "id": "implement",
+          "attrs": {
+            "shape": {
+              "String": "box"
+            },
+            "model": {
+              "String": "claude-opus-4-8"
+            },
+            "fidelity": {
+              "String": "full"
+            },
+            "provider": {
+              "String": "anthropic"
+            },
+            "thread_id": {
+              "String": "feat"
+            },
+            "prompt": {
+              "String": "Implement the approved plan (in `/tmp/plan.md` and the context above).\n\n## The feature\n\nharden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default\n\n## Rules\n\n- **Build only the in-scope work**: CI-buildable Rust crates (`freeq-server`, `freeq-sdk`, `freeq-sdk-ffi`, `freeq-tui`, `freeq-bots`, `freeq-windows-core`), the web app `freeq-app`, and protocol/docs. **Do NOT touch** `freeq-ios/`, `freeq-macos/`, `Freeq.WinUI/`, `freeq-windows-app/`, or the AV crates — they can't be compiled or verified here, so editing them would ship unverified code.\n- **Follow the plan.** If you discover the plan is wrong mid-build, make the smallest correct deviation and note it clearly in your final message — don't silently rewrite the design.\n- **Match the codebase**: existing patterns, error handling, naming. Honor `-D warnings` (no `#[allow]` to dodge lints; rustfmt + clippy clean). Keep protocol changes additive and versioned per the plan.\n- **Write the tests the plan specified** — server/SDK unit + integration, web vitest — so each success criterion is pinned by a deterministic, offline test.\n- Keep the diff coherent and reviewable. No drive-by reformatting of untouched code.\n\n## Build discipline (important — the workspace is large)\n\n- **Iterate with TARGETED commands** as you build: `cargo check -p <crate>`, `cargo test -p <crate> <name>`, `cargo clippy -p <crate>`, and scoped `npm run test` in `freeq-app`. Full-workspace builds are slow — don't loop them.\n- **Do NOT touch build configuration** to speed things up — no `.cargo/config.toml`, no `[profile.*]` / `debuginfo` / `strip` edits, no `CARGO_*` changes. The environment is already tuned; let slow compiles run. Optimizing the build is not the task.\n\n## Work incrementally, self-verify once at the end\n\nBuild in plan order, checking each crate with targeted commands as you go. When the slice is complete, first **auto-format and lint-fix** — the gate enforces both:\n\n```\ncargo fmt --all                       # gate runs `cargo fmt --all -- --check`\ncargo clippy -p <crate> --tests       # fix every warning; never silence with #[allow]\n```\n\n(If you touched `freeq-app`, also run `npm run lint` / `npx prettier -w` there as the project does.) Then run the full gate **exactly once** to confirm it's green:\n\n```\nbash .fabro/verify.sh\n```\n\nIf the feature is large, it's fine to land a coherent, gate-passing **first slice** that fully implements part of the plan rather than a broken attempt at all of it — but say exactly what you did and didn't implement in your final message, so the PR and any follow-up run are honest about remaining work."
+            },
+            "label": {
+              "String": "Implement"
+            },
+            "reasoning_effort": {
+              "String": "high"
+            },
+            "timeout": {
+              "Duration": {
+                "secs": 5400,
+                "nanos": 0
+              }
+            }
+          }
+        },
+        "review_compat": {
+          "id": "review_compat",
+          "attrs": {
+            "shape": {
+              "String": "box"
+            },
+            "provider": {
+              "String": "anthropic"
+            },
+            "reasoning_effort": {
+              "String": "high"
+            },
+            "model": {
+              "String": "claude-sonnet-4-6"
+            },
+            "fidelity": {
+              "String": "full"
+            },
+            "prompt": {
+              "String": "You are an independent **compatibility reviewer** critiquing a proposed implementation plan. Find what breaks; don't praise.\n\n## The feature\n\nharden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default\n\n## What to do\n\nRead `/tmp/plan.md` and check it against the real code. Critique through a **protocol- and cross-client-compatibility lens**:\n\n- **Protocol/wire compatibility**: are changes additive and versioned? Does anything break the IRC/TAGMSG/REST contract in `docs/PROTOCOL.md`? Will older clients that don't understand the new fields still work (graceful degradation)?\n- **Native clients we are NOT editing now** (`freeq-ios`, `freeq-macos`, Windows app): does the server/web contract let them keep functioning unchanged, then adopt the feature later without a flag day? Is the follow-up section accurate about what they'll need?\n- **SDK surface**: are `freeq-sdk` / `freeq-sdk-ffi` changes backward-compatible? FFI ABI stability?\n- **Web app**: does `freeq-app` degrade gracefully if the server is older/newer?\n- **Migration**: existing uploads/data keep resolving.\n\n## Output\n\nA focused critique: each compatibility break or risk, who it affects, and the specific plan change required. Confirm the scope fence holds (no native-client edits planned). Be concrete. Do not edit code or the plan."
+            },
+            "timeout": {
+              "Duration": {
+                "secs": 1800,
+                "nanos": 0
+              }
+            },
+            "label": {
+              "String": "Review: compatibility"
+            }
+          }
+        },
+        "address": {
+          "id": "address",
+          "attrs": {
+            "timeout": {
+              "Duration": {
+                "secs": 3600,
+                "nanos": 0
+              }
+            },
+            "reasoning_effort": {
+              "String": "high"
+            },
+            "prompt": {
+              "String": "Two independent reviewers — correctness and security — have reviewed your diff (findings are in the context above).\n\n## The feature\n\nharden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default\n\n## What to do\n\n1. **Fix every must-fix finding.** For each, make the change and note which finding it resolves.\n2. For nice-to-haves: fix the cheap, clearly-correct ones; for the rest, leave a brief note (in your final message) on why you're deferring — don't silently ignore.\n3. If a finding is wrong (the reviewer misread the code), say so explicitly with the evidence rather than making a needless change.\n4. Stay inside the scope fence (no native-client / AV-crate edits) and keep the diff coherent — honor `-D warnings`, rustfmt + clippy clean.\n\n## Build discipline\n\nIterate with targeted commands (`cargo test -p <crate> <name>`, `cargo check -p\n<crate>`); don't loop full-workspace builds, and don't touch build config\n(`.cargo/config.toml`, `[profile.*]`, `CARGO_*`) — the environment is tuned.\n\n## Self-verify once, at the end\n\nWhen the must-fixes are in, `cargo fmt --all` and clear any clippy warnings\n(the gate enforces both), then run the gate **once** to confirm green:\n\n```\nbash .fabro/verify.sh\n```\n\nThe next node runs this as a hard gate. In your final message, summarize what you fixed, what you deferred and why, and any finding you rejected."
+            },
+            "thread_id": {
+              "String": "feat"
+            },
+            "provider": {
+              "String": "anthropic"
+            },
+            "fidelity": {
+              "String": "full"
+            },
+            "label": {
+              "String": "Address review"
+            },
+            "shape": {
+              "String": "box"
+            },
+            "model": {
+              "String": "claude-opus-4-8"
+            }
+          }
+        },
+        "exit": {
+          "id": "exit",
+          "attrs": {
+            "label": {
+              "String": "Exit"
+            },
+            "shape": {
+              "String": "Msquare"
+            }
+          }
+        },
+        "plan": {
+          "id": "plan",
+          "attrs": {
+            "prompt": {
+              "String": "Write a concrete, reviewable implementation plan for the feature, grounded in your exploration.\n\n## The feature\n\nharden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default\n\n## Scope fence (critical)\n\n**In scope — you may edit, and CI can verify:** the Rust crates that build in CI (`freeq-server`, `freeq-sdk`, `freeq-sdk-ffi`, `freeq-tui`, `freeq-bots`, `freeq-windows-core`), the web app `freeq-app`, and protocol/docs (`docs/PROTOCOL.md`, `CLAUDE.md`).\n\n**Out of scope — do NOT plan to edit (this Linux executor cannot compile or verify them):** `freeq-ios/`, `freeq-macos/`, `Freeq.WinUI/`, `freeq-windows-app/` (Swift / WinUI), and the AV crates CI excludes (`freeq-av`, `freeq-eliza`, `freeq-av-client`, `freeq-av-image`).\n\nThe plan must keep the **protocol/server/web contract stable and additive** so the native clients can adopt it later without breaking — and must list exactly what each native client will need, as a dedicated follow-up section (not implemented here).\n\n## Write the plan to a file AND output it\n\nWrite the full plan to `/tmp/plan.md` (it lives in the sandbox, not the repo, so it won't end up in the PR), and also print it as your final message so reviewers and the human gate can see it.\n\n## Plan structure\n\n1. **Goal & success criteria** — what \"done\" means, in testable terms.\n2. **Design** — the approach: data model, API/protocol changes (additive, versioned), storage (the on-server-storage default and how it's selected), auth/capability, and how the web app consumes it.\n3. **Work breakdown** — ordered, concrete steps with the specific files/functions each touches. Mark what's covered by the existing CI gate.\n4. **Test strategy** — unit + integration tests you'll add (server, SDK, web), and how each success criterion is pinned.\n5. **Migration / back-compat** — how existing uploads/data and older clients keep working.\n6. **Follow-up: native clients** — exactly what `freeq-ios`, `freeq-macos`, and the Windows app must change to adopt this, as separate future PRs. Enumerated, not implemented.\n7. **Risks & open questions.**\n\nKeep it specific and honest. A plan reviewer should be able to find holes in it."
+            },
+            "reasoning_effort": {
+              "String": "high"
+            },
+            "provider": {
+              "String": "anthropic"
+            },
+            "timeout": {
+              "Duration": {
+                "secs": 2400,
+                "nanos": 0
+              }
+            },
+            "thread_id": {
+              "String": "feat"
+            },
+            "label": {
+              "String": "Draft plan"
+            },
+            "shape": {
+              "String": "box"
+            },
+            "model": {
+              "String": "claude-opus-4-8"
+            },
+            "fidelity": {
+              "String": "full"
+            }
+          }
+        },
+        "verify": {
+          "id": "verify",
+          "attrs": {
+            "goal_gate": {
+              "Boolean": true
+            },
+            "timeout": {
+              "Duration": {
+                "secs": 5400,
+                "nanos": 0
+              }
+            },
+            "label": {
+              "String": "CI gate"
+            },
+            "retry_target": {
+              "String": "implement"
+            },
+            "shape": {
+              "String": "parallelogram"
+            },
+            "script": {
+              "String": "bash .fabro/verify.sh"
+            },
+            "max_retries": {
+              "Integer": 2
+            }
+          }
+        },
+        "pr_body": {
+          "id": "pr_body",
+          "attrs": {
+            "fidelity": {
+              "String": "full"
+            },
+            "label": {
+              "String": "PR description"
+            },
+            "shape": {
+              "String": "tab"
+            },
+            "prompt": {
+              "String": "Write the pull-request description for the feature work. Fabro opens the PR from the run branch; this is its body. Base it strictly on what actually changed (`git diff --stat`, `git diff`) and what happened in this run.\n\n**Feature:** harden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default\n\nGitHub-flavored markdown:\n\n## Summary\nWhat this PR delivers, in 2–4 sentences, tied to the approved plan's success criteria.\n\n## What changed\nBulleted, grouped by area (server / SDK / protocol / web). Note new endpoints/tags, the on-server-storage default, and any additive/versioned protocol changes.\n\n## Scope & what's deferred\n- State clearly that this covers the **Linux-verifiable scope** (Rust + web) only.\n- List the **native-client follow-ups** (iOS / macOS / Windows) from the plan that are intentionally NOT in this PR.\n- If the implementer landed a first slice rather than the whole plan, say exactly what's done vs remaining.\n\n## Testing\nThe tests added and what they pin. Confirm `.fabro/verify.sh` (CI-mirrored: rustfmt + check + clippy `-D warnings` + test, plus web vitest) passes.\n\n## Review notes\nSummarize the peer review the change went through (security + correctness), and any findings consciously deferred.\n\nFactual and precise. Don't claim anything the run didn't actually verify."
+            },
+            "thread_id": {
+              "String": "feat"
+            }
+          }
+        },
+        "cr_correctness": {
+          "id": "cr_correctness",
+          "attrs": {
+            "prompt": {
+              "String": "You are an independent **correctness reviewer** of the diff the implementer just produced. Adversarial: assume there are bugs and find them. You did not write this code.\n\n## The feature\n\nharden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default\n\n## What to do\n\nInspect the actual change (`git diff origin/main...HEAD` / `git diff --stat`) and the surrounding code. Review for:\n\n- **Logic bugs**: wrong conditions, off-by-one, mishandled error/edge cases, unwrap/expect/panic on reachable input, incorrect state transitions.\n- **Plan fidelity**: does it actually implement the approved plan's in-scope items and success criteria? What's missing or diverged?\n- **Test quality**: do the new tests actually pin the behavior, or are they shallow/tautological? What important case is untested? Could a test pass while the feature is broken?\n- **Scope fence**: confirm no edits to `freeq-ios`/`freeq-macos`/WinUI/AV crates.\n- **Concurrency/resource**: races, leaks, unbounded buffering, missing backpressure.\n\n## Output\n\nA prioritized list of concrete findings. For each: file:line, what's wrong, the scenario, and the fix. Mark each **must-fix** or **nice-to-have**. If you genuinely find nothing must-fix, say so — don't invent issues. Do not edit code yourself; the next step addresses findings."
+            },
+            "model": {
+              "String": "claude-opus-4-8"
+            },
+            "provider": {
+              "String": "anthropic"
+            },
+            "timeout": {
+              "Duration": {
+                "secs": 2400,
+                "nanos": 0
+              }
+            },
+            "label": {
+              "String": "Code review: correctness"
+            },
+            "shape": {
+              "String": "box"
+            },
+            "fidelity": {
+              "String": "full"
+            },
+            "reasoning_effort": {
+              "String": "high"
+            }
+          }
+        },
+        "synthesize": {
+          "id": "synthesize",
+          "attrs": {
+            "shape": {
+              "String": "box"
+            },
+            "model": {
+              "String": "claude-opus-4-8"
+            },
+            "thread_id": {
+              "String": "feat"
+            },
+            "provider": {
+              "String": "anthropic"
+            },
+            "reasoning_effort": {
+              "String": "high"
+            },
+            "prompt": {
+              "String": "You are the lead engineer again. Three independent reviewers — security, compatibility, and storage/ops — have critiqued your plan (their critiques are in the conversation context above).\n\n## The feature\n\nharden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default\n\n## What to do\n\n1. Work through every reviewer item. For each: either fold the fix into the plan, or explicitly justify why you're not (with reasoning a reviewer would accept). Don't silently drop anything.\n2. Resolve conflicts between reviewers with an explicit decision.\n3. Re-confirm the scope fence: in-scope = CI-buildable Rust crates + `freeq-app` + protocol/docs; native clients (iOS/macOS/WinUI) are follow-ups only.\n\n## Output\n\nRewrite the full revised plan to `/tmp/plan.md` (overwrite it), and print it as your final message. At the top, add a short \"## Changes from review\" section listing what you changed and what you consciously rejected and why. This revised plan is what the human will approve and what the implementer will build — make it the single source of truth."
+            },
+            "label": {
+              "String": "Revise plan"
+            },
+            "fidelity": {
+              "String": "full"
+            },
+            "timeout": {
+              "Duration": {
+                "secs": 1800,
+                "nanos": 0
+              }
+            }
+          }
+        },
+        "explore": {
+          "id": "explore",
+          "attrs": {
+            "timeout": {
+              "Duration": {
+                "secs": 2400,
+                "nanos": 0
+              }
+            },
+            "provider": {
+              "String": "anthropic"
+            },
+            "shape": {
+              "String": "box"
+            },
+            "model": {
+              "String": "claude-opus-4-8"
+            },
+            "reasoning_effort": {
+              "String": "high"
+            },
+            "fidelity": {
+              "String": "full"
+            },
+            "label": {
+              "String": "Explore surface"
+            },
+            "thread_id": {
+              "String": "feat"
+            },
+            "prompt": {
+              "String": "You are the lead engineer scoping a complex feature for the freeq codebase.\n\n## The feature\n\nharden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default\n\n## Your job (this step is READ-ONLY — investigate, do not edit anything)\n\nMap the current reality the feature touches, so the plan that follows is grounded in the actual code, not guesses.\n\n1. **Find the surface.** Locate every place the feature concerns today across the Linux-verifiable codebase: `freeq-server` (esp. `src/web.rs`, media/upload, REST, `av_*`), `freeq-sdk` / `freeq-sdk-ffi`, the web app `freeq-app`, `freeq-tui`, and the protocol/docs (`docs/PROTOCOL.md`, `CLAUDE.md`). Use ripgrep/glob/read freely.\n2. **Trace the end-to-end paths** the feature affects — request/response, storage, auth/capability, client rendering — and name the key files + functions.\n3. **Capture constraints**: the protocol spec, existing tests, the CI gate (`.fabro/verify.sh` mirrors `ci.yml`), and anything in `CLAUDE.md` (hotspots, philosophy) that bounds the design.\n4. **Threat model / failure modes** relevant to the feature (for uploads: size limits, content-type spoofing, path traversal, capability-URL leakage, quota, auth).\n5. **Note the native clients** (`freeq-ios`, `freeq-macos`, `Freeq.WinUI`/`freeq-windows-app`) only enough to say what they'll *eventually* need — you will NOT edit them (this executor can't compile Swift/WinUI).\n\n## Output\n\nA concise but concrete findings brief: the current architecture of this surface, the files/functions that matter (with paths), the constraints, the threat model, and the open design questions the plan must answer. This brief is the foundation for the next step."
+            }
+          }
+        },
+        "review_ops": {
+          "id": "review_ops",
+          "attrs": {
+            "label": {
+              "String": "Review: storage/ops"
+            },
+            "timeout": {
+              "Duration": {
+                "secs": 1800,
+                "nanos": 0
+              }
+            },
+            "shape": {
+              "String": "box"
+            },
+            "model": {
+              "String": "claude-sonnet-4-6"
+            },
+            "fidelity": {
+              "String": "full"
+            },
+            "prompt": {
+              "String": "You are an independent **storage & operations reviewer** critiquing a proposed implementation plan. Find the operational holes; don't praise.\n\n## The feature\n\nharden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default\n\n## What to do\n\nRead `/tmp/plan.md` and check it against the real code. Critique through a **storage / ops / testability lens**:\n\n- **On-server storage as default**: where do bytes live, how are keys laid out, how is cleanup/GC handled, what happens at scale (many/large files), disk-full behavior, and how is it configured (and overridden)?\n- **Migration & data lifecycle**: existing data, retention, deletion, orphan cleanup.\n- **Performance**: streaming vs buffering whole files in memory, backpressure, concurrency, impact on the server's hot paths.\n- **Observability & failure handling**: errors surfaced sanely, partial-upload recovery, idempotency.\n- **Testability**: is the plan's test strategy real — can each success criterion be pinned by an offline, deterministic test that the CI gate (`.fabro/verify.sh`) will run? Flag anything that can only be \"tested\" by hand.\n\n## Output\n\nA focused critique: each operational/testability gap, its consequence, and the specific plan change required. Be concrete. Do not edit code or the plan."
+            },
+            "provider": {
+              "String": "anthropic"
+            },
+            "reasoning_effort": {
+              "String": "high"
+            }
+          }
+        },
+        "approve": {
+          "id": "approve",
+          "attrs": {
+            "prompt": {
+              "String": "The peer-reviewed, revised plan is ready for your decision before any code is written.\n\n**Feature:** harden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default\n\nThe full plan is in the previous step's output (and at `/tmp/plan.md` in the sandbox), including the \"Changes from review\" summary and the native-client follow-up section.\n\n**Approve this plan and proceed to implementation?**\n\n- **Yes** → the implementer builds the in-scope work (CI-verifiable Rust + web), then it goes through adversarial code review and the CI gate before a PR is opened.\n- **No** → the run stops here with the plan captured, so you can adjust the goal or steer and re-run.\n\n(Tip: launch with `--auto-approve` to skip this gate for a fully autonomous run.)"
+            },
+            "shape": {
+              "String": "hexagon"
+            },
+            "label": {
+              "String": "Approve plan?"
+            },
+            "question_type": {
+              "String": "confirmation"
+            }
+          }
+        },
+        "review_security": {
+          "id": "review_security",
+          "attrs": {
+            "fidelity": {
+              "String": "full"
+            },
+            "provider": {
+              "String": "anthropic"
+            },
+            "prompt": {
+              "String": "You are an independent **security reviewer** critiquing a proposed implementation plan. You did not write it; your job is to find what's wrong or missing, not to praise it.\n\n## The feature\n\nharden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default\n\n## What to do\n\nRead the plan at `/tmp/plan.md` (and explore the relevant code to check its claims). Critique it purely through a **security lens**:\n\n- Auth & authorization: who can upload/read/delete, and is every path actually gated? Capability-URL design — unguessable, scoped, revocable, non-leaking in logs/referrers?\n- Input handling: size limits, content-type/extension spoofing, path traversal, zip/decompression bombs, filename sanitization, storage-key injection.\n- On-server storage default: isolation between users/channels, quota/DoS, where bytes land on disk and with what permissions.\n- Data exposure: private-by-default, signed/expiring URLs, no IDOR, no enumeration.\n- Protocol changes: any new tag/endpoint that widens the attack surface or trust assumptions.\n\n## Output\n\nA focused critique: concrete vulnerabilities or gaps (each with the scenario that exploits it), severity, and the specific plan change you'd require. If the plan is solid on a point, say so briefly. Be specific enough that the synthesizer can act on each item. Do not edit code or the plan."
+            },
+            "label": {
+              "String": "Review: security"
+            },
+            "reasoning_effort": {
+              "String": "high"
+            },
+            "model": {
+              "String": "claude-sonnet-4-6"
+            },
+            "shape": {
+              "String": "box"
+            },
+            "timeout": {
+              "Duration": {
+                "secs": 1800,
+                "nanos": 0
+              }
+            }
+          }
+        },
+        "cr_security": {
+          "id": "cr_security",
+          "attrs": {
+            "model": {
+              "String": "claude-sonnet-4-6"
+            },
+            "fidelity": {
+              "String": "full"
+            },
+            "label": {
+              "String": "Code review: security"
+            },
+            "shape": {
+              "String": "box"
+            },
+            "reasoning_effort": {
+              "String": "high"
+            },
+            "timeout": {
+              "Duration": {
+                "secs": 2400,
+                "nanos": 0
+              }
+            },
+            "prompt": {
+              "String": "You are an independent **security reviewer** of the diff the implementer just produced. Adversarial: try to break it. You did not write this code.\n\n## The feature\n\nharden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default\n\n## What to do\n\nInspect the actual change (`git diff origin/main...HEAD`) and surrounding code. Review for security defects introduced or left open:\n\n- **AuthZ on every new path**: upload, download, delete, list — is each actually gated to the right principal? Any IDOR / missing ownership check?\n- **Capability URLs / tokens**: unguessable, scoped, expiring, not logged, not enumerable.\n- **Input validation**: size caps enforced (streaming, not after buffering), content-type/extension handling, filename + storage-key sanitization (no path traversal), decompression limits.\n- **Storage**: file permissions, per-user/channel isolation, quota/DoS, no secret/data leakage across tenants.\n- **Protocol**: new tags/endpoints don't widen trust or bypass existing checks.\n\n## Output\n\nA prioritized list of concrete vulnerabilities with the exploit scenario, severity, and the fix, each marked **must-fix** or **nice-to-have**. If the diff is clean on a point, note it. Don't invent issues. Do not edit code; the next step addresses findings."
+            },
+            "provider": {
+              "String": "anthropic"
+            }
+          }
+        },
+        "start": {
+          "id": "start",
+          "attrs": {
+            "shape": {
+              "String": "Mdiamond"
+            },
+            "label": {
+              "String": "Start"
+            }
+          }
+        }
+      },
+      "edges": [
+        {
+          "from": "start",
+          "to": "explore",
+          "attrs": {}
+        },
+        {
+          "from": "explore",
+          "to": "plan",
+          "attrs": {}
+        },
+        {
+          "from": "plan",
+          "to": "review_security",
+          "attrs": {}
+        },
+        {
+          "from": "plan",
+          "to": "review_compat",
+          "attrs": {}
+        },
+        {
+          "from": "plan",
+          "to": "review_ops",
+          "attrs": {}
+        },
+        {
+          "from": "review_security",
+          "to": "synthesize",
+          "attrs": {}
+        },
+        {
+          "from": "review_compat",
+          "to": "synthesize",
+          "attrs": {}
+        },
+        {
+          "from": "review_ops",
+          "to": "synthesize",
+          "attrs": {}
+        },
+        {
+          "from": "synthesize",
+          "to": "approve",
+          "attrs": {}
+        },
+        {
+          "from": "approve",
+          "to": "implement",
+          "attrs": {}
+        },
+        {
+          "from": "implement",
+          "to": "verify",
+          "attrs": {}
+        },
+        {
+          "from": "verify",
+          "to": "cr_correctness",
+          "attrs": {}
+        },
+        {
+          "from": "verify",
+          "to": "cr_security",
+          "attrs": {}
+        },
+        {
+          "from": "cr_correctness",
+          "to": "address",
+          "attrs": {}
+        },
+        {
+          "from": "cr_security",
+          "to": "address",
+          "attrs": {}
+        },
+        {
+          "from": "address",
+          "to": "verify2",
+          "attrs": {}
+        },
+        {
+          "from": "verify2",
+          "to": "pr_body",
+          "attrs": {}
+        },
+        {
+          "from": "pr_body",
+          "to": "exit",
+          "attrs": {}
+        }
+      ],
+      "attrs": {
+        "rankdir": {
+          "String": "LR"
+        },
+        "goal": {
+          "String": "harden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default"
+        }
+      }
+    },
+    "graph_source": "// feature — long-horizon, multi-agent development of a complex feature.\n//\n// Parameterized entirely by --goal: the feature description rides into every\n// node as {{ goal }}. Invoke like:\n//   fabro run .fabro/workflows/feature/workflow.toml \\\n//     --goal \"harden and enhance file upload across server + web, on-server storage default\"\n//\n// Shape: research → plan → 3-lens parallel plan-review → synthesize →\n//   HUMAN approval gate → implement → CI gate → 2-lens parallel code-review →\n//   address → final gate → PR.\n//\n// Scope is fenced to the Linux-verifiable surface (Rust crates that build in\n// CI + the web app); native clients (iOS/macOS/WinUI) are planned-for but not\n// edited here, because this executor can't compile or verify them. The plan\n// node enumerates that work as explicit follow-ups instead.\n//\n// The plan/critiques are exchanged via files under /tmp in the sandbox (NOT in\n// the repo, so they never land in the PR) plus conversation context.\ndigraph Feature {\n    graph [goal=\"Develop a complex freeq feature end to end — research the surface, write and peer-review a plan, get human approval, implement the Linux-verifiable scope, review the diff, and open a reviewable PR. The specific feature is given at run time via --goal.\"]\n    rankdir=LR\n\n    start [shape=Mdiamond, label=\"Start\"]\n    exit  [shape=Msquare, label=\"Exit\"]\n\n    // ── Research + plan ──────────────────────────────────────────────────\n    explore [shape=box, label=\"Explore surface\", prompt=\"@prompts/explore.md\", model=\"claude-opus-4-8\", reasoning_effort=\"high\", thread_id=\"feat\", fidelity=\"full\", timeout=\"2400s\"]\n    plan    [shape=box, label=\"Draft plan\",      prompt=\"@prompts/plan.md\",    model=\"claude-opus-4-8\", reasoning_effort=\"high\", thread_id=\"feat\", fidelity=\"full\", timeout=\"2400s\"]\n\n    // ── Parallel plan review (3 independent lenses) ──────────────────────\n    review_security    [shape=box, label=\"Review: security\",      prompt=\"@prompts/review-security.md\",    model=\"claude-sonnet-4-6\", reasoning_effort=\"high\", fidelity=\"full\", timeout=\"1800s\"]\n    review_compat      [shape=box, label=\"Review: compatibility\", prompt=\"@prompts/review-compat.md\",      model=\"claude-sonnet-4-6\", reasoning_effort=\"high\", fidelity=\"full\", timeout=\"1800s\"]\n    review_ops         [shape=box, label=\"Review: storage/ops\",   prompt=\"@prompts/review-ops.md\",         model=\"claude-sonnet-4-6\", reasoning_effort=\"high\", fidelity=\"full\", timeout=\"1800s\"]\n\n    synthesize [shape=box, label=\"Revise plan\", prompt=\"@prompts/synthesize.md\", model=\"claude-opus-4-8\", reasoning_effort=\"high\", thread_id=\"feat\", fidelity=\"full\", timeout=\"1800s\"]\n\n    // ── Human approval before any code ───────────────────────────────────\n    approve [shape=hexagon, label=\"Approve plan?\", question_type=\"confirmation\", prompt=\"@prompts/approve.md\"]\n\n    // ── Implement + verify ───────────────────────────────────────────────\n    implement [shape=box, label=\"Implement\", prompt=\"@prompts/implement.md\", model=\"claude-opus-4-8\", reasoning_effort=\"high\", thread_id=\"feat\", fidelity=\"full\", timeout=\"5400s\"]\n    verify    [shape=parallelogram, label=\"CI gate\", script=\"bash .fabro/verify.sh\", goal_gate=true, retry_target=\"implement\", max_retries=2, timeout=\"5400s\"]\n\n    // ── Parallel adversarial code review (2 lenses) ──────────────────────\n    cr_correctness [shape=box, label=\"Code review: correctness\", prompt=\"@prompts/cr-correctness.md\", model=\"claude-opus-4-8\", reasoning_effort=\"high\", fidelity=\"full\", timeout=\"2400s\"]\n    cr_security    [shape=box, label=\"Code review: security\",    prompt=\"@prompts/cr-security.md\",    model=\"claude-sonnet-4-6\", reasoning_effort=\"high\", fidelity=\"full\", timeout=\"2400s\"]\n\n    address [shape=box, label=\"Address review\", prompt=\"@prompts/address.md\", model=\"claude-opus-4-8\", reasoning_effort=\"high\", thread_id=\"feat\", fidelity=\"full\", timeout=\"3600s\"]\n    verify2 [shape=parallelogram, label=\"Final CI gate\", script=\"bash .fabro/verify.sh\", goal_gate=true, retry_target=\"address\", max_retries=1, timeout=\"5400s\"]\n\n    pr_body [shape=tab, label=\"PR description\", prompt=\"@prompts/pr_body.md\", thread_id=\"feat\", fidelity=\"full\"]\n\n    // ── Wiring (fan-out / fan-in) ────────────────────────────────────────\n    start -> explore -> plan\n    plan -> review_security\n    plan -> review_compat\n    plan -> review_ops\n    review_security -> synthesize\n    review_compat   -> synthesize\n    review_ops      -> synthesize\n    synthesize -> approve -> implement -> verify\n    verify -> cr_correctness\n    verify -> cr_security\n    cr_correctness -> address\n    cr_security    -> address\n    address -> verify2 -> pr_body -> exit\n}\n",
+    "workflow_slug": "feature",
+    "source_directory": "/home/boxd/freeq",
+    "provenance": {
+      "server": {
+        "version": "0.254.0"
+      },
+      "client": {
+        "user_agent": "fabro-cli/0.254.0",
+        "name": "fabro-cli",
+        "version": "0.254.0"
+      },
+      "subject": {
+        "kind": "user",
+        "identity": {
+          "issuer": "fabro:dev",
+          "subject": "dev"
+        },
+        "login": "dev",
+        "auth_method": "dev_token"
+      }
+    },
+    "manifest_blob": "977d9aa7a7c62a7fd0025b5667f2b34c9119f704c605ddd1a036ae23deef517e",
+    "definition_blob": "7d9382870c50259fec513cf811c7fb8d2e6d9ca2cb3a7cd2160ecb178f8471cf",
+    "git": {
+      "origin_url": "https://github.com/chad/freeq",
+      "branch": "main",
+      "sha": "4b4179959a797df20e8d1e6dd90c1d2f216b5f63",
+      "dirty": "clean",
+      "push_outcome": {
+        "type": "not_attempted"
+      }
+    }
+  },
+  "web_url": "http://127.0.0.1:32276/runs/01KV6F3HHVEBBBFYF9Y032HF92",
+  "start": null,
+  "status": {
+    "kind": "starting"
+  },
+  "status_updated_at": "2026-06-15T20:20:58.338165613Z",
+  "last_event_at": "2026-06-15T20:21:19.160272900Z",
+  "pending_control": null,
+  "checkpoints": [],
+  "conclusion": null,
+  "sandbox": {
+    "kind": "ready",
+    "plan": {
+      "provider": "docker",
+      "image": "freeq-fabro:tools"
+    },
+    "instance": {
+      "provider": "docker",
+      "image": "freeq-fabro:tools",
+      "runtime": {
+        "id": "f6e831aee3ccee10dd05a0d0c68b28f77633cc224d89ea97aa4c56ee75064696",
+        "working_directory": "/workspace/freeq",
+        "repo_cloned": true,
+        "clone_origin_url": "https://github.com/chad/freeq",
+        "clone_branch": "main",
+        "workspace_root": "/workspace",
+        "repos_root": "/repos",
+        "primary_repo_path": "/repos/chad/freeq",
+        "primary_repo_link": "/workspace/freeq"
+      }
+    }
+  },
+  "pull_request": null,
+  "superseded_by": null,
+  "pending_interviews": {},
+  "stages": {}
+}
