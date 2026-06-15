@@ -28,7 +28,9 @@ Apply the smallest change that resolves the advisory you chose.
 
 ## Self-verify once, at the end (required)
 
-After the bump, run the full gate **exactly once** to prove nothing broke:
+After the bump, if you changed any Rust source, first `cargo fmt --all` and fix
+any clippy warnings (the gate enforces both). Then run the full gate **exactly
+once** to prove nothing broke:
 
 ```
 bash .fabro/verify.sh

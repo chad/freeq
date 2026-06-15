@@ -19,7 +19,8 @@ Iterate with targeted commands (`cargo test -p <crate> <name>`, `cargo check -p
 
 ## Self-verify once, at the end
 
-When the must-fixes are in, run the gate **once** to confirm green:
+When the must-fixes are in, `cargo fmt --all` and clear any clippy warnings
+(the gate enforces both), then run the gate **once** to confirm green:
 
 ```
 bash .fabro/verify.sh

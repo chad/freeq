@@ -31,8 +31,15 @@ increase that lands as a clean, mergeable PR.
 
 ## Self-verify once, at the end (required)
 
-When your tests are written and passing under targeted runs, run the full gate
-**exactly once** to confirm it's green before finishing:
+When your tests are written and passing under targeted runs, first **auto-format
+and lint-fix** your changes — the gate enforces both:
+
+```
+cargo fmt --all                 # the gate runs `cargo fmt --all -- --check`
+cargo clippy -p <crate> --tests # fix every warning (do NOT silence with #[allow])
+```
+
+Then run the full gate **exactly once** to confirm it's green before finishing:
 
 ```
 bash .fabro/verify.sh

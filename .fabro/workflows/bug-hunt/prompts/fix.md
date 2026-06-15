@@ -32,8 +32,15 @@ Now prove and fix the bug you identified.
 
 ## Self-verify once, at the end (required)
 
-When the regression test fails-before / passes-after and your fix is in, run the
-full gate **exactly once** to confirm it's green:
+When the regression test fails-before / passes-after and your fix is in, first
+**auto-format and lint-fix** (the gate enforces both):
+
+```
+cargo fmt --all                 # gate runs `cargo fmt --all -- --check`
+cargo clippy -p <crate> --tests # fix warnings, never silence with #[allow]
+```
+
+Then run the full gate **exactly once** to confirm it's green:
 
 ```
 bash .fabro/verify.sh

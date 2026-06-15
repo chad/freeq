@@ -19,7 +19,14 @@ Implement the approved plan (in `/tmp/plan.md` and the context above).
 
 ## Work incrementally, self-verify once at the end
 
-Build in plan order, checking each crate with targeted commands as you go. When the slice is complete, run the full gate **exactly once** to confirm it's green:
+Build in plan order, checking each crate with targeted commands as you go. When the slice is complete, first **auto-format and lint-fix** — the gate enforces both:
+
+```
+cargo fmt --all                       # gate runs `cargo fmt --all -- --check`
+cargo clippy -p <crate> --tests       # fix every warning; never silence with #[allow]
+```
+
+(If you touched `freeq-app`, also run `npm run lint` / `npx prettier -w` there as the project does.) Then run the full gate **exactly once** to confirm it's green:
 
 ```
 bash .fabro/verify.sh
