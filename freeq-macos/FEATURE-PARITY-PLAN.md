@@ -76,6 +76,14 @@ Status legend: ☐ todo · ◐ in progress · ☑ done · ⛔ blocked
 - ☑ Re-run SwiftPM tests and full Xcode build.
 - ☑ Commit Bluesky profile parity fix.
 
+## 2026-06-15 internal notice routing
+
+- ☑ Trace why `API-BEARER stream-*` renders inside the active channel.
+- ☑ Add regression coverage for API bearer notice classification.
+- ☑ Consume API bearer notices into app state instead of appending chat messages.
+- ☑ Re-run SwiftPM tests and full Xcode build.
+- ☑ Commit internal notice routing fix.
+
 ---
 
 ## Method

@@ -51,3 +51,33 @@ enum BlueskyProfileBootstrap {
         }
     }
 }
+
+enum ServerNoticeRoute: Equatable {
+    case ignore
+    case motdStart
+    case motdLine(String)
+    case motdEnd
+    case namesEnd(String)
+    case apiBearer(String)
+    case display(String)
+}
+
+enum ServerNoticeRouter {
+    static func route(_ text: String) -> ServerNoticeRoute {
+        if text.isEmpty { return .ignore }
+        if text == "MOTD:START" { return .motdStart }
+        if text == "MOTD:END" { return .motdEnd }
+        if text.hasPrefix("MOTD:") {
+            return .motdLine(String(text.dropFirst("MOTD:".count)))
+        }
+        if text.hasPrefix("__NAMES_END__") {
+            return .namesEnd(String(text.dropFirst("__NAMES_END__".count)))
+        }
+        if text.hasPrefix("API-BEARER ") {
+            let token = text.dropFirst("API-BEARER ".count)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return token.isEmpty ? .ignore : .apiBearer(token)
+        }
+        return .display(text)
+    }
+}

@@ -126,6 +126,24 @@ final class ValidationTests: XCTestCase {
         XCTAssertNil(BlueskyProfileBootstrap.actor(nick: "#freeq", did: nil))
     }
 
+    // MARK: - Server notice routing
+
+    func testServerNoticeRouterConsumesApiBearerNotice() {
+        XCTAssertEqual(ServerNoticeRouter.route("API-BEARER stream-715"), .apiBearer("stream-715"))
+    }
+
+    func testServerNoticeRouterClassifiesInternalMotdAndNamesSignals() {
+        XCTAssertEqual(ServerNoticeRouter.route("MOTD:START"), .motdStart)
+        XCTAssertEqual(ServerNoticeRouter.route("MOTD:hello"), .motdLine("hello"))
+        XCTAssertEqual(ServerNoticeRouter.route("MOTD:END"), .motdEnd)
+        XCTAssertEqual(ServerNoticeRouter.route("__NAMES_END__#freeq"), .namesEnd("#freeq"))
+    }
+
+    func testServerNoticeRouterKeepsDisplayableNoticeText() {
+        XCTAssertEqual(ServerNoticeRouter.route("You are not channel operator"), .display("You are not channel operator"))
+        XCTAssertEqual(ServerNoticeRouter.route(""), .ignore)
+    }
+
     // MARK: - Bluesky profile URL
 
     func testBlueSkyProfileURLBasic() {

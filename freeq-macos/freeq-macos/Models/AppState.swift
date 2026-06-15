@@ -115,6 +115,7 @@ class AppState {
     var authBrokerBase: String = "https://auth.freeq.at"
     var brokerToken: String?
     var pendingWebToken: String?
+    var apiBearerSessionId: String?
 
     // MARK: - Batches (CHATHISTORY)
     struct BatchBuffer {
@@ -257,6 +258,7 @@ class AppState {
         client = nil
         connectionState = .disconnected
         didRequestDmTargets = false
+        apiBearerSessionId = nil
         shutdownP2p()
     }
 
@@ -265,6 +267,7 @@ class AppState {
         brokerToken = nil
         authenticatedDID = nil
         pendingWebToken = nil
+        apiBearerSessionId = nil
         KeychainHelper.delete(key: "brokerToken")
         KeychainHelper.delete(key: "did")
         channels.removeAll()
@@ -1136,23 +1139,19 @@ extension AppState {
             }
 
         case .notice(let text):
-            // MOTD handling
-            if text == "MOTD:START" {
+            switch ServerNoticeRouter.route(text) {
+            case .ignore:
+                return
+            case .motdStart:
                 motd = ""
                 return
-            }
-            if text.hasPrefix("MOTD:") && text != "MOTD:START" && text != "MOTD:END" {
-                motd += String(text.dropFirst("MOTD:".count)) + "\n"
+            case .motdLine(let line):
+                motd += line + "\n"
                 return
-            }
-            if text == "MOTD:END" {
+            case .motdEnd:
                 if !motd.isEmpty { showMotd = true }
                 return
-            }
-
-            // NamesEnd signal — flush pending members and request history
-            if text.hasPrefix("__NAMES_END__") {
-                let channel = String(text.dropFirst("__NAMES_END__".count))
+            case .namesEnd(let channel):
                 let key = channel.lowercased()
                 // Ensure channel exists before flushing
                 let ch = getOrCreateChannel(channel)
@@ -1163,17 +1162,20 @@ extension AppState {
                 }
                 requestHistory(channel: channel)
                 return
-            }
-            if text.isEmpty { return }
-            if let ch = activeChannelState {
-                ch.appendIfNew(ChatMessage(
-                    id: UUID().uuidString,
-                    from: "server",
-                    text: text,
-                    isAction: false,
-                    timestamp: Date(),
-                    replyTo: nil
-                ))
+            case .apiBearer(let sessionId):
+                apiBearerSessionId = sessionId
+                return
+            case .display(let displayText):
+                if let ch = activeChannelState {
+                    ch.appendIfNew(ChatMessage(
+                        id: UUID().uuidString,
+                        from: "server",
+                        text: displayText,
+                        isAction: false,
+                        timestamp: Date(),
+                        replyTo: nil
+                    ))
+                }
             }
 
         case .disconnected(let reason):
