@@ -84,6 +84,55 @@ Status legend: ☐ todo · ◐ in progress · ☑ done · ⛔ blocked
 - ☑ Re-run SwiftPM tests and full Xcode build.
 - ☑ Commit internal notice routing fix.
 
+## 2026-06-15 design critique pass
+
+- ☑ Capture current macOS app screenshots from the running build.
+- ☑ Send screenshots to a design sub-agent for critique.
+- ☑ Extract prioritized design issues for a modern, light, friendly, delightful direction.
+- ☑ Commit critique-plan update.
+
+### Sub-agent critique synthesis
+
+The current macOS UI reads as an internal IRC tool in a dark Slack/Discord shell:
+functional, but too heavy, too segmented, and too protocol-forward. The large
+empty transcript area makes quiet channels feel unfinished; the sidebar, member
+panel, profile panel, and composer each use their own hierarchy rather than one
+coherent product language.
+
+Target direction: a modern native macOS social client that is light, calm,
+identity-rich, and quietly technical underneath. Default surfaces should use
+light macOS materials, warm off-white canvases, soft separators, confident
+typography, and a restrained accent. The product should feel like
+identity-native chat, not "better IRC with debug details visible."
+
+P0 design work:
+- Redesign the main shell around a light native macOS visual system.
+- Replace empty channel voids with a channel welcome/context state: topic, MOTD,
+  members, pinned item, activity summary, and a start-message affordance.
+- Rework the composer into one polished message bar with grouped tools.
+- Replace `WHOIS` as a primary profile action with user-facing identity/profile
+  language; keep raw protocol actions behind advanced disclosure.
+- Turn the DM/member profile panel into a real identity card: banner, avatar,
+  display name, handle, verification, bio, status, and Bluesky link first;
+  DID/host/server details behind an identity inspector.
+- Unify trust and presence language so shields, checks, dots, handles, and DIDs
+  do not read as unrelated badges.
+
+P1 design work:
+- Improve sidebar row density, selected states, previews, unread/mention states,
+  and scanability.
+- Make the member panel lighter and less bolted on; reduce role-heading weight
+  and show avatar/name/handle/status cleanly.
+- Establish a smaller type scale with fewer weights.
+- Simplify the top bar into a cleaner title/metadata/action area.
+- Add subtle hover, send, profile, unread, and presence transitions.
+
+P2 design work:
+- Add tasteful personalization for channels/profiles.
+- Support compact vs comfortable density.
+- Build a proper identity inspector for technical protocol details.
+- Revisit dark mode after the light hierarchy works.
+
 ---
 
 ## Method
