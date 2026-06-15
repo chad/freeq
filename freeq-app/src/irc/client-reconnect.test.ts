@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 /**
  * Reconnect-path tests for irc/client.ts (hotspot, gamma 133).
  *
@@ -52,6 +51,14 @@ vi.mock('@freeq/sdk', () => ({
   FreeqClient: MockFreeqClient,
   format: {},
   prefetchProfiles: () => {},
+}));
+
+// Prevent notifications.ts from crashing on `document.title` in node env.
+vi.mock('../lib/notifications', () => ({
+  notify: () => {},
+  setNotificationsEnabled: () => {},
+  setSoundEnabled: () => {},
+  requestPermission: async () => false,
 }));
 
 const sdk = await import('./client');

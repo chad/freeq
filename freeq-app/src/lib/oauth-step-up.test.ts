@@ -81,7 +81,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.useRealTimers();
+  // Clear any pending timers installed by the test. Do NOT call
+  // vi.useRealTimers() here — on vitest 4.1.x / node 18 that call hangs
+  // the afterEach hook (the vitest worker uses real-time to enforce the
+  // hook timeout, but fake timers prevent it from advancing).
+  // vitest resets the timer implementation automatically between test files.
+  vi.clearAllTimers();
 });
 
 // ── helpers ──────────────────────────────────────────────────────────────

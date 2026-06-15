@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 /**
  * Behavior tests for AV-session protocol bits in irc/client.ts:
  *  - startAvSession (discover-then-join vs av-start)
@@ -13,6 +12,14 @@
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import type { Mock } from 'vitest';
+
+// Prevent notifications.ts from crashing on `document.title` in node env.
+vi.mock('../lib/notifications', () => ({
+  notify: () => {},
+  setNotificationsEnabled: () => {},
+  setSoundEnabled: () => {},
+  requestPermission: async () => false,
+}));
 
 // ── Global mocks (must be before importing the modules under test) ──
 const storage = new Map<string, string>();
