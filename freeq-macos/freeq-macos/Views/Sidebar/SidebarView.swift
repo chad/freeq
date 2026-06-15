@@ -50,7 +50,7 @@ struct SidebarView: View {
                                 .font(.system(.body, design: .monospaced))
                         } icon: {
                             Image(systemName: "point.3.connected.trianglepath.dotted")
-                                .foregroundStyle(.green)
+                                .foregroundStyle(Theme.success)
                         }
                         .tag("p2p:\(String(peerId.prefix(8)))")
                     }
@@ -85,18 +85,24 @@ struct SidebarView: View {
         HStack(spacing: 8) {
             // User info
             if let did = appState.authenticatedDID {
-                Circle()
-                    .fill(Theme.success)
-                    .frame(width: 8, height: 8)
+                AvatarView(nick: appState.nick, size: 24)
+                    .overlay(alignment: .bottomTrailing) {
+                        Circle()
+                            .fill(Theme.success)
+                            .frame(width: 7, height: 7)
+                            .overlay(Circle().strokeBorder(Theme.sidebarBackground, lineWidth: 1))
+                    }
                 VStack(alignment: .leading, spacing: 0) {
                     Text(appState.nick)
                         .font(.caption.weight(.medium))
+                        .foregroundStyle(Theme.textPrimary)
                         .lineLimit(1)
-                    Text(did.prefix(24) + "…")
+                    Text("Signed in")
                         .font(.caption2)
                         .foregroundStyle(Theme.textTertiary)
                         .lineLimit(1)
                 }
+                .help("Signed in as \(did)")
             } else if appState.connectionState == .registered {
                 Circle()
                     .fill(Theme.warning)

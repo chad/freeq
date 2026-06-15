@@ -65,7 +65,7 @@ struct ChatView: View {
     }
 }
 
-// MARK: - MOTD Banner
+// MARK: - Server note banner
 
 struct MotdBanner: View {
     @Environment(AppState.self) private var appState
@@ -82,20 +82,25 @@ struct MotdBanner: View {
             .map(String.init) ?? "Server announcement"
     }
 
+    private var isLongMotd: Bool {
+        motdText.count > 360 || motdText.filter(\.isNewline).count > 4
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: expanded ? 8 : 0) {
             HStack(spacing: 8) {
                 Image(systemName: "info.circle")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Theme.accent)
 
-                Text("MOTD")
+                Text("Server note")
                     .font(.caption.weight(.semibold))
+                    .foregroundStyle(Theme.textPrimary)
 
                 if !expanded {
                     Text(previewText)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
@@ -111,6 +116,7 @@ struct MotdBanner: View {
                         .labelStyle(.titleAndIcon)
                 }
                 .font(.caption)
+                .foregroundStyle(Theme.textSecondary)
                 .buttonStyle(.plain)
                 .help(expanded ? "Hide message of the day" : "Show message of the day")
 
@@ -119,25 +125,34 @@ struct MotdBanner: View {
                 } label: {
                     Image(systemName: "xmark")
                         .font(.caption2)
+                        .foregroundStyle(Theme.textTertiary)
                 }
                 .buttonStyle(.plain)
                 .help("Dismiss message of the day")
             }
 
             if expanded {
-                ScrollView {
+                if isLongMotd {
+                    ScrollView {
+                        Text(motdText)
+                            .font(.caption)
+                            .foregroundStyle(Theme.textSecondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 160)
+                } else {
                     Text(motdText)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.textSecondary)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxHeight: 180)
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(Theme.surface)
+        .background(Theme.accentSoft.opacity(0.70))
     }
 }
 
@@ -195,7 +210,7 @@ struct ChannelWelcomeView: View {
             if let topic = channel?.topic, !topic.isEmpty {
                 return topic
             }
-            return "No messages here yet. Start the conversation, pin the important bits, and let identity do the quiet trust work."
+            return "This room is quiet right now."
         }
         return "This direct message is private to the two of you. Say hello when you are ready."
     }
@@ -240,12 +255,24 @@ struct TopBarView: View {
                         .foregroundStyle(Theme.textTertiary)
                 }
             } else {
-                Circle()
-                    .fill(isOnline ? Theme.success : Theme.textTertiary.opacity(0.35))
-                    .frame(width: 10, height: 10)
-                Text(channel?.name ?? "")
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(Theme.textPrimary)
+                if let name = channel?.name {
+                    AvatarView(nick: name, size: 30)
+                        .overlay(alignment: .bottomTrailing) {
+                            Circle()
+                                .fill(isOnline ? (awayMsg != nil ? Theme.warning : Theme.success) : Theme.textTertiary.opacity(0.45))
+                                .frame(width: 9, height: 9)
+                                .overlay(Circle().strokeBorder(Theme.surface, lineWidth: 1.5))
+                        }
+
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(name)
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(Theme.textPrimary)
+                        Text(isOnline ? (awayMsg != nil ? "away" : "online") : "offline")
+                            .font(.caption2)
+                            .foregroundStyle(isOnline ? (awayMsg != nil ? Theme.warning : Theme.success) : Theme.textTertiary)
+                    }
+                }
 
                 // P2P badge
                 if let name = channel?.name,
@@ -259,10 +286,6 @@ struct TopBarView: View {
                 }
 
                 if !isChannel {
-                    Text(isOnline ? (awayMsg != nil ? "away" : "online") : "offline")
-                        .font(.caption)
-                        .foregroundStyle(isOnline ? (awayMsg != nil ? Theme.warning : Theme.success) : Theme.textSecondary)
-
                     // E2EE badge for DMs
                     if let did = ProfileCache.shared.did(for: channel?.name ?? ""),
                        E2eeManager.shared.hasSession(remoteDid: did) {

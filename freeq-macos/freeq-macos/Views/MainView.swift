@@ -105,7 +105,7 @@ struct MainView: View {
                 Text("Choose a conversation")
                     .font(.title2.weight(.semibold))
                     .foregroundStyle(Theme.textPrimary)
-                Text("Channels and DMs are identity-backed, searchable, and ready when you are.")
+                Text("Pick a channel or direct message from the sidebar.")
                     .font(.subheadline)
                     .foregroundStyle(Theme.textSecondary)
                     .multilineTextAlignment(.center)

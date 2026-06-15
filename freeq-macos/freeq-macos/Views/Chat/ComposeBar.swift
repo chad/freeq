@@ -185,6 +185,8 @@ struct ComposeBar: View {
                     if text.isEmpty {
                         Text("Message \(appState.activeChannel ?? "")…")
                             .foregroundStyle(Theme.textTertiary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 8)
                     }
@@ -207,6 +209,7 @@ struct ComposeBar: View {
                     RoundedRectangle(cornerRadius: 12)
                         .strokeBorder(isFocused ? Theme.accent.opacity(0.35) : Theme.borderSoft, lineWidth: 1)
                 )
+                .frame(maxWidth: .infinity)
 
                 // Format toolbar
                 FormatToolbar(text: $text)

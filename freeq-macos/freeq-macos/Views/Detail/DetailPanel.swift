@@ -231,156 +231,241 @@ struct MemberRow: View {
 struct DMProfilePanel: View {
     @Environment(AppState.self) private var appState
     let nick: String
+    @State private var showIdentityDetails = false
 
     private var isOnline: Bool { appState.isNickOnline(nick) }
     private var awayMsg: String? { appState.awayStatus(for: nick) }
     private var isP2p: Bool { appState.p2pDMActive.contains(nick.lowercased()) }
     private var profile: ProfileCache.Profile? { ProfileCache.shared.profile(for: nick) }
     private var did: String? { ProfileCache.shared.did(for: nick) }
+    private var knownDid: String? { did ?? profile?.did }
+    private var displayName: String {
+        if let displayName = profile?.displayName, !displayName.isEmpty {
+            return displayName
+        }
+        return nick
+    }
+    private var statusText: String {
+        if !isOnline { return "Offline - messages saved" }
+        if let awayMsg, !awayMsg.isEmpty { return "Away: \(awayMsg)" }
+        return "Online"
+    }
+    private var statusIcon: String {
+        if !isOnline { return "circle" }
+        return awayMsg == nil ? "circle.fill" : "moon.fill"
+    }
+    private var statusColor: Color {
+        if !isOnline { return Theme.textTertiary }
+        return awayMsg == nil ? Theme.success : Theme.warning
+    }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
                 DMProfileBanner(nick: nick, bannerURL: profile?.bannerURL)
-                .overlay(alignment: .bottom) {
-                    AvatarView(nick: nick, size: 56)
-                        .overlay(alignment: .bottomTrailing) {
-                            Circle()
-                                .fill(isOnline ? (awayMsg != nil ? .orange : .green) : Color.secondary.opacity(0.3))
-                                .frame(width: 14, height: 14)
-                                .overlay(Circle().strokeBorder(.background, lineWidth: 2))
-                        }
-                        .offset(y: 28)
-                }
+                    .overlay(alignment: .bottom) {
+                        AvatarView(nick: nick, size: 72)
+                            .overlay(alignment: .bottomTrailing) {
+                                Circle()
+                                    .fill(statusColor)
+                                    .frame(width: 16, height: 16)
+                                    .overlay(Circle().strokeBorder(Theme.detailBackground, lineWidth: 2.5))
+                            }
+                            .offset(y: 36)
+                    }
 
-                VStack(spacing: 4) {
-                    // Display name
-                    if let displayName = profile?.displayName, !displayName.isEmpty {
+                VStack(spacing: 16) {
+                    VStack(spacing: 6) {
                         Text(displayName)
-                            .font(.headline)
-                            .padding(.top, 32)
-                        Text(nick)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text(nick)
-                            .font(.headline)
-                            .padding(.top, 32)
-                    }
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(Theme.textPrimary)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.center)
+                            .padding(.top, 40)
 
-                    // Handle
-                    if let handle = profile?.handle {
-                        HStack(spacing: 3) {
-                            Text("@\(handle)")
-                                .font(.caption)
-                                .foregroundStyle(.blue)
-                            Image(systemName: "checkmark.seal.fill")
-                                .font(.caption2)
-                                .foregroundStyle(.blue)
+                        if displayName != nick {
+                            Text(nick)
+                                .font(.subheadline)
+                                .foregroundStyle(Theme.textSecondary)
+                                .lineLimit(1)
+                        }
+
+                        if let handle = profile?.handle {
+                            HStack(spacing: 4) {
+                                Text("@\(handle)")
+                                    .font(.callout.weight(.medium))
+                                    .foregroundStyle(Theme.accent)
+                                Image(systemName: "arrow.up.right")
+                                    .font(.caption)
+                                    .foregroundStyle(Theme.accent)
+                            }
+                        }
+
+                        HStack(spacing: 8) {
+                            statusPill
+                            if knownDid != nil {
+                                Label("Verified", systemImage: "checkmark.seal.fill")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(Theme.verified)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Capsule().fill(Theme.verified.opacity(0.10)))
+                            }
                         }
                     }
 
-                    // Status
-                    if isOnline {
-                        if let away = awayMsg {
-                            Label("Away: \(away)", systemImage: "moon.fill")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                        } else {
-                            Label("Online", systemImage: "circle.fill")
-                                .font(.caption)
-                                .foregroundStyle(.green)
-                        }
-                    } else {
-                        Label("Offline — messages saved", systemImage: "circle")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    // P2P
                     if isP2p {
-                        Label("Direct P2P via iroh", systemImage: "point.3.connected.trianglepath.dotted")
-                            .font(.caption)
-                            .foregroundStyle(.green)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Capsule().fill(.green.opacity(0.1)))
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
-
-                // Bio
-                if let desc = profile?.description, !desc.isEmpty {
-                    Text(desc)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-
-                // Stats
-                if let profile, (profile.followersCount ?? 0) > 0 {
-                    HStack(spacing: 16) {
-                        statItem(count: profile.postsCount ?? 0, label: "Posts")
-                        statItem(count: profile.followersCount ?? 0, label: "Followers")
-                        statItem(count: profile.followsCount ?? 0, label: "Following")
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 12)
-                }
-
-                // DID
-                if let did {
-                    Text(did)
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(2)
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                }
-
-                Divider()
-
-                // Actions
-                VStack(spacing: 8) {
-                    if let handle = profile?.handle,
-                       let blueSkyURL = Validation.makeBlueSkyProfileURL(handle: handle) {
-                        Link(destination: blueSkyURL) {
-                            Label("View on Bluesky", systemImage: "arrow.up.right.square")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-
-                    Button {
-                        appState.sendWhois(nick)
-                    } label: {
-                        Label("WHOIS", systemImage: "person.text.rectangle")
+                        Label("Direct P2P available", systemImage: "point.3.connected.trianglepath.dotted")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Theme.success)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
                             .frame(maxWidth: .infinity)
+                            .background(RoundedRectangle(cornerRadius: 10).fill(Theme.success.opacity(0.09)))
                     }
-                    .buttonStyle(.bordered)
+
+                    if let desc = profile?.description, !desc.isEmpty {
+                        Text(desc)
+                            .font(.callout)
+                            .lineSpacing(3)
+                            .foregroundStyle(Theme.textSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    if let profile, hasStats(profile) {
+                        HStack(spacing: 0) {
+                            statItem(count: profile.postsCount ?? 0, label: "Posts")
+                            statItem(count: profile.followersCount ?? 0, label: "Followers")
+                            statItem(count: profile.followsCount ?? 0, label: "Following")
+                        }
+                        .padding(.vertical, 12)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.surface))
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.borderSoft, lineWidth: 1))
+                    }
+
+                    VStack(spacing: 8) {
+                        if let handle = profile?.handle,
+                           let blueSkyURL = Validation.makeBlueSkyProfileURL(handle: handle) {
+                            Link(destination: blueSkyURL) {
+                                actionLabel("View on Bluesky", systemImage: "arrow.up.right.square")
+                                    .foregroundStyle(Theme.surface)
+                                    .background(RoundedRectangle(cornerRadius: 12).fill(Theme.accent))
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        Button {
+                            appState.sendWhois(nick)
+                            ProfileCache.shared.fetchProfileIfPossible(nick: nick)
+                        } label: {
+                            actionLabel("Refresh identity", systemImage: "arrow.clockwise")
+                                .foregroundStyle(Theme.textPrimary)
+                                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.surface))
+                                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.borderSoft, lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    identityDisclosure
                 }
                 .padding(16)
             }
         }
+        .background(Theme.detailBackground)
         .task(id: nick) {
             appState.sendWhois(nick)
             ProfileCache.shared.fetchProfileIfPossible(nick: nick)
         }
     }
 
+    private var statusPill: some View {
+        Label(statusText, systemImage: statusIcon)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(statusColor)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(statusColor.opacity(0.10)))
+    }
+
+    private var identityDisclosure: some View {
+        DisclosureGroup(isExpanded: $showIdentityDetails) {
+            VStack(alignment: .leading, spacing: 10) {
+                identityRow(label: "Nick", value: nick)
+                if let handle = profile?.handle {
+                    identityRow(label: "Bluesky", value: "@\(handle)")
+                }
+                if let knownDid {
+                    identityRow(label: "DID", value: knownDid, monospaced: true)
+                    Button {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(knownDid, forType: .string)
+                    } label: {
+                        Label("Copy DID", systemImage: "doc.on.doc")
+                            .font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.accent)
+                }
+                Button {
+                    appState.sendWhois(nick)
+                } label: {
+                    Label("Run WHOIS", systemImage: "terminal")
+                        .font(.caption.weight(.medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.textSecondary)
+            }
+            .padding(.top, 10)
+        } label: {
+            Label("Identity details", systemImage: "person.badge.key")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.textSecondary)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.surfaceSoft))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.borderSoft, lineWidth: 1))
+    }
+
+    private func actionLabel(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.callout.weight(.semibold))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .contentShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func identityRow(label: String, value: String, monospaced: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(Theme.textTertiary)
+                .textCase(.uppercase)
+            Text(value)
+                .font(monospaced ? .system(size: 10, design: .monospaced) : .caption)
+                .foregroundStyle(Theme.textSecondary)
+                .lineLimit(3)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func hasStats(_ profile: ProfileCache.Profile) -> Bool {
+        (profile.postsCount ?? 0) > 0 ||
+            (profile.followersCount ?? 0) > 0 ||
+            (profile.followsCount ?? 0) > 0
+    }
+
     private func statItem(count: Int, label: String) -> some View {
         VStack(spacing: 1) {
             Text(formatCount(count))
-                .font(.caption.weight(.bold))
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(Theme.textPrimary)
             Text(label)
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Theme.textTertiary)
         }
+        .frame(maxWidth: .infinity)
     }
 
     private func formatCount(_ count: Int) -> String {
@@ -421,7 +506,11 @@ private struct DMProfileBanner: View {
 
     private var fallback: some View {
         LinearGradient(
-            colors: [Theme.nickColor(for: nick).opacity(0.35), .clear],
+            colors: [
+                Theme.nickColor(for: nick).opacity(0.30),
+                Theme.accentSoft,
+                Theme.surfaceSoft,
+            ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
