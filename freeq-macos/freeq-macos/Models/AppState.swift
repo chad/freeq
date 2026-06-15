@@ -73,6 +73,7 @@ class AppState {
     var isInCall: Bool = false
     var isMuted: Bool = false
     var isCameraOn: Bool = false
+    var isScreenSharing: Bool = false
     var isCallExpanded: Bool = false
     var callParticipants: [String] = []
     /// channel (lowercased) → active session id, populated from `+freeq.at/av-state` TAGMSGs
@@ -87,6 +88,7 @@ class AppState {
     /// Per-call instance id sent on av-join/av-leave (`+freeq.at/av-instance`).
     @ObservationIgnored var currentAvInstance: String? = nil
     @ObservationIgnored var cameraCapture: CallCameraCapture? = nil
+    @ObservationIgnored var screenCapture: CallScreenCapture? = nil
     @ObservationIgnored var micCapture: CallMicCapture? = nil
     /// Per-nick remote video display layers (lowercased nick → layer, weakly held).
     @ObservationIgnored var remoteVideoLayers =
@@ -116,6 +118,7 @@ class AppState {
     var brokerToken: String?
     var pendingWebToken: String?
     var apiBearerSessionId: String?
+    var isLoadingSavedSession: Bool = false
 
     // MARK: - Batches (CHATHISTORY)
     struct BatchBuffer {
@@ -177,6 +180,8 @@ class AppState {
         // guest connect + DebugBridge from init, independent of any view.
         if ProcessInfo.processInfo.environment["FREEQ_TEST_NICK"] != nil {
             DispatchQueue.main.async { [weak self] in self?.startupConnect() }
+        } else {
+            loadSavedCredentialsAsync()
         }
     }
 
@@ -191,13 +196,6 @@ class AppState {
             autoJoinChannels = saved
         }
         closedDMs = Set(UserDefaults.standard.stringArray(forKey: "freeq.closedDMs") ?? [])
-        // In test mode we connect as a guest and don't need the saved
-        // credentials — skip the keychain reads, which on ad-hoc-signed dev
-        // builds pop a blocking "allow keychain access" dialog every rebuild.
-        if ProcessInfo.processInfo.environment["FREEQ_TEST_NICK"] == nil {
-            brokerToken = KeychainHelper.load(key: "brokerToken")
-            authenticatedDID = KeychainHelper.load(key: "did")
-        }
         favorites = Set(UserDefaults.standard.stringArray(forKey: "freeq.favorites") ?? [])
         mutedChannels = Set(UserDefaults.standard.stringArray(forKey: "freeq.muted") ?? [])
         if let data = UserDefaults.standard.data(forKey: "freeq.bookmarks"),
@@ -213,6 +211,31 @@ class AppState {
             Log.irc.info("System wake detected — reconnecting")
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 self.reconnectIfSaved()
+            }
+        }
+    }
+
+    private func loadSavedCredentialsAsync() {
+        isLoadingSavedSession = true
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, self.isLoadingSavedSession, self.brokerToken == nil else { return }
+            self.isLoadingSavedSession = false
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard self != nil else { return }
+            let savedBrokerToken = KeychainHelper.load(key: "brokerToken")
+            let savedDID = KeychainHelper.load(key: "did")
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.brokerToken = savedBrokerToken
+                self.authenticatedDID = savedDID
+                self.isLoadingSavedSession = false
+                if self.connectionState == .disconnected, self.hasSavedSession {
+                    self.reconnectIfSaved()
+                }
             }
         }
     }

@@ -1,4 +1,5 @@
 import Foundation
+import LocalAuthentication
 import Security
 
 /// Simple Keychain wrapper for storing sensitive strings.
@@ -29,12 +30,16 @@ enum KeychainHelper {
     }
 
     static func load(key: String) -> String? {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseAuthenticationContext as String: context,
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)

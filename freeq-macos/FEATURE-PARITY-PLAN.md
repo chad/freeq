@@ -148,6 +148,23 @@ P2 design work:
 - ☑ Move the welcome overlay behind the message list's visible-message rule.
 - ☑ Rebuild, relaunch, screenshot, and commit the regression fix.
 
+## 2026-06-15 macOS AV + screen sharing parity slice
+
+- ☑ Mount the existing macOS call panel in the chat view.
+- ☑ Add an obvious top-bar call button for channels.
+- ☑ Add ScreenCaptureKit display capture and publish it through the native AV video pipeline.
+- ☑ Add screen-share UI state, slash-command support, and focused tests where practical.
+- ☑ Rebuild, relaunch, WindowServer-verify, and commit the AV/screenshare progress.
+
+## 2026-06-15 macOS empty-message regression follow-up
+
+- ☑ Unify message-row rendering and empty-state decisions behind `MessageVisibility`.
+- ☑ Pass the selected `ChannelState` directly into `MessageListView` so row rendering observes the active buffer's message array.
+- ☑ Add adversarial tests for deleted-only and mixed visible/deleted message lists.
+- ☑ Move saved keychain credential reads off the main startup path so the app can render while restoring a session.
+- ☑ Make startup keychain reads fail fast instead of blocking on authentication UI.
+- ☑ Rebuild, relaunch, WindowServer-verify, and commit the regression follow-up.
+
 ---
 
 ## Method

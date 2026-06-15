@@ -2,22 +2,23 @@ import SwiftUI
 
 struct MessageListView: View {
     @Environment(AppState.self) private var appState
+    let channel: ChannelState?
     /// Which channel we last rendered for. A channel switch should snap
     /// the scroll to the bottom (no animation, no visible "scroll from
     /// top down" sweep). Only subsequent incremental adds in the SAME
     /// channel get the gentle scroll animation.
     @State private var lastRenderedChannel: String?
 
-    private var channel: ChannelState? {
-        appState.activeChannelState
-    }
-
     private var messages: [ChatMessage] {
         channel?.messages ?? []
     }
 
+    private var visibleMessages: [ChatMessage] {
+        MessageVisibility.visibleMessages(from: messages)
+    }
+
     private var shouldShowWelcome: Bool {
-        !(channel?.hasVisibleMessages ?? false)
+        MessageVisibility.shouldShowWelcome(messages: messages)
     }
 
     /// Stable sentinel ID for the bottom anchor — scrolling to a fixed
@@ -34,7 +35,7 @@ struct MessageListView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         // Load more history button
-                        if !messages.isEmpty {
+                        if !visibleMessages.isEmpty {
                             Button {
                                 loadOlderHistory()
                             } label: {
@@ -57,15 +58,13 @@ struct MessageListView: View {
                             .id("load-more")
                         }
 
-                        ForEach(messages) { msg in
-                            if !msg.isDeleted {
-                                if msg.from.isEmpty {
-                                    SystemMessageRow(message: msg)
-                                        .id(msg.id)
-                                } else {
-                                    MessageRow(message: msg)
-                                        .id(msg.id)
-                                }
+                        ForEach(visibleMessages) { msg in
+                            if msg.from.isEmpty {
+                                SystemMessageRow(message: msg)
+                                    .id(msg.id)
+                            } else {
+                                MessageRow(message: msg)
+                                    .id(msg.id)
                             }
                         }
 
@@ -81,7 +80,7 @@ struct MessageListView: View {
                     }
                     .padding(.top, 8)
                 }
-                .onChange(of: messages.count) { oldCount, newCount in
+                .onChange(of: visibleMessages.count) { oldCount, newCount in
                     // If this count change is the initial load for a newly-
                     // selected channel, snap with no animation — otherwise
                     // the user sees a fast visual scroll from top to bottom

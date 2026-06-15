@@ -10,6 +10,16 @@ enum ChannelHydration {
     }
 }
 
+enum MessageVisibility {
+    static func visibleMessages(from messages: [ChatMessage]) -> [ChatMessage] {
+        messages.filter { !$0.isDeleted }
+    }
+
+    static func shouldShowWelcome(messages: [ChatMessage]) -> Bool {
+        visibleMessages(from: messages).isEmpty
+    }
+}
+
 /// Decides when the client should ask the server for authenticated DM targets.
 /// Registration and DID-authentication can arrive in either order, so the
 /// request must wait for both and still only fire once per TCP connection.
@@ -48,6 +58,38 @@ enum BlueskyProfileBootstrap {
         }
         return trimmed.allSatisfy { char in
             char.isLetter || char.isNumber || char == "." || char == "-"
+        }
+    }
+}
+
+enum AvCommandAction: Equatable {
+    case startOrJoin
+    case leave
+    case mute
+    case camera
+    case screenShare
+    case help
+}
+
+enum AvCommandParser {
+    static func action(for argument: String) -> AvCommandAction {
+        let subcommand = argument
+            .split(separator: " ")
+            .first
+            .map { String($0).lowercased() } ?? ""
+        switch subcommand {
+        case "", "start", "join":
+            return .startOrJoin
+        case "leave", "end", "hangup":
+            return .leave
+        case "mute":
+            return .mute
+        case "camera", "video":
+            return .camera
+        case "screen", "share", "screenshare":
+            return .screenShare
+        default:
+            return .help
         }
     }
 }

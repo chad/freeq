@@ -49,6 +49,7 @@ extension AppState {
 
     /// `/av leave` / `/av end` entrypoint used by the UI and slash command.
     func toggleCameraEnabled() { toggleCamera() }
+    func toggleScreenShareEnabled() { toggleScreenShare() }
 
     private func discoverAndJoinOrStart(channel: String) async {
         let key = channel.lowercased()
@@ -114,6 +115,7 @@ extension AppState {
             // Fresh call — don't inherit mute/camera/expand from a prior one.
             isMuted = false
             isCameraOn = false
+            isScreenSharing = false
             isCallExpanded = false
             participantsWithVideo = []
             callParticipants = []
@@ -142,6 +144,8 @@ extension AppState {
     private func teardownLocal() {
         cameraCapture?.stop()
         cameraCapture = nil
+        screenCapture?.stop()
+        screenCapture = nil
         micCapture?.stop()
         micCapture = nil
         avSession?.leave()
@@ -150,6 +154,7 @@ extension AppState {
         isInCall = false
         isMuted = false
         isCameraOn = false
+        isScreenSharing = false
         isCallExpanded = false
         callParticipants = []
         participantsWithVideo = []
@@ -168,6 +173,12 @@ extension AppState {
         isCameraOn = next
     }
 
+    func toggleScreenShare() {
+        guard isInCall else { return }
+        let next = !isScreenSharing
+        if next { startLocalScreenShare() } else { stopLocalScreenShare(disableVideo: !isCameraOn) }
+    }
+
     private func startLocalMic() {
         guard avSession != nil else { return }
         let cap = CallMicCapture()
@@ -180,6 +191,9 @@ extension AppState {
 
     private func startLocalCamera() {
         guard let av = avSession else { return }
+        if isScreenSharing {
+            stopLocalScreenShare(disableVideo: false)
+        }
         if cameraCapture == nil {
             let cap = CallCameraCapture()
             cap.onFrame = { [weak self] ptr, length, width, height, ts in
@@ -200,10 +214,59 @@ extension AppState {
 
     private func stopLocalCamera() {
         cameraCapture?.stop()
+        cameraCapture = nil
         do {
             try avSession?.setCameraEnabled(enabled: false)
         } catch {
             print("[av] setCameraEnabled(false): \(error)")
+        }
+    }
+
+    private func startLocalScreenShare() {
+        guard let av = avSession else { return }
+        if isCameraOn {
+            cameraCapture?.stop()
+            cameraCapture = nil
+            isCameraOn = false
+        }
+        let cap = CallScreenCapture()
+        cap.onFrame = { [weak self] ptr, length, width, height, ts in
+            guard let av = self?.avSession else { return }
+            let bytes = Array(UnsafeBufferPointer(start: ptr, count: length))
+            av.pushVideoFrame(bgra: bytes, width: UInt32(width), height: UInt32(height), timestampUs: ts)
+        }
+        cap.onStopped = { [weak self] in
+            guard let self else { return }
+            self.screenCapture = nil
+            if self.isScreenSharing {
+                self.isScreenSharing = false
+                self.stopLocalScreenShare(disableVideo: !self.isCameraOn)
+            }
+        }
+        screenCapture = cap
+        do {
+            try av.setCameraEnabled(enabled: true)
+        } catch {
+            print("[av] setCameraEnabled(true) for screen share failed: \(error)")
+            screenCapture = nil
+            return
+        }
+        isScreenSharing = true
+        cap.start()
+    }
+
+    private func stopLocalScreenShare(disableVideo: Bool = true) {
+        let cap = screenCapture
+        screenCapture = nil
+        cap?.onStopped = nil
+        cap?.stop()
+        isScreenSharing = false
+        if disableVideo {
+            do {
+                try avSession?.setCameraEnabled(enabled: false)
+            } catch {
+                print("[av] setCameraEnabled(false) for screen share: \(error)")
+            }
         }
     }
 

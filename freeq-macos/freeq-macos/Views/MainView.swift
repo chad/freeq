@@ -6,7 +6,9 @@ struct MainView: View {
 
     var body: some View {
         Group {
-            if appState.connectionState == .disconnected && appState.brokerToken == nil {
+            if appState.connectionState == .disconnected && appState.brokerToken == nil && appState.isLoadingSavedSession {
+                restoringSessionView
+            } else if appState.connectionState == .disconnected && appState.brokerToken == nil {
                 ConnectView()
             } else if appState.connectionState == .connecting {
                 connectingView
@@ -72,6 +74,23 @@ struct MainView: View {
         } message: {
             Text(appState.errorMessage ?? "")
         }
+    }
+
+    private var restoringSessionView: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .scaleEffect(1.5)
+            Text("Restoring your session…")
+                .foregroundStyle(Theme.textSecondary)
+        }
+        .padding(32)
+        .background(
+            RoundedRectangle(cornerRadius: 18)
+                .fill(Theme.surface)
+                .shadow(color: .black.opacity(0.06), radius: 18, y: 8)
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Theme.chatBackground)
     }
 
     private var connectingView: some View {

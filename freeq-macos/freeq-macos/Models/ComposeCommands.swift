@@ -156,7 +156,7 @@ extension AppState {
         "/msg user text · /mode +o user · /raw IRC_LINE",
         "/edit [id] text · /delete [id] · /react emoji · /reply [id] text",
         "/pin [id] · /unpin id · /pins · /list · /names · /who · /search text",
-        "/media · /av start|join|leave · /oper name pass · /reconnect",
+        "/media · /av start|join|leave|mute|camera|screen · /oper name pass · /reconnect",
         "/p2p start|id|connect|peers",
         "── Shortcuts ──",
         "⌘K quick switch · ⌘J join · ↑ edit last · Esc cancel edit",
@@ -196,24 +196,25 @@ extension AppState {
         }
     }
 
-    /// `/av start|join|leave|end|mute|camera` — voice/video calls.
+    /// `/av start|join|leave|end|mute|camera|screen` — voice/video calls.
     func handleAvCommand(_ arg: String, target: String) {
         guard target.hasPrefix("#") else {
             appendSystem("Voice calls are only available in channels")
             return
         }
-        let sub = arg.split(separator: " ").first.map(String.init)?.lowercased() ?? ""
-        switch sub {
-        case "", "start", "join":
+        switch AvCommandParser.action(for: arg) {
+        case .startOrJoin:
             startOrJoinVoice(channel: target)
-        case "leave", "end", "hangup":
+        case .leave:
             leaveCall()
-        case "mute":
+        case .mute:
             toggleMute()
-        case "camera", "video":
+        case .camera:
             toggleCamera()
-        default:
-            appendSystem("AV: start | join | leave | mute | camera")
+        case .screenShare:
+            toggleScreenShare()
+        case .help:
+            appendSystem("AV: start | join | leave | mute | camera | screen")
         }
     }
 

@@ -82,6 +82,57 @@ final class ValidationTests: XCTestCase {
         XCTAssertFalse(channel.hasVisibleMessages)
     }
 
+    func testMessageVisibilityShowsWelcomeOnlyWhenNoRenderableMessagesExist() {
+        let visible = ChatMessage(
+            id: "m1",
+            from: "alice",
+            text: "this should render",
+            isAction: false,
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            replyTo: nil
+        )
+        var deleted = visible
+        deleted.id = "m2"
+        deleted.isDeleted = true
+
+        XCTAssertTrue(MessageVisibility.shouldShowWelcome(messages: []))
+        XCTAssertTrue(MessageVisibility.shouldShowWelcome(messages: [deleted]))
+        XCTAssertFalse(MessageVisibility.shouldShowWelcome(messages: [deleted, visible]))
+    }
+
+    func testMessageVisibilityReturnsOnlyRenderableMessagesInOrder() {
+        let first = ChatMessage(
+            id: "m1",
+            from: "alice",
+            text: "first",
+            isAction: false,
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            replyTo: nil
+        )
+        var deleted = ChatMessage(
+            id: "m2",
+            from: "bob",
+            text: "deleted",
+            isAction: false,
+            timestamp: Date(timeIntervalSince1970: 1_700_000_001),
+            replyTo: nil
+        )
+        let last = ChatMessage(
+            id: "m3",
+            from: "carol",
+            text: "last",
+            isAction: false,
+            timestamp: Date(timeIntervalSince1970: 1_700_000_002),
+            replyTo: nil
+        )
+        deleted.isDeleted = true
+
+        XCTAssertEqual(
+            MessageVisibility.visibleMessages(from: [first, deleted, last]).map(\.id),
+            ["m1", "m3"]
+        )
+    }
+
     func testSelfJoinRequestsLatestChannelHistory() {
         XCTAssertEqual(
             ChannelHydration.historyCommand(for: "#has-messages"),
@@ -91,6 +142,23 @@ final class ValidationTests: XCTestCase {
 
     func testSelfJoinDoesNotRequestChannelHistoryForDMTarget() {
         XCTAssertNil(ChannelHydration.historyCommand(for: "alice"))
+    }
+
+    // MARK: - AV commands
+
+    func testAvCommandParserRecognizesScreenShareAliases() {
+        XCTAssertEqual(AvCommandParser.action(for: "screen"), .screenShare)
+        XCTAssertEqual(AvCommandParser.action(for: "share"), .screenShare)
+        XCTAssertEqual(AvCommandParser.action(for: "screenshare"), .screenShare)
+    }
+
+    func testAvCommandParserRecognizesCoreActions() {
+        XCTAssertEqual(AvCommandParser.action(for: ""), .startOrJoin)
+        XCTAssertEqual(AvCommandParser.action(for: "join"), .startOrJoin)
+        XCTAssertEqual(AvCommandParser.action(for: "leave"), .leave)
+        XCTAssertEqual(AvCommandParser.action(for: "mute"), .mute)
+        XCTAssertEqual(AvCommandParser.action(for: "video"), .camera)
+        XCTAssertEqual(AvCommandParser.action(for: "wat"), .help)
     }
 
     // MARK: - DM target bootstrap

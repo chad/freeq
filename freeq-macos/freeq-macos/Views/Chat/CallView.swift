@@ -2,7 +2,8 @@ import AVFoundation
 import SwiftUI
 
 /// Voice/video call panel — shown when the user is in an AV session.
-/// Camera is off by default (audio only). Click the camera button to enable.
+/// Camera and screen sharing are off by default. Screen share uses the native
+/// video path until the SDK grows web-style `/screen` spotlight broadcasts.
 struct CallView: View {
     @Environment(AppState.self) private var appState
     let channel: String
@@ -33,7 +34,7 @@ struct CallView: View {
     @ViewBuilder
     private func tile(nick: String, label: String, isLocal: Bool) -> some View {
         let hasVideo = isLocal
-            ? (appState.isCameraOn && appState.localPreviewCapture != nil)
+            ? ((appState.isCameraOn && appState.localPreviewCapture != nil) || appState.isScreenSharing)
             : appState.participantsWithVideo.contains(nick)
         VStack(spacing: 4) {
             ZStack {
@@ -44,6 +45,14 @@ struct CallView: View {
                     LocalPreviewView(capture: cap)
                         .frame(width: 110, height: 80)
                         .clipShape(RoundedRectangle(cornerRadius: 8))
+                } else if isLocal, appState.isScreenSharing {
+                    VStack(spacing: 6) {
+                        Image(systemName: "rectangle.on.rectangle")
+                            .font(.title2.weight(.semibold))
+                        Text("Sharing screen")
+                            .font(.caption2.weight(.medium))
+                    }
+                    .foregroundStyle(Theme.accent)
                 } else if !isLocal {
                     RemoteVideoTile(appState: appState, nick: nick)
                         .frame(width: 110, height: 80)
@@ -77,7 +86,7 @@ struct CallView: View {
     @ViewBuilder
     private func expandedTile(nick: String, isLocal: Bool) -> some View {
         let hasVideo = isLocal
-            ? (appState.isCameraOn && appState.localPreviewCapture != nil)
+            ? ((appState.isCameraOn && appState.localPreviewCapture != nil) || appState.isScreenSharing)
             : appState.participantsWithVideo.contains(nick)
         ZStack {
             RoundedRectangle(cornerRadius: 14)
@@ -85,6 +94,14 @@ struct CallView: View {
             if isLocal, appState.isCameraOn, let cap = appState.localPreviewCapture {
                 LocalPreviewView(capture: cap)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if isLocal, appState.isScreenSharing {
+                VStack(spacing: 12) {
+                    Image(systemName: "rectangle.on.rectangle")
+                        .font(.system(size: 52, weight: .semibold))
+                    Text("Sharing your screen")
+                        .font(.headline.weight(.semibold))
+                }
+                .foregroundStyle(Theme.accent)
             } else if !isLocal {
                 RemoteVideoTile(appState: appState, nick: nick)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -117,7 +134,7 @@ struct CallView: View {
         HStack(spacing: 14) {
             HStack(spacing: 6) {
                 Circle().fill(Color.green).frame(width: 8, height: 8)
-                Text("Voice")
+                Text(appState.isScreenSharing ? "Screen" : (appState.isCameraOn ? "Video" : "Voice"))
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.green)
                 if !channel.isEmpty {
@@ -143,6 +160,11 @@ struct CallView: View {
             controlButton(systemName: appState.isCameraOn ? "video.fill" : "video.slash.fill",
                           active: appState.isCameraOn) {
                 appState.toggleCamera()
+            }
+            controlButton(systemName: appState.isScreenSharing ? "rectangle.on.rectangle.fill" : "rectangle.on.rectangle",
+                          active: appState.isScreenSharing,
+                          activeColor: Theme.accent) {
+                appState.toggleScreenShare()
             }
             controlButton(systemName: "phone.down.fill", active: true, activeColor: .red) {
                 appState.leaveCall()

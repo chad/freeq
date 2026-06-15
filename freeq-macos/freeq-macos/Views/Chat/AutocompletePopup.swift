@@ -53,6 +53,7 @@ struct AutocompletePopup: View {
         ("whois", "Look up user info"),
         ("mode", "Set channel/user mode"),
         ("raw", "Send raw IRC command"),
+        ("av", "Start, join, or control a call"),
         ("p2p", "P2P commands"),
         ("help", "Show help"),
     ]

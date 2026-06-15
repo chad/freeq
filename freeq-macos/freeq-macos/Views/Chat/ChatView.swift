@@ -29,7 +29,12 @@ struct ChatView: View {
                 Divider().overlay(Theme.borderSoft)
             }
 
-            MessageListView()
+            if appState.isInCall, let callChannel = appState.currentCallChannel {
+                CallView(channel: callChannel)
+                Divider().overlay(Theme.borderSoft)
+            }
+
+            MessageListView(channel: appState.activeChannelState)
             Divider().overlay(Theme.borderSoft)
 
             // Typing indicator bar
@@ -308,6 +313,23 @@ struct TopBarView: View {
             }
 
             Spacer()
+
+            if isChannel, let name = channel?.name {
+                Button {
+                    if appState.isInCall && appState.currentCallChannel?.lowercased() == name.lowercased() {
+                        appState.isCallExpanded.toggle()
+                    } else if !appState.isInCall {
+                        appState.startOrJoinVoice(channel: name)
+                    }
+                } label: {
+                    Image(systemName: appState.isInCall && appState.currentCallChannel?.lowercased() == name.lowercased()
+                          ? "waveform.circle.fill"
+                          : "phone.badge.plus")
+                    .foregroundStyle(appState.isInCall ? Theme.success : Theme.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .help(appState.isInCall ? "Show active call" : "Start or join call")
+            }
 
             // Search
             Button {
