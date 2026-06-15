@@ -75,6 +75,38 @@ final class ValidationTests: XCTestCase {
         XCTAssertNil(ChannelHydration.historyCommand(for: "alice"))
     }
 
+    // MARK: - DM target bootstrap
+
+    func testDmTargetBootstrapWaitsForRegisteredAuthenticatedConnection() {
+        XCTAssertFalse(DmTargetBootstrap.shouldRequest(
+            isRegistered: false,
+            authenticatedDID: "did:plc:alice",
+            alreadyRequested: false
+        ))
+        XCTAssertFalse(DmTargetBootstrap.shouldRequest(
+            isRegistered: true,
+            authenticatedDID: nil,
+            alreadyRequested: false
+        ))
+        XCTAssertTrue(DmTargetBootstrap.shouldRequest(
+            isRegistered: true,
+            authenticatedDID: "did:plc:alice",
+            alreadyRequested: false
+        ))
+    }
+
+    func testDmTargetBootstrapRequestsOnlyOncePerConnection() {
+        XCTAssertFalse(DmTargetBootstrap.shouldRequest(
+            isRegistered: true,
+            authenticatedDID: "did:plc:alice",
+            alreadyRequested: true
+        ))
+    }
+
+    func testDmTargetBootstrapUsesServerConversationListCommand() {
+        XCTAssertEqual(DmTargetBootstrap.command, "CHATHISTORY TARGETS * * 50")
+    }
+
     // MARK: - Bluesky profile URL
 
     func testBlueSkyProfileURLBasic() {

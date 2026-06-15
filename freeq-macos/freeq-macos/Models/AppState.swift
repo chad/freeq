@@ -142,6 +142,7 @@ class AppState {
     // MARK: - Private
     private var client: FreeqClient?
     private var p2p: FreeqP2p?
+    @ObservationIgnored private var didRequestDmTargets = false
 
     // MARK: - Computed
 
@@ -225,6 +226,7 @@ class AppState {
         Log.irc.info("Connecting as \(nick, privacy: .public)")
         self.nick = nick
         connectionState = .connecting
+        didRequestDmTargets = false
         UserDefaults.standard.set(nick, forKey: "freeq.nick")
 
         let handler = AppEventHandler(appState: self)
@@ -254,6 +256,7 @@ class AppState {
         client?.disconnect()
         client = nil
         connectionState = .disconnected
+        didRequestDmTargets = false
         shutdownP2p()
     }
 
@@ -425,6 +428,17 @@ class AppState {
 
     func sendRaw(_ line: String) {
         try? client?.sendRaw(line: line)
+    }
+
+    private func requestDmTargetsIfReady() {
+        guard DmTargetBootstrap.shouldRequest(
+            isRegistered: connectionState == .registered,
+            authenticatedDID: authenticatedDID,
+            alreadyRequested: didRequestDmTargets
+        ) else { return }
+
+        didRequestDmTargets = true
+        sendRaw(DmTargetBootstrap.command)
     }
 
     func requestHistory(channel: String, before: Date? = nil) {
@@ -762,10 +776,7 @@ extension AppState {
             for ch in autoJoinChannels {
                 joinChannel(ch)
             }
-            // Request DM targets
-            if authenticatedDID != nil {
-                sendRaw("CHATHISTORY TARGETS * * 50")
-            }
+            requestDmTargetsIfReady()
             // Self-avatar: prime the profile cache with our own DID so
             // our avatar resolves immediately, without waiting for one
             // of our own messages to round-trip the server and come
@@ -781,6 +792,7 @@ extension AppState {
             if !KeychainHelper.save(key: "did", value: did) {
                 Log.auth.error("Could not persist authenticated DID")
             }
+            requestDmTargetsIfReady()
             // Once we know our DID, seed the profile cache so our own
             // avatar shows in the sidebar / member list before any
             // self-message echoes back.

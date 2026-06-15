@@ -59,6 +59,14 @@ Status legend: ☐ todo · ◐ in progress · ☑ done · ⛔ blocked
 - ☑ Rebuild macOS app and relaunch.
 - ☑ Commit MOTD placement fix.
 
+## 2026-06-15 DM target bootstrap
+
+- ☑ Confirm whether prior DMs should appear on macOS after sign-in.
+- ☑ Add regression coverage for DM target bootstrap across auth/register event order.
+- ☑ Request `CHATHISTORY TARGETS` once the connection is both registered and DID-authenticated.
+- ☑ Re-run SwiftPM tests and full Xcode build.
+- ☑ Commit DM list bootstrap fix.
+
 ---
 
 ## Method
