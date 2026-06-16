@@ -135,6 +135,95 @@ final class ValidationTests: XCTestCase {
         )
     }
 
+    func testHistoryBatchRoutingBuffersTargetedHistoryBatches() {
+        XCTAssertTrue(HistoryBatchRouting.shouldBuffer(batchType: "chathistory", target: "#freeq"))
+        XCTAssertTrue(HistoryBatchRouting.shouldBuffer(batchType: "freeq.at/search", target: "#freeq"))
+    }
+
+    func testHistoryBatchRoutingIgnoresTargetlessDelimiterBatches() {
+        XCTAssertFalse(HistoryBatchRouting.shouldBuffer(batchType: "draft/chathistory-targets", target: ""))
+        XCTAssertFalse(HistoryBatchRouting.shouldApplyBatch(target: "", messageCount: 0))
+    }
+
+    func testHistoryBatchRoutingBuffersTargetlessMessageBatches() {
+        XCTAssertTrue(HistoryBatchRouting.shouldBuffer(batchType: "chathistory", target: ""))
+        XCTAssertTrue(HistoryBatchRouting.shouldBuffer(batchType: "draft/chathistory", target: "  "))
+        XCTAssertTrue(HistoryBatchRouting.shouldBuffer(batchType: "freeq.at/search", target: ""))
+    }
+
+    func testHistoryBatchRoutingCanLearnMissingTargetFromFirstMessage() {
+        XCTAssertEqual(
+            HistoryBatchRouting.resolvedTarget(batchTarget: "", messageTarget: "#alexandria"),
+            "#alexandria"
+        )
+        XCTAssertEqual(
+            HistoryBatchRouting.resolvedTarget(batchTarget: "#freeq", messageTarget: "#alexandria"),
+            "#freeq"
+        )
+    }
+
+    func testHistoryBatchRoutingDoesNotApplyEmptyMessageBatches() {
+        XCTAssertFalse(HistoryBatchRouting.shouldApplyBatch(target: "#freeq", messageCount: 0))
+        XCTAssertTrue(HistoryBatchRouting.shouldApplyBatch(target: "#freeq", messageCount: 1))
+    }
+
+    func testHistoryBatchApplicationHydratesExistingChannelWithVisibleMessages() {
+        var channels = [ChannelState(name: "#alexandria")]
+        var dmBuffers: [ChannelState] = []
+        var batch = HistoryBatchBuffer(target: "#alexandria")
+
+        batch.append(
+            ChatMessage(
+                id: "newer",
+                from: "bob",
+                text: "newer history",
+                isAction: false,
+                timestamp: Date(timeIntervalSince1970: 1_700_000_010),
+                replyTo: nil
+            ),
+            messageTarget: "#alexandria"
+        )
+        batch.append(
+            ChatMessage(
+                id: "older",
+                from: "alice",
+                text: "older history",
+                isAction: false,
+                timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+                replyTo: nil
+            ),
+            messageTarget: "#alexandria"
+        )
+
+        XCTAssertTrue(HistoryBatchRouting.apply(buffer: batch, channels: &channels, dmBuffers: &dmBuffers))
+        XCTAssertEqual(channels.count, 1)
+        XCTAssertEqual(channels[0].messages.map(\.id), ["older", "newer"])
+        XCTAssertFalse(MessageVisibility.shouldShowWelcome(messages: channels[0].messages))
+    }
+
+    func testHistoryBatchApplicationLearnsTargetAndCreatesChannel() {
+        var channels: [ChannelState] = []
+        var dmBuffers: [ChannelState] = []
+        var batch = HistoryBatchBuffer(target: "")
+
+        batch.append(
+            ChatMessage(
+                id: "m1",
+                from: "alice",
+                text: "visible history",
+                isAction: false,
+                timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+                replyTo: nil
+            ),
+            messageTarget: "#alexandria"
+        )
+
+        XCTAssertTrue(HistoryBatchRouting.apply(buffer: batch, channels: &channels, dmBuffers: &dmBuffers))
+        XCTAssertEqual(channels.map(\.name), ["#alexandria"])
+        XCTAssertEqual(channels.first?.messages.first?.text, "visible history")
+        XCTAssertTrue(dmBuffers.isEmpty)
+    }
+
     func testSelfJoinRequestsLatestChannelHistory() {
         XCTAssertEqual(
             ChannelHydration.historyCommand(for: "#has-messages"),

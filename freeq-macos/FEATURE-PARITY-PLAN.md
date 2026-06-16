@@ -173,6 +173,15 @@ P2 design work:
 - ☑ Add SwiftPM guard tests that keychain queries use data protection and noninteractive auth contexts.
 - ☑ Rebuild, relaunch, verify no launch-time keychain prompt path remains, and commit.
 
+## 2026-06-15 macOS channel history rendering regression
+
+- ☑ Probe live IRC CHATHISTORY wire shape for a disposable channel.
+- ☑ Preserve parent `batch=<chathistory-id>` when SDK assembles nested multiline history messages.
+- ☑ Harden macOS batch routing so targetless delimiter batches cannot create empty buffers.
+- ☑ Extract shared history-batch application logic used by `AppState`.
+- ☑ Add Swift routing and visible-buffer hydration tests for target fallback, empty-batch rejection, and timestamp ordering.
+- ☑ Run Swift/Rust tests, rebuild macOS, visually verify via per-window screenshot, and commit.
+
 ---
 
 ## Method

@@ -121,11 +121,7 @@ class AppState {
     var isLoadingSavedSession: Bool = false
 
     // MARK: - Batches (CHATHISTORY)
-    struct BatchBuffer {
-        let target: String
-        var messages: [ChatMessage]
-    }
-    var batches: [String: BatchBuffer] = [:]
+    var batches: [String: HistoryBatchBuffer] = [:]
 
     // MARK: - Names accumulator (353 lines come in multiple events)
     var pendingNames: [String: [MemberInfo]] = [:]
@@ -908,6 +904,7 @@ extension AppState {
             // Handle edits
             if let editOf = msg.editOf {
                 if let batchId = msg.batchId, var batch = batches[batchId] {
+                    batch.learnTarget(from: msg.target)
                     if let idx = batch.messages.firstIndex(where: { $0.id == editOf }) {
                         batch.messages[idx].text = msg.text
                         batch.messages[idx].isEdited = true
@@ -935,7 +932,7 @@ extension AppState {
 
             // Handle batch (CHATHISTORY)
             if let batchId = msg.batchId, var batch = batches[batchId] {
-                batch.messages.append(message)
+                batch.append(message, messageTarget: msg.target)
                 batches[batchId] = batch
                 return
             }
@@ -1106,22 +1103,13 @@ extension AppState {
                 }
             }
 
-        case .batchStart(let id, _, let target):
-            batches[id] = BatchBuffer(target: target, messages: [])
+        case .batchStart(let id, let batchType, let target):
+            guard HistoryBatchRouting.shouldBuffer(batchType: batchType, target: target) else { return }
+            batches[id] = HistoryBatchBuffer(target: target)
 
         case .batchEnd(let id):
             guard let batch = batches.removeValue(forKey: id) else { return }
-            let target = batch.target
-            // Case-insensitive: find existing channel/DM or create
-            let ch: ChannelState
-            if target.hasPrefix("#") {
-                ch = channels.first(where: { $0.name.lowercased() == target.lowercased() }) ?? getOrCreateChannel(target)
-            } else {
-                ch = dmBuffers.first(where: { $0.name.lowercased() == target.lowercased() }) ?? getOrCreateDM(target)
-            }
-            for msg in batch.messages.sorted(by: { $0.timestamp < $1.timestamp }) {
-                ch.appendIfNew(msg)
-            }
+            HistoryBatchRouting.apply(buffer: batch, channels: &channels, dmBuffers: &dmBuffers)
 
         case .chatHistoryTarget(let targetNick, let timestamp):
             if closedDMs.contains(targetNick.lowercased()) { return }

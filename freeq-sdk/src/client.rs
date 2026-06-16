@@ -2140,19 +2140,21 @@ async fn dispatch_assembled_multiline(
         }
         text.push_str(&line.body);
     }
+    let mut tags = batch.opener_tags;
+    if let Some(parent_batch_id) = batch.parent_batch_id {
+        tags.insert("batch".to_string(), parent_batch_id);
+    }
     let _ = event_tx
         .send(Event::Message {
             from: batch.from,
             target: batch.target,
             text,
-            tags: batch.opener_tags,
+            tags,
         })
         .await;
     // Nested-batch parent (e.g. multiline inside CHATHISTORY) is
-    // exposed to the consumer via the `batch` tag in `opener_tags`;
-    // assembled multiline events fire at top-level regardless of
-    // nesting depth.
-    let _ = batch.parent_batch_id;
+    // exposed to the consumer via the `batch` tag so UI layers can
+    // attach the assembled message to the outer batch.
 }
 
 /// Execute a single IRC command on the wire.
@@ -3083,6 +3085,17 @@ mod multiline_tests {
         assert!(
             assembled.iter().any(|t| t.contains("sibling regular msg")),
             "regular sibling PRIVMSG should also have been dispatched. got: {assembled:#?}",
+        );
+        let assembled_multiline_tags = events.iter().find_map(|e| match e {
+            Event::Message { text, tags, .. } if text == "first line\nsecond line" => Some(tags),
+            _ => None,
+        });
+        assert_eq!(
+            assembled_multiline_tags
+                .and_then(|tags| tags.get("batch"))
+                .map(String::as_str),
+            Some("cht1"),
+            "assembled nested multiline history message must retain parent chathistory batch tag. events: {events:#?}",
         );
     }
 

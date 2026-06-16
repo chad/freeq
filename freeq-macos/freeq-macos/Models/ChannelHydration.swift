@@ -20,6 +20,82 @@ enum MessageVisibility {
     }
 }
 
+enum HistoryBatchRouting {
+    static func shouldBuffer(batchType: String, target: String) -> Bool {
+        if !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+
+        // `CHATHISTORY TARGETS` uses a batch only as a list delimiter; it
+        // emits dedicated ChatHistoryTarget events, not messages for a buffer.
+        let normalizedType = batchType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalizedType == "chathistory"
+            || normalizedType == "draft/chathistory"
+            || normalizedType == "freeq.at/search"
+    }
+
+    static func resolvedTarget(batchTarget: String, messageTarget: String) -> String {
+        let trimmedBatchTarget = batchTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedBatchTarget.isEmpty { return trimmedBatchTarget }
+        return messageTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func shouldApplyBatch(target: String, messageCount: Int) -> Bool {
+        messageCount > 0 && !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    @discardableResult
+    static func apply(
+        buffer: HistoryBatchBuffer,
+        channels: inout [ChannelState],
+        dmBuffers: inout [ChannelState]
+    ) -> Bool {
+        let target = buffer.target.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard shouldApplyBatch(target: target, messageCount: buffer.messages.count) else {
+            return false
+        }
+
+        let destination: ChannelState
+        if target.hasPrefix("#") || target.hasPrefix("&") {
+            if let existing = channels.first(where: { $0.name.lowercased() == target.lowercased() }) {
+                destination = existing
+            } else {
+                destination = ChannelState(name: target)
+                channels.append(destination)
+            }
+        } else {
+            if let existing = dmBuffers.first(where: { $0.name.lowercased() == target.lowercased() }) {
+                destination = existing
+            } else {
+                destination = ChannelState(name: target)
+                dmBuffers.append(destination)
+            }
+        }
+
+        for message in buffer.messages.sorted(by: { $0.timestamp < $1.timestamp }) {
+            destination.appendIfNew(message)
+        }
+        return true
+    }
+}
+
+struct HistoryBatchBuffer {
+    var target: String
+    var messages: [ChatMessage] = []
+
+    mutating func learnTarget(from messageTarget: String) {
+        target = HistoryBatchRouting.resolvedTarget(
+            batchTarget: target,
+            messageTarget: messageTarget
+        )
+    }
+
+    mutating func append(_ message: ChatMessage, messageTarget: String) {
+        learnTarget(from: messageTarget)
+        messages.append(message)
+    }
+}
+
 /// Decides when the client should ask the server for authenticated DM targets.
 /// Registration and DID-authentication can arrive in either order, so the
 /// request must wait for both and still only fire once per TCP connection.
