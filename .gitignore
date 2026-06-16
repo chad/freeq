@@ -87,3 +87,6 @@ data/
 node_modules/
 /Freeq.WinUI/.vs
 .gstack/
+
+# macOS FFI build artifact — too big for git (142MB); build locally
+freeq-macos/Libraries/libfreeq_sdk_ffi.a
