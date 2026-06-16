@@ -27,54 +27,66 @@ object AvatarCache {
 
     fun profile(nick: String): BlueskyProfile? = profileCache[nick.lowercase()]
 
-    suspend fun fetchProfileIfNeeded(nick: String): BlueskyProfile? {
+    suspend fun fetchProfileIfNeeded(nick: String, did: String?): BlueskyProfile? {
         val key = nick.lowercase()
         profileCache[key]?.let { return it }
-        fetchAvatar(nick, key)
+        // DID-only: without a verified, non-did:key DID there is no Bluesky
+        // profile to show. See fetchAvatar for why we never resolve from a nick.
+        if (did.isNullOrEmpty() || did.startsWith("did:key:")) return null
+        pending.add(key)
+        fetchAvatar(key, did)
         return profileCache[key]
     }
 
     fun prefetch(nick: String, did: String? = null) {
         val key = nick.lowercase()
-        // Skip guest nicks - they're not Bluesky accounts (avoid false positives like guest111.bsky.social)
+        // Skip guest nicks - they're not Bluesky accounts.
         if (key.startsWith("guest") || key.startsWith("web")) return
-        if (cache.containsKey(key) || pending.contains(key) || failed.contains(key)) return
+        if (cache.containsKey(key) || pending.contains(key)) return
+        // Identity on freeq is the DID the server bound at SASL — never the
+        // freely-settable nick. Without a verified DID there is nothing we can
+        // safely resolve, and did:key users (guests, AI beings) have no Bluesky
+        // profile. A no-DID call is a no-op (and NOT marked failed) so a later
+        // call carrying the account-tag DID is never pre-empted.
+        if (did.isNullOrEmpty() || did.startsWith("did:key:")) return
+        if (failed.contains(key)) return
         pending.add(key)
-        scope.launch { fetchAvatar(nick, key, did) }
+        scope.launch { fetchAvatar(key, did) }
     }
 
     fun prefetchAll(nicks: List<String>) {
         nicks.forEach { prefetch(it) }
     }
 
-    private suspend fun fetchAvatar(nick: String, key: String, did: String? = null) {
-        // Try DID first — most reliable
-        if (!did.isNullOrEmpty()) {
-            val result = resolveProfile(did)
-            if (result != null) {
-                profileCache[key] = result
-                result.avatar?.let { cache[key] = it }
-                pending.remove(key)
-                return
-            }
+    private suspend fun fetchAvatar(key: String, did: String) {
+        // Resolve ONLY by the server-verified DID. We must never derive a
+        // Bluesky identity from the nick — neither the bare nick as a handle
+        // nor a guessed "<nick>.bsky.social". Nicks are freely chosen, so any
+        // such guess shows a STRANGER's photo and handle for whoever happens to
+        // match (e.g. the AI being "olive" pulling up the unrelated real
+        // account olive.bsky.social). That is impersonation.
+        val result = resolveProfile(did)
+        if (result != null) {
+            profileCache[key] = result
+            result.avatar?.let { cache[key] = it }
+        } else {
+            failed.add(key)
         }
-
-        val handles = if (nick.contains(".")) listOf(nick) else listOf("$nick.bsky.social")
-
-        for (handle in handles) {
-            val result = resolveProfile(handle)
-            if (result != null) {
-                profileCache[key] = result
-                result.avatar?.let { cache[key] = it }
-                pending.remove(key)
-                return
-            }
-        }
-        failed.add(key)
         pending.remove(key)
     }
 
-    private fun resolveProfile(handle: String): BlueskyProfile? {
+    // Test seam: unit tests override this to assert we only ever resolve by a
+    // verified DID (never a nick or a guessed "<nick>.bsky.social"). Defaults
+    // to the live Bluesky API call.
+    internal var resolveProfile: (String) -> BlueskyProfile? = ::resolveProfileNetwork
+
+    /** Clear all caches and restore the live resolver. Test-only. */
+    internal fun resetForTest() {
+        cache.clear(); profileCache.clear(); pending.clear(); failed.clear()
+        resolveProfile = ::resolveProfileNetwork
+    }
+
+    private fun resolveProfileNetwork(handle: String): BlueskyProfile? {
         return try {
             val encoded = URLEncoder.encode(handle, "UTF-8")
             val url = URL("https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor=$encoded")

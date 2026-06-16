@@ -39,8 +39,18 @@ fun UserProfileSheet(
     val isOwnProfile = nick.equals(appState.nick.value, ignoreCase = true)
 
     LaunchedEffect(nick) {
+        // Identity is the server-bound DID, never the nick. Resolve the DID
+        // from our own session (self) or a channel member entry; with no DID
+        // there is no Bluesky profile to show (no nick-as-handle guessing).
+        val did = if (isOwnProfile) {
+            appState.authenticatedDID.value
+        } else {
+            appState.channels.firstNotNullOfOrNull { ch ->
+                ch.members.firstOrNull { it.nick.equals(nick, ignoreCase = true) }?.did
+            }
+        }
         profile = withContext(Dispatchers.IO) {
-            AvatarCache.fetchProfileIfNeeded(nick)
+            AvatarCache.fetchProfileIfNeeded(nick, did)
         }
         loading = false
     }
