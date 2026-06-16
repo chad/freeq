@@ -326,7 +326,7 @@
     "kind": "running"
   },
   "status_updated_at": "2026-06-16T02:09:00.624200718Z",
-  "last_event_at": "2026-06-16T02:29:06.613552781Z",
+  "last_event_at": "2026-06-16T02:32:59.077124380Z",
   "pending_control": null,
   "checkpoints": [
     {
@@ -454,9 +454,9 @@
       }
     },
     {
-      "seq": 0,
+      "seq": 361,
       "checkpoint": {
-        "timestamp": "2026-06-16T02:29:06.635755066Z",
+        "timestamp": "2026-06-16T02:29:10.164058723Z",
         "current_node": "implement",
         "completed_nodes": [
           "start",
@@ -465,27 +465,179 @@
         ],
         "node_retries": {},
         "context_values": {
+          "failure_class": "",
+          "internal.node_visit_count": 1,
+          "internal.retry_count.start": 0,
+          "internal.thread_id": "cov",
+          "thread.cov.current_node": "implement",
+          "current_node": "implement",
+          "internal.run_id": "01KV730C7B2VZ6EQ9JB7GMHMRX",
+          "internal.retry_count.implement": 0,
+          "response.implement": "All 30 tests in `irc_loop_tests` pass (16 new + 14 existing). Let me do a final summary of what was added:\n\n---\n\n## Summary\n\n**File modified:** `freeq-sdk/src/client.rs`\n\n**16 new tests** added to the existing `mod irc_loop_tests` block, covering 7 previously untested IRC message types:\n\n| Group | Tests | Behaviors pinned |\n|---|---|---|\n| **NICK change** | `server_nick_change_emits_nick_changed_event`, `server_nick_change_bare_prefix_parses_correctly` | nick parsed from prefix (with and without `!user@host`), new_nick from params |\n| **QUIT** | `server_quit_emits_user_quit_event`, `server_quit_with_no_reason_emits_empty_reason` | quit with reason, quit with no params → empty reason (no panic) |\n| **KICK** | `server_kick_emits_kicked_event`, `server_kick_with_no_reason_emits_empty_reason` | full kick with reason, kick with missing reason param |\n| **AWAY** | `server_away_with_message_emits_away_changed`, `server_away_with_no_message_emits_away_changed_none` | going away (`Some(msg)`), returning (`None`) |\n| **TOPIC** | `server_topic_change_emits_topic_changed_event`, `server_rpl_topic_332_emits_topic_changed_no_setter` | live TOPIC with `set_by`, 332 RPL_TOPIC with `set_by=None` |\n| **INVITE** | `server_invite_emits_invited_event` | channel and inviter nick extracted correctly |\n| **NAMES/TAGMSG** | `server_353_emits_names_event`, `server_tagmsg_emits_tag_msg_event` | nick list parsing, tag propagation to `TagMsg` event |\n| **Legacy multiline** | `legacy_multiline_tag_normalizes_slash_n_to_newline`, `privmsg_without_multiline_tag_preserves_literal_slash_n` | `+freeq.at/multiline` tag triggers `\\n` normalization; absence preserves verbatim body |\n| **Extended JOIN** | `extended_join_with_did_account_emits_joined_with_account`, `extended_join_with_star_account_emits_joined_no_account` | DID account present, `*` sentinel → `None` |\n\nAll tests use the same in-process `tokio::io::duplex` harness as existing tests — no network, no server, deterministic, fast (0.13s for all 30).",
+          "internal.fidelity": "full",
+          "outcome": "succeeded",
+          "last_stage": "implement",
           "graph.goal": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code.",
+          "graph.rankdir": "LR",
+          "last_response": "All 30 tests in `irc_loop_tests` pass (16 new + 14 existing). Let me do a final summary of what was added:\n\n---\n\n## Summary\n\n**File modified:** `freeq-sdk/src/client.rs`\n\n**16 new tests** added to the",
+          "internal.work_dir": "/workspace/freeq",
+          "response.select": "Now I have a comprehensive picture. Let me assess both candidates side by side:\n\n**`freeq-sdk/src/client.rs`** (3712 lines, 62 public functions, 28 tests):\n- CLAUDE.md flags it explicitly: \"sdk/client.rs (gamma 104) — ZERO unit tests on connection state machine\"\n- The existing 28 tests cover: multiline assembly (14 tests), basic connection state machine behaviors (14 tests: PING/PONG, 001, nick-in-use, 904, raw, privmsg signing, JOIN, PART, EOF)\n- **Zero tests** for: NICK change events, QUIT events, KICK events, AWAY events, TOPIC events, INVITE events, MODE events, NAMES/353, TAGMSG dispatch, server NOTICE parsing, `legacy +freeq.at/multiline \\n` normalization, `ConnectConfig::validate()` invalid char cases (nick with `#`, `!`, `@`, etc.)\n\n**`freeq-app/src/components/MessageList.tsx`** (1327 lines):\n- Has 391 lines of tests already — reasonably covered.\n\nThe clear winner is `freeq-sdk/src/client.rs`.\n\n---\n\n## My Choice: `freeq-sdk/src/client.rs`\n\n**Language/crate:** Rust, `freeq-sdk`\n\n### Why it's high-risk and undertested\n\nCLAUDE.md explicitly flags it: **\"sdk/client.rs (gamma 104) — ZERO unit tests on connection state machine.\"** At 3,712 lines with 62 public functions (117 `fn` definitions total), only 28 `#[tokio::test]` cases exist — and the majority of those (14) test `multiline` batch assembly, a self-contained sub-feature. The core IRC event dispatch loop (`run_irc`) handles over a dozen server-sent message types; of those, only PING, 001 RPL_WELCOME, 433 nick-in-use, 904 SASL failure, JOIN, and PART have any test coverage. Every other incoming event type is completely unexercised by automated tests.\n\n### 3–6 specific behaviors I'll pin with tests\n\n1. **`NICK` → `Event::NickChanged`** — Server sends `:alice!u@h NICK :alice2`. The client must emit `Event::NickChanged { old_nick: \"alice\", new_nick: \"alice2\" }`. Critically, the nick is parsed from the prefix (before `!`), not from params.\n\n2. **`QUIT` → `Event::UserQuit`** — Server sends `:bob!u@h QUIT :Gone` and the client must emit `Event::UserQuit { nick: \"bob\", reason: \"Gone\" }`. Edge case: quit with empty/missing reason must not panic.\n\n3. **`KICK` → `Event::Kicked`** — Server sends `:op!u@h KICK #room victim :spam`. Client must emit `Event::Kicked { channel: \"#room\", nick: \"victim\", by: \"op\", reason: \"spam\" }`.\n\n4. **`AWAY` → `Event::AwayChanged`** — Two sub-cases: (a) `:user!u@h AWAY :be right back` → `away_msg: Some(\"be right back\")`, and (b) `:user!u@h AWAY` (no param) → `away_msg: None` (user returning).\n\n5. **`TOPIC` → `Event::TopicChanged`** — `:mod!u@h TOPIC #room :New topic` must emit `Event::TopicChanged { channel: \"#room\", topic: \"New topic\", set_by: Some(\"mod\") }`.\n\n6. **`ConnectConfig::validate()` invalid nick characters** — The validator rejects nicks containing `#`, `!`, `@`, `*`, `?`, `,`, space, or control chars. There are no tests for these individual rejection paths despite the function having 8 distinct invalid-char checks.\n\n### Existing test convention to follow\n\nThe sibling test module `mod irc_loop_tests` at the bottom of `freeq-sdk/src/client.rs` (line 3247) provides the exact pattern: use `start_run_irc()` to spin up `run_irc` over a `tokio::io::duplex`, write raw IRC lines to the \"server side\", then `tokio::time::timeout`-wait for specific `Event` variants on the event channel. All new tests will follow this same in-process, no-network, no-server pattern.",
+          "internal.retry_count.select": 0,
+          "failure_signature": ""
+        },
+        "node_outcomes": {
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          },
+          "select": {
+            "status": "succeeded",
+            "context_updates": {
+              "response.select": "Now I have a comprehensive picture. Let me assess both candidates side by side:\n\n**`freeq-sdk/src/client.rs`** (3712 lines, 62 public functions, 28 tests):\n- CLAUDE.md flags it explicitly: \"sdk/client.rs (gamma 104) — ZERO unit tests on connection state machine\"\n- The existing 28 tests cover: multiline assembly (14 tests), basic connection state machine behaviors (14 tests: PING/PONG, 001, nick-in-use, 904, raw, privmsg signing, JOIN, PART, EOF)\n- **Zero tests** for: NICK change events, QUIT events, KICK events, AWAY events, TOPIC events, INVITE events, MODE events, NAMES/353, TAGMSG dispatch, server NOTICE parsing, `legacy +freeq.at/multiline \\n` normalization, `ConnectConfig::validate()` invalid char cases (nick with `#`, `!`, `@`, etc.)\n\n**`freeq-app/src/components/MessageList.tsx`** (1327 lines):\n- Has 391 lines of tests already — reasonably covered.\n\nThe clear winner is `freeq-sdk/src/client.rs`.\n\n---\n\n## My Choice: `freeq-sdk/src/client.rs`\n\n**Language/crate:** Rust, `freeq-sdk`\n\n### Why it's high-risk and undertested\n\nCLAUDE.md explicitly flags it: **\"sdk/client.rs (gamma 104) — ZERO unit tests on connection state machine.\"** At 3,712 lines with 62 public functions (117 `fn` definitions total), only 28 `#[tokio::test]` cases exist — and the majority of those (14) test `multiline` batch assembly, a self-contained sub-feature. The core IRC event dispatch loop (`run_irc`) handles over a dozen server-sent message types; of those, only PING, 001 RPL_WELCOME, 433 nick-in-use, 904 SASL failure, JOIN, and PART have any test coverage. Every other incoming event type is completely unexercised by automated tests.\n\n### 3–6 specific behaviors I'll pin with tests\n\n1. **`NICK` → `Event::NickChanged`** — Server sends `:alice!u@h NICK :alice2`. The client must emit `Event::NickChanged { old_nick: \"alice\", new_nick: \"alice2\" }`. Critically, the nick is parsed from the prefix (before `!`), not from params.\n\n2. **`QUIT` → `Event::UserQuit`** — Server sends `:bob!u@h QUIT :Gone` and the client must emit `Event::UserQuit { nick: \"bob\", reason: \"Gone\" }`. Edge case: quit with empty/missing reason must not panic.\n\n3. **`KICK` → `Event::Kicked`** — Server sends `:op!u@h KICK #room victim :spam`. Client must emit `Event::Kicked { channel: \"#room\", nick: \"victim\", by: \"op\", reason: \"spam\" }`.\n\n4. **`AWAY` → `Event::AwayChanged`** — Two sub-cases: (a) `:user!u@h AWAY :be right back` → `away_msg: Some(\"be right back\")`, and (b) `:user!u@h AWAY` (no param) → `away_msg: None` (user returning).\n\n5. **`TOPIC` → `Event::TopicChanged`** — `:mod!u@h TOPIC #room :New topic` must emit `Event::TopicChanged { channel: \"#room\", topic: \"New topic\", set_by: Some(\"mod\") }`.\n\n6. **`ConnectConfig::validate()` invalid nick characters** — The validator rejects nicks containing `#`, `!`, `@`, `*`, `?`, `,`, space, or control chars. There are no tests for these individual rejection paths despite the function having 8 distinct invalid-char checks.\n\n### Existing test convention to follow\n\nThe sibling test module `mod irc_loop_tests` at the bottom of `freeq-sdk/src/client.rs` (line 3247) provides the exact pattern: use `start_run_irc()` to spin up `run_irc` over a `tokio::io::duplex`, write raw IRC lines to the \"server side\", then `tokio::time::timeout`-wait for specific `Event` variants on the event channel. All new tests will follow this same in-process, no-network, no-server pattern.",
+              "last_stage": "select",
+              "last_response": "Now I have a comprehensive picture. Let me assess both candidates side by side:\n\n**`freeq-sdk/src/client.rs`** (3712 lines, 62 public functions, 28 tests):\n- CLAUDE.md flags it explicitly: \"sdk/client"
+            },
+            "notes": "Stage completed: select",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "anthropic",
+                    "model_id": "claude-sonnet-4-6"
+                  },
+                  "tokens": {
+                    "input_tokens": 23031,
+                    "output_tokens": 5421,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 426630,
+                    "cache_write_tokens": 66810
+                  }
+                },
+                "facts": {
+                  "algorithm": "anthropic",
+                  "cache_write_5m_tokens": 66810,
+                  "cache_write_1h_tokens": 0
+                }
+              },
+              "total_usd_micros": 528934
+            },
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 114225,
+              "tool_time_ms": 2806,
+              "active_time_ms": 117031
+            }
+          },
+          "implement": {
+            "status": "succeeded",
+            "context_updates": {
+              "last_response": "All 30 tests in `irc_loop_tests` pass (16 new + 14 existing). Let me do a final summary of what was added:\n\n---\n\n## Summary\n\n**File modified:** `freeq-sdk/src/client.rs`\n\n**16 new tests** added to the",
+              "response.implement": "All 30 tests in `irc_loop_tests` pass (16 new + 14 existing). Let me do a final summary of what was added:\n\n---\n\n## Summary\n\n**File modified:** `freeq-sdk/src/client.rs`\n\n**16 new tests** added to the existing `mod irc_loop_tests` block, covering 7 previously untested IRC message types:\n\n| Group | Tests | Behaviors pinned |\n|---|---|---|\n| **NICK change** | `server_nick_change_emits_nick_changed_event`, `server_nick_change_bare_prefix_parses_correctly` | nick parsed from prefix (with and without `!user@host`), new_nick from params |\n| **QUIT** | `server_quit_emits_user_quit_event`, `server_quit_with_no_reason_emits_empty_reason` | quit with reason, quit with no params → empty reason (no panic) |\n| **KICK** | `server_kick_emits_kicked_event`, `server_kick_with_no_reason_emits_empty_reason` | full kick with reason, kick with missing reason param |\n| **AWAY** | `server_away_with_message_emits_away_changed`, `server_away_with_no_message_emits_away_changed_none` | going away (`Some(msg)`), returning (`None`) |\n| **TOPIC** | `server_topic_change_emits_topic_changed_event`, `server_rpl_topic_332_emits_topic_changed_no_setter` | live TOPIC with `set_by`, 332 RPL_TOPIC with `set_by=None` |\n| **INVITE** | `server_invite_emits_invited_event` | channel and inviter nick extracted correctly |\n| **NAMES/TAGMSG** | `server_353_emits_names_event`, `server_tagmsg_emits_tag_msg_event` | nick list parsing, tag propagation to `TagMsg` event |\n| **Legacy multiline** | `legacy_multiline_tag_normalizes_slash_n_to_newline`, `privmsg_without_multiline_tag_preserves_literal_slash_n` | `+freeq.at/multiline` tag triggers `\\n` normalization; absence preserves verbatim body |\n| **Extended JOIN** | `extended_join_with_did_account_emits_joined_with_account`, `extended_join_with_star_account_emits_joined_no_account` | DID account present, `*` sentinel → `None` |\n\nAll tests use the same in-process `tokio::io::duplex` harness as existing tests — no network, no server, deterministic, fast (0.13s for all 30).",
+              "last_stage": "implement"
+            },
+            "notes": "Stage completed: implement",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "anthropic",
+                    "model_id": "claude-sonnet-4-6"
+                  },
+                  "tokens": {
+                    "input_tokens": 31289,
+                    "output_tokens": 10462,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 1361083,
+                    "cache_write_tokens": 232069
+                  }
+                },
+                "facts": {
+                  "algorithm": "anthropic",
+                  "cache_write_5m_tokens": 232069,
+                  "cache_write_1h_tokens": 0
+                }
+              },
+              "total_usd_micros": 1529379
+            },
+            "files_touched": [
+              "/workspace/freeq/freeq-sdk/src/client.rs"
+            ],
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 182618,
+              "tool_time_ms": 901504,
+              "active_time_ms": 1084122
+            }
+          }
+        },
+        "next_node_id": "verify",
+        "git_commit_sha": "efb2ff2bafa849a58bfe4d7f4c7836d0bcf49eaf",
+        "node_visits": {
+          "implement": 1,
+          "select": 1,
+          "start": 1
+        }
+      },
+      "diff": {
+        "patch": "diff --git a/freeq-eliza/src/irc.rs b/freeq-eliza/src/irc.rs\nindex 9f799b5..7935735 100644\n--- a/freeq-eliza/src/irc.rs\n+++ b/freeq-eliza/src/irc.rs\n@@ -1533,8 +1533,7 @@ pub(crate) async fn speak_text(\n     let voice = cfg.elevenlabs_voice_id.clone();\n     let model = cfg.elevenlabs_model.clone();\n     let voice_profile = resolve_speak_profile(cfg);\n-    let mut chain =\n-        ghostly::audio::VoiceChain::new(voice_profile, tts::ELEVENLABS_PCM_RATE as f32);\n+    let mut chain = ghostly::audio::VoiceChain::new(voice_profile, tts::ELEVENLABS_PCM_RATE as f32);\n     let mut work: Vec<f32> = Vec::with_capacity(4096);\n     let mut chunker = qa::SentenceChunker::new();\n     let mut sentences: Vec<String> = chunker.push(text);\ndiff --git a/freeq-eliza/src/main.rs b/freeq-eliza/src/main.rs\nindex 44e6518..5caafb1 100644\n--- a/freeq-eliza/src/main.rs\n+++ b/freeq-eliza/src/main.rs\n@@ -474,7 +474,10 @@ async fn main() -> Result<()> {\n fn decode_seed_hex(s: &str) -> Result<[u8; 32]> {\n     let bytes = s.as_bytes();\n     if bytes.len() != 64 {\n-        anyhow::bail!(\"expected 64 hex chars (32 bytes), got {} chars\", bytes.len());\n+        anyhow::bail!(\n+            \"expected 64 hex chars (32 bytes), got {} chars\",\n+            bytes.len()\n+        );\n     }\n     let nibble = |c: u8| -> Result<u8> {\n         match c {\ndiff --git a/freeq-sdk/src/client.rs b/freeq-sdk/src/client.rs\nindex 2968f27..5e67a4a 100644\n--- a/freeq-sdk/src/client.rs\n+++ b/freeq-sdk/src/client.rs\n@@ -3709,4 +3709,535 @@ mod irc_loop_tests {\n \n         assert!(got_disconnect, \"expected Event::Disconnected on server EOF\");\n     }\n+\n+    // ── NICK change ───────────────────────────────────────────────────────────\n+\n+    /// NICK from another user emits Event::NickChanged with correct\n+    /// old_nick (parsed from the prefix) and new_nick (from params).\n+    #[tokio::test]\n+    async fn server_nick_change_emits_nick_changed_event() {\n+        let (mut server, mut events, _cmd) = start_run_irc(\"host\").await;\n+\n+        server\n+            .write_all(b\":alice!u@h NICK :alice2\\r\\n\")\n+            .await\n+            .unwrap();\n+        server.flush().await.unwrap();\n+\n+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {\n+            while let Some(ev) = events.recv().await {\n+                if let Event::NickChanged { old_nick, new_nick } = ev {\n+                    return Some((old_nick, new_nick));\n+                }\n+            }\n+            None\n+        })\n+        .await\n+        .unwrap_or(None);\n+\n+        let (old, new) = got.expect(\"expected NickChanged event\");\n+        assert_eq!(old, \"alice\");\n+        assert_eq!(new, \"alice2\");\n+    }\n+\n+    /// A NICK message whose prefix has no user@host hostmask (bare nick prefix)\n+    /// must still parse correctly — old_nick from prefix, new_nick from params.\n+    #[tokio::test]\n+    async fn server_nick_change_bare_prefix_parses_correctly() {\n+        let (mut server, mut events, _cmd) = start_run_irc(\"host2\").await;\n+\n+        // Bare prefix: no \"!user@host\" component.\n+        server.write_all(b\":bob NICK :robert\\r\\n\").await.unwrap();\n+        server.flush().await.unwrap();\n+\n+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {\n+            while let Some(ev) = events.recv().await {\n+                if let Event::NickChanged { old_nick, new_nick } = ev {\n+                    return Some((old_nick, new_nick));\n+                }\n+            }\n+            None\n+        })\n+        .await\n+        .unwrap_or(None);\n+\n+        let (old, new) = got.expect(\"expected NickChanged event with bare prefix\");\n+        assert_eq!(old, \"bob\");\n+        assert_eq!(new, \"robert\");\n+    }\n+\n+    // ── QUIT ──────────────────────────────────────────────────────────────────\n+\n+    /// QUIT emits Event::UserQuit with the correct nick and reason.\n+    #[tokio::test]\n+    async fn server_quit_emits_user_quit_event() {\n+        let (mut server, mut events, _cmd) = start_run_irc(\"host3\").await;\n+\n+        server\n+            .write_all(b\":bob!u@h QUIT :Gone fishing\\r\\n\")\n+            .await\n+            .unwrap();\n+        server.flush().await.unwrap();\n+\n+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {\n+            while let Some(ev) = events.recv().await {\n+                if let Event::UserQuit { nick, reason } = ev {\n+                    return Some((nick, reason));\n+                }\n+            }\n+            None\n+        })\n+        .await\n+        .unwrap_or(None);\n+\n+        let (nick, reason) = got.expect(\"expected UserQuit event\");\n+        assert_eq!(nick, \"bob\");\n+        assert_eq!(reason, \"Gone fishing\");\n+    }\n+\n+    /// QUIT with no reason parameter must not panic and must emit an empty reason.\n+    #[tokio::test]\n+    async fn server_quit_with_no_reason_emits_empty_reason() {\n+        let (mut server, mut events, _cmd) = start_run_irc(\"host4\").await;\n+\n+        server.write_all(b\":carol!u@h QUIT\\r\\n\").await.unwrap();\n+        server.flush().await.unwrap();\n+\n+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {\n+            while let Some(ev) = events.recv().await {\n+                if let Event::UserQuit { nick, reason } = ev {\n+                    return Some((nick, reason));\n+                }\n+            }\n+            None\n+        })\n+        .await\n+        .unwrap_or(None);\n+\n+        let (nick, reason) = got.expect(\"expected UserQuit even without reason\");\n+        assert_eq!(nick, \"carol\");\n+        assert_eq!(reason, \"\", \"reason should be empty when param is absent\");\n+    }\n+\n+    // ── KICK ──────────────────────────────────────────────────────────────────\n+\n+    /// KICK emits Event::Kicked with channel, kicked nick, kicker, and reason.\n+    #[tokio::test]\n+    async fn server_kick_emits_kicked_event() {\n+        let (mut server, mut events, _cmd) = start_run_irc(\"host5\").await;\n+\n+        server\n+            .write_all(b\":op!u@h KICK #room victim :no spam\\r\\n\")\n+            .await\n+            .unwrap();\n+        server.flush().await.unwrap();\n+\n+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {\n+            while let Some(ev) = events.recv().await {\n+                if let Event::Kicked {\n+                    channel,\n+                    nick,\n+                    by,\n+                    reason,\n+                } = ev\n+                {\n+                    return Some((channel, nick, by, reason));\n+                }\n+            }\n+            None\n+        })\n+        .await\n+        .unwrap_or(None);\n+\n+        let (channel, nick, by, reason) = got.expect(\"expected Kicked event\");\n+        assert_eq!(channel, \"#room\");\n+        assert_eq!(nick, \"victim\");\n+        assert_eq!(by, \"op\");\n+        assert_eq!(reason, \"no spam\");\n+    }\n+\n+    /// KICK with no reason param must emit an empty reason string, not panic.\n+    #[tokio::test]\n+    async fn server_kick_with_no_reason_emits_empty_reason() {\n+        let (mut server, mut events, _cmd) = start_run_irc(\"host6\").await;\n+\n+        server\n+            .write_all(b\":op!u@h KICK #room victim\\r\\n\")\n+            .await\n+            .unwrap();\n+        server.flush().await.unwrap();\n+\n+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {\n+            while let Some(ev) = events.recv().await {\n+                if let Event::Kicked { reason, .. } = ev {\n+                    return Some(reason);\n+                }\n+            }\n+            None\n+        })\n+        .await\n+        .unwrap_or(None);\n+\n+        let reason = got.expect(\"expected Kicked event without reason\");\n+        assert_eq!(reason, \"\", \"reason should be empty when omitted\");\n+    }\n+\n+    // ── AWAY ──────────────────────────────────────────────────────────────────\n+\n+    /// AWAY with a message emits Event::AwayChanged with away_msg = Some(…).\n+    #[tokio::test]\n+    async fn server_away_with_message_emits_away_changed() {\n+        let (mut server, mut events, _cmd) = start_run_irc(\"host7\").await;\n+\n+        server\n+            .write_all(b\":dave!u@h AWAY :be right back\\r\\n\")\n+            .await\n+            .unwrap();\n+        server.flush().await.unwrap();\n+\n+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {\n+            while let Some(ev) = events.recv().await {\n+                if let Event::AwayChanged { nick, away_msg } = ev {\n+                    return Some((nick, away_msg));\n+                }\n+            }\n+            None\n+        })\n+        .await\n+        .unwrap_or(None);\n+\n+        let (nick, away_msg) = got.expect(\"expected AwayChanged event\");\n+        assert_eq!(nick, \"dave\");\n+        assert_eq!(away_msg.as_deref(), Some(\"be right back\"));\n+    }\n+\n+    /// AWAY with no params emits Event::AwayChanged with away_msg = None\n+    /// (the user is returning from away status).\n+    #[tokio::test]\n+    async fn server_away_with_no_message_emits_away_changed_none() {\n+        let (mut server, mut events, _cmd) = start_run_irc(\"host8\").await;\n+\n+        server.write_all(b\":dave!u@h AWAY\\r\\n\").await.unwrap();\n+        server.flush().await.unwrap();\n+\n+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {\n+            while let Some(ev) = events.recv().await {\n+                if let Event::AwayChanged { nick, away_msg } = ev {\n+                    return Some((nick, away_msg));\n+                }\n+            }\n+            None\n+        })\n+        .await\n+        .unwrap_or(None);\n+\n+        let (nick, away_msg) = got.expect(\"expected AwayChanged event for returning user\");\n+        assert_eq!(nick, \"dave\");\n+        assert!(\n+            away_msg.is_none(),\n+            \"away_msg should be None when returning from away\"\n+        );\n+    }\n+\n+    // ── TOPIC ─────────────────────────────────────────────────────────────────\n+\n+    /// Live TOPIC change emits Event::TopicChanged with channel, new topic,\n+    /// and set_by = Some(nick parsed from prefix).\n+    #[tokio::test]\n+    async fn server_topic_change_emits_topic_changed_event() {\n+        let (mut server, mut events, _cmd) = start_run_irc(\"host9\").await;\n+\n+        server\n+            .write_all(b\":mod!u@h TOPIC #room :New topic here\\r\\n\")\n+            .await\n+            .unwrap();\n+        server.flush().await.unwrap();\n+\n+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {\n+            while let Some(ev) = events.recv().await {\n+                if let Event::TopicChanged {\n+                    channel,\n+                    topic,\n+                    set_by,\n+                } = ev\n+                {\n+                    return Some((channel, topic, set_by));\n+                }\n+            }\n+            None\n+        })\n+        .await\n+        .unwrap_or(None);\n+\n+        let (channel, topic, set_by) = got.expect(\"expected TopicChanged event\");\n+        assert_eq!(channel, \"#room\");\n+        assert_eq!(topic, \"New topic here\");\n+        assert_eq!(set_by.as_deref(), Some(\"mod\"));\n+    }\n+\n+    /// 332 RPL_TOPIC (received on join) emits Event::TopicChanged with\n+    /// set_by = None (the server doesn't tell us who set it in 332 itself).\n+    #[tokio::test]\n+    async fn server_rpl_topic_332_emits_topic_changed_no_setter() {\n+        let (mut server, mut events, _cmd) = start_run_irc(\"host10\").await;\n+\n+        // 332 format: :<server> 332 <ournick> <channel> :<topic>\n+        server\n+            .write_all(b\":srv 332 host10 #room :Welcome to the room\\r\\n\")\n+            .await\n+            .unwrap();\n+        server.flush().await.unwrap();\n+\n+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {\n+            while let Some(ev) = events.recv().await {\n+                if let Event::TopicChanged {\n+                    channel,\n+                    topic,\n+                    set_by,\n+                } = ev\n+                {\n+                    return Some((channel, topic, set_by));\n+                }\n+            }\n+            None\n+        })\n+        .await\n+        .unwrap_or(None);\n+\n+        let (channel, topic, set_by) = got.expect(\"expected TopicChanged from 332\");\n+        assert_eq!(channel, \"#room\");\n+        assert_eq!(topic, \"Welcome to the room\");\n+        assert!(\n+            set_by.is_none(),\n+            \"set_by should be None for 332 RPL_TOPIC (no setter in that numeric)\"\n+        );\n+    }\n+\n+    // ── INVITE ────────────────────────────────────────────────────────────────\n+\n+    /// INVITE emits Event::Invited with the channel and the inviter's nick.\n+    #[tokio::test]\n+    async fn server_invite_emits_invited_event() {\n+        let (mut server, mut events, _cmd) = start_run_irc(\"host11\").await;\n+\n+        // INVITE <target_nick> <channel>\n+        server\n+            .write_all(b\":alice!u@h INVITE host11 #secret\\r\\n\")\n+            .await\n+            .unwrap();\n+        server.flush().await.unwrap();\n+\n+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {\n+            while let Some(ev) = events.recv().await {\n+                if let Event::Invited { channel, by } = ev {\n+                    return Some((channel, by));\n+                }\n+            }\n+            None\n+        })\n+        .await\n+        .unwrap_or(None);\n+\n+        let (channel, by) = got.expect(\"expected Invited event\");\n+        assert_eq!(channel, \"#secret\");\n+        assert_eq!(by, \"alice\");\n+    }\n+\n+    // ── NAMES / 353 ───────────────────────────────────────────────────────────\n+\n+    /// 353 RPL_NAMREPLY emits Event::Names with the correct channel and nicks.\n+    #[tokio::test]\n+    async fn server_353_emits_names_event() {\n+        let (mut server, mut events, _cmd) = start_run_irc(\"host12\").await;\n+\n+        // 353 format: :<server> 353 <ournick> = <channel> :<nick1> <nick2> …\n+        server\n+            .write_all(b\":srv 353 host12 = #room :alice @bob +carol\\r\\n\")\n+            .await\n+            .unwrap();\n+        server.flush().await.unwrap();\n+\n+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {\n+            while let Some(ev) = events.recv().await {\n+                if let Event::Names { channel, nicks } = ev {\n+                    return Some((channel, nicks));\n+                }\n+            }\n+            None\n+        })\n+        .await\n+        .unwrap_or(None);\n+\n+        let (channel, nicks) = got.expect(\"expected Names event\");\n+        assert_eq!(channel, \"#room\");\n+        assert_eq!(nicks, vec![\"alice\", \"@bob\", \"+carol\"]);\n+    }\n+\n+    // ── TAGMSG dispatch ───────────────────────────────────────────────────────\n+\n+    /// TAGMSG emits Event::TagMsg with the correct from, target, and tags.\n+    #[tokio::test]\n+    async fn server_tagmsg_emits_tag_msg_event() {\n+        let (mut server, mut events, _cmd) = start_run_irc(\"host13\").await;\n+\n+        // Tagged TAGMSG: @+react=👍 :alice!u@h TAGMSG #room\n+        server\n+            .write_all(b\"@+react=\\xf0\\x9f\\x91\\x8d :alice!u@h TAGMSG #room\\r\\n\")\n+            .await\n+            .unwrap();\n+        server.flush().await.unwrap();\n+\n+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {\n+            while let Some(ev) = events.recv().await {\n+                if let Event::TagMsg { from, target, tags } = ev {\n+                    return Some((from, target, tags));\n+                }\n+            }\n+            None\n+        })\n+        .await\n+        .unwrap_or(None);\n+\n+        let (from, target, tags) = got.expect(\"expected TagMsg event\");\n+        assert_eq!(from, \"alice\");\n+        assert_eq!(target, \"#room\");\n+        assert_eq!(tags.get(\"+react\").map(|s| s.as_str()), Some(\"👍\"));\n+    }\n+\n+    // ── legacy +freeq.at/multiline \\\\n normalization ──────────────────────────\n+\n+    /// PRIVMSG bearing the legacy `+freeq.at/multiline` tag must have its\n+    /// literal `\\n` escape sequences (two chars: backslash + n) replaced with\n+    /// real newline characters before the Event::Message is emitted.\n+    #[tokio::test]\n+    async fn legacy_multiline_tag_normalizes_slash_n_to_newline() {\n+        let (mut server, mut events, _cmd) = start_run_irc(\"host14\").await;\n+\n+        // The wire body contains literal \\n (backslash + 'n'), not a real newline.\n+        server\n+            .write_all(\n+                b\"@+freeq.at/multiline=1 :alice!u@h PRIVMSG #room :line1\\\\nline2\\\\nline3\\r\\n\",\n+            )\n+            .await\n+            .unwrap();\n+        server.flush().await.unwrap();\n+\n+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {\n+            while let Some(ev) = events.recv().await {\n+                if let Event::Message { text, .. } = ev {\n+                    return Some(text);\n+                }\n+            }\n+            None\n+        })\n+        .await\n+        .unwrap_or(None);\n+\n+        let text = got.expect(\"expected Message event\");\n+        assert_eq!(\n+            text, \"line1\\nline2\\nline3\",\n+            \"legacy \\\\n escape must be replaced with a real newline\"\n+        );\n+    }\n+\n+    /// A PRIVMSG without the `+freeq.at/multiline` tag must NOT have `\\n`\n+    /// sequences replaced — the body should be delivered verbatim.\n+    #[tokio::test]\n+    async fn privmsg_without_multiline_tag_preserves_literal_slash_n() {\n+        let (mut server, mut events, _cmd) = start_run_irc(\"host15\").await;\n+\n+        server\n+            .write_all(b\":alice!u@h PRIVMSG #room :keep\\\\nraw\\r\\n\")\n+            .await\n+            .unwrap();\n+        server.flush().await.unwrap();\n+\n+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {\n+            while let Some(ev) = events.recv().await {\n+                if let Event::Message { text, .. } = ev {\n+                    return Some(text);\n+                }\n+            }\n+            None\n+        })\n+        .await\n+        .unwrap_or(None);\n+\n+        let text = got.expect(\"expected Message event\");\n+        assert_eq!(\n+            text, r\"keep\\nraw\",\n+            \"without multiline tag, literal \\\\n must be preserved\"\n+        );\n+    }\n+\n+    // ── extended-join account field ───────────────────────────────────────────\n+\n+    /// Extended JOIN with a DID account field emits Event::Joined with\n+    /// account = Some(did).\n+    #[tokio::test]\n+    async fn extended_join_with_did_account_emits_joined_with_account() {\n+        let (mut server, mut events, _cmd) = start_run_irc(\"host16\").await;\n+\n+        // extended-join: JOIN <channel> <account> :<realname>\n+        server\n+            .write_all(b\":alice!u@h JOIN #lobby did:plc:abc123 :Alice Smith\\r\\n\")\n+            .await\n+            .unwrap();\n+        server.flush().await.unwrap();\n+\n+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {\n+            while let Some(ev) = events.recv().await {\n+                if let Event::Joined {\n+                    nick,\n+                    channel,\n+                    account,\n+                } = ev\n+                {\n+                    return Some((nick, channel, account));\n+                }\n+            }\n+            None\n+        })\n+        .await\n+        .unwrap_or(None);\n+\n+        let (nick, channel, account) = got.expect(\"expected Joined event with account\");\n+        assert_eq!(nick, \"alice\");\n+        assert_eq!(channel, \"#lobby\");\n+        assert_eq!(\n+            account.as_deref(),\n+            Some(\"did:plc:abc123\"),\n+            \"DID account must be present in extended JOIN\"\n+        );\n+    }\n+\n+    /// Extended JOIN where account is the unauthenticated sentinel `*` must\n+    /// emit Event::Joined with account = None.\n+    #[tokio::test]\n+    async fn extended_join_with_star_account_emits_joined_no_account() {\n+        let (mut server, mut events, _cmd) = start_run_irc(\"host17\").await;\n+\n+        server\n+            .write_all(b\":guest!u@h JOIN #lobby * :Guest User\\r\\n\")\n+            .await\n+            .unwrap();\n+        server.flush().await.unwrap();\n+\n+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {\n+            while let Some(ev) = events.recv().await {\n+                if let Event::Joined { account, .. } = ev {\n+                    return Some(account);\n+                }\n+            }\n+            None\n+        })\n+        .await\n+        .unwrap_or(None);\n+\n+        let account = got.expect(\"expected Joined event\");\n+        assert!(\n+            account.is_none(),\n+            \"account `*` sentinel must be treated as unauthenticated (None)\"\n+        );\n+    }\n }\n",
+        "summary": {
+          "files_changed": 3,
+          "additions": 536,
+          "deletions": 3
+        }
+      }
+    },
+    {
+      "seq": 0,
+      "checkpoint": {
+        "timestamp": "2026-06-16T02:32:59.085802998Z",
+        "current_node": "verify",
+        "completed_nodes": [
+          "start",
+          "select",
+          "implement",
+          "verify"
+        ],
+        "node_retries": {},
+        "context_values": {
+          "graph.goal": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code.",
+          "thread.implement.current_node": "verify",
+          "internal.retry_count.verify": 0,
           "failure_signature": "",
           "internal.work_dir": "/workspace/freeq",
-          "internal.fidelity": "full",
+          "internal.fidelity": "compact",
           "response.select": "Now I have a comprehensive picture. Let me assess both candidates side by side:\n\n**`freeq-sdk/src/client.rs`** (3712 lines, 62 public functions, 28 tests):\n- CLAUDE.md flags it explicitly: \"sdk/client.rs (gamma 104) — ZERO unit tests on connection state machine\"\n- The existing 28 tests cover: multiline assembly (14 tests), basic connection state machine behaviors (14 tests: PING/PONG, 001, nick-in-use, 904, raw, privmsg signing, JOIN, PART, EOF)\n- **Zero tests** for: NICK change events, QUIT events, KICK events, AWAY events, TOPIC events, INVITE events, MODE events, NAMES/353, TAGMSG dispatch, server NOTICE parsing, `legacy +freeq.at/multiline \\n` normalization, `ConnectConfig::validate()` invalid char cases (nick with `#`, `!`, `@`, etc.)\n\n**`freeq-app/src/components/MessageList.tsx`** (1327 lines):\n- Has 391 lines of tests already — reasonably covered.\n\nThe clear winner is `freeq-sdk/src/client.rs`.\n\n---\n\n## My Choice: `freeq-sdk/src/client.rs`\n\n**Language/crate:** Rust, `freeq-sdk`\n\n### Why it's high-risk and undertested\n\nCLAUDE.md explicitly flags it: **\"sdk/client.rs (gamma 104) — ZERO unit tests on connection state machine.\"** At 3,712 lines with 62 public functions (117 `fn` definitions total), only 28 `#[tokio::test]` cases exist — and the majority of those (14) test `multiline` batch assembly, a self-contained sub-feature. The core IRC event dispatch loop (`run_irc`) handles over a dozen server-sent message types; of those, only PING, 001 RPL_WELCOME, 433 nick-in-use, 904 SASL failure, JOIN, and PART have any test coverage. Every other incoming event type is completely unexercised by automated tests.\n\n### 3–6 specific behaviors I'll pin with tests\n\n1. **`NICK` → `Event::NickChanged`** — Server sends `:alice!u@h NICK :alice2`. The client must emit `Event::NickChanged { old_nick: \"alice\", new_nick: \"alice2\" }`. Critically, the nick is parsed from the prefix (before `!`), not from params.\n\n2. **`QUIT` → `Event::UserQuit`** — Server sends `:bob!u@h QUIT :Gone` and the client must emit `Event::UserQuit { nick: \"bob\", reason: \"Gone\" }`. Edge case: quit with empty/missing reason must not panic.\n\n3. **`KICK` → `Event::Kicked`** — Server sends `:op!u@h KICK #room victim :spam`. Client must emit `Event::Kicked { channel: \"#room\", nick: \"victim\", by: \"op\", reason: \"spam\" }`.\n\n4. **`AWAY` → `Event::AwayChanged`** — Two sub-cases: (a) `:user!u@h AWAY :be right back` → `away_msg: Some(\"be right back\")`, and (b) `:user!u@h AWAY` (no param) → `away_msg: None` (user returning).\n\n5. **`TOPIC` → `Event::TopicChanged`** — `:mod!u@h TOPIC #room :New topic` must emit `Event::TopicChanged { channel: \"#room\", topic: \"New topic\", set_by: Some(\"mod\") }`.\n\n6. **`ConnectConfig::validate()` invalid nick characters** — The validator rejects nicks containing `#`, `!`, `@`, `*`, `?`, `,`, space, or control chars. There are no tests for these individual rejection paths despite the function having 8 distinct invalid-char checks.\n\n### Existing test convention to follow\n\nThe sibling test module `mod irc_loop_tests` at the bottom of `freeq-sdk/src/client.rs` (line 3247) provides the exact pattern: use `start_run_irc()` to spin up `run_irc` over a `tokio::io::duplex`, write raw IRC lines to the \"server side\", then `tokio::time::timeout`-wait for specific `Event` variants on the event channel. All new tests will follow this same in-process, no-network, no-server pattern.",
           "internal.retry_count.start": 0,
           "thread.cov.current_node": "implement",
           "internal.run_id": "01KV730C7B2VZ6EQ9JB7GMHMRX",
           "failure_class": "",
+          "command.output": "blob://sha256/c61281f6e4c15e14cd7f9078a9ae71c72fd7077dbc8a7b9a02be94feffbeb59a",
           "internal.node_visit_count": 1,
           "graph.rankdir": "LR",
           "internal.retry_count.select": 0,
-          "internal.thread_id": "cov",
+          "internal.thread_id": "implement",
           "outcome": "succeeded",
           "last_response": "All 30 tests in `irc_loop_tests` pass (16 new + 14 existing). Let me do a final summary of what was added:\n\n---\n\n## Summary\n\n**File modified:** `freeq-sdk/src/client.rs`\n\n**16 new tests** added to the",
           "last_stage": "implement",
           "response.implement": "All 30 tests in `irc_loop_tests` pass (16 new + 14 existing). Let me do a final summary of what was added:\n\n---\n\n## Summary\n\n**File modified:** `freeq-sdk/src/client.rs`\n\n**16 new tests** added to the existing `mod irc_loop_tests` block, covering 7 previously untested IRC message types:\n\n| Group | Tests | Behaviors pinned |\n|---|---|---|\n| **NICK change** | `server_nick_change_emits_nick_changed_event`, `server_nick_change_bare_prefix_parses_correctly` | nick parsed from prefix (with and without `!user@host`), new_nick from params |\n| **QUIT** | `server_quit_emits_user_quit_event`, `server_quit_with_no_reason_emits_empty_reason` | quit with reason, quit with no params → empty reason (no panic) |\n| **KICK** | `server_kick_emits_kicked_event`, `server_kick_with_no_reason_emits_empty_reason` | full kick with reason, kick with missing reason param |\n| **AWAY** | `server_away_with_message_emits_away_changed`, `server_away_with_no_message_emits_away_changed_none` | going away (`Some(msg)`), returning (`None`) |\n| **TOPIC** | `server_topic_change_emits_topic_changed_event`, `server_rpl_topic_332_emits_topic_changed_no_setter` | live TOPIC with `set_by`, 332 RPL_TOPIC with `set_by=None` |\n| **INVITE** | `server_invite_emits_invited_event` | channel and inviter nick extracted correctly |\n| **NAMES/TAGMSG** | `server_353_emits_names_event`, `server_tagmsg_emits_tag_msg_event` | nick list parsing, tag propagation to `TagMsg` event |\n| **Legacy multiline** | `legacy_multiline_tag_normalizes_slash_n_to_newline`, `privmsg_without_multiline_tag_preserves_literal_slash_n` | `+freeq.at/multiline` tag triggers `\\n` normalization; absence preserves verbatim body |\n| **Extended JOIN** | `extended_join_with_did_account_emits_joined_with_account`, `extended_join_with_star_account_emits_joined_no_account` | DID account present, `*` sentinel → `None` |\n\nAll tests use the same in-process `tokio::io::duplex` harness as existing tests — no network, no server, deterministic, fast (0.13s for all 30).",
-          "current_node": "implement",
+          "current_node": "verify",
           "internal.retry_count.implement": 0
         },
         "node_outcomes": {
+          "verify": {
+            "status": "succeeded",
+            "context_updates": {
+              "command.output": "blob://sha256/c61281f6e4c15e14cd7f9078a9ae71c72fd7077dbc8a7b9a02be94feffbeb59a"
+            },
+            "notes": "Script completed: bash .fabro/verify.sh",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 228865,
+              "active_time_ms": 228865
+            }
+          },
           "start": {
             "status": "succeeded",
             "usage": null
@@ -570,8 +722,9 @@
             }
           }
         },
-        "next_node_id": "verify",
+        "next_node_id": "pr_body",
         "node_visits": {
+          "verify": 1,
           "select": 1,
           "implement": 1,
           "start": 1
@@ -850,7 +1003,12 @@
       "first_event_seq": 156,
       "prompt": null,
       "response": null,
-      "completion": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": "Stage completed: implement",
+        "failure_reason": null,
+        "timestamp": "2026-06-16T02:29:06.635467635Z"
+      },
       "provider_used": {
         "mode": "agent",
         "provider": "anthropic",
@@ -864,13 +1022,20 @@
       "output": null,
       "started_at": "2026-06-16T02:11:02.444083018Z",
       "handler": "agent",
+      "timing": {
+        "wall_time_ms": 1084191,
+        "inference_time_ms": 182618,
+        "tool_time_ms": 901504,
+        "active_time_ms": 1084122
+      },
       "usage": {
-        "input_tokens": 30326,
-        "output_tokens": 9789,
-        "total_tokens": 1572195,
+        "input_tokens": 31289,
+        "output_tokens": 10462,
+        "total_tokens": 1634903,
         "reasoning_tokens": 0,
-        "cache_read_tokens": 1300408,
-        "cache_write_tokens": 231672
+        "cache_read_tokens": 1361083,
+        "cache_write_tokens": 232069,
+        "total_usd_micros": 1529379
       },
       "model": {
         "provider": "anthropic",
@@ -881,42 +1046,42 @@
         "provider": "anthropic",
         "model": "claude-sonnet-4-6",
         "context_window_tokens": 200000,
-        "input_tokens": 61073,
-        "usage_percent": 30.5365,
+        "input_tokens": 62035,
+        "usage_percent": 31.0175,
         "count_method": "response_usage_scaled_breakdown",
         "staleness": "live",
-        "generated_at": "2026-06-16T02:28:48.604717665Z",
-        "event_seq": 347,
+        "generated_at": "2026-06-16T02:29:06.613271131Z",
+        "event_seq": 355,
         "breakdown": [
           {
             "category": "system_prompt",
-            "tokens": 1821,
-            "usage_percent": 0.9105
+            "tokens": 1826,
+            "usage_percent": 0.913
           },
           {
             "category": "tools",
-            "tokens": 2119,
-            "usage_percent": 1.0595
+            "tokens": 2125,
+            "usage_percent": 1.0625
           },
           {
             "category": "memory",
-            "tokens": 2930,
-            "usage_percent": 1.465
+            "tokens": 2939,
+            "usage_percent": 1.4695
           },
           {
             "category": "conversation",
-            "tokens": 54195,
-            "usage_percent": 27.0975
+            "tokens": 55136,
+            "usage_percent": 27.568
           },
           {
             "category": "other",
-            "tokens": 8,
-            "usage_percent": 0.004
+            "tokens": 9,
+            "usage_percent": 0.0045
           }
         ],
         "warnings": []
       },
-      "state": "running"
+      "state": "succeeded"
     },
     "start@1": {
       "first_event_seq": 17,
@@ -951,6 +1116,44 @@
         "cache_write_tokens": 0
       },
       "state": "succeeded"
+    },
+    "verify@1": {
+      "first_event_seq": 364,
+      "prompt": null,
+      "response": null,
+      "completion": null,
+      "provider_used": null,
+      "diff": null,
+      "script_invocation": {
+        "script": "bash .fabro/verify.sh",
+        "command": "exec 2>&1\nbash .fabro/verify.sh",
+        "language": "shell",
+        "timeout_ms": 3600000
+      },
+      "script_timing": {
+        "output": "blob://sha256/c61281f6e4c15e14cd7f9078a9ae71c72fd7077dbc8a7b9a02be94feffbeb59a",
+        "exit_code": 0,
+        "duration_ms": 228865,
+        "termination": "exited",
+        "output_bytes": 100115,
+        "live_streaming": true
+      },
+      "parallel_results": null,
+      "output": null,
+      "output_bytes": 100115,
+      "live_streaming": true,
+      "termination": "exited",
+      "started_at": "2026-06-16T02:29:10.164353964Z",
+      "handler": "command",
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "state": "running"
     }
   }
 }
