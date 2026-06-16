@@ -1533,8 +1533,7 @@ pub(crate) async fn speak_text(
     let voice = cfg.elevenlabs_voice_id.clone();
     let model = cfg.elevenlabs_model.clone();
     let voice_profile = resolve_speak_profile(cfg);
-    let mut chain =
-        ghostly::audio::VoiceChain::new(voice_profile, tts::ELEVENLABS_PCM_RATE as f32);
+    let mut chain = ghostly::audio::VoiceChain::new(voice_profile, tts::ELEVENLABS_PCM_RATE as f32);
     let mut work: Vec<f32> = Vec::with_capacity(4096);
     let mut chunker = qa::SentenceChunker::new();
     let mut sentences: Vec<String> = chunker.push(text);

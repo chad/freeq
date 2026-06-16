@@ -474,7 +474,10 @@ async fn main() -> Result<()> {
 fn decode_seed_hex(s: &str) -> Result<[u8; 32]> {
     let bytes = s.as_bytes();
     if bytes.len() != 64 {
-        anyhow::bail!("expected 64 hex chars (32 bytes), got {} chars", bytes.len());
+        anyhow::bail!(
+            "expected 64 hex chars (32 bytes), got {} chars",
+            bytes.len()
+        );
     }
     let nibble = |c: u8| -> Result<u8> {
         match c {
