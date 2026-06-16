@@ -165,6 +165,14 @@ P2 design work:
 - ☑ Make startup keychain reads fail fast instead of blocking on authentication UI.
 - ☑ Rebuild, relaunch, WindowServer-verify, and commit the regression follow-up.
 
+## 2026-06-15 macOS launch keychain prompt fix
+
+- ☑ Identify legacy macOS keychain ACL prompts as the cause of repeated launch password/Allow dialogs on rebuilt/dev-signed apps.
+- ☑ Move credential storage to the data-protection keychain for normal save/load/delete paths.
+- ☑ Stop delete-then-add credential writes so saves do not touch old legacy keychain ACL items.
+- ☑ Add SwiftPM guard tests that keychain queries use data protection and noninteractive auth contexts.
+- ☑ Rebuild, relaunch, verify no launch-time keychain prompt path remains, and commit.
+
 ---
 
 ## Method

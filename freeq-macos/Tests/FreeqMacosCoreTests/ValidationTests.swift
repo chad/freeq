@@ -1,4 +1,6 @@
 import XCTest
+import LocalAuthentication
+import Security
 
 @testable import FreeqMacosCore
 
@@ -159,6 +161,25 @@ final class ValidationTests: XCTestCase {
         XCTAssertEqual(AvCommandParser.action(for: "mute"), .mute)
         XCTAssertEqual(AvCommandParser.action(for: "video"), .camera)
         XCTAssertEqual(AvCommandParser.action(for: "wat"), .help)
+    }
+
+    // MARK: - Keychain policy
+
+    func testKeychainQueriesUseDataProtectionKeychain() {
+        let query = KeychainHelper.baseQuery(key: "brokerToken")
+
+        XCTAssertEqual(query[kSecUseDataProtectionKeychain as String] as? Bool, true)
+        XCTAssertEqual(query[kSecAttrService as String] as? String, KeychainHelper.service)
+        XCTAssertEqual(query[kSecAttrAccount as String] as? String, "brokerToken")
+    }
+
+    func testKeychainLoadQueryDisablesInteractiveAuthPrompts() {
+        let query = KeychainHelper.loadQuery(key: "brokerToken")
+        let context = query[kSecUseAuthenticationContext as String] as? LAContext
+
+        XCTAssertNotNil(context)
+        XCTAssertEqual(context?.interactionNotAllowed, true)
+        XCTAssertEqual(query[kSecReturnData as String] as? Bool, true)
     }
 
     // MARK: - DM target bootstrap

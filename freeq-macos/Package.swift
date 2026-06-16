@@ -23,7 +23,25 @@ let package = Package(
         .target(
             name: "FreeqMacosCore",
             path: "freeq-macos/Models",
-            sources: ["Validation.swift", "ChatMessage.swift", "ChannelState.swift", "ChannelHydration.swift"]
+            exclude: [
+                "AppState.swift",
+                "AvatarCache.swift",
+                "CallCameraCapture.swift",
+                "CallController.swift",
+                "CallMicCapture.swift",
+                "ComposeCommands.swift",
+                "DebugBridge.swift",
+                "E2eeManager.swift",
+                "MessageStore.swift",
+            ],
+            sources: [
+                "Validation.swift",
+                "ChatMessage.swift",
+                "ChannelState.swift",
+                "ChannelHydration.swift",
+                "Logger.swift",
+                "KeychainHelper.swift",
+            ]
         ),
         .testTarget(
             name: "FreeqMacosCoreTests",
