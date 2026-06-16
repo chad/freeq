@@ -14,6 +14,8 @@
 //!
 //!   yokota → eliza:
 //!     {"type":"say","text":"It's sunny."}           → spoken (dry voice)
+//!     {"type":"show","topic":"planet Earth"}         → picture on the video tile
+//!     {"type":"state","thinking":true}              → tile shows "thinking" mood
 //!
 //! eliza is the CLIENT; yokota is the SERVER. If the socket drops, the
 //! seam reconnects with a simple fixed backoff.
@@ -27,7 +29,8 @@ use tokio::net::UnixStream;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::mpsc;
 
-use crate::irc::{ActiveCall, SharedConfig, speak_text};
+use crate::irc::{ActiveCall, SharedConfig, spawn_scene_image, speak_text};
+use crate::video::{SceneKind, SceneSpec};
 
 /// A line eliza sends up to yokota.
 #[derive(Debug, Serialize)]
@@ -49,6 +52,16 @@ pub enum Outbound {
 enum Inbound {
     #[serde(rename = "say")]
     Say { text: String },
+    /// yokota's brain state → drives the tile's "thinking"/working mood while
+    /// the (remote) brain is composing a reply.
+    #[serde(rename = "state")]
+    State { thinking: bool },
+    /// Put a generated picture up on the call's video tile. `topic` is a
+    /// short subject (e.g. "planet Earth") used both as the scene-card
+    /// title and the image-generation query. Rendered off the hot path —
+    /// the spoken reply never waits on it.
+    #[serde(rename = "show")]
+    Show { topic: String },
     /// Anything else is ignored (forward-compatible).
     #[serde(other)]
     Other,
@@ -183,13 +196,32 @@ async fn handle_inbound(
             return;
         }
     };
-    let Inbound::Say { text } = msg else {
-        return;
-    };
+    match msg {
+        Inbound::Say { text } => speak_inbound(cfg, active, text).await,
+        Inbound::Show { topic } => show_inbound(cfg, active, topic).await,
+        Inbound::State { thinking } => {
+            let video = {
+                let guard = active.lock().await;
+                guard.as_ref().map(|call| call.video.clone())
+            };
+            if let Some(video) = video {
+                video.set_thinking(thinking);
+            }
+        }
+        Inbound::Other => {}
+    }
+}
+
+/// Speak a `say` line against the currently active call. No-op if the
+/// text is empty or no call is live.
+async fn speak_inbound(
+    cfg: &Arc<SharedConfig>,
+    active: &Arc<AsyncMutex<Option<ActiveCall>>>,
+    text: String,
+) {
     if text.trim().is_empty() {
         return;
     }
-
     // Snapshot the active call's speaker + video (cheap clones) without
     // holding the lock across the (awaiting) TTS work.
     let snapshot = {
@@ -206,4 +238,38 @@ async fn handle_inbound(
     if let Err(e) = speak_text(cfg, &speaker, Some(&video), &text).await {
         tracing::warn!(error = ?e, "brain seam: speak failed");
     }
+}
+
+/// Put a generated picture on the call's video tile. The scene card
+/// appears immediately (title only); the backdrop image is fetched off
+/// the hot path and attached when ready — so a `show` never blocks the
+/// voice loop. No-op if no call is live.
+async fn show_inbound(
+    cfg: &Arc<SharedConfig>,
+    active: &Arc<AsyncMutex<Option<ActiveCall>>>,
+    topic: String,
+) {
+    let topic = topic.trim().to_string();
+    if topic.is_empty() {
+        return;
+    }
+    let video = {
+        let guard = active.lock().await;
+        guard.as_ref().map(|call| call.video.clone())
+    };
+    let Some(video) = video else {
+        tracing::info!(%topic, "brain seam: 'show' arrived with no active call; ignoring");
+        return;
+    };
+    tracing::info!(%topic, "brain seam: showing yokota's picture");
+    let spec = SceneSpec {
+        kind: SceneKind::Hero,
+        title: topic.clone(),
+        subtitle: String::new(),
+        points: Vec::new(),
+        accent: "#3effd6".to_string(),
+        image_query: topic.clone(),
+    };
+    let scene_id = video.show_scene(spec);
+    spawn_scene_image(cfg, &video, scene_id, topic);
 }

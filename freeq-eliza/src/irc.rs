@@ -2467,7 +2467,12 @@ fn spawn_hello_on_join(
     });
 }
 
-fn spawn_scene_image(cfg: &Arc<SharedConfig>, video: &VideoTile, scene_id: u64, query: String) {
+pub(crate) fn spawn_scene_image(
+    cfg: &Arc<SharedConfig>,
+    video: &VideoTile,
+    scene_id: u64,
+    query: String,
+) {
     if query.trim().is_empty() {
         return;
     }
