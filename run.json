@@ -711,14 +711,136 @@
     }
   },
   "web_url": "http://127.0.0.1:32276/runs/01KV70WV0C0X3AZ5PZMKHBW91W",
-  "start": null,
-  "status": {
-    "kind": "starting"
+  "start": {
+    "start_time": "2026-06-16T01:32:10.138154701Z",
+    "run_branch": "fabro/run/01KV70WV0C0X3AZ5PZMKHBW91W",
+    "base_sha": "f1923115cd23c25e9c7b99da933de4ef77fbf8a5"
   },
-  "status_updated_at": "2026-06-16T01:31:52.451544023Z",
-  "last_event_at": "2026-06-16T01:32:09.510631904Z",
+  "status": {
+    "kind": "running"
+  },
+  "status_updated_at": "2026-06-16T01:32:10.138540662Z",
+  "last_event_at": "2026-06-16T01:37:28.027975742Z",
   "pending_control": null,
-  "checkpoints": [],
+  "checkpoints": [
+    {
+      "seq": 20,
+      "checkpoint": {
+        "timestamp": "2026-06-16T01:32:11.534293128Z",
+        "current_node": "start",
+        "completed_nodes": [
+          "start"
+        ],
+        "node_retries": {},
+        "context_values": {
+          "internal.work_dir": "/workspace/freeq",
+          "failure_class": "",
+          "outcome": "succeeded",
+          "internal.thread_id": null,
+          "current_node": "start",
+          "graph.goal": "harden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default",
+          "internal.node_visit_count": 1,
+          "internal.retry_count.start": 0,
+          "failure_signature": "",
+          "internal.fidelity": "compact",
+          "internal.run_id": "01KV70WV0C0X3AZ5PZMKHBW91W",
+          "graph.rankdir": "LR"
+        },
+        "node_outcomes": {
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          }
+        },
+        "next_node_id": "explore",
+        "node_visits": {
+          "start": 1
+        }
+      },
+      "diff": {}
+    },
+    {
+      "seq": 0,
+      "checkpoint": {
+        "timestamp": "2026-06-16T01:37:28.039540049Z",
+        "current_node": "explore",
+        "completed_nodes": [
+          "start",
+          "explore"
+        ],
+        "node_retries": {},
+        "context_values": {
+          "internal.thread_id": "feat",
+          "internal.retry_count.start": 0,
+          "internal.retry_count.explore": 0,
+          "graph.goal": "harden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default",
+          "last_response": "I have a complete, grounded picture. Here is the findings brief.\n\n---\n\n# Findings Brief: File Upload Surface in freeq\n\n## 1. Current architecture (end-to-end)\n\nfreeq has a **private-by-default, on-ser",
+          "internal.run_id": "01KV70WV0C0X3AZ5PZMKHBW91W",
+          "internal.work_dir": "/workspace/freeq",
+          "thread.feat.current_node": "explore",
+          "outcome": "succeeded",
+          "internal.node_visit_count": 1,
+          "response.explore": "I have a complete, grounded picture. Here is the findings brief.\n\n---\n\n# Findings Brief: File Upload Surface in freeq\n\n## 1. Current architecture (end-to-end)\n\nfreeq has a **private-by-default, on-server media store** already built. The flow:\n\n1. **Client** builds `multipart/form-data` → `POST /api/v1/upload` (fields: `file`, `did`, `alt?`, `channel?`, `share_pds?`, `share_bluesky?/cross_post?`).\n2. **Server** (`web.rs::api_upload`) authenticates the DID, **always** stores bytes **encrypted-at-rest on local disk** (AES-256-GCM), records metadata in SQLite, and mints a **signed capability URL**: `{origin}/api/v1/media/{id}/{sig}/{filename}`.\n3. **Optionally** (only if `share_pds`/`share_bluesky`) the server *additionally* proxies the blob to the user's AT Protocol PDS via the SDK — best-effort, never fails the private upload.\n4. **Server** returns `{ url, content_type, size, private }`. The client **string-concatenates the URL into a PRIVMSG body**.\n5. On render, clients **regex-scan message text** to detect media URLs and render inline; `GET /api/v1/media/{id}/{sig}/{filename}` (`api_media_serve`) verifies the HMAC capability, decrypts, and serves with HTTP Range support.\n\n**On-server storage is already the default** — the feature is hardening/enhancing this existing path, not building it.\n\n## 2. Files & functions that matter\n\n**Server (`freeq-server/src/`)**\n- `media_store.rs` — the whole private store. `MediaStore::{new,sign,verify,capability_url,path_for,put,get,remove}`, `derive_enc_key`/`derive_cap_key` (HMAC domain-separated from `msg_signing_key`), `new_id` (128-bit), `sanitize_filename` (path-traversal guard), `encrypt`/`decrypt` (AES-256-GCM), `tighten_dir/file` (0700/0600). Fully unit-tested.\n- `web.rs` (**gamma 275 hotspot**) — `api_upload` (`:3113`, multipart parse, 10MB cap at `:3155`, auth at `:3203`, PDS step-up at `:3235`), `pick_media_filename` (`:3396`), `api_media_serve` (`:3791`), `parse_single_range` (`:3867`), `api_blob_proxy` (`:3674`, SSRF allowlist), routes (`:196`/`:201`), `DefaultBodyLimit::max(12MB)` global layer (`:245`).\n- `db.rs` — `media` table (`:430`, schema: id/uploader_did/scope/mime/size/alt/filename/created_at/deleted_at), `insert_media` (`:1086`), `get_media` (`:1116`), `soft_delete_media` (`:1141`).\n- `server.rs` (**gamma 334 hotspot**) — `SharedState.media_store` (`:734`), `upload_tokens` (`:723`), store init gated on `db.is_some()` (`:1283`).\n\n**SDK (`freeq-sdk/src/`)**\n- `media.rs` — `upload_media_to_pds` (`:315`, PDS-only, not freeq-server), `MediaUploadResult`, `MediaAttachment` tag (de)serialization, `fetch_link_preview` (`:179`, SSRF-guarded, 64KB cap).\n- `ssrf.rs` — `resolve_and_check`, `pinned_client` (DNS pinning vs rebinding), `is_private_ip/hostname`.\n- **`freeq-sdk-ffi` has NO media/upload exports** — native FFI clients can't upload via the SDK; they call the REST endpoint directly.\n\n**Web app (`freeq-app/src/`)**\n- `components/ComposeBox.tsx` — `doUpload()` (`:193`, FormData build, 401 broker-refresh + 403 step-up retry), `handleFileSelect` (`:168`), `MAX_FILE_SIZE=10MB`/`ALLOWED_TYPES` (`:9-11`), paste/drag handlers.\n- `components/FileDropOverlay.tsx` — window-level drop → CustomEvent.\n- `components/MessageList.tsx` (**gamma 103, UNDERTESTED**) — `MessageContent` regex dispatch (`:368`), `isTrustedImageUrl` (`:218`, trusts same-origin `/api/v1/media/`), `GatedImage` (`:235`), detection regexes (`:56-71`).\n- `store.ts` — only *viewing* state (`loadExternalMedia`, `lightboxUrl`); no upload state.\n\n**TUI / native** — `freeq-tui` (`app.rs::MediaUploader`, PDS-cred based) and iOS/macOS/Windows/Android all build multipart by hand and POST to `/api/v1/upload` (confirmed: `MediaCapture.swift:472`, `UploadService.cs:17`).\n\n## 3. Constraints the plan must respect\n\n- **CI gate** (`.fabro/verify.sh` mirrors `ci.yml`): `cargo fmt --check`, `cargo check`, `clippy -D warnings` (warnings = errors), `cargo test` — all `--workspace` excluding AV crates (`freeq-av`, `freeq-eliza`, `freeq-av-client`, `freeq-av-image`). If `freeq-app/` changes, `vitest` must pass. **This executor cannot compile Swift/WinUI/Kotlin** — native clients are out of scope for edits.\n- **Hotspots / \"write tests FIRST\"**: `web.rs` (275), `server.rs` (334), and `MessageList.tsx` (103, undertested) are the files this feature touches. CLAUDE.md philosophy: *\"If something feels 'too clever,' it's probably wrong\"* — favor minimal, auditable changes.\n- **Capability-URL invariant**: URLs are **non-expiring** by design (CHATHISTORY replay must keep rendering). HMAC over `id` only; AES key + cap key both derived from the server's `msg_signing_key` seed.\n- **10MB cap** is load-bearing: it's *why* the serve path can decrypt-in-memory and support Range without a streaming cipher (`media_store.rs:15`). Raising it has architectural ripple.\n- **Existing tests**: `tests/upload.rs` (auth, oversize 413, private roundtrip, tampered-sig 403, range 206, step-up, blob-proxy SSRF, OG SSRF, CSP). `MessageList.media.test.tsx` (3 render cases). `oauth-step-up.test.ts`.\n\n## 4. Threat model / failure modes (where hardening is needed)\n\n| Risk | Current state | Gap |\n|---|---|---|\n| **Content-type spoofing** | Server trusts client-declared MIME; **no sniffing/whitelist**. `pick_media_filename` maps known MIMEs. | Server accepts *any* content-type; a `.html`/SVG/script could be stored and served with attacker-chosen type. No magic-byte validation. |\n| **Stored-XSS via served blobs** | `api_media_serve` sets `Content-Type` from stored mime; **no `Content-Disposition`, no `X-Content-Type-Options: nosniff` on this route, no sandbox CSP.** | A blob served as `text/html`/SVG on the API origin could execute. Needs `nosniff` + `Content-Disposition: attachment` (or inline-only for known-safe types) + restrictive CSP on the media route. |\n| **Size limit enforcement** | 10MB checked **after** `field.bytes()` reads the whole part into memory; global `DefaultBodyLimit` is 12MB. | Cap enforced post-buffering (memory pressure window). Limit + body-limit are slightly inconsistent (10 vs 12MB). No per-DID/quota limit. |\n| **Path traversal** | `sanitize_filename` strips path components; id is opaque base64url; shard dir derived from id. | Tested and solid. `path_for` uses first 2 chars of id (could be `_`); URL `{filename}` is cosmetic only. Low risk. |\n| **Capability-URL leakage** | Possession = access; non-expiring; HMAC unforgeable. URL only reaches conversation members *in theory* — but it's pasted into PRIVMSG text, so **anyone who can read the channel/history (incl. via REST/CHATHISTORY/federation) gets the URL forever.** | No per-recipient binding, no revocation beyond soft-delete, no scope check at serve time (the `scope` column is recorded but **not enforced** in `api_media_serve` — any valid sig serves regardless of channel membership). |\n| **Quota / DoS** | Only IP rate-limit on upload + 10MB cap. No per-DID storage quota, no total-disk cap, no cleanup/GC. | Unbounded disk growth; soft-deleted blobs stay on disk (`soft_delete_media` flips a flag but `media_store::remove` isn't wired to it). |\n| **Auth** | Upload requires active WS session or `X-Upload-Token` (HMAC, <300s, DID-bound). | Solid. But `did` is a form field cross-checked against session — fine. |\n| **SSRF** | `api_blob_proxy` uses host **allowlist** (not DNS-pinned, unlike SDK's `resolve_and_check`). | Blob proxy is allowlist-only; acceptable but inconsistent with the pinned-client pattern elsewhere. |\n| **Orphan/rollback** | Upload rolls back blob if DB insert fails. | Good. But no reconciliation job for blobs whose messages were deleted, or DB rows whose blobs vanished. |\n\n## 5. Native clients (eventual needs — NOT edited here)\n\nAll four call `POST /api/v1/upload` with hand-rolled multipart and expect `{url, content_type, size}`:\n- **iOS** (`MediaCapture.swift`, `ComposeView.swift`, `PhotoPicker.swift`), **macOS** (`FileUpload.swift`), **Windows** (`UploadService.cs`), **Android** (`PhotoUpload.kt`).\n\nThey will *eventually* need to consume any new response fields (e.g. structured attachment metadata, a `nosniff`/disposition contract, server-validated content-type, or an upload-token refresh). **Any change to the upload request/response contract or capability-URL format must stay backward-compatible** or be versioned, since these clients can't be recompiled in this environment.\n\n## 6. Open design questions the plan must answer\n\n1. **Content-type hardening**: Add server-side magic-byte sniffing + an allowlist (mirror the JS `ALLOWED_TYPES`)? Reject or coerce mismatched types? This is the single biggest security gap.\n2. **Serve-path safety headers**: Add `X-Content-Type-Options: nosniff`, `Content-Disposition` (attachment vs inline-by-type), and a tight CSP/`Content-Security-Policy: sandbox` on `/api/v1/media/*`? (Affects how inline rendering works in all clients.)\n3. **Scope enforcement at serve time**: Should `api_media_serve` verify the requester is a member of `row.scope` (channel/DM), upgrading from pure capability-URL to capability+authz? This changes the \"possession = access\" + non-expiring invariant and breaks unauthenticated `<img>` loads — needs care.\n4. **Structured attachment metadata**: Move from URL-in-PRIVMSG-text + regex detection to an IRCv3 tag (mime/size/alt) carried to the renderer (`MediaAttachment` already exists in the SDK but is unused by web)? Reduces render-side ambiguity and the gating asymmetry (video/audio aren't gated, only `<img>`).\n5. **Quota & lifecycle**: Per-DID/total storage quota, wiring `soft_delete_media` → physical `remove`, and a GC/reconciliation job. What limits and retention?\n6. **Size cap**: Keep 10MB (and align the 12MB body-limit to it), or raise it (requires streaming cipher rework)? Enforce *before* full buffering via `Content-Length` precheck.\n7. **Test-first targets**: New `web.rs`/`media_store.rs` tests for sniffing, headers, scope; the undertested `MessageList.tsx` and untested `doUpload()`/no-e2e-upload gaps in `freeq-app`.\n\nThis brief is the foundation for the implementation plan. No files were edited.",
+          "current_node": "explore",
+          "last_stage": "explore",
+          "graph.rankdir": "LR",
+          "internal.fidelity": "full",
+          "failure_class": "",
+          "failure_signature": ""
+        },
+        "node_outcomes": {
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          },
+          "explore": {
+            "status": "succeeded",
+            "context_updates": {
+              "response.explore": "I have a complete, grounded picture. Here is the findings brief.\n\n---\n\n# Findings Brief: File Upload Surface in freeq\n\n## 1. Current architecture (end-to-end)\n\nfreeq has a **private-by-default, on-server media store** already built. The flow:\n\n1. **Client** builds `multipart/form-data` → `POST /api/v1/upload` (fields: `file`, `did`, `alt?`, `channel?`, `share_pds?`, `share_bluesky?/cross_post?`).\n2. **Server** (`web.rs::api_upload`) authenticates the DID, **always** stores bytes **encrypted-at-rest on local disk** (AES-256-GCM), records metadata in SQLite, and mints a **signed capability URL**: `{origin}/api/v1/media/{id}/{sig}/{filename}`.\n3. **Optionally** (only if `share_pds`/`share_bluesky`) the server *additionally* proxies the blob to the user's AT Protocol PDS via the SDK — best-effort, never fails the private upload.\n4. **Server** returns `{ url, content_type, size, private }`. The client **string-concatenates the URL into a PRIVMSG body**.\n5. On render, clients **regex-scan message text** to detect media URLs and render inline; `GET /api/v1/media/{id}/{sig}/{filename}` (`api_media_serve`) verifies the HMAC capability, decrypts, and serves with HTTP Range support.\n\n**On-server storage is already the default** — the feature is hardening/enhancing this existing path, not building it.\n\n## 2. Files & functions that matter\n\n**Server (`freeq-server/src/`)**\n- `media_store.rs` — the whole private store. `MediaStore::{new,sign,verify,capability_url,path_for,put,get,remove}`, `derive_enc_key`/`derive_cap_key` (HMAC domain-separated from `msg_signing_key`), `new_id` (128-bit), `sanitize_filename` (path-traversal guard), `encrypt`/`decrypt` (AES-256-GCM), `tighten_dir/file` (0700/0600). Fully unit-tested.\n- `web.rs` (**gamma 275 hotspot**) — `api_upload` (`:3113`, multipart parse, 10MB cap at `:3155`, auth at `:3203`, PDS step-up at `:3235`), `pick_media_filename` (`:3396`), `api_media_serve` (`:3791`), `parse_single_range` (`:3867`), `api_blob_proxy` (`:3674`, SSRF allowlist), routes (`:196`/`:201`), `DefaultBodyLimit::max(12MB)` global layer (`:245`).\n- `db.rs` — `media` table (`:430`, schema: id/uploader_did/scope/mime/size/alt/filename/created_at/deleted_at), `insert_media` (`:1086`), `get_media` (`:1116`), `soft_delete_media` (`:1141`).\n- `server.rs` (**gamma 334 hotspot**) — `SharedState.media_store` (`:734`), `upload_tokens` (`:723`), store init gated on `db.is_some()` (`:1283`).\n\n**SDK (`freeq-sdk/src/`)**\n- `media.rs` — `upload_media_to_pds` (`:315`, PDS-only, not freeq-server), `MediaUploadResult`, `MediaAttachment` tag (de)serialization, `fetch_link_preview` (`:179`, SSRF-guarded, 64KB cap).\n- `ssrf.rs` — `resolve_and_check`, `pinned_client` (DNS pinning vs rebinding), `is_private_ip/hostname`.\n- **`freeq-sdk-ffi` has NO media/upload exports** — native FFI clients can't upload via the SDK; they call the REST endpoint directly.\n\n**Web app (`freeq-app/src/`)**\n- `components/ComposeBox.tsx` — `doUpload()` (`:193`, FormData build, 401 broker-refresh + 403 step-up retry), `handleFileSelect` (`:168`), `MAX_FILE_SIZE=10MB`/`ALLOWED_TYPES` (`:9-11`), paste/drag handlers.\n- `components/FileDropOverlay.tsx` — window-level drop → CustomEvent.\n- `components/MessageList.tsx` (**gamma 103, UNDERTESTED**) — `MessageContent` regex dispatch (`:368`), `isTrustedImageUrl` (`:218`, trusts same-origin `/api/v1/media/`), `GatedImage` (`:235`), detection regexes (`:56-71`).\n- `store.ts` — only *viewing* state (`loadExternalMedia`, `lightboxUrl`); no upload state.\n\n**TUI / native** — `freeq-tui` (`app.rs::MediaUploader`, PDS-cred based) and iOS/macOS/Windows/Android all build multipart by hand and POST to `/api/v1/upload` (confirmed: `MediaCapture.swift:472`, `UploadService.cs:17`).\n\n## 3. Constraints the plan must respect\n\n- **CI gate** (`.fabro/verify.sh` mirrors `ci.yml`): `cargo fmt --check`, `cargo check`, `clippy -D warnings` (warnings = errors), `cargo test` — all `--workspace` excluding AV crates (`freeq-av`, `freeq-eliza`, `freeq-av-client`, `freeq-av-image`). If `freeq-app/` changes, `vitest` must pass. **This executor cannot compile Swift/WinUI/Kotlin** — native clients are out of scope for edits.\n- **Hotspots / \"write tests FIRST\"**: `web.rs` (275), `server.rs` (334), and `MessageList.tsx` (103, undertested) are the files this feature touches. CLAUDE.md philosophy: *\"If something feels 'too clever,' it's probably wrong\"* — favor minimal, auditable changes.\n- **Capability-URL invariant**: URLs are **non-expiring** by design (CHATHISTORY replay must keep rendering). HMAC over `id` only; AES key + cap key both derived from the server's `msg_signing_key` seed.\n- **10MB cap** is load-bearing: it's *why* the serve path can decrypt-in-memory and support Range without a streaming cipher (`media_store.rs:15`). Raising it has architectural ripple.\n- **Existing tests**: `tests/upload.rs` (auth, oversize 413, private roundtrip, tampered-sig 403, range 206, step-up, blob-proxy SSRF, OG SSRF, CSP). `MessageList.media.test.tsx` (3 render cases). `oauth-step-up.test.ts`.\n\n## 4. Threat model / failure modes (where hardening is needed)\n\n| Risk | Current state | Gap |\n|---|---|---|\n| **Content-type spoofing** | Server trusts client-declared MIME; **no sniffing/whitelist**. `pick_media_filename` maps known MIMEs. | Server accepts *any* content-type; a `.html`/SVG/script could be stored and served with attacker-chosen type. No magic-byte validation. |\n| **Stored-XSS via served blobs** | `api_media_serve` sets `Content-Type` from stored mime; **no `Content-Disposition`, no `X-Content-Type-Options: nosniff` on this route, no sandbox CSP.** | A blob served as `text/html`/SVG on the API origin could execute. Needs `nosniff` + `Content-Disposition: attachment` (or inline-only for known-safe types) + restrictive CSP on the media route. |\n| **Size limit enforcement** | 10MB checked **after** `field.bytes()` reads the whole part into memory; global `DefaultBodyLimit` is 12MB. | Cap enforced post-buffering (memory pressure window). Limit + body-limit are slightly inconsistent (10 vs 12MB). No per-DID/quota limit. |\n| **Path traversal** | `sanitize_filename` strips path components; id is opaque base64url; shard dir derived from id. | Tested and solid. `path_for` uses first 2 chars of id (could be `_`); URL `{filename}` is cosmetic only. Low risk. |\n| **Capability-URL leakage** | Possession = access; non-expiring; HMAC unforgeable. URL only reaches conversation members *in theory* — but it's pasted into PRIVMSG text, so **anyone who can read the channel/history (incl. via REST/CHATHISTORY/federation) gets the URL forever.** | No per-recipient binding, no revocation beyond soft-delete, no scope check at serve time (the `scope` column is recorded but **not enforced** in `api_media_serve` — any valid sig serves regardless of channel membership). |\n| **Quota / DoS** | Only IP rate-limit on upload + 10MB cap. No per-DID storage quota, no total-disk cap, no cleanup/GC. | Unbounded disk growth; soft-deleted blobs stay on disk (`soft_delete_media` flips a flag but `media_store::remove` isn't wired to it). |\n| **Auth** | Upload requires active WS session or `X-Upload-Token` (HMAC, <300s, DID-bound). | Solid. But `did` is a form field cross-checked against session — fine. |\n| **SSRF** | `api_blob_proxy` uses host **allowlist** (not DNS-pinned, unlike SDK's `resolve_and_check`). | Blob proxy is allowlist-only; acceptable but inconsistent with the pinned-client pattern elsewhere. |\n| **Orphan/rollback** | Upload rolls back blob if DB insert fails. | Good. But no reconciliation job for blobs whose messages were deleted, or DB rows whose blobs vanished. |\n\n## 5. Native clients (eventual needs — NOT edited here)\n\nAll four call `POST /api/v1/upload` with hand-rolled multipart and expect `{url, content_type, size}`:\n- **iOS** (`MediaCapture.swift`, `ComposeView.swift`, `PhotoPicker.swift`), **macOS** (`FileUpload.swift`), **Windows** (`UploadService.cs`), **Android** (`PhotoUpload.kt`).\n\nThey will *eventually* need to consume any new response fields (e.g. structured attachment metadata, a `nosniff`/disposition contract, server-validated content-type, or an upload-token refresh). **Any change to the upload request/response contract or capability-URL format must stay backward-compatible** or be versioned, since these clients can't be recompiled in this environment.\n\n## 6. Open design questions the plan must answer\n\n1. **Content-type hardening**: Add server-side magic-byte sniffing + an allowlist (mirror the JS `ALLOWED_TYPES`)? Reject or coerce mismatched types? This is the single biggest security gap.\n2. **Serve-path safety headers**: Add `X-Content-Type-Options: nosniff`, `Content-Disposition` (attachment vs inline-by-type), and a tight CSP/`Content-Security-Policy: sandbox` on `/api/v1/media/*`? (Affects how inline rendering works in all clients.)\n3. **Scope enforcement at serve time**: Should `api_media_serve` verify the requester is a member of `row.scope` (channel/DM), upgrading from pure capability-URL to capability+authz? This changes the \"possession = access\" + non-expiring invariant and breaks unauthenticated `<img>` loads — needs care.\n4. **Structured attachment metadata**: Move from URL-in-PRIVMSG-text + regex detection to an IRCv3 tag (mime/size/alt) carried to the renderer (`MediaAttachment` already exists in the SDK but is unused by web)? Reduces render-side ambiguity and the gating asymmetry (video/audio aren't gated, only `<img>`).\n5. **Quota & lifecycle**: Per-DID/total storage quota, wiring `soft_delete_media` → physical `remove`, and a GC/reconciliation job. What limits and retention?\n6. **Size cap**: Keep 10MB (and align the 12MB body-limit to it), or raise it (requires streaming cipher rework)? Enforce *before* full buffering via `Content-Length` precheck.\n7. **Test-first targets**: New `web.rs`/`media_store.rs` tests for sniffing, headers, scope; the undertested `MessageList.tsx` and untested `doUpload()`/no-e2e-upload gaps in `freeq-app`.\n\nThis brief is the foundation for the implementation plan. No files were edited.",
+              "last_response": "I have a complete, grounded picture. Here is the findings brief.\n\n---\n\n# Findings Brief: File Upload Surface in freeq\n\n## 1. Current architecture (end-to-end)\n\nfreeq has a **private-by-default, on-ser",
+              "last_stage": "explore"
+            },
+            "notes": "Stage completed: explore",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "anthropic",
+                    "model_id": "claude-opus-4-8"
+                  },
+                  "tokens": {
+                    "input_tokens": 64084,
+                    "output_tokens": 10849,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 781081,
+                    "cache_write_tokens": 159873
+                  }
+                },
+                "facts": {
+                  "algorithm": "anthropic",
+                  "cache_write_5m_tokens": 159873,
+                  "cache_write_1h_tokens": 0
+                }
+              },
+              "total_usd_micros": 1981391
+            },
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 197705,
+              "tool_time_ms": 118278,
+              "active_time_ms": 315983
+            }
+          }
+        },
+        "next_node_id": "plan",
+        "node_visits": {
+          "start": 1,
+          "explore": 1
+        }
+      },
+      "diff": {}
+    }
+  ],
   "conclusion": null,
   "sandbox": {
     "kind": "ready",
@@ -745,5 +867,289 @@
   "pull_request": null,
   "superseded_by": null,
   "pending_interviews": {},
-  "stages": {}
+  "stages": {
+    "explore@1": {
+      "first_event_seq": 21,
+      "prompt": null,
+      "response": null,
+      "completion": null,
+      "provider_used": {
+        "mode": "agent",
+        "provider": "anthropic",
+        "model": "claude-opus-4-8",
+        "reasoning_effort": "high"
+      },
+      "diff": null,
+      "script_invocation": null,
+      "script_timing": null,
+      "parallel_results": null,
+      "output": null,
+      "started_at": "2026-06-16T01:32:11.535333Z",
+      "handler": "agent",
+      "usage": {
+        "input_tokens": 166013,
+        "output_tokens": 25779,
+        "total_tokens": 3064124,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 2431251,
+        "cache_write_tokens": 441081
+      },
+      "model": {
+        "provider": "anthropic",
+        "model_id": "claude-opus-4-8"
+      },
+      "subagents": [
+        {
+          "agent_id": "248183d6",
+          "depth": 1,
+          "task": "Read-only investigation of the freeq-sdk media/upload surface for a planning brief. Do NOT edit anything.\n\nIn /workspace/freeq/freeq-sdk/src/media.rs and any related SDK files (av.rs, client.rs, lib.rs, pds.rs, ssrf.rs), find and report:\n1. Every function related to media/file upload (signatures, paths, line numbers). Especially `upload_media_to_pds` and anything that uploads to the freeq server vs the AT Protocol PDS blob store.\n2. How the SDK uploads to the freeq server's REST endpoint (POST /api/v1/media or similar) — the request shape, multipart vs JSON, auth headers, size limits, content-type handling.\n3. Any SSRF protection (ssrf.rs) and how it bounds upload/fetch URLs.\n4. Any size caps, content-type validation, or MIME sniffing constants.\n5. The FFI surface: check /workspace/freeq/freeq-sdk-ffi for any media/upload exports.\n\nOutput a concise findings list with file paths + function names + line numbers + the request/response shape. Quote the key constants (size limits, allowed types). Do not edit any files.",
+          "status": {
+            "kind": "completed",
+            "success": true,
+            "turns_used": 54
+          }
+        },
+        {
+          "agent_id": "3232e508",
+          "depth": 1,
+          "task": "Read-only investigation of the freeq-app (React/TS web app) file-upload surface for a planning brief. Do NOT edit anything. Note: ripgrep is NOT installed; use grep -rn or the find command.\n\nIn /workspace/freeq/freeq-app/src (ignore node_modules), find and report:\n1. Every place the web app uploads files / media / attachments. Search for: upload, media, attach, FormData, fetch.*media, capability URL, image paste, drag-drop, file input. Report file paths + line numbers + function/component names.\n2. How it talks to the server's media endpoint (POST /api/v1/media): request shape (FormData/multipart? fields?), auth headers, how it gets the resulting capability URL, and how that URL is then put into an IRC message (PRIVMSG).\n3. How uploaded media is RENDERED in the message list (MessageList.tsx or similar): how capability URLs are detected, image/video/file rendering, any client-side validation, CSP concerns.\n4. Any size limits, allowed content types, or progress UI in the client.\n5. The relevant store.ts integration (state, actions) for uploads.\n6. Existing tests touching upload (vitest *.test.ts and playwright e2e/*.spec.ts).\n\nOutput a concise findings list with file paths + line numbers + symbol names + request/response shapes. Do not edit any files.",
+          "status": {
+            "kind": "completed",
+            "success": true,
+            "turns_used": 54
+          }
+        }
+      ],
+      "permission_level": "full",
+      "agent_tools": [
+        {
+          "name": "AskUserQuestion",
+          "description": "Ask the human one or more questions and wait for their answers before continuing this stage.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "TaskCreate",
+          "description": "Create pending tasks in the current session. Use concise subjects, descriptions, optional activeForm text, and metadata. Check TaskList first to avoid duplicate tasks.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "TaskGet",
+          "description": "Get one task by taskId, including subject, status, description, owner, blockedBy, and blocks.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "TaskList",
+          "description": "List tasks for the current session, including status, owner, and blocking dependencies. Use TaskGet with a taskId for full description and dependency details.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "TaskUpdate",
+          "description": "Update an existing task's status, text, owner, metadata, or dependencies. Valid statuses are pending, in_progress, completed, and deleted. After completing a task, call TaskList to find newly unblocked work.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "close_agent",
+          "description": "Close a running subagent that is no longer needed.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "subagent",
+          "invoked": false
+        },
+        {
+          "name": "edit_file",
+          "description": "Edit a file by replacing an exact string. The old_string must be an exact match and unique unless replace_all is true; include surrounding context when needed. Read the file first and preserve existing indentation.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "write",
+          "invoked": false
+        },
+        {
+          "name": "glob",
+          "description": "Find files by file names using a glob pattern. Use path to choose the search root. Prefer this over shell find or ls when locating repository files.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "read",
+          "invoked": true
+        },
+        {
+          "name": "grep",
+          "description": "Search file contents with a regex pattern. Use path to choose the search root, glob_filter to limit matching files, case_insensitive for case folding, and max_results to cap output.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "read",
+          "invoked": true
+        },
+        {
+          "name": "read_file",
+          "description": "Read files before editing them. Returns line-numbered text and supports offset/limit for large files. Use this instead of shell cat, head, tail, or sed when inspecting repository files.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "read",
+          "invoked": true
+        },
+        {
+          "name": "send_input",
+          "description": "Send a follow-up message to a running subagent when new information or corrected instructions are needed.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "subagent",
+          "invoked": false
+        },
+        {
+          "name": "shell",
+          "description": "Execute shell commands for terminal operations, package managers, tests and builds. Use dedicated tools for file reads, file edits, filename searches, and content searches. Provide timeout_ms for long-running commands.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "shell",
+          "invoked": true
+        },
+        {
+          "name": "spawn_agent",
+          "description": "Spawn a subagent for independent work or context isolation. Use it for tasks that can proceed separately, and avoid duplicating the same work in the parent session.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "subagent",
+          "invoked": true
+        },
+        {
+          "name": "wait",
+          "description": "Wait for a subagent to complete, then use the result to synthesize the outcome for the user.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "subagent",
+          "invoked": true
+        },
+        {
+          "name": "web_fetch",
+          "description": "Fetch content from a URL that starts with http:// or https://. Pass a prompt to extract specific information or summarize the page; omit prompt to return the page content.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "web_search",
+          "description": "Search the web using Brave Search when current external information is needed. Returns result titles, URLs, and descriptions; use web_fetch for a specific URL.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "other",
+          "invoked": false
+        },
+        {
+          "name": "write_file",
+          "description": "Create new files, or overwrite an existing file only when replacement is explicitly intended. Prefer edit_file for targeted changes to existing files because write_file overwrites the full file content.",
+          "source": {
+            "kind": "native"
+          },
+          "category": "write",
+          "invoked": false
+        }
+      ],
+      "context_window": {
+        "provider": "anthropic",
+        "model": "claude-opus-4-8",
+        "context_window_tokens": 1000000,
+        "input_tokens": 73345,
+        "usage_percent": 7.3345,
+        "count_method": "response_usage_scaled_breakdown",
+        "staleness": "live",
+        "generated_at": "2026-06-16T01:36:31.094733034Z",
+        "event_seq": 321,
+        "breakdown": [
+          {
+            "category": "system_prompt",
+            "tokens": 2773,
+            "usage_percent": 0.2773
+          },
+          {
+            "category": "tools",
+            "tokens": 3229,
+            "usage_percent": 0.3229
+          },
+          {
+            "category": "memory",
+            "tokens": 4466,
+            "usage_percent": 0.4466
+          },
+          {
+            "category": "conversation",
+            "tokens": 62866,
+            "usage_percent": 6.2866
+          },
+          {
+            "category": "other",
+            "tokens": 11,
+            "usage_percent": 0.0011
+          }
+        ],
+        "warnings": []
+      },
+      "state": "running"
+    },
+    "start@1": {
+      "first_event_seq": 17,
+      "prompt": null,
+      "response": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": null,
+        "failure_reason": null,
+        "timestamp": "2026-06-16T01:32:11.530907097Z"
+      },
+      "provider_used": null,
+      "diff": null,
+      "script_invocation": null,
+      "script_timing": null,
+      "parallel_results": null,
+      "output": null,
+      "started_at": "2026-06-16T01:32:11.526025884Z",
+      "handler": "start",
+      "timing": {
+        "wall_time_ms": 2,
+        "inference_time_ms": 0,
+        "tool_time_ms": 0,
+        "active_time_ms": 0
+      },
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "state": "succeeded"
+    }
+  }
 }
