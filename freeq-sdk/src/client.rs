@@ -3709,4 +3709,535 @@ mod irc_loop_tests {
 
         assert!(got_disconnect, "expected Event::Disconnected on server EOF");
     }
+
+    // ── NICK change ───────────────────────────────────────────────────────────
+
+    /// NICK from another user emits Event::NickChanged with correct
+    /// old_nick (parsed from the prefix) and new_nick (from params).
+    #[tokio::test]
+    async fn server_nick_change_emits_nick_changed_event() {
+        let (mut server, mut events, _cmd) = start_run_irc("host").await;
+
+        server
+            .write_all(b":alice!u@h NICK :alice2\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::NickChanged { old_nick, new_nick } = ev {
+                    return Some((old_nick, new_nick));
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let (old, new) = got.expect("expected NickChanged event");
+        assert_eq!(old, "alice");
+        assert_eq!(new, "alice2");
+    }
+
+    /// A NICK message whose prefix has no user@host hostmask (bare nick prefix)
+    /// must still parse correctly — old_nick from prefix, new_nick from params.
+    #[tokio::test]
+    async fn server_nick_change_bare_prefix_parses_correctly() {
+        let (mut server, mut events, _cmd) = start_run_irc("host2").await;
+
+        // Bare prefix: no "!user@host" component.
+        server.write_all(b":bob NICK :robert\r\n").await.unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::NickChanged { old_nick, new_nick } = ev {
+                    return Some((old_nick, new_nick));
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let (old, new) = got.expect("expected NickChanged event with bare prefix");
+        assert_eq!(old, "bob");
+        assert_eq!(new, "robert");
+    }
+
+    // ── QUIT ──────────────────────────────────────────────────────────────────
+
+    /// QUIT emits Event::UserQuit with the correct nick and reason.
+    #[tokio::test]
+    async fn server_quit_emits_user_quit_event() {
+        let (mut server, mut events, _cmd) = start_run_irc("host3").await;
+
+        server
+            .write_all(b":bob!u@h QUIT :Gone fishing\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::UserQuit { nick, reason } = ev {
+                    return Some((nick, reason));
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let (nick, reason) = got.expect("expected UserQuit event");
+        assert_eq!(nick, "bob");
+        assert_eq!(reason, "Gone fishing");
+    }
+
+    /// QUIT with no reason parameter must not panic and must emit an empty reason.
+    #[tokio::test]
+    async fn server_quit_with_no_reason_emits_empty_reason() {
+        let (mut server, mut events, _cmd) = start_run_irc("host4").await;
+
+        server.write_all(b":carol!u@h QUIT\r\n").await.unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::UserQuit { nick, reason } = ev {
+                    return Some((nick, reason));
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let (nick, reason) = got.expect("expected UserQuit even without reason");
+        assert_eq!(nick, "carol");
+        assert_eq!(reason, "", "reason should be empty when param is absent");
+    }
+
+    // ── KICK ──────────────────────────────────────────────────────────────────
+
+    /// KICK emits Event::Kicked with channel, kicked nick, kicker, and reason.
+    #[tokio::test]
+    async fn server_kick_emits_kicked_event() {
+        let (mut server, mut events, _cmd) = start_run_irc("host5").await;
+
+        server
+            .write_all(b":op!u@h KICK #room victim :no spam\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::Kicked {
+                    channel,
+                    nick,
+                    by,
+                    reason,
+                } = ev
+                {
+                    return Some((channel, nick, by, reason));
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let (channel, nick, by, reason) = got.expect("expected Kicked event");
+        assert_eq!(channel, "#room");
+        assert_eq!(nick, "victim");
+        assert_eq!(by, "op");
+        assert_eq!(reason, "no spam");
+    }
+
+    /// KICK with no reason param must emit an empty reason string, not panic.
+    #[tokio::test]
+    async fn server_kick_with_no_reason_emits_empty_reason() {
+        let (mut server, mut events, _cmd) = start_run_irc("host6").await;
+
+        server
+            .write_all(b":op!u@h KICK #room victim\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::Kicked { reason, .. } = ev {
+                    return Some(reason);
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let reason = got.expect("expected Kicked event without reason");
+        assert_eq!(reason, "", "reason should be empty when omitted");
+    }
+
+    // ── AWAY ──────────────────────────────────────────────────────────────────
+
+    /// AWAY with a message emits Event::AwayChanged with away_msg = Some(…).
+    #[tokio::test]
+    async fn server_away_with_message_emits_away_changed() {
+        let (mut server, mut events, _cmd) = start_run_irc("host7").await;
+
+        server
+            .write_all(b":dave!u@h AWAY :be right back\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::AwayChanged { nick, away_msg } = ev {
+                    return Some((nick, away_msg));
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let (nick, away_msg) = got.expect("expected AwayChanged event");
+        assert_eq!(nick, "dave");
+        assert_eq!(away_msg.as_deref(), Some("be right back"));
+    }
+
+    /// AWAY with no params emits Event::AwayChanged with away_msg = None
+    /// (the user is returning from away status).
+    #[tokio::test]
+    async fn server_away_with_no_message_emits_away_changed_none() {
+        let (mut server, mut events, _cmd) = start_run_irc("host8").await;
+
+        server.write_all(b":dave!u@h AWAY\r\n").await.unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::AwayChanged { nick, away_msg } = ev {
+                    return Some((nick, away_msg));
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let (nick, away_msg) = got.expect("expected AwayChanged event for returning user");
+        assert_eq!(nick, "dave");
+        assert!(
+            away_msg.is_none(),
+            "away_msg should be None when returning from away"
+        );
+    }
+
+    // ── TOPIC ─────────────────────────────────────────────────────────────────
+
+    /// Live TOPIC change emits Event::TopicChanged with channel, new topic,
+    /// and set_by = Some(nick parsed from prefix).
+    #[tokio::test]
+    async fn server_topic_change_emits_topic_changed_event() {
+        let (mut server, mut events, _cmd) = start_run_irc("host9").await;
+
+        server
+            .write_all(b":mod!u@h TOPIC #room :New topic here\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::TopicChanged {
+                    channel,
+                    topic,
+                    set_by,
+                } = ev
+                {
+                    return Some((channel, topic, set_by));
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let (channel, topic, set_by) = got.expect("expected TopicChanged event");
+        assert_eq!(channel, "#room");
+        assert_eq!(topic, "New topic here");
+        assert_eq!(set_by.as_deref(), Some("mod"));
+    }
+
+    /// 332 RPL_TOPIC (received on join) emits Event::TopicChanged with
+    /// set_by = None (the server doesn't tell us who set it in 332 itself).
+    #[tokio::test]
+    async fn server_rpl_topic_332_emits_topic_changed_no_setter() {
+        let (mut server, mut events, _cmd) = start_run_irc("host10").await;
+
+        // 332 format: :<server> 332 <ournick> <channel> :<topic>
+        server
+            .write_all(b":srv 332 host10 #room :Welcome to the room\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::TopicChanged {
+                    channel,
+                    topic,
+                    set_by,
+                } = ev
+                {
+                    return Some((channel, topic, set_by));
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let (channel, topic, set_by) = got.expect("expected TopicChanged from 332");
+        assert_eq!(channel, "#room");
+        assert_eq!(topic, "Welcome to the room");
+        assert!(
+            set_by.is_none(),
+            "set_by should be None for 332 RPL_TOPIC (no setter in that numeric)"
+        );
+    }
+
+    // ── INVITE ────────────────────────────────────────────────────────────────
+
+    /// INVITE emits Event::Invited with the channel and the inviter's nick.
+    #[tokio::test]
+    async fn server_invite_emits_invited_event() {
+        let (mut server, mut events, _cmd) = start_run_irc("host11").await;
+
+        // INVITE <target_nick> <channel>
+        server
+            .write_all(b":alice!u@h INVITE host11 #secret\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::Invited { channel, by } = ev {
+                    return Some((channel, by));
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let (channel, by) = got.expect("expected Invited event");
+        assert_eq!(channel, "#secret");
+        assert_eq!(by, "alice");
+    }
+
+    // ── NAMES / 353 ───────────────────────────────────────────────────────────
+
+    /// 353 RPL_NAMREPLY emits Event::Names with the correct channel and nicks.
+    #[tokio::test]
+    async fn server_353_emits_names_event() {
+        let (mut server, mut events, _cmd) = start_run_irc("host12").await;
+
+        // 353 format: :<server> 353 <ournick> = <channel> :<nick1> <nick2> …
+        server
+            .write_all(b":srv 353 host12 = #room :alice @bob +carol\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::Names { channel, nicks } = ev {
+                    return Some((channel, nicks));
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let (channel, nicks) = got.expect("expected Names event");
+        assert_eq!(channel, "#room");
+        assert_eq!(nicks, vec!["alice", "@bob", "+carol"]);
+    }
+
+    // ── TAGMSG dispatch ───────────────────────────────────────────────────────
+
+    /// TAGMSG emits Event::TagMsg with the correct from, target, and tags.
+    #[tokio::test]
+    async fn server_tagmsg_emits_tag_msg_event() {
+        let (mut server, mut events, _cmd) = start_run_irc("host13").await;
+
+        // Tagged TAGMSG: @+react=👍 :alice!u@h TAGMSG #room
+        server
+            .write_all(b"@+react=\xf0\x9f\x91\x8d :alice!u@h TAGMSG #room\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::TagMsg { from, target, tags } = ev {
+                    return Some((from, target, tags));
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let (from, target, tags) = got.expect("expected TagMsg event");
+        assert_eq!(from, "alice");
+        assert_eq!(target, "#room");
+        assert_eq!(tags.get("+react").map(|s| s.as_str()), Some("👍"));
+    }
+
+    // ── legacy +freeq.at/multiline \\n normalization ──────────────────────────
+
+    /// PRIVMSG bearing the legacy `+freeq.at/multiline` tag must have its
+    /// literal `\n` escape sequences (two chars: backslash + n) replaced with
+    /// real newline characters before the Event::Message is emitted.
+    #[tokio::test]
+    async fn legacy_multiline_tag_normalizes_slash_n_to_newline() {
+        let (mut server, mut events, _cmd) = start_run_irc("host14").await;
+
+        // The wire body contains literal \n (backslash + 'n'), not a real newline.
+        server
+            .write_all(
+                b"@+freeq.at/multiline=1 :alice!u@h PRIVMSG #room :line1\\nline2\\nline3\r\n",
+            )
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::Message { text, .. } = ev {
+                    return Some(text);
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let text = got.expect("expected Message event");
+        assert_eq!(
+            text, "line1\nline2\nline3",
+            "legacy \\n escape must be replaced with a real newline"
+        );
+    }
+
+    /// A PRIVMSG without the `+freeq.at/multiline` tag must NOT have `\n`
+    /// sequences replaced — the body should be delivered verbatim.
+    #[tokio::test]
+    async fn privmsg_without_multiline_tag_preserves_literal_slash_n() {
+        let (mut server, mut events, _cmd) = start_run_irc("host15").await;
+
+        server
+            .write_all(b":alice!u@h PRIVMSG #room :keep\\nraw\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::Message { text, .. } = ev {
+                    return Some(text);
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let text = got.expect("expected Message event");
+        assert_eq!(
+            text, r"keep\nraw",
+            "without multiline tag, literal \\n must be preserved"
+        );
+    }
+
+    // ── extended-join account field ───────────────────────────────────────────
+
+    /// Extended JOIN with a DID account field emits Event::Joined with
+    /// account = Some(did).
+    #[tokio::test]
+    async fn extended_join_with_did_account_emits_joined_with_account() {
+        let (mut server, mut events, _cmd) = start_run_irc("host16").await;
+
+        // extended-join: JOIN <channel> <account> :<realname>
+        server
+            .write_all(b":alice!u@h JOIN #lobby did:plc:abc123 :Alice Smith\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::Joined {
+                    nick,
+                    channel,
+                    account,
+                } = ev
+                {
+                    return Some((nick, channel, account));
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let (nick, channel, account) = got.expect("expected Joined event with account");
+        assert_eq!(nick, "alice");
+        assert_eq!(channel, "#lobby");
+        assert_eq!(
+            account.as_deref(),
+            Some("did:plc:abc123"),
+            "DID account must be present in extended JOIN"
+        );
+    }
+
+    /// Extended JOIN where account is the unauthenticated sentinel `*` must
+    /// emit Event::Joined with account = None.
+    #[tokio::test]
+    async fn extended_join_with_star_account_emits_joined_no_account() {
+        let (mut server, mut events, _cmd) = start_run_irc("host17").await;
+
+        server
+            .write_all(b":guest!u@h JOIN #lobby * :Guest User\r\n")
+            .await
+            .unwrap();
+        server.flush().await.unwrap();
+
+        let got = tokio::time::timeout(tokio::time::Duration::from_millis(400), async {
+            while let Some(ev) = events.recv().await {
+                if let Event::Joined { account, .. } = ev {
+                    return Some(account);
+                }
+            }
+            None
+        })
+        .await
+        .unwrap_or(None);
+
+        let account = got.expect("expected Joined event");
+        assert!(
+            account.is_none(),
+            "account `*` sentinel must be treated as unauthenticated (None)"
+        );
+    }
 }
