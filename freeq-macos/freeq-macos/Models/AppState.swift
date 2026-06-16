@@ -143,6 +143,7 @@ class AppState {
     private var client: FreeqClient?
     private var p2p: FreeqP2p?
     @ObservationIgnored private var didRequestDmTargets = false
+    @ObservationIgnored private var explicitWhoisRequests: Set<String> = []
 
     // MARK: - Computed
 
@@ -227,7 +228,7 @@ class AppState {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.brokerToken = savedBrokerToken
-                self.authenticatedDID = savedDID
+                self.authenticatedDID = AuthSessionState.confirmedDidFromSavedCredentials(savedDID)
                 self.isLoadingSavedSession = false
                 if self.connectionState == .disconnected, self.hasSavedSession {
                     self.reconnectIfSaved()
@@ -246,6 +247,7 @@ class AppState {
         Log.irc.info("Connecting as \(nick, privacy: .public)")
         self.nick = nick
         connectionState = .connecting
+        authenticatedDID = nil
         didRequestDmTargets = false
         UserDefaults.standard.set(nick, forKey: "freeq.nick")
 
@@ -276,6 +278,7 @@ class AppState {
         client?.disconnect()
         client = nil
         connectionState = .disconnected
+        authenticatedDID = nil
         didRequestDmTargets = false
         apiBearerSessionId = nil
         shutdownP2p()
@@ -335,7 +338,7 @@ class AppState {
                 )
                 await MainActor.run {
                     self.pendingWebToken = session.token
-                    self.authenticatedDID = session.did
+                    self.authenticatedDID = AuthSessionState.confirmedDidFromSavedCredentials(session.did)
                     if !KeychainHelper.save(key: "did", value: session.did) {
                         self.errorMessage = "Could not store credentials in Keychain — login will not persist across restarts."
                     }
@@ -536,7 +539,10 @@ class AppState {
         sendRaw("INVITE \(nick) \(channel)")
     }
 
-    func sendWhois(_ nick: String) {
+    func sendWhois(_ nick: String, display: Bool = true) {
+        if display {
+            explicitWhoisRequests.insert(nick.lowercased())
+        }
         sendRaw("WHOIS \(nick)")
     }
 
@@ -747,7 +753,7 @@ class AppState {
             return
         }
         let nick = whoisQueue.removeFirst()
-        sendWhois(nick)
+        sendWhois(nick, display: false)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
             self?.drainNextWhois()
         }
@@ -823,12 +829,16 @@ extension AppState {
             }
 
         case .authFailed(let reason):
+            authenticatedDID = AuthSessionState.didAfterAuthFailure(current: authenticatedDID)
+            pendingWebToken = nil
             errorMessage = "Auth failed: \(reason)"
 
         case .joined(let channel, let joinNick):
             if joinNick.lowercased() == nick.lowercased() {
                 let ch = getOrCreateChannel(channel)
                 ch.members.removeAll()
+                ch.accessDeniedReason = nil
+                ch.messages.removeAll { $0.id.hasPrefix("channel-access-denied-\(channel)-") }
                 pendingNames[channel.lowercased()] = []
                 if activeChannel == nil || activeChannel == "server" {
                     activeChannel = ch.name
@@ -1141,8 +1151,12 @@ extension AppState {
                     }
                 }
             }
-            // Show WHOIS in active channel
-            if let ch = activeChannelState {
+            // Background WHOIS is for identity hydration only. Only explicit
+            // user-triggered WHOIS replies should appear in chat; otherwise
+            // protected channels can look like they have messages when they
+            // merely received diagnostics for some other channel's members.
+            if WhoisDisplayPolicy.shouldDisplay(explicitlyRequested: explicitWhoisRequests.contains(whoisNick.lowercased())),
+               let ch = activeChannelState {
                 ch.appendIfNew(ChatMessage(
                     id: UUID().uuidString, from: "server", text: info,
                     isAction: false, timestamp: Date(), replyTo: nil
@@ -1175,6 +1189,29 @@ extension AppState {
                 return
             case .apiBearer(let sessionId):
                 apiBearerSessionId = sessionId
+                return
+            case .channelAccessDenied(let channel, let reason):
+                let ch = getOrCreateChannel(channel)
+                ch.accessDeniedReason = reason
+                ch.appendIfNew(ServerNoticeRouter.channelAccessMessage(channel: channel, reason: reason))
+                if activeChannel == nil
+                    || activeChannel?.lowercased() == channel.lowercased()
+                    || activeChannelState == nil {
+                    activeChannel = ch.name
+                }
+                return
+            case .whoisDiagnostic(let whoisNick, let displayText):
+                if WhoisDisplayPolicy.shouldDisplay(explicitlyRequested: explicitWhoisRequests.contains(whoisNick.lowercased())),
+                   let ch = activeChannelState {
+                    ch.appendIfNew(ChatMessage(
+                        id: UUID().uuidString,
+                        from: "server",
+                        text: displayText,
+                        isAction: false,
+                        timestamp: Date(),
+                        replyTo: nil
+                    ))
+                }
                 return
             case .display(let displayText):
                 if let ch = activeChannelState {

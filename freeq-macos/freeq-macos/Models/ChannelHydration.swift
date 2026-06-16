@@ -177,6 +177,8 @@ enum ServerNoticeRoute: Equatable {
     case motdEnd
     case namesEnd(String)
     case apiBearer(String)
+    case channelAccessDenied(channel: String, reason: String)
+    case whoisDiagnostic(nick: String, text: String)
     case display(String)
 }
 
@@ -196,6 +198,92 @@ enum ServerNoticeRouter {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return token.isEmpty ? .ignore : .apiBearer(token)
         }
+        if let denial = channelAccessDenied(from: text) {
+            return .channelAccessDenied(channel: denial.channel, reason: denial.reason)
+        }
+        if let diagnostic = whoisDiagnostic(from: text) {
+            return .whoisDiagnostic(nick: diagnostic.nick, text: diagnostic.text)
+        }
         return .display(text)
+    }
+
+    static func channelAccessMessage(channel: String, reason: String, now: Date = Date()) -> ChatMessage {
+        ChatMessage(
+            id: "channel-access-denied-\(channel)-\(reason)",
+            from: "server",
+            text: reason,
+            isAction: false,
+            timestamp: now,
+            replyTo: nil
+        )
+    }
+
+    private static func channelAccessDenied(from text: String) -> (channel: String, reason: String)? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = trimmed.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        guard parts.count == 2 else { return nil }
+
+        let channel = String(parts[0])
+        guard channel.hasPrefix("#") || channel.hasPrefix("&") else { return nil }
+
+        let reason = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = reason.lowercased()
+        let denialPhrases = [
+            "requires authentication",
+            "cannot join",
+            "invite",
+            "banned",
+            "bad channel key",
+            "channel is full",
+            "not authorized",
+            "permission",
+        ]
+
+        guard denialPhrases.contains(where: { normalized.contains($0) }) else {
+            return nil
+        }
+        return (channel, reason)
+    }
+
+    private static func whoisDiagnostic(from text: String) -> (nick: String, text: String)? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = trimmed.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+        guard parts.count == 2 else { return nil }
+
+        let nick = String(parts[0])
+        guard !nick.hasPrefix("#"), !nick.hasPrefix("&") else { return nil }
+
+        let detail = String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = detail.lowercased()
+        let diagnosticPrefixes = [
+            "at protocol handle:",
+            "client:",
+            "actor_class=",
+        ]
+
+        guard diagnosticPrefixes.contains(where: { normalized.hasPrefix($0) }) else {
+            return nil
+        }
+        return (nick, trimmed)
+    }
+}
+
+enum AuthSessionState {
+    /// A saved DID or broker session says who we intend to authenticate as, but
+    /// only the IRC server's SASL success event confirms this TCP connection.
+    static func confirmedDidFromSavedCredentials(_ savedDID: String?) -> String? {
+        nil
+    }
+
+    /// After any SASL failure, the current connection is not authenticated even
+    /// if a previous app launch had a DID saved in Keychain.
+    static func didAfterAuthFailure(current: String?) -> String? {
+        nil
+    }
+}
+
+enum WhoisDisplayPolicy {
+    static func shouldDisplay(explicitlyRequested: Bool) -> Bool {
+        explicitlyRequested
     }
 }

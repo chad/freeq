@@ -13,6 +13,7 @@ class ChannelState: Identifiable {
     var typingUsers: [String: Date] = [:]
     var lastActivity: Date = Date()
     var isEncrypted: Bool = false
+    var accessDeniedReason: String?
 
     var id: String { name }
     var isChannel: Bool { name.hasPrefix("#") }

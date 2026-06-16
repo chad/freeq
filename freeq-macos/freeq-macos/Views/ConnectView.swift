@@ -102,7 +102,6 @@ struct ConnectView: View {
                 appState.brokerToken = brokerToken
                 KeychainHelper.save(key: "brokerToken", value: brokerToken)
                 appState.pendingWebToken = session.token
-                appState.authenticatedDID = session.did
                 KeychainHelper.save(key: "did", value: session.did)
                 appState.connect(nick: session.nick)
             } catch {

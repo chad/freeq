@@ -14,6 +14,11 @@ struct ChatView: View {
                 Divider().overlay(Theme.borderSoft)
             }
 
+            if let reason = appState.activeChannelState?.accessDeniedReason {
+                ChannelAccessBanner(reason: reason)
+                Divider().overlay(Theme.borderSoft)
+            }
+
             // Pinned messages bar
             if let pins = appState.activeChannelState?.pinnedMessages, !pins.isEmpty {
                 PinnedMessagesBar(pins: pins)
@@ -62,6 +67,39 @@ struct ChatView: View {
         case 2: return "\(typers[0]) and \(typers[1]) are typing…"
         default: return "Several people are typing…"
         }
+    }
+}
+
+struct ChannelAccessBanner: View {
+    @Environment(AppState.self) private var appState
+    let reason: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "lock.fill")
+                .font(.caption)
+                .foregroundStyle(Theme.warning)
+
+            Text(reason)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(Theme.textPrimary)
+                .lineLimit(2)
+
+            Spacer(minLength: 8)
+
+            if appState.authenticatedDID == nil {
+                Button("Sign In") {
+                    appState.disconnect()
+                    appState.brokerToken = nil
+                }
+                .font(.caption.weight(.medium))
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Theme.warning.opacity(0.12))
     }
 }
 

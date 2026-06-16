@@ -190,6 +190,14 @@ P2 design work:
 - ☑ Add a guard that keeps the macOS app build from silently using stale FFI after SDK changes.
 - ☑ Commit the artifact/build guard fix.
 
+## 2026-06-16 macOS `#freeq` protected-channel history still empty
+
+- ☑ Reproduce `#freeq` specifically with live wire logs: guest joins are rejected with numeric `477` (`This channel requires authentication — sign in to join`) while public channels return `CHATHISTORY`.
+- ☑ Add failing regression tests for protected-channel join rejection visibility, stale optimistic auth state, and background WHOIS diagnostic leakage.
+- ☑ Fix the client path so protected-channel failures become visible, stale auth cannot masquerade as signed-in, and background identity diagnostics cannot render as channel messages.
+- ☑ Rebuild/relaunch and visually verify `#freeq` behavior.
+- ☑ Commit the focused fix.
+
 ---
 
 ## Method

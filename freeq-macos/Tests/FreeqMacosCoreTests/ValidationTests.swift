@@ -224,6 +224,71 @@ final class ValidationTests: XCTestCase {
         XCTAssertTrue(dmBuffers.isEmpty)
     }
 
+    func testProtectedChannelJoinRejectionRoutesToChannelAccessDenied() {
+        XCTAssertEqual(
+            ServerNoticeRouter.route("#freeq This channel requires authentication — sign in to join"),
+            .channelAccessDenied(
+                channel: "#freeq",
+                reason: "This channel requires authentication — sign in to join"
+            )
+        )
+    }
+
+    func testProtectedChannelJoinRejectionMessageIsVisible() {
+        let message = ServerNoticeRouter.channelAccessMessage(
+            channel: "#freeq",
+            reason: "This channel requires authentication — sign in to join",
+            now: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        XCTAssertEqual(message.id, "channel-access-denied-#freeq-This channel requires authentication — sign in to join")
+        XCTAssertEqual(message.from, "server")
+        XCTAssertEqual(message.text, "This channel requires authentication — sign in to join")
+        XCTAssertFalse(MessageVisibility.shouldShowWelcome(messages: [message]))
+    }
+
+    func testSavedDidIsNotTreatedAsServerConfirmedAuthentication() {
+        XCTAssertNil(AuthSessionState.confirmedDidFromSavedCredentials("did:plc:stale"))
+        XCTAssertNil(AuthSessionState.didAfterAuthFailure(current: "did:plc:stale"))
+    }
+
+    func testBackgroundWhoisRepliesDoNotDisplayAsChannelMessages() {
+        XCTAssertFalse(WhoisDisplayPolicy.shouldDisplay(explicitlyRequested: false))
+        XCTAssertTrue(WhoisDisplayPolicy.shouldDisplay(explicitlyRequested: true))
+    }
+
+    func testFreeqWhoisDiagnosticsAreNotNormalChannelNotices() {
+        XCTAssertEqual(
+            ServerNoticeRouter.route("chadfowler.com AT Protocol handle: chadfowler.com"),
+            .whoisDiagnostic(
+                nick: "chadfowler.com",
+                text: "chadfowler.com AT Protocol handle: chadfowler.com"
+            )
+        )
+        XCTAssertEqual(
+            ServerNoticeRouter.route("nandi.uk client: freeq"),
+            .whoisDiagnostic(nick: "nandi.uk", text: "nandi.uk client: freeq")
+        )
+        XCTAssertEqual(
+            ServerNoticeRouter.route("yokotabot actor_class=agent"),
+            .whoisDiagnostic(nick: "yokotabot", text: "yokotabot actor_class=agent")
+        )
+    }
+
+    func testFreeqWhoisDiagnosticsDoNotHideChannelAccessDenials() {
+        XCTAssertEqual(
+            ServerNoticeRouter.route("#freeq This channel requires authentication — sign in to join"),
+            .channelAccessDenied(
+                channel: "#freeq",
+                reason: "This channel requires authentication — sign in to join"
+            )
+        )
+        XCTAssertEqual(
+            ServerNoticeRouter.route("#freeq client: freeq"),
+            .display("#freeq client: freeq")
+        )
+    }
+
     func testSelfJoinRequestsLatestChannelHistory() {
         XCTAssertEqual(
             ChannelHydration.historyCommand(for: "#has-messages"),
