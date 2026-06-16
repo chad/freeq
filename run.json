@@ -720,7 +720,7 @@
     "kind": "running"
   },
   "status_updated_at": "2026-06-16T01:32:10.138540662Z",
-  "last_event_at": "2026-06-16T01:37:28.027975742Z",
+  "last_event_at": "2026-06-16T01:41:17.301276339Z",
   "pending_control": null,
   "checkpoints": [
     {
@@ -760,9 +760,9 @@
       "diff": {}
     },
     {
-      "seq": 0,
+      "seq": 331,
       "checkpoint": {
-        "timestamp": "2026-06-16T01:37:28.039540049Z",
+        "timestamp": "2026-06-16T01:37:30.929940104Z",
         "current_node": "explore",
         "completed_nodes": [
           "start",
@@ -770,25 +770,157 @@
         ],
         "node_retries": {},
         "context_values": {
+          "internal.work_dir": "/workspace/freeq",
+          "graph.goal": "harden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default",
+          "failure_signature": "",
+          "graph.rankdir": "LR",
+          "internal.fidelity": "full",
+          "outcome": "succeeded",
+          "internal.retry_count.explore": 0,
+          "current_node": "explore",
+          "internal.retry_count.start": 0,
+          "last_response": "I have a complete, grounded picture. Here is the findings brief.\n\n---\n\n# Findings Brief: File Upload Surface in freeq\n\n## 1. Current architecture (end-to-end)\n\nfreeq has a **private-by-default, on-ser",
+          "failure_class": "",
+          "internal.node_visit_count": 1,
+          "last_stage": "explore",
+          "internal.run_id": "01KV70WV0C0X3AZ5PZMKHBW91W",
+          "response.explore": "I have a complete, grounded picture. Here is the findings brief.\n\n---\n\n# Findings Brief: File Upload Surface in freeq\n\n## 1. Current architecture (end-to-end)\n\nfreeq has a **private-by-default, on-server media store** already built. The flow:\n\n1. **Client** builds `multipart/form-data` → `POST /api/v1/upload` (fields: `file`, `did`, `alt?`, `channel?`, `share_pds?`, `share_bluesky?/cross_post?`).\n2. **Server** (`web.rs::api_upload`) authenticates the DID, **always** stores bytes **encrypted-at-rest on local disk** (AES-256-GCM), records metadata in SQLite, and mints a **signed capability URL**: `{origin}/api/v1/media/{id}/{sig}/{filename}`.\n3. **Optionally** (only if `share_pds`/`share_bluesky`) the server *additionally* proxies the blob to the user's AT Protocol PDS via the SDK — best-effort, never fails the private upload.\n4. **Server** returns `{ url, content_type, size, private }`. The client **string-concatenates the URL into a PRIVMSG body**.\n5. On render, clients **regex-scan message text** to detect media URLs and render inline; `GET /api/v1/media/{id}/{sig}/{filename}` (`api_media_serve`) verifies the HMAC capability, decrypts, and serves with HTTP Range support.\n\n**On-server storage is already the default** — the feature is hardening/enhancing this existing path, not building it.\n\n## 2. Files & functions that matter\n\n**Server (`freeq-server/src/`)**\n- `media_store.rs` — the whole private store. `MediaStore::{new,sign,verify,capability_url,path_for,put,get,remove}`, `derive_enc_key`/`derive_cap_key` (HMAC domain-separated from `msg_signing_key`), `new_id` (128-bit), `sanitize_filename` (path-traversal guard), `encrypt`/`decrypt` (AES-256-GCM), `tighten_dir/file` (0700/0600). Fully unit-tested.\n- `web.rs` (**gamma 275 hotspot**) — `api_upload` (`:3113`, multipart parse, 10MB cap at `:3155`, auth at `:3203`, PDS step-up at `:3235`), `pick_media_filename` (`:3396`), `api_media_serve` (`:3791`), `parse_single_range` (`:3867`), `api_blob_proxy` (`:3674`, SSRF allowlist), routes (`:196`/`:201`), `DefaultBodyLimit::max(12MB)` global layer (`:245`).\n- `db.rs` — `media` table (`:430`, schema: id/uploader_did/scope/mime/size/alt/filename/created_at/deleted_at), `insert_media` (`:1086`), `get_media` (`:1116`), `soft_delete_media` (`:1141`).\n- `server.rs` (**gamma 334 hotspot**) — `SharedState.media_store` (`:734`), `upload_tokens` (`:723`), store init gated on `db.is_some()` (`:1283`).\n\n**SDK (`freeq-sdk/src/`)**\n- `media.rs` — `upload_media_to_pds` (`:315`, PDS-only, not freeq-server), `MediaUploadResult`, `MediaAttachment` tag (de)serialization, `fetch_link_preview` (`:179`, SSRF-guarded, 64KB cap).\n- `ssrf.rs` — `resolve_and_check`, `pinned_client` (DNS pinning vs rebinding), `is_private_ip/hostname`.\n- **`freeq-sdk-ffi` has NO media/upload exports** — native FFI clients can't upload via the SDK; they call the REST endpoint directly.\n\n**Web app (`freeq-app/src/`)**\n- `components/ComposeBox.tsx` — `doUpload()` (`:193`, FormData build, 401 broker-refresh + 403 step-up retry), `handleFileSelect` (`:168`), `MAX_FILE_SIZE=10MB`/`ALLOWED_TYPES` (`:9-11`), paste/drag handlers.\n- `components/FileDropOverlay.tsx` — window-level drop → CustomEvent.\n- `components/MessageList.tsx` (**gamma 103, UNDERTESTED**) — `MessageContent` regex dispatch (`:368`), `isTrustedImageUrl` (`:218`, trusts same-origin `/api/v1/media/`), `GatedImage` (`:235`), detection regexes (`:56-71`).\n- `store.ts` — only *viewing* state (`loadExternalMedia`, `lightboxUrl`); no upload state.\n\n**TUI / native** — `freeq-tui` (`app.rs::MediaUploader`, PDS-cred based) and iOS/macOS/Windows/Android all build multipart by hand and POST to `/api/v1/upload` (confirmed: `MediaCapture.swift:472`, `UploadService.cs:17`).\n\n## 3. Constraints the plan must respect\n\n- **CI gate** (`.fabro/verify.sh` mirrors `ci.yml`): `cargo fmt --check`, `cargo check`, `clippy -D warnings` (warnings = errors), `cargo test` — all `--workspace` excluding AV crates (`freeq-av`, `freeq-eliza`, `freeq-av-client`, `freeq-av-image`). If `freeq-app/` changes, `vitest` must pass. **This executor cannot compile Swift/WinUI/Kotlin** — native clients are out of scope for edits.\n- **Hotspots / \"write tests FIRST\"**: `web.rs` (275), `server.rs` (334), and `MessageList.tsx` (103, undertested) are the files this feature touches. CLAUDE.md philosophy: *\"If something feels 'too clever,' it's probably wrong\"* — favor minimal, auditable changes.\n- **Capability-URL invariant**: URLs are **non-expiring** by design (CHATHISTORY replay must keep rendering). HMAC over `id` only; AES key + cap key both derived from the server's `msg_signing_key` seed.\n- **10MB cap** is load-bearing: it's *why* the serve path can decrypt-in-memory and support Range without a streaming cipher (`media_store.rs:15`). Raising it has architectural ripple.\n- **Existing tests**: `tests/upload.rs` (auth, oversize 413, private roundtrip, tampered-sig 403, range 206, step-up, blob-proxy SSRF, OG SSRF, CSP). `MessageList.media.test.tsx` (3 render cases). `oauth-step-up.test.ts`.\n\n## 4. Threat model / failure modes (where hardening is needed)\n\n| Risk | Current state | Gap |\n|---|---|---|\n| **Content-type spoofing** | Server trusts client-declared MIME; **no sniffing/whitelist**. `pick_media_filename` maps known MIMEs. | Server accepts *any* content-type; a `.html`/SVG/script could be stored and served with attacker-chosen type. No magic-byte validation. |\n| **Stored-XSS via served blobs** | `api_media_serve` sets `Content-Type` from stored mime; **no `Content-Disposition`, no `X-Content-Type-Options: nosniff` on this route, no sandbox CSP.** | A blob served as `text/html`/SVG on the API origin could execute. Needs `nosniff` + `Content-Disposition: attachment` (or inline-only for known-safe types) + restrictive CSP on the media route. |\n| **Size limit enforcement** | 10MB checked **after** `field.bytes()` reads the whole part into memory; global `DefaultBodyLimit` is 12MB. | Cap enforced post-buffering (memory pressure window). Limit + body-limit are slightly inconsistent (10 vs 12MB). No per-DID/quota limit. |\n| **Path traversal** | `sanitize_filename` strips path components; id is opaque base64url; shard dir derived from id. | Tested and solid. `path_for` uses first 2 chars of id (could be `_`); URL `{filename}` is cosmetic only. Low risk. |\n| **Capability-URL leakage** | Possession = access; non-expiring; HMAC unforgeable. URL only reaches conversation members *in theory* — but it's pasted into PRIVMSG text, so **anyone who can read the channel/history (incl. via REST/CHATHISTORY/federation) gets the URL forever.** | No per-recipient binding, no revocation beyond soft-delete, no scope check at serve time (the `scope` column is recorded but **not enforced** in `api_media_serve` — any valid sig serves regardless of channel membership). |\n| **Quota / DoS** | Only IP rate-limit on upload + 10MB cap. No per-DID storage quota, no total-disk cap, no cleanup/GC. | Unbounded disk growth; soft-deleted blobs stay on disk (`soft_delete_media` flips a flag but `media_store::remove` isn't wired to it). |\n| **Auth** | Upload requires active WS session or `X-Upload-Token` (HMAC, <300s, DID-bound). | Solid. But `did` is a form field cross-checked against session — fine. |\n| **SSRF** | `api_blob_proxy` uses host **allowlist** (not DNS-pinned, unlike SDK's `resolve_and_check`). | Blob proxy is allowlist-only; acceptable but inconsistent with the pinned-client pattern elsewhere. |\n| **Orphan/rollback** | Upload rolls back blob if DB insert fails. | Good. But no reconciliation job for blobs whose messages were deleted, or DB rows whose blobs vanished. |\n\n## 5. Native clients (eventual needs — NOT edited here)\n\nAll four call `POST /api/v1/upload` with hand-rolled multipart and expect `{url, content_type, size}`:\n- **iOS** (`MediaCapture.swift`, `ComposeView.swift`, `PhotoPicker.swift`), **macOS** (`FileUpload.swift`), **Windows** (`UploadService.cs`), **Android** (`PhotoUpload.kt`).\n\nThey will *eventually* need to consume any new response fields (e.g. structured attachment metadata, a `nosniff`/disposition contract, server-validated content-type, or an upload-token refresh). **Any change to the upload request/response contract or capability-URL format must stay backward-compatible** or be versioned, since these clients can't be recompiled in this environment.\n\n## 6. Open design questions the plan must answer\n\n1. **Content-type hardening**: Add server-side magic-byte sniffing + an allowlist (mirror the JS `ALLOWED_TYPES`)? Reject or coerce mismatched types? This is the single biggest security gap.\n2. **Serve-path safety headers**: Add `X-Content-Type-Options: nosniff`, `Content-Disposition` (attachment vs inline-by-type), and a tight CSP/`Content-Security-Policy: sandbox` on `/api/v1/media/*`? (Affects how inline rendering works in all clients.)\n3. **Scope enforcement at serve time**: Should `api_media_serve` verify the requester is a member of `row.scope` (channel/DM), upgrading from pure capability-URL to capability+authz? This changes the \"possession = access\" + non-expiring invariant and breaks unauthenticated `<img>` loads — needs care.\n4. **Structured attachment metadata**: Move from URL-in-PRIVMSG-text + regex detection to an IRCv3 tag (mime/size/alt) carried to the renderer (`MediaAttachment` already exists in the SDK but is unused by web)? Reduces render-side ambiguity and the gating asymmetry (video/audio aren't gated, only `<img>`).\n5. **Quota & lifecycle**: Per-DID/total storage quota, wiring `soft_delete_media` → physical `remove`, and a GC/reconciliation job. What limits and retention?\n6. **Size cap**: Keep 10MB (and align the 12MB body-limit to it), or raise it (requires streaming cipher rework)? Enforce *before* full buffering via `Content-Length` precheck.\n7. **Test-first targets**: New `web.rs`/`media_store.rs` tests for sniffing, headers, scope; the undertested `MessageList.tsx` and untested `doUpload()`/no-e2e-upload gaps in `freeq-app`.\n\nThis brief is the foundation for the implementation plan. No files were edited.",
+          "internal.thread_id": "feat",
+          "thread.feat.current_node": "explore"
+        },
+        "node_outcomes": {
+          "explore": {
+            "status": "succeeded",
+            "context_updates": {
+              "response.explore": "I have a complete, grounded picture. Here is the findings brief.\n\n---\n\n# Findings Brief: File Upload Surface in freeq\n\n## 1. Current architecture (end-to-end)\n\nfreeq has a **private-by-default, on-server media store** already built. The flow:\n\n1. **Client** builds `multipart/form-data` → `POST /api/v1/upload` (fields: `file`, `did`, `alt?`, `channel?`, `share_pds?`, `share_bluesky?/cross_post?`).\n2. **Server** (`web.rs::api_upload`) authenticates the DID, **always** stores bytes **encrypted-at-rest on local disk** (AES-256-GCM), records metadata in SQLite, and mints a **signed capability URL**: `{origin}/api/v1/media/{id}/{sig}/{filename}`.\n3. **Optionally** (only if `share_pds`/`share_bluesky`) the server *additionally* proxies the blob to the user's AT Protocol PDS via the SDK — best-effort, never fails the private upload.\n4. **Server** returns `{ url, content_type, size, private }`. The client **string-concatenates the URL into a PRIVMSG body**.\n5. On render, clients **regex-scan message text** to detect media URLs and render inline; `GET /api/v1/media/{id}/{sig}/{filename}` (`api_media_serve`) verifies the HMAC capability, decrypts, and serves with HTTP Range support.\n\n**On-server storage is already the default** — the feature is hardening/enhancing this existing path, not building it.\n\n## 2. Files & functions that matter\n\n**Server (`freeq-server/src/`)**\n- `media_store.rs` — the whole private store. `MediaStore::{new,sign,verify,capability_url,path_for,put,get,remove}`, `derive_enc_key`/`derive_cap_key` (HMAC domain-separated from `msg_signing_key`), `new_id` (128-bit), `sanitize_filename` (path-traversal guard), `encrypt`/`decrypt` (AES-256-GCM), `tighten_dir/file` (0700/0600). Fully unit-tested.\n- `web.rs` (**gamma 275 hotspot**) — `api_upload` (`:3113`, multipart parse, 10MB cap at `:3155`, auth at `:3203`, PDS step-up at `:3235`), `pick_media_filename` (`:3396`), `api_media_serve` (`:3791`), `parse_single_range` (`:3867`), `api_blob_proxy` (`:3674`, SSRF allowlist), routes (`:196`/`:201`), `DefaultBodyLimit::max(12MB)` global layer (`:245`).\n- `db.rs` — `media` table (`:430`, schema: id/uploader_did/scope/mime/size/alt/filename/created_at/deleted_at), `insert_media` (`:1086`), `get_media` (`:1116`), `soft_delete_media` (`:1141`).\n- `server.rs` (**gamma 334 hotspot**) — `SharedState.media_store` (`:734`), `upload_tokens` (`:723`), store init gated on `db.is_some()` (`:1283`).\n\n**SDK (`freeq-sdk/src/`)**\n- `media.rs` — `upload_media_to_pds` (`:315`, PDS-only, not freeq-server), `MediaUploadResult`, `MediaAttachment` tag (de)serialization, `fetch_link_preview` (`:179`, SSRF-guarded, 64KB cap).\n- `ssrf.rs` — `resolve_and_check`, `pinned_client` (DNS pinning vs rebinding), `is_private_ip/hostname`.\n- **`freeq-sdk-ffi` has NO media/upload exports** — native FFI clients can't upload via the SDK; they call the REST endpoint directly.\n\n**Web app (`freeq-app/src/`)**\n- `components/ComposeBox.tsx` — `doUpload()` (`:193`, FormData build, 401 broker-refresh + 403 step-up retry), `handleFileSelect` (`:168`), `MAX_FILE_SIZE=10MB`/`ALLOWED_TYPES` (`:9-11`), paste/drag handlers.\n- `components/FileDropOverlay.tsx` — window-level drop → CustomEvent.\n- `components/MessageList.tsx` (**gamma 103, UNDERTESTED**) — `MessageContent` regex dispatch (`:368`), `isTrustedImageUrl` (`:218`, trusts same-origin `/api/v1/media/`), `GatedImage` (`:235`), detection regexes (`:56-71`).\n- `store.ts` — only *viewing* state (`loadExternalMedia`, `lightboxUrl`); no upload state.\n\n**TUI / native** — `freeq-tui` (`app.rs::MediaUploader`, PDS-cred based) and iOS/macOS/Windows/Android all build multipart by hand and POST to `/api/v1/upload` (confirmed: `MediaCapture.swift:472`, `UploadService.cs:17`).\n\n## 3. Constraints the plan must respect\n\n- **CI gate** (`.fabro/verify.sh` mirrors `ci.yml`): `cargo fmt --check`, `cargo check`, `clippy -D warnings` (warnings = errors), `cargo test` — all `--workspace` excluding AV crates (`freeq-av`, `freeq-eliza`, `freeq-av-client`, `freeq-av-image`). If `freeq-app/` changes, `vitest` must pass. **This executor cannot compile Swift/WinUI/Kotlin** — native clients are out of scope for edits.\n- **Hotspots / \"write tests FIRST\"**: `web.rs` (275), `server.rs` (334), and `MessageList.tsx` (103, undertested) are the files this feature touches. CLAUDE.md philosophy: *\"If something feels 'too clever,' it's probably wrong\"* — favor minimal, auditable changes.\n- **Capability-URL invariant**: URLs are **non-expiring** by design (CHATHISTORY replay must keep rendering). HMAC over `id` only; AES key + cap key both derived from the server's `msg_signing_key` seed.\n- **10MB cap** is load-bearing: it's *why* the serve path can decrypt-in-memory and support Range without a streaming cipher (`media_store.rs:15`). Raising it has architectural ripple.\n- **Existing tests**: `tests/upload.rs` (auth, oversize 413, private roundtrip, tampered-sig 403, range 206, step-up, blob-proxy SSRF, OG SSRF, CSP). `MessageList.media.test.tsx` (3 render cases). `oauth-step-up.test.ts`.\n\n## 4. Threat model / failure modes (where hardening is needed)\n\n| Risk | Current state | Gap |\n|---|---|---|\n| **Content-type spoofing** | Server trusts client-declared MIME; **no sniffing/whitelist**. `pick_media_filename` maps known MIMEs. | Server accepts *any* content-type; a `.html`/SVG/script could be stored and served with attacker-chosen type. No magic-byte validation. |\n| **Stored-XSS via served blobs** | `api_media_serve` sets `Content-Type` from stored mime; **no `Content-Disposition`, no `X-Content-Type-Options: nosniff` on this route, no sandbox CSP.** | A blob served as `text/html`/SVG on the API origin could execute. Needs `nosniff` + `Content-Disposition: attachment` (or inline-only for known-safe types) + restrictive CSP on the media route. |\n| **Size limit enforcement** | 10MB checked **after** `field.bytes()` reads the whole part into memory; global `DefaultBodyLimit` is 12MB. | Cap enforced post-buffering (memory pressure window). Limit + body-limit are slightly inconsistent (10 vs 12MB). No per-DID/quota limit. |\n| **Path traversal** | `sanitize_filename` strips path components; id is opaque base64url; shard dir derived from id. | Tested and solid. `path_for` uses first 2 chars of id (could be `_`); URL `{filename}` is cosmetic only. Low risk. |\n| **Capability-URL leakage** | Possession = access; non-expiring; HMAC unforgeable. URL only reaches conversation members *in theory* — but it's pasted into PRIVMSG text, so **anyone who can read the channel/history (incl. via REST/CHATHISTORY/federation) gets the URL forever.** | No per-recipient binding, no revocation beyond soft-delete, no scope check at serve time (the `scope` column is recorded but **not enforced** in `api_media_serve` — any valid sig serves regardless of channel membership). |\n| **Quota / DoS** | Only IP rate-limit on upload + 10MB cap. No per-DID storage quota, no total-disk cap, no cleanup/GC. | Unbounded disk growth; soft-deleted blobs stay on disk (`soft_delete_media` flips a flag but `media_store::remove` isn't wired to it). |\n| **Auth** | Upload requires active WS session or `X-Upload-Token` (HMAC, <300s, DID-bound). | Solid. But `did` is a form field cross-checked against session — fine. |\n| **SSRF** | `api_blob_proxy` uses host **allowlist** (not DNS-pinned, unlike SDK's `resolve_and_check`). | Blob proxy is allowlist-only; acceptable but inconsistent with the pinned-client pattern elsewhere. |\n| **Orphan/rollback** | Upload rolls back blob if DB insert fails. | Good. But no reconciliation job for blobs whose messages were deleted, or DB rows whose blobs vanished. |\n\n## 5. Native clients (eventual needs — NOT edited here)\n\nAll four call `POST /api/v1/upload` with hand-rolled multipart and expect `{url, content_type, size}`:\n- **iOS** (`MediaCapture.swift`, `ComposeView.swift`, `PhotoPicker.swift`), **macOS** (`FileUpload.swift`), **Windows** (`UploadService.cs`), **Android** (`PhotoUpload.kt`).\n\nThey will *eventually* need to consume any new response fields (e.g. structured attachment metadata, a `nosniff`/disposition contract, server-validated content-type, or an upload-token refresh). **Any change to the upload request/response contract or capability-URL format must stay backward-compatible** or be versioned, since these clients can't be recompiled in this environment.\n\n## 6. Open design questions the plan must answer\n\n1. **Content-type hardening**: Add server-side magic-byte sniffing + an allowlist (mirror the JS `ALLOWED_TYPES`)? Reject or coerce mismatched types? This is the single biggest security gap.\n2. **Serve-path safety headers**: Add `X-Content-Type-Options: nosniff`, `Content-Disposition` (attachment vs inline-by-type), and a tight CSP/`Content-Security-Policy: sandbox` on `/api/v1/media/*`? (Affects how inline rendering works in all clients.)\n3. **Scope enforcement at serve time**: Should `api_media_serve` verify the requester is a member of `row.scope` (channel/DM), upgrading from pure capability-URL to capability+authz? This changes the \"possession = access\" + non-expiring invariant and breaks unauthenticated `<img>` loads — needs care.\n4. **Structured attachment metadata**: Move from URL-in-PRIVMSG-text + regex detection to an IRCv3 tag (mime/size/alt) carried to the renderer (`MediaAttachment` already exists in the SDK but is unused by web)? Reduces render-side ambiguity and the gating asymmetry (video/audio aren't gated, only `<img>`).\n5. **Quota & lifecycle**: Per-DID/total storage quota, wiring `soft_delete_media` → physical `remove`, and a GC/reconciliation job. What limits and retention?\n6. **Size cap**: Keep 10MB (and align the 12MB body-limit to it), or raise it (requires streaming cipher rework)? Enforce *before* full buffering via `Content-Length` precheck.\n7. **Test-first targets**: New `web.rs`/`media_store.rs` tests for sniffing, headers, scope; the undertested `MessageList.tsx` and untested `doUpload()`/no-e2e-upload gaps in `freeq-app`.\n\nThis brief is the foundation for the implementation plan. No files were edited.",
+              "last_response": "I have a complete, grounded picture. Here is the findings brief.\n\n---\n\n# Findings Brief: File Upload Surface in freeq\n\n## 1. Current architecture (end-to-end)\n\nfreeq has a **private-by-default, on-ser",
+              "last_stage": "explore"
+            },
+            "notes": "Stage completed: explore",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "anthropic",
+                    "model_id": "claude-opus-4-8"
+                  },
+                  "tokens": {
+                    "input_tokens": 64084,
+                    "output_tokens": 10849,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 781081,
+                    "cache_write_tokens": 159873
+                  }
+                },
+                "facts": {
+                  "algorithm": "anthropic",
+                  "cache_write_5m_tokens": 159873,
+                  "cache_write_1h_tokens": 0
+                }
+              },
+              "total_usd_micros": 1981391
+            },
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 197705,
+              "tool_time_ms": 118278,
+              "active_time_ms": 315983
+            }
+          },
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          }
+        },
+        "next_node_id": "plan",
+        "git_commit_sha": "f7594595dc83d76db468291f94cac0017bbc079f",
+        "node_visits": {
+          "start": 1,
+          "explore": 1
+        }
+      },
+      "diff": {
+        "summary": {
+          "files_changed": 0,
+          "additions": 0,
+          "deletions": 0
+        }
+      }
+    },
+    {
+      "seq": 0,
+      "checkpoint": {
+        "timestamp": "2026-06-16T01:41:17.323061686Z",
+        "current_node": "plan",
+        "completed_nodes": [
+          "start",
+          "explore",
+          "plan"
+        ],
+        "node_retries": {},
+        "context_values": {
           "internal.thread_id": "feat",
           "internal.retry_count.start": 0,
           "internal.retry_count.explore": 0,
+          "response.plan": "Plan written to `/tmp/plan.md`. Here it is in full:\n\n---\n\n# Implementation Plan: Harden & Enhance File Upload (on-server storage default)\n\n**Status:** proposed · **Scope:** `freeq-server`, `freeq-sdk`, `freeq-app`, `freeq-tui`, `docs/`\n**Out of scope (not edited here):** `freeq-ios`, `freeq-macos`, `Freeq.WinUI`, `freeq-windows-app`, AV crates.\n**Guiding principle (CLAUDE.md):** *\"If something feels 'too clever,' it's probably wrong.\"* Keep changes minimal, auditable, additive.\n\n---\n\n## 0. Grounding facts (from exploration — so the plan is honest)\n\nThe private on-server store **already exists and is the default**:\n\n- Upload: `POST /api/v1/upload` → `web.rs::api_upload` (`:3113`). Always stores privately via `media_store::MediaStore`, mints a signed capability URL, optionally also pushes to PDS.\n- Store: `media_store.rs` — AES-256-GCM at rest, HMAC capability URLs over `id`, `sanitize_filename` path-traversal guard, 0700/0600 perms.\n- Serve: `GET /api/v1/media/{id}/{sig}/{filename}` → `web.rs::api_media_serve` (`:3791`). HMAC-verifies, decrypts, Range support.\n- DB: `media` table (`db.rs:430`) with `insert_media`/`get_media`/`soft_delete_media`. **`scope` is recorded but not enforced at serve time. `soft_delete_media` is never called and is not wired to physical blob removal.**\n- Global middleware `security_headers` (`web.rs:4180`) **already sets `X-Content-Type-Options: nosniff` on every response, including the media route.** So nosniff is NOT a gap; `Content-Disposition` and content-type *trust* are.\n- **No server-side content-type validation / magic-byte sniffing.** Server trusts the client-declared multipart `Content-Type`; web client whitelists (`ComposeBox.tsx:11`) but TUI/native do not.\n- Size cap: `10MB` checked **after** the part is fully buffered (`web.rs:3155`); global `DefaultBodyLimit::max(12MB)` (`web.rs:245`) is the only pre-buffer guard. The two are inconsistent (10 vs 12).\n- No per-DID quota, no GC, no disk cap. No `infer`/`tree_magic`/`mime` crate in `freeq-server/Cargo.toml` today.\n- Web app puts the capability URL **into PRIVMSG text**; `MessageList.tsx` re-detects it by regex. Only `<img>` honors the `loadExternalMedia` privacy gate; video/audio do not. `MessageList.tsx` (gamma 103) and `doUpload()` are undertested.\n\nThis feature therefore **hardens** (content-type validation, disposition, size enforcement, optional scope authz, quota/GC) and **enhances** (explicit on-server-default contract, structured response fields the web app and later native clients can use) — without rebuilding the store.\n\n---\n\n## 1. Goal & success criteria\n\n**Goal:** Make on-server storage the explicit, hardened default for uploads, close the content-type / disposition / quota gaps, and keep the upload + capability-URL contract stable and additive so iOS/macOS/Windows can adopt later.\n\n**Done means (each is a test):**\n\n1. **SC1 — Content-type is server-validated.** Upload of bytes whose magic bytes don't match an allowlisted media type is rejected `415`. The *stored & served* `Content-Type` is the server-derived type, never the raw client claim.\n2. **SC2 — Served blobs cannot be treated as active content.** `api_media_serve` responses carry `X-Content-Type-Options: nosniff` (already global — assert it stays) **and** `Content-Disposition: inline; filename=\"...\"` for known-renderable types, `attachment` for everything else, plus a per-route `Content-Security-Policy: default-src 'none'; sandbox`.\n3. **SC3 — Size cap is enforced before full buffering and is consistent.** A request whose declared `Content-Length` exceeds the cap is rejected `413` without buffering the whole body; the global body limit equals the upload cap + small multipart overhead. The cap is a single named constant.\n4. **SC4 — On-server storage is the documented, selected default.** `share_pds=false`/absent → bytes never leave the server; response includes `\"storage\":\"server\"` and `\"private\":true`. `docs/PROTOCOL.md` documents the upload contract + capability-URL semantics.\n5. **SC5 — Quota & lifecycle.** Per-DID stored-bytes quota enforced at upload; a `soft_delete_media` path is wired so deleted media stops serving (`404`) and the blob is physically removed.\n6. **SC6 — Web app sends correct metadata and renders safely.** `doUpload()` posts `filename` + `alt`; uses the structured response (`url`,`content_type`,`size`,`storage`); video/audio honor the external-media gate symmetrically with images.\n7. **SC7 — Back-compat.** Existing stored media still serves. Older clients (no new fields) still upload and get a working capability URL.\n8. **SC8 — CI green.** `.fabro/verify.sh` passes: `cargo fmt`, `cargo check`, `clippy -D warnings`, `cargo test --workspace` (CI exclusions), and `freeq-app` vitest.\n\n**Explicit non-goals:** raising the 10MB cap; replacing capability URLs with per-recipient tokens; streaming cipher; editing native clients.\n\n---\n\n## 2. Design\n\n### 2.1 Data model\n\n`media` table — **additive columns only** (new migrations in `db.rs`, same pattern as existing `ALTER TABLE ... ADD COLUMN`):\n\n- `sha256 TEXT` — hex digest of plaintext bytes (dedupe + integrity; nullable for old rows).\n- `validated_type TEXT` — the server-derived content-type actually served (nullable; old rows fall back to `mime`).\n\nNo column is dropped or made non-null. `get_media` returns the new fields as `Option`. A new `db.rs::sum_media_bytes_for_did(did) -> u64` backs the quota check.\n\n### 2.2 Content-type validation (SC1)\n\n- New `media_store.rs::validate_content_type(declared, bytes) -> Result<&'static str, RejectReason>`: sniff bytes → canonical type; allowlist = a unified server-side `ALLOWED_MEDIA_TYPES` (the same set the web client uses); non-allowlisted/unknown → `415`. The **served** type is the sniffed type, not the declared one. `text/plain` allowed but always served `attachment`.\n- Sniffer: prefer a small in-crate `sniff_media_type(&[u8])` matching the ~12 magic signatures already enumerated in `pick_media_filename` (avoids a new dep on the gamma-334 server). `infer` crate is the alternative (see Q1).\n- `api_upload` calls this after reading bytes and **before** `store.put`; reject stores nothing.\n\n### 2.3 Serve-path safety headers (SC2)\n\nIn `api_media_serve`: serve `validated_type` (fallback `mime`); assert global `nosniff` stays; add `Content-Disposition` (`inline` for image/video/audio, `attachment` for pdf/text/other) and a per-route `Content-Security-Policy: default-src 'none'; sandbox`. Same headers on the Range path.\n\n### 2.4 Size enforcement (SC3)\n\n- `pub const MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;` in `media_store.rs`, reused everywhere.\n- `DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 256*1024)` instead of literal 12MB.\n- `Content-Length` precheck in `api_upload` → early `413`; keep authoritative post-decode check.\n\n### 2.5 On-server-default contract + response shape (SC4)\n\nResponse gains additive fields: `\"storage\": \"server\"` (or `\"server+pds\"`), `\"sha256\"`. Request unchanged — **no new required field** (SC7).\n\n### 2.6 Auth / capability (unchanged invariant + optional opt-in authz)\n\nCapability URLs stay **non-expiring**, HMAC-over-`id`, format unchanged. **Scope enforcement is designed but ships OFF** behind `media_require_membership: bool` (default false): when on, `api_media_serve` checks the requester's session DID against `row.scope`. Default-off preserves \"possession = access\" and unauthenticated `<img>` loads (and protects un-editable native clients). See Q2.\n\n### 2.7 Quota & lifecycle (SC5)\n\n`media_max_bytes_per_did` config (default 256MB; `0` = unlimited). `api_upload` checks `sum_media_bytes_for_did` → `413` on exceed. Add `delete_media(id, requester_did)` (authorize uploader/op → `soft_delete_media` → `store.remove`); `get_media` already filters `deleted_at IS NULL` so serving returns `404` after delete.\n\n### 2.8 Web app consumption (SC6)\n\n`ComposeBox.tsx`: consume `result.storage`/`content_type`; request stays additive. `MessageList.tsx`: generalize the `loadExternalMedia` gate to video/audio for external URLs (`isTrustedMediaUrl`/`GatedMedia`); first-party `/api/v1/media/` stays ungated. No new store state.\n\n---\n\n## 3. Work breakdown (ordered; all CI-verified unless noted)\n\n> Hotspot rule: `web.rs` (275), `server.rs` (334), `MessageList.tsx` (103) — **write the test first**.\n\n- **S1. Constants + size enforcement** — `media_store.rs` constants; `web.rs` `:3155`/`:245` use the constant + `Content-Length` precheck. Test: extend `upload_rejects_oversized_file`.\n- **S2. Content-type validation** — `media_store.rs` `sniff`/`validate` (+unit tests); `api_upload` calls before `put`. Test: spoof→415, served type==sniffed.\n- **S3. DB additive columns** — `db.rs` `ADD COLUMN sha256/validated_type`, extend `insert_media`/`MediaRow`/`get_media`, add `sum_media_bytes_for_did`. Test: insert/get/sum.\n- **S4. Serve-path headers** — `api_media_serve` disposition + per-route CSP + validated type (Range + full). Test: header assertions.\n- **S5. Quota** — `config.rs` field; `api_upload` check. Test: over-quota→413.\n- **S6. Deletion wiring** — `delete_media` helper. Test: post-delete 404 + blob gone.\n- **S7. Optional scope-authz (dark, default-off)** — `config.rs` flag; `api_media_serve` membership check. Test: on (member 200 / non-member 403), off (unchanged).\n- **S8. Response fields** — `api_upload` adds `storage`+`sha256`. Test: assert `storage==\"server\"`.\n- **S9. Web app** — `ComposeBox.tsx` consume fields; `MessageList.tsx` gate video/audio. Tests: new `ComposeBox.test.tsx` for `doUpload()`; extend `MessageList.media.test.tsx`.\n- **S10. SDK (optional)** — share `ALLOWED_MEDIA_TYPES`/sniff helper if reused by TUI; otherwise none.\n- **S11. Docs** — `docs/PROTOCOL.md` upload contract + capability semantics + serve headers + native-adoption note; `CLAUDE.md` TODO tick + test count.\n\n---\n\n## 4. Test strategy (how each SC is pinned)\n\n- **Server unit** (`media_store.rs`/`db.rs`): sniff/validate (spoof, allowlist, text→attachment) → SC1; insert/get with new fields + `sum_media_bytes_for_did` → SC3, SC5.\n- **Server integration** (`tests/upload.rs`, in CI): spoofed type→415, served==sniffed → SC1; disposition+CSP+nosniff → SC2; `Content-Length` precheck + oversize 413 → SC3; `storage:\"server\"`/no-PDS-without-share → SC4; quota 413 + delete 404+gone → SC5; pre-seeded old row serves + no new required field → SC7; scope flag on/off → §2.6.\n- **Web (vitest)**: `ComposeBox.test.tsx` `doUpload()` (FormData, 401/403 retry, URL→PRIVMSG) → SC6; `MessageList.media.test.tsx` video/audio gating + first-party ungated → SC6.\n- **CI gate**: `.fabro/verify.sh` end-to-end → SC8.\n\n---\n\n## 5. Migration / back-compat\n\n- **DB:** additive `ADD COLUMN` only (mirrors existing migration style); old rows null → `Option`, serve falls back to `mime`; no backfill required.\n- **Existing blobs/URLs:** unchanged; capability-URL format + non-expiring invariant preserved → old pasted URLs keep working.\n- **Request contract:** no new required field; `share_*` unchanged.\n- **Response contract:** strictly additive (`storage`, `sha256`); old clients ignore unknown keys.\n- **Serve contract:** additive headers; `inline` keeps current rendering; `attachment` only hits pdf/text.\n- **One behavior change — validation tightening:** out-of-allowlist uploads now `415`. Allowlist = union of what clients already send; documented in `PROTOCOL.md`. Scope flag (off) and quota (256MB) default permissive to avoid surprising existing deployments.\n\n---\n\n## 6. Follow-up: native clients (future PRs — NOT implemented here)\n\nAll call `POST /api/v1/upload` and keep working after this change. To fully adopt:\n\n- **`freeq-ios`** (`MediaCapture.swift`, `ComposeView.swift`, `PhotoPicker.swift`): restrict picker/camera to `ALLOWED_MEDIA_TYPES` + surface `415`; display `storage`; distinguish quota `413`; honor `Content-Disposition: attachment` for pdf/text.\n- **`freeq-macos`** (`Views/Chat/FileUpload.swift`): same 1–4, plus external-media privacy toggle for video/audio.\n- **`Freeq.WinUI`/`freeq-windows-app`** (`Services/UploadService.cs`): client-side allowlist + `415`; consume `storage`/`sha256`; respect disposition on download; quota-aware errors.\n\n**Stable contract after this PR:** request fields unchanged; response adds `storage`+`sha256`; capability-URL format unchanged + non-expiring; serve adds `Content-Disposition` + per-route CSP + `nosniff`. Documented in `docs/PROTOCOL.md`.\n\n---\n\n## 7. Risks & open questions\n\n- **Q1 — Sniffer dependency:** in-crate (~12 signatures, no new dep, plan's assumption) vs the `infer` crate (broader, adds a dep to gamma-334 server). Reviewer decides.\n- **Q2 — Scope enforcement default:** shipped **off** because turning it on breaks unauthenticated inline `<img>`/`<video>` loads and the un-editable native clients (no session cookie on `<img>` GETs). Authz-at-serve is a larger, contract-affecting follow-up, deferred.\n- **Q3 — `text/plain`:** allowed but always `attachment`+sandbox; alternative is dropping it entirely. Low stakes.\n- **Q4 — Quota accounting:** counts server-stored bytes (always stored); PDS copies not double-counted.\n- **Q5 — Container ambiguity:** MP4/MOV/M4A share ISO-BMFF `ftyp`; misclassification is cosmetic (both inline), not security-relevant.\n- **Q6 — No streaming:** 10MB cap retained deliberately; raising it is out of scope (needs streaming cipher).\n- **Risk — gamma hotspots:** changes localized to upload/serve handlers, test-first; no unrelated refactor.\n- **Risk — `clippy -D warnings`:** new `insert_media` args may trip `too_many_arguments` (already `#[allow]`'d); keep the allow or introduce a `MediaInsert` struct.\n\n---\n\nTwo design decisions I'd flag for the human gate before implementation: **Q1** (new `infer` dep vs in-crate sniffer) and **Q2** (whether scope-at-serve enforcement should ship dark/off as planned, since enabling it would break inline media in the native clients we can't edit). Everything else is additive and CI-verifiable.",
           "graph.goal": "harden and enhance file upload across the freeq server and web app, with on-freeq-server storage as the default",
-          "last_response": "I have a complete, grounded picture. Here is the findings brief.\n\n---\n\n# Findings Brief: File Upload Surface in freeq\n\n## 1. Current architecture (end-to-end)\n\nfreeq has a **private-by-default, on-ser",
+          "last_response": "Plan written to `/tmp/plan.md`. Here it is in full:\n\n---\n\n# Implementation Plan: Harden & Enhance File Upload (on-server storage default)\n\n**Status:** proposed · **Scope:** `freeq-server`, `freeq-sdk",
           "internal.run_id": "01KV70WV0C0X3AZ5PZMKHBW91W",
           "internal.work_dir": "/workspace/freeq",
-          "thread.feat.current_node": "explore",
+          "thread.feat.current_node": "plan",
           "outcome": "succeeded",
           "internal.node_visit_count": 1,
           "response.explore": "I have a complete, grounded picture. Here is the findings brief.\n\n---\n\n# Findings Brief: File Upload Surface in freeq\n\n## 1. Current architecture (end-to-end)\n\nfreeq has a **private-by-default, on-server media store** already built. The flow:\n\n1. **Client** builds `multipart/form-data` → `POST /api/v1/upload` (fields: `file`, `did`, `alt?`, `channel?`, `share_pds?`, `share_bluesky?/cross_post?`).\n2. **Server** (`web.rs::api_upload`) authenticates the DID, **always** stores bytes **encrypted-at-rest on local disk** (AES-256-GCM), records metadata in SQLite, and mints a **signed capability URL**: `{origin}/api/v1/media/{id}/{sig}/{filename}`.\n3. **Optionally** (only if `share_pds`/`share_bluesky`) the server *additionally* proxies the blob to the user's AT Protocol PDS via the SDK — best-effort, never fails the private upload.\n4. **Server** returns `{ url, content_type, size, private }`. The client **string-concatenates the URL into a PRIVMSG body**.\n5. On render, clients **regex-scan message text** to detect media URLs and render inline; `GET /api/v1/media/{id}/{sig}/{filename}` (`api_media_serve`) verifies the HMAC capability, decrypts, and serves with HTTP Range support.\n\n**On-server storage is already the default** — the feature is hardening/enhancing this existing path, not building it.\n\n## 2. Files & functions that matter\n\n**Server (`freeq-server/src/`)**\n- `media_store.rs` — the whole private store. `MediaStore::{new,sign,verify,capability_url,path_for,put,get,remove}`, `derive_enc_key`/`derive_cap_key` (HMAC domain-separated from `msg_signing_key`), `new_id` (128-bit), `sanitize_filename` (path-traversal guard), `encrypt`/`decrypt` (AES-256-GCM), `tighten_dir/file` (0700/0600). Fully unit-tested.\n- `web.rs` (**gamma 275 hotspot**) — `api_upload` (`:3113`, multipart parse, 10MB cap at `:3155`, auth at `:3203`, PDS step-up at `:3235`), `pick_media_filename` (`:3396`), `api_media_serve` (`:3791`), `parse_single_range` (`:3867`), `api_blob_proxy` (`:3674`, SSRF allowlist), routes (`:196`/`:201`), `DefaultBodyLimit::max(12MB)` global layer (`:245`).\n- `db.rs` — `media` table (`:430`, schema: id/uploader_did/scope/mime/size/alt/filename/created_at/deleted_at), `insert_media` (`:1086`), `get_media` (`:1116`), `soft_delete_media` (`:1141`).\n- `server.rs` (**gamma 334 hotspot**) — `SharedState.media_store` (`:734`), `upload_tokens` (`:723`), store init gated on `db.is_some()` (`:1283`).\n\n**SDK (`freeq-sdk/src/`)**\n- `media.rs` — `upload_media_to_pds` (`:315`, PDS-only, not freeq-server), `MediaUploadResult`, `MediaAttachment` tag (de)serialization, `fetch_link_preview` (`:179`, SSRF-guarded, 64KB cap).\n- `ssrf.rs` — `resolve_and_check`, `pinned_client` (DNS pinning vs rebinding), `is_private_ip/hostname`.\n- **`freeq-sdk-ffi` has NO media/upload exports** — native FFI clients can't upload via the SDK; they call the REST endpoint directly.\n\n**Web app (`freeq-app/src/`)**\n- `components/ComposeBox.tsx` — `doUpload()` (`:193`, FormData build, 401 broker-refresh + 403 step-up retry), `handleFileSelect` (`:168`), `MAX_FILE_SIZE=10MB`/`ALLOWED_TYPES` (`:9-11`), paste/drag handlers.\n- `components/FileDropOverlay.tsx` — window-level drop → CustomEvent.\n- `components/MessageList.tsx` (**gamma 103, UNDERTESTED**) — `MessageContent` regex dispatch (`:368`), `isTrustedImageUrl` (`:218`, trusts same-origin `/api/v1/media/`), `GatedImage` (`:235`), detection regexes (`:56-71`).\n- `store.ts` — only *viewing* state (`loadExternalMedia`, `lightboxUrl`); no upload state.\n\n**TUI / native** — `freeq-tui` (`app.rs::MediaUploader`, PDS-cred based) and iOS/macOS/Windows/Android all build multipart by hand and POST to `/api/v1/upload` (confirmed: `MediaCapture.swift:472`, `UploadService.cs:17`).\n\n## 3. Constraints the plan must respect\n\n- **CI gate** (`.fabro/verify.sh` mirrors `ci.yml`): `cargo fmt --check`, `cargo check`, `clippy -D warnings` (warnings = errors), `cargo test` — all `--workspace` excluding AV crates (`freeq-av`, `freeq-eliza`, `freeq-av-client`, `freeq-av-image`). If `freeq-app/` changes, `vitest` must pass. **This executor cannot compile Swift/WinUI/Kotlin** — native clients are out of scope for edits.\n- **Hotspots / \"write tests FIRST\"**: `web.rs` (275), `server.rs` (334), and `MessageList.tsx` (103, undertested) are the files this feature touches. CLAUDE.md philosophy: *\"If something feels 'too clever,' it's probably wrong\"* — favor minimal, auditable changes.\n- **Capability-URL invariant**: URLs are **non-expiring** by design (CHATHISTORY replay must keep rendering). HMAC over `id` only; AES key + cap key both derived from the server's `msg_signing_key` seed.\n- **10MB cap** is load-bearing: it's *why* the serve path can decrypt-in-memory and support Range without a streaming cipher (`media_store.rs:15`). Raising it has architectural ripple.\n- **Existing tests**: `tests/upload.rs` (auth, oversize 413, private roundtrip, tampered-sig 403, range 206, step-up, blob-proxy SSRF, OG SSRF, CSP). `MessageList.media.test.tsx` (3 render cases). `oauth-step-up.test.ts`.\n\n## 4. Threat model / failure modes (where hardening is needed)\n\n| Risk | Current state | Gap |\n|---|---|---|\n| **Content-type spoofing** | Server trusts client-declared MIME; **no sniffing/whitelist**. `pick_media_filename` maps known MIMEs. | Server accepts *any* content-type; a `.html`/SVG/script could be stored and served with attacker-chosen type. No magic-byte validation. |\n| **Stored-XSS via served blobs** | `api_media_serve` sets `Content-Type` from stored mime; **no `Content-Disposition`, no `X-Content-Type-Options: nosniff` on this route, no sandbox CSP.** | A blob served as `text/html`/SVG on the API origin could execute. Needs `nosniff` + `Content-Disposition: attachment` (or inline-only for known-safe types) + restrictive CSP on the media route. |\n| **Size limit enforcement** | 10MB checked **after** `field.bytes()` reads the whole part into memory; global `DefaultBodyLimit` is 12MB. | Cap enforced post-buffering (memory pressure window). Limit + body-limit are slightly inconsistent (10 vs 12MB). No per-DID/quota limit. |\n| **Path traversal** | `sanitize_filename` strips path components; id is opaque base64url; shard dir derived from id. | Tested and solid. `path_for` uses first 2 chars of id (could be `_`); URL `{filename}` is cosmetic only. Low risk. |\n| **Capability-URL leakage** | Possession = access; non-expiring; HMAC unforgeable. URL only reaches conversation members *in theory* — but it's pasted into PRIVMSG text, so **anyone who can read the channel/history (incl. via REST/CHATHISTORY/federation) gets the URL forever.** | No per-recipient binding, no revocation beyond soft-delete, no scope check at serve time (the `scope` column is recorded but **not enforced** in `api_media_serve` — any valid sig serves regardless of channel membership). |\n| **Quota / DoS** | Only IP rate-limit on upload + 10MB cap. No per-DID storage quota, no total-disk cap, no cleanup/GC. | Unbounded disk growth; soft-deleted blobs stay on disk (`soft_delete_media` flips a flag but `media_store::remove` isn't wired to it). |\n| **Auth** | Upload requires active WS session or `X-Upload-Token` (HMAC, <300s, DID-bound). | Solid. But `did` is a form field cross-checked against session — fine. |\n| **SSRF** | `api_blob_proxy` uses host **allowlist** (not DNS-pinned, unlike SDK's `resolve_and_check`). | Blob proxy is allowlist-only; acceptable but inconsistent with the pinned-client pattern elsewhere. |\n| **Orphan/rollback** | Upload rolls back blob if DB insert fails. | Good. But no reconciliation job for blobs whose messages were deleted, or DB rows whose blobs vanished. |\n\n## 5. Native clients (eventual needs — NOT edited here)\n\nAll four call `POST /api/v1/upload` with hand-rolled multipart and expect `{url, content_type, size}`:\n- **iOS** (`MediaCapture.swift`, `ComposeView.swift`, `PhotoPicker.swift`), **macOS** (`FileUpload.swift`), **Windows** (`UploadService.cs`), **Android** (`PhotoUpload.kt`).\n\nThey will *eventually* need to consume any new response fields (e.g. structured attachment metadata, a `nosniff`/disposition contract, server-validated content-type, or an upload-token refresh). **Any change to the upload request/response contract or capability-URL format must stay backward-compatible** or be versioned, since these clients can't be recompiled in this environment.\n\n## 6. Open design questions the plan must answer\n\n1. **Content-type hardening**: Add server-side magic-byte sniffing + an allowlist (mirror the JS `ALLOWED_TYPES`)? Reject or coerce mismatched types? This is the single biggest security gap.\n2. **Serve-path safety headers**: Add `X-Content-Type-Options: nosniff`, `Content-Disposition` (attachment vs inline-by-type), and a tight CSP/`Content-Security-Policy: sandbox` on `/api/v1/media/*`? (Affects how inline rendering works in all clients.)\n3. **Scope enforcement at serve time**: Should `api_media_serve` verify the requester is a member of `row.scope` (channel/DM), upgrading from pure capability-URL to capability+authz? This changes the \"possession = access\" + non-expiring invariant and breaks unauthenticated `<img>` loads — needs care.\n4. **Structured attachment metadata**: Move from URL-in-PRIVMSG-text + regex detection to an IRCv3 tag (mime/size/alt) carried to the renderer (`MediaAttachment` already exists in the SDK but is unused by web)? Reduces render-side ambiguity and the gating asymmetry (video/audio aren't gated, only `<img>`).\n5. **Quota & lifecycle**: Per-DID/total storage quota, wiring `soft_delete_media` → physical `remove`, and a GC/reconciliation job. What limits and retention?\n6. **Size cap**: Keep 10MB (and align the 12MB body-limit to it), or raise it (requires streaming cipher rework)? Enforce *before* full buffering via `Content-Length` precheck.\n7. **Test-first targets**: New `web.rs`/`media_store.rs` tests for sniffing, headers, scope; the undertested `MessageList.tsx` and untested `doUpload()`/no-e2e-upload gaps in `freeq-app`.\n\nThis brief is the foundation for the implementation plan. No files were edited.",
-          "current_node": "explore",
-          "last_stage": "explore",
+          "current_node": "plan",
+          "last_stage": "plan",
+          "internal.retry_count.plan": 0,
           "graph.rankdir": "LR",
           "internal.fidelity": "full",
           "failure_class": "",
           "failure_signature": ""
         },
         "node_outcomes": {
+          "plan": {
+            "status": "succeeded",
+            "context_updates": {
+              "last_response": "Plan written to `/tmp/plan.md`. Here it is in full:\n\n---\n\n# Implementation Plan: Harden & Enhance File Upload (on-server storage default)\n\n**Status:** proposed · **Scope:** `freeq-server`, `freeq-sdk",
+              "last_stage": "plan",
+              "response.plan": "Plan written to `/tmp/plan.md`. Here it is in full:\n\n---\n\n# Implementation Plan: Harden & Enhance File Upload (on-server storage default)\n\n**Status:** proposed · **Scope:** `freeq-server`, `freeq-sdk`, `freeq-app`, `freeq-tui`, `docs/`\n**Out of scope (not edited here):** `freeq-ios`, `freeq-macos`, `Freeq.WinUI`, `freeq-windows-app`, AV crates.\n**Guiding principle (CLAUDE.md):** *\"If something feels 'too clever,' it's probably wrong.\"* Keep changes minimal, auditable, additive.\n\n---\n\n## 0. Grounding facts (from exploration — so the plan is honest)\n\nThe private on-server store **already exists and is the default**:\n\n- Upload: `POST /api/v1/upload` → `web.rs::api_upload` (`:3113`). Always stores privately via `media_store::MediaStore`, mints a signed capability URL, optionally also pushes to PDS.\n- Store: `media_store.rs` — AES-256-GCM at rest, HMAC capability URLs over `id`, `sanitize_filename` path-traversal guard, 0700/0600 perms.\n- Serve: `GET /api/v1/media/{id}/{sig}/{filename}` → `web.rs::api_media_serve` (`:3791`). HMAC-verifies, decrypts, Range support.\n- DB: `media` table (`db.rs:430`) with `insert_media`/`get_media`/`soft_delete_media`. **`scope` is recorded but not enforced at serve time. `soft_delete_media` is never called and is not wired to physical blob removal.**\n- Global middleware `security_headers` (`web.rs:4180`) **already sets `X-Content-Type-Options: nosniff` on every response, including the media route.** So nosniff is NOT a gap; `Content-Disposition` and content-type *trust* are.\n- **No server-side content-type validation / magic-byte sniffing.** Server trusts the client-declared multipart `Content-Type`; web client whitelists (`ComposeBox.tsx:11`) but TUI/native do not.\n- Size cap: `10MB` checked **after** the part is fully buffered (`web.rs:3155`); global `DefaultBodyLimit::max(12MB)` (`web.rs:245`) is the only pre-buffer guard. The two are inconsistent (10 vs 12).\n- No per-DID quota, no GC, no disk cap. No `infer`/`tree_magic`/`mime` crate in `freeq-server/Cargo.toml` today.\n- Web app puts the capability URL **into PRIVMSG text**; `MessageList.tsx` re-detects it by regex. Only `<img>` honors the `loadExternalMedia` privacy gate; video/audio do not. `MessageList.tsx` (gamma 103) and `doUpload()` are undertested.\n\nThis feature therefore **hardens** (content-type validation, disposition, size enforcement, optional scope authz, quota/GC) and **enhances** (explicit on-server-default contract, structured response fields the web app and later native clients can use) — without rebuilding the store.\n\n---\n\n## 1. Goal & success criteria\n\n**Goal:** Make on-server storage the explicit, hardened default for uploads, close the content-type / disposition / quota gaps, and keep the upload + capability-URL contract stable and additive so iOS/macOS/Windows can adopt later.\n\n**Done means (each is a test):**\n\n1. **SC1 — Content-type is server-validated.** Upload of bytes whose magic bytes don't match an allowlisted media type is rejected `415`. The *stored & served* `Content-Type` is the server-derived type, never the raw client claim.\n2. **SC2 — Served blobs cannot be treated as active content.** `api_media_serve` responses carry `X-Content-Type-Options: nosniff` (already global — assert it stays) **and** `Content-Disposition: inline; filename=\"...\"` for known-renderable types, `attachment` for everything else, plus a per-route `Content-Security-Policy: default-src 'none'; sandbox`.\n3. **SC3 — Size cap is enforced before full buffering and is consistent.** A request whose declared `Content-Length` exceeds the cap is rejected `413` without buffering the whole body; the global body limit equals the upload cap + small multipart overhead. The cap is a single named constant.\n4. **SC4 — On-server storage is the documented, selected default.** `share_pds=false`/absent → bytes never leave the server; response includes `\"storage\":\"server\"` and `\"private\":true`. `docs/PROTOCOL.md` documents the upload contract + capability-URL semantics.\n5. **SC5 — Quota & lifecycle.** Per-DID stored-bytes quota enforced at upload; a `soft_delete_media` path is wired so deleted media stops serving (`404`) and the blob is physically removed.\n6. **SC6 — Web app sends correct metadata and renders safely.** `doUpload()` posts `filename` + `alt`; uses the structured response (`url`,`content_type`,`size`,`storage`); video/audio honor the external-media gate symmetrically with images.\n7. **SC7 — Back-compat.** Existing stored media still serves. Older clients (no new fields) still upload and get a working capability URL.\n8. **SC8 — CI green.** `.fabro/verify.sh` passes: `cargo fmt`, `cargo check`, `clippy -D warnings`, `cargo test --workspace` (CI exclusions), and `freeq-app` vitest.\n\n**Explicit non-goals:** raising the 10MB cap; replacing capability URLs with per-recipient tokens; streaming cipher; editing native clients.\n\n---\n\n## 2. Design\n\n### 2.1 Data model\n\n`media` table — **additive columns only** (new migrations in `db.rs`, same pattern as existing `ALTER TABLE ... ADD COLUMN`):\n\n- `sha256 TEXT` — hex digest of plaintext bytes (dedupe + integrity; nullable for old rows).\n- `validated_type TEXT` — the server-derived content-type actually served (nullable; old rows fall back to `mime`).\n\nNo column is dropped or made non-null. `get_media` returns the new fields as `Option`. A new `db.rs::sum_media_bytes_for_did(did) -> u64` backs the quota check.\n\n### 2.2 Content-type validation (SC1)\n\n- New `media_store.rs::validate_content_type(declared, bytes) -> Result<&'static str, RejectReason>`: sniff bytes → canonical type; allowlist = a unified server-side `ALLOWED_MEDIA_TYPES` (the same set the web client uses); non-allowlisted/unknown → `415`. The **served** type is the sniffed type, not the declared one. `text/plain` allowed but always served `attachment`.\n- Sniffer: prefer a small in-crate `sniff_media_type(&[u8])` matching the ~12 magic signatures already enumerated in `pick_media_filename` (avoids a new dep on the gamma-334 server). `infer` crate is the alternative (see Q1).\n- `api_upload` calls this after reading bytes and **before** `store.put`; reject stores nothing.\n\n### 2.3 Serve-path safety headers (SC2)\n\nIn `api_media_serve`: serve `validated_type` (fallback `mime`); assert global `nosniff` stays; add `Content-Disposition` (`inline` for image/video/audio, `attachment` for pdf/text/other) and a per-route `Content-Security-Policy: default-src 'none'; sandbox`. Same headers on the Range path.\n\n### 2.4 Size enforcement (SC3)\n\n- `pub const MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;` in `media_store.rs`, reused everywhere.\n- `DefaultBodyLimit::max(MAX_UPLOAD_BYTES + 256*1024)` instead of literal 12MB.\n- `Content-Length` precheck in `api_upload` → early `413`; keep authoritative post-decode check.\n\n### 2.5 On-server-default contract + response shape (SC4)\n\nResponse gains additive fields: `\"storage\": \"server\"` (or `\"server+pds\"`), `\"sha256\"`. Request unchanged — **no new required field** (SC7).\n\n### 2.6 Auth / capability (unchanged invariant + optional opt-in authz)\n\nCapability URLs stay **non-expiring**, HMAC-over-`id`, format unchanged. **Scope enforcement is designed but ships OFF** behind `media_require_membership: bool` (default false): when on, `api_media_serve` checks the requester's session DID against `row.scope`. Default-off preserves \"possession = access\" and unauthenticated `<img>` loads (and protects un-editable native clients). See Q2.\n\n### 2.7 Quota & lifecycle (SC5)\n\n`media_max_bytes_per_did` config (default 256MB; `0` = unlimited). `api_upload` checks `sum_media_bytes_for_did` → `413` on exceed. Add `delete_media(id, requester_did)` (authorize uploader/op → `soft_delete_media` → `store.remove`); `get_media` already filters `deleted_at IS NULL` so serving returns `404` after delete.\n\n### 2.8 Web app consumption (SC6)\n\n`ComposeBox.tsx`: consume `result.storage`/`content_type`; request stays additive. `MessageList.tsx`: generalize the `loadExternalMedia` gate to video/audio for external URLs (`isTrustedMediaUrl`/`GatedMedia`); first-party `/api/v1/media/` stays ungated. No new store state.\n\n---\n\n## 3. Work breakdown (ordered; all CI-verified unless noted)\n\n> Hotspot rule: `web.rs` (275), `server.rs` (334), `MessageList.tsx` (103) — **write the test first**.\n\n- **S1. Constants + size enforcement** — `media_store.rs` constants; `web.rs` `:3155`/`:245` use the constant + `Content-Length` precheck. Test: extend `upload_rejects_oversized_file`.\n- **S2. Content-type validation** — `media_store.rs` `sniff`/`validate` (+unit tests); `api_upload` calls before `put`. Test: spoof→415, served type==sniffed.\n- **S3. DB additive columns** — `db.rs` `ADD COLUMN sha256/validated_type`, extend `insert_media`/`MediaRow`/`get_media`, add `sum_media_bytes_for_did`. Test: insert/get/sum.\n- **S4. Serve-path headers** — `api_media_serve` disposition + per-route CSP + validated type (Range + full). Test: header assertions.\n- **S5. Quota** — `config.rs` field; `api_upload` check. Test: over-quota→413.\n- **S6. Deletion wiring** — `delete_media` helper. Test: post-delete 404 + blob gone.\n- **S7. Optional scope-authz (dark, default-off)** — `config.rs` flag; `api_media_serve` membership check. Test: on (member 200 / non-member 403), off (unchanged).\n- **S8. Response fields** — `api_upload` adds `storage`+`sha256`. Test: assert `storage==\"server\"`.\n- **S9. Web app** — `ComposeBox.tsx` consume fields; `MessageList.tsx` gate video/audio. Tests: new `ComposeBox.test.tsx` for `doUpload()`; extend `MessageList.media.test.tsx`.\n- **S10. SDK (optional)** — share `ALLOWED_MEDIA_TYPES`/sniff helper if reused by TUI; otherwise none.\n- **S11. Docs** — `docs/PROTOCOL.md` upload contract + capability semantics + serve headers + native-adoption note; `CLAUDE.md` TODO tick + test count.\n\n---\n\n## 4. Test strategy (how each SC is pinned)\n\n- **Server unit** (`media_store.rs`/`db.rs`): sniff/validate (spoof, allowlist, text→attachment) → SC1; insert/get with new fields + `sum_media_bytes_for_did` → SC3, SC5.\n- **Server integration** (`tests/upload.rs`, in CI): spoofed type→415, served==sniffed → SC1; disposition+CSP+nosniff → SC2; `Content-Length` precheck + oversize 413 → SC3; `storage:\"server\"`/no-PDS-without-share → SC4; quota 413 + delete 404+gone → SC5; pre-seeded old row serves + no new required field → SC7; scope flag on/off → §2.6.\n- **Web (vitest)**: `ComposeBox.test.tsx` `doUpload()` (FormData, 401/403 retry, URL→PRIVMSG) → SC6; `MessageList.media.test.tsx` video/audio gating + first-party ungated → SC6.\n- **CI gate**: `.fabro/verify.sh` end-to-end → SC8.\n\n---\n\n## 5. Migration / back-compat\n\n- **DB:** additive `ADD COLUMN` only (mirrors existing migration style); old rows null → `Option`, serve falls back to `mime`; no backfill required.\n- **Existing blobs/URLs:** unchanged; capability-URL format + non-expiring invariant preserved → old pasted URLs keep working.\n- **Request contract:** no new required field; `share_*` unchanged.\n- **Response contract:** strictly additive (`storage`, `sha256`); old clients ignore unknown keys.\n- **Serve contract:** additive headers; `inline` keeps current rendering; `attachment` only hits pdf/text.\n- **One behavior change — validation tightening:** out-of-allowlist uploads now `415`. Allowlist = union of what clients already send; documented in `PROTOCOL.md`. Scope flag (off) and quota (256MB) default permissive to avoid surprising existing deployments.\n\n---\n\n## 6. Follow-up: native clients (future PRs — NOT implemented here)\n\nAll call `POST /api/v1/upload` and keep working after this change. To fully adopt:\n\n- **`freeq-ios`** (`MediaCapture.swift`, `ComposeView.swift`, `PhotoPicker.swift`): restrict picker/camera to `ALLOWED_MEDIA_TYPES` + surface `415`; display `storage`; distinguish quota `413`; honor `Content-Disposition: attachment` for pdf/text.\n- **`freeq-macos`** (`Views/Chat/FileUpload.swift`): same 1–4, plus external-media privacy toggle for video/audio.\n- **`Freeq.WinUI`/`freeq-windows-app`** (`Services/UploadService.cs`): client-side allowlist + `415`; consume `storage`/`sha256`; respect disposition on download; quota-aware errors.\n\n**Stable contract after this PR:** request fields unchanged; response adds `storage`+`sha256`; capability-URL format unchanged + non-expiring; serve adds `Content-Disposition` + per-route CSP + `nosniff`. Documented in `docs/PROTOCOL.md`.\n\n---\n\n## 7. Risks & open questions\n\n- **Q1 — Sniffer dependency:** in-crate (~12 signatures, no new dep, plan's assumption) vs the `infer` crate (broader, adds a dep to gamma-334 server). Reviewer decides.\n- **Q2 — Scope enforcement default:** shipped **off** because turning it on breaks unauthenticated inline `<img>`/`<video>` loads and the un-editable native clients (no session cookie on `<img>` GETs). Authz-at-serve is a larger, contract-affecting follow-up, deferred.\n- **Q3 — `text/plain`:** allowed but always `attachment`+sandbox; alternative is dropping it entirely. Low stakes.\n- **Q4 — Quota accounting:** counts server-stored bytes (always stored); PDS copies not double-counted.\n- **Q5 — Container ambiguity:** MP4/MOV/M4A share ISO-BMFF `ftyp`; misclassification is cosmetic (both inline), not security-relevant.\n- **Q6 — No streaming:** 10MB cap retained deliberately; raising it is out of scope (needs streaming cipher).\n- **Risk — gamma hotspots:** changes localized to upload/serve handlers, test-first; no unrelated refactor.\n- **Risk — `clippy -D warnings`:** new `insert_media` args may trip `too_many_arguments` (already `#[allow]`'d); keep the allow or introduce a `MediaInsert` struct.\n\n---\n\nTwo design decisions I'd flag for the human gate before implementation: **Q1** (new `infer` dep vs in-crate sniffer) and **Q2** (whether scope-at-serve enforcement should ship dark/off as planned, since enabling it would break inline media in the native clients we can't edit). Everything else is additive and CI-verifiable."
+            },
+            "notes": "Stage completed: plan",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "anthropic",
+                    "model_id": "claude-opus-4-8"
+                  },
+                  "tokens": {
+                    "input_tokens": 17287,
+                    "output_tokens": 15745,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 470615,
+                    "cache_write_tokens": 9303
+                  }
+                },
+                "facts": {
+                  "algorithm": "anthropic",
+                  "cache_write_5m_tokens": 9303,
+                  "cache_write_1h_tokens": 0
+                }
+              },
+              "total_usd_micros": 773510
+            },
+            "files_touched": [
+              "/tmp/plan.md"
+            ],
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 225867,
+              "tool_time_ms": 495,
+              "active_time_ms": 226362
+            }
+          },
           "start": {
             "status": "succeeded",
             "usage": null
@@ -832,8 +964,9 @@
             }
           }
         },
-        "next_node_id": "plan",
+        "next_node_id": "review_compat",
         "node_visits": {
+          "plan": 1,
           "start": 1,
           "explore": 1
         }
@@ -872,7 +1005,12 @@
       "first_event_seq": 21,
       "prompt": null,
       "response": null,
-      "completion": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": "Stage completed: explore",
+        "failure_reason": null,
+        "timestamp": "2026-06-16T01:37:28.038737738Z"
+      },
       "provider_used": {
         "mode": "agent",
         "provider": "anthropic",
@@ -886,13 +1024,20 @@
       "output": null,
       "started_at": "2026-06-16T01:32:11.535333Z",
       "handler": "agent",
+      "timing": {
+        "wall_time_ms": 316502,
+        "inference_time_ms": 197705,
+        "tool_time_ms": 118278,
+        "active_time_ms": 315983
+      },
       "usage": {
-        "input_tokens": 166013,
-        "output_tokens": 25779,
-        "total_tokens": 3064124,
+        "input_tokens": 81371,
+        "output_tokens": 26594,
+        "total_tokens": 1528837,
         "reasoning_tokens": 0,
-        "cache_read_tokens": 2431251,
-        "cache_write_tokens": 441081
+        "cache_read_tokens": 1251696,
+        "cache_write_tokens": 169176,
+        "total_usd_micros": 1981391
       },
       "model": {
         "provider": "anthropic",
@@ -1073,44 +1218,116 @@
             "kind": "native"
           },
           "category": "write",
-          "invoked": false
+          "invoked": true
         }
       ],
       "context_window": {
         "provider": "anthropic",
         "model": "claude-opus-4-8",
         "context_window_tokens": 1000000,
-        "input_tokens": 73345,
-        "usage_percent": 7.3345,
+        "input_tokens": 91722,
+        "usage_percent": 9.1722,
         "count_method": "response_usage_scaled_breakdown",
         "staleness": "live",
-        "generated_at": "2026-06-16T01:36:31.094733034Z",
-        "event_seq": 321,
+        "generated_at": "2026-06-16T01:41:17.301029799Z",
+        "event_seq": 369,
         "breakdown": [
           {
             "category": "system_prompt",
-            "tokens": 2773,
-            "usage_percent": 0.2773
+            "tokens": 2508,
+            "usage_percent": 0.2508
           },
           {
             "category": "tools",
-            "tokens": 3229,
-            "usage_percent": 0.3229
+            "tokens": 2921,
+            "usage_percent": 0.2921
           },
           {
             "category": "memory",
-            "tokens": 4466,
-            "usage_percent": 0.4466
+            "tokens": 4039,
+            "usage_percent": 0.4039
           },
           {
             "category": "conversation",
-            "tokens": 62866,
-            "usage_percent": 6.2866
+            "tokens": 82244,
+            "usage_percent": 8.2244
           },
           {
             "category": "other",
-            "tokens": 11,
-            "usage_percent": 0.0011
+            "tokens": 10,
+            "usage_percent": 0.001
+          }
+        ],
+        "warnings": []
+      },
+      "state": "succeeded"
+    },
+    "plan@1": {
+      "first_event_seq": 334,
+      "prompt": null,
+      "response": null,
+      "completion": null,
+      "provider_used": {
+        "mode": "agent",
+        "provider": "anthropic",
+        "model": "claude-opus-4-8",
+        "reasoning_effort": "high"
+      },
+      "diff": null,
+      "script_invocation": null,
+      "script_timing": null,
+      "parallel_results": null,
+      "output": null,
+      "started_at": "2026-06-16T01:37:30.930112014Z",
+      "handler": "agent",
+      "usage": {
+        "input_tokens": 8211,
+        "output_tokens": 9903,
+        "total_tokens": 415386,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 389015,
+        "cache_write_tokens": 8257
+      },
+      "model": {
+        "provider": "anthropic",
+        "model_id": "claude-opus-4-8"
+      },
+      "permission_level": "full",
+      "context_window": {
+        "provider": "anthropic",
+        "model": "claude-opus-4-8",
+        "context_window_tokens": 1000000,
+        "input_tokens": 82648,
+        "usage_percent": 8.2648,
+        "count_method": "response_usage_scaled_breakdown",
+        "staleness": "live",
+        "generated_at": "2026-06-16T01:39:49.885589453Z",
+        "event_seq": 364,
+        "breakdown": [
+          {
+            "category": "system_prompt",
+            "tokens": 2756,
+            "usage_percent": 0.2756
+          },
+          {
+            "category": "tools",
+            "tokens": 3209,
+            "usage_percent": 0.3209
+          },
+          {
+            "category": "memory",
+            "tokens": 4438,
+            "usage_percent": 0.4438
+          },
+          {
+            "category": "conversation",
+            "tokens": 72235,
+            "usage_percent": 7.2235
+          },
+          {
+            "category": "other",
+            "tokens": 10,
+            "usage_percent": 0.001
           }
         ],
         "warnings": []
