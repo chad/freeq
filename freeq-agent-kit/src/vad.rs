@@ -44,10 +44,14 @@ impl Default for VadConfig {
     /// needs at least 0.35 s of actual voice to be emitted.
     fn default() -> Self {
         Self {
-            voice_peak_threshold: 0.018,
+            // Raised from 0.018: room tone / background noise sat just above the
+            // old floor and Whisper hallucinated phrases from it ("A live voice
+            // call with the assistant…"), which the bot then answered. Real
+            // conversational speech peaks well above 0.045.
+            voice_peak_threshold: 0.045,
             silence_gap_samples: SAMPLE_RATE * 6 / 10, // 0.6 s
             max_utterance_samples: SAMPLE_RATE * 22,   // 22 s
-            min_voiced_samples: SAMPLE_RATE * 35 / 100, // 0.35 s
+            min_voiced_samples: SAMPLE_RATE * 45 / 100, // 0.45 s (was 0.35) — drop brief noise bursts
         }
     }
 }
