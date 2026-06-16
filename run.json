@@ -326,7 +326,7 @@
     "kind": "running"
   },
   "status_updated_at": "2026-06-16T02:09:00.624200718Z",
-  "last_event_at": "2026-06-16T02:32:59.077124380Z",
+  "last_event_at": "2026-06-16T02:33:02.535400729Z",
   "pending_control": null,
   "checkpoints": [
     {
@@ -588,9 +588,9 @@
       }
     },
     {
-      "seq": 0,
+      "seq": 371,
       "checkpoint": {
-        "timestamp": "2026-06-16T02:32:59.085802998Z",
+        "timestamp": "2026-06-16T02:33:02.516133348Z",
         "current_node": "verify",
         "completed_nodes": [
           "start",
@@ -600,27 +600,182 @@
         ],
         "node_retries": {},
         "context_values": {
+          "internal.retry_count.select": 0,
+          "last_response": "All 30 tests in `irc_loop_tests` pass (16 new + 14 existing). Let me do a final summary of what was added:\n\n---\n\n## Summary\n\n**File modified:** `freeq-sdk/src/client.rs`\n\n**16 new tests** added to the",
+          "internal.work_dir": "/workspace/freeq",
+          "current_node": "verify",
+          "internal.thread_id": "implement",
+          "internal.retry_count.implement": 0,
+          "failure_class": "",
+          "thread.cov.current_node": "implement",
+          "internal.retry_count.verify": 0,
+          "outcome": "succeeded",
+          "internal.fidelity": "compact",
+          "internal.retry_count.start": 0,
+          "internal.run_id": "01KV730C7B2VZ6EQ9JB7GMHMRX",
+          "graph.goal": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code.",
+          "response.implement": "All 30 tests in `irc_loop_tests` pass (16 new + 14 existing). Let me do a final summary of what was added:\n\n---\n\n## Summary\n\n**File modified:** `freeq-sdk/src/client.rs`\n\n**16 new tests** added to the existing `mod irc_loop_tests` block, covering 7 previously untested IRC message types:\n\n| Group | Tests | Behaviors pinned |\n|---|---|---|\n| **NICK change** | `server_nick_change_emits_nick_changed_event`, `server_nick_change_bare_prefix_parses_correctly` | nick parsed from prefix (with and without `!user@host`), new_nick from params |\n| **QUIT** | `server_quit_emits_user_quit_event`, `server_quit_with_no_reason_emits_empty_reason` | quit with reason, quit with no params → empty reason (no panic) |\n| **KICK** | `server_kick_emits_kicked_event`, `server_kick_with_no_reason_emits_empty_reason` | full kick with reason, kick with missing reason param |\n| **AWAY** | `server_away_with_message_emits_away_changed`, `server_away_with_no_message_emits_away_changed_none` | going away (`Some(msg)`), returning (`None`) |\n| **TOPIC** | `server_topic_change_emits_topic_changed_event`, `server_rpl_topic_332_emits_topic_changed_no_setter` | live TOPIC with `set_by`, 332 RPL_TOPIC with `set_by=None` |\n| **INVITE** | `server_invite_emits_invited_event` | channel and inviter nick extracted correctly |\n| **NAMES/TAGMSG** | `server_353_emits_names_event`, `server_tagmsg_emits_tag_msg_event` | nick list parsing, tag propagation to `TagMsg` event |\n| **Legacy multiline** | `legacy_multiline_tag_normalizes_slash_n_to_newline`, `privmsg_without_multiline_tag_preserves_literal_slash_n` | `+freeq.at/multiline` tag triggers `\\n` normalization; absence preserves verbatim body |\n| **Extended JOIN** | `extended_join_with_did_account_emits_joined_with_account`, `extended_join_with_star_account_emits_joined_no_account` | DID account present, `*` sentinel → `None` |\n\nAll tests use the same in-process `tokio::io::duplex` harness as existing tests — no network, no server, deterministic, fast (0.13s for all 30).",
+          "internal.node_visit_count": 1,
+          "graph.rankdir": "LR",
+          "failure_signature": "",
+          "last_stage": "implement",
+          "response.select": "Now I have a comprehensive picture. Let me assess both candidates side by side:\n\n**`freeq-sdk/src/client.rs`** (3712 lines, 62 public functions, 28 tests):\n- CLAUDE.md flags it explicitly: \"sdk/client.rs (gamma 104) — ZERO unit tests on connection state machine\"\n- The existing 28 tests cover: multiline assembly (14 tests), basic connection state machine behaviors (14 tests: PING/PONG, 001, nick-in-use, 904, raw, privmsg signing, JOIN, PART, EOF)\n- **Zero tests** for: NICK change events, QUIT events, KICK events, AWAY events, TOPIC events, INVITE events, MODE events, NAMES/353, TAGMSG dispatch, server NOTICE parsing, `legacy +freeq.at/multiline \\n` normalization, `ConnectConfig::validate()` invalid char cases (nick with `#`, `!`, `@`, etc.)\n\n**`freeq-app/src/components/MessageList.tsx`** (1327 lines):\n- Has 391 lines of tests already — reasonably covered.\n\nThe clear winner is `freeq-sdk/src/client.rs`.\n\n---\n\n## My Choice: `freeq-sdk/src/client.rs`\n\n**Language/crate:** Rust, `freeq-sdk`\n\n### Why it's high-risk and undertested\n\nCLAUDE.md explicitly flags it: **\"sdk/client.rs (gamma 104) — ZERO unit tests on connection state machine.\"** At 3,712 lines with 62 public functions (117 `fn` definitions total), only 28 `#[tokio::test]` cases exist — and the majority of those (14) test `multiline` batch assembly, a self-contained sub-feature. The core IRC event dispatch loop (`run_irc`) handles over a dozen server-sent message types; of those, only PING, 001 RPL_WELCOME, 433 nick-in-use, 904 SASL failure, JOIN, and PART have any test coverage. Every other incoming event type is completely unexercised by automated tests.\n\n### 3–6 specific behaviors I'll pin with tests\n\n1. **`NICK` → `Event::NickChanged`** — Server sends `:alice!u@h NICK :alice2`. The client must emit `Event::NickChanged { old_nick: \"alice\", new_nick: \"alice2\" }`. Critically, the nick is parsed from the prefix (before `!`), not from params.\n\n2. **`QUIT` → `Event::UserQuit`** — Server sends `:bob!u@h QUIT :Gone` and the client must emit `Event::UserQuit { nick: \"bob\", reason: \"Gone\" }`. Edge case: quit with empty/missing reason must not panic.\n\n3. **`KICK` → `Event::Kicked`** — Server sends `:op!u@h KICK #room victim :spam`. Client must emit `Event::Kicked { channel: \"#room\", nick: \"victim\", by: \"op\", reason: \"spam\" }`.\n\n4. **`AWAY` → `Event::AwayChanged`** — Two sub-cases: (a) `:user!u@h AWAY :be right back` → `away_msg: Some(\"be right back\")`, and (b) `:user!u@h AWAY` (no param) → `away_msg: None` (user returning).\n\n5. **`TOPIC` → `Event::TopicChanged`** — `:mod!u@h TOPIC #room :New topic` must emit `Event::TopicChanged { channel: \"#room\", topic: \"New topic\", set_by: Some(\"mod\") }`.\n\n6. **`ConnectConfig::validate()` invalid nick characters** — The validator rejects nicks containing `#`, `!`, `@`, `*`, `?`, `,`, space, or control chars. There are no tests for these individual rejection paths despite the function having 8 distinct invalid-char checks.\n\n### Existing test convention to follow\n\nThe sibling test module `mod irc_loop_tests` at the bottom of `freeq-sdk/src/client.rs` (line 3247) provides the exact pattern: use `start_run_irc()` to spin up `run_irc` over a `tokio::io::duplex`, write raw IRC lines to the \"server side\", then `tokio::time::timeout`-wait for specific `Event` variants on the event channel. All new tests will follow this same in-process, no-network, no-server pattern.",
+          "thread.implement.current_node": "verify",
+          "command.output": "blob://sha256/c61281f6e4c15e14cd7f9078a9ae71c72fd7077dbc8a7b9a02be94feffbeb59a"
+        },
+        "node_outcomes": {
+          "implement": {
+            "status": "succeeded",
+            "context_updates": {
+              "last_response": "All 30 tests in `irc_loop_tests` pass (16 new + 14 existing). Let me do a final summary of what was added:\n\n---\n\n## Summary\n\n**File modified:** `freeq-sdk/src/client.rs`\n\n**16 new tests** added to the",
+              "response.implement": "All 30 tests in `irc_loop_tests` pass (16 new + 14 existing). Let me do a final summary of what was added:\n\n---\n\n## Summary\n\n**File modified:** `freeq-sdk/src/client.rs`\n\n**16 new tests** added to the existing `mod irc_loop_tests` block, covering 7 previously untested IRC message types:\n\n| Group | Tests | Behaviors pinned |\n|---|---|---|\n| **NICK change** | `server_nick_change_emits_nick_changed_event`, `server_nick_change_bare_prefix_parses_correctly` | nick parsed from prefix (with and without `!user@host`), new_nick from params |\n| **QUIT** | `server_quit_emits_user_quit_event`, `server_quit_with_no_reason_emits_empty_reason` | quit with reason, quit with no params → empty reason (no panic) |\n| **KICK** | `server_kick_emits_kicked_event`, `server_kick_with_no_reason_emits_empty_reason` | full kick with reason, kick with missing reason param |\n| **AWAY** | `server_away_with_message_emits_away_changed`, `server_away_with_no_message_emits_away_changed_none` | going away (`Some(msg)`), returning (`None`) |\n| **TOPIC** | `server_topic_change_emits_topic_changed_event`, `server_rpl_topic_332_emits_topic_changed_no_setter` | live TOPIC with `set_by`, 332 RPL_TOPIC with `set_by=None` |\n| **INVITE** | `server_invite_emits_invited_event` | channel and inviter nick extracted correctly |\n| **NAMES/TAGMSG** | `server_353_emits_names_event`, `server_tagmsg_emits_tag_msg_event` | nick list parsing, tag propagation to `TagMsg` event |\n| **Legacy multiline** | `legacy_multiline_tag_normalizes_slash_n_to_newline`, `privmsg_without_multiline_tag_preserves_literal_slash_n` | `+freeq.at/multiline` tag triggers `\\n` normalization; absence preserves verbatim body |\n| **Extended JOIN** | `extended_join_with_did_account_emits_joined_with_account`, `extended_join_with_star_account_emits_joined_no_account` | DID account present, `*` sentinel → `None` |\n\nAll tests use the same in-process `tokio::io::duplex` harness as existing tests — no network, no server, deterministic, fast (0.13s for all 30).",
+              "last_stage": "implement"
+            },
+            "notes": "Stage completed: implement",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "anthropic",
+                    "model_id": "claude-sonnet-4-6"
+                  },
+                  "tokens": {
+                    "input_tokens": 31289,
+                    "output_tokens": 10462,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 1361083,
+                    "cache_write_tokens": 232069
+                  }
+                },
+                "facts": {
+                  "algorithm": "anthropic",
+                  "cache_write_5m_tokens": 232069,
+                  "cache_write_1h_tokens": 0
+                }
+              },
+              "total_usd_micros": 1529379
+            },
+            "files_touched": [
+              "/workspace/freeq/freeq-sdk/src/client.rs"
+            ],
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 182618,
+              "tool_time_ms": 901504,
+              "active_time_ms": 1084122
+            }
+          },
+          "select": {
+            "status": "succeeded",
+            "context_updates": {
+              "response.select": "Now I have a comprehensive picture. Let me assess both candidates side by side:\n\n**`freeq-sdk/src/client.rs`** (3712 lines, 62 public functions, 28 tests):\n- CLAUDE.md flags it explicitly: \"sdk/client.rs (gamma 104) — ZERO unit tests on connection state machine\"\n- The existing 28 tests cover: multiline assembly (14 tests), basic connection state machine behaviors (14 tests: PING/PONG, 001, nick-in-use, 904, raw, privmsg signing, JOIN, PART, EOF)\n- **Zero tests** for: NICK change events, QUIT events, KICK events, AWAY events, TOPIC events, INVITE events, MODE events, NAMES/353, TAGMSG dispatch, server NOTICE parsing, `legacy +freeq.at/multiline \\n` normalization, `ConnectConfig::validate()` invalid char cases (nick with `#`, `!`, `@`, etc.)\n\n**`freeq-app/src/components/MessageList.tsx`** (1327 lines):\n- Has 391 lines of tests already — reasonably covered.\n\nThe clear winner is `freeq-sdk/src/client.rs`.\n\n---\n\n## My Choice: `freeq-sdk/src/client.rs`\n\n**Language/crate:** Rust, `freeq-sdk`\n\n### Why it's high-risk and undertested\n\nCLAUDE.md explicitly flags it: **\"sdk/client.rs (gamma 104) — ZERO unit tests on connection state machine.\"** At 3,712 lines with 62 public functions (117 `fn` definitions total), only 28 `#[tokio::test]` cases exist — and the majority of those (14) test `multiline` batch assembly, a self-contained sub-feature. The core IRC event dispatch loop (`run_irc`) handles over a dozen server-sent message types; of those, only PING, 001 RPL_WELCOME, 433 nick-in-use, 904 SASL failure, JOIN, and PART have any test coverage. Every other incoming event type is completely unexercised by automated tests.\n\n### 3–6 specific behaviors I'll pin with tests\n\n1. **`NICK` → `Event::NickChanged`** — Server sends `:alice!u@h NICK :alice2`. The client must emit `Event::NickChanged { old_nick: \"alice\", new_nick: \"alice2\" }`. Critically, the nick is parsed from the prefix (before `!`), not from params.\n\n2. **`QUIT` → `Event::UserQuit`** — Server sends `:bob!u@h QUIT :Gone` and the client must emit `Event::UserQuit { nick: \"bob\", reason: \"Gone\" }`. Edge case: quit with empty/missing reason must not panic.\n\n3. **`KICK` → `Event::Kicked`** — Server sends `:op!u@h KICK #room victim :spam`. Client must emit `Event::Kicked { channel: \"#room\", nick: \"victim\", by: \"op\", reason: \"spam\" }`.\n\n4. **`AWAY` → `Event::AwayChanged`** — Two sub-cases: (a) `:user!u@h AWAY :be right back` → `away_msg: Some(\"be right back\")`, and (b) `:user!u@h AWAY` (no param) → `away_msg: None` (user returning).\n\n5. **`TOPIC` → `Event::TopicChanged`** — `:mod!u@h TOPIC #room :New topic` must emit `Event::TopicChanged { channel: \"#room\", topic: \"New topic\", set_by: Some(\"mod\") }`.\n\n6. **`ConnectConfig::validate()` invalid nick characters** — The validator rejects nicks containing `#`, `!`, `@`, `*`, `?`, `,`, space, or control chars. There are no tests for these individual rejection paths despite the function having 8 distinct invalid-char checks.\n\n### Existing test convention to follow\n\nThe sibling test module `mod irc_loop_tests` at the bottom of `freeq-sdk/src/client.rs` (line 3247) provides the exact pattern: use `start_run_irc()` to spin up `run_irc` over a `tokio::io::duplex`, write raw IRC lines to the \"server side\", then `tokio::time::timeout`-wait for specific `Event` variants on the event channel. All new tests will follow this same in-process, no-network, no-server pattern.",
+              "last_stage": "select",
+              "last_response": "Now I have a comprehensive picture. Let me assess both candidates side by side:\n\n**`freeq-sdk/src/client.rs`** (3712 lines, 62 public functions, 28 tests):\n- CLAUDE.md flags it explicitly: \"sdk/client"
+            },
+            "notes": "Stage completed: select",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "anthropic",
+                    "model_id": "claude-sonnet-4-6"
+                  },
+                  "tokens": {
+                    "input_tokens": 23031,
+                    "output_tokens": 5421,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 426630,
+                    "cache_write_tokens": 66810
+                  }
+                },
+                "facts": {
+                  "algorithm": "anthropic",
+                  "cache_write_5m_tokens": 66810,
+                  "cache_write_1h_tokens": 0
+                }
+              },
+              "total_usd_micros": 528934
+            },
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 114225,
+              "tool_time_ms": 2806,
+              "active_time_ms": 117031
+            }
+          },
+          "verify": {
+            "status": "succeeded",
+            "context_updates": {
+              "command.output": "blob://sha256/c61281f6e4c15e14cd7f9078a9ae71c72fd7077dbc8a7b9a02be94feffbeb59a"
+            },
+            "notes": "Script completed: bash .fabro/verify.sh",
+            "usage": null,
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 0,
+              "tool_time_ms": 228865,
+              "active_time_ms": 228865
+            }
+          },
+          "start": {
+            "status": "succeeded",
+            "usage": null
+          }
+        },
+        "next_node_id": "pr_body",
+        "git_commit_sha": "f477139cd6301dff92203d98d82c7036d08a020f",
+        "node_visits": {
+          "implement": 1,
+          "select": 1,
+          "start": 1,
+          "verify": 1
+        }
+      },
+      "diff": {
+        "summary": {
+          "files_changed": 3,
+          "additions": 536,
+          "deletions": 3
+        }
+      }
+    },
+    {
+      "seq": 0,
+      "checkpoint": {
+        "timestamp": "2026-06-16T02:33:16.103661429Z",
+        "current_node": "pr_body",
+        "completed_nodes": [
+          "start",
+          "select",
+          "implement",
+          "verify",
+          "pr_body"
+        ],
+        "node_retries": {},
+        "context_values": {
           "graph.goal": "Raise automated-test coverage on one of freeq's high-risk, undertested files — adding tests only, with at most minimal, behavior-preserving testability seams in production code.",
           "thread.implement.current_node": "verify",
           "internal.retry_count.verify": 0,
           "failure_signature": "",
           "internal.work_dir": "/workspace/freeq",
-          "internal.fidelity": "compact",
+          "internal.fidelity": "full",
+          "response.pr_body": "I have to be straight with you: I have not made any code changes in this conversation. There is no branch, no diff, and no tests I actually wrote. I cannot produce an accurate PR description because I have nothing real to base it on — and fabricating `git diff --stat` output or test names would be exactly the kind of thing that causes real problems when Fabro goes to review it.\n\nIf you want this PR description written correctly, the path forward is one of these:\n\n1. **Point me at the actual diff.** Paste the output of `git diff --stat` and `git diff` (or the relevant hunks) and I will write the description strictly from that.\n\n2. **Tell me which hotspot you want me to address.** From CLAUDE.md the flagged candidates are:\n   - `sdk/client.rs` (gamma 104) — zero unit tests on the connection state machine\n   - `irc/client.ts` (gamma 133) — needs dedicated unit tests\n   - `MessageList.tsx` (gamma 103) — only Playwright coverage\n\n   Pick one, I will write the tests, then write the PR description from the real diff.\n\n3. **Provide a prior diff you want described.** If someone else wrote the tests and you want help drafting the body, share the diff and I will describe only what is actually there.\n\nWhat would you like to do?",
           "response.select": "Now I have a comprehensive picture. Let me assess both candidates side by side:\n\n**`freeq-sdk/src/client.rs`** (3712 lines, 62 public functions, 28 tests):\n- CLAUDE.md flags it explicitly: \"sdk/client.rs (gamma 104) — ZERO unit tests on connection state machine\"\n- The existing 28 tests cover: multiline assembly (14 tests), basic connection state machine behaviors (14 tests: PING/PONG, 001, nick-in-use, 904, raw, privmsg signing, JOIN, PART, EOF)\n- **Zero tests** for: NICK change events, QUIT events, KICK events, AWAY events, TOPIC events, INVITE events, MODE events, NAMES/353, TAGMSG dispatch, server NOTICE parsing, `legacy +freeq.at/multiline \\n` normalization, `ConnectConfig::validate()` invalid char cases (nick with `#`, `!`, `@`, etc.)\n\n**`freeq-app/src/components/MessageList.tsx`** (1327 lines):\n- Has 391 lines of tests already — reasonably covered.\n\nThe clear winner is `freeq-sdk/src/client.rs`.\n\n---\n\n## My Choice: `freeq-sdk/src/client.rs`\n\n**Language/crate:** Rust, `freeq-sdk`\n\n### Why it's high-risk and undertested\n\nCLAUDE.md explicitly flags it: **\"sdk/client.rs (gamma 104) — ZERO unit tests on connection state machine.\"** At 3,712 lines with 62 public functions (117 `fn` definitions total), only 28 `#[tokio::test]` cases exist — and the majority of those (14) test `multiline` batch assembly, a self-contained sub-feature. The core IRC event dispatch loop (`run_irc`) handles over a dozen server-sent message types; of those, only PING, 001 RPL_WELCOME, 433 nick-in-use, 904 SASL failure, JOIN, and PART have any test coverage. Every other incoming event type is completely unexercised by automated tests.\n\n### 3–6 specific behaviors I'll pin with tests\n\n1. **`NICK` → `Event::NickChanged`** — Server sends `:alice!u@h NICK :alice2`. The client must emit `Event::NickChanged { old_nick: \"alice\", new_nick: \"alice2\" }`. Critically, the nick is parsed from the prefix (before `!`), not from params.\n\n2. **`QUIT` → `Event::UserQuit`** — Server sends `:bob!u@h QUIT :Gone` and the client must emit `Event::UserQuit { nick: \"bob\", reason: \"Gone\" }`. Edge case: quit with empty/missing reason must not panic.\n\n3. **`KICK` → `Event::Kicked`** — Server sends `:op!u@h KICK #room victim :spam`. Client must emit `Event::Kicked { channel: \"#room\", nick: \"victim\", by: \"op\", reason: \"spam\" }`.\n\n4. **`AWAY` → `Event::AwayChanged`** — Two sub-cases: (a) `:user!u@h AWAY :be right back` → `away_msg: Some(\"be right back\")`, and (b) `:user!u@h AWAY` (no param) → `away_msg: None` (user returning).\n\n5. **`TOPIC` → `Event::TopicChanged`** — `:mod!u@h TOPIC #room :New topic` must emit `Event::TopicChanged { channel: \"#room\", topic: \"New topic\", set_by: Some(\"mod\") }`.\n\n6. **`ConnectConfig::validate()` invalid nick characters** — The validator rejects nicks containing `#`, `!`, `@`, `*`, `?`, `,`, space, or control chars. There are no tests for these individual rejection paths despite the function having 8 distinct invalid-char checks.\n\n### Existing test convention to follow\n\nThe sibling test module `mod irc_loop_tests` at the bottom of `freeq-sdk/src/client.rs` (line 3247) provides the exact pattern: use `start_run_irc()` to spin up `run_irc` over a `tokio::io::duplex`, write raw IRC lines to the \"server side\", then `tokio::time::timeout`-wait for specific `Event` variants on the event channel. All new tests will follow this same in-process, no-network, no-server pattern.",
           "internal.retry_count.start": 0,
-          "thread.cov.current_node": "implement",
+          "thread.cov.current_node": "pr_body",
           "internal.run_id": "01KV730C7B2VZ6EQ9JB7GMHMRX",
           "failure_class": "",
+          "internal.retry_count.pr_body": 0,
           "command.output": "blob://sha256/c61281f6e4c15e14cd7f9078a9ae71c72fd7077dbc8a7b9a02be94feffbeb59a",
           "internal.node_visit_count": 1,
           "graph.rankdir": "LR",
           "internal.retry_count.select": 0,
-          "internal.thread_id": "implement",
+          "internal.thread_id": "cov",
           "outcome": "succeeded",
-          "last_response": "All 30 tests in `irc_loop_tests` pass (16 new + 14 existing). Let me do a final summary of what was added:\n\n---\n\n## Summary\n\n**File modified:** `freeq-sdk/src/client.rs`\n\n**16 new tests** added to the",
-          "last_stage": "implement",
+          "last_response": "I have to be straight with you: I have not made any code changes in this conversation. There is no branch, no diff, and no tests I actually wrote. I cannot produce an accurate PR description because I",
+          "last_stage": "pr_body",
           "response.implement": "All 30 tests in `irc_loop_tests` pass (16 new + 14 existing). Let me do a final summary of what was added:\n\n---\n\n## Summary\n\n**File modified:** `freeq-sdk/src/client.rs`\n\n**16 new tests** added to the existing `mod irc_loop_tests` block, covering 7 previously untested IRC message types:\n\n| Group | Tests | Behaviors pinned |\n|---|---|---|\n| **NICK change** | `server_nick_change_emits_nick_changed_event`, `server_nick_change_bare_prefix_parses_correctly` | nick parsed from prefix (with and without `!user@host`), new_nick from params |\n| **QUIT** | `server_quit_emits_user_quit_event`, `server_quit_with_no_reason_emits_empty_reason` | quit with reason, quit with no params → empty reason (no panic) |\n| **KICK** | `server_kick_emits_kicked_event`, `server_kick_with_no_reason_emits_empty_reason` | full kick with reason, kick with missing reason param |\n| **AWAY** | `server_away_with_message_emits_away_changed`, `server_away_with_no_message_emits_away_changed_none` | going away (`Some(msg)`), returning (`None`) |\n| **TOPIC** | `server_topic_change_emits_topic_changed_event`, `server_rpl_topic_332_emits_topic_changed_no_setter` | live TOPIC with `set_by`, 332 RPL_TOPIC with `set_by=None` |\n| **INVITE** | `server_invite_emits_invited_event` | channel and inviter nick extracted correctly |\n| **NAMES/TAGMSG** | `server_353_emits_names_event`, `server_tagmsg_emits_tag_msg_event` | nick list parsing, tag propagation to `TagMsg` event |\n| **Legacy multiline** | `legacy_multiline_tag_normalizes_slash_n_to_newline`, `privmsg_without_multiline_tag_preserves_literal_slash_n` | `+freeq.at/multiline` tag triggers `\\n` normalization; absence preserves verbatim body |\n| **Extended JOIN** | `extended_join_with_did_account_emits_joined_with_account`, `extended_join_with_star_account_emits_joined_no_account` | DID account present, `*` sentinel → `None` |\n\nAll tests use the same in-process `tokio::io::duplex` harness as existing tests — no network, no server, deterministic, fast (0.13s for all 30).",
-          "current_node": "verify",
+          "current_node": "pr_body",
           "internal.retry_count.implement": 0
         },
         "node_outcomes": {
@@ -641,6 +796,44 @@
           "start": {
             "status": "succeeded",
             "usage": null
+          },
+          "pr_body": {
+            "status": "succeeded",
+            "context_updates": {
+              "last_stage": "pr_body",
+              "last_response": "I have to be straight with you: I have not made any code changes in this conversation. There is no branch, no diff, and no tests I actually wrote. I cannot produce an accurate PR description because I",
+              "response.pr_body": "I have to be straight with you: I have not made any code changes in this conversation. There is no branch, no diff, and no tests I actually wrote. I cannot produce an accurate PR description because I have nothing real to base it on — and fabricating `git diff --stat` output or test names would be exactly the kind of thing that causes real problems when Fabro goes to review it.\n\nIf you want this PR description written correctly, the path forward is one of these:\n\n1. **Point me at the actual diff.** Paste the output of `git diff --stat` and `git diff` (or the relevant hunks) and I will write the description strictly from that.\n\n2. **Tell me which hotspot you want me to address.** From CLAUDE.md the flagged candidates are:\n   - `sdk/client.rs` (gamma 104) — zero unit tests on the connection state machine\n   - `irc/client.ts` (gamma 133) — needs dedicated unit tests\n   - `MessageList.tsx` (gamma 103) — only Playwright coverage\n\n   Pick one, I will write the tests, then write the PR description from the real diff.\n\n3. **Provide a prior diff you want described.** If someone else wrote the tests and you want help drafting the body, share the diff and I will describe only what is actually there.\n\nWhat would you like to do?"
+            },
+            "notes": "Stage completed: pr_body",
+            "usage": {
+              "input": {
+                "usage": {
+                  "model": {
+                    "provider": "anthropic",
+                    "model_id": "claude-sonnet-4-6"
+                  },
+                  "tokens": {
+                    "input_tokens": 220,
+                    "output_tokens": 664,
+                    "reasoning_tokens": 0,
+                    "cache_read_tokens": 0,
+                    "cache_write_tokens": 3494
+                  }
+                },
+                "facts": {
+                  "algorithm": "anthropic",
+                  "cache_write_5m_tokens": 3494,
+                  "cache_write_1h_tokens": 0
+                }
+              },
+              "total_usd_micros": 23722
+            },
+            "timing": {
+              "wall_time_ms": 0,
+              "inference_time_ms": 13560,
+              "tool_time_ms": 0,
+              "active_time_ms": 13560
+            }
           },
           "implement": {
             "status": "succeeded",
@@ -722,10 +915,11 @@
             }
           }
         },
-        "next_node_id": "pr_body",
+        "next_node_id": "exit",
         "node_visits": {
           "verify": 1,
           "select": 1,
+          "pr_body": 1,
           "implement": 1,
           "start": 1
         }
@@ -1121,7 +1315,12 @@
       "first_event_seq": 364,
       "prompt": null,
       "response": null,
-      "completion": null,
+      "completion": {
+        "outcome": "succeeded",
+        "notes": "Script completed: bash .fabro/verify.sh",
+        "failure_reason": null,
+        "timestamp": "2026-06-16T02:32:59.080050699Z"
+      },
       "provider_used": null,
       "diff": null,
       "script_invocation": {
@@ -1145,6 +1344,39 @@
       "termination": "exited",
       "started_at": "2026-06-16T02:29:10.164353964Z",
       "handler": "command",
+      "timing": {
+        "wall_time_ms": 228913,
+        "inference_time_ms": 0,
+        "tool_time_ms": 228865,
+        "active_time_ms": 228865
+      },
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0
+      },
+      "state": "succeeded"
+    },
+    "pr_body@1": {
+      "first_event_seq": 374,
+      "prompt": null,
+      "response": null,
+      "completion": null,
+      "provider_used": {
+        "mode": "prompt",
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-6"
+      },
+      "diff": null,
+      "script_invocation": null,
+      "script_timing": null,
+      "parallel_results": null,
+      "output": null,
+      "started_at": "2026-06-16T02:33:02.517876051Z",
+      "handler": "prompt",
       "usage": {
         "input_tokens": 0,
         "output_tokens": 0,
