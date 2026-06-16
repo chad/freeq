@@ -45,7 +45,13 @@ cp freeq-macos/Generated/freeqFFI.modulemap freeq-macos/FreeqSDK.xcframework/mac
 cp target/aarch64-apple-darwin/release/libfreeq_sdk_ffi.a freeq-macos/FreeqSDK.xcframework/macos-arm64/
 
 # Keep the legacy Libraries/ copy in sync (some setups link it directly).
-cp target/aarch64-apple-darwin/release/libfreeq_sdk_ffi.a freeq-macos/Libraries/ 2>/dev/null || true
+mkdir -p freeq-macos/Libraries
+cp target/aarch64-apple-darwin/release/libfreeq_sdk_ffi.a freeq-macos/Libraries/
+
+echo "==> Stamping Rust FFI source fingerprint..."
+FFI_SOURCE_FINGERPRINT="$(freeq-macos/scripts/ffi-source-fingerprint.sh)"
+printf '%s\n' "$FFI_SOURCE_FINGERPRINT" > freeq-macos/FreeqSDK.xcframework/macos-arm64/ffi-source.sha256
+printf '%s\n' "$FFI_SOURCE_FINGERPRINT" > freeq-macos/Libraries/ffi-source.sha256
 
 cat > freeq-macos/FreeqSDK.xcframework/Info.plist << 'EOF'
 <?xml version="1.0" encoding="UTF-8"?>

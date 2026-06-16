@@ -264,6 +264,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = FFCC7582359AA1CA2AE6B069 /* Build configuration list for PBXNativeTarget "freeq-macos" */;
 			buildPhases = (
+				7A9DFD377E4E42C1A8F93D42 /* Check Rust FFI freshness */,
 				22CCB7671953A8A81BA17172 /* Sources */,
 				246E26546C7E7B110EA8CC9E /* Resources */,
 				8D3B13DF7B9EFA73CB0B28E7 /* Frameworks */,
@@ -319,6 +320,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		7A9DFD377E4E42C1A8F93D42 /* Check Rust FFI freshness */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Check Rust FFI freshness";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/bash;
+			shellScript = "\"$SRCROOT/scripts/check-ffi-source-fresh.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		22CCB7671953A8A81BA17172 /* Sources */ = {

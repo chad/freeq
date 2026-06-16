@@ -182,6 +182,14 @@ P2 design work:
 - ☑ Add Swift routing and visible-buffer hydration tests for target fallback, empty-batch rejection, and timestamp ordering.
 - ☑ Run Swift/Rust tests, rebuild macOS, visually verify via per-window screenshot, and commit.
 
+## 2026-06-16 macOS history still empty after source fix
+
+- ☑ Reproduce `#alexandria` empty in the launched macOS app while raw IRC `CHATHISTORY LATEST #alexandria * 10` returns messages.
+- ☑ Confirm Xcode was linking stale `freeq-macos/Libraries/libfreeq_sdk_ffi.a` from before the SDK batch-tag fix.
+- ☑ Rebuild macOS Rust FFI artifacts, rebuild/relaunch app, and verify `#alexandria` renders.
+- ☑ Add a guard that keeps the macOS app build from silently using stale FFI after SDK changes.
+- ☑ Commit the artifact/build guard fix.
+
 ---
 
 ## Method

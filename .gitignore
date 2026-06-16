@@ -80,6 +80,9 @@ vs/
 /freeq-windows-app/.vs
 .env.secrets
 freeq-macos/FreeqSDK.xcframework/macos-arm64/libfreeq_sdk_ffi.a
+freeq-macos/FreeqSDK.xcframework/macos-arm64/ffi-source.sha256
+freeq-macos/Libraries/ffi-source.sha256
+freeq-macos/Generated/ffi-source.sha256
 data/
 node_modules/
 /Freeq.WinUI/.vs
