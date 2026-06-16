@@ -16,4 +16,8 @@ Read the plan at `/tmp/plan.md` (and explore the relevant code to check its clai
 
 ## Output
 
-A focused critique: concrete vulnerabilities or gaps (each with the scenario that exploits it), severity, and the specific plan change you'd require. If the plan is solid on a point, say so briefly. Be specific enough that the synthesizer can act on each item. Do not edit code or the plan.
+Write your critique to **`/tmp/review-security.md`** (the synthesizer reads it
+from there — this is how your review reaches it), and also print it as your
+final message.
+
+A focused critique: concrete vulnerabilities or gaps (each with the scenario that exploits it), severity, and the specific plan change you'd require. If the plan is solid on a point, say so briefly. Be specific enough that the synthesizer can act on each item. Do not edit the plan (`/tmp/plan.md`) or any code.

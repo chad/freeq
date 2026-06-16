@@ -16,4 +16,8 @@ Read `/tmp/plan.md` and check it against the real code. Critique through a **pro
 
 ## Output
 
-A focused critique: each compatibility break or risk, who it affects, and the specific plan change required. Confirm the scope fence holds (no native-client edits planned). Be concrete. Do not edit code or the plan.
+Write your critique to **`/tmp/review-compat.md`** (the synthesizer reads it
+from there — this is how your review reaches it), and also print it as your
+final message.
+
+A focused critique: each compatibility break or risk, who it affects, and the specific plan change required. Confirm the scope fence holds (no native-client edits planned). Be concrete. Do not edit the plan (`/tmp/plan.md`) or any code.
