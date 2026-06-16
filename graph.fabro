@@ -1,0 +1,67 @@
+// feature — long-horizon, multi-agent development of a complex feature.
+//
+// Parameterized entirely by --goal: the feature description rides into every
+// node as {{ goal }}. Invoke like:
+//   fabro run .fabro/workflows/feature/workflow.toml \
+//     --goal "harden and enhance file upload across server + web, on-server storage default"
+//
+// Shape: research → plan → 3-lens parallel plan-review → synthesize →
+//   HUMAN approval gate → implement → CI gate → 2-lens parallel code-review →
+//   address → final gate → PR.
+//
+// Scope is fenced to the Linux-verifiable surface (Rust crates that build in
+// CI + the web app); native clients (iOS/macOS/WinUI) are planned-for but not
+// edited here, because this executor can't compile or verify them. The plan
+// node enumerates that work as explicit follow-ups instead.
+//
+// The plan/critiques are exchanged via files under /tmp in the sandbox (NOT in
+// the repo, so they never land in the PR) plus conversation context.
+digraph Feature {
+    graph [goal="Develop a complex freeq feature end to end — research the surface, write and peer-review a plan, get human approval, implement the Linux-verifiable scope, review the diff, and open a reviewable PR. The specific feature is given at run time via --goal."]
+    rankdir=LR
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    // ── Research + plan ──────────────────────────────────────────────────
+    explore [shape=box, label="Explore surface", prompt="@prompts/explore.md", model="claude-opus-4-8", reasoning_effort="high", thread_id="feat", fidelity="full", timeout="2400s"]
+    plan    [shape=box, label="Draft plan",      prompt="@prompts/plan.md",    model="claude-opus-4-8", reasoning_effort="high", thread_id="feat", fidelity="full", timeout="2400s"]
+
+    // ── Parallel plan review (3 independent lenses) ──────────────────────
+    review_security    [shape=box, label="Review: security",      prompt="@prompts/review-security.md",    model="claude-sonnet-4-6", reasoning_effort="high", fidelity="full", timeout="1800s"]
+    review_compat      [shape=box, label="Review: compatibility", prompt="@prompts/review-compat.md",      model="claude-sonnet-4-6", reasoning_effort="high", fidelity="full", timeout="1800s"]
+    review_ops         [shape=box, label="Review: storage/ops",   prompt="@prompts/review-ops.md",         model="claude-sonnet-4-6", reasoning_effort="high", fidelity="full", timeout="1800s"]
+
+    synthesize [shape=box, label="Revise plan", prompt="@prompts/synthesize.md", model="claude-opus-4-8", reasoning_effort="high", thread_id="feat", fidelity="full", timeout="1800s"]
+
+    // ── Human approval before any code ───────────────────────────────────
+    approve [shape=hexagon, label="Approve plan?", question_type="confirmation", prompt="@prompts/approve.md"]
+
+    // ── Implement + verify ───────────────────────────────────────────────
+    implement [shape=box, label="Implement", prompt="@prompts/implement.md", model="claude-opus-4-8", reasoning_effort="high", thread_id="feat", fidelity="full", timeout="5400s"]
+    verify    [shape=parallelogram, label="CI gate", script="bash .fabro/verify.sh", goal_gate=true, retry_target="implement", max_retries=2, timeout="5400s"]
+
+    // ── Parallel adversarial code review (2 lenses) ──────────────────────
+    cr_correctness [shape=box, label="Code review: correctness", prompt="@prompts/cr-correctness.md", model="claude-opus-4-8", reasoning_effort="high", fidelity="full", timeout="2400s"]
+    cr_security    [shape=box, label="Code review: security",    prompt="@prompts/cr-security.md",    model="claude-sonnet-4-6", reasoning_effort="high", fidelity="full", timeout="2400s"]
+
+    address [shape=box, label="Address review", prompt="@prompts/address.md", model="claude-opus-4-8", reasoning_effort="high", thread_id="feat", fidelity="full", timeout="3600s"]
+    verify2 [shape=parallelogram, label="Final CI gate", script="bash .fabro/verify.sh", goal_gate=true, retry_target="address", max_retries=1, timeout="5400s"]
+
+    pr_body [shape=tab, label="PR description", prompt="@prompts/pr_body.md", thread_id="feat", fidelity="full"]
+
+    // ── Wiring (fan-out / fan-in) ────────────────────────────────────────
+    start -> explore -> plan
+    plan -> review_security
+    plan -> review_compat
+    plan -> review_ops
+    review_security -> synthesize
+    review_compat   -> synthesize
+    review_ops      -> synthesize
+    synthesize -> approve -> implement -> verify
+    verify -> cr_correctness
+    verify -> cr_security
+    cr_correctness -> address
+    cr_security    -> address
+    address -> verify2 -> pr_body -> exit
+}
