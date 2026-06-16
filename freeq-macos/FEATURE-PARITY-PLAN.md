@@ -198,6 +198,13 @@ P2 design work:
 - ☑ Rebuild/relaunch and visually verify `#freeq` behavior.
 - ☑ Commit the focused fix.
 
+## 2026-06-16 launch latest macOS build
+
+- ☑ Rebuild stale macOS Rust FFI artifact after latest HEAD changed SDK sources.
+- ☑ Rebuild the macOS app from current HEAD.
+- ☑ Launch the rebuilt app.
+- ☑ Confirm the FFI rebuild produced no refreshed tracked artifacts.
+
 ---
 
 ## Method
