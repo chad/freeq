@@ -22,12 +22,16 @@ final class CallMicCapture {
     private var deliverCount = 0
 
     /// What the Rust `PushAudioSource` expects: mono 48 kHz float32.
-    private let target = AVAudioFormat(
+    /// Exposed (static) so tests can build a converter against the exact
+    /// target the live path uses.
+    static let targetFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32,
         sampleRate: 48_000,
         channels: 1,
         interleaved: false
     )!
+
+    private let target = CallMicCapture.targetFormat
 
     /// Request microphone permission, then start capture. Idempotent.
     func start() {
@@ -87,12 +91,20 @@ final class CallMicCapture {
         }
     }
 
-    /// Convert one captured buffer to mono 48 kHz and hand it to `onSamples`.
-    private func deliver(_ buffer: AVAudioPCMBuffer) {
-        guard let converter, let onSamples else { return }
+    /// Pure conversion of one captured PCM buffer to the target format
+    /// (mono 48 kHz float32) using the supplied converter. Extracted from
+    /// `deliver` so it's testable without an `AVAudioEngine`/microphone:
+    /// a test builds a converter from any input format to
+    /// [`targetFormat`] and feeds synthetic buffers. Returns the converted
+    /// mono samples, or `nil` on a converter error.
+    static func convert(
+        _ buffer: AVAudioPCMBuffer,
+        using converter: AVAudioConverter,
+        to target: AVAudioFormat
+    ) -> [Float]? {
         let ratio = target.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1024
-        guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
+        guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return nil }
 
         var supplied = false
         var convErr: NSError?
@@ -107,11 +119,19 @@ final class CallMicCapture {
         }
         if status == .error {
             print("[mic] convert error: \(convErr?.localizedDescription ?? "unknown")")
-            return
+            return nil
         }
         let frames = Int(out.frameLength)
-        guard frames > 0, let channel = out.floatChannelData else { return }
-        let samples = Array(UnsafeBufferPointer(start: channel[0], count: frames))
+        guard frames > 0, let channel = out.floatChannelData else { return [] }
+        return Array(UnsafeBufferPointer(start: channel[0], count: frames))
+    }
+
+    /// Convert one captured buffer to mono 48 kHz and hand it to `onSamples`.
+    private func deliver(_ buffer: AVAudioPCMBuffer) {
+        guard let converter, let onSamples else { return }
+        guard let samples = CallMicCapture.convert(buffer, using: converter, to: target),
+              !samples.isEmpty else { return }
+        let frames = samples.count
 
         // Heartbeat: the peak amplitude tells us whether real audio is
         // being captured (peak > 0) or the input route is dead (peak ~ 0).

@@ -398,15 +398,9 @@ extension CallCameraCapture: AVCaptureVideoDataOutputSampleBufferDelegate {
         // is locked at 1280×720 landscape and the only knob that travels
         // out the wire is the pixel content itself, so we rotate the
         // pixels here.
-        let expectedRow = width * 4
-        var packed = [UInt8](repeating: 0, count: width * height * 4)
-        packed.withUnsafeMutableBufferPointer { dst in
-            for y in 0..<height {
-                let src = base.advanced(by: y * rowBytes).assumingMemoryBound(to: UInt8.self)
-                let dstRow = dst.baseAddress!.advanced(by: y * expectedRow)
-                dstRow.update(from: src, count: expectedRow)
-            }
-        }
+        let packed = CallCameraCapture.packTightlyPackedBGRA(
+            base: base, width: width, height: height, rowBytes: rowBytes
+        )
 
         let rotated = CallCameraCapture.rotatedFrame(
             sourceBGRA: packed,
@@ -417,6 +411,28 @@ extension CallCameraCapture: AVCaptureVideoDataOutputSampleBufferDelegate {
         rotated.data.withUnsafeBufferPointer { buf in
             cb(buf.baseAddress!, rotated.data.count, rotated.width, rotated.height, tsMicros)
         }
+    }
+
+    /// Pack a (possibly row-padded) BGRA capture buffer into a tightly-packed
+    /// `width*height*4` byte array, stripping any `rowBytes - width*4` stride
+    /// padding the capture device added. Extracted from `captureOutput` so the
+    /// stride-handling is unit-testable without a live `AVCaptureSession`.
+    static func packTightlyPackedBGRA(
+        base: UnsafeRawPointer,
+        width: Int,
+        height: Int,
+        rowBytes: Int
+    ) -> [UInt8] {
+        let expectedRow = width * 4
+        var packed = [UInt8](repeating: 0, count: width * height * 4)
+        packed.withUnsafeMutableBufferPointer { dst in
+            for y in 0..<height {
+                let src = base.advanced(by: y * rowBytes).assumingMemoryBound(to: UInt8.self)
+                let dstRow = dst.baseAddress!.advanced(by: y * expectedRow)
+                dstRow.update(from: src, count: expectedRow)
+            }
+        }
+        return packed
     }
 
     // MARK: - Software rotation for the broadcast path

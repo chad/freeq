@@ -13,6 +13,7 @@
 		0D90DB6A860ED297CC10A2CF /* CallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1613B43E3F87D0A8567A57BB /* CallView.swift */; };
 		1223DEEA3B6C431275E0AC0C /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D567BC948344D3BCA2F31223 /* SwiftUI.framework */; };
 		1AF9A87111E0AB6A8533B406 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = EA65B8D6263AAF104F9B06CE /* Security.framework */; };
+		1C03827BA2B28F3D2A0FEE28 /* AvMediaFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90CFA49BA9803132D1A9979D /* AvMediaFlowTests.swift */; };
 		1D0A256D49EDDC69B0E09E66 /* SpotlightIndexer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91D4028719D43D3BBF97FA82 /* SpotlightIndexer.swift */; };
 		1F2A16FBB786A03B28150914 /* WatchPayloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13E68B84D80561E2B74C5B48 /* WatchPayloads.swift */; };
 		1F9DFDD8FEA7371236A02E29 /* WatchConnectivity.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0CFEA027394A64C46A1780F5 /* WatchConnectivity.framework */; };
@@ -132,6 +133,7 @@
 		83E16EC2E4202D7B88D8DEDE /* ThreadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadView.swift; sourceTree = "<group>"; };
 		88E010DFF61E21BE28AF989C /* FreeqIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FreeqIntents.swift; sourceTree = "<group>"; };
 		893A3A695627ED14710AD125 /* WatchSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchSession.swift; sourceTree = "<group>"; };
+		90CFA49BA9803132D1A9979D /* AvMediaFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AvMediaFlowTests.swift; sourceTree = "<group>"; };
 		91D4028719D43D3BBF97FA82 /* SpotlightIndexer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpotlightIndexer.swift; sourceTree = "<group>"; };
 		95D94CB373FB8CFD1EAD366F /* UserProfileSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserProfileSheet.swift; sourceTree = "<group>"; };
 		9A3E250AEA65FB526452DDC0 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
@@ -246,6 +248,7 @@
 		226B3BF308D250B9F8004925 /* freeqTests */ = {
 			isa = PBXGroup;
 			children = (
+				90CFA49BA9803132D1A9979D /* AvMediaFlowTests.swift */,
 				B3200A9C4EB97C507BCBA97D /* AvSessionTests.swift */,
 				E69472A0DAAB1972CC0FB351 /* BufferRoutingTests.swift */,
 			);
@@ -471,6 +474,7 @@
 				};
 			};
 			buildConfigurationList = CF425087341A09E5CC8DE165 /* Build configuration list for PBXProject "freeq" */;
+			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -480,7 +484,6 @@
 			mainGroup = 01499C2CDD8D0D2662C1FB6B;
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
-			productRefGroup = F62CC89110A6FF28365B0816 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -508,6 +511,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				1C03827BA2B28F3D2A0FEE28 /* AvMediaFlowTests.swift in Sources */,
 				62B8CBF5B228608CF2E5BCF6 /* AvSessionTests.swift in Sources */,
 				3752BB3B1DC74EFFB3D5FB13 /* BufferRoutingTests.swift in Sources */,
 			);

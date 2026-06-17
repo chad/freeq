@@ -84,19 +84,13 @@ struct RemoteVideoTile: UIViewRepresentable {
 /// We rebuild the format description only when the dimensions change — the
 /// common case is a steady stream of same-sized frames.
 enum VideoSampleBuffer {
-    /// Returns false if the frame couldn't be converted (size mismatch,
-    /// allocation failure). Logs but doesn't throw.
-    @discardableResult
-    static func enqueue(
-        bgra: [UInt8],
-        width: Int,
-        height: Int,
-        on layer: AVSampleBufferDisplayLayer
-    ) -> Bool {
-        guard bgra.count == width * height * 4 else {
-            print("[av] BGRA size mismatch: got \(bgra.count), expected \(width * height * 4)")
-            return false
-        }
+    /// Build a 32BGRA `CVPixelBuffer` from a tightly-packed BGRA byte array.
+    /// Handles row padding (`bytesPerRow > width*4`) by copying row-by-row.
+    /// Returns nil on a size mismatch or allocation failure. Extracted from
+    /// `enqueue` so the inbound-video pixel path is unit-testable: round-trip
+    /// a known frame's bytes without needing a display layer.
+    static func makePixelBuffer(bgra: [UInt8], width: Int, height: Int) -> CVPixelBuffer? {
+        guard width > 0, height > 0, bgra.count == width * height * 4 else { return nil }
 
         var pixelBuffer: CVPixelBuffer?
         let attrs: [CFString: Any] = [
@@ -112,14 +106,14 @@ enum VideoSampleBuffer {
         )
         guard status == kCVReturnSuccess, let pb = pixelBuffer else {
             print("[av] CVPixelBufferCreate failed: \(status)")
-            return false
+            return nil
         }
 
         CVPixelBufferLockBaseAddress(pb, [])
         defer { CVPixelBufferUnlockBaseAddress(pb, []) }
 
         let rowBytes = CVPixelBufferGetBytesPerRow(pb)
-        guard let dst = CVPixelBufferGetBaseAddress(pb) else { return false }
+        guard let dst = CVPixelBufferGetBaseAddress(pb) else { return nil }
         let expectedRow = width * 4
 
         bgra.withUnsafeBufferPointer { src in
@@ -132,6 +126,47 @@ enum VideoSampleBuffer {
                     memcpy(dstRow, srcRow, expectedRow)
                 }
             }
+        }
+        return pb
+    }
+
+    /// Read a 32BGRA `CVPixelBuffer` back into a tightly-packed byte array
+    /// (strips any row padding). Test helper for verifying pixel round-trips.
+    static func readTightlyPacked(_ pb: CVPixelBuffer) -> [UInt8] {
+        CVPixelBufferLockBaseAddress(pb, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
+        let width = CVPixelBufferGetWidth(pb)
+        let height = CVPixelBufferGetHeight(pb)
+        let rowBytes = CVPixelBufferGetBytesPerRow(pb)
+        let expectedRow = width * 4
+        var out = [UInt8](repeating: 0, count: width * height * 4)
+        guard let base = CVPixelBufferGetBaseAddress(pb) else { return out }
+        out.withUnsafeMutableBufferPointer { dst in
+            for y in 0..<height {
+                let srcRow = base.advanced(by: y * rowBytes).assumingMemoryBound(to: UInt8.self)
+                let dstRow = dst.baseAddress!.advanced(by: y * expectedRow)
+                dstRow.update(from: srcRow, count: expectedRow)
+            }
+        }
+        return out
+    }
+
+    /// Returns false if the frame couldn't be converted (size mismatch,
+    /// allocation failure). Logs but doesn't throw.
+    @discardableResult
+    static func enqueue(
+        bgra: [UInt8],
+        width: Int,
+        height: Int,
+        on layer: AVSampleBufferDisplayLayer
+    ) -> Bool {
+        guard bgra.count == width * height * 4 else {
+            print("[av] BGRA size mismatch: got \(bgra.count), expected \(width * height * 4)")
+            return false
+        }
+
+        guard let pb = makePixelBuffer(bgra: bgra, width: width, height: height) else {
+            return false
         }
 
         var formatDesc: CMVideoFormatDescription?
