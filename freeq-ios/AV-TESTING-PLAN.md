@@ -37,8 +37,19 @@ and video actually flow end-to-end. No human interaction. Work until done.
       wiring; camera stride-pack; inbound pixel round-trip (incl. padded
       stride); enqueue valid/mismatch; camera→push wiring; out→in byte-integrity
       loopback; videoFrame event → render state.
-- [ ] Run green (in progress)
-- [ ] Commit (do not push — main push blocked by 142MB artifact in chad's commit)
+- [x] Run green — 96 tests pass on iPhone 17 sim, incl. all 15 AvMediaFlow.
+      (Found + fixed a real subtlety: non-integer-ratio resampling 44.1k→48k
+      has converter priming latency; one-shot under-produces, so the test
+      streams many buffers through one persistent converter — exactly what the
+      production capture path does.)
+- [x] Committed on branch `ios-av-testing` (1dfa50a). NOT pushed — main push is
+      blocked by a 142MB artifact in an unpushed local commit (chad's, separate).
+
+## Result
+Deep automated AV-flow coverage now exists and passes. Along the way the test
+target itself was unblocked (stale FFI xcframework rebuilt; bindings/lib now
+match; 4 stale IrcMessage call sites fixed). Real on-device network media flow
+remains device-only by the project's own simulator-stub design.
 
 ## Note on scope
 The simulator `FreeqAv` is an AV stub (openh264 can't target the sim), so real
