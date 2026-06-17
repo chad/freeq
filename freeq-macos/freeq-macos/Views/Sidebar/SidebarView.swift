@@ -60,6 +60,9 @@ struct SidebarView: View {
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
         .background(Theme.sidebarBackground)
+        .transaction { transaction in
+            transaction.animation = nil
+        }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
                 Divider().overlay(Theme.borderSoft)

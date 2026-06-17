@@ -14,6 +14,7 @@ class ChannelState: Identifiable {
     var lastActivity: Date = Date()
     var isEncrypted: Bool = false
     var accessDeniedReason: String?
+    var isHydratingHistory: Bool = false
 
     var id: String { name }
     var isChannel: Bool { name.hasPrefix("#") }
@@ -26,13 +27,14 @@ class ChannelState: Identifiable {
     }
 
     private var messageIds: Set<String> = []
+    private var messageIndexById: [String: Int] = [:]
 
     init(name: String) {
         self.name = name
     }
 
     func findMessage(byId id: String) -> Int? {
-        messages.firstIndex(where: { $0.id == id })
+        messageIndexById[id]
     }
 
     func memberInfo(for nick: String) -> MemberInfo? {
@@ -47,12 +49,38 @@ class ChannelState: Identifiable {
         if let last = messages.last, msg.timestamp < last.timestamp {
             let idx = messages.firstIndex(where: { $0.timestamp > msg.timestamp }) ?? messages.endIndex
             messages.insert(msg, at: idx)
+            rebuildMessageIndex()
         } else {
             messages.append(msg)
+            messageIndexById[msg.id] = messages.count - 1
         }
         if msg.timestamp > lastActivity {
             lastActivity = msg.timestamp
         }
+    }
+
+    /// Replace an optimistic local echo with the authoritative server echo.
+    /// Keeps sending instant while avoiding duplicate self messages when the
+    /// server returns the real msgid/signature/timestamp.
+    @discardableResult
+    func replacePendingEcho(with msg: ChatMessage, maxAge: TimeInterval = 120) -> Bool {
+        guard let idx = messages.firstIndex(where: { pending in
+            pending.id.hasPrefix("pending-")
+                && pending.from.lowercased() == msg.from.lowercased()
+                && pending.text == msg.text
+                && abs(pending.timestamp.timeIntervalSince(msg.timestamp)) <= maxAge
+        }) else { return false }
+
+        let pendingId = messages[idx].id
+        messageIds.remove(pendingId)
+        messageIndexById.removeValue(forKey: pendingId)
+        messageIds.insert(msg.id)
+        messages[idx] = msg
+        messageIndexById[msg.id] = idx
+        if msg.timestamp > lastActivity {
+            lastActivity = msg.timestamp
+        }
+        return true
     }
 
     func applyEdit(originalId: String, newId: String?, newText: String) {
@@ -60,8 +88,10 @@ class ChannelState: Identifiable {
             messages[idx].text = newText
             messages[idx].isEdited = true
             if let newId {
+                messageIndexById.removeValue(forKey: messages[idx].id)
                 messages[idx].id = newId
                 messageIds.insert(newId)
+                messageIndexById[newId] = idx
             }
         }
     }
@@ -113,5 +143,11 @@ class ChannelState: Identifiable {
     func hasReaction(msgId: String, emoji: String, from: String) -> Bool {
         guard let idx = findMessage(byId: msgId) else { return false }
         return messages[idx].reactions[emoji]?.contains(from) ?? false
+    }
+
+    private func rebuildMessageIndex() {
+        messageIndexById = Dictionary(
+            uniqueKeysWithValues: messages.enumerated().map { ($0.element.id, $0.offset) }
+        )
     }
 }

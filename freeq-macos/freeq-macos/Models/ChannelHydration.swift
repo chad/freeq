@@ -287,3 +287,74 @@ enum WhoisDisplayPolicy {
         explicitlyRequested
     }
 }
+
+enum QuickSwitchItemKind: Equatable {
+    case existing
+    case joinChannel
+}
+
+struct QuickSwitchItem: Identifiable, Equatable {
+    let name: String
+    let isChannel: Bool
+    let kind: QuickSwitchItemKind
+
+    var id: String {
+        switch kind {
+        case .existing:
+            return "existing:\(name.lowercased())"
+        case .joinChannel:
+            return "join:\(name.lowercased())"
+        }
+    }
+}
+
+enum QuickSwitchPlanner {
+    static func items(query: String, buffers: [ChannelState]) -> [QuickSwitchItem] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let existingItems = matchingExistingItems(query: trimmed, buffers: buffers)
+        guard !trimmed.isEmpty,
+              let joinName = joinCandidate(query: trimmed, existingNames: buffers.map(\.name)) else {
+            return existingItems
+        }
+
+        return [QuickSwitchItem(name: joinName, isChannel: true, kind: .joinChannel)] + existingItems
+    }
+
+    static func joinCandidate(query: String, existingNames: [String]) -> String? {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              !trimmed.contains(where: { $0.isWhitespace }) else { return nil }
+
+        let channel: String
+        if trimmed.hasPrefix("#") || trimmed.hasPrefix("&") {
+            channel = trimmed
+        } else {
+            channel = "#\(trimmed)"
+        }
+
+        guard channel.count > 1,
+              !channel.dropFirst().contains("#"),
+              !channel.dropFirst().contains("&") else { return nil }
+
+        let lower = channel.lowercased()
+        guard !existingNames.contains(where: { $0.lowercased() == lower }) else {
+            return nil
+        }
+        return channel
+    }
+
+    private static func matchingExistingItems(query: String, buffers: [ChannelState]) -> [QuickSwitchItem] {
+        let normalized = query.lowercased()
+        let matches = normalized.isEmpty
+            ? buffers
+            : buffers.filter { buffer in
+                let name = buffer.name.lowercased()
+                return name.contains(normalized)
+                    || name.trimmingCharacters(in: CharacterSet(charactersIn: "#&")).contains(normalized)
+            }
+
+        return matches.map {
+            QuickSwitchItem(name: $0.name, isChannel: $0.isChannel, kind: .existing)
+        }
+    }
+}

@@ -8,11 +8,8 @@ struct QuickSwitcher: View {
     @FocusState private var isFocused: Bool
     @State private var selectedIndex: Int = 0
 
-    private var results: [ChannelState] {
-        let all = appState.allBuffers
-        if query.isEmpty { return all }
-        let q = query.lowercased()
-        return all.filter { $0.name.lowercased().contains(q) }
+    private var results: [QuickSwitchItem] {
+        QuickSwitchPlanner.items(query: query, buffers: appState.allBuffers)
     }
 
     var body: some View {
@@ -36,7 +33,11 @@ struct QuickSwitcher: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(results.enumerated()), id: \.element.id) { index, item in
                         HStack(spacing: 10) {
-                            if item.isChannel {
+                            if item.kind == .joinChannel {
+                                Image(systemName: "plus.circle.fill")
+                                    .foregroundStyle(Theme.accent)
+                                    .frame(width: 20)
+                            } else if item.isChannel {
                                 Image(systemName: "number")
                                     .foregroundStyle(.secondary)
                                     .frame(width: 20)
@@ -46,10 +47,18 @@ struct QuickSwitcher: View {
                                     .frame(width: 10, height: 10)
                                     .frame(width: 20)
                             }
-                            Text(item.name)
-                                .lineLimit(1)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(item.name)
+                                    .lineLimit(1)
+                                if item.kind == .joinChannel {
+                                    Text("Join channel")
+                                        .font(.caption2)
+                                        .foregroundStyle(Theme.textTertiary)
+                                }
+                            }
                             Spacer()
-                            if let unread = appState.unreadCounts[item.name.lowercased()], unread > 0 {
+                            if item.kind == .existing,
+                               let unread = appState.unreadCounts[item.name.lowercased()], unread > 0 {
                                 Text("\(unread)")
                                     .font(.caption2.weight(.bold))
                                     .foregroundStyle(.white)
@@ -63,7 +72,7 @@ struct QuickSwitcher: View {
                         .background(index == selectedIndex ? Color.accentColor.opacity(0.15) : .clear)
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            appState.activeChannel = item.name
+                            activate(item)
                             dismiss()
                         }
                     }
@@ -77,10 +86,18 @@ struct QuickSwitcher: View {
         .shadow(radius: 20)
         .onAppear { isFocused = true }
         .onKeyPress(.upArrow) {
+            guard !results.isEmpty else {
+                selectedIndex = 0
+                return .handled
+            }
             selectedIndex = max(0, selectedIndex - 1)
             return .handled
         }
         .onKeyPress(.downArrow) {
+            guard !results.isEmpty else {
+                selectedIndex = 0
+                return .handled
+            }
             selectedIndex = min(results.count - 1, selectedIndex + 1)
             return .handled
         }
@@ -95,7 +112,18 @@ struct QuickSwitcher: View {
 
     private func select() {
         guard selectedIndex < results.count else { return }
-        appState.activeChannel = results[selectedIndex].name
+        activate(results[selectedIndex])
         dismiss()
+    }
+
+    private func activate(_ item: QuickSwitchItem) {
+        switch item.kind {
+        case .existing:
+            appState.activeChannel = item.name
+        case .joinChannel:
+            appState.getOrCreateChannel(item.name)
+            appState.joinChannel(item.name)
+            appState.activeChannel = item.name
+        }
     }
 }

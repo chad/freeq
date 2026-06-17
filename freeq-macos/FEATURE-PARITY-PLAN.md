@@ -205,6 +205,16 @@ P2 design work:
 - ☑ Launch the rebuilt app.
 - ☑ Confirm the FFI rebuild produced no refreshed tracked artifacts.
 
+## 2026-06-17 macOS interaction latency pass
+
+- ☑ Fix top-level banners so guest/reconnect state participates in layout instead of overlaying channel text.
+- ☑ Let ⌘K offer to join a typed channel that is not already open.
+- ☑ Remove visible channel-switch/message-insert catch-up animations.
+- ☑ Add lightweight hydration/pending-message state so empty views and self messages feel immediate.
+- ☑ Add focused SwiftPM tests for Quick Switch routing, channel indexing, and pending echo reconciliation.
+- ☑ Rebuild and launch the interaction-latency pass.
+- ☑ Commit the interaction-latency pass.
+
 ---
 
 ## Method

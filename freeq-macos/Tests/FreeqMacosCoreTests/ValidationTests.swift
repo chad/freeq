@@ -135,6 +135,80 @@ final class ValidationTests: XCTestCase {
         )
     }
 
+    func testChannelMessageIndexSurvivesOutOfOrderInsert() {
+        let channel = ChannelState(name: "#indexed")
+        channel.appendIfNew(ChatMessage(
+            id: "newer",
+            from: "alice",
+            text: "newer",
+            isAction: false,
+            timestamp: Date(timeIntervalSince1970: 1_700_000_010),
+            replyTo: nil
+        ))
+        channel.appendIfNew(ChatMessage(
+            id: "older",
+            from: "bob",
+            text: "older",
+            isAction: false,
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            replyTo: nil
+        ))
+
+        XCTAssertEqual(channel.messages.map(\.id), ["older", "newer"])
+        XCTAssertEqual(channel.findMessage(byId: "older"), 0)
+        XCTAssertEqual(channel.findMessage(byId: "newer"), 1)
+    }
+
+    func testChannelPendingEchoIsReplacedByServerEcho() {
+        let channel = ChannelState(name: "#pending")
+        let sentAt = Date(timeIntervalSince1970: 1_700_000_000)
+        channel.appendIfNew(ChatMessage(
+            id: "pending-local",
+            from: "me",
+            text: "instant",
+            isAction: false,
+            timestamp: sentAt,
+            replyTo: nil
+        ))
+
+        let server = ChatMessage(
+            id: "real-msgid",
+            from: "me",
+            text: "instant",
+            isAction: false,
+            timestamp: sentAt.addingTimeInterval(1),
+            replyTo: nil,
+            isSigned: true
+        )
+
+        XCTAssertTrue(channel.replacePendingEcho(with: server))
+        XCTAssertEqual(channel.messages.map(\.id), ["real-msgid"])
+        XCTAssertEqual(channel.findMessage(byId: "real-msgid"), 0)
+        XCTAssertNil(channel.findMessage(byId: "pending-local"))
+        XCTAssertTrue(channel.messages[0].isSigned)
+    }
+
+    func testQuickSwitchPlannerOffersJoinForTypedChannel() {
+        let items = QuickSwitchPlanner.items(
+            query: "freeq",
+            buffers: [ChannelState(name: "#alexandria")]
+        )
+
+        XCTAssertEqual(items.first, QuickSwitchItem(name: "#freeq", isChannel: true, kind: .joinChannel))
+    }
+
+    func testQuickSwitchPlannerDoesNotOfferJoinForExistingChannel() {
+        let channel = ChannelState(name: "#freeq")
+        let items = QuickSwitchPlanner.items(query: "freeq", buffers: [channel])
+
+        XCTAssertEqual(items, [QuickSwitchItem(name: "#freeq", isChannel: true, kind: .existing)])
+    }
+
+    func testQuickSwitchPlannerRejectsInvalidJoinText() {
+        XCTAssertNil(QuickSwitchPlanner.joinCandidate(query: "two words", existingNames: []))
+        XCTAssertNil(QuickSwitchPlanner.joinCandidate(query: "#", existingNames: []))
+    }
+
     func testHistoryBatchRoutingBuffersTargetedHistoryBatches() {
         XCTAssertTrue(HistoryBatchRouting.shouldBuffer(batchType: "chathistory", target: "#freeq"))
         XCTAssertTrue(HistoryBatchRouting.shouldBuffer(batchType: "freeq.at/search", target: "#freeq"))

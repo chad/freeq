@@ -29,6 +29,7 @@ struct JoinChannelSheet: View {
     private func join() {
         var name = channelName.trimmingCharacters(in: .whitespaces)
         if !name.hasPrefix("#") { name = "#" + name }
+        appState.getOrCreateChannel(name)
         appState.joinChannel(name)
         appState.activeChannel = name
         dismiss()

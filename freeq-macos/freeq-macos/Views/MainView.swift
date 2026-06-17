@@ -13,7 +13,8 @@ struct MainView: View {
             } else if appState.connectionState == .connecting {
                 connectingView
             } else {
-                ZStack(alignment: .top) {
+                VStack(spacing: 0) {
+                    connectionBanner
                     NavigationSplitView {
                         SidebarView()
                             .navigationSplitViewColumnWidth(min: 180, ideal: 220, max: 300)
@@ -41,16 +42,6 @@ struct MainView: View {
                             connectionIndicator
                         }
                     }
-
-                    // Reconnect banner
-                    if appState.connectionState == .disconnected && appState.hasSavedSession {
-                        ReconnectBanner()
-                    }
-
-                    // Guest upgrade banner
-                    if appState.connectionState == .registered && appState.authenticatedDID == nil {
-                        GuestUpgradeBanner()
-                    }
                 }
                 .background(Theme.appBackground)
             }
@@ -73,6 +64,17 @@ struct MainView: View {
             Button("OK") { appState.errorMessage = nil }
         } message: {
             Text(appState.errorMessage ?? "")
+        }
+    }
+
+    @ViewBuilder
+    private var connectionBanner: some View {
+        if appState.connectionState == .disconnected && appState.hasSavedSession {
+            ReconnectBanner()
+            Divider().overlay(Theme.borderSoft)
+        } else if appState.connectionState == .registered && appState.authenticatedDID == nil {
+            GuestUpgradeBanner()
+            Divider().overlay(Theme.borderSoft)
         }
     }
 
@@ -233,11 +235,12 @@ struct GuestUpgradeBanner: View {
         HStack(spacing: 8) {
             Image(systemName: "person.badge.key")
                 .font(.caption)
-            Text("You're connected as a guest.")
+            Text("Guest mode")
                 .font(.caption.weight(.medium))
-            Text("Sign in with AT Protocol for DMs, history, and identity.")
+            Text("Sign in for DMs, history, and identity.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
             Spacer()
             Button("Sign In") {
                 appState.disconnect()

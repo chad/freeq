@@ -40,6 +40,7 @@ struct ChatView: View {
             }
 
             MessageListView(channel: appState.activeChannelState)
+                .id(appState.activeChannel ?? "__no-channel")
             Divider().overlay(Theme.borderSoft)
 
             // Typing indicator bar
@@ -59,6 +60,9 @@ struct ChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.chatBackground)
+        .transaction { transaction in
+            transaction.animation = nil
+        }
     }
 
     private func typingText(_ typers: [String]) -> String {

@@ -18,7 +18,8 @@ struct MessageListView: View {
     }
 
     private var shouldShowWelcome: Bool {
-        MessageVisibility.shouldShowWelcome(messages: messages)
+        guard channel?.isHydratingHistory != true else { return false }
+        return MessageVisibility.shouldShowWelcome(messages: messages)
     }
 
     /// Stable sentinel ID for the bottom anchor — scrolling to a fixed
@@ -92,21 +93,12 @@ struct MessageListView: View {
                         proxy.scrollTo(bottomAnchorID, anchor: .bottom)
                         lastRenderedChannel = appState.activeChannel
                     } else if newCount > oldCount {
-                        withAnimation(.easeOut(duration: 0.15)) {
-                            proxy.scrollTo(bottomAnchorID, anchor: .bottom)
-                        }
+                        proxy.scrollTo(bottomAnchorID, anchor: .bottom)
                     }
                 }
                 .onChange(of: appState.activeChannel) { _, _ in
-                    // Channel switch — snap to bottom on the next runloop
-                    // tick so the LazyVStack has populated its rows. Without
-                    // the deferral, scrollTo runs against an empty stack
-                    // and the view appears at the top, then the count-onChange
-                    // visibly catches up by animating down.
-                    DispatchQueue.main.async {
-                        proxy.scrollTo(bottomAnchorID, anchor: .bottom)
-                        lastRenderedChannel = appState.activeChannel
-                    }
+                    proxy.scrollTo(bottomAnchorID, anchor: .bottom)
+                    lastRenderedChannel = appState.activeChannel
                 }
                 .onAppear {
                     // First mount — snap immediately, no animation.
@@ -131,6 +123,9 @@ struct MessageListView: View {
             }
         }
         .background(Theme.chatBackground)
+        .transaction { transaction in
+            transaction.animation = nil
+        }
     }
 
     private func loadOlderHistory() {
@@ -676,18 +671,13 @@ struct FlowLayout: Layout {
 // MARK: - Full timestamp for hover
 
 private func fullTimestamp(_ date: Date) -> String {
-    let formatter = DateFormatter()
-    formatter.locale = .current
-    formatter.dateStyle = .full
-    formatter.timeStyle = .medium
-    return formatter.string(from: date)
+    ChatDateFormatters.fullTimestamp.string(from: date)
 }
 
 // MARK: - URL extraction
 
 private func extractFirstURL(from text: String) -> String? {
-    let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
-    if let match = detector?.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+    if let match = Validation.linkMatches(in: text).first,
        let range = Range(match.range, in: text) {
         return String(text[range])
     }
@@ -697,15 +687,36 @@ private func extractFirstURL(from text: String) -> String? {
 // MARK: - Time formatting (shared)
 
 func formatTime(_ date: Date) -> String {
-    let formatter = DateFormatter()
-    formatter.locale = .current
     let calendar = Calendar.current
     if calendar.isDateInToday(date) {
+        return ChatDateFormatters.timeOnly.string(from: date)
+    } else {
+        return ChatDateFormatters.mediumDateTime.string(from: date)
+    }
+}
+
+private enum ChatDateFormatters {
+    static let timeOnly: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = .current
         formatter.dateStyle = .none
         formatter.timeStyle = .short
-    } else {
+        return formatter
+    }()
+
+    static let mediumDateTime: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = .current
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
-    }
-    return formatter.string(from: date)
+        return formatter
+    }()
+
+    static let fullTimestamp: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.dateStyle = .full
+        formatter.timeStyle = .medium
+        return formatter
+    }()
 }

@@ -385,8 +385,13 @@ class AppState {
         }
 
         // Server-relayed
+        guard let client else {
+            errorMessage = "Send failed: not connected"
+            return
+        }
         do {
-            try client?.sendMessage(target: target, text: text)
+            try client.sendMessage(target: target, text: text)
+            appendOptimisticSelfMessage(to: target, text: text)
         } catch {
             errorMessage = "Send failed: \(error.localizedDescription)"
         }
@@ -471,8 +476,33 @@ class AppState {
             let iso = ISO8601DateFormatter().string(from: before)
             sendRaw("CHATHISTORY BEFORE \(channel) timestamp=\(iso) 50")
         } else {
+            buffer(named: channel)?.isHydratingHistory = true
             sendRaw("CHATHISTORY LATEST \(channel) * 50")
         }
+    }
+
+    private func appendOptimisticSelfMessage(to target: String, text: String) {
+        guard !nick.isEmpty else { return }
+        let message = ChatMessage(
+            id: "pending-\(UUID().uuidString)",
+            from: nick,
+            text: text,
+            isAction: false,
+            timestamp: Date(),
+            replyTo: nil
+        )
+
+        if target.hasPrefix("#") {
+            getOrCreateChannel(target).appendIfNew(message)
+        } else {
+            getOrCreateDM(target).appendIfNew(message)
+        }
+    }
+
+    private func buffer(named name: String) -> ChannelState? {
+        let lower = name.lowercased()
+        return channels.first { $0.name.lowercased() == lower }
+            ?? dmBuffers.first { $0.name.lowercased() == lower }
     }
 
     /// Populate a channel's pinned-messages bar from the server's REST pins
@@ -588,11 +618,13 @@ class AppState {
             return ch
         }
         let ch = ChannelState(name: name)
+        ch.isHydratingHistory = true
         // Pre-populate from local DB
         Task {
             let cached = await MessageStore.shared.loadMessages(channel: name, limit: 100)
             await MainActor.run {
                 for msg in cached { ch.appendIfNew(msg) }
+                ch.isHydratingHistory = false
             }
         }
         channels.append(ch)
@@ -606,11 +638,13 @@ class AppState {
             return dm
         }
         let dm = ChannelState(name: nick)
+        dm.isHydratingHistory = true
         // Pre-populate from local DB
         Task {
             let cached = await MessageStore.shared.loadMessages(channel: nick, limit: 100)
             await MainActor.run {
                 for msg in cached { dm.appendIfNew(msg) }
+                dm.isHydratingHistory = false
             }
         }
         dmBuffers.append(dm)
@@ -954,7 +988,9 @@ extension AppState {
 
             if target.hasPrefix("#") {
                 let ch = getOrCreateChannel(target)
-                ch.appendIfNew(message)
+                if !(isSelf && ch.replacePendingEcho(with: message)) {
+                    ch.appendIfNew(message)
+                }
                 ch.typingUsers.removeValue(forKey: msg.fromNick)
                 incrementUnread(target)
 
@@ -970,7 +1006,9 @@ extension AppState {
                 let bufName = isSelf ? target : msg.fromNick
                 closedDMs.remove(bufName.lowercased())
                 let dm = getOrCreateDM(bufName)
-                dm.appendIfNew(message)
+                if !(isSelf && dm.replacePendingEcho(with: message)) {
+                    dm.appendIfNew(message)
+                }
                 incrementUnread(bufName)
 
                 // DM notification
@@ -1120,6 +1158,9 @@ extension AppState {
         case .batchEnd(let id):
             guard let batch = batches.removeValue(forKey: id) else { return }
             HistoryBatchRouting.apply(buffer: batch, channels: &channels, dmBuffers: &dmBuffers)
+            if let hydrated = buffer(named: batch.target) {
+                hydrated.isHydratingHistory = false
+            }
 
         case .chatHistoryTarget(let targetNick, let timestamp):
             if closedDMs.contains(targetNick.lowercased()) { return }
@@ -1192,6 +1233,7 @@ extension AppState {
                 return
             case .channelAccessDenied(let channel, let reason):
                 let ch = getOrCreateChannel(channel)
+                ch.isHydratingHistory = false
                 ch.accessDeniedReason = reason
                 ch.appendIfNew(ServerNoticeRouter.channelAccessMessage(channel: channel, reason: reason))
                 if activeChannel == nil
