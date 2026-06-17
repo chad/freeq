@@ -139,6 +139,11 @@ impl Default for IrohLiveBackend {
     }
 }
 
+// Stub backend used only when `av-native` is OFF. Without this gate it also
+// compiles under `av-native`, colliding with the async `new(endpoint)` above
+// (duplicate `new`) and failing to set the av-native-only
+// `live`/`pending_events` fields — which broke the production build.
+#[cfg(not(feature = "av-native"))]
 impl IrohLiveBackend {
     pub fn new() -> Self {
         Self {
