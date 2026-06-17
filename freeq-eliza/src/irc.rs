@@ -3137,6 +3137,13 @@ pub(crate) fn lookup_tap_video(taps: &CallVideoTaps, asker: &str) -> Option<Vide
     let want_base = base(&want);
     m.iter()
         .find_map(|(k, vh)| (base(k) == want_base).then(|| vh.clone()))
+        // Fall back to a live screen-share. A screen broadcast
+        // (`{session}/{nick}~{inst}/screen`) is tapped under the nick "screen";
+        // when the asker's camera isn't publishing (the flaky web camera path)
+        // but they're sharing their screen, "what do you see?" should still see
+        // it. Screen-share is a separate, already-shipped publish path that
+        // needs no client redeploy.
+        .or_else(|| m.get("screen").cloned())
 }
 
 /// True when `text` opens by addressing some OTHER named participant or
