@@ -3995,6 +3995,25 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc;
 
+    // ---------- offload-to-Claude-Code trigger ----------
+
+    #[test]
+    fn delegate_task_triggers_on_explicit_claude() {
+        assert!(delegate_task("ask Claude Code to add a ping behavior").is_some());
+        assert!(delegate_task("have claude edit your own code").is_some());
+        assert!(delegate_task("Claude, run the tests").is_some());
+        assert!(delegate_task("offload this to your engineering brain").is_some());
+    }
+
+    #[test]
+    fn delegate_task_ignores_normal_conversation() {
+        assert!(delegate_task("what's the weather in New York?").is_none());
+        assert!(delegate_task("tell me a joke").is_none());
+        assert!(delegate_task("can you see me?").is_none());
+        // Casual non-imperative mention shouldn't hijack the conversation.
+        assert!(delegate_task("how are you doing today").is_none());
+    }
+
     // ---------- own-TTS echo guard ----------
 
     fn echo_log(sentences: &[&str]) -> RecentTts {
