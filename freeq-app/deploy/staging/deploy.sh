@@ -2,21 +2,23 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# This script lives at freeq-app/deploy/staging, so the repo root is THREE up.
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 TMPDIR=$(mktemp -d)
 
 echo "Preparing staging deploy in $TMPDIR..."
 
 cp "$REPO_ROOT/Cargo.toml" "$REPO_ROOT/Cargo.lock" "$TMPDIR/"
 
-# Copy workspace members that freeq-server depends on
-cp -r "$REPO_ROOT/freeq-sdk" "$TMPDIR/"
-cp -r "$REPO_ROOT/freeq-server" "$TMPDIR/"
-[ -d "$REPO_ROOT/freeq-av-client" ] && cp -r "$REPO_ROOT/freeq-av-client" "$TMPDIR/"
-
-# Copy remaining workspace members (stubs for Cargo workspace resolution)
-for dir in freeq-tui freeq-auth-broker freeq-bots freeq-bot-id freeq-sdk-ffi freeq-windows-core; do
-    [ -d "$REPO_ROOT/$dir" ] && cp -r "$REPO_ROOT/$dir" "$TMPDIR/"
+# Copy ALL workspace members — derived from Cargo.toml so it can never go
+# stale. cargo-chef needs EVERY member on disk to extract the package graph;
+# a hardcoded list (missing freeq-av, freeq-agent-kit, freeq-eliza, …) breaks
+# the build with "Cannot extract package graph". Nested members (e.g.
+# freeq-agent-kit/examples/*) are covered by copying the top-level dir.
+for dir in $(sed -n '/^members = \[/,/^\]/p' "$REPO_ROOT/Cargo.toml" | grep -o '"[^"]*"' | tr -d '"' | cut -d/ -f1 | sort -u); do
+    if [ -d "$REPO_ROOT/$dir" ] && [ ! -d "$TMPDIR/$dir" ]; then
+        cp -r "$REPO_ROOT/$dir" "$TMPDIR/"
+    fi
 done
 
 cp -r "$REPO_ROOT/freeq-app" "$TMPDIR/web-client"
