@@ -40,6 +40,13 @@ pub enum Outbound {
     Ready { channel: String },
     #[serde(rename = "utterance")]
     Utterance { nick: String, text: String },
+    /// Offload an agentic request to yokota's Claude Code brain. Unlike
+    /// `Utterance` (only in external-brain mode), this is sent from NATIVE mode
+    /// when the asker explicitly invokes "claude": eliza keeps answering normal
+    /// conversation itself, but hands deep/agentic tasks to the deep brain,
+    /// whose result comes back as a `say`.
+    #[serde(rename = "delegate")]
+    Delegate { nick: String, text: String },
     #[serde(rename = "left")]
     Left,
     #[serde(rename = "ended")]

@@ -620,7 +620,11 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
     // addressed utterances, and given the live-call slot so an inbound
     // "say" speaks against whatever call is active. No-op unless both
     // `--external-brain` and `--brain-sock` are set.
-    if external_brain {
+    // Connect whenever a brain socket is given: external-brain forwards every
+    // utterance; NATIVE mode keeps answering itself but uses the seam to offload
+    // explicit "claude" requests to yokota's Claude Code brain (and to receive
+    // its say/show/state). No-op when --brain-sock is unset.
+    if brain_sock.is_some() {
         if let Some(sock) = brain_sock.clone() {
             let seam = crate::brain_seam::connect(cfg.clone(), sock, active.clone());
             let _ = cfg.brain_seam.set(seam);
@@ -1559,6 +1563,23 @@ pub(crate) async fn speak_text(
         }
     }
     Ok(())
+}
+
+/// Detect an explicit "offload to Claude Code" request in a voice utterance and
+/// return the task to hand off. Triggers ONLY on an explicit "claude" mention,
+/// so normal fluid conversation is never accidentally delegated.
+fn delegate_task(question: &str) -> Option<String> {
+    let lc = question.to_ascii_lowercase();
+    let triggered = lc.contains("claude code")
+        || lc.contains("ask claude")
+        || lc.contains("tell claude")
+        || lc.contains("have claude")
+        || lc.contains("get claude")
+        || lc.contains("claude to ")
+        || lc.contains("offload")
+        || lc.starts_with("claude ")
+        || lc.starts_with("claude,");
+    triggered.then(|| question.trim().to_string())
 }
 
 async fn answer_and_speak(
@@ -3624,6 +3645,22 @@ async fn transcribe_participant(
                                 tracing::debug!(%nick, "external-brain: no seam handle; dropping utterance");
                             }
                             return;
+                        }
+                        // Offload to the Claude Code brain (NATIVE mode): when the
+                        // asker explicitly invokes "claude", hand the request to
+                        // yokota over the seam instead of answering conversationally.
+                        // yokota runs `claude -p` (file access + tools) and the
+                        // result is spoken back as a `say`, so the call stays fluid.
+                        if let Some(task) = delegate_task(&question) {
+                            if let Some(seam) = cfg.brain_seam.get() {
+                                seam.send(crate::brain_seam::Outbound::Delegate {
+                                    nick: nick.clone(),
+                                    text: task,
+                                });
+                                tracing::info!(%nick, %question, "offload: forwarded to Claude Code brain");
+                                return;
+                            }
+                            tracing::debug!("offload requested but no seam — answering normally");
                         }
                         // Multi-agent chatter guard: see is_address_allowed.
                         if !is_address_allowed(&cfg, &nick) {
