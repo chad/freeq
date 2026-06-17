@@ -84,6 +84,12 @@ export function CallPanel() {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const localScreenRef = useRef<HTMLVideoElement>(null);
   const publishElRef = useRef<HTMLElement | null>(null);
+  // What the LIVE camera publisher was built with (video on/off). Toggling the
+  // `invisible` attribute on a live broadcast updates local capture but does
+  // NOT re-announce the MoQ catalog with the video track, so peers/bots keep
+  // seeing has_video=false. We recreate the publisher when this diverges from
+  // avCameraOn so the catalog is re-announced with/without video for real.
+  const publishedWithVideoRef = useRef<boolean | null>(null);
   // Second publisher dedicated to the screen-share broadcast
   // (`{name}/screen`), so the camera+mic publish element above is never
   // disturbed when sharing starts/stops.
@@ -163,6 +169,60 @@ export function CallPanel() {
     return () => navigator.mediaDevices.removeEventListener('devicechange', onChange);
   }, [avAudioActive, refreshDevices]);
 
+  // Create + configure the camera/mic publish element. `withVideo` decides
+  // whether the broadcast is announced WITH a video track: when true, video is
+  // present from element creation (a fresh catalog announce that bots/peers
+  // actually see) rather than bolted on later via the `invisible` attribute,
+  // which doesn't re-announce the catalog. Audio is always published.
+  const buildPublishEl = useCallback((withVideo: boolean): MoqPublishEl | null => {
+    const container = publishContainerRef.current;
+    if (!container || !sessionId || !myNick) return null;
+    const pub = document.createElement('moq-publish') as MoqPublishEl;
+    container.appendChild(pub);
+    publishElRef.current = pub;
+    // Per-call instance suffix so this device's path is unique even if the
+    // same DID publishes from another tab/device.
+    const myInstance = getAvInstanceId();
+    const broadcastName = myInstance
+      ? `${sessionId}/${myNick}~${myInstance}`
+      : `${sessionId}/${myNick}`;
+    pub.setAttribute('url', moqOrigin);
+    pub.setAttribute('name', broadcastName);
+    // `invisible` BEFORE `source`: moq-publish reacts to `source` by opening a
+    // single getUserMedia. With `invisible` set first it grabs audio only, so a
+    // busy/denied camera can't fail the whole (audio) call. When withVideo, we
+    // leave `invisible` off so the camera is captured AND published from the
+    // start — the catalog ships with the video track.
+    if (!withVideo) pub.setAttribute('invisible', '');
+    // Re-apply mute (attribute + property — moq-publish has observed each at
+    // different versions) so a recreate doesn't unmute.
+    if (useStore.getState().avMuted) {
+      pub.setAttribute('muted', '');
+      (pub as HTMLElement & { muted?: boolean }).muted = true;
+    }
+    pub.setAttribute('source', 'camera');
+    publishedWithVideoRef.current = withVideo;
+    setPubEl(pub);
+    console.log('[call] Publishing:', broadcastName, withVideo ? '(video)' : '(audio-only)');
+    return pub;
+  }, [sessionId, myNick, moqOrigin]);
+
+  // Hard-stop + remove ONLY the camera publish element (not the whole call) so
+  // it can be recreated with a different video state. Mirrors cleanup()'s
+  // element teardown: removeAttribute('source') (never '') closes the capture.
+  const stopPublishEl = useCallback(() => {
+    const pub = publishElRef.current;
+    if (!pub) return;
+    const p = pub as HTMLElement & { paused?: boolean; muted?: boolean };
+    p.muted = true;
+    p.paused = true;
+    pub.setAttribute('muted', '');
+    pub.removeAttribute('source');
+    pub.setAttribute('url', '');
+    pub.remove();
+    publishElRef.current = null;
+  }, []);
+
   // ── Start/stop call when avAudioActive changes ──────────────
   useEffect(() => {
     if (!avAudioActive || !sessionId || !myNick) return;
@@ -200,37 +260,9 @@ export function CallPanel() {
       // Mic permission granted — device labels are populated now.
       refreshDevices();
 
-      const container = publishContainerRef.current;
-      if (!container) return;
-
-      const pub = document.createElement('moq-publish');
-      container.appendChild(pub);
-      publishElRef.current = pub;
-      setPubEl(pub as MoqPublishEl);
-
-      // Include the per-call instance suffix the IRC layer generated for
-      // our av-join TAGMSG so this device's path is unique even if the
-      // same DID is also publishing from another tab/device.
-      const myInstance = getAvInstanceId();
-      const broadcastName = myInstance
-        ? `${sessionId}/${myNick}~${myInstance}`
-        : `${sessionId}/${myNick}`;
-      pub.setAttribute('url', moqOrigin);
-      pub.setAttribute('name', broadcastName);
-      // CRITICAL: set `invisible` BEFORE `source`. moq-publish reacts to
-      // the `source` attribute immediately by opening a single
-      // getUserMedia({audio:true, video:true}). If we set `source` first
-      // and `invisible` second, that grab can already be in flight; if
-      // the camera is busy or permission denied, the whole call (audio
-      // included) fails and the catalog ships with no audio track —
-      // Eliza/peers then see a participant who never speaks. With
-      // `invisible` set first, moq-publish grabs audio only and only
-      // adds video when we later remove `invisible`.
-      if (!useStore.getState().avCameraOn) {
-        pub.setAttribute('invisible', '');
-      }
-      pub.setAttribute('source', 'camera');
-      console.log('[call] Publishing:', broadcastName);
+      // Build the publisher with video included iff the camera is already on
+      // at call start (the reliable "video in the catalog from the start" path).
+      if (!buildPublishEl(useStore.getState().avCameraOn)) return;
 
       pollParticipants();
       // 1.2s poll — combined with the re-poll on roster changes below,
@@ -266,15 +298,23 @@ export function CallPanel() {
     const pub = pubEl;
     if (!pub) return;
 
+    // The camera state changed vs what the live publisher was built with.
+    // Recreate it so the broadcast catalog is re-announced WITH/WITHOUT the
+    // video track for real — toggling `invisible` alone leaves peers/bots
+    // seeing the old (audio-only) catalog. Recreating costs a ~1s audio blip
+    // on a camera toggle, which is worth it for video that actually arrives.
+    if (publishedWithVideoRef.current !== avCameraOn) {
+      stopPublishEl();
+      buildPublishEl(avCameraOn); // setPubEl → this effect re-runs, now matched
+      return;
+    }
+
     if (!avCameraOn) {
-      pub.setAttribute('invisible', '');
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = null;
       }
       return;
     }
-
-    pub.removeAttribute('invisible');
 
     // Local preview: reuse moq-publish's own MediaStreamTrack rather
     // than opening a second `getUserMedia` on the same camera. The
@@ -335,7 +375,7 @@ export function CallPanel() {
       unsubInner?.();
       unsubOuter();
     };
-  }, [avCameraOn, pubEl, refreshDevices]);
+  }, [avCameraOn, pubEl, refreshDevices, buildPublishEl, stopPublishEl]);
 
   // ── Screen share: a second, dedicated publisher ─────────────
   // The screen rides its own broadcast `{name}/screen` so the camera+mic

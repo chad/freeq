@@ -47,8 +47,34 @@ import { showToast } from './Toast';
 // These are bare custom elements that just record attributes/properties.
 // We can't import the real ones (they need a network) so we stub them.
 
+// Minimal moq Signal with real semantics (peek + change-only subscribe).
+function makeTestSignal<T>(initial: T) {
+  let value = initial;
+  const subs = new Set<(v: T) => void>();
+  return {
+    peek: () => value,
+    subscribe(fn: (v: T) => void) { subs.add(fn); return () => subs.delete(fn); },
+    set(v: T) { value = v; subs.forEach((fn) => fn(v)); },
+  };
+}
+
 class FakeMoqElement extends HTMLElement {
-  // Track every setAttribute / removeAttribute so tests can assert on it.
+  // Mirror the real moq-publish: when `source="camera"` is set, the element
+  // exposes a `video` signal holding `{ source: <track signal> }`. Tests drive
+  // the captured track via `el.cameraTrack.set(track)`. This makes a freshly
+  // (re)created publisher behave like the real one, so the camera flow works
+  // whether the element is toggled or recreated.
+  video?: ReturnType<typeof makeTestSignal>;
+  cameraTrack?: ReturnType<typeof makeTestSignal>;
+  setAttribute(name: string, value: string): void {
+    super.setAttribute(name, value);
+    if (name === 'source' && value === 'camera' && !this.video) {
+      this.cameraTrack = makeTestSignal<MediaStreamTrack | undefined>(undefined);
+      this.video = makeTestSignal<{ source: typeof this.cameraTrack } | undefined>({
+        source: this.cameraTrack,
+      });
+    }
+  }
 }
 
 // Define once, idempotent in case multiple test files load.
@@ -482,19 +508,27 @@ describe('CallPanel — mute', () => {
 // ═══════════════════════════════════════════════════════════════
 
 describe('CallPanel — camera', () => {
-  it('removes `invisible` from <moq-publish> when avCameraOn=true', async () => {
+  it('publishes WITH video (no `invisible`) when avCameraOn=true — fresh catalog announce', async () => {
+    // Toggling `invisible` on a live broadcast does NOT re-announce the MoQ
+    // catalog with the video track (bots/peers kept seeing has_video=false), so
+    // camera-on now REBUILDS the publisher with video baked in from creation.
     setupSession();
     mockSessionsApi([]);
 
     const { container } = render(<CallPanel />);
     await flush();
 
-    const pub = container.querySelector('moq-publish') as HTMLElement;
-    expect(pub.hasAttribute('invisible')).toBe(true);
+    // Camera off at start → audio-only publisher (invisible).
+    expect((container.querySelector('moq-publish') as HTMLElement).hasAttribute('invisible')).toBe(true);
 
     await act(async () => { useStore.getState().setAvCameraOn(true); });
     await flush();
+
+    // Camera on → a freshly-built publisher with NO invisible + source=camera,
+    // so the catalog announces the video track.
+    const pub = container.querySelector('moq-publish') as HTMLElement;
     expect(pub.hasAttribute('invisible')).toBe(false);
+    expect(pub.getAttribute('source')).toBe('camera');
   });
 
   it('adds `invisible` back when avCameraOn flips to false', async () => {
@@ -558,52 +592,29 @@ describe('CallPanel — camera', () => {
     expect(sawVideoFromCallPanel).toBe(false);
   });
 
-  it('wires the local preview from a video signal that was set BEFORE camera-on (subscribe does not replay)', async () => {
-    // Regression: the local tile rendered black while the camera LED was
-    // on. Real moq Signals only fire subscribers on *future* changes —
-    // the current value is never replayed — and the element's `video`
-    // signal is assigned exactly once, when `source="camera"` is set at
-    // call start. So a bare subscribe made later, when the user toggles
-    // the camera on, never fired and the preview <video> never got a
-    // srcObject. CallPanel must replay the current value (peek) in
-    // addition to subscribing.
+  it('wires the local preview from the (recreated) camera publisher’s video signal', async () => {
+    // The camera publisher exposes a `video` signal holding `{ source }` as
+    // soon as source=camera is set; the captured track lands on the inner
+    // source signal once moq-publish's getUserMedia resolves. CallPanel must
+    // peek + subscribe (moq Signals don't replay) and render it as the local
+    // preview — for whichever element is currently live (it's rebuilt on
+    // camera-on, so the preview must follow the fresh element).
     setupSession();
     mockSessionsApi([]);
-
-    // Signal with real moq semantics: peek() + change-only subscribe.
-    function makeSignal<T>(initial: T) {
-      let value = initial;
-      const subs = new Set<(v: T) => void>();
-      return {
-        peek: () => value,
-        subscribe(fn: (v: T) => void) { subs.add(fn); return () => subs.delete(fn); },
-        set(v: T) { value = v; subs.forEach((fn) => fn(v)); },
-      };
-    }
 
     class FakeMediaStream { tracks: unknown[]; constructor(tracks: unknown[]) { this.tracks = tracks; } }
     vi.stubGlobal('MediaStream', FakeMediaStream);
 
-    const trackSig = makeSignal<MediaStreamTrack | undefined>(undefined);
-    const cameraSource = { source: trackSig };
-    const videoSig = makeSignal<typeof cameraSource | undefined>(undefined);
-
     const { container } = render(<CallPanel />);
     await flush();
-
-    const pub = container.querySelector('moq-publish') as HTMLElement & { video?: unknown };
-    // Like the real element: the video signal already holds the camera
-    // source object before the user ever touches the camera button.
-    videoSig.set(cameraSource);
-    pub.video = videoSig;
 
     await act(async () => { useStore.getState().setAvCameraOn(true); });
     await flush();
 
-    // moq-publish's internal getUserMedia resolves after camera-on and
-    // lands the captured track on the inner source signal.
+    // The live (rebuilt-with-video) publisher provides its own track signal.
+    const pub = container.querySelector('moq-publish') as FakeMoqElement;
     const fakeTrack = { kind: 'video' } as MediaStreamTrack;
-    await act(async () => { trackSig.set(fakeTrack); });
+    await act(async () => { pub.cameraTrack!.set(fakeTrack); });
     await flush();
 
     const video = container.querySelector('video') as HTMLVideoElement;
@@ -621,22 +632,8 @@ describe('CallPanel — camera', () => {
     vi.mocked(showToast).mockClear();
     vi.useFakeTimers();
     try {
-      function makeSignal<T>(initial: T) {
-        let value = initial;
-        const subs = new Set<(v: T) => void>();
-        return {
-          peek: () => value,
-          subscribe(fn: (v: T) => void) { subs.add(fn); return () => subs.delete(fn); },
-          set(v: T) { value = v; subs.forEach((fn) => fn(v)); },
-        };
-      }
-      const trackSig = makeSignal<MediaStreamTrack | undefined>(undefined);
-      const videoSig = makeSignal<{ source: typeof trackSig } | undefined>({ source: trackSig });
-
       const { container } = render(<CallPanel />);
       await flush();
-      const pub = container.querySelector('moq-publish') as HTMLElement & { video?: unknown };
-      pub.video = videoSig;
 
       await act(async () => { useStore.getState().setAvCameraOn(true); });
       await flush();
@@ -650,7 +647,8 @@ describe('CallPanel — camera', () => {
       // A late grant (user finally clicks Allow) closes the loop.
       class FakeMediaStream { tracks: unknown[]; constructor(t: unknown[]) { this.tracks = t; } }
       vi.stubGlobal('MediaStream', FakeMediaStream);
-      await act(async () => { trackSig.set({ kind: 'video' } as MediaStreamTrack); });
+      const pub = container.querySelector('moq-publish') as FakeMoqElement;
+      await act(async () => { pub.cameraTrack!.set({ kind: 'video' } as MediaStreamTrack); });
       expect(showToast).toHaveBeenCalledTimes(2);
       expect(vi.mocked(showToast).mock.calls[1][1]).toBe('success');
     } finally {
@@ -664,28 +662,17 @@ describe('CallPanel — camera', () => {
     vi.mocked(showToast).mockClear();
     vi.useFakeTimers();
     try {
-      function makeSignal<T>(initial: T) {
-        let value = initial;
-        const subs = new Set<(v: T) => void>();
-        return {
-          peek: () => value,
-          subscribe(fn: (v: T) => void) { subs.add(fn); return () => subs.delete(fn); },
-          set(v: T) { value = v; subs.forEach((fn) => fn(v)); },
-        };
-      }
       class FakeMediaStream { tracks: unknown[]; constructor(t: unknown[]) { this.tracks = t; } }
       vi.stubGlobal('MediaStream', FakeMediaStream);
-      const trackSig = makeSignal<MediaStreamTrack | undefined>(undefined);
-      const videoSig = makeSignal<{ source: typeof trackSig } | undefined>({ source: trackSig });
 
       const { container } = render(<CallPanel />);
       await flush();
-      const pub = container.querySelector('moq-publish') as HTMLElement & { video?: unknown };
-      pub.video = videoSig;
 
       await act(async () => { useStore.getState().setAvCameraOn(true); });
       await flush();
-      await act(async () => { trackSig.set({ kind: 'video' } as MediaStreamTrack); });
+      // Track arrives in time on the live (rebuilt) publisher.
+      const pub = container.querySelector('moq-publish') as FakeMoqElement;
+      await act(async () => { pub.cameraTrack!.set({ kind: 'video' } as MediaStreamTrack); });
 
       await act(async () => { vi.advanceTimersByTime(CAMERA_WATCHDOG_MS * 2); });
       expect(showToast).not.toHaveBeenCalled();
