@@ -23,4 +23,4 @@ pub mod vad;
 
 pub use addressing::extract_addressed;
 pub use speech::{is_hallucination, split_speech_and_links};
-pub use vad::{VadConfig, VadSegmenter};
+pub use vad::{Utterance, VadConfig, VadSegmenter};

@@ -49,11 +49,26 @@ impl Default for VadConfig {
             // call with the assistant…"), which the bot then answered. Real
             // conversational speech peaks well above 0.045.
             voice_peak_threshold: 0.045,
-            silence_gap_samples: SAMPLE_RATE * 6 / 10, // 0.6 s
-            max_utterance_samples: SAMPLE_RATE * 22,   // 22 s
+            // 0.45 s (was 0.6): the trailing pause before we decide the
+            // turn ended is pure pre-answer latency. 0.45 s still rides
+            // over inter-word gaps but shaves ~150 ms off perceived rhythm.
+            silence_gap_samples: SAMPLE_RATE * 45 / 100, // 0.45 s
+            max_utterance_samples: SAMPLE_RATE * 22,     // 22 s
             min_voiced_samples: SAMPLE_RATE * 45 / 100, // 0.45 s (was 0.35) — drop brief noise bursts
         }
     }
+}
+
+/// A completed utterance plus the segmentation stats that produced it.
+/// Returned by [`VadSegmenter::push_stats`] for latency instrumentation.
+pub struct Utterance {
+    /// The utterance PCM (voiced audio plus mid-utterance + trailing pauses).
+    pub pcm: Vec<f32>,
+    /// Samples that crossed the voice threshold (actual speech).
+    pub voiced_samples: usize,
+    /// Trailing silence at the moment of flush — the end-of-turn dead air
+    /// the VAD waited through before emitting. Pure pre-answer latency.
+    pub trailing_silence_samples: usize,
 }
 
 /// Segments a PCM stream into utterances by voice activity.
@@ -90,6 +105,16 @@ impl VadSegmenter {
     /// that turned out to be noise (less than `min_voiced_samples` of
     /// actual voice — silently dropped).
     pub fn push(&mut self, pcm: &[f32]) -> Option<Vec<f32>> {
+        self.push_stats(pcm).map(|u| u.pcm)
+    }
+
+    /// Like [`push`](VadSegmenter::push) but returns the utterance plus the
+    /// voiced/trailing-silence breakdown that drove the flush. Used by the
+    /// voice-latency instrumentation: the trailing-silence gap is pure
+    /// pre-answer latency (the VAD waits `silence_gap_samples` of quiet
+    /// before it even knows the turn ended), and voiced vs total tells us
+    /// how much of the STT audio is real speech.
+    pub fn push_stats(&mut self, pcm: &[f32]) -> Option<Utterance> {
         if pcm.is_empty() {
             return None;
         }
@@ -118,6 +143,9 @@ impl VadSegmenter {
 
         let chunk = std::mem::take(&mut self.buf);
         let chunk_voiced = self.voiced_samples;
+        // Capture trailing silence at the moment of flush (before reset) —
+        // this is the dead-air tax that delayed the turn end.
+        let chunk_trailing = self.trailing_silence;
         self.voiced_samples = 0;
         self.trailing_silence = 0;
 
@@ -125,7 +153,11 @@ impl VadSegmenter {
         if chunk_voiced < self.config.min_voiced_samples {
             return None;
         }
-        Some(chunk)
+        Some(Utterance {
+            pcm: chunk,
+            voiced_samples: chunk_voiced,
+            trailing_silence_samples: chunk_trailing,
+        })
     }
 
     /// Samples currently buffered in the in-progress utterance. Useful
@@ -152,9 +184,9 @@ mod tests {
     #[test]
     fn default_config_matches_the_documented_16k_tuning() {
         let c = VadConfig::default();
-        assert_eq!(c.silence_gap_samples, 9_600); // 0.6 s
+        assert_eq!(c.silence_gap_samples, 7_200); // 0.45 s
         assert_eq!(c.max_utterance_samples, 352_000); // 22 s
-        assert_eq!(c.min_voiced_samples, 5_600); // 0.35 s
+        assert_eq!(c.min_voiced_samples, 7_200); // 0.45 s
     }
 
     #[test]

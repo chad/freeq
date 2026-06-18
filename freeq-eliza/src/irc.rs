@@ -1124,6 +1124,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                         None,
                         asker_video,
                         Some(active),
+                        None, // text path — no voice-turn latency anchor
                     )
                     .await;
                 });
@@ -1490,6 +1491,8 @@ async fn synth_and_enqueue(
     recent_tts: &std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<(Instant, String)>>>,
     speaker: &Speaker,
     sentence: &str,
+    // Voice-turn id for latency correlation (0 = non-voice speak path).
+    turn: u64,
     mut on_first_audio: impl FnMut(),
 ) -> Result<()> {
     // URLs are unpronounceable — strip them from speech; the channel
@@ -1502,9 +1505,16 @@ async fn synth_and_enqueue(
     // (no AEC) transcribed back at us can be recognized and dropped.
     note_spoken(recent_tts, &spoken);
     let mut fired = false;
+    let t_req = Instant::now();
     tts::synthesize_streaming(http, el_key, voice, model, &spoken, |pcm| {
         if !fired {
             fired = true;
+            tracing::info!(
+                turn,
+                tts_first_byte_ms = t_req.elapsed().as_millis() as u64,
+                chars = spoken.chars().count(),
+                "latency: TTS request→first audio byte"
+            );
             on_first_audio();
         }
         work.clear();
@@ -1521,6 +1531,25 @@ async fn synth_and_enqueue(
 /// external-brain seam (yokota's `say` lines). Chunks `text` into
 /// sentences and synthesizes them in order. No-op (returns `Ok`) when
 /// there's no ElevenLabs key configured.
+/// Monotonic per-turn id for correlating the voice-pipeline latency logs
+/// (VAD → STT → answer → TTS → speak) of a single utterance, even when
+/// several utterances are in flight. `turn=0` marks the non-voice (text)
+/// path, which has no speech-end anchor.
+static VOICE_TURN_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_turn_id() -> u64 {
+    VOICE_TURN_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Anchors a voice turn at the moment the user stopped speaking (the VAD
+/// flush). Threaded through the answer path so every stage can report
+/// `speech_end → now` — the rhythm metric a human actually perceives.
+#[derive(Clone, Copy)]
+pub(crate) struct TurnClock {
+    pub id: u64,
+    pub speech_end: Instant,
+}
+
 pub(crate) async fn speak_text(
     cfg: &SharedConfig,
     speaker: &Speaker,
@@ -1551,6 +1580,7 @@ pub(crate) async fn speak_text(
             &cfg.recent_tts,
             speaker,
             &sentence,
+            0, // non-voice speak path — no turn anchor
             || {},
         )
         .await
@@ -1576,10 +1606,15 @@ async fn answer_and_speak(
     // the transcript (symmetric conversation log). `None` when there's
     // no call.
     active: Option<Arc<AsyncMutex<Option<ActiveCall>>>>,
+    // Voice-turn latency anchor: `Some` on the voice path (carries the
+    // turn id + speech_end instant), `None` on the text path.
+    clock: Option<TurnClock>,
 ) {
     let Some(key) = cfg.groq_api_key.as_deref() else {
         return;
     };
+    // Turn id for correlating latency lines (0 = text path, no anchor).
+    let turn = clock.map(|c| c.id).unwrap_or(0);
     // Per-stage latency clock — every stage below logs elapsed_ms off
     // this so a slow answer can be blamed on its actual stage (recall /
     // feed / first token / first TTS audio) instead of guessed at.
@@ -1587,7 +1622,14 @@ async fn answer_and_speak(
     // Voice answers use the fast model: time-to-first-word IS the
     // experience in a call. Text answers keep the heavyweight default.
     let is_voice = speaker.is_some();
-    tracing::info!(%asker, %question, voice = is_voice, "answering addressed question");
+    tracing::info!(
+        turn,
+        %asker,
+        %question,
+        voice = is_voice,
+        since_speech_end_ms = clock.map(|c| c.speech_end.elapsed().as_millis() as u64),
+        "answering addressed question"
+    );
 
     // Route the question with a fast small-model classifier, in
     // parallel with the context assembly below — by the time context is
@@ -1637,6 +1679,9 @@ async fn answer_and_speak(
             // does not drive this signal.
             let peer_level = video.as_ref().map(|v| v.peer_level_handle());
             let recent_tts = cfg.recent_tts.clone();
+            // Solo = no configured peer agents → skip the anti-collision
+            // jitter in the quiet gate (it's only there for bot↔bot).
+            let solo = cfg.peer_agents.is_empty();
             Some(tokio::spawn(async move {
                 let mut chain =
                     ghostly::audio::VoiceChain::new(voice_profile, tts::ELEVENLABS_PCM_RATE as f32);
@@ -1659,10 +1704,12 @@ async fn answer_and_speak(
                     }
                     if first {
                         if let Some(pl) = &peer_level {
-                            wait_for_room_quiet(pl).await;
+                            wait_for_room_quiet(pl, solo).await;
                         }
                         tracing::info!(
+                            turn,
                             elapsed_ms = t0.elapsed().as_millis() as u64,
+                            since_speech_end_ms = clock.map(|c| c.speech_end.elapsed().as_millis() as u64),
                             "latency: first sentence reached TTS"
                         );
                         first = false;
@@ -1678,13 +1725,26 @@ async fn answer_and_speak(
                         &recent_tts,
                         &sp,
                         &sentence,
+                        turn,
                         || {
                             if !*first_audio_ref {
                                 *first_audio_ref = true;
                                 tracing::info!(
+                                    turn,
                                     elapsed_ms = t0.elapsed().as_millis() as u64,
                                     "latency: first TTS audio enqueued"
                                 );
+                                // THE rhythm metric: how long after the user
+                                // stopped talking did the bot start speaking.
+                                if let Some(c) = clock {
+                                    tracing::info!(
+                                        turn,
+                                        speech_to_first_audio_ms =
+                                            c.speech_end.elapsed().as_millis() as u64,
+                                        answer_compose_ms = t0.elapsed().as_millis() as u64,
+                                        "latency: SUMMARY speech_end→first_audio (rhythm)"
+                                    );
+                                }
                             }
                         },
                     )
@@ -1769,6 +1829,7 @@ async fn answer_and_speak(
     }
     let context = sections.join("\n\n");
     tracing::info!(
+        turn,
         elapsed_ms = t0.elapsed().as_millis() as u64,
         "latency: context assembled (memory + feed), dispatching model"
     );
@@ -1790,6 +1851,7 @@ async fn answer_and_speak(
         &cfg.groq_answer_model
     };
     tracing::info!(
+        turn,
         elapsed_ms = t0.elapsed().as_millis() as u64,
         visual = route.map(|r| r.visual),
         live_data = route.map(|r| r.live_data),
@@ -1939,6 +2001,7 @@ sharpen the thread. Do NOT address yourself."
             if !first_delta_logged {
                 first_delta_logged = true;
                 tracing::info!(
+                    turn,
                     elapsed_ms = t0.elapsed().as_millis() as u64,
                     "latency: first model token"
                 );
@@ -2001,6 +2064,14 @@ sharpen the thread. Do NOT address yourself."
     if let Some(last) = chunker.flush() {
         let _ = tx.send(last);
     }
+
+    // Answer fully composed — model generation done (first token → last).
+    tracing::info!(
+        turn,
+        elapsed_ms = t0.elapsed().as_millis() as u64,
+        answer_chars = answer.text.len(),
+        "latency: answer fully composed (model generation complete)"
+    );
 
     // Log the full answer text — invaluable for debugging when she's
     // saying something weird (e.g. reading image alt attributes).
@@ -2214,14 +2285,26 @@ sharpen the thread. Do NOT address yourself."
 ///
 /// Caps total wait at 8 s so a stuck-open mic from a peer cannot mute
 /// the bot forever.
-async fn wait_for_room_quiet(peer_level: &Arc<std::sync::atomic::AtomicU32>) {
+/// Hold until the room is quiet before the bot starts speaking.
+///
+/// `solo` skips the anti-collision jitter stage: that jitter only exists
+/// to keep two BOTS from talking over each other, so when this is the only
+/// agent in the call it is 250–1000 ms of pure pre-speech latency with no
+/// benefit. On the solo path we return as soon as the quiet HOLD passes —
+/// the single biggest win for conversational rhythm.
+async fn wait_for_room_quiet(peer_level: &Arc<std::sync::atomic::AtomicU32>, solo: bool) {
     use std::sync::atomic::Ordering;
     const THRESHOLD: f32 = 0.04;
-    const HOLD: Duration = Duration::from_millis(250);
+    // 150 ms (was 250): on the answer path the VAD already waited ~450 ms of
+    // silence to end the turn and STT added ~300 ms more, so the room has been
+    // provably quiet ~750 ms before this gate runs — a long HOLD just re-confirms
+    // known silence and taxes rhythm. 150 ms still catches a human resuming.
+    const HOLD: Duration = Duration::from_millis(150);
     const MAX_WAIT: Duration = Duration::from_millis(8000);
     let start = Instant::now();
     'outer: loop {
         if start.elapsed() >= MAX_WAIT {
+            tracing::info!(waited_ms = start.elapsed().as_millis() as u64, solo, "latency: wait_for_room_quiet (max-wait timeout)");
             return;
         }
         // ── Stage 1: classic quiet wait ──
@@ -2241,6 +2324,11 @@ async fn wait_for_room_quiet(peer_level: &Arc<std::sync::atomic::AtomicU32>) {
                 quiet_since = None;
             }
             tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+        // Solo: no other bot to collide with — the quiet hold is enough.
+        if solo {
+            tracing::info!(waited_ms = start.elapsed().as_millis() as u64, solo, "latency: wait_for_room_quiet (solo, no jitter)");
+            return;
         }
         // ── Stage 2: anti-collision confirmation jitter ──
         let jitter_ms = jitter_ms_per_bot(peer_level);
@@ -2429,6 +2517,7 @@ fn spawn_hello_on_join(
     let character = cfg.ghostly_character.clone();
     let ghostly_pack = cfg.ghostly_pack.clone();
     let recent_tts = cfg.recent_tts.clone();
+    let solo = cfg.peer_agents.is_empty();
     tokio::spawn(async move {
         // Audio-pipeline settle: when the bot has just joined the call,
         // the MoQ broadcast publish has been opened but no subscriber
@@ -2443,7 +2532,7 @@ fn spawn_hello_on_join(
         // Wait my turn: each bot enters the call ~6s after the prior
         // one (staggered launch), and they all greet — without this
         // gate they'd talk over each other.
-        wait_for_room_quiet(&peer_level).await;
+        wait_for_room_quiet(&peer_level, solo).await;
         note_spoken(&recent_tts, &text);
         let voice_profile =
             crate::persona::resolve_voice_profile(&character, ghostly_pack.as_deref());
@@ -3361,9 +3450,26 @@ async fn transcribe_participant(
         // Accumulate; `push` yields a chunk only on a completed utterance
         // (pre-speech silence and noise-only flushes stay inside the
         // segmenter).
-        let Some(chunk) = segmenter.push(&pcm) else {
+        let Some(utt) = segmenter.push_stats(&pcm) else {
             continue;
         };
+        // Turn starts here: the VAD just decided the user stopped talking.
+        // `t_flush` is the rhythm anchor (speech_end); `turn` correlates
+        // every downstream latency line for this utterance.
+        let turn = next_turn_id();
+        let t_flush = Instant::now();
+        let chunk = utt.pcm;
+        let utter_ms = (chunk.len() as u64) * 1000 / 16_000;
+        let voiced_ms = (utt.voiced_samples as u64) * 1000 / 16_000;
+        let trailing_silence_ms = (utt.trailing_silence_samples as u64) * 1000 / 16_000;
+        tracing::info!(
+            turn,
+            %nick,
+            utter_ms,
+            voiced_ms,
+            trailing_silence_ms,
+            "latency: VAD flush (turn start; trailing_silence is pre-answer dead air)"
+        );
 
         let stt = stt.clone();
         let nick = nick.clone();
@@ -3383,10 +3489,16 @@ async fn transcribe_participant(
         // per utterance so a slow STT call doesn't stall the tap loop.
         tokio::spawn(async move {
             let t_stt = Instant::now();
+            let audio_sec = chunk.len() as f32 / 16_000.0;
             let stt_result = stt.transcribe(&chunk).await;
+            let stt_ms = t_stt.elapsed().as_millis() as u64;
             tracing::info!(
+                turn,
                 %nick,
-                elapsed_ms = t_stt.elapsed().as_millis() as u64,
+                elapsed_ms = stt_ms,
+                audio_sec,
+                rtf = if audio_sec > 0.0 { stt_ms as f32 / (audio_sec * 1000.0) } else { 0.0 },
+                since_speech_end_ms = t_flush.elapsed().as_millis() as u64,
                 "latency: STT round-trip"
             );
             match stt_result {
@@ -3705,6 +3817,7 @@ async fn transcribe_participant(
                                 Some(video),
                                 Some(asker_video),
                                 Some(active.clone()),
+                                Some(TurnClock { id: turn, speech_end: t_flush }),
                             )
                             .await;
                         }
