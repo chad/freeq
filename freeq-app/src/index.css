@@ -91,6 +91,23 @@ body {
 /* Remove transition from scroll */
 [class*="overflow"] { transition: none; }
 
+.app-sidebar-shell {
+  overflow: hidden;
+  transition: width 200ms ease, transform 200ms ease;
+  will-change: width, transform;
+}
+
+.app-sidebar-backdrop {
+  transition: opacity 200ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-sidebar-shell,
+  .app-sidebar-backdrop {
+    transition-duration: 1ms;
+  }
+}
+
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: translateY(0); }
