@@ -173,6 +173,13 @@ struct Cli {
     #[arg(long)]
     no_ambient: bool,
 
+    /// Enable the ambient-research monitor — when she's NOT addressed, she
+    /// recognizes the topics being discussed, logs them to a note, and drops
+    /// definitions/links for help-worthy technical topics into the text
+    /// channel. Off by default (opt-in).
+    #[arg(long)]
+    ambient_research: bool,
+
     /// Video tile renderer: `svg` (default — full freeq cyberpunk
     /// presence with EQ strip, scene cards, ambient HUD, vision PiP),
     /// `particles` (ghostly particle face — face only, no overlays),
@@ -378,6 +385,7 @@ async fn main() -> Result<()> {
         image_ai,
         proactive_enabled: !cli.no_proactive,
         ambient_enabled: !cli.no_ambient,
+        research_enabled: cli.ambient_research,
         // A `--persona` pack's `render_backend` wins over the launch flag,
         // so a forked being carries its own visual style end-to-end.
         render_backend: persona

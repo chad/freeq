@@ -187,6 +187,11 @@ pub struct RunConfig {
     /// listens, and escalates to an image scene on concrete subjects.
     /// Toggle with `--no-ambient` on the CLI.
     pub ambient_enabled: bool,
+    /// Enable the ambient-research monitor — when true and she is NOT being
+    /// addressed, she recognizes the topics being discussed, logs them to a
+    /// note, and drops definitions/links for help-worthy technical topics into
+    /// the text channel. Opt-in via `--ambient-research`.
+    pub research_enabled: bool,
     /// Video tile renderer choice. `svg` = the rich freeq presence;
     /// `particles` = ghostly particle face.
     pub render_backend: String,
@@ -263,6 +268,8 @@ pub(crate) struct SharedConfig {
     pub(crate) proactive_enabled: bool,
     /// Whether the ambient monitor runs (`--no-ambient` disables it).
     pub(crate) ambient_enabled: bool,
+    /// Whether the ambient-research monitor runs (`--ambient-research`).
+    pub(crate) research_enabled: bool,
     /// Renderer choice — `"svg"` (default) or `"particles"`.
     pub(crate) render_backend: String,
     /// Ghostly character name when `render_backend == "particles"`.
@@ -395,6 +402,8 @@ pub(crate) struct ActiveCall {
     proactive_task: Option<JoinHandle<()>>,
     /// The ambient-monitor task (if enabled). Same drop story.
     ambient_task: Option<JoinHandle<()>>,
+    /// The ambient-research-monitor task (if enabled). Same drop story.
+    research_task: Option<JoinHandle<()>>,
     /// Watchdog that leaves the call once we've been alone in it too long, so a
     /// lingering empty call doesn't burn CPU or block auto-sleep. Same drop story.
     lonely_task: Option<JoinHandle<()>>,
@@ -413,6 +422,9 @@ impl Drop for ActiveCall {
             t.abort();
         }
         if let Some(t) = &self.ambient_task {
+            t.abort();
+        }
+        if let Some(t) = &self.research_task {
             t.abort();
         }
         if let Some(t) = &self.lonely_task {
@@ -466,6 +478,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         image_ai,
         proactive_enabled,
         ambient_enabled,
+        research_enabled,
         render_backend,
         ghostly_character,
         ghostly_pack,
@@ -589,6 +602,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         // can't talk over yokota's lines (off-flag = unchanged).
         proactive_enabled: proactive_enabled && !external_brain,
         ambient_enabled: ambient_enabled && !external_brain,
+        research_enabled: research_enabled && !external_brain,
         render_backend,
         ghostly_character,
         ghostly_pack,
@@ -2912,6 +2926,20 @@ async fn start_transcription(
         None
     };
 
+    // Ambient-research monitor — silent text-channel companion. While she's
+    // not addressed, it recognizes the topics in the conversation, notes them,
+    // and drops definitions/links for help-worthy technical topics into chat.
+    let research_task = if cfg.research_enabled {
+        Some(crate::research::spawn_monitor(
+            cfg.clone(),
+            handle.clone(),
+            channel.clone(),
+            active.clone(),
+        ))
+    } else {
+        None
+    };
+
     // Lonely watchdog — leave the call once we've been alone in it for a
     // while, so the being returns to idle (and the box can sleep to ~$0)
     // instead of holding a tap open on an empty room. Aborts via
@@ -2936,6 +2964,7 @@ async fn start_transcription(
         moq_task: task,
         proactive_task,
         ambient_task,
+        research_task,
         lonely_task,
         handle,
     })

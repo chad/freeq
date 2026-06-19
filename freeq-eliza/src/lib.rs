@@ -17,6 +17,7 @@ pub mod mitosis;
 pub mod persona;
 pub mod proactive;
 pub mod qa;
+pub mod research;
 pub mod social;
 pub mod social_feed;
 pub mod stt;
