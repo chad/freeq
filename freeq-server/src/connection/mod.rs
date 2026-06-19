@@ -343,7 +343,7 @@ fn is_draft_multiline_chunk_rate_exempt(
             let command_matches = batch
                 .first_command
                 .as_deref()
-                .map_or(true, |seen| seen == msg.command);
+                .is_none_or(|seen| seen == msg.command);
             batch.batch_type == "draft/multiline" && batch.target == target && command_matches
         })
 }
