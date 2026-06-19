@@ -17,8 +17,13 @@ export class Transport {
   private lastDataReceived = 0;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
-  private static PING_INTERVAL = 45_000;
-  private static DEAD_TIMEOUT = 90_000;
+  // Tightened from 45s/90s: a half-dead socket (TCP still "open" but the
+  // server stopped responding) used to drop outbound traffic for up to 90s
+  // before the watchdog forced a reconnect — long enough that the bot
+  // silently vanished from channels. Ping every 20s, declare dead after 45s
+  // (two missed pings) so presence recovers within ~45s.
+  private static PING_INTERVAL = 20_000;
+  private static DEAD_TIMEOUT = 45_000;
 
   constructor(opts: TransportOptions) {
     this.opts = opts;
@@ -124,7 +129,7 @@ export class Transport {
       } else if (elapsed > Transport.PING_INTERVAL) {
         this.send('PING :heartbeat');
       }
-    }, 15_000);
+    }, 10_000);
   }
 
   private stopHeartbeat() {
