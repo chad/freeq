@@ -314,7 +314,7 @@ fn is_draft_multiline_batch_open_rate_exempt(
         return false;
     }
 
-    open.keys().filter(|(sid, _)| sid == session_id).count()
+    draft_multiline::count_session_open_batches(&open, session_id)
         < draft_multiline::MAX_CONCURRENT_BATCHES_PER_SESSION
 }
 
@@ -326,7 +326,9 @@ fn is_draft_multiline_chunk_rate_exempt(
     let Some(batch_id) = msg.tags.get("batch") else {
         return false;
     };
-    let (Some(target), Some(_text)) = (msg.params.first(), msg.params.get(1)) else {
+    // A real chunk carries a body param; require its presence (matching the
+    // PRIVMSG/NOTICE dispatch) without binding it.
+    let (Some(target), Some(_)) = (msg.params.first(), msg.params.get(1)) else {
         return false;
     };
     let target = if target.starts_with('#') || target.starts_with('&') {
