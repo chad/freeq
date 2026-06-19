@@ -1108,7 +1108,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                 // and if the asker is on the call with a camera, their
                 // video handle rides along so "what do you see?" typed in
                 // the channel works the same as asked by voice.
-                let (transcript, asker_video) = {
+                let (transcript, asker_video, screen_video) = {
                     let mut guard = active.lock().await;
                     match guard.as_mut() {
                         Some(c) => {
@@ -1118,9 +1118,13 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                             // the conversation log must carry it.
                             let snapshot = recent_lines(&c.transcript, TRANSCRIPT_PROMPT_LINES);
                             c.transcript.push(format!("{from}: {question}"));
-                            (snapshot, lookup_tap_video(&c.video_taps, &from))
+                            (
+                                snapshot,
+                                lookup_tap_video(&c.video_taps, &from),
+                                lookup_tap_video(&c.video_taps, "screen"),
+                            )
                         }
-                        None => (String::new(), None),
+                        None => (String::new(), None, None),
                     }
                 };
                 // External-brain mode: the main yokota daemon is in this same
@@ -1147,6 +1151,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                         None,
                         None,
                         asker_video,
+                        screen_video,
                         Some(active),
                         None, // text path — no voice-turn latency anchor
                     )
@@ -1624,8 +1629,10 @@ async fn answer_and_speak(
     transcript: String,
     speaker: Option<Speaker>,
     video: Option<VideoTile>,
-    // The asker's own video (their screen/camera), for visual questions.
+    // The asker's own camera video, for visual questions.
     asker_video: Option<VideoHandle>,
+    // The asker's screen share (a separate `{name}/screen` broadcast), if live.
+    screen_video: Option<VideoHandle>,
     // The live call slot — so the bot's own answer can be appended to
     // the transcript (symmetric conversation log). `None` when there's
     // no call.
@@ -1844,12 +1851,17 @@ async fn answer_and_speak(
             "LIVE CALL TRANSCRIPT (this call, oldest line first):\n{live_transcript}"
         ));
     }
-    // Tell the model the asker is visibly on camera — so "can you see
-    // me?" gets "yes" even when the question routes to the text model.
-    if asker_video.is_some() {
-        sections.push(format!(
-            "({asker} has their camera or screen live in this call.)"
-        ));
+    // Tell the model exactly which live video the asker has — so "can you
+    // see me?" / "see my screen?" get an accurate yes even when the question
+    // routes to the text model.
+    let live_hint = match (asker_video.is_some(), screen_video.is_some()) {
+        (true, true) => Some("both their camera and a screen share"),
+        (false, true) => Some("a screen share (camera off)"),
+        (true, false) => Some("their camera"),
+        (false, false) => None,
+    };
+    if let Some(hint) = live_hint {
+        sections.push(format!("({asker} has {hint} live in this call.)"));
     }
     let context = sections.join("\n\n");
     tracing::info!(
@@ -1929,28 +1941,49 @@ async fn answer_and_speak(
     // Keyed off the tap existing, not off a frame already decoded:
     // "can you see this?" usually arrives in the same breath as the
     // camera coming on, before the first frame lands.
-    let mut candidate_frame = asker_video.as_ref().and_then(|vh| vh.latest());
+    // Source choice: camera vs screen share. The screen is a separate tap.
+    // Explicit camera/self questions → camera; otherwise, whenever a screen
+    // share is live, prefer it (a shared screen is almost always the thing to
+    // look at, and a bare "what do you see?" while sharing means the screen).
+    // Always fall back to the other source if the preferred one has no frame.
+    let q_low = question.to_lowercase();
+    let asks_self_cam = [
+        "see me", "look at me", "my face", "how do i look", "how do i look like",
+        "wearing", "holding", "behind me", "my camera", "the camera", "at me",
+    ]
+    .iter()
+    .any(|w| q_low.contains(w));
+    let prefer_screen = screen_video.is_some() && !asks_self_cam;
+    let (primary, secondary) = if prefer_screen {
+        (screen_video.as_ref(), asker_video.as_ref())
+    } else {
+        (asker_video.as_ref(), screen_video.as_ref())
+    };
+    let mut candidate_frame = primary
+        .and_then(|vh| vh.latest())
+        .or_else(|| secondary.and_then(|vh| vh.latest()));
+    let has_video_tap = asker_video.is_some() || screen_video.is_some();
     let visual = route.is_some_and(|r| r.visual)
-        || if asker_video.is_some() {
+        || if has_video_tap {
             vision::is_visual_question_with_frame(&question)
         } else {
             vision::is_visual_question(&question)
         };
-    // Camera warm-up: a visual question with a tap but no frame yet —
-    // poll briefly for the first decode instead of claiming blindness.
-    if visual
-        && candidate_frame.is_none()
-        && let Some(vh) = asker_video.as_ref()
-    {
+    // Warm-up: a visual question with a tap but no frame yet — poll briefly
+    // for the first decode (of either source) instead of claiming blindness.
+    if visual && candidate_frame.is_none() && has_video_tap {
         let warmup = Instant::now();
         while candidate_frame.is_none() && warmup.elapsed() < Duration::from_secs(2) {
             tokio::time::sleep(Duration::from_millis(100)).await;
-            candidate_frame = vh.latest();
+            candidate_frame = primary
+                .and_then(|vh| vh.latest())
+                .or_else(|| secondary.and_then(|vh| vh.latest()));
         }
         tracing::info!(
+            prefer_screen,
             got_frame = candidate_frame.is_some(),
             waited_ms = warmup.elapsed().as_millis() as u64,
-            "visual question — waited for camera warm-up"
+            "visual question — waited for video warm-up"
         );
     }
     let frame = if visual { candidate_frame } else { None };
@@ -3578,6 +3611,10 @@ async fn transcribe_participant(
         // The asker's own video — so a visual question can be answered
         // from what they're showing.
         let asker_video = video.clone();
+        // A screen share is a SEPARATE `{name}/screen` broadcast, tapped as a
+        // participant nicked "screen" — distinct from the camera tap above.
+        // Resolve it so screen questions ("look at my screen") actually see it.
+        let video_taps_for_screen = video_taps.clone();
         // `SttEngine::transcribe` is async — Groq is an HTTP round-trip,
         // local whisper does its own spawn_blocking internally. One task
         // per utterance so a slow STT call doesn't stall the tap loop.
@@ -3908,6 +3945,8 @@ async fn transcribe_participant(
                             }
                         };
                         if let Some((transcript, speaker, video)) = dispatch {
+                            let screen_video =
+                                lookup_tap_video(&video_taps_for_screen, "screen");
                             answer_and_speak(
                                 cfg,
                                 handle,
@@ -3918,6 +3957,7 @@ async fn transcribe_participant(
                                 Some(speaker),
                                 Some(video),
                                 Some(asker_video),
+                                screen_video,
                                 Some(active.clone()),
                                 Some(TurnClock { id: turn, speech_end: t_flush }),
                             )
