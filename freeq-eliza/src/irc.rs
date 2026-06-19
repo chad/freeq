@@ -374,6 +374,11 @@ pub(crate) struct ActiveCall {
     /// once, and so the proactive monitor doesn't pile on right after
     /// she just spoke.
     pub(crate) last_answer: Option<Instant>,
+    /// The last question we actually dispatched an answer for. The debounce
+    /// is content-aware: a repeat is dropped only when it closely matches
+    /// this within the (short) window — so multi-device duplicate broadcasts
+    /// are deduped, but a genuine conversational follow-up is always answered.
+    pub(crate) last_question: Option<String>,
     /// Feeds the bot's outbound broadcast — `enqueue` makes it speak.
     pub(crate) speaker: Speaker,
     /// The agent's video tile (audio-reactive presence + visual-aid
@@ -2924,6 +2929,7 @@ async fn start_transcription(
         joined_at: Instant::now(),
         transcript: Vec::new(),
         last_answer: None,
+        last_question: None,
         speaker,
         video,
         video_taps,
@@ -2990,7 +2996,30 @@ async fn lonely_watchdog(
 /// this long. Collapses the duplicate transcriptions a multi-device
 /// speaker produces (each device's broadcast is tapped separately) and
 /// keeps Eliza from piling answers up while she is still speaking.
-const ANSWER_DEBOUNCE: Duration = Duration::from_secs(8);
+///
+/// Short, because it is now CONTENT-AWARE (see [`is_near_duplicate`]): only a
+/// repeat that matches the last answered question is dropped within this
+/// window. 8 s used to be purely time-based and swallowed genuine follow-ups
+/// ("how's the weather" → "I'm flying from LaGuardia"), breaking back-and-forth
+/// conversation. Multi-device duplicate broadcasts arrive within ~1-2 s.
+const ANSWER_DEBOUNCE: Duration = Duration::from_millis(2500);
+
+/// Two transcriptions are "the same question" (a duplicate broadcast, not a
+/// real follow-up) when their normalized forms match. Multi-device taps of the
+/// same utterance transcribe identically; a new question differs.
+fn is_near_duplicate(a: &str, b: &str) -> bool {
+    fn norm(s: &str) -> String {
+        s.chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .flat_map(|c| c.to_lowercase())
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+    let (na, nb) = (norm(a), norm(b));
+    !na.is_empty() && (na == nb || na.contains(&nb) || nb.contains(&na))
+}
 /// After the bot joins, ignore addressed questions for this long. The
 /// server replays a burst of channel history on join (and the SFU can
 /// replay buffered audio) — answering that backlog is an unprompted
@@ -3773,6 +3802,7 @@ async fn transcribe_participant(
                                     tracing::info!(%nick, "barge-in — interrupting current answer");
                                     call.speaker.clear();
                                     call.last_answer = Some(Instant::now());
+                                    call.last_question = Some(question.clone());
                                     // Snapshot the context BEFORE pushing the
                                     // question — then record the question as a
                                     // transcript line so the conversation log
@@ -3783,23 +3813,30 @@ async fn transcribe_participant(
                                     call.transcript.push(format!("{nick}: {text}"));
                                     Some((snapshot, call.speaker.clone(), call.video.clone()))
                                 }
-                                // Debounce: a speaker joined from several
-                                // devices is tapped once per broadcast, so
-                                // the same question arrives 2-3 times —
-                                // answer the first, drop the rest.
+                                // Content-aware debounce: drop a repeat only
+                                // when it MATCHES the last answered question
+                                // within the short window (a multi-device
+                                // duplicate broadcast). A different question —
+                                // a real conversational follow-up — always
+                                // goes through, even seconds later.
                                 Some(call)
-                                    if call
+                                    if !(call
                                         .last_answer
-                                        .is_none_or(|t| t.elapsed() >= ANSWER_DEBOUNCE) =>
+                                        .is_some_and(|t| t.elapsed() < ANSWER_DEBOUNCE)
+                                        && call
+                                            .last_question
+                                            .as_deref()
+                                            .is_some_and(|q| is_near_duplicate(q, &question))) =>
                                 {
                                     call.last_answer = Some(Instant::now());
+                                    call.last_question = Some(question.clone());
                                     let snapshot =
                                         recent_lines(&call.transcript, TRANSCRIPT_PROMPT_LINES);
                                     call.transcript.push(format!("{nick}: {text}"));
                                     Some((snapshot, call.speaker.clone(), call.video.clone()))
                                 }
                                 Some(_) => {
-                                    tracing::info!(%nick, "ignoring duplicate addressed question (debounce)");
+                                    tracing::info!(%nick, %question, "ignoring duplicate addressed question (content-debounce)");
                                     None
                                 }
                                 None => None,
