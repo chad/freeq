@@ -69,6 +69,22 @@ impl C {
         c.tx("CAP END");
         c
     }
+    fn with_multiline_caps(addr: SocketAddr, nick: &str) -> Self {
+        let s = TcpStream::connect(addr).unwrap();
+        s.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        let w = s.try_clone().unwrap();
+        let mut c = Self {
+            reader: BufReader::new(s),
+            writer: w,
+        };
+        c.tx("CAP LS 302");
+        c.tx(&format!("NICK {nick}"));
+        c.tx(&format!("USER {nick} 0 * :test"));
+        c.tx("CAP REQ :message-tags server-time batch draft/chathistory draft/multiline");
+        c.rx(|l| l.contains("ACK"), "ACK");
+        c.tx("CAP END");
+        c
+    }
     fn with_sasl(addr: SocketAddr, nick: &str, did: &str, key: PrivateKey) -> Self {
         let s = TcpStream::connect(addr).unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).ok();
@@ -226,6 +242,57 @@ impl C {
 // ═══════════════════════════════════════════════════════════════
 // CHANNEL HISTORY: membership check
 // ═══════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn inbound_multiline_batch_bypasses_command_throttle_until_close() {
+    // A single logical `draft/multiline` message can exceed the generic
+    // command burst window on the wire. The server should rate-limit the
+    // assembled logical message, not drop batch chunks or the close frame
+    // before assembly.
+    let r = resolver(vec![]);
+    let (addr, _h) = start(r).await;
+    run(addr, |addr| {
+        let mut alice = C::with_multiline_caps(addr, "mlrate_alice");
+        alice.reg();
+        alice.drain();
+        let mut bob = C::with_caps(addr, "mlrate_bob");
+        bob.reg();
+        bob.drain();
+
+        alice.tx("JOIN #mlrate");
+        alice.num("366");
+        alice.drain();
+        bob.tx("JOIN #mlrate");
+        bob.num("366");
+        bob.drain();
+        alice.drain();
+
+        alice.tx("BATCH +burst1 draft/multiline #mlrate");
+        for i in 0..20 {
+            alice.tx(&format!("@batch=burst1 PRIVMSG #mlrate :burst line {i:02}"));
+        }
+        alice.tx("BATCH -burst1");
+
+        let mut seen = Vec::new();
+        for _ in 0..20 {
+            let line = bob.rx(
+                |l| l.contains("PRIVMSG #mlrate") && l.contains("burst line"),
+                "burst multiline relay",
+            );
+            seen.push(line);
+        }
+
+        assert!(
+            seen.iter().any(|m| m.contains("burst line 00")),
+            "first fallback chunk missing: {seen:#?}"
+        );
+        assert!(
+            seen.iter().any(|m| m.contains("burst line 19")),
+            "last fallback chunk missing; batch was likely throttled before close: {seen:#?}"
+        );
+    })
+    .await;
+}
 
 #[tokio::test]
 async fn chathistory_multiline_message_replayed_as_split_privmsgs() {

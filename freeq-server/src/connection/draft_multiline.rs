@@ -178,8 +178,7 @@ pub fn handle_batch_open(
 
     // Cap concurrent open batches per session — prevents a misbehaving
     // client from accumulating unbounded per-session state.
-    let session_open_count = open.keys().filter(|(sid, _)| sid == session_id).count();
-    if session_open_count >= MAX_CONCURRENT_BATCHES_PER_SESSION {
+    if count_session_open_batches(&open, session_id) >= MAX_CONCURRENT_BATCHES_PER_SESSION {
         return Err(BatchError::Invalid("too many concurrent batches"));
     }
 
@@ -536,16 +535,21 @@ pub fn assemble_body(batch: &OpenBatch) -> String {
     out
 }
 
-/// Snapshot the number of open batches for a session — used by the
-/// per-session concurrent-cap check and by tests.
+/// Count the open batches a session currently holds, given an already-locked
+/// `open_batches` map. Single source of truth for the per-session concurrency
+/// cap, shared by `handle_batch_open` (enforcement) and the connection-loop
+/// rate-limit exemption pre-check so the two can't drift.
+pub(super) fn count_session_open_batches(
+    open: &HashMap<(String, String), OpenBatch>,
+    session_id: &str,
+) -> usize {
+    open.keys().filter(|(sid, _)| sid == session_id).count()
+}
+
+/// Snapshot the number of open batches for a session — used by tests.
 #[cfg(test)]
 fn count_open_batches(state: &Arc<SharedState>, session_id: &str) -> usize {
-    state
-        .open_batches
-        .lock()
-        .keys()
-        .filter(|(sid, _)| sid == session_id)
-        .count()
+    count_session_open_batches(&state.open_batches.lock(), session_id)
 }
 
 /// Top-level entry point for the inbound `BATCH` command. Parses the
