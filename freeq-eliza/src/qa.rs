@@ -196,6 +196,10 @@ pub struct QuestionRoute {
     /// fast voice model would have to hallucinate it.
     #[serde(default)]
     pub live_data: bool,
+    /// A TASK that needs the agentic Claude Code brain (tools + file access,
+    /// multi-step work) rather than a spoken answer or a single web lookup.
+    #[serde(default)]
+    pub agent: bool,
 }
 
 /// Model for [`route_question`] — small and fast (~100-200 ms); the
@@ -203,9 +207,9 @@ pub struct QuestionRoute {
 /// to the answer path.
 pub const ROUTER_MODEL: &str = "llama-3.1-8b-instant";
 
-const ROUTER_SYSTEM: &str = "You route a question asked aloud in a live \
-video call to the right answering pipeline. Output ONLY a JSON object: \
-{\"visual\": bool, \"live_data\": bool}.\n\
+const ROUTER_SYSTEM: &str = "You route a request spoken aloud in a live \
+video call to the right pipeline. Output ONLY a JSON object: \
+{\"visual\": bool, \"live_data\": bool, \"agent\": bool}.\n\
 visual=true when the asker wants you to LOOK at their live camera or \
 shared screen: anything about what they're showing, holding, wearing, \
 pointing at, their surroundings, text/numbers on their screen or tile, \
@@ -216,7 +220,17 @@ crypto prices, sports scores or fixtures, breaking news, today's \
 events, current status of services. NOT for stable facts, math, \
 opinions, the call itself, or anything answerable from general \
 knowledge.\n\
-Both false for everything else. When unsure, false.";
+agent=true when it is a TASK that needs a capable coding/agentic \
+assistant with tools and file access to actually DO something — write, \
+edit, refactor or debug code; run commands; build, test or deploy; \
+create or modify files; carry out a multi-step job; do deep research \
+and produce an artifact; or change your own behavior/configuration. \
+Phrases like 'write...', 'build...', 'fix...', 'add a...', 'create...', \
+'run...', 'set up...', 'refactor...', 'implement...', 'make a script...'. \
+NOT for a question you can simply answer by talking, and NOT for a plain \
+current-facts lookup.\n\
+All false for an ordinary question you can just answer. When unsure, \
+all false.";
 
 /// Classify a spoken question with a fast small model. Returns `None`
 /// on any error or non-JSON reply — callers fall back to the cue-list
@@ -228,7 +242,7 @@ pub async fn route_question(
 ) -> Option<QuestionRoute> {
     let body = serde_json::json!({
         "model": ROUTER_MODEL,
-        "max_tokens": 40,
+        "max_tokens": 64,
         "temperature": 0,
         "response_format": { "type": "json_object" },
         "messages": [
@@ -250,6 +264,67 @@ pub async fn route_question(
     let text = parsed.choices.first()?.message.content.trim().to_string();
     let v = extract_json(&text)?;
     serde_json::from_value::<QuestionRoute>(v).ok()
+}
+
+/// Cue-list fallback for the `agent` route — UNION'd with the router's
+/// semantic verdict so a small-model miss still hands a real task to Claude
+/// Code. Fires only when an imperative task verb meets a technical/code/file
+/// object (so "write a haiku" stays a self-answer while "write a script"
+/// delegates), or on an explicit self-modification request.
+pub fn is_agentic_task(question: &str) -> bool {
+    let q = question.to_lowercase();
+    // Explicit self-modification — always agentic (needs file/tool access).
+    const SELF_MOD: [&str; 6] = [
+        "your code",
+        "your behavior",
+        "your prompt",
+        "your config",
+        "modify yourself",
+        "change your",
+    ];
+    if SELF_MOD.iter().any(|p| q.contains(p)) {
+        return true;
+    }
+    // Imperative "do something" verbs …
+    const VERBS: [&str; 18] = [
+        "write ", "build ", "create ", "implement ", "refactor ", "fix ", "debug ",
+        "add a", "add an", "set up", "run ", "deploy", "generate ", "install ",
+        "configure ", "commit", "make a", "rewrite ",
+    ];
+    // … paired with a technical / code / file / system object.
+    const OBJECTS: [&str; 24] = [
+        "script", "program", "code", "function", "file", "repo", "repository",
+        "test", "bug", "feature", "app", "server", "endpoint", "api", "class",
+        "module", "package", "branch", "pull request", " pr", "command", "project",
+        "database", "migration",
+    ];
+    let has_verb = VERBS.iter().any(|v| q.contains(v));
+    let has_object = OBJECTS.iter().any(|o| q.contains(o));
+    has_verb && has_object
+}
+
+#[cfg(test)]
+mod agent_route_tests {
+    use super::is_agentic_task;
+
+    #[test]
+    fn delegates_real_coding_tasks() {
+        assert!(is_agentic_task("write a python script that reverses a string"));
+        assert!(is_agentic_task("fix the bug in the login function"));
+        assert!(is_agentic_task("add a feature to the app"));
+        assert!(is_agentic_task("refactor the auth module"));
+        assert!(is_agentic_task("run the tests and commit"));
+        assert!(is_agentic_task("change your behavior to be quieter"));
+    }
+
+    #[test]
+    fn leaves_ordinary_requests_alone() {
+        assert!(!is_agentic_task("write a haiku about the ocean"));
+        assert!(!is_agentic_task("what is a monad"));
+        assert!(!is_agentic_task("what's the weather tomorrow"));
+        assert!(!is_agentic_task("tell me about the roman empire"));
+        assert!(!is_agentic_task("how are you doing today"));
+    }
 }
 
 const SCENE_SYSTEM: &str = "You design one visual card for Eliza's \

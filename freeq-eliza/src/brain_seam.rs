@@ -40,6 +40,11 @@ pub enum Outbound {
     Ready { channel: String },
     #[serde(rename = "utterance")]
     Utterance { nick: String, text: String },
+    /// A request the router classified as an agentic TASK — hand it to the
+    /// Claude Code brain (tools + file access). yokota's `onDelegate` speaks
+    /// an ack, runs it, and sends the result back as a `say`.
+    #[serde(rename = "delegate")]
+    Delegate { nick: String, text: String },
     #[serde(rename = "left")]
     Left,
     #[serde(rename = "ended")]

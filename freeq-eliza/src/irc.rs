@@ -639,7 +639,12 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
     // addressed utterances, and given the live-call slot so an inbound
     // "say" speaks against whatever call is active. No-op unless both
     // `--external-brain` and `--brain-sock` are set.
-    if external_brain {
+    // Connect whenever a brain socket is configured — not only in full
+    // external-brain mode. In native mode the seam stays idle until the
+    // router classifies a request as an agentic TASK, at which point the
+    // emit site forwards a `Delegate` to the Claude Code brain (smart
+    // hand-off); `external_brain` additionally forwards EVERY utterance.
+    if external_brain || brain_sock.is_some() {
         if let Some(sock) = brain_sock.clone() {
             let seam = crate::brain_seam::connect(cfg.clone(), sock, active.clone());
             let _ = cfg.brain_seam.set(seam);
@@ -1874,9 +1879,40 @@ async fn answer_and_speak(
         elapsed_ms = t0.elapsed().as_millis() as u64,
         visual = route.map(|r| r.visual),
         live_data = route.map(|r| r.live_data),
+        agent = route.map(|r| r.agent),
         model = %answer_model,
         "question routed"
     );
+
+    // ── Smart hand-off ───────────────────────────────────────────────
+    // An agentic TASK (write/run code, multi-step work, file ops) goes to the
+    // Claude Code brain over the seam — it has tools + file access the fast
+    // voice model lacks. Visual questions stay local (the camera frame lives
+    // here). `external_brain` already forwards everything, so this only fires
+    // on the native voice path. yokota acks, runs it, and speaks the result
+    // back via the seam, so we take no native answer here.
+    // Router verdict UNION the cue-list heuristic (small router models miss
+    // clear coding tasks); a visual question stays local regardless.
+    let wants_agent =
+        route.is_some_and(|r| r.agent) || qa::is_agentic_task(&question);
+    let is_visual_route = route.is_some_and(|r| r.visual);
+    if is_voice
+        && !cfg.external_brain
+        && wants_agent
+        && !is_visual_route
+        && let Some(seam) = cfg.brain_seam.get()
+    {
+        tracing::info!(turn, %asker, %question, "smart hand-off → Claude Code (agentic task)");
+        seam.send(crate::brain_seam::Outbound::Delegate {
+            nick: asker.clone(),
+            text: question.clone(),
+        });
+        drop(tx);
+        if let Some(t) = speak_task {
+            let _ = t.await;
+        }
+        return;
+    }
 
     // A visual question we can actually see → the vision model with the
     // asker's latest frame. A visual question with no frame → a useful
