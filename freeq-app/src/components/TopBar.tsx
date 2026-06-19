@@ -8,10 +8,11 @@ import { fetchProfile, type ATProfile } from '../lib/profiles';
 interface TopBarProps {
   onToggleSidebar?: () => void;
   onToggleMembers?: () => void;
+  sidebarOpen?: boolean;
   membersOpen?: boolean;
 }
 
-export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBarProps) {
+export function TopBar({ onToggleSidebar, onToggleMembers, sidebarOpen, membersOpen }: TopBarProps) {
   const activeChannel = useStore((s) => s.activeChannel);
   const channels = useStore((s) => s.channels);
   const connectionState = useStore((s) => s.connectionState);
@@ -29,14 +30,16 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
   // For DMs, resolve partner profile
   const partnerWhois = isDM ? whoisCache.get(activeChannel.toLowerCase()) : undefined;
   const partnerDid = isDM ? (ch?.members.values().next().value?.did || partnerWhois?.did) : undefined;
-  const [partnerProfile, setPartnerProfile] = useState<ATProfile | null>(null);
+  const [partnerProfileState, setPartnerProfileState] = useState<{ did: string; profile: ATProfile | null } | null>(null);
   useEffect(() => {
-    if (isDM && partnerDid) {
-      fetchProfile(partnerDid).then((p) => p && setPartnerProfile(p));
-    } else {
-      setPartnerProfile(null);
-    }
+    if (!isDM || !partnerDid) return;
+    let cancelled = false;
+    fetchProfile(partnerDid).then((profile) => {
+      if (!cancelled) setPartnerProfileState({ did: partnerDid, profile });
+    });
+    return () => { cancelled = true; };
   }, [isDM, partnerDid]);
+  const partnerProfile = partnerProfileState && partnerProfileState.did === partnerDid ? partnerProfileState.profile : null;
 
   const startEdit = () => {
     setTopicDraft(topic);
@@ -51,13 +54,20 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
   return (
     <>
     <header className="h-14 bg-bg-secondary border-b border-border flex items-center gap-3 px-4 shrink-0">
-      {/* Mobile menu button */}
+      {/* Sidebar toggle */}
       <button
         onClick={onToggleSidebar}
-        className="md:hidden text-fg-dim hover:text-fg-muted p-1 -ml-1 mr-1"
+        className={`text-fg-dim hover:text-fg-muted p-1.5 -ml-1 rounded-lg hover:bg-bg-tertiary shrink-0 transition-colors ${
+          sidebarOpen ? 'text-fg-muted' : 'text-fg-dim'
+        }`}
+        title={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+        aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
+        aria-pressed={sidebarOpen}
       >
-        <svg className="w-5 h-5" viewBox="0 0 16 16" fill="currentColor">
-          <path fillRule="evenodd" d="M2.5 12a.5.5 0 01.5-.5h10a.5.5 0 010 1H3a.5.5 0 01-.5-.5zm0-4a.5.5 0 01.5-.5h10a.5.5 0 010 1H3a.5.5 0 01-.5-.5zm0-4a.5.5 0 01.5-.5h10a.5.5 0 010 1H3a.5.5 0 01-.5-.5z"/>
+        <svg className="w-5 h-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="3" y="4" width="14" height="12" rx="2" />
+          <path d="M8 4v12" />
+          <path d={sidebarOpen ? 'M12.5 8l-2 2 2 2' : 'M10.5 8l2 2-2 2'} />
         </svg>
       </button>
 
@@ -175,11 +185,13 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
             membersOpen ? 'text-fg-muted' : 'text-fg-dim'
           }`}
           title={membersOpen ? 'Hide members' : 'Show members'}
+          aria-label={membersOpen ? 'Hide members sidebar' : 'Show members sidebar'}
+          aria-pressed={membersOpen}
         >
           <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
             <path d="M8 8a3 3 0 100-6 3 3 0 000 6zM2 14s-1 0-1-1 1-4 7-4 7 3 7 4-1 1-1 1H2z"/>
           </svg>
-          {memberCount > 0 && <span>{memberCount}</span>}
+          {memberCount > 0 && <span className="hidden sm:inline tabular-nums">{memberCount}</span>}
         </button>
       )}
 
@@ -191,6 +203,8 @@ export function TopBar({ onToggleSidebar, onToggleMembers, membersOpen }: TopBar
             membersOpen ? 'text-fg-muted' : 'text-fg-dim'
           }`}
           title={membersOpen ? 'Hide profile' : 'Show profile'}
+          aria-label={membersOpen ? 'Hide profile sidebar' : 'Show profile sidebar'}
+          aria-pressed={membersOpen}
         >
           <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
             <path d="M8 8a3 3 0 100-6 3 3 0 000 6zM2 14s-1 0-1-1 1-4 7-4 7 3 7 4-1 1-1 1H2z"/>
