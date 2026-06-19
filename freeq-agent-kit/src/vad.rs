@@ -41,7 +41,7 @@ pub struct VadConfig {
 impl Default for VadConfig {
     /// Defaults tuned for conversational speech at 16 kHz: a 0.6 s pause
     /// ends an utterance, utterances are capped at 22 s, and a flush
-    /// needs at least 0.35 s of actual voice to be emitted.
+    /// needs at least 0.45 s of actual voice to be emitted.
     fn default() -> Self {
         Self {
             // Raised from 0.018: room tone / background noise sat just above the

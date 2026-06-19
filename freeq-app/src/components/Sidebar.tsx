@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useStore } from '../store';
 import { joinChannel, partChannel, disconnect, startAvSession, endAvSession, leaveAvSession, getNick } from '../irc/client';
 import { SpeakerIcon } from './SessionIndicator';
@@ -496,10 +497,15 @@ function SidebarContextMenu({ channel, isFav, isMuted, isChannel, position, onCl
     return () => document.removeEventListener('mousedown', handler);
   }, [onClose]);
 
-  return (
+  // Portal to <body>: the sidebar's wrapper in App.tsx has a transform
+  // (md:translate-x-0 + transition-transform), which makes it the containing
+  // block + stacking/clip context for position:fixed descendants — so an
+  // in-tree menu gets confined to the sidebar and clipped where it overlaps
+  // the chat pane. Rendering at the body root lets `fixed` track the viewport.
+  return createPortal(
     <div
       ref={ref}
-      className="fixed z-50 bg-bg-secondary border border-border rounded-xl shadow-2xl py-1.5 min-w-[160px] animate-fadeIn"
+      className="fixed z-[100] bg-bg-secondary border border-border rounded-xl shadow-2xl py-1.5 min-w-[160px] animate-fadeIn"
       style={{ left: Math.min(position.x, window.innerWidth - 180), top: Math.min(position.y, window.innerHeight - 200) }}
     >
       {isChannel && (
@@ -537,7 +543,8 @@ function SidebarContextMenu({ channel, isFav, isMuted, isChannel, position, onCl
           Close conversation
         </button>
       )}
-    </div>
+    </div>,
+    document.body
   );
 }
 

@@ -28,6 +28,32 @@ import { BookmarksPanel } from './components/BookmarksPanel';
 import { MotdBanner } from './components/MotdBanner';
 import { CallPanel } from './components/CallPanel';
 
+const SIDEBAR_OPEN_KEY = 'freeq-sidebar-open';
+const MEMBERS_OPEN_KEY = 'freeq-members-open';
+
+function getStoredBoolean(key: string, fallback: boolean) {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const value = window.localStorage.getItem(key);
+    return value === null ? fallback : value === 'true';
+  } catch {
+    return fallback;
+  }
+}
+
+function setStoredBoolean(key: string, value: boolean) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(key, String(value));
+  } catch {
+    // Storage can be unavailable in private browsing or locked-down embeds.
+  }
+}
+
+function isDesktopViewport() {
+  return typeof window === 'undefined' || window.innerWidth >= 768;
+}
+
 export default function App() {
   const registered = useStore((s) => s.registered);
   const wasRegistered = useStore((s) => s.wasRegistered);
@@ -46,13 +72,25 @@ export default function App() {
   const [quickSwitcher, setQuickSwitcher] = useState(false);
   const [settings, setSettings] = useState(false);
   const [shortcuts, setShortcuts] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [membersOpen, setMembersOpen] = useState(() => window.innerWidth >= 768);
+  const [sidebarOpen, setSidebarOpen] = useState(() => getStoredBoolean(SIDEBAR_OPEN_KEY, true));
+  const [membersOpen, setMembersOpen] = useState(() => getStoredBoolean(MEMBERS_OPEN_KEY, isDesktopViewport()));
   const threadMsgId = useStore((s) => s.threadMsgId);
   const threadChannel = useStore((s) => s.threadChannel);
   const channels = useStore((s) => s.channels);
   const activeChannel = useStore((s) => s.activeChannel);
   const setActive = useStore((s) => s.setActiveChannel);
+  const hasRightSidebar = activeChannel !== 'server';
+  const isProfileSidebar = hasRightSidebar && !activeChannel.startsWith('#');
+  const rightSidebarWidth = isProfileSidebar ? 'w-64' : 'w-52';
+  const rightSidebarDesktopWidth = isProfileSidebar ? 'md:w-64' : 'md:w-52';
+
+  useEffect(() => {
+    setStoredBoolean(SIDEBAR_OPEN_KEY, sidebarOpen);
+  }, [sidebarOpen]);
+
+  useEffect(() => {
+    setStoredBoolean(MEMBERS_OPEN_KEY, membersOpen);
+  }, [membersOpen]);
 
   // Swipe gesture to open/close sidebar on mobile
   const touchStart = useRef<{ x: number; y: number } | null>(null);
@@ -206,38 +244,42 @@ export default function App() {
       <ReconnectBanner />
       <GuestUpgradeBanner />
       <div className="flex flex-1 min-h-0">
-        {/* Mobile sidebar overlay */}
-        {sidebarOpen && (
-          <div
-            className="fixed inset-0 bg-black/40 z-30 md:hidden"
-            onClick={() => setSidebarOpen(false)}
-          />
-        )}
-        <div className={`${
-          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
-        } fixed inset-y-0 left-0 md:relative md:inset-auto md:h-full md:translate-x-0 z-30 transition-transform duration-200`}>
+        <div
+          className={`app-sidebar-backdrop fixed inset-0 bg-black/40 z-20 md:hidden ${
+            sidebarOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          }`}
+          onClick={() => setSidebarOpen(false)}
+        />
+        <div className={`app-sidebar-shell fixed inset-y-0 left-0 z-30 w-64 md:relative md:inset-auto md:h-full ${
+          sidebarOpen ? 'translate-x-0 md:w-64' : '-translate-x-full md:w-0 md:translate-x-0 pointer-events-none'
+        }`}>
           <Sidebar onOpenSettings={() => setSettings(true)} />
         </div>
 
         <main className="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
           <MotdBanner />
           <TopBar
-            onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
-            onToggleMembers={() => setMembersOpen(!membersOpen)}
+            onToggleSidebar={() => setSidebarOpen((open) => !open)}
+            onToggleMembers={() => setMembersOpen((open) => !open)}
+            sidebarOpen={sidebarOpen}
             membersOpen={membersOpen}
           />
           <CallPanel />
           <MessageList />
           <ComposeBox />
         </main>
-        {/* Member list — inline on desktop, overlay on mobile */}
-        {membersOpen && (
+        {/* Member/profile list — inline on desktop, overlay on mobile */}
+        {hasRightSidebar && (
           <>
             <div
-              className="fixed inset-0 bg-black/40 z-30 md:hidden"
+              className={`app-sidebar-backdrop fixed inset-0 bg-black/40 z-20 md:hidden ${
+                membersOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+              }`}
               onClick={() => setMembersOpen(false)}
             />
-            <div className="fixed right-0 top-0 bottom-0 z-30 md:relative md:z-auto">
+            <div className={`app-sidebar-shell fixed right-0 top-0 bottom-0 z-30 ${rightSidebarWidth} md:relative md:inset-auto md:z-auto md:h-full ${
+              membersOpen ? `translate-x-0 ${rightSidebarDesktopWidth}` : 'translate-x-full md:w-0 md:translate-x-0 pointer-events-none'
+            }`}>
               <MemberList />
             </div>
           </>

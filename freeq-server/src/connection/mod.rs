@@ -249,6 +249,107 @@ impl Connection {
     }
 }
 
+fn is_draft_multiline_rate_exempt(
+    msg: &Message,
+    state: &Arc<SharedState>,
+    session_id: &str,
+) -> bool {
+    match msg.command.as_str() {
+        "BATCH" => is_draft_multiline_batch_rate_exempt(msg, state, session_id),
+        "PRIVMSG" | "NOTICE" => is_draft_multiline_chunk_rate_exempt(msg, state, session_id),
+        _ => false,
+    }
+}
+
+fn is_draft_multiline_batch_rate_exempt(
+    msg: &Message,
+    state: &Arc<SharedState>,
+    session_id: &str,
+) -> bool {
+    let Some(reference) = msg.params.first() else {
+        return false;
+    };
+
+    if let Some(batch_id) = reference.strip_prefix('+') {
+        return is_draft_multiline_batch_open_rate_exempt(msg, state, session_id, batch_id);
+    }
+
+    if let Some(batch_id) = reference.strip_prefix('-') {
+        return !batch_id.is_empty()
+            && state
+                .open_batches
+                .lock()
+                .get(&(session_id.to_string(), batch_id.to_string()))
+                .is_some_and(|batch| batch.batch_type == "draft/multiline");
+    }
+
+    false
+}
+
+fn is_draft_multiline_batch_open_rate_exempt(
+    msg: &Message,
+    state: &Arc<SharedState>,
+    session_id: &str,
+    batch_id: &str,
+) -> bool {
+    if batch_id.is_empty() {
+        return false;
+    }
+    if msg.params.get(1).map(String::as_str) != Some("draft/multiline") {
+        return false;
+    }
+    if msg.params.get(2).is_none_or(|target| target.is_empty()) {
+        return false;
+    }
+
+    let has_batch = state.cap_batch.lock().contains(session_id);
+    let has_multiline = state.cap_draft_multiline.lock().contains(session_id);
+    if !has_batch || !has_multiline {
+        return false;
+    }
+
+    let key = (session_id.to_string(), batch_id.to_string());
+    let open = state.open_batches.lock();
+    if open.contains_key(&key) {
+        return false;
+    }
+
+    draft_multiline::count_session_open_batches(&open, session_id)
+        < draft_multiline::MAX_CONCURRENT_BATCHES_PER_SESSION
+}
+
+fn is_draft_multiline_chunk_rate_exempt(
+    msg: &Message,
+    state: &Arc<SharedState>,
+    session_id: &str,
+) -> bool {
+    let Some(batch_id) = msg.tags.get("batch") else {
+        return false;
+    };
+    // A real chunk carries a body param; require its presence (matching the
+    // PRIVMSG/NOTICE dispatch) without binding it.
+    let (Some(target), Some(_)) = (msg.params.first(), msg.params.get(1)) else {
+        return false;
+    };
+    let target = if target.starts_with('#') || target.starts_with('&') {
+        normalize_channel(target)
+    } else {
+        target.clone()
+    };
+
+    state
+        .open_batches
+        .lock()
+        .get(&(session_id.to_string(), batch_id.to_string()))
+        .is_some_and(|batch| {
+            let command_matches = batch
+                .first_command
+                .as_deref()
+                .is_none_or(|seen| seen == msg.command);
+            batch.batch_type == "draft/multiline" && batch.target == target && command_matches
+        })
+}
+
 /// Handle a plain TCP connection.
 pub async fn handle(stream: TcpStream, state: Arc<SharedState>) -> Result<()> {
     let peer = stream.peer_addr()?;
@@ -512,7 +613,7 @@ where
         let exempt_from_rate_limit = matches!(
             msg.command.as_str(),
             "JOIN" | "CHATHISTORY" | "WHOIS" | "PING" | "PONG" | "MODE" | "WHO" | "NAMES" | "LOGIN"
-        );
+        ) || is_draft_multiline_rate_exempt(&msg, &state, &session_id);
         if conn.registered && !exempt_from_rate_limit {
             let now = tokio::time::Instant::now();
             let elapsed = now.duration_since(rate_last).as_secs_f64();
