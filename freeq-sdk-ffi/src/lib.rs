@@ -1059,6 +1059,10 @@ pub trait AvEventHandler: Send + Sync + 'static {
     fn on_av_event(&self, event: AvEvent);
 }
 
+/// Pure mic jitter-buffer logic (producer cap + consumer drain). Always
+/// compiled — and unit-tested — independent of the heavy `av` media stack.
+mod audio_buffer;
+
 #[cfg(feature = "av")]
 mod av_impl {
     use super::{AvEvent, AvEventHandler, FreeqError, RUNTIME};
@@ -1136,7 +1140,7 @@ mod av_impl {
     }
 
     /// Rate Swift resamples mic audio to before pushing it in.
-    pub(super) const PUSH_AUDIO_RATE: u32 = 48_000;
+    pub(super) use crate::audio_buffer::PUSH_AUDIO_RATE;
 
     /// Audio source fed from Swift via `push_audio_frame`. Swift owns the
     /// real mic capture (`AVAudioEngine`) — the same arrangement as video —
@@ -1153,17 +1157,12 @@ mod av_impl {
             }
         }
         fn pop_samples(&mut self, buf: &mut [f32]) -> anyhow::Result<Option<usize>> {
+            // FIFO drain with silence-padding on underrun. The backlog bound
+            // is enforced producer-side in `push_audio` (a stalled encoder
+            // never reaches here, so capping here couldn't bound it). Always
+            // hand the encoder a full buffer.
             let mut q = self.queue.lock().unwrap();
-            for slot in buf.iter_mut() {
-                *slot = q.pop_front().unwrap_or(0.0);
-            }
-            // Cap the backlog at ~1s so a stalled encoder can't make the
-            // queue grow without bound.
-            let cap = PUSH_AUDIO_RATE as usize;
-            if q.len() > cap {
-                let excess = q.len() - cap;
-                q.drain(..excess);
-            }
+            crate::audio_buffer::drain_into(&mut q, buf);
             Ok(Some(buf.len()))
         }
     }
@@ -1547,7 +1546,12 @@ mod av_impl {
     }
 
     pub(super) fn push_audio(state: &State, samples: Vec<f32>) {
-        state.audio_queue.lock().unwrap().extend(samples);
+        // Bound the backlog on the PRODUCER side: if the encoder stalls it
+        // never calls pop_samples, so the cap has to live here or the queue
+        // grows without bound (memory leak + seconds of stale audio on
+        // resume). Drops oldest to keep real-time latency low.
+        let mut q = state.audio_queue.lock().unwrap();
+        crate::audio_buffer::push_capped(&mut q, samples, crate::audio_buffer::MAX_BACKLOG_SAMPLES);
     }
 }
 

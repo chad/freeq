@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { useStore } from '../store';
 import { getAvInstanceId, getNick, leaveAvSession } from '../irc/client';
 import { loadMoqComponents } from '../lib/moq-loader';
+import { broadcastName, computeParticipantSlots } from '../lib/av-mesh';
 import { getCachedProfile } from '../lib/profiles';
 import { showToast } from './Toast';
 
@@ -183,11 +184,12 @@ export function CallPanel() {
     // Per-call instance suffix so this device's path is unique even if the
     // same DID publishes from another tab/device.
     const myInstance = getAvInstanceId();
-    const broadcastName = myInstance
-      ? `${sessionId}/${myNick}~${myInstance}`
-      : `${sessionId}/${myNick}`;
+    // Single source of truth for the broadcast path — the exact same
+    // function every subscriber uses to compute what to watch, so publish
+    // and subscribe paths can never drift (a whole class of split bugs).
+    const myBroadcast = broadcastName(sessionId, myNick, myInstance);
     pub.setAttribute('url', moqOrigin);
-    pub.setAttribute('name', broadcastName);
+    pub.setAttribute('name', myBroadcast);
     // `invisible` BEFORE `source`: moq-publish reacts to `source` by opening a
     // single getUserMedia. With `invisible` set first it grabs audio only, so a
     // busy/denied camera can't fail the whole (audio) call. When withVideo, we
@@ -203,7 +205,7 @@ export function CallPanel() {
     pub.setAttribute('source', 'camera');
     publishedWithVideoRef.current = withVideo;
     setPubEl(pub);
-    console.log('[call] Publishing:', broadcastName, withVideo ? '(video)' : '(audio-only)');
+    console.log('[call] Publishing:', myBroadcast, withVideo ? '(video)' : '(audio-only)');
     return pub;
   }, [sessionId, myNick, moqOrigin]);
 
@@ -461,28 +463,19 @@ export function CallPanel() {
       if (!data.participants) return;
 
       const myInstance = getAvInstanceId();
+      const myDid = useStore.getState().authDid;
 
-      // Each participant slot is identified by (nick, instance_id). Two
-      // devices on the same DID return two entries with the same nick but
-      // different instance_id — and we have to subscribe to each path
-      // independently. The watcher map is keyed by the full broadcast key
-      // so the per-slot lifecycle works.
-      const slots: Slot[] = data.participants
-        .filter((p: { nick: string; instance_id?: string | null }) => {
-          // Skip *our own* slot (matching nick AND matching instance_id).
-          if (p.nick.toLowerCase() !== myNick.toLowerCase()) return true;
-          if (myInstance && p.instance_id && p.instance_id === myInstance) return false;
-          if (!myInstance && !p.instance_id) return false;
-          // Same nick, different instance — that's another device of ours.
-          // Subscribe so the user hears themselves across devices (useful
-          // for verifying the call is wired up at all).
-          return true;
-        })
-        .map((p: { nick: string; instance_id?: string | null }) => {
-          const broadcastKey = p.instance_id ? `${p.nick}~${p.instance_id}` : p.nick;
-          const broadcastName = `${sessionId}/${broadcastKey}`;
-          return { nick: p.nick, broadcastKey, broadcastName };
-        });
+      // Build the subscribe set: one slot per OTHER live participant.
+      // computeParticipantSlots decides "is this me?" by instance/DID — never
+      // by nick — so a peer who shares our nick is never wrongly disowned
+      // (that disowning is exactly how a one-way "split" appears). Two devices
+      // on the same DID surface as two entries (same nick, different
+      // instance); each is subscribed independently.
+      const slots: Slot[] = computeParticipantSlots(
+        data.participants,
+        { nick: myNick, instance: myInstance, did: myDid },
+        sessionId,
+      );
 
       console.log(
         '[call] poll: participants=%o myInstance=%s slots=%o',
