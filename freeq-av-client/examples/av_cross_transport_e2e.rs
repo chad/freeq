@@ -42,7 +42,7 @@ use iroh_live::media::publish::LocalBroadcast;
 use iroh_live::media::subscribe::RemoteBroadcast;
 use iroh_live::media::traits::{AudioSource, VideoSource};
 
-use freeq_av::{PcmFrame, TapBackend, path_nick};
+use freeq_av::{PcmFrame, TapBackend};
 
 const VID_W: u32 = 320;
 const VID_H: u32 = 240;
@@ -136,6 +136,7 @@ struct Args {
     secs: u64,
     out: PathBuf,
     session: String,
+    capture_only: bool,
 }
 
 fn parse_args() -> Args {
@@ -149,6 +150,7 @@ fn parse_args() -> Args {
         secs: get("--secs").and_then(|s| s.parse().ok()).unwrap_or(12),
         out: get("--out").map(PathBuf::from).unwrap_or_else(|| "/tmp/freeq-av-e2e".into()),
         session: get("--session").unwrap_or_else(|| format!("xtest-{}", std::process::id())),
+        capture_only: a.iter().any(|x| x == "--capture-only"),
     }
 }
 
@@ -216,13 +218,14 @@ async fn main() -> Result<()> {
     let mut tasks = tokio::task::JoinSet::new();
     let all_labels: Vec<String> = agents.iter().map(|a| a.label.clone()).collect();
 
+    let _ = &all_labels;
     for ag in agents.clone() {
         let session = args.session.clone();
         let out = args.out.clone();
         let matrix = matrix.clone();
-        let peers = all_labels.clone();
+        let capture_only = args.capture_only;
         tasks.spawn(async move {
-            if let Err(e) = run_agent(ag.clone(), session, out, matrix, peers).await {
+            if let Err(e) = run_agent(ag.clone(), session, out, matrix, capture_only).await {
                 eprintln!("  [{}] agent error: {e:#}", ag.label);
             }
         });
@@ -233,8 +236,38 @@ async fn main() -> Result<()> {
     // Let in-flight artifact writes settle.
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    print_matrix(&agents, &matrix);
+    if args.capture_only {
+        print_capture_report(&matrix);
+    } else {
+        print_matrix(&agents, &matrix);
+    }
     Ok(())
+}
+
+/// Capture-only report: per (observer, real peer) what was decoded. The peers
+/// are real clients we discovered, not agents we spawned.
+fn print_capture_report(matrix: &Matrix) {
+    let g = matrix.lock().unwrap();
+    println!("\n=== capture report (observer  <==  real peer) ===\n");
+    if g.is_empty() {
+        println!("  NOTHING captured — no peer broadcasts seen in this session.");
+        println!("  (Is anyone actually publishing? Did they av-join THIS session id?)\n");
+        return;
+    }
+    for ((obs, peer), c) in g.iter() {
+        println!(
+            "  {obs:>8}  <==  {peer:<28}  audio_frames={:<5} video_frames={:<5} peak={:.3}",
+            c.audio_frames, c.video_frames, c.peak
+        );
+    }
+    let any_audio = g.values().any(|c| c.audio_frames > 0);
+    let any_video = g.values().any(|c| c.video_frames > 0);
+    println!(
+        "\n  observers heard real audio: {}   saw real video: {}",
+        if any_audio { "YES" } else { "no" },
+        if any_video { "YES" } else { "no" },
+    );
+    println!("  artifacts (real clients' decoded media) written to --out dir\n");
 }
 
 /// One agent: publish our own tone+colour broadcast, then subscribe to every
@@ -244,30 +277,37 @@ async fn run_agent(
     session: String,
     out: PathBuf,
     matrix: Matrix,
-    _peers: Vec<String>,
+    capture_only: bool,
 ) -> Result<()> {
     let our_path = format!("{session}/{}", me.label);
 
-    let broadcast = LocalBroadcast::new();
-    broadcast
-        .audio()
-        .set(
-            ToneSource { freq: me.freq, phase: 0.0 },
-            AudioCodec::Opus,
-            [AudioPreset::Hq],
-        )
-        .map_err(|e| anyhow::anyhow!("audio set: {e}"))?;
-    broadcast
-        .video()
-        .set_source(
-            ColorSource { bgra_pixel: me.bgra, idx: 0 },
-            VideoCodec::H264,
-            [VideoPreset::P360],
-        )
-        .map_err(|e| anyhow::anyhow!("video set: {e}"))?;
-
     let pub_origin = moq_lite::Origin::produce();
-    pub_origin.publish_broadcast(our_path.as_str(), broadcast.consume());
+    // In capture-only mode the agent publishes NOTHING — it's a silent
+    // observer that only subscribes (so it can join a real human call and
+    // record what's there without injecting test tones into it).
+    let _broadcast = if capture_only {
+        None
+    } else {
+        let broadcast = LocalBroadcast::new();
+        broadcast
+            .audio()
+            .set(
+                ToneSource { freq: me.freq, phase: 0.0 },
+                AudioCodec::Opus,
+                [AudioPreset::Hq],
+            )
+            .map_err(|e| anyhow::anyhow!("audio set: {e}"))?;
+        broadcast
+            .video()
+            .set_source(
+                ColorSource { bgra_pixel: me.bgra, idx: 0 },
+                VideoCodec::H264,
+                [VideoPreset::P360],
+            )
+            .map_err(|e| anyhow::anyhow!("video set: {e}"))?;
+        pub_origin.publish_broadcast(our_path.as_str(), broadcast.consume());
+        Some(broadcast)
+    };
 
     let sub_origin = moq_lite::Origin::produce();
     let mut sub_consumer = sub_origin.consume();
@@ -283,7 +323,6 @@ async fn run_agent(
         .connect(me.url.parse().context("parse sfu url")?)
         .await
         .context("MoQ connect")?;
-    let _broadcast = broadcast; // keep encoder alive
 
     let prefix = format!("{session}/");
     let mut taps: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
@@ -297,7 +336,9 @@ async fn run_agent(
         if path == our_path || !path.starts_with(&prefix) || !seen.insert(path.clone()) {
             continue;
         }
-        let peer_label = path_nick(&path).to_string();
+        // Full last segment ({nick}~{instance}) so two devices on one DID
+        // (e.g. web + iOS both "chadfowler.com") are distinguished.
+        let peer_label = path.rsplit('/').next().unwrap_or(&path).to_string();
         let consumer = announce.unwrap();
         let (me_label, out, matrix) = (me.label.clone(), out.clone(), matrix.clone());
         taps.spawn(async move {
