@@ -120,9 +120,10 @@ type Matrix = Arc<Mutex<BTreeMap<(String, String), Cell>>>;
 
 #[derive(Clone)]
 struct Agent {
-    label: String,      // e.g. "quic-0"
+    label: String,      // e.g. "qbot0" (also the IRC nick when --channel is set)
     transport: String,  // "QUIC" | "WS"
     url: String,
+    instance: String,   // per-agent broadcast instance suffix
     // Distinct fingerprints.
     freq: f32,
     bgra: [u8; 4],
@@ -137,6 +138,8 @@ struct Args {
     out: PathBuf,
     session: String,
     capture_only: bool,
+    channel: Option<String>,
+    irc_ws: String,
 }
 
 fn parse_args() -> Args {
@@ -151,6 +154,8 @@ fn parse_args() -> Args {
         out: get("--out").map(PathBuf::from).unwrap_or_else(|| "/tmp/freeq-av-e2e".into()),
         session: get("--session").unwrap_or_else(|| format!("xtest-{}", std::process::id())),
         capture_only: a.iter().any(|x| x == "--capture-only"),
+        channel: get("--channel"),
+        irc_ws: get("--irc-ws").unwrap_or_else(|| "wss://irc.freeq.at/irc".into()),
     }
 }
 
@@ -176,13 +181,15 @@ async fn main() -> Result<()> {
         [220, 200, 40, 255], // cyan
     ];
 
+    let pid = std::process::id() & 0xffff;
     let mut agents: Vec<Agent> = Vec::new();
     let mut n = 0usize;
     for i in 0..args.quic {
         agents.push(Agent {
-            label: format!("quic-{i}"),
+            label: format!("qbot{i}"),
             transport: "QUIC".into(),
             url: args.quic_url.clone(),
+            instance: format!("{pid:04x}{n}"),
             freq: 330.0 + 70.0 * n as f32,
             bgra: palette[n % palette.len()],
         });
@@ -190,9 +197,10 @@ async fn main() -> Result<()> {
     }
     for i in 0..args.ws {
         agents.push(Agent {
-            label: format!("ws-{i}"),
+            label: format!("wbot{i}"),
             transport: "WS".into(),
             url: args.ws_url.clone(),
+            instance: format!("{pid:04x}{n}"),
             freq: 330.0 + 70.0 * n as f32,
             bgra: palette[n % palette.len()],
         });
@@ -224,8 +232,10 @@ async fn main() -> Result<()> {
         let out = args.out.clone();
         let matrix = matrix.clone();
         let capture_only = args.capture_only;
+        let channel = args.channel.clone();
+        let irc_ws = args.irc_ws.clone();
         tasks.spawn(async move {
-            if let Err(e) = run_agent(ag.clone(), session, out, matrix, capture_only).await {
+            if let Err(e) = run_agent(ag.clone(), session, out, matrix, capture_only, channel, irc_ws).await {
                 eprintln!("  [{}] agent error: {e:#}", ag.label);
             }
         });
@@ -272,14 +282,34 @@ fn print_capture_report(matrix: &Matrix) {
 
 /// One agent: publish our own tone+colour broadcast, then subscribe to every
 /// other agent and record what we decode.
+#[allow(clippy::too_many_arguments)]
 async fn run_agent(
     me: Agent,
     session: String,
     out: PathBuf,
     matrix: Matrix,
     capture_only: bool,
+    channel: Option<String>,
+    irc_ws: String,
 ) -> Result<()> {
-    let our_path = format!("{session}/{}", me.label);
+    // When --channel is set, register over IRC and av-join the session so the
+    // agent appears in the server's REST roster — which is what the WEB client
+    // subscribes from. Without this the agent's broadcast is in the SFU but
+    // invisible to web (web only renders roster participants). The broadcast
+    // path then MUST be {session}/{nick}~{instance} to match the roster entry.
+    let our_path = if capture_only {
+        String::new()
+    } else if channel.is_some() {
+        format!("{session}/{}~{}", me.label, me.instance)
+    } else {
+        format!("{session}/{}", me.label)
+    };
+
+    if let (false, Some(chan)) = (capture_only, channel.as_deref()) {
+        if let Err(e) = irc_av_join(&irc_ws, chan, &session, &me.label, &me.instance).await {
+            eprintln!("  [{}] av-join failed (will still publish to SFU): {e:#}", me.label);
+        }
+    }
 
     let pub_origin = moq_lite::Origin::produce();
     // In capture-only mode the agent publishes NOTHING — it's a silent
@@ -480,6 +510,101 @@ fn print_matrix(agents: &[Agent], matrix: &Matrix) {
         );
     }
     println!("\n  artifacts (open to verify sound/images): see the --out dir\n");
+}
+
+// ── IRC av-join (so an agent shows up in the server's REST roster) ──
+
+/// Register a guest over IRC-over-WebSocket, JOIN the channel, and send the
+/// `av-join` TAGMSG with this agent's instance suffix — making it a real
+/// roster participant the web client will subscribe to. Holds the IRC
+/// connection open in a background task (the server marks a participant left
+/// when its connection drops), responding to PINGs, until the process exits.
+async fn irc_av_join(
+    irc_ws: &str,
+    channel: &str,
+    session: &str,
+    nick: &str,
+    instance: &str,
+) -> Result<()> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::time::timeout;
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (ws, _) = tokio_tungstenite::connect_async(irc_ws)
+        .await
+        .context("IRC ws connect")?;
+    let (mut w, mut r) = ws.split();
+    w.send(Message::Text(
+        format!("NICK {nick}\r\nUSER {nick} 0 * :av-e2e\r\n").into(),
+    ))
+    .await?;
+
+    // Read until registration (numeric 001), answering PINGs.
+    timeout(Duration::from_secs(10), async {
+        while let Some(msg) = r.next().await {
+            if let Ok(Message::Text(t)) = msg {
+                for line in t.lines() {
+                    let line = line.trim();
+                    if line.starts_with("PING") {
+                        let _ = w
+                            .send(Message::Text(
+                                format!("{}\r\n", line.replacen("PING", "PONG", 1)).into(),
+                            ))
+                            .await;
+                    }
+                    if line.contains(" 001 ") {
+                        return Ok::<(), anyhow::Error>(());
+                    }
+                }
+            }
+        }
+        anyhow::bail!("connection closed before registration")
+    })
+    .await
+    .context("IRC registration timed out")??;
+
+    w.send(Message::Text(
+        format!("CAP REQ :message-tags\r\nJOIN {channel}\r\n").into(),
+    ))
+    .await?;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    w.send(Message::Text(
+        format!(
+            "@+freeq.at/av-join;+freeq.at/av-id={session};+freeq.at/av-instance={instance} TAGMSG {channel}\r\n"
+        )
+        .into(),
+    ))
+    .await?;
+
+    // Keep the connection alive for the call's lifetime (PING every 20s,
+    // answer server PINGs). Dies when the process exits → server reaps the
+    // participant cleanly.
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(20));
+        loop {
+            tokio::select! {
+                _ = tick.tick() => {
+                    if w.send(Message::Text("PING :keep\r\n".into())).await.is_err() {
+                        break;
+                    }
+                }
+                msg = r.next() => match msg {
+                    Some(Ok(Message::Text(t))) => {
+                        for line in t.lines() {
+                            if line.starts_with("PING") {
+                                let _ = w.send(Message::Text(
+                                    format!("{}\r\n", line.trim().replacen("PING", "PONG", 1)).into(),
+                                )).await;
+                            }
+                        }
+                    }
+                    Some(Ok(_)) => {}
+                    _ => break,
+                }
+            }
+        }
+    });
+    Ok(())
 }
 
 // ── Minimal artifact writers (no extra deps) ────────────────────────

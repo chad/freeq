@@ -2717,12 +2717,28 @@ fn handle_av_tagmsg(
                 "av-join: handler entry"
             );
 
+            // Record THIS connection's instance BEFORE building the live-set
+            // and reaping. The recording used to happen after join_session,
+            // which opened a race: a second client av-joining a few ms later
+            // built its live-set before we'd registered, didn't see us, and
+            // reaped our just-created slot (observed live: two agents joining
+            // ~5ms apart — the first vanished from the roster). Recording
+            // up-front closes that window.
+            if let Some(inst) = instance_id {
+                state
+                    .av_instances_per_conn
+                    .lock()
+                    .entry(conn.id.clone())
+                    .or_default()
+                    .insert(inst.to_string());
+            }
+
             // Before joining: reap any orphan slots in this session whose
             // owning IRC connection is gone. Live-set is built from the
-            // (did, instance) pairs that current connections registered on
-            // their own av-join. Without this, a refreshed/crashed tab
-            // leaves a `left_at: None` ghost in the participants list and
-            // peers waste subscriptions on a broadcast nobody publishes.
+            // instances that current connections registered on their own
+            // av-join. Without this, a refreshed/crashed tab leaves a
+            // `left_at: None` ghost in the participants list and peers waste
+            // subscriptions on a broadcast nobody publishes.
             let live: std::collections::HashSet<(String, Option<String>)> = {
                 let per_conn = state.av_instances_per_conn.lock();
                 let dids = state.session_dids.lock();
@@ -2756,17 +2772,8 @@ fn handle_av_tagmsg(
                     }
                     drop(mgr);
 
-                    // Record this instance against the IRC connection so the
-                    // disconnect handler can clean only this slot — not every
-                    // slot of the same DID across other tabs/devices.
-                    if let Some(inst) = instance_id {
-                        state
-                            .av_instances_per_conn
-                            .lock()
-                            .entry(conn.id.clone())
-                            .or_default()
-                            .insert(inst.to_string());
-                    }
+                    // (Instance was recorded against this connection before
+                    // the reap above, to close the concurrent-join race.)
 
                     // Send iroh-live RoomTicket to joiner (for native clients)
                     if let Some(ticket) = &session.iroh_ticket {

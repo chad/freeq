@@ -601,12 +601,24 @@ impl AvSessionManager {
         if !matches!(session.state, AvSessionState::Active) {
             return;
         }
+        // A per-call instance suffix is a globally-unique per-device id, so a
+        // slot that HAS an instance is live iff its instance is in the live
+        // set — independent of the `did` the caller paired it with. (The
+        // caller builds the live set from connection bookkeeping where guests
+        // may carry a different did string than the participant slot, e.g.
+        // "" vs "guest:nick"; matching on the did too would wrongly reap a
+        // live guest. Only instance-less legacy slots fall back to did.)
+        let live_instances: std::collections::HashSet<&String> =
+            live.iter().filter_map(|(_, inst)| inst.as_ref()).collect();
         for p in session.participants.values_mut() {
             if p.left_at.is_some() {
                 continue;
             }
-            let key = (p.did.clone(), p.instance_id.clone());
-            if !live.contains(&key) {
+            let orphan = match &p.instance_id {
+                Some(inst) => !live_instances.contains(inst),
+                None => !live.contains(&(p.did.clone(), None)),
+            };
+            if orphan {
                 p.left_at = Some(now);
             }
         }
@@ -1244,6 +1256,41 @@ mod tests {
                 "SDK FFI path and web client path must match for {p:?}"
             );
         }
+    }
+
+    /// Regression: a slot whose instance IS live must survive the reaper even
+    /// when the caller's live-set pairs that instance with a DIFFERENT did
+    /// than the slot carries. This is the guest case — the participant slot is
+    /// keyed `did="guest:qbot0"` but the connection-derived live-set may carry
+    /// `did=""` for the same instance. Matching on (did, instance) wrongly
+    /// reaped the live guest; matching on instance fixes it. Observed live:
+    /// two guest agents av-joined ~5ms apart and the first vanished.
+    #[test]
+    fn reap_keeps_live_instance_despite_did_mismatch() {
+        let mut mgr = AvSessionManager::new();
+        let id = mgr
+            .create_session(Some("#g"), "guest:qbot0", "qbot0", None, Some("ee830"))
+            .unwrap()
+            .id;
+        mgr.join_session(&id, "guest:wbot0", "wbot0", Some("ef0c1"))
+            .unwrap();
+        assert_eq!(mgr.active_participant_count(&id), 2);
+
+        // Live-set as the messaging handler builds it for guests: correct
+        // instances, but did attributed as "" (session_dids unset for guests).
+        let live: std::collections::HashSet<(String, Option<String>)> = [
+            (String::new(), Some("ee830".to_string())),
+            (String::new(), Some("ef0c1".to_string())),
+        ]
+        .into_iter()
+        .collect();
+        mgr.reap_orphan_slots(&id, &live);
+
+        assert_eq!(
+            mgr.active_participant_count(&id),
+            2,
+            "both live instances must survive despite the did mismatch"
+        );
     }
 
     #[test]
