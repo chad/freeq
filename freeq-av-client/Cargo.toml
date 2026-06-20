@@ -9,7 +9,8 @@ name = "freeq-av"
 path = "src/main.rs"
 
 [dependencies]
-iroh-live = { git = "https://github.com/n0-computer/iroh-live", rev = "edd9bcc530a615f3ab3a6919e96790a077905376", default-features = false, features = ["opus"] }
+iroh-live = { git = "https://github.com/n0-computer/iroh-live", rev = "edd9bcc530a615f3ab3a6919e96790a077905376", default-features = false, features = ["opus", "h264"] }
+freeq-av = { path = "../freeq-av" }
 iroh = { workspace = true }
 moq-native = { git = "https://github.com/Frando/moq", branch = "deps/iroh-main", default-features = false, features = ["noq", "websocket", "aws-lc-rs"] }
 moq-lite = { git = "https://github.com/Frando/moq", branch = "deps/iroh-main" }
