@@ -122,8 +122,22 @@ async fn handle_quic_connection(
     use moq_relay::AuthParams;
 
     let transport = request.transport();
+    // Root EVERY connection at the cluster root (""), regardless of the URL
+    // path the client dialed (e.g. "/av/moq"). The WebSocket entry point
+    // (`handle_ws_moq`) already roots at "". If QUIC instead rooted at the
+    // URL path, native (QUIC) and web (WebSocket) clients would publish into
+    // DISJOINT namespaces inside the SAME `moq_relay::Cluster` and never see
+    // each other — observed live: an iOS QUIC client and a web WS client in
+    // one `#chadtest` session, mutually invisible (no audio, no video, not
+    // even in each other's participant list). `AuthParams::from_url` still
+    // parses any jwt/register query params; we only force the root path so
+    // both transports share one broadcast namespace.
     let params = match request.url() {
-        Some(url) => AuthParams::from_url(url),
+        Some(url) => {
+            let mut p = AuthParams::from_url(url);
+            p.path = String::new();
+            p
+        }
         None => AuthParams::default(),
     };
 

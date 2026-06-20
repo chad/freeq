@@ -421,10 +421,14 @@ class AppState: ObservableObject {
 
     func startCall(channel: String, sessionId: String) {
         guard client != nil || rawSenderForTest != nil else { return }
-        // The MoQ SFU has its own QUIC listener on :8080 — the same endpoint
-        // the web client and the bot use. The :443 reverse-proxy path serves
-        // an older, unstable WebSocket MoQ (moq-lite-02) that starves audio;
-        // don't route the call through it.
+        // Native clients take the SFU's QUIC listener on :8080 — the
+        // low-latency media path that doesn't starve audio the way the :443
+        // WebSocket path can. The web client rides :443 WebSocket (browsers
+        // can't use the self-signed QUIC cert). Both transports terminate in
+        // the SAME moq_relay::Cluster and — as of the av_sfu.rs root-unify fix
+        // — share one broadcast namespace, so QUIC (native) and WS (web)
+        // participants see and hear each other. (Before that fix QUIC rooted
+        // at "/av/moq" and WS at "", leaving them mutually invisible.)
         let serverUrl = ServerConfig.sfuBaseUrl
 
         // iOS won't let cpal/iroh-live open both mic and speaker until the
