@@ -1042,6 +1042,25 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
             Event::Message {
                 from, target, text, ..
             } => {
+                // Direct message (target is our own nick): a DM is inherently
+                // addressed, so in external-brain-text mode forward the whole
+                // text to the brain and let it reply privately (to=from). This
+                // lets the owner converse with the being fully privately,
+                // without exposing the question in a channel.
+                if target.eq_ignore_ascii_case(&cfg.nick) {
+                    if !from.eq_ignore_ascii_case(&cfg.nick)
+                        && cfg.external_brain
+                        && cfg.external_brain_text
+                        && let Some(seam) = cfg.brain_seam.get()
+                    {
+                        let q = text.trim().to_string();
+                        if !q.is_empty() {
+                            tracing::info!(%from, question = %q, "external-brain(text): forwarding DM to brain");
+                            seam.send(crate::brain_seam::Outbound::Utterance { nick: from.clone(), text: q });
+                        }
+                    }
+                    continue;
+                }
                 // Answer when a participant addresses the bot by name in
                 // channel chat. Ignore non-channel targets and our own
                 // messages (the bot posts to the channel too).
