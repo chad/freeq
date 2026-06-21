@@ -282,6 +282,30 @@ export function getAvInstanceId(): string | null {
 // and silently no-op every future button click on that user's session.
 const _startInFlight = new Set<string>();
 
+/** Seed an AV session into the store from the REST `/sessions` shape, so
+ *  CallPanel (which renders `avSessions.get(activeAvSession)`) can mount
+ *  immediately rather than waiting for the 5s discovery poll. */
+function seedAvSessionFromRest(active: {
+  id: string; channel: string; created_by?: string; created_by_nick?: string;
+  title?: string; created_at?: number; iroh_ticket?: string;
+  participants?: Array<{ nick: string; did?: string; role?: string; joined_at?: number }>;
+}) {
+  const participants = new Map<string, import('../store').AvParticipant>();
+  for (const p of active.participants || []) {
+    participants.set(p.nick, {
+      did: p.did || '', nick: p.nick,
+      role: (p.role as import('../store').AvParticipant['role']) || 'speaker',
+      joinedAt: new Date((p.joined_at || 0) * 1000),
+    });
+  }
+  useStore.getState().updateAvSession({
+    id: active.id, channel: active.channel, createdBy: active.created_by || '',
+    createdByNick: active.created_by_nick || '', title: active.title || undefined,
+    participants, state: 'active', startedAt: new Date((active.created_at || 0) * 1000),
+    irohTicket: active.iroh_ticket || undefined,
+  });
+}
+
 export async function startAvSession(channel: string, title?: string) {
   const store = useStore.getState();
   if (!store.authDid) {
@@ -303,26 +327,10 @@ export async function startAvSession(channel: string, title?: string) {
         const data = await resp.json();
         if (data.active && data.active.state === 'Active') {
           store.addSystemMessage(channel, `Joining existing voice session (${data.active.participant_count} participants)`);
-          // Seed the session into the store NOW so CallPanel can mount on this
-          // same click — it reads `avSessions.get(activeAvSession)`, and if the
-          // 5s discovery poll hasn't populated it yet, setting activeAvSession
-          // alone leaves CallPanel with nothing to render (the call UI never
-          // appears, so the click feels like it did nothing and you end up
-          // hitting "Join voice" in the nav as a second step).
-          const participants = new Map<string, import('../store').AvParticipant>();
-          for (const p of data.active.participants || []) {
-            participants.set(p.nick, {
-              did: p.did || '', nick: p.nick, role: p.role || 'speaker',
-              joinedAt: new Date((p.joined_at || 0) * 1000),
-            });
-          }
-          store.updateAvSession({
-            id: data.active.id, channel: data.active.channel,
-            createdBy: data.active.created_by || '', createdByNick: data.active.created_by_nick || '',
-            title: data.active.title || undefined, participants, state: 'active',
-            startedAt: new Date((data.active.created_at || 0) * 1000),
-            irohTicket: data.active.iroh_ticket || undefined,
-          });
+          // Seed the session NOW so CallPanel can mount on this same click —
+          // setting activeAvSession alone, before the 5s poll populates the
+          // map, leaves CallPanel with nothing to render.
+          seedAvSessionFromRest(data.active);
           joinAvSession(channel, data.active.id);
           store.setAvAudioActive(true);
           return;
@@ -342,6 +350,34 @@ export async function startAvSession(channel: string, title?: string) {
     if (title) tags['+freeq.at/av-title'] = title;
     client?.raw(format('TAGMSG', [channel], tags));
     store.setAvAudioActive(true);
+
+    // Converge on the session we just created. The av-state SDK event is
+    // supposed to fire and set activeAvSession (see the avSessionUpdate
+    // handler), but if it doesn't fire or its createdBy doesn't match, a user
+    // starting a call ALONE is left with avAudioActive=true and no
+    // activeAvSession — so CallPanel never mounts and the call seems to never
+    // start. Poll the channel roster for our freshly-created session and
+    // activate it directly. Idempotent with the event: whichever sets
+    // activeAvSession first wins; the other no-ops.
+    const myDid = store.authDid;
+    for (let i = 0; i < 16; i++) {
+      if (useStore.getState().activeAvSession) { pendingAvStart = null; break; }
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        const r = await fetch(`/api/v1/channels/${encodeURIComponent(channel)}/sessions`);
+        if (!r.ok) continue;
+        const d = await r.json();
+        const active = d.active;
+        if (active && active.state === 'Active' && active.created_by === myDid) {
+          if (!useStore.getState().activeAvSession) {
+            seedAvSessionFromRest(active);
+            useStore.getState().setActiveAvSession(active.id);
+          }
+          pendingAvStart = null;
+          break;
+        }
+      } catch { /* keep polling */ }
+    }
   } finally {
     _startInFlight.delete(key);
   }
