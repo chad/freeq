@@ -56,7 +56,15 @@ pub enum Outbound {
 #[serde(tag = "type")]
 enum Inbound {
     #[serde(rename = "say")]
-    Say { text: String },
+    Say {
+        text: String,
+        /// Optional reply target. When set (a nick or channel), the reply is
+        /// sent there as text — so the brain can DM a private answer to the
+        /// asker instead of posting it in the channel. Ignored during a live
+        /// call (the reply is always spoken there).
+        #[serde(default)]
+        to: Option<String>,
+    },
     /// yokota's brain state → drives the tile's "thinking"/working mood while
     /// the (remote) brain is composing a reply.
     #[serde(rename = "state")]
@@ -67,6 +75,11 @@ enum Inbound {
     /// the spoken reply never waits on it.
     #[serde(rename = "show")]
     Show { topic: String },
+    /// Run a raw IRC line on the being's behalf — lets the brain administer its
+    /// channel (MODE +i, INVITE, MODE +o, TOPIC, …). The being must hold the
+    /// privileges the command needs (e.g. channel op).
+    #[serde(rename = "irc")]
+    Irc { raw: String },
     /// Anything else is ignored (forward-compatible).
     #[serde(other)]
     Other,
@@ -202,8 +215,9 @@ async fn handle_inbound(
         }
     };
     match msg {
-        Inbound::Say { text } => speak_inbound(cfg, active, text).await,
+        Inbound::Say { text, to } => speak_inbound(cfg, active, text, to).await,
         Inbound::Show { topic } => show_inbound(cfg, active, topic).await,
+        Inbound::Irc { raw } => irc_inbound(cfg, raw).await,
         Inbound::State { thinking } => {
             let video = {
                 let guard = active.lock().await;
@@ -217,12 +231,29 @@ async fn handle_inbound(
     }
 }
 
+/// Run a raw IRC line from the brain (channel admin: MODE/INVITE/TOPIC/…).
+async fn irc_inbound(cfg: &Arc<SharedConfig>, raw: String) {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return;
+    }
+    if let Some(handle) = cfg.client_handle.get() {
+        tracing::info!(%raw, "brain seam: running raw IRC from brain");
+        if let Err(e) = handle.raw(raw).await {
+            tracing::warn!(error = ?e, %raw, "brain seam: raw IRC failed");
+        }
+    } else {
+        tracing::warn!(%raw, "brain seam: no client handle for raw IRC");
+    }
+}
+
 /// Speak a `say` line against the currently active call. No-op if the
 /// text is empty or no call is live.
 async fn speak_inbound(
     cfg: &Arc<SharedConfig>,
     active: &Arc<AsyncMutex<Option<ActiveCall>>>,
     text: String,
+    to: Option<String>,
 ) {
     if text.trim().is_empty() {
         return;
@@ -241,11 +272,12 @@ async fn speak_inbound(
         // so answer by typing. Otherwise (voice-only seam) there's nowhere to
         // speak it, so drop it.
         if cfg.external_brain_text {
-            if let (Some(handle), Some(channel)) =
-                (cfg.client_handle.get(), cfg.channels.first())
-            {
-                tracing::info!(%text, %channel, "brain seam: posting brain reply as channel text");
-                let _ = handle.privmsg(channel, &text).await;
+            // Reply target: the brain's explicit `to` (e.g. DM the asker
+            // privately) wins; otherwise the being's first channel.
+            let target = to.as_deref().or_else(|| cfg.channels.first().map(|s| s.as_str()));
+            if let (Some(handle), Some(target)) = (cfg.client_handle.get(), target) {
+                tracing::info!(%text, %target, "brain seam: posting brain reply as text");
+                let _ = handle.privmsg(target, &text).await;
                 return;
             }
         }

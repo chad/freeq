@@ -231,6 +231,9 @@ pub struct RunConfig {
     /// Also forward typed text to the brain and post its reply (opt-in; see
     /// `SharedConfig::external_brain_text`).
     pub external_brain_text: bool,
+    /// Audio-only: don't render or publish a video tile in calls (skip the
+    /// H.264 encode) so a being can hold a stable voice call on a small host.
+    pub no_video: bool,
     /// Path to the unix socket yokota listens on; eliza CONNECTS to it
     /// as a client. Only used when [`Self::external_brain`] is set.
     pub brain_sock: Option<String>,
@@ -367,6 +370,8 @@ pub(crate) struct SharedConfig {
     /// brain IS the seam server (no separate text daemon) sets this so you can
     /// drive it by typing as well as by voice.
     pub(crate) external_brain_text: bool,
+    /// Audio-only mode — skip video render + publish in calls.
+    pub(crate) no_video: bool,
     /// Disable per-character voice DSP — speak with the dry/neutral
     /// profile (see [`RunConfig::no_voice_dsp`]).
     pub(crate) no_voice_dsp: bool,
@@ -509,6 +514,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         peer_agents,
         external_brain,
         external_brain_text,
+        no_video,
         brain_sock,
         no_voice_dsp,
     } = cfg;
@@ -656,6 +662,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         recent_tts: std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
         external_brain,
         external_brain_text,
+        no_video,
         no_voice_dsp,
         brain_seam: std::sync::OnceLock::new(),
         client_handle: std::sync::OnceLock::new(),
@@ -2947,7 +2954,11 @@ async fn start_transcription(
         _ => crate::video::Backend::Svg,
     };
     let video = VideoTile::with_backend(backend);
-    video.spawn_renderer();
+    // Audio-only beings skip the renderer thread — no raster, no frames to
+    // encode — so the real-time audio path keeps its CPU on a constrained host.
+    if !cfg.no_video {
+        video.spawn_renderer();
+    }
 
     // Pair a Speaker (kept here) with a PushAudioSource (published by
     // the AvSession as the bot's broadcast). Enqueueing on the Speaker
@@ -2959,6 +2970,7 @@ async fn start_transcription(
         session_id: session_id.clone(),
         our_broadcast: broadcast_path(&session_id, &cfg.nick, &instance_id),
         my_nick: cfg.nick.clone(),
+        audio_only: cfg.no_video,
     };
 
     // Dispatcher task: own the AvSession and spawn one transcription

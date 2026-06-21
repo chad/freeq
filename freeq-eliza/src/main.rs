@@ -237,6 +237,12 @@ struct Cli {
     #[arg(long)]
     external_brain_text: bool,
 
+    /// Audio-only: in calls, don't render or publish a video tile (skip the
+    /// H.264 encode). Lets a being hold a stable VOICE call on a small/2-core
+    /// host where the video codec would otherwise starve the audio path.
+    #[arg(long)]
+    no_video: bool,
+
     /// Unix socket path to CONNECT to for external-brain mode (yokota
     /// is the server). Only used with `--external-brain`.
     #[arg(long)]
@@ -493,6 +499,7 @@ async fn main() -> Result<()> {
         peer_agents: cli.peer_agents,
         external_brain: cli.external_brain,
         external_brain_text: cli.external_brain_text,
+        no_video: cli.no_video,
         brain_sock: cli.brain_sock,
         no_voice_dsp: cli.no_voice_dsp,
     })
