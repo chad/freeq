@@ -21,6 +21,7 @@ pub mod research;
 pub mod social;
 pub mod social_feed;
 pub mod stt;
+pub mod streaming_stt;
 pub mod summary;
 pub mod tts;
 pub mod video;

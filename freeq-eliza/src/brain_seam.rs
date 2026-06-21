@@ -236,6 +236,19 @@ async fn speak_inbound(
             .map(|call| (call.speaker.clone(), call.video.clone()))
     };
     let Some((speaker, video)) = snapshot else {
+        // No live call. If this being forwards typed text (external_brain_text),
+        // the reply belongs in the channel as text — the user asked by typing,
+        // so answer by typing. Otherwise (voice-only seam) there's nowhere to
+        // speak it, so drop it.
+        if cfg.external_brain_text {
+            if let (Some(handle), Some(channel)) =
+                (cfg.client_handle.get(), cfg.channels.first())
+            {
+                tracing::info!(%text, %channel, "brain seam: posting brain reply as channel text");
+                let _ = handle.privmsg(channel, &text).await;
+                return;
+            }
+        }
         tracing::info!(%text, "brain seam: 'say' arrived with no active call; ignoring");
         return;
     };
