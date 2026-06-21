@@ -303,6 +303,26 @@ export async function startAvSession(channel: string, title?: string) {
         const data = await resp.json();
         if (data.active && data.active.state === 'Active') {
           store.addSystemMessage(channel, `Joining existing voice session (${data.active.participant_count} participants)`);
+          // Seed the session into the store NOW so CallPanel can mount on this
+          // same click — it reads `avSessions.get(activeAvSession)`, and if the
+          // 5s discovery poll hasn't populated it yet, setting activeAvSession
+          // alone leaves CallPanel with nothing to render (the call UI never
+          // appears, so the click feels like it did nothing and you end up
+          // hitting "Join voice" in the nav as a second step).
+          const participants = new Map<string, import('../store').AvParticipant>();
+          for (const p of data.active.participants || []) {
+            participants.set(p.nick, {
+              did: p.did || '', nick: p.nick, role: p.role || 'speaker',
+              joinedAt: new Date((p.joined_at || 0) * 1000),
+            });
+          }
+          store.updateAvSession({
+            id: data.active.id, channel: data.active.channel,
+            createdBy: data.active.created_by || '', createdByNick: data.active.created_by_nick || '',
+            title: data.active.title || undefined, participants, state: 'active',
+            startedAt: new Date((data.active.created_at || 0) * 1000),
+            irohTicket: data.active.iroh_ticket || undefined,
+          });
           joinAvSession(channel, data.active.id);
           store.setAvAudioActive(true);
           return;
