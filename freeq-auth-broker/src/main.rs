@@ -33,6 +33,12 @@ struct BrokerState {
     config: BrokerConfig,
     pending: Mutex<std::collections::HashMap<String, PendingAuth>>,
     db: Mutex<rusqlite::Connection>,
+    // Per-broker-token serialization for /session: AT Protocol refresh tokens
+    // are single-use, so concurrent /session calls for the same token cause
+    // one PDS rotation to succeed and the rest to fail with "replayed",
+    // eventually invalidating the stored token. This map gives each token
+    // its own mutex; concurrent callers queue and observe the rotated token.
+    session_locks: Mutex<std::collections::HashMap<String, Arc<Mutex<()>>>>,
 }
 
 #[derive(Clone)]
@@ -407,6 +413,7 @@ async fn main() {
         },
         pending: Mutex::new(std::collections::HashMap::new()),
         db: Mutex::new(db),
+        session_locks: Mutex::new(std::collections::HashMap::new()),
     });
 
     let app = Router::new()
@@ -1016,14 +1023,38 @@ async fn session(
         return Err((StatusCode::FORBIDDEN, "Origin not allowed".to_string()));
     }
 
+    tracing::info!(token_prefix = %req.broker_token.chars().take(8).collect::<String>(), "Session refresh request");
+
+    // Serialize concurrent /session calls for the same broker_token (see
+    // `session_locks` doc on BrokerState).
+    let lock = {
+        let mut map = state.session_locks.lock().await;
+        // Opportunistic GC: drop entries whose only reference is the map
+        // itself (strong_count == 1 means no active holder, no waiter). This
+        // keeps `session_locks` proportional to *concurrent* /session callers,
+        // not the cumulative set of broker_tokens the broker has ever served.
+        map.retain(|_, v| Arc::strong_count(v) > 1);
+        map.entry(req.broker_token.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    };
+    let _guard = lock.lock().await;
+
     let record = get_session(&state, &req.broker_token)
         .await
-        .ok_or((StatusCode::UNAUTHORIZED, "Invalid broker token".to_string()))?;
+        .ok_or_else(|| {
+            tracing::warn!(token_prefix = %req.broker_token.chars().take(8).collect::<String>(), "Session refresh: broker token not in DB");
+            (StatusCode::UNAUTHORIZED, "Invalid broker token".to_string())
+        })?;
 
     let (access_token, refresh_token, dpop_nonce, granted_scope) =
         refresh_access_token(&state.config, &record)
             .await
-            .map_err(|e| (StatusCode::BAD_GATEWAY, format!("Refresh failed: {e}")))?;
+            .map_err(|e| {
+                tracing::warn!(error = %e, did = %record.did, "Session refresh: PDS refresh_access_token failed");
+                (StatusCode::BAD_GATEWAY, format!("Refresh failed: {e}"))
+            })?;
+    tracing::info!(did = %record.did, "Session refresh: PDS refresh succeeded");
 
     // Update stored refresh token + nonce (C-5: encrypt before storing)
     let now = chrono::Utc::now().timestamp();

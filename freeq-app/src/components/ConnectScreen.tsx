@@ -48,6 +48,12 @@ let brokerAutoAttempts = 0;
 const MAX_BROKER_AUTO_ATTEMPTS = 3;
 // Synchronous guard: prevents broker effect from racing with OAuth result effect
 let oauthConnectInProgress = false;
+// Synchronous in-flight flag for the /session refresh effect. React 18
+// StrictMode double-invokes effects in dev, which would otherwise fire two
+// parallel /session calls per refresh. The broker serializes them safely
+// but the duplicate still costs a PDS round-trip and produces a visible
+// "Establishing session" flash when the second response lands.
+let sessionRefreshInFlight = false;
 
 type OAuthResultData = {
   did?: string;
@@ -138,7 +144,12 @@ export function ConnectScreen() {
   });
   const [brokerOrigin] = useState(() => {
     const stored = localStorage.getItem(LS_BROKER_BASE);
-    if (stored) return stored;
+    // Discard a stored value that equals the web origin: that means an earlier
+    // session ran in single-server mode (no external broker). The broker
+    // session refresh effect below short-circuits when brokerOrigin equals
+    // webOrigin, so trusting that stored value would defeat persistent login
+    // for users who once ran without a broker and later moved to one.
+    if (stored && stored !== webOrigin) return stored;
     if (isTauri) return 'https://auth.freeq.at';
     const host = window.location.host;
     if (host === 'irc.freeq.at') return 'https://auth.freeq.at';
@@ -223,6 +234,7 @@ export function ConnectScreen() {
     // Synchronous check: if OAuth result effect already called connect(), skip
     if (oauthConnectInProgress) return;
     if (brokerAutoAttempts >= MAX_BROKER_AUTO_ATTEMPTS) return;
+    if (sessionRefreshInFlight) return;
     const brokerToken = localStorage.getItem(LS_BROKER_TOKEN);
     if (!brokerToken) return;
     // If brokerOrigin is the same as webOrigin, there's no external broker —
@@ -233,6 +245,7 @@ export function ConnectScreen() {
     }
 
     brokerAutoAttempts++;
+    sessionRefreshInFlight = true;
     setAutoConnecting(true);
     // Use saved joined channels if available (reflects actual PART/JOIN state),
     // otherwise fall back to the saved channels from connect screen input.
@@ -285,6 +298,9 @@ export function ConnectScreen() {
         } else if (e?.name === 'AbortError') {
           setError('Authentication service unavailable. Try again or connect as guest.');
         }
+      })
+      .finally(() => {
+        sessionRefreshInFlight = false;
       });
   }, [registered, oauthPending, autoConnecting, brokerOrigin, server]);
 
