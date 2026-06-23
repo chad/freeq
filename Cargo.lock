@@ -2284,6 +2284,7 @@ dependencies = [
  "anyhow",
  "bytes",
  "clap",
+ "freeq-av",
  "futures-util",
  "hang",
  "http",
