@@ -2868,20 +2868,21 @@ pub(crate) async fn process_s2s_message(
                         }
                     }
                     drop(channels);
-                    let empty_tags = HashMap::new();
                     // Prefer the DID carried from the origin; fall back to a
                     // local nick_owners lookup for peers that didn't send one.
                     let sender_nick = from.split('!').next().unwrap_or(&from);
                     let s2s_sender_did = account
                         .clone()
                         .or_else(|| state.nick_owners.lock().get(sender_nick).cloned());
+                    // Persist the coordination tags (incl. +freeq.at/origin) so
+                    // CHATHISTORY replay carries them, like the DM persist path.
                     state.with_db(|db| {
                         db.insert_message(
                             &target,
                             &from,
                             &text,
                             timestamp,
-                            &empty_tags,
+                            &relay_tags,
                             Some(&msgid),
                             s2s_sender_did.as_deref(),
                         )
@@ -6192,6 +6193,50 @@ mod s2s_adversarial_tests {
         assert!(
             msgs.is_empty(),
             "without a carried account the stranger DM must not persist"
+        );
+    }
+
+    #[tokio::test]
+    async fn s2s_channel_message_persists_origin_for_history_replay() {
+        // The channel insert must persist coordination tags (incl. origin) so
+        // CHATHISTORY replay carries provenance, the same as the DM path.
+        let state = test_state_with_db();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        setup_channel(&state, "#provhist");
+        mgr.peer_names
+            .lock()
+            .await
+            .insert(PEER.to_string(), "zerosum".to_string());
+
+        process_s2s_message(
+            &state,
+            &mgr,
+            PEER,
+            S2sMessage::Privmsg {
+                event_id: format!("{PEER}:provhist"),
+                from: "alice!a@remote".to_string(),
+                target: "#provhist".to_string(),
+                text: "hi".to_string(),
+                origin: PEER.to_string(),
+                msgid: Some("PROVHIST-1".to_string()),
+                sig: None,
+                account: Some("did:plc:alice".to_string()),
+                tags: HashMap::new(),
+                multiline_lines: None,
+            },
+        )
+        .await;
+
+        let msgs = state
+            .with_db(|db| db.get_messages("#provhist", 10, None))
+            .expect("get_messages");
+        assert_eq!(msgs.len(), 1, "channel message should persist");
+        assert_eq!(
+            msgs[0].tags.get("+freeq.at/origin").map(String::as_str),
+            Some("zerosum"),
+            "persisted channel row must carry origin for replay: {:?}",
+            msgs[0].tags
         );
     }
 
