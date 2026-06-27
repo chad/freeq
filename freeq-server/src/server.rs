@@ -2743,7 +2743,7 @@ pub(crate) async fn process_s2s_message(
             from,
             target,
             text,
-            origin: _,
+            origin,
             msgid,
             sig,
             account,
@@ -2768,12 +2768,19 @@ pub(crate) async fn process_s2s_message(
             // `+freeq.at/*` minus `+freeq.at/sig` (re-attested locally),
             // sanitize key+value against IRC injection, and cap the count to
             // bound relay amplification.
-            let relay_tags: HashMap<String, String> = relayed_tags
+            let mut relay_tags: HashMap<String, String> = relayed_tags
                 .into_iter()
                 .filter(|(k, _)| k.starts_with("+freeq.at/") && k != "+freeq.at/sig")
                 .take(16)
                 .map(|(k, v)| (sanitize_s2s_str(&k, 64), sanitize_s2s_str(&v, 4096)))
                 .collect();
+            // Provenance: every message reaching here is from a remote origin
+            // (self-origin is skipped above), so tag it with the origin
+            // server's name. Lets clients distinguish a peer-vouched federated
+            // message from a locally-verified one, rather than rendering the
+            // (only peer-trusted) `account` as if this server had verified it.
+            let origin_name = sanitize_s2s_str(&manager.peer_display_name(&origin).await, 64);
+            relay_tags.insert("+freeq.at/origin".to_string(), origin_name);
 
             // Plain line for non-tag clients, tagged line with msgid + sig for
             // tag clients. `tagged_line_account` additionally carries the
@@ -5090,6 +5097,109 @@ mod s2s_adversarial_tests {
         assert!(
             !frames[0].contains("account="),
             "client without account-tag must not get account: {}",
+            frames[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn s2s_privmsg_carries_origin_provenance_tag() {
+        // A federated message is tagged with the origin server's name so
+        // clients can tell it apart from a locally-verified one. Gated on
+        // message-tags (it's a coordination tag), independent of account-tag.
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        setup_channel(&state, "#prov");
+        mgr.peer_names
+            .lock()
+            .await
+            .insert(PEER.to_string(), "zerosum".to_string());
+
+        let (tx, mut rx) = mpsc::channel(16);
+        state.connections.lock().insert("prov-recv".to_string(), tx);
+        state
+            .channels
+            .lock()
+            .get_mut("#prov")
+            .unwrap()
+            .members
+            .insert("prov-recv".to_string());
+        state.cap_message_tags.lock().insert("prov-recv".to_string());
+
+        process_s2s_message(
+            &state,
+            &mgr,
+            PEER,
+            S2sMessage::Privmsg {
+                event_id: format!("{PEER}:prov"),
+                from: "alice!a@remote".to_string(),
+                target: "#prov".to_string(),
+                text: "hi".to_string(),
+                origin: PEER.to_string(),
+                msgid: Some("PROV-1".to_string()),
+                sig: None,
+                account: Some("did:plc:alice".to_string()),
+                tags: HashMap::new(),
+                multiline_lines: None,
+            },
+        )
+        .await;
+
+        let frames = drain_mailbox(&mut rx).await;
+        assert_eq!(frames.len(), 1, "got frames: {frames:#?}");
+        assert!(
+            frames[0].contains("+freeq.at/origin=zerosum"),
+            "federated message should carry origin provenance: {}",
+            frames[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn s2s_privmsg_origin_provenance_falls_back_to_peer_id() {
+        // When the origin peer has no recorded name, the provenance tag falls
+        // back to a short form of its id rather than being absent.
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        setup_channel(&state, "#prov2");
+
+        let (tx, mut rx) = mpsc::channel(16);
+        state.connections.lock().insert("prov2-recv".to_string(), tx);
+        state
+            .channels
+            .lock()
+            .get_mut("#prov2")
+            .unwrap()
+            .members
+            .insert("prov2-recv".to_string());
+        state.cap_message_tags.lock().insert("prov2-recv".to_string());
+
+        // Note: no peer_names entry for PEER.
+        process_s2s_message(
+            &state,
+            &mgr,
+            PEER,
+            S2sMessage::Privmsg {
+                event_id: format!("{PEER}:prov2"),
+                from: "alice!a@remote".to_string(),
+                target: "#prov2".to_string(),
+                text: "hi".to_string(),
+                origin: PEER.to_string(),
+                msgid: Some("PROV-2".to_string()),
+                sig: None,
+                account: None,
+                tags: HashMap::new(),
+                multiline_lines: None,
+            },
+        )
+        .await;
+
+        let frames = drain_mailbox(&mut rx).await;
+        assert_eq!(frames.len(), 1, "got frames: {frames:#?}");
+        let expected = &PEER[..8.min(PEER.len())];
+        assert!(
+            frames[0].contains(&format!("+freeq.at/origin={expected}")),
+            "should fall back to short peer id: {}",
             frames[0]
         );
     }
