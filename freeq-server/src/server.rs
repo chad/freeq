@@ -2746,6 +2746,7 @@ pub(crate) async fn process_s2s_message(
             origin: _,
             msgid,
             sig,
+            account,
             tags: relayed_tags,
             multiline_lines,
             ..
@@ -2754,6 +2755,10 @@ pub(crate) async fn process_s2s_message(
             let from = sanitize_s2s_str(&from, 512);
             let target = sanitize_s2s_str(&target, 200);
             let text = sanitize_s2s_str(&text, 4096);
+            // Sender DID carried from the origin (the `account` tag value).
+            // Stamped by the origin from its authenticated session, never
+            // client-set; relayed on the same peer trust as the message body.
+            let account = account.map(|a| sanitize_s2s_str(&a, 512));
 
             // Generate a local msgid if the remote didn't send one
             let msgid = msgid.unwrap_or_else(crate::msgid::generate);
@@ -2770,14 +2775,22 @@ pub(crate) async fn process_s2s_message(
                 .map(|(k, v)| (sanitize_s2s_str(&k, 64), sanitize_s2s_str(&v, 4096)))
                 .collect();
 
-            // Plain line for non-tag clients, tagged line with msgid + sig for tag clients
+            // Plain line for non-tag clients, tagged line with msgid + sig for
+            // tag clients. `tagged_line_account` additionally carries the
+            // `account` tag and is sent only to clients that negotiated
+            // `account-tag` (per IRCv3, mirroring local delivery).
             let plain_line = format!(":{from} PRIVMSG {target} :{text}\r\n");
-            let tagged_line = {
+            let build_tagged = |with_account: bool| -> String {
                 let mut tags = HashMap::new();
                 tags.extend(relay_tags.iter().map(|(k, v)| (k.clone(), v.clone())));
                 tags.insert("msgid".to_string(), msgid.clone());
                 if let Some(ref sig) = sig {
                     tags.insert("+freeq.at/sig".to_string(), sig.clone());
+                }
+                if with_account
+                    && let Some(ref acct) = account
+                {
+                    tags.insert("account".to_string(), acct.clone());
                 }
                 let tag_msg = crate::irc::Message {
                     tags,
@@ -2787,6 +2800,8 @@ pub(crate) async fn process_s2s_message(
                 };
                 format!("{tag_msg}\r\n")
             };
+            let tagged_line = build_tagged(false);
+            let tagged_line_account = account.as_ref().map(|_| build_tagged(true));
 
             if target.starts_with('#') || target.starts_with('&') {
                 // Enforce +n and +m on incoming S2S messages
@@ -2829,6 +2844,9 @@ pub(crate) async fn process_s2s_message(
                     if let Some(ref sig) = sig {
                         tags.insert("+freeq.at/sig".to_string(), sig.clone());
                     }
+                    if let Some(ref acct) = account {
+                        tags.insert("account".to_string(), acct.clone());
+                    }
                     let mut channels = state.channels.lock();
                     if let Some(ch) = channels.get_mut(&channel_key) {
                         ch.history.push_back(HistoryMessage {
@@ -2844,9 +2862,12 @@ pub(crate) async fn process_s2s_message(
                     }
                     drop(channels);
                     let empty_tags = HashMap::new();
-                    // S2S messages: look up sender DID from nick_owners if available
+                    // Prefer the DID carried from the origin; fall back to a
+                    // local nick_owners lookup for peers that didn't send one.
                     let sender_nick = from.split('!').next().unwrap_or(&from);
-                    let s2s_sender_did = state.nick_owners.lock().get(sender_nick).cloned();
+                    let s2s_sender_did = account
+                        .clone()
+                        .or_else(|| state.nick_owners.lock().get(sender_nick).cloned());
                     state.with_db(|db| {
                         db.insert_message(
                             &target,
@@ -2869,6 +2890,7 @@ pub(crate) async fn process_s2s_message(
                     .unwrap_or_default();
                 let tag_caps = state.cap_message_tags.lock();
                 let time_caps = state.cap_server_time.lock();
+                let account_caps = state.cap_account_tag.lock();
                 let multiline_caps = state.cap_draft_multiline.lock();
                 let conns = state.connections.lock();
                 // If the peer told us this is a draft/multiline batch,
@@ -2895,10 +2917,9 @@ pub(crate) async fn process_s2s_message(
                 let time_tag = chrono::Utc::now()
                     .format("%Y-%m-%dT%H:%M:%S.000Z")
                     .to_string();
-                // Federated relays don't inject account-tag — matches
-                // the single-PRIVMSG S2S path's existing behavior.
-                // Whether to start attributing federated messages is a
-                // server-wide policy question, not a multiline one.
+                // Inject the `account` tag (sender DID carried from the
+                // origin) for clients that negotiated account-tag, the same
+                // as the single-PRIVMSG path and local delivery.
                 for sid in &members {
                     if let Some(tx) = conns.get(sid) {
                         if let (Some(lines), Some(batch_id)) =
@@ -2908,8 +2929,8 @@ pub(crate) async fn process_s2s_message(
                                 has_tags: tag_caps.contains(sid),
                                 has_time: time_caps.contains(sid),
                                 has_multiline: multiline_caps.contains(sid),
-                                wants_account: false,
-                                sender_did: None,
+                                wants_account: account.is_some() && account_caps.contains(sid),
+                                sender_did: account.as_deref(),
                             };
                             // Opener tags here are the relayed
                             // coordination tags + sig (msgid is
@@ -2939,10 +2960,12 @@ pub(crate) async fn process_s2s_message(
                                 let _ = tx.try_send(frame);
                             }
                         } else {
-                            let line = if tag_caps.contains(sid) {
-                                &tagged_line
-                            } else {
+                            let line = if !tag_caps.contains(sid) {
                                 &plain_line
+                            } else if account.is_some() && account_caps.contains(sid) {
+                                tagged_line_account.as_ref().unwrap_or(&tagged_line)
+                            } else {
+                                &tagged_line
                             };
                             let _ = tx.try_send(line.clone());
                         }
@@ -2957,16 +2980,28 @@ pub(crate) async fn process_s2s_message(
                     .map(|s| s.to_string());
                 if let Some(sid) = sid {
                     let has_tags = state.cap_message_tags.lock().contains(&sid);
-                    let line = if has_tags { &tagged_line } else { &plain_line };
+                    let wants_account =
+                        account.is_some() && state.cap_account_tag.lock().contains(&sid);
+                    let line = if !has_tags {
+                        &plain_line
+                    } else if wants_account {
+                        tagged_line_account.as_ref().unwrap_or(&tagged_line)
+                    } else {
+                        &tagged_line
+                    };
                     let conns = state.connections.lock();
                     if let Some(tx) = conns.get(&sid) {
                         let _ = tx.try_send(line.clone());
                     }
                 }
 
-                // Persist DM if both sender and recipient have DIDs
+                // Persist DM if both sender and recipient have DIDs. Prefer the
+                // sender DID carried from the origin (a remote sender is not in
+                // our nick_owners); fall back to the local lookup.
                 let sender_nick = from.split('!').next().unwrap_or(&from);
-                let sender_did = state.nick_owners.lock().get(sender_nick).cloned();
+                let sender_did = account
+                    .clone()
+                    .or_else(|| state.nick_owners.lock().get(sender_nick).cloned());
                 let recipient_did = state.nick_owners.lock().get(&target).cloned();
                 if let (Some(s_did), Some(r_did)) =
                     (sender_did.as_deref(), recipient_did.as_deref())
@@ -2981,6 +3016,9 @@ pub(crate) async fn process_s2s_message(
                     tags.insert("msgid".to_string(), msgid.clone());
                     if let Some(ref sig) = sig {
                         tags.insert("+freeq.at/sig".to_string(), sig.clone());
+                    }
+                    if let Some(ref acct) = account {
+                        tags.insert("account".to_string(), acct.clone());
                     }
                     state.with_db(|db| {
                         db.insert_message(
@@ -4795,6 +4833,7 @@ mod s2s_adversarial_tests {
                 origin: PEER.to_string(),
                 msgid: None,
                 sig: None,
+                account: None,
                 tags: HashMap::new(),
                 multiline_lines: None,
             },
@@ -4847,6 +4886,7 @@ mod s2s_adversarial_tests {
                     origin: PEER.to_string(),
                     msgid: None,
                     sig: None,
+                    account: None,
                     tags: HashMap::new(),
                     multiline_lines: None,
                 },
@@ -4932,6 +4972,7 @@ mod s2s_adversarial_tests {
                 origin: PEER.to_string(),
                 msgid: Some("ML-MSG-1".to_string()),
                 sig: None,
+                account: None,
                 tags: HashMap::new(),
                 multiline_lines: Some(s2s_multiline_lines(&["first", "second", "third"])),
             },
@@ -4950,6 +4991,107 @@ mod s2s_adversarial_tests {
         assert!(frames[2].contains("second"));
         assert!(frames[3].contains("third"));
         assert!(frames[4].starts_with("BATCH -ml"));
+    }
+
+    #[tokio::test]
+    async fn s2s_privmsg_account_injected_for_account_tag_client() {
+        // A federated PRIVMSG carrying the sender DID (`account`) should be
+        // delivered with `account=<did>` to a local client that negotiated
+        // account-tag — same as a locally-originated message.
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        setup_channel(&state, "#acct");
+
+        let (tx, mut rx) = mpsc::channel(16);
+        state.connections.lock().insert("acct-recv".to_string(), tx);
+        state
+            .channels
+            .lock()
+            .get_mut("#acct")
+            .unwrap()
+            .members
+            .insert("acct-recv".to_string());
+        state.cap_message_tags.lock().insert("acct-recv".to_string());
+        state.cap_account_tag.lock().insert("acct-recv".to_string());
+
+        process_s2s_message(
+            &state,
+            &mgr,
+            PEER,
+            S2sMessage::Privmsg {
+                event_id: format!("{PEER}:acct"),
+                from: "alice!a@remote".to_string(),
+                target: "#acct".to_string(),
+                text: "hi".to_string(),
+                origin: PEER.to_string(),
+                msgid: Some("ACCT-MSG-1".to_string()),
+                sig: None,
+                account: Some("did:plc:alice".to_string()),
+                tags: HashMap::new(),
+                multiline_lines: None,
+            },
+        )
+        .await;
+
+        let frames = drain_mailbox(&mut rx).await;
+        assert_eq!(frames.len(), 1, "got frames: {frames:#?}");
+        assert!(
+            frames[0].contains("account=did:plc:alice"),
+            "federated message should carry account=<did>: {}",
+            frames[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn s2s_privmsg_account_omitted_without_account_tag_cap() {
+        // A tag-capable client that did NOT negotiate account-tag must not
+        // receive the `account` tag (IRCv3 account-tag is opt-in).
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        setup_channel(&state, "#acct2");
+
+        let (tx, mut rx) = mpsc::channel(16);
+        state.connections.lock().insert("plain-recv".to_string(), tx);
+        state
+            .channels
+            .lock()
+            .get_mut("#acct2")
+            .unwrap()
+            .members
+            .insert("plain-recv".to_string());
+        state
+            .cap_message_tags
+            .lock()
+            .insert("plain-recv".to_string());
+
+        process_s2s_message(
+            &state,
+            &mgr,
+            PEER,
+            S2sMessage::Privmsg {
+                event_id: format!("{PEER}:acct2"),
+                from: "alice!a@remote".to_string(),
+                target: "#acct2".to_string(),
+                text: "hi".to_string(),
+                origin: PEER.to_string(),
+                msgid: Some("ACCT-MSG-2".to_string()),
+                sig: None,
+                account: Some("did:plc:alice".to_string()),
+                tags: HashMap::new(),
+                multiline_lines: None,
+            },
+        )
+        .await;
+
+        let frames = drain_mailbox(&mut rx).await;
+        assert_eq!(frames.len(), 1, "got frames: {frames:#?}");
+        assert!(
+            !frames[0].contains("account="),
+            "client without account-tag must not get account: {}",
+            frames[0]
+        );
     }
 
     #[tokio::test]
@@ -4983,6 +5125,7 @@ mod s2s_adversarial_tests {
                 origin: PEER.to_string(),
                 msgid: Some("ML-MSG-2".to_string()),
                 sig: None,
+                account: None,
                 tags: HashMap::new(),
                 multiline_lines: Some(s2s_multiline_lines(&["first", "second"])),
             },
@@ -5090,6 +5233,7 @@ mod s2s_adversarial_tests {
         let outcome = relay_to_nick(
             &state,
             "sender!u@h",
+            None,
             "ghost",
             "chunk one\nchunk twotail",
             "evt-1".to_string(),
@@ -5151,6 +5295,7 @@ mod s2s_adversarial_tests {
         let outcome = relay_to_nick(
             &state,
             "sender!u@h",
+            None,
             "ghost",
             "ordinary text",
             "evt-2".to_string(),
@@ -5219,6 +5364,7 @@ mod s2s_adversarial_tests {
                 origin: PEER.to_string(),
                 msgid: Some("PLAIN-MSG".to_string()),
                 sig: None,
+                account: None,
                 tags: HashMap::new(),
                 multiline_lines: None,
             },
@@ -5406,6 +5552,7 @@ mod s2s_adversarial_tests {
                     origin: PEER.to_string(),
                     msgid: None,
                     sig: None,
+                    account: None,
                     tags: HashMap::new(),
                     multiline_lines: None,
                 },
@@ -5511,6 +5658,7 @@ mod s2s_adversarial_tests {
                     origin: RL_PEER.to_string(),
                     msgid: None,
                     sig: None,
+                    account: None,
                     tags: HashMap::new(),
                     multiline_lines: None,
                 },
@@ -5786,6 +5934,7 @@ mod s2s_adversarial_tests {
                 origin: PEER.to_string(),
                 msgid: Some("dm-msg-001".to_string()),
                 sig: None,
+                account: None,
                 tags: HashMap::new(),
                 multiline_lines: None,
             },
@@ -5804,6 +5953,135 @@ mod s2s_adversarial_tests {
         assert!(
             msg.contains("PRIVMSG bob"),
             "Should be addressed to bob, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn s2s_dm_account_injected_for_account_tag_client() {
+        // A federated DM delivers `account=<did>` to a local recipient that
+        // negotiated account-tag (DM path, distinct from the channel path).
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+
+        let (tx, mut rx) = mpsc::channel(16);
+        state.connections.lock().insert("bob-sess".to_string(), tx);
+        state.nick_to_session.lock().insert("bob", "bob-sess");
+        state.cap_message_tags.lock().insert("bob-sess".to_string());
+        state.cap_account_tag.lock().insert("bob-sess".to_string());
+
+        process_s2s_message(
+            &state,
+            &mgr,
+            PEER,
+            S2sMessage::Privmsg {
+                event_id: format!("{PEER}:dm-acct"),
+                from: "alice!a@remote".to_string(),
+                target: "bob".to_string(),
+                text: "hey bob".to_string(),
+                origin: PEER.to_string(),
+                msgid: Some("DM-ACCT-D1".to_string()),
+                sig: None,
+                account: Some("did:plc:alice".to_string()),
+                tags: HashMap::new(),
+                multiline_lines: None,
+            },
+        )
+        .await;
+
+        let frames = drain_mailbox(&mut rx).await;
+        assert_eq!(frames.len(), 1, "got frames: {frames:#?}");
+        assert!(
+            frames[0].contains("account=did:plc:alice"),
+            "federated DM should carry account=<did>: {}",
+            frames[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn s2s_dm_from_unknown_remote_sender_persists_via_carried_account() {
+        // Before the account carry, persisting a DM required BOTH DIDs to be
+        // resolvable from local nick_owners. A sender who never authed on this
+        // server isn't there, so a stranger→local DM was dropped from history
+        // (todo #16). The carried `account` now supplies the sender DID, so it
+        // persists.
+        let state = test_state_with_db();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+
+        // Recipient is a known local identity; sender is NOT in nick_owners.
+        state
+            .nick_owners
+            .lock()
+            .insert("bob".to_string(), "did:plc:bob".to_string());
+
+        process_s2s_message(
+            &state,
+            &mgr,
+            PEER,
+            S2sMessage::Privmsg {
+                event_id: format!("{PEER}:dm-persist"),
+                from: "alice!a@remote".to_string(),
+                target: "bob".to_string(),
+                text: "stranger dm".to_string(),
+                origin: PEER.to_string(),
+                msgid: Some("DM-ACCT-P1".to_string()),
+                sig: None,
+                account: Some("did:plc:alice".to_string()),
+                tags: HashMap::new(),
+                multiline_lines: None,
+            },
+        )
+        .await;
+
+        let key = crate::db::canonical_dm_key("did:plc:alice", "did:plc:bob");
+        let msgs = state
+            .with_db(|db| db.get_messages(&key, 10, None))
+            .expect("get_messages");
+        assert_eq!(msgs.len(), 1, "stranger→local DM should persist");
+        assert_eq!(msgs[0].text, "stranger dm");
+        assert_eq!(msgs[0].sender_did.as_deref(), Some("did:plc:alice"));
+    }
+
+    #[tokio::test]
+    async fn s2s_dm_from_unknown_remote_sender_without_account_not_persisted() {
+        // Same as above but the peer sent no account (older peer): the sender
+        // DID is unresolvable, so the DM still isn't persisted — proving the
+        // carried account is what enables persistence, not something else.
+        let state = test_state_with_db();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        state
+            .nick_owners
+            .lock()
+            .insert("bob".to_string(), "did:plc:bob".to_string());
+
+        process_s2s_message(
+            &state,
+            &mgr,
+            PEER,
+            S2sMessage::Privmsg {
+                event_id: format!("{PEER}:dm-noacct"),
+                from: "alice!a@remote".to_string(),
+                target: "bob".to_string(),
+                text: "stranger dm".to_string(),
+                origin: PEER.to_string(),
+                msgid: Some("DM-ACCT-P2".to_string()),
+                sig: None,
+                account: None,
+                tags: HashMap::new(),
+                multiline_lines: None,
+            },
+        )
+        .await;
+
+        let key = crate::db::canonical_dm_key("did:plc:alice", "did:plc:bob");
+        let msgs = state
+            .with_db(|db| db.get_messages(&key, 10, None))
+            .expect("get_messages");
+        assert!(
+            msgs.is_empty(),
+            "without a carried account the stranger DM must not persist"
         );
     }
 

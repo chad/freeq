@@ -516,6 +516,7 @@ pub(super) fn handle_tagmsg(
         match relay_to_nick(
             state,
             &from_nick,
+            conn.authenticated_did.as_deref(),
             target,
             &tag_text,
             super::helpers::s2s_next_event_id(state),
@@ -963,6 +964,7 @@ pub(super) fn handle_privmsg_with_multiline(
                     origin,
                     msgid: Some(msgid.clone()),
                     sig,
+                    account: conn.authenticated_did.clone(),
                     tags: s2s_tags,
                     // When this message originated as a draft/multiline
                     // batch, ship the per-line breakdown so the peer
@@ -1087,6 +1089,7 @@ pub(super) fn handle_privmsg_with_multiline(
         match relay_to_nick(
             state,
             &from_nick,
+            conn.authenticated_did.as_deref(),
             target,
             text,
             s2s_next_event_id(state),
@@ -1110,6 +1113,7 @@ pub(super) fn handle_privmsg_with_multiline(
                         origin: state.server_iroh_id.lock().clone().unwrap_or_default(),
                         msgid: Some(pm_msgid.clone()),
                         sig: pm_tags.get("+freeq.at/sig").cloned(),
+                        account: conn.authenticated_did.clone(),
                         tags: s2s_tags,
                         multiline_lines: multiline_lines.map(|lines| {
                             lines
@@ -2215,6 +2219,7 @@ fn handle_edit(
                 origin,
                 msgid: Some(edit_msgid),
                 sig,
+                account: conn.authenticated_did.clone(),
                 tags: s2s_tags,
                 // Multi-line edit: pass the per-line breakdown so peer
                 // servers can re-emit BATCH frames to their own
@@ -2284,6 +2289,7 @@ fn handle_edit(
         match relay_to_nick(
             state,
             &from_nick,
+            conn.authenticated_did.as_deref(),
             target,
             new_text,
             s2s_next_event_id(state),

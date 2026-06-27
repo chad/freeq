@@ -60,6 +60,7 @@ pub(crate) enum RouteResult {
 pub(crate) fn relay_to_nick(
     state: &Arc<SharedState>,
     from: &str,
+    account: Option<&str>,
     target: &str,
     text: &str,
     event_id: String,
@@ -91,6 +92,7 @@ pub(crate) fn relay_to_nick(
                 origin,
                 msgid: None, // PM relay — no msgid (recipient server assigns)
                 sig: None,   // PM relay — sig not available at routing layer
+                account: account.map(|a| a.to_string()),
                 tags: s2s_tags,
                 multiline_lines: multiline_lines.map(|lines| {
                     lines

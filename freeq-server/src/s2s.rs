@@ -252,6 +252,15 @@ pub enum S2sMessage {
         /// Server-attested message signature (`+freeq.at/sig`).
         #[serde(default)]
         sig: Option<String>,
+        /// Sender's DID — the value of the IRCv3 `account` tag. Carried
+        /// so the receiving server can stamp `account` for a remote
+        /// sender it has no local session for; without it the receiver
+        /// has no DID and federated clients show no identity. Always
+        /// origin-stamped from the authenticated session, never
+        /// client-set (preserves the anti-spoof rule across S2S).
+        /// `serde(default)` → older peers omit it (wire back-compat).
+        #[serde(default)]
+        account: Option<String>,
         /// Application coordination tags (`+freeq.at/event` etc.) that ride
         /// with the message so federated clients render the same card the
         /// origin shows. `serde(default)` → older peers omit it, deserialize
@@ -1510,6 +1519,7 @@ mod tests {
             origin: server_id.clone(),
             msgid: Some("MSG123".to_string()),
             sig: None,
+            account: None,
             tags: HashMap::new(),
             multiline_lines: None,
         };
@@ -1611,6 +1621,7 @@ mod tests {
             origin: server_id.clone(),
             msgid: None,
             sig: None,
+            account: None,
             tags: HashMap::new(),
             multiline_lines: None,
         };
@@ -1631,6 +1642,7 @@ mod tests {
                     origin: server_id.clone(),
                     msgid: None,
                     sig: None,
+                    account: None,
                     tags: HashMap::new(),
                     multiline_lines: None,
                 };
@@ -1974,6 +1986,7 @@ mod tests {
             origin: "peerA".to_string(),
             msgid: Some("01HZ".to_string()),
             sig: None,
+            account: None,
             tags: tags.clone(),
             multiline_lines: None,
         };
@@ -1987,11 +2000,16 @@ mod tests {
         let old = r##"{"type":"privmsg","event_id":"p:2","from":"a!u@h","target":"#c","text":"hi","origin":"peerB"}"##;
         match serde_json::from_str::<S2sMessage>(old).unwrap() {
             S2sMessage::Privmsg {
-                tags, msgid, sig, ..
+                tags,
+                msgid,
+                sig,
+                account,
+                ..
             } => {
                 assert!(tags.is_empty(), "missing tags → empty via serde default");
                 assert!(msgid.is_none());
                 assert!(sig.is_none());
+                assert!(account.is_none(), "missing account → None via serde default");
             }
             _ => panic!("expected Privmsg"),
         }
