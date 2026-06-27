@@ -500,7 +500,7 @@ pub(super) fn handle_tagmsg(
             state,
             crate::s2s::S2sMessage::Tagmsg {
                 event_id: super::helpers::s2s_next_event_id(state),
-                from: conn.hostmask(),
+                from: conn.nick.as_deref().unwrap_or("*").to_string(),
                 target: target.to_string(),
                 tags: tags.clone(),
                 origin: state.server_iroh_id.lock().clone().unwrap_or_default(),
@@ -542,7 +542,7 @@ pub(super) fn handle_tagmsg(
                     state,
                     crate::s2s::S2sMessage::Tagmsg {
                         event_id: super::helpers::s2s_next_event_id(state),
-                        from: conn.hostmask(),
+                        from: conn.nick.as_deref().unwrap_or("*").to_string(),
                         target: target.to_string(),
                         tags: tags.clone(),
                         origin: state.server_iroh_id.lock().clone().unwrap_or_default(),
@@ -1104,7 +1104,7 @@ pub(super) fn handle_privmsg_with_multiline(
                     state,
                     crate::s2s::S2sMessage::Privmsg {
                         event_id: s2s_next_event_id(state),
-                        from: conn.hostmask(),
+                        from: conn.nick.as_deref().unwrap_or("*").to_string(),
                         target: target.to_string(),
                         text: s2s_text,
                         origin: state.server_iroh_id.lock().clone().unwrap_or_default(),
