@@ -34,6 +34,7 @@ class MessageMapperTest {
         isSigned: Boolean = false,
         timestampMs: Long = 1_700_000_000_000L,
         account: String? = null,
+        origin: String? = null,
         reactions: List<ReactionTally> = emptyList(),
     ) = IrcMessage(
         fromNick = fromNick,
@@ -50,6 +51,7 @@ class MessageMapperTest {
         isSigned = isSigned,
         timestampMs = timestampMs,
         account = account,
+        origin = origin,
         reactions = reactions,
     )
 
@@ -83,6 +85,13 @@ class MessageMapperTest {
         // ChatMessage ignored it. This test pins the bit end-to-end.
         assertTrue(MessageMapper.fromIrc(ircMsg(isSigned = true)).isSigned)
         assertFalse(MessageMapper.fromIrc(ircMsg(isSigned = false)).isSigned)
+    }
+
+    @Test fun origin_propagates() {
+        // Federated provenance: the origin server name must surface so the UI
+        // can render "via {origin}" and withhold the local verified/signed badges.
+        assertEquals("zerosum", MessageMapper.fromIrc(ircMsg(origin = "zerosum")).origin)
+        assertNull(MessageMapper.fromIrc(ircMsg(origin = null)).origin)
     }
 
     @Test fun isAction_propagates() {

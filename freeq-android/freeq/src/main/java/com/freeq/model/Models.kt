@@ -26,6 +26,10 @@ data class ChatMessage(
     var isEdited: Boolean = false,
     var isDeleted: Boolean = false,
     val isSigned: Boolean = false,
+    // Origin server name when relayed from a federated peer (+freeq.at/origin).
+    // null = locally-originated. Drives "via {origin}" + suppresses the local
+    // verified/signed badges, which would overstate trust for a peer-vouched msg.
+    val origin: String? = null,
     val reactions: MutableMap<String, MutableSet<String>> = mutableMapOf()
 )
 

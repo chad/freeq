@@ -51,6 +51,12 @@ pub struct IrcMessage {
     pub is_signed: bool,
     pub timestamp_ms: i64,
     pub account: Option<String>,
+    /// Origin server name when this message was relayed from a federated
+    /// peer (the `+freeq.at/origin` tag). `None` for locally-originated
+    /// messages. Clients use it to distinguish a peer-vouched identity
+    /// ("via {origin}") from one this server verified — and must not show a
+    /// federated message as locally verified/signed.
+    pub origin: Option<String>,
     /// Persisted reactions delivered on the message itself via the
     /// server's `+freeq.at/reactions` tag (CHATHISTORY / JOIN replay).
     /// Live reactions still arrive as separate `TagMsg` events.
@@ -504,6 +510,7 @@ fn convert_event(event: &freeq_sdk::event::Event) -> FreeqEvent {
                     is_signed: tags.contains_key("+freeq.at/sig"),
                     timestamp_ms: ts,
                     account: tags.get("account").cloned(),
+                    origin: tags.get("+freeq.at/origin").cloned(),
                     reactions,
                 },
             }

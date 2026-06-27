@@ -30,6 +30,7 @@ internal object MessageMapper {
             timestamp = Date(ircMsg.timestampMs),
             replyTo = ircMsg.replyTo,
             isSigned = ircMsg.isSigned,
+            origin = ircMsg.origin,
             reactions = reactions,
         )
     }

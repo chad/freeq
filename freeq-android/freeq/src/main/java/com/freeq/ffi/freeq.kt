@@ -3234,6 +3234,7 @@ data class IrcMessage (
     var `isSigned`: kotlin.Boolean, 
     var `timestampMs`: kotlin.Long, 
     var `account`: kotlin.String?, 
+    var `origin`: kotlin.String?, 
     var `reactions`: List<ReactionTally>
 ) {
     
@@ -3260,6 +3261,7 @@ public object FfiConverterTypeIrcMessage: FfiConverterRustBuffer<IrcMessage> {
             FfiConverterBoolean.read(buf),
             FfiConverterLong.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterSequenceTypeReactionTally.read(buf),
         )
     }
@@ -3279,6 +3281,7 @@ public object FfiConverterTypeIrcMessage: FfiConverterRustBuffer<IrcMessage> {
             FfiConverterBoolean.allocationSize(value.`isSigned`) +
             FfiConverterLong.allocationSize(value.`timestampMs`) +
             FfiConverterOptionalString.allocationSize(value.`account`) +
+            FfiConverterOptionalString.allocationSize(value.`origin`) +
             FfiConverterSequenceTypeReactionTally.allocationSize(value.`reactions`)
     )
 
@@ -3297,6 +3300,7 @@ public object FfiConverterTypeIrcMessage: FfiConverterRustBuffer<IrcMessage> {
             FfiConverterBoolean.write(value.`isSigned`, buf)
             FfiConverterLong.write(value.`timestampMs`, buf)
             FfiConverterOptionalString.write(value.`account`, buf)
+            FfiConverterOptionalString.write(value.`origin`, buf)
             FfiConverterSequenceTypeReactionTally.write(value.`reactions`, buf)
     }
 }

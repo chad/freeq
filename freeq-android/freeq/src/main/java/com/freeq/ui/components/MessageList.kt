@@ -255,11 +255,15 @@ fun MessageList(
                     return@itemsIndexed
                 }
 
-                // Show header if sender changes, >5 min gap, or after date/system/deleted boundary
+                // Show header if sender changes, >5 min gap, or after date/system/deleted boundary.
+                // Also break across a provenance boundary: a federated message (msg.origin
+                // set) must not collapse under a local sender's header, or it loses its
+                // "via {origin}" and inherits the local verified/signed context.
                 val showHeader = prevMsg == null
                     || msg.from != prevMsg.from
                     || prevMsg.from.isEmpty()
                     || prevMsg.isDeleted
+                    || msg.origin != prevMsg.origin
                     || timeDiff > 5 * 60 * 1000
                     || currentDate != prevDate
 
@@ -569,7 +573,7 @@ private fun MessageBubble(
                             color = Theme.nickColor(msg.from),
                             modifier = Modifier.clickable { onNickClick?.invoke(msg.from) }
                         )
-                        if (AvatarCache.avatarUrl(msg.from) != null) {
+                        if (msg.origin == null && AvatarCache.avatarUrl(msg.from) != null) {
                             Icon(
                                 Icons.Default.CheckCircle,
                                 contentDescription = "Verified",
@@ -577,12 +581,22 @@ private fun MessageBubble(
                                 modifier = Modifier.size(14.dp)
                             )
                         }
+                        // Federated: relayed from another server — peer-vouched,
+                        // not verified here. Show provenance instead of the local
+                        // verified/signed badges (which would overstate trust).
+                        if (msg.origin != null) {
+                            Text(
+                                text = "via ${msg.origin}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                            )
+                        }
                         Text(
                             text = formatTime(msg.timestamp),
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
-                        if (msg.isSigned) {
+                        if (msg.origin == null && msg.isSigned) {
                             Icon(
                                 Icons.Default.Lock,
                                 contentDescription = "Signed by sender",

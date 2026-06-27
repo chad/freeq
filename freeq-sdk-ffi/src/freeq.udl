@@ -15,6 +15,7 @@ dictionary IrcMessage {
     boolean is_signed;
     i64 timestamp_ms;
     string? account;
+    string? origin;
     sequence<ReactionTally> reactions;
 };
 
