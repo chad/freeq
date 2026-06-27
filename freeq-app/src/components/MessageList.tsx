@@ -625,6 +625,12 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
   const member = useStore((s) => s.channels.get(channel.toLowerCase())?.members.get(msg.from.toLowerCase()));
   const selfDid = useStore((s) => msg.isSelf ? s.authDid : null);
   const did = member?.did || selfDid || msg.tags?.account || undefined;
+  // Federated provenance: when present, this message was relayed from another
+  // server (+freeq.at/origin = its name). Its identity is peer-vouched by that
+  // server, not verified here — so we show "via {origin}" and suppress the
+  // local "verified" (✓) and "signed" (🔒) badges, which would overstate trust.
+  const origin = msg.tags?.['+freeq.at/origin'];
+  const isFederated = !!origin;
 
   const openEmojiPicker = (e: React.MouseEvent) => {
     setPickerPos({ x: e.clientX, y: e.clientY });
@@ -655,8 +661,9 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
           >
             {msg.from}
           </button>
-          {member?.did && <VerifiedBadge />}
-          {msg.tags['+freeq.at/sig'] && <SignedBadge />}
+          {member?.did && !isFederated && <VerifiedBadge />}
+          {isFederated && <ViaBadge origin={origin!} />}
+          {msg.tags['+freeq.at/sig'] && !isFederated && <SignedBadge />}
           {member?.away != null && (
             <span className="text-xs text-fg-dim bg-warning/10 text-warning px-1.5 py-0.5 rounded">away</span>
           )}
@@ -789,6 +796,19 @@ function VerifiedBadge() {
       <svg className="w-3.5 h-3.5 inline -mt-0.5" viewBox="0 0 16 16" fill="currentColor">
         <path d="M8 0a8 8 0 100 16A8 8 0 008 0zm3.78 5.97l-4.5 5a.75.75 0 01-1.06.02l-2-1.86a.75.75 0 011.02-1.1l1.45 1.35 3.98-4.43a.75.75 0 011.11 1.02z"/>
       </svg>
+    </span>
+  );
+}
+
+/** Provenance badge for a federated message — relayed from another server.
+    The sender's identity is vouched for by that server, not verified here. */
+function ViaBadge({ origin }: { origin: string }) {
+  return (
+    <span
+      className="text-xs text-fg-dim bg-white/5 px-1.5 py-0.5 rounded cursor-default"
+      title={`Relayed from ${origin}. This server didn't verify the sender's identity — ${origin} vouches for it.`}
+    >
+      via {origin}
     </span>
   );
 }
