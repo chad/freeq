@@ -536,6 +536,12 @@ function isGrouped(msgs: Message[], i: number): boolean {
   const curr = msgs[i];
   if (prev.isSystem || curr.isSystem || prev.deleted || curr.deleted) return false;
   if (prev.from !== curr.from) return false;
+  // Don't group across a provenance boundary: a federated message (carrying
+  // +freeq.at/origin) must not collapse under a local sender's header, or it
+  // loses its "via {origin}" and inherits the local verified/signed context.
+  // Same sender + same origin groups; local vs federated (or different origins)
+  // each start a fresh header.
+  if ((prev.tags?.['+freeq.at/origin'] ?? '') !== (curr.tags?.['+freeq.at/origin'] ?? '')) return false;
   if (curr.timestamp.getTime() - prev.timestamp.getTime() > 5 * 60 * 1000) return false;
   return true;
 }
