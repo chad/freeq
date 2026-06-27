@@ -54,6 +54,33 @@ S2S operations are authorized:
 - **Joins** — Checked against bans and invite-only
 - **Rate limiting** — 100 events/sec per peer
 
+## Identity & provenance
+
+A message's sender identity — the IRCv3 `account` tag, i.e. the sender's DID —
+is carried across S2S, so a federated user renders with their real handle and
+avatar on the receiving server, not just a bare nick. The DID is always stamped
+by the origin server from the sender's authenticated session; clients never set
+it.
+
+Federated identity is **peer-vouched, not locally verified.** The receiving
+server did not authenticate the remote sender — it relays the origin's claim on
+the same peer trust it already extends to the message body. To keep this honest,
+federated messages also carry `+freeq.at/origin=<server>` naming the origin, so
+clients can distinguish:
+
+- **Locally verified** (no `+freeq.at/origin`): this server authenticated the
+  sender via SASL — render as verified.
+- **Peer-vouched** (`+freeq.at/origin` present): relayed from that server —
+  render as "via {origin}", not as locally verified.
+
+The signature (`+freeq.at/sig`) is **not** verifiable across servers today (its
+canonical inputs aren't all reconstructable downstream), so clients must not
+show a "cryptographically verified" affordance on federated messages.
+End-to-end-verifiable federated identity is future work.
+
+`account` and `+freeq.at/origin` are persisted, so provenance survives history
+replay (CHATHISTORY), not only live delivery.
+
 ## Security
 
 - **Allowlist**: Use `--s2s-allowed-peers` to restrict federation to trusted peers only.

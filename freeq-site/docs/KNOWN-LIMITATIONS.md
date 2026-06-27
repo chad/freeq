@@ -38,6 +38,13 @@
 - **Topic merge strategy**: SyncResponse ignores remote topic if local is set,
   but CRDT reconciliation uses last-write-wins. The two merge strategies can
   cause flapping in edge cases.
+- **Federated identity is peer-vouched, not verified**: a relayed message
+  carries the sender's DID (`account`) and a `+freeq.at/origin` tag, but the
+  receiving server does not verify it — it trusts the origin peer (the same
+  trust the message body already rides on). The signature (`+freeq.at/sig`) is
+  not verifiable across servers (its canonical inputs don't survive S2S), so
+  clients render federated messages as "via {origin}" rather than locally
+  verified. End-to-end verification is future work.
 
 ## Persistence
 
