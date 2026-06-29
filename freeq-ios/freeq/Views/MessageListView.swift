@@ -411,6 +411,10 @@ struct MessageListView: View {
         let curr = channel.messages[idx]
         if curr.from.isEmpty || prev.from.isEmpty { return true }
         if prev.from != curr.from { return true }
+        // Break across a provenance boundary: a federated message (origin set)
+        // must not collapse under a local sender's header, or it loses its
+        // "via {origin}" and inherits the local verified/signed context.
+        if prev.origin != curr.origin { return true }
         return curr.timestamp.timeIntervalSince(prev.timestamp) > 300
     }
 
@@ -511,18 +515,27 @@ struct MessageListView: View {
                                         .font(.system(size: 15, weight: .bold))
                                         .foregroundColor(Theme.nickColor(for: msg.from))
 
-                                    if avatarCache.avatarURL(for: msg.from.lowercased()) != nil {
+                                    if msg.origin == nil && avatarCache.avatarURL(for: msg.from.lowercased()) != nil {
                                         VerifiedBadge(size: 12)
                                     }
                                 }
                             }
                             .buttonStyle(.plain)
 
+                            // Federated: relayed from another server — peer-vouched,
+                            // not verified here. Show provenance instead of the local
+                            // verified/signed badges (which would overstate trust).
+                            if let origin = msg.origin {
+                                Text("via \(origin)")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(Theme.textMuted)
+                            }
+
                             Text(formatTime(msg.timestamp))
                                 .font(.system(size: 11))
                                 .foregroundColor(Theme.textMuted)
 
-                            if msg.isSigned {
+                            if msg.origin == nil && msg.isSigned {
                                 Image(systemName: "lock.fill")
                                     .font(.system(size: 9, weight: .semibold))
                                     .foregroundColor(Theme.success)

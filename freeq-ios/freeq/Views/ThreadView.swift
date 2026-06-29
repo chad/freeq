@@ -84,15 +84,21 @@ struct ThreadView: View {
                                                 .font(.system(size: 14, weight: .bold))
                                                 .foregroundColor(Theme.nickColor(for: msg.from))
 
-                                            if avatarCache.avatarURL(for: msg.from.lowercased()) != nil {
+                                            if msg.origin == nil && avatarCache.avatarURL(for: msg.from.lowercased()) != nil {
                                                 VerifiedBadge(size: 11)
+                                            }
+
+                                            if let origin = msg.origin {
+                                                Text("via \(origin)")
+                                                    .font(.system(size: 11))
+                                                    .foregroundColor(Theme.textMuted)
                                             }
 
                                             Text(formatTime(msg.timestamp))
                                                 .font(.system(size: 11))
                                                 .foregroundColor(Theme.textMuted)
 
-                                            if msg.isSigned {
+                                            if msg.origin == nil && msg.isSigned {
                                                 Image(systemName: "lock.fill")
                                                     .font(.system(size: 9, weight: .semibold))
                                                     .foregroundColor(Theme.success)

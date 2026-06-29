@@ -22,6 +22,10 @@ struct ChatMessage: Identifiable, Equatable {
     var isEdited: Bool = false
     var isDeleted: Bool = false
     var isSigned: Bool = false
+    // Origin server name when relayed from a federated peer (+freeq.at/origin).
+    // nil = locally-originated. Drives "via {origin}" + suppresses the local
+    // verified/signed badges, which would overstate trust for a peer-vouched msg.
+    var origin: String? = nil
     var reactions: [String: Set<String>] = [:]  // emoji -> set of nicks
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
@@ -1949,7 +1953,8 @@ final class SwiftEventHandler: @unchecked Sendable, EventHandler {
                 isAction: ircMsg.isAction,
                 timestamp: Date(timeIntervalSince1970: Double(ircMsg.timestampMs) / 1000.0),
                 replyTo: ircMsg.replyTo,
-                isSigned: ircMsg.isSigned
+                isSigned: ircMsg.isSigned,
+                origin: ircMsg.origin
             )
 
             // Handle edits

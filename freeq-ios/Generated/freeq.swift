@@ -1547,11 +1547,12 @@ public struct IrcMessage {
     public var isSigned: Bool
     public var timestampMs: Int64
     public var account: String?
+    public var origin: String?
     public var reactions: [ReactionTally]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(fromNick: String, target: String, text: String, msgid: String?, replyTo: String?, replacesMsgid: String?, editOf: String?, batchId: String?, pinMsgid: String?, unpinMsgid: String?, isAction: Bool, isSigned: Bool, timestampMs: Int64, account: String?, reactions: [ReactionTally]) {
+    public init(fromNick: String, target: String, text: String, msgid: String?, replyTo: String?, replacesMsgid: String?, editOf: String?, batchId: String?, pinMsgid: String?, unpinMsgid: String?, isAction: Bool, isSigned: Bool, timestampMs: Int64, account: String?, origin: String?, reactions: [ReactionTally]) {
         self.fromNick = fromNick
         self.target = target
         self.text = text
@@ -1566,6 +1567,7 @@ public struct IrcMessage {
         self.isSigned = isSigned
         self.timestampMs = timestampMs
         self.account = account
+        self.origin = origin
         self.reactions = reactions
     }
 }
@@ -1619,6 +1621,9 @@ extension IrcMessage: Equatable, Hashable {
         if lhs.account != rhs.account {
             return false
         }
+        if lhs.origin != rhs.origin {
+            return false
+        }
         if lhs.reactions != rhs.reactions {
             return false
         }
@@ -1640,6 +1645,7 @@ extension IrcMessage: Equatable, Hashable {
         hasher.combine(isSigned)
         hasher.combine(timestampMs)
         hasher.combine(account)
+        hasher.combine(origin)
         hasher.combine(reactions)
     }
 }
@@ -1667,6 +1673,7 @@ public struct FfiConverterTypeIrcMessage: FfiConverterRustBuffer {
                 isSigned: FfiConverterBool.read(from: &buf), 
                 timestampMs: FfiConverterInt64.read(from: &buf), 
                 account: FfiConverterOptionString.read(from: &buf), 
+                origin: FfiConverterOptionString.read(from: &buf), 
                 reactions: FfiConverterSequenceTypeReactionTally.read(from: &buf)
         )
     }
@@ -1686,6 +1693,7 @@ public struct FfiConverterTypeIrcMessage: FfiConverterRustBuffer {
         FfiConverterBool.write(value.isSigned, into: &buf)
         FfiConverterInt64.write(value.timestampMs, into: &buf)
         FfiConverterOptionString.write(value.account, into: &buf)
+        FfiConverterOptionString.write(value.origin, into: &buf)
         FfiConverterSequenceTypeReactionTally.write(value.reactions, into: &buf)
     }
 }
