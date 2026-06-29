@@ -5,7 +5,7 @@ struct MessageListView: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var channel: ChannelState
     @State private var emojiPickerMessage: ChatMessage? = nil
-    @State private var profileNick: String? = nil
+    @State private var profileTarget: ProfileNickTarget? = nil
     @State private var threadMessage: ChatMessage? = nil
     @StateObject private var avatarCache = AvatarCache.shared
 
@@ -221,11 +221,8 @@ struct MessageListView: View {
                 .presentationDetents([.medium])
                 .presentationDragIndicator(.visible)
         }
-        .sheet(item: Binding(
-            get: { profileNick.map { ProfileNickTarget(nick: $0) } },
-            set: { profileNick = $0?.nick }
-        )) { target in
-            UserProfileSheet(nick: target.nick)
+        .sheet(item: $profileTarget) { target in
+            UserProfileSheet(nick: target.nick, origin: target.origin)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
@@ -509,7 +506,7 @@ struct MessageListView: View {
 
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Button(action: { profileNick = msg.from }) {
+                            Button(action: { profileTarget = ProfileNickTarget(nick: msg.from, origin: msg.origin) }) {
                                 HStack(spacing: 4) {
                                     Text((channel.memberInfo(for: msg.from)?.prefix ?? "") + msg.from)
                                         .font(.system(size: 15, weight: .bold))
@@ -1092,6 +1089,7 @@ struct TypingDots: View {
 // Helper for profile sheet binding
 private struct ProfileNickTarget: Identifiable {
     let nick: String
+    let origin: String?
     var id: String { nick }
 }
 

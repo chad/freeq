@@ -5,6 +5,10 @@ struct UserProfileSheet: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) var dismiss
     let nick: String
+    /// Set when opened from a federated message (+freeq.at/origin = peer name).
+    /// The sender is peer-vouched by that server, not verified here — so we warn
+    /// and suppress the local verified badge.
+    var origin: String? = nil
     @State private var profile: BlueskyProfile? = nil
     @State private var loading = true
     @State private var recentPosts: [BskyFeedItem] = []
@@ -17,6 +21,22 @@ struct UserProfileSheet: View {
 
                 ScrollView {
                     VStack(spacing: 20) {
+                        // Federated provenance warning — opened from a relayed message.
+                        if let origin {
+                            HStack(spacing: 8) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .font(.system(size: 13))
+                                Text("Relayed via \(origin) — this server did not verify this identity.")
+                                    .font(.system(size: 12))
+                                Spacer()
+                            }
+                            .foregroundColor(Theme.warning)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .frame(maxWidth: .infinity)
+                            .background(Theme.warning.opacity(0.15))
+                        }
+
                         // Avatar
                         UserAvatar(nick: nick, size: 80)
                             .padding(.top, 24)
@@ -28,7 +48,7 @@ struct UserProfileSheet: View {
                                     .font(.system(size: 22, weight: .bold))
                                     .foregroundColor(Theme.textPrimary)
 
-                                if profile != nil {
+                                if profile != nil && origin == nil {
                                     VerifiedBadge(size: 16)
                                 }
                             }
@@ -197,11 +217,24 @@ struct UserProfileSheet: View {
         // Bluesky profile to show. did:key users (guests, AI beings) have
         // none either.
         let did = await MainActor.run { () -> String? in
+            // 1. Member-roster DID.
             for ch in appState.channels {
                 if let m = ch.members.first(where: { $0.nick.lowercased() == nick.lowercased() }),
                    let d = m.did, !d.isEmpty {
                     return d
                 }
+            }
+            // 2. DID seen on a message's account tag (retained by AvatarCache).
+            //    Covers senders whose DID rode the message, not the roster —
+            //    custom-domain handles and federated senders. This is the same
+            //    source that resolves their avatar + verified badge on the row.
+            if let cached = AvatarCache.shared.did(for: nick), !cached.isEmpty {
+                return cached
+            }
+            // 3. Own profile: the authenticated session DID (mirrors Android).
+            if nick.lowercased() == appState.nick.lowercased(),
+               let own = appState.authenticatedDID, !own.isEmpty {
+                return own
             }
             return nil
         }

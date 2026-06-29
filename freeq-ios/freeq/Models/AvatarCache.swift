@@ -6,12 +6,21 @@ class AvatarCache: ObservableObject {
     static let shared = AvatarCache()
 
     @Published private var cache: [String: URL] = [:]  // nick -> avatar URL
+    private var dids: [String: String] = [:]  // nick -> DID (from message account tags etc.)
     private var pending: Set<String> = []
     private var failed: Set<String> = []  // Don't retry failed lookups
 
     /// Get cached avatar URL for a nick. Returns nil if not yet fetched.
     func avatarURL(for nick: String) -> URL? {
         cache[nick]
+    }
+
+    /// The DID last seen for a nick (from a message account tag, account-notify,
+    /// or WHOIS). Lets identity UIs resolve a profile for senders whose DID
+    /// arrived on a message rather than in the member roster (e.g. custom-domain
+    /// handles like chadfowler.com, or federated senders).
+    func did(for nick: String) -> String? {
+        dids[nick.lowercased()]
     }
 
     /// Request avatar fetch for a nick. Resolution requires a verified
@@ -28,6 +37,7 @@ class AvatarCache: ObservableObject {
         // can safely resolve, and `did:key` users (guests, AI beings) have
         // no Bluesky profile at all.
         guard let did = did, !did.isEmpty, !did.hasPrefix("did:key:") else { return }
+        dids[key] = did
         if failed.contains(key) { return }
         pending.insert(key)
 
