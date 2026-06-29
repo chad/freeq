@@ -908,7 +908,8 @@ extension AppState {
                 timestamp: Date(timeIntervalSince1970: Double(msg.timestampMs) / 1000.0),
                 replyTo: msg.replyTo,
                 isEdited: msg.editOf != nil,
-                isSigned: msg.isSigned
+                isSigned: msg.isSigned,
+                origin: msg.origin
             )
 
             // Handle edits

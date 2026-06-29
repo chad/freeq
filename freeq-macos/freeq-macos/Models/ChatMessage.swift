@@ -11,6 +11,10 @@ struct ChatMessage: Identifiable, Equatable {
     var isEdited: Bool = false
     var isDeleted: Bool = false
     var isSigned: Bool = false
+    // Origin server name when relayed from a federated peer (+freeq.at/origin).
+    // nil = locally-originated. Drives "via {origin}" + suppresses the local
+    // verified/signed badges, which would overstate trust for a peer-vouched msg.
+    var origin: String? = nil
     var reactions: [String: Set<String>] = [:]  // emoji -> set of nicks
 
     static func == (lhs: ChatMessage, rhs: ChatMessage) -> Bool {
@@ -23,6 +27,7 @@ struct ChatMessage: Identifiable, Equatable {
             && lhs.isEdited == rhs.isEdited
             && lhs.isDeleted == rhs.isDeleted
             && lhs.isSigned == rhs.isSigned
+            && lhs.origin == rhs.origin
             && lhs.reactions == rhs.reactions
     }
 }

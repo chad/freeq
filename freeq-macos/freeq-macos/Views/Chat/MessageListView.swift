@@ -199,6 +199,9 @@ struct MessageRow: View {
         let prev = ch.messages[idx - 1]
         if prev.from.isEmpty { return true }  // After system message
         if prev.from != message.from { return true }
+        // Break across a provenance boundary: a federated message (origin set)
+        // must not collapse under a local sender's header.
+        if prev.origin != message.origin { return true }
         return message.timestamp.timeIntervalSince(prev.timestamp) > 300
     }
 
@@ -207,7 +210,9 @@ struct MessageRow: View {
     }
 
     private var hasDid: Bool {
-        ProfileCache.shared.did(for: message.from) != nil
+        // A federated message is peer-vouched, not verified here — withhold the
+        // local verified badge even if a same-nick local member has a DID.
+        message.origin == nil && ProfileCache.shared.did(for: message.from) != nil
     }
 
     var body: some View {
@@ -226,6 +231,11 @@ struct MessageRow: View {
                         Image(systemName: "checkmark.seal.fill")
                             .font(.system(size: 8))
                             .foregroundStyle(Theme.verified)
+                    }
+                    if let origin = message.origin {
+                        Text("via \(origin)")
+                            .font(.system(size: 9))
+                            .foregroundStyle(Theme.textTertiary)
                     }
                 }
             } else if showHeader {
@@ -256,11 +266,21 @@ struct MessageRow: View {
                                     .help("AT Protocol verified identity")
                             }
 
-                            if message.isSigned {
+                            if message.origin == nil && message.isSigned {
                                 Image(systemName: "lock.fill")
                                     .font(.system(size: 9))
                                     .foregroundStyle(Theme.success)
                                     .help("Cryptographically signed message")
+                            }
+
+                            // Federated: relayed from another server — peer-vouched,
+                            // not verified here. Show provenance instead of the local
+                            // verified/signed badges (which would overstate trust).
+                            if let origin = message.origin {
+                                Text("via \(origin)")
+                                    .font(.caption2)
+                                    .foregroundStyle(Theme.textTertiary)
+                                    .help("Relayed from \(origin). This server didn't verify the sender — \(origin) vouches for it.")
                             }
 
                             Text(formatTime(message.timestamp))

@@ -37,19 +37,24 @@ actor MessageStore {
             is_edited INTEGER DEFAULT 0,
             is_deleted INTEGER DEFAULT 0,
             reply_to TEXT,
+            origin TEXT,
             UNIQUE(id)
         );
         CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel, timestamp);
         CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
         """
         sqlite3_exec(db, sql, nil, nil, nil)
+        // Additive migration for DBs created before the origin column existed.
+        // Without it, federated messages reload from cache with origin == nil and
+        // render as local — re-showing the verified/signed badges we suppress.
+        sqlite3_exec(db, "ALTER TABLE messages ADD COLUMN origin TEXT;", nil, nil, nil)
     }
 
     /// Store a message.
     func store(_ msg: ChatMessage, channel: String) {
         let sql = """
-        INSERT OR REPLACE INTO messages (id, channel, from_nick, text, timestamp, is_action, is_signed, is_edited, is_deleted, reply_to)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO messages (id, channel, from_nick, text, timestamp, is_action, is_signed, is_edited, is_deleted, reply_to, origin)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
@@ -65,6 +70,7 @@ actor MessageStore {
         sqlite3_bind_int(stmt, 8, msg.isEdited ? 1 : 0)
         sqlite3_bind_int(stmt, 9, msg.isDeleted ? 1 : 0)
         sqlite3_bind_text(stmt, 10, ((msg.replyTo ?? "") as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(stmt, 11, ((msg.origin ?? "") as NSString).utf8String, -1, nil)
         let rc = sqlite3_step(stmt)
         if rc != SQLITE_DONE {
             Log.ui.error("MessageStore.save sqlite3_step rc=\(rc, privacy: .public) channel=\(channel, privacy: .public)")
@@ -74,7 +80,7 @@ actor MessageStore {
     /// Load recent messages for a channel.
     func loadMessages(channel: String, limit: Int = 200) -> [ChatMessage] {
         let sql = """
-        SELECT id, from_nick, text, timestamp, is_action, is_signed, is_edited, is_deleted, reply_to
+        SELECT id, from_nick, text, timestamp, is_action, is_signed, is_edited, is_deleted, reply_to, origin
         FROM messages
         WHERE channel = ? AND is_deleted = 0
         ORDER BY timestamp DESC
@@ -97,6 +103,7 @@ actor MessageStore {
             let isSigned = sqlite3_column_int(stmt, 5) != 0
             let isEdited = sqlite3_column_int(stmt, 6) != 0
             let replyTo = sqlite3_column_text(stmt, 8).map(String.init(cString:))
+            let origin = sqlite3_column_text(stmt, 9).map(String.init(cString:))
 
             var msg = ChatMessage(
                 id: id, from: from, text: text, isAction: isAction,
@@ -104,6 +111,7 @@ actor MessageStore {
             )
             msg.isSigned = isSigned
             msg.isEdited = isEdited
+            msg.origin = (origin?.isEmpty == true) ? nil : origin
             messages.append(msg)
         }
         return messages.reversed()  // Oldest first
@@ -139,7 +147,7 @@ actor MessageStore {
     /// Search messages.
     func search(query: String, channel: String? = nil, limit: Int = 50) -> [(channel: String, msg: ChatMessage)] {
         var sql = """
-        SELECT id, channel, from_nick, text, timestamp, is_action, is_signed
+        SELECT id, channel, from_nick, text, timestamp, is_action, is_signed, origin
         FROM messages
         WHERE is_deleted = 0 AND (text LIKE ? OR from_nick LIKE ?)
         """
@@ -170,6 +178,8 @@ actor MessageStore {
             let isAction = sqlite3_column_int(stmt, 5) != 0
             var msg = ChatMessage(id: id, from: from, text: text, isAction: isAction, timestamp: timestamp, replyTo: nil)
             msg.isSigned = sqlite3_column_int(stmt, 6) != 0
+            let origin = sqlite3_column_text(stmt, 7).map(String.init(cString:))
+            msg.origin = (origin?.isEmpty == true) ? nil : origin
             results.append((ch, msg))
         }
         return results
