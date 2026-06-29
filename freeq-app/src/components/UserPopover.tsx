@@ -186,11 +186,15 @@ interface ActorInfo {
 interface UserPopoverProps {
   nick: string;
   did?: string;
+  /** Set when opened from a federated message (+freeq.at/origin = peer name).
+   *  The sender is vouched for by that server, not verified here — so we show
+   *  a warning bar and suppress the local "verified" / WHOIS context. */
+  origin?: string;
   position: { x: number; y: number };
   onClose: () => void;
 }
 
-export function UserPopover({ nick, did, position, onClose }: UserPopoverProps) {
+export function UserPopover({ nick, did, origin, position, onClose }: UserPopoverProps) {
   const [profile, setProfile] = useState<ATProfile | null>(null);
   const [loading, setLoading] = useState(false);
   const setActive = useStore((s) => s.setActiveChannel);
@@ -264,6 +268,13 @@ export function UserPopover({ nick, did, position, onClose }: UserPopoverProps) 
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
       <div style={style} className="z-50 bg-bg-secondary border border-border rounded-xl shadow-2xl w-72 animate-fadeIn overflow-hidden">
+        {/* Federated provenance warning — opened from a relayed message */}
+        {origin && (
+          <div className="bg-warning/15 border-b border-warning/30 px-3 py-2 text-[11px] text-warning flex items-start gap-1.5">
+            <span aria-hidden="true">⚠️</span>
+            <span>Relayed via <span className="font-semibold">{origin}</span> — this server did not verify this identity.</span>
+          </div>
+        )}
         {/* Header */}
         <div className="h-16 bg-gradient-to-r from-accent/20 to-purple/20 relative">
           {avatarUrl ? (
@@ -290,7 +301,7 @@ export function UserPopover({ nick, did, position, onClose }: UserPopoverProps) 
           {handle && !isDidKey && (
             <div className="text-xs text-accent mt-1 flex items-center gap-1">
               <span>@{handle}</span>
-              <span className="text-success text-[10px]" title="AT Protocol identity">✓</span>
+              {!origin && <span className="text-success text-[10px]" title="AT Protocol identity">✓</span>}
             </div>
           )}
 
@@ -402,8 +413,10 @@ export function UserPopover({ nick, did, position, onClose }: UserPopoverProps) 
             </div>
           )}
 
-          {/* WHOIS info (for guests or extra detail) */}
-          {whois && (
+          {/* WHOIS info (for guests or extra detail) — suppressed for federated
+              senders: it's local-server, resolved-by-nick data, i.e. the wrong
+              person for a relayed message. */}
+          {whois && !origin && (
             <div className="mt-2 space-y-0.5">
               {whois.user && whois.host && (
                 <div className="text-[11px] text-fg-dim font-mono">

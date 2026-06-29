@@ -615,7 +615,7 @@ function SystemMessage({ msg }: { msg: Message }) {
 interface MessageProps {
   msg: Message;
   channel: string;
-  onNickClick: (nick: string, did: string | undefined, e: React.MouseEvent) => void;
+  onNickClick: (nick: string, did: string | undefined, origin: string | undefined, e: React.MouseEvent) => void;
 }
 
 function FullMessage({ msg, channel, onNickClick }: MessageProps) {
@@ -653,7 +653,7 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
     >
       <div
         className="cursor-pointer mt-0.5"
-        onClick={(e) => onNickClick(msg.from, did, e)}
+        onClick={(e) => onNickClick(msg.from, did, origin, e)}
       >
         <Avatar nick={msg.from} did={did} />
       </div>
@@ -663,7 +663,7 @@ function FullMessage({ msg, channel, onNickClick }: MessageProps) {
           <button
             className="font-semibold text-[15px] hover:underline"
             style={{ color }}
-            onClick={(e) => onNickClick(msg.from, member?.did, e)}
+            onClick={(e) => onNickClick(msg.from, member?.did, origin, e)}
           >
             {msg.from}
           </button>
@@ -1111,7 +1111,7 @@ export function MessageList() {
   const stickToBottomRef = useRef(true);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [newMsgCount, setNewMsgCount] = useState(0);
-  const [popover, setPopover] = useState<{ nick: string; did?: string; pos: { x: number; y: number } } | null>(null);
+  const [popover, setPopover] = useState<{ nick: string; did?: string; origin?: string; pos: { x: number; y: number } } | null>(null);
 
   // Track whether user has scrolled up (unstick from bottom)
   const handleScroll = useCallback(() => {
@@ -1208,8 +1208,8 @@ export function MessageList() {
     return () => clearTimeout(t);
   }, [activeChannel]);
 
-  const onNickClick = useCallback((nick: string, did: string | undefined, e: React.MouseEvent) => {
-    setPopover({ nick, did, pos: { x: e.clientX, y: e.clientY } });
+  const onNickClick = useCallback((nick: string, did: string | undefined, origin: string | undefined, e: React.MouseEvent) => {
+    setPopover({ nick, did, origin, pos: { x: e.clientX, y: e.clientY } });
   }, []);
 
   return (
@@ -1344,6 +1344,7 @@ export function MessageList() {
         <UserPopover
           nick={popover.nick}
           did={popover.did}
+          origin={popover.origin}
           position={popover.pos}
           onClose={() => setPopover(null)}
         />
