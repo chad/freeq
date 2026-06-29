@@ -28,100 +28,105 @@ struct UserProfileSheet: View {
             .padding(.trailing, 12)
             .padding(.top, 8)
 
-            // Avatar
-            AvatarView(nick: nick, size: 72)
-                .padding(.top, 4)
+            // Scrollable body — content length varies (bio length, shared-channel
+            // count), so it must scroll rather than clip the pinned action buttons.
+            ScrollView {
+                VStack(spacing: 0) {
+                    // Avatar
+                    AvatarView(nick: nick, size: 72)
+                        .padding(.top, 4)
 
-            // Name
-            if let displayName = profile?.displayName, !displayName.isEmpty {
-                Text(displayName)
-                    .font(.title2.weight(.bold))
-                    .padding(.top, 8)
-                Text("@\(profile?.handle ?? nick)")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text(nick)
-                    .font(.title2.weight(.bold))
-                    .padding(.top, 8)
-            }
+                    // Name
+                    if let displayName = profile?.displayName, !displayName.isEmpty {
+                        Text(displayName)
+                            .font(.title2.weight(.bold))
+                            .padding(.top, 8)
+                        Text("@\(profile?.handle ?? nick)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(nick)
+                            .font(.title2.weight(.bold))
+                            .padding(.top, 8)
+                    }
 
-            // DID
-            if let did {
-                HStack(spacing: 4) {
-                    Image(systemName: "checkmark.seal.fill")
-                        .font(.caption)
-                        .foregroundStyle(.blue)
-                    Text(did)
-                        .font(.caption2.monospaced())
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .padding(.top, 4)
-                .textSelection(.enabled)
-            }
-
-            // Bio
-            if let bio = profile?.description, !bio.isEmpty {
-                Text(bio)
-                    .font(.body)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
-                    .padding(.top, 8)
-            }
-
-            // Stats
-            if let p = profile {
-                HStack(spacing: 24) {
-                    StatItem(label: "Posts", value: p.postsCount ?? 0)
-                    StatItem(label: "Followers", value: p.followersCount ?? 0)
-                    StatItem(label: "Following", value: p.followsCount ?? 0)
-                }
-                .padding(.top, 12)
-            }
-
-            Divider().padding(.vertical, 12)
-
-            // Shared channels
-            let sharedChannels = appState.channels.filter { ch in
-                ch.members.contains(where: { $0.nick.lowercased() == nick.lowercased() })
-            }
-            if !sharedChannels.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Shared Channels")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 24)
-                    ForEach(sharedChannels) { ch in
-                        Button {
-                            appState.activeChannel = ch.name
-                            dismiss()
-                        } label: {
-                            HStack {
-                                Image(systemName: "number")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Text(ch.name.replacingOccurrences(of: "#", with: ""))
-                                    .font(.body)
-                                Spacer()
-                                Text("\(ch.members.count)")
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .padding(.horizontal, 24)
-                            .padding(.vertical, 4)
-                            .contentShape(Rectangle())
+                    // DID
+                    if let did {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.seal.fill")
+                                .font(.caption)
+                                .foregroundStyle(.blue)
+                            Text(did)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
                         }
-                        .buttonStyle(.plain)
+                        .padding(.top, 4)
+                        .textSelection(.enabled)
+                    }
+
+                    // Bio
+                    if let bio = profile?.description, !bio.isEmpty {
+                        Text(bio)
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+                            .padding(.top, 8)
+                    }
+
+                    // Stats
+                    if let p = profile {
+                        HStack(spacing: 24) {
+                            StatItem(label: "Posts", value: p.postsCount ?? 0)
+                            StatItem(label: "Followers", value: p.followersCount ?? 0)
+                            StatItem(label: "Following", value: p.followsCount ?? 0)
+                        }
+                        .padding(.top, 12)
+                    }
+
+                    Divider().padding(.vertical, 12)
+
+                    // Shared channels
+                    let sharedChannels = appState.channels.filter { ch in
+                        ch.members.contains(where: { $0.nick.lowercased() == nick.lowercased() })
+                    }
+                    if !sharedChannels.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Shared Channels")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 24)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            ForEach(sharedChannels) { ch in
+                                Button {
+                                    appState.activeChannel = ch.name
+                                    dismiss()
+                                } label: {
+                                    HStack {
+                                        Image(systemName: "number")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Text(ch.name.replacingOccurrences(of: "#", with: ""))
+                                            .font(.body)
+                                        Spacer()
+                                        Text("\(ch.members.count)")
+                                            .font(.caption)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    .padding(.horizontal, 24)
+                                    .padding(.vertical, 4)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
                     }
                 }
             }
 
-            Spacer()
-
-            // Actions
+            // Actions — pinned below the scroll area so they never clip.
             HStack(spacing: 12) {
                 Button("Send Message") {
                     let dm = appState.getOrCreateDM(nick)
@@ -137,6 +142,7 @@ struct UserProfileSheet: View {
                         .font(.body)
                 }
             }
+            .padding(.top, 12)
             .padding(.bottom, 16)
         }
         .frame(width: 340, height: 480)
