@@ -66,7 +66,7 @@ import java.util.*
 fun MessageList(
     appState: AppState,
     channelState: ChannelState,
-    onProfileClick: ((String) -> Unit)? = null,
+    onProfileClick: ((String, String?) -> Unit)? = null,
     scrollToMessageId: String? = null,
     modifier: Modifier = Modifier
 ) {
@@ -403,7 +403,7 @@ private fun MessageBubble(
     appState: AppState,
     channelState: ChannelState,
     clipboardManager: androidx.compose.ui.platform.ClipboardManager,
-    onNickClick: ((String) -> Unit)? = null,
+    onNickClick: ((String, String?) -> Unit)? = null,
     onImageClick: ((String) -> Unit)? = null,
     onThreadClick: ((ChatMessage) -> Unit)? = null
 ) {
@@ -538,7 +538,7 @@ private fun MessageBubble(
                 UserAvatar(
                     nick = msg.from,
                     size = 36.dp,
-                    modifier = Modifier.clickable { onNickClick?.invoke(msg.from) }
+                    modifier = Modifier.clickable { onNickClick?.invoke(msg.from, msg.origin) }
                 )
             } else {
                 Spacer(modifier = Modifier.width(36.dp))
@@ -571,7 +571,7 @@ private fun MessageBubble(
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = Theme.nickColor(msg.from),
-                            modifier = Modifier.clickable { onNickClick?.invoke(msg.from) }
+                            modifier = Modifier.clickable { onNickClick?.invoke(msg.from, msg.origin) }
                         )
                         if (msg.origin == null && AvatarCache.avatarUrl(msg.from) != null) {
                             Icon(

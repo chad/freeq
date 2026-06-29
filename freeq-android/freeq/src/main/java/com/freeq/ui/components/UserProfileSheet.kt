@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material3.*
@@ -30,6 +31,7 @@ import kotlinx.coroutines.withContext
 fun UserProfileSheet(
     nick: String,
     appState: AppState,
+    origin: String? = null,
     onDismiss: () -> Unit,
     onNavigateToDM: (String) -> Unit
 ) {
@@ -67,6 +69,37 @@ fun UserProfileSheet(
                 .padding(bottom = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // Federated provenance warning — opened from a relayed message.
+            // The sender is peer-vouched by {origin}, not verified here, so we
+            // warn and suppress the local verified badge below.
+            origin?.let { o ->
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = FreeqColors.warning.copy(alpha = 0.15f)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = FreeqColors.warning,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text(
+                            text = "Relayed via $o — this server did not verify this identity.",
+                            fontSize = 12.sp,
+                            color = FreeqColors.warning
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
             // Avatar
             UserAvatar(nick = nick, size = 80.dp)
 
@@ -83,7 +116,7 @@ fun UserProfileSheet(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground
                 )
-                if (profile != null) {
+                if (profile != null && origin == null) {
                     Icon(
                         Icons.Default.CheckCircle,
                         contentDescription = "Verified",

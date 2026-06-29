@@ -38,7 +38,8 @@ fun ChatDetailScreen(
     var showSearch by remember { mutableStateOf(false) }
     var showChannelSettings by remember { mutableStateOf(false) }
     var showPinnedMessages by remember { mutableStateOf(false) }
-    var profileSheetNick by remember { mutableStateOf<String?>(null) }
+    // (nick, origin): origin is non-null only when opened from a federated message.
+    var profileTarget by remember { mutableStateOf<Pair<String, String?>?>(null) }
     var scrollToMessageId by remember { mutableStateOf<String?>(null) }
     val isChannel = channelName.startsWith("#")
 
@@ -171,7 +172,7 @@ fun ChatDetailScreen(
                 MessageList(
                     appState = appState,
                     channelState = channelState,
-                    onProfileClick = { nick -> profileSheetNick = nick },
+                    onProfileClick = { nick, origin -> profileTarget = nick to origin },
                     scrollToMessageId = scrollToMessageId,
                     modifier = Modifier.weight(1f)
                 )
@@ -188,7 +189,7 @@ fun ChatDetailScreen(
                 onDismiss = { showMembers = false },
                 onMemberClick = { nick ->
                     showMembers = false
-                    profileSheetNick = nick
+                    profileTarget = nick to null
                 }
             )
         }
@@ -238,15 +239,16 @@ fun ChatDetailScreen(
         }
 
         // Profile sheet
-        profileSheetNick?.let { nick ->
+        profileTarget?.let { (nick, origin) ->
             UserProfileSheet(
                 nick = nick,
                 appState = appState,
-                onDismiss = { profileSheetNick = null },
+                origin = origin,
+                onDismiss = { profileTarget = null },
                 onNavigateToDM = { dmNick ->
                     appState.getOrCreateDM(dmNick)
                     showMembers = false
-                    profileSheetNick = null
+                    profileTarget = null
                     onNavigateToChat?.invoke(dmNick)
                 }
             )
