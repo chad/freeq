@@ -68,12 +68,14 @@ enum BrokerAuth {
     /// Start OAuth flow via the auth broker.
     /// Opens a browser window for AT Protocol login, receives callback.
     @MainActor
-    static func startOAuth(brokerBase: String, handle: String) async throws -> (brokerToken: String, session: BrokerSession) {
+    static func startOAuth(brokerBase: String, handle: String) async throws -> (brokerToken: String?, session: BrokerSession) {
         let callbackScheme = "freeq"
+        // return_to must match the active deployment's host; a hardcoded
+        // host breaks login on any other deployment.
         guard let loginURL = Validation.brokerLoginURL(
             brokerBase: brokerBase,
             handle: handle,
-            returnTo: "https://irc.freeq.at/auth/mobile"
+            returnTo: "\(ServerConfig.apiBaseUrl)/auth/mobile"
         ) else {
             throw BrokerError.sessionFailed("Invalid broker URL or handle")
         }
@@ -88,29 +90,38 @@ enum BrokerAuth {
                     return
                 }
                 guard let url = callbackURL,
-                      let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-                      let token = components.queryItems?.first(where: { $0.name == "broker_token" })?.value,
-                      components.queryItems?.contains(where: { $0.name == "did" }) == true,
-                      components.queryItems?.contains(where: { $0.name == "nick" }) == true else {
-                    continuation.resume(throwing: BrokerError.sessionFailed("No token in callback"))
+                      let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+                    continuation.resume(throwing: BrokerError.sessionFailed("No callback URL"))
+                    return
+                }
+                let items = components.queryItems ?? []
+                func value(_ name: String) -> String? { items.first(where: { $0.name == name })?.value }
+
+                if let err = value("error") {
+                    continuation.resume(throwing: BrokerError.sessionFailed(err))
                     return
                 }
 
-                _ = components.queryItems?.first(where: { $0.name == "handle" })?.value ?? ""
-
-                // Now fetch a web-token using the broker token. If this
-                // fails, propagate — silently returning a session with
-                // an empty token (the prior behaviour) made the user
-                // appear logged in but every subsequent connection
-                // attempt failed with an opaque "invalid token" error.
-                Task {
-                    do {
-                        let session = try await fetchSession(brokerBase: brokerBase, brokerToken: token)
-                        continuation.resume(returning: (brokerToken: token, session: session))
-                    } catch {
-                        continuation.resume(throwing: error)
-                    }
+                // The broker completes via
+                // freeq://auth?token=<web token>&nick=&did=[&broker_token=&handle=].
+                // `token` (the web token) is what we connect with; `broker_token`
+                // is optional — the standalone broker includes it (used to re-mint
+                // web tokens on reconnect), the embedded broker does not. Mirrors
+                // the iOS handler.
+                guard let webToken = value("token"),
+                      let nick = value("nick"),
+                      let did = value("did") else {
+                    continuation.resume(throwing: BrokerError.sessionFailed("Invalid auth response"))
+                    return
                 }
+
+                let session = BrokerSession(
+                    token: webToken,
+                    nick: nick,
+                    did: did,
+                    handle: value("handle") ?? nick
+                )
+                continuation.resume(returning: (brokerToken: value("broker_token"), session: session))
             }
             session.prefersEphemeralWebBrowserSession = false
 

@@ -99,8 +99,13 @@ struct ConnectView: View {
                     brokerBase: appState.authBrokerBase,
                     handle: handle
                 )
+                // broker_token is only present on the standalone broker; it
+                // drives reconnect (re-minting web tokens). The embedded
+                // broker omits it, so persist only when we actually got one.
                 appState.brokerToken = brokerToken
-                KeychainHelper.save(key: "brokerToken", value: brokerToken)
+                if let brokerToken {
+                    KeychainHelper.save(key: "brokerToken", value: brokerToken)
+                }
                 appState.pendingWebToken = session.token
                 KeychainHelper.save(key: "did", value: session.did)
                 appState.connect(nick: session.nick)

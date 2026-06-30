@@ -509,7 +509,7 @@ final class ValidationTests: XCTestCase {
         )
         XCTAssertEqual(items["handle"], "chad@example.com")
         XCTAssertEqual(items["return_to"], "https://irc.freeq.at/auth/mobile")
-        XCTAssertEqual(items["popup"], "1")
+        XCTAssertEqual(items["mobile"], "1")
     }
 
     func testBrokerLoginURLEncodesCharactersThatNeedIt() {
@@ -530,15 +530,22 @@ final class ValidationTests: XCTestCase {
         XCTAssertEqual(items["handle"], "weird name&injected=true")
     }
 
-    func testBrokerLoginURLPopupOptional() {
+    func testBrokerLoginURLRequestsMobileFlow() {
+        // The broker must complete via the freeq:// app scheme, so the
+        // login URL always carries mobile=1 and never the old popup flag.
         let url = Validation.brokerLoginURL(
             brokerBase: "https://broker.example.com",
             handle: "chad",
-            returnTo: "https://irc.freeq.at/auth/mobile",
-            popup: false
+            returnTo: "https://irc.example.com/auth/mobile"
         )
         XCTAssertNotNil(url)
-        XCTAssertFalse(url!.absoluteString.contains("popup=1"))
+        let items = Dictionary(
+            uniqueKeysWithValues: (URLComponents(url: url!, resolvingAgainstBaseURL: false)?
+                .queryItems ?? []).map { ($0.name, $0.value ?? "") }
+        )
+        XCTAssertEqual(items["mobile"], "1")
+        XCTAssertEqual(items["return_to"], "https://irc.example.com/auth/mobile")
+        XCTAssertNil(items["popup"])
     }
 
     // MARK: - IRC nick validation

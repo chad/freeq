@@ -72,8 +72,7 @@ public enum Validation {
     public static func brokerLoginURL(
         brokerBase: String,
         handle: String,
-        returnTo: String,
-        popup: Bool = true
+        returnTo: String
     ) -> URL? {
         let trimmedBase = brokerBase.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedBase.isEmpty else { return nil }
@@ -82,12 +81,15 @@ public enum Validation {
             : trimmedBase
         guard var comps = URLComponents(string: "\(normalized)/auth/login")
         else { return nil }
-        var items = [
+        // `mobile=1` tells the broker to complete via the `freeq://` app
+        // scheme (host-agnostic) instead of rendering a popup web page —
+        // matches iOS and Android. `ASWebAuthenticationSession` intercepts
+        // that redirect by its `freeq` callback scheme.
+        comps.queryItems = [
             URLQueryItem(name: "handle", value: handle),
+            URLQueryItem(name: "mobile", value: "1"),
             URLQueryItem(name: "return_to", value: returnTo),
         ]
-        if popup { items.append(URLQueryItem(name: "popup", value: "1")) }
-        comps.queryItems = items
         return comps.url
     }
 

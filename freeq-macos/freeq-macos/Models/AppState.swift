@@ -33,7 +33,7 @@ class AppState {
     var connectionState: ConnectionState = .disconnected
     var transportType: TransportType = .tcp
     var nick: String = ""
-    var serverAddress: String = "irc.freeq.at:6697"
+    var serverAddress: String = ServerConfig.ircServer
     var authenticatedDID: String?
     var irohEndpointId: String?
     var reconnectAttempts: Int = 0
@@ -114,7 +114,7 @@ class AppState {
     var threadRootMessage: ChatMessage?
 
     // MARK: - Auth
-    var authBrokerBase: String = "https://auth.freeq.at"
+    var authBrokerBase: String = ServerConfig.authBrokerBase
     var brokerToken: String?
     var pendingWebToken: String?
     var apiBearerSessionId: String?
@@ -183,6 +183,7 @@ class AppState {
     }
 
     private func loadSavedState() {
+        reconcileDeploymentChange()
         if let saved = UserDefaults.standard.string(forKey: "freeq.nick") {
             nick = saved
         }
@@ -209,6 +210,35 @@ class AppState {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 self.reconnectIfSaved()
             }
+        }
+    }
+
+    /// Drops saved auth + server-scoped state when the build has been
+    /// retargeted at a different deployment since the last run. The
+    /// default freeq.at build never trips this — its deployment id is
+    /// stable — so anyone who doesn't touch deployment config is
+    /// unaffected. It only fires when the baked `IRC_SERVER` /
+    /// `AUTH_BROKER_BASE` change (e.g. switching to a zerosum build),
+    /// where the bundle-shared keychain/UserDefaults would otherwise
+    /// carry a freeq.at token and session into the new host.
+    private func reconcileDeploymentChange() {
+        let current = ServerConfig.deploymentID
+        let key = "freeq.deployment"
+        let previous = UserDefaults.standard.string(forKey: key)
+        defer { UserDefaults.standard.set(current, forKey: key) }
+        guard let previous, previous != current else { return }
+
+        Log.auth.info(
+            "Deployment changed (\(previous, privacy: .public) -> \(current, privacy: .public)); clearing saved session"
+        )
+        KeychainHelper.delete(key: "brokerToken")
+        KeychainHelper.delete(key: "did")
+        for staleKey in [
+            "freeq.nick", "freeq.server", "freeq.channels",
+            "freeq.closedDMs", "freeq.favorites", "freeq.muted",
+            "freeq.bookmarks",
+        ] {
+            UserDefaults.standard.removeObject(forKey: staleKey)
         }
     }
 

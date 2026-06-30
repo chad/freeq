@@ -36,6 +36,7 @@ let package = Package(
             ],
             sources: [
                 "Validation.swift",
+                "ServerConfig.swift",
                 "ChatMessage.swift",
                 "ChannelState.swift",
                 "ChannelHydration.swift",
