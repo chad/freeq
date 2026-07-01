@@ -11,11 +11,11 @@ RUN cargo build --release -p freeq-server -p freeq-auth-broker
 # ── Web client build ──
 FROM node:20-slim AS web-builder
 
-WORKDIR /app
-COPY freeq-app/package.json freeq-app/package-lock.json ./
-RUN npm ci --ignore-scripts
-COPY freeq-app/ ./
-RUN npm run build
+WORKDIR /src
+COPY freeq-sdk-js/ freeq-sdk-js/
+COPY freeq-app/ freeq-app/
+WORKDIR /src/freeq-app
+RUN npm ci --ignore-scripts && npm run build
 
 # ── Runtime ──
 FROM debian:bookworm-slim
@@ -27,7 +27,7 @@ WORKDIR /app
 
 COPY --from=builder /src/target/release/freeq-server /usr/local/bin/
 COPY --from=builder /src/target/release/freeq-auth-broker /usr/local/bin/
-COPY --from=web-builder /app/dist /app/web
+COPY --from=web-builder /src/freeq-app/dist /app/web
 
 RUN mkdir -p /data && chown freeq:freeq /data
 VOLUME /data
