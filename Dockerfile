@@ -4,16 +4,7 @@ FROM rust:1.89-slim-bookworm AS builder
 RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
-COPY Cargo.toml Cargo.lock ./
-COPY freeq-server/ freeq-server/
-COPY freeq-sdk/ freeq-sdk/
-COPY freeq-sdk-ffi/ freeq-sdk-ffi/
-COPY freeq-tui/ freeq-tui/
-COPY freeq-bots/ freeq-bots/
-COPY freeq-auth-broker/ freeq-auth-broker/
-COPY freeq-windows-core/ freeq-windows-core/
-COPY freeq-bot-id/ freeq-bot-id/
-COPY freeq-av-client/ freeq-av-client/
+COPY . .
 
 RUN cargo build --release -p freeq-server -p freeq-auth-broker
 
