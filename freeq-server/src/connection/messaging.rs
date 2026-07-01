@@ -706,15 +706,20 @@ pub(super) fn handle_privmsg_with_multiline(
                 // send `@+encrypted PRIVMSG #ch :leaked plaintext` and
                 // any logger or non-aware viewer would see the body in
                 // the clear.
+                // Accept either passphrase channels (ENC1) or VC-bootstrapped
+                // sender-keys group channels (EG1). Both bodies are opaque
+                // AEAD ciphertext the server never reads; the tag+prefix pair
+                // is what CTF-21 enforces so no plaintext can ride a +E channel.
                 let has_tag = tags.contains_key("+encrypted");
-                let has_enc1 = text.starts_with("ENC1:") && text.len() > 5;
-                if ch.encrypted_only && !(has_tag && has_enc1) {
+                let has_ciphertext =
+                    (text.starts_with("ENC1:") || text.starts_with("EG1:")) && text.len() > 5;
+                if ch.encrypted_only && !(has_tag && has_ciphertext) {
                     if !is_notice {
                         let nick = conn.nick_or_star();
                         let reason = if !has_tag {
                             "Cannot send to channel (+E) — messages must carry the +encrypted tag"
                         } else {
-                            "Cannot send to channel (+E) — body must be ENC1-prefixed ciphertext"
+                            "Cannot send to channel (+E) — body must be ENC1/EG1-prefixed ciphertext"
                         };
                         let reply = Message::from_server(
                             &state.server_name,

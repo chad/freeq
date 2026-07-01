@@ -263,6 +263,20 @@ impl Db {
                 updated_at  INTEGER NOT NULL
             );
 
+            -- Sealed group keys for VC-bootstrapped E2E channels (EG1/EGK1).
+            -- Each row is a group secret sealed to ONE member's X25519 key at
+            -- ONE epoch. The server stores/relays these opaque blobs but can
+            -- never open them (see freeq-sdk::e2ee_group). Multiple epochs are
+            -- retained so a member can decrypt channel history across rotations.
+            CREATE TABLE IF NOT EXISTS group_keys (
+                channel     TEXT NOT NULL,
+                member_did  TEXT NOT NULL,
+                epoch       INTEGER NOT NULL,
+                sealed_wire TEXT NOT NULL,      -- EGK1:... opaque sealed blob
+                updated_at  INTEGER NOT NULL,
+                PRIMARY KEY (channel, member_did, epoch)
+            );
+
             CREATE TABLE IF NOT EXISTS signing_keys (
                 did            TEXT PRIMARY KEY,
                 pubkey         BLOB NOT NULL,         -- raw 32-byte ed25519 public key
@@ -1392,6 +1406,51 @@ impl Db {
             Some(row) => Ok(Some(row?)),
             None => Ok(None),
         }
+    }
+
+    /// Store a group key sealed to one member at one epoch (server-blind).
+    pub fn save_group_key(
+        &self,
+        channel: &str,
+        member_did: &str,
+        epoch: i64,
+        sealed_wire: &str,
+    ) -> SqlResult<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.conn.execute(
+            "INSERT INTO group_keys (channel, member_did, epoch, sealed_wire, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(channel, member_did, epoch)
+             DO UPDATE SET sealed_wire=excluded.sealed_wire, updated_at=excluded.updated_at",
+            params![
+                channel.to_lowercase(),
+                member_did,
+                epoch,
+                sealed_wire,
+                now as i64
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Fetch all sealed group keys for one member of a channel, newest epoch
+    /// first. Returns `(epoch, sealed_wire)` pairs.
+    pub fn get_group_keys_for_member(
+        &self,
+        channel: &str,
+        member_did: &str,
+    ) -> SqlResult<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT epoch, sealed_wire FROM group_keys
+             WHERE channel = ?1 AND member_did = ?2 ORDER BY epoch DESC",
+        )?;
+        let rows = stmt.query_map(params![channel.to_lowercase(), member_did], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect()
     }
 
     /// Load all pre-key bundles (for populating in-memory cache on startup).

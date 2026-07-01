@@ -14,6 +14,7 @@
 pub mod bluesky;
 pub mod github;
 pub mod moderation;
+pub mod oidc;
 
 use axum::Router;
 use ed25519_dalek::SigningKey;
@@ -27,6 +28,8 @@ pub struct VerifierState {
     pub issuer_did: String,
     /// GitHub OAuth credentials (if configured).
     pub github: Option<GitHubConfig>,
+    /// OIDC / Google Workspace verifier config (if configured via env).
+    pub oidc: Option<oidc::OidcConfig>,
     /// Pending verification flows: state_token → PendingVerification.
     pub pending: parking_lot::Mutex<std::collections::HashMap<String, PendingVerification>>,
     /// Moderator roster: channel → active appointments.
@@ -95,10 +98,16 @@ pub fn router(
         public_key_multibase
     );
 
+    let oidc = oidc::OidcConfig::from_env();
+    if let Some(cfg) = &oidc {
+        tracing::info!(domain = %cfg.allowed_domain, "OIDC/SSO verifier configured");
+    }
+
     let state = Arc::new(VerifierState {
         signing_key,
         issuer_did: issuer_did.clone(),
         github,
+        oidc,
         pending: parking_lot::Mutex::new(std::collections::HashMap::new()),
         mod_roster: parking_lot::Mutex::new(moderation::ModRoster {
             channels: std::collections::HashMap::new(),
@@ -119,6 +128,11 @@ pub fn router(
 
     // Moderation verifier — always available
     app = app.merge(moderation::routes());
+
+    // OIDC / SSO verifier — only if OIDC_* env vars are configured
+    if state.oidc.is_some() {
+        app = app.merge(oidc::routes());
+    }
 
     // GitHub verifier — only if OAuth credentials are configured
     if state.github.is_some() {

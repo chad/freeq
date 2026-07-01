@@ -202,6 +202,10 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/api/v1/og", get(api_og_preview))
         .route("/api/v1/keys/{did}", get(api_get_keys))
         .route("/api/v1/keys", axum::routing::post(api_upload_keys))
+        .route(
+            "/api/v1/channels/{name}/groupkeys",
+            get(api_get_group_keys).post(api_put_group_keys),
+        )
         .route("/api/v1/signing-key", get(api_signing_key))
         .route("/api/v1/signing-keys/{did}", get(api_did_signing_key))
         .route("/api/v1/verify/{msgid}", get(api_verify_message))
@@ -1217,6 +1221,130 @@ async fn api_channels(State(state): State<Arc<SharedState>>) -> Json<Vec<Channel
     // Sort: most members first, then alphabetically
     list.sort_by(|a, b| b.members.cmp(&a.members).then(a.name.cmp(&b.name)));
     Json(list)
+}
+
+/// Resolve the authenticated caller DID from a `Bearer <session-id>` header.
+fn caller_did_from_bearer(
+    state: &crate::server::SharedState,
+    headers: &axum::http::HeaderMap,
+) -> Option<String> {
+    let sid = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    state.session_dids.lock().get(sid).cloned()
+}
+
+/// POST /api/v1/channels/{name}/groupkeys — a channel steward (founder or
+/// DID-op) uploads group secrets sealed to each member's X25519 key. The server
+/// stores opaque `EGK1:` blobs; it can never open them (server-blind key
+/// distribution for VC-bootstrapped E2E channels). Body:
+/// `{ "epoch": <n>, "keys": { "<member_did>": "EGK1:...", ... } }`.
+async fn api_put_group_keys(
+    Path(name): Path<String>,
+    State(state): State<Arc<SharedState>>,
+    headers: axum::http::HeaderMap,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+    let channel = if name.starts_with('#') {
+        name
+    } else {
+        format!("#{name}")
+    };
+
+    let Some(caller) = caller_did_from_bearer(&state, &headers) else {
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({ "error": "Bearer session required" })),
+        );
+    };
+
+    // Steward authorization: only the channel founder or a DID-op may distribute
+    // group keys — the same DID authorities the policy layer already trusts.
+    {
+        let channels = state.channels.lock();
+        let Some(ch) = channels.get(&channel.to_lowercase()) else {
+            return (
+                axum::http::StatusCode::NOT_FOUND,
+                axum::Json(serde_json::json!({ "error": "Unknown channel" })),
+            );
+        };
+        let is_authority =
+            ch.founder_did.as_deref() == Some(caller.as_str()) || ch.did_ops.contains(&caller);
+        if !is_authority {
+            return (
+                axum::http::StatusCode::FORBIDDEN,
+                axum::Json(serde_json::json!({
+                    "error": "Only the channel founder or a DID-op may distribute group keys"
+                })),
+            );
+        }
+    }
+
+    let (Some(epoch), Some(keys)) = (
+        body.get("epoch").and_then(|v| v.as_i64()),
+        body.get("keys").and_then(|v| v.as_object()),
+    ) else {
+        return (
+            axum::http::StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({
+                "error": "Expected { epoch: <n>, keys: { member_did: sealed } }"
+            })),
+        );
+    };
+
+    let mut stored = 0usize;
+    for (member_did, sealed) in keys {
+        if let Some(sealed_wire) = sealed.as_str() {
+            let (ch, md, sw) = (channel.clone(), member_did.clone(), sealed_wire.to_string());
+            state.with_db(|db| db.save_group_key(&ch, &md, epoch, &sw));
+            stored += 1;
+        }
+    }
+
+    (
+        axum::http::StatusCode::OK,
+        axum::Json(serde_json::json!({ "ok": true, "epoch": epoch, "stored": stored })),
+    )
+}
+
+/// GET /api/v1/channels/{name}/groupkeys — a member fetches the group keys
+/// sealed to THEIR DID across all retained epochs (newest first), so they can
+/// read live traffic and decrypt history across rotations. Only blobs the
+/// caller can actually open are returned.
+async fn api_get_group_keys(
+    Path(name): Path<String>,
+    State(state): State<Arc<SharedState>>,
+    headers: axum::http::HeaderMap,
+) -> (axum::http::StatusCode, axum::Json<serde_json::Value>) {
+    let channel = if name.starts_with('#') {
+        name
+    } else {
+        format!("#{name}")
+    };
+
+    let Some(caller) = caller_did_from_bearer(&state, &headers) else {
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({ "error": "Bearer session required" })),
+        );
+    };
+
+    let rows = state
+        .with_db(|db| db.get_group_keys_for_member(&channel, &caller))
+        .unwrap_or_default();
+
+    let keys: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|(epoch, sealed)| serde_json::json!({ "epoch": epoch, "sealed": sealed }))
+        .collect();
+
+    (
+        axum::http::StatusCode::OK,
+        axum::Json(serde_json::json!({ "channel": channel, "keys": keys })),
+    )
 }
 
 async fn api_channel_history(

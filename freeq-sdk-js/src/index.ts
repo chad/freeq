@@ -76,3 +76,13 @@ export type { ATProfile } from './profiles.js';
 // for the canonical usage pattern.
 export { generateDidKey, importDidKey } from './did-key.js';
 export type { DidKey } from './did-key.js';
+
+// VC-bootstrapped E2E group channels (EG1/EGK1) — passphrase-free, server-blind
+// channel encryption with per-epoch revocation. Interop-compatible with the
+// Rust `freeq-sdk::e2ee_group`. See docs/VC-BOOTSTRAPPED-CHANNEL-E2EE.md.
+export {
+  createGroup, rotate, encryptGroup, decryptGroup,
+  sealFor, openSealed, sealedToWire, sealedFromWire,
+  sealBatch, openBest, isGroupEncrypted, parseEpoch,
+} from './e2ee_group.js';
+export type { GroupState, SealedGroupKey, X25519Secret } from './e2ee_group.js';

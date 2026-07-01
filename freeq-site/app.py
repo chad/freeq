@@ -93,6 +93,11 @@ SLUG_MAP = {
     "av-protocol": ("site", "av-protocol.md"),
     "well-known-agent": ("site", "skills/well-known-agent.md"),
     "av-quic-migration": ("site", "AV-QUIC-MIGRATION.md"),
+    # Company privacy / E2E encrypted channels
+    "company-encrypted-channels": ("site", "COMPANY-ENCRYPTED-CHANNELS.md"),
+    "vc-e2e-channels": ("site", "VC-BOOTSTRAPPED-CHANNEL-E2EE.md"),
+    "company-security": ("site", "COMPANY-DEPLOYMENT-SECURITY-ANALYSIS.md"),
+    "self-hosting-e2e": ("site", "SELF-HOSTING-END-TO-END.md"),
 }
 
 
