@@ -42,12 +42,12 @@ JOIN #freeq</code></pre>
 <pre><code># Build from source
 git clone https://github.com/chad/freeq
 cd freeq
-cargo build --release --bin irc-at-tui
+cargo build --release --bin freeq-tui
 
 # Connect with AT Protocol authentication
-./target/release/irc-at-tui \
+./target/release/freeq-tui \
   --server irc.freeq.at --tls \
-  --at-handle yourname.bsky.social</code></pre>
+  --handle yourname.bsky.social</code></pre>
 
 <p>First run opens your browser for OAuth. Sessions are cached locally at
 <code>~/.config/freeq-tui/</code>.</p>
@@ -67,7 +67,7 @@ ws.onmessage = (e) => console.log(e.data);</code></pre>
 iroh endpoint ID in <code>CAP LS</code>. The TUI client auto-discovers
 and upgrades.</p>
 <pre><code># Connect directly via iroh endpoint ID
-./target/release/irc-at-tui --iroh-addr &lt;endpoint-id&gt;</code></pre>
+./target/release/freeq-tui --iroh-addr &lt;endpoint-id&gt;</code></pre>
 
 <h2>Bot SDK</h2>
 <p>Build bots with the Rust SDK:</p>
