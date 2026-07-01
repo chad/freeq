@@ -13,6 +13,9 @@ cp -r ../docs ./docs
 git -C .. rev-parse --short HEAD 2>/dev/null > .git_commit || echo "unknown" > .git_commit
 
 echo "Deploying freeq-site (commit: $(cat .git_commit))..."
-miren deploy -f
+# Pin the target cluster: the freeq-site app lives on BlueYard. Without this the
+# deploy targets whatever cluster is currently active (`miren cluster`), which
+# 403s if that's a cluster this identity has no deploy rights on.
+miren deploy -f -C BlueYard
 
 echo "Deployed! Docs will be at https://www.freeq.at/docs/"
