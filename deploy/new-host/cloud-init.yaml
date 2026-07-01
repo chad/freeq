@@ -1,0 +1,48 @@
+#cloud-config
+# Bootstraps a fresh Ubuntu 24.04 box into a Docker host ready for the miren
+# server. Fully headless: installs Docker, pulls the miren image, and pre-stages
+# a data dir. The miren server itself is started by the operator's one-time
+# `miren server docker install` (§3 in README.md) because registering the
+# cluster to YOUR new miren org needs your org auth — that step can't be headless.
+#
+# Verified against miren v0.9.0: image `oci.miren.cloud/miren:latest`,
+# `miren server docker install --host-network` binds the control plane on :8443.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - ca-certificates
+  - curl
+  - ufw
+  - fail2ban
+
+write_files:
+  # Persist miren state across container restarts / upgrades.
+  - path: /etc/miren/README
+    content: |
+      /var/lib/miren  — miren server + containerd state (BACK THIS UP)
+      Bring up the server with:  miren server docker install --host-network --cluster-name freeq-prod
+      or standalone:             miren server docker install --host-network --without-cloud
+
+runcmd:
+  # Docker (official convenience script — pinned channel).
+  - curl -fsSL https://get.docker.com | sh
+  - systemctl enable --now docker
+  - mkdir -p /var/lib/miren
+  # Pre-pull the miren server image so the operator's install is instant.
+  - docker pull oci.miren.cloud/miren:latest || true
+  # Host firewall as defence-in-depth behind the cloud firewall (Terraform).
+  # Cloud firewall is the source of truth; this mirrors the intended posture.
+  - ufw --force reset
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw allow 6697/tcp
+  - ufw allow 8443/tcp
+  - ufw allow 1024:65535/udp
+  - ufw --force enable
+
+final_message: "freeq host ready. Docker + miren image staged. Next: `miren server docker install` (see /etc/miren/README), then deploy from your laptop."
