@@ -228,6 +228,21 @@ struct Cli {
     #[arg(long)]
     external_brain: bool,
 
+    /// In external-brain mode, ALSO forward typed (non-voice) addressed
+    /// questions to the brain and post its replies back as channel text.
+    /// Default off: typed text is ignored in external-brain mode (a
+    /// separate yokota daemon owns it). Turn on for a self-contained
+    /// agentic being whose brain IS the seam (e.g. the claude-code brain),
+    /// so it answers in text chat as well as in calls.
+    #[arg(long)]
+    external_brain_text: bool,
+
+    /// Audio-only: in calls, don't render or publish a video tile (skip the
+    /// H.264 encode). Lets a being hold a stable VOICE call on a small/2-core
+    /// host where the video codec would otherwise starve the audio path.
+    #[arg(long)]
+    no_video: bool,
+
     /// Unix socket path to CONNECT to for external-brain mode (yokota
     /// is the server). Only used with `--external-brain`.
     #[arg(long)]
@@ -312,6 +327,18 @@ async fn main() -> Result<()> {
     let stt = Arc::new(build_stt(&cli)?);
     tracing::info!(backend = %stt.label(), "STT backend ready");
 
+    // Streaming STT (Deepgram): when DEEPGRAM_API_KEY is set, each
+    // participant tap opens a Deepgram websocket for sub-second
+    // finalised transcripts instead of the VAD + batched-Whisper loop.
+    // `build_stt` above stays as the fallback (used if the key is empty).
+    let stt_streaming_key = std::env::var("DEEPGRAM_API_KEY")
+        .ok()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty());
+    if stt_streaming_key.is_some() {
+        tracing::info!("STT: Deepgram streaming enabled (nova-3) — Whisper kept as fallback");
+    }
+
     // Anthropic key is now used for TWO things: optional end-of-call
     // summary, AND (by default) the per-question answer model when
     // `--groq-answer-model` is a `claude-*` model. So we always try
@@ -368,6 +395,7 @@ async fn main() -> Result<()> {
         nick,
         ident,
         stt,
+        stt_streaming_key,
         window_secs: cli.window_secs,
         summary_model: cli.summary_model,
         anthropic_key,
@@ -470,6 +498,8 @@ async fn main() -> Result<()> {
         }),
         peer_agents: cli.peer_agents,
         external_brain: cli.external_brain,
+        external_brain_text: cli.external_brain_text,
+        no_video: cli.no_video,
         brain_sock: cli.brain_sock,
         no_voice_dsp: cli.no_voice_dsp,
     })

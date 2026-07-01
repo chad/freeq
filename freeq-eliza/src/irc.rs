@@ -134,6 +134,12 @@ pub struct RunConfig {
     pub nick: String,
     pub ident: Identity,
     pub stt: Arc<SttEngine>,
+    /// Deepgram API key for streaming STT. When present, each
+    /// participant tap opens a Deepgram websocket instead of the local
+    /// VAD + batched-Whisper loop — finalised transcripts come back
+    /// within a few hundred ms of speech end. Falls back to `stt` when
+    /// absent. See [`crate::streaming_stt`].
+    pub stt_streaming_key: Option<String>,
     pub window_secs: f32,
     pub summary_model: String,
     pub anthropic_key: Option<String>,
@@ -222,6 +228,12 @@ pub struct RunConfig {
     /// (proactive, ambient, hello-on-join, backchannels). Off (default)
     /// = unchanged behavior.
     pub external_brain: bool,
+    /// Also forward typed text to the brain and post its reply (opt-in; see
+    /// `SharedConfig::external_brain_text`).
+    pub external_brain_text: bool,
+    /// Audio-only: don't render or publish a video tile in calls (skip the
+    /// H.264 encode) so a being can hold a stable voice call on a small host.
+    pub no_video: bool,
     /// Path to the unix socket yokota listens on; eliza CONNECTS to it
     /// as a client. Only used when [`Self::external_brain`] is set.
     pub brain_sock: Option<String>,
@@ -242,6 +254,9 @@ pub(crate) struct SharedConfig {
     pub(crate) owner: Option<String>,
     pub(crate) nick: String,
     pub(crate) stt: Arc<SttEngine>,
+    /// Pre-built Deepgram streaming config (nova-3) when a key is set —
+    /// shared across all participant taps. `None` = use `stt` (Whisper).
+    pub(crate) stt_streaming: Option<Arc<crate::streaming_stt::StreamingSttConfig>>,
     pub(crate) summary_model: String,
     pub(crate) anthropic_key: Option<String>,
     pub(crate) summary_enabled: bool,
@@ -349,6 +364,14 @@ pub(crate) struct SharedConfig {
     /// the bot forwards addressed utterances to yokota over the seam
     /// instead of answering itself, and suppresses self-initiated speech.
     pub(crate) external_brain: bool,
+    /// Also forward typed TEXT (not just voice) to the brain seam, and post the
+    /// brain's reply back as text. Opt-in: default external-brain mode ignores
+    /// text (a separate yokota daemon owns it). A self-contained being whose
+    /// brain IS the seam server (no separate text daemon) sets this so you can
+    /// drive it by typing as well as by voice.
+    pub(crate) external_brain_text: bool,
+    /// Audio-only mode — skip video render + publish in calls.
+    pub(crate) no_video: bool,
     /// Disable per-character voice DSP — speak with the dry/neutral
     /// profile (see [`RunConfig::no_voice_dsp`]).
     pub(crate) no_voice_dsp: bool,
@@ -357,6 +380,9 @@ pub(crate) struct SharedConfig {
     /// handle). Empty unless `external_brain && brain_sock.is_some()`.
     /// The emit site reads it to forward addressed utterances to yokota.
     pub(crate) brain_seam: std::sync::OnceLock<crate::brain_seam::SeamHandle>,
+    /// The freeq handle — set once connected, so the seam can POST text replies
+    /// to the channel when there's no live call (text-mode beings).
+    pub(crate) client_handle: std::sync::OnceLock<Arc<ClientHandle>>,
 }
 
 /// Active-call state. Held inside an `Arc<AsyncMutex<Option<...>>>`
@@ -460,6 +486,7 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         nick,
         ident: Identity { did, private_key },
         stt,
+        stt_streaming_key,
         window_secs: _window_secs,
         summary_model,
         anthropic_key,
@@ -486,6 +513,8 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         persona_hello_line,
         peer_agents,
         external_brain,
+        external_brain_text,
+        no_video,
         brain_sock,
         no_voice_dsp,
     } = cfg;
@@ -583,6 +612,9 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         owner,
         nick,
         stt,
+        stt_streaming: stt_streaming_key
+            .filter(|k| !k.trim().is_empty())
+            .map(|k| Arc::new(crate::streaming_stt::StreamingSttConfig::nova_3(k))),
         summary_model,
         anthropic_key,
         summary_enabled,
@@ -629,10 +661,14 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
         started_at: Instant::now(),
         recent_tts: std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
         external_brain,
+        external_brain_text,
+        no_video,
         no_voice_dsp,
         brain_seam: std::sync::OnceLock::new(),
+        client_handle: std::sync::OnceLock::new(),
     });
     let handle_arc = Arc::new(handle);
+    let _ = cfg.client_handle.set(handle_arc.clone()); // so the seam can post text replies
 
     // External-brain seam — connect to yokota's unix socket as a client.
     // Stored on the (Arc'd) SharedConfig so the emit site can forward
@@ -1006,6 +1042,25 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
             Event::Message {
                 from, target, text, ..
             } => {
+                // Direct message (target is our own nick): a DM is inherently
+                // addressed, so in external-brain-text mode forward the whole
+                // text to the brain and let it reply privately (to=from). This
+                // lets the owner converse with the being fully privately,
+                // without exposing the question in a channel.
+                if target.eq_ignore_ascii_case(&cfg.nick) {
+                    if !from.eq_ignore_ascii_case(&cfg.nick)
+                        && cfg.external_brain
+                        && cfg.external_brain_text
+                        && let Some(seam) = cfg.brain_seam.get()
+                    {
+                        let q = text.trim().to_string();
+                        if !q.is_empty() {
+                            tracing::info!(%from, question = %q, "external-brain(text): forwarding DM to brain");
+                            seam.send(crate::brain_seam::Outbound::Utterance { nick: from.clone(), text: q });
+                        }
+                    }
+                    continue;
+                }
                 // Answer when a participant addresses the bot by name in
                 // channel chat. Ignore non-channel targets and our own
                 // messages (the bot posts to the channel too).
@@ -1133,6 +1188,19 @@ pub async fn run(cfg: RunConfig) -> Result<()> {
                 // ignore typed questions here; forwarding them too would make
                 // the bot answer twice (text reply + spoken/seam reply).
                 if cfg.external_brain {
+                    // Default: a separate yokota daemon owns typed text — ignore
+                    // it here. Opt-in (external_brain_text): this being's brain
+                    // IS the seam, so forward typed text too; the reply posts back
+                    // as channel text (see brain_seam::speak_inbound).
+                    if cfg.external_brain_text {
+                        if let Some(seam) = cfg.brain_seam.get() {
+                            tracing::info!(%from, %question, "external-brain(text): forwarding typed question to brain");
+                            seam.send(crate::brain_seam::Outbound::Utterance {
+                                nick: from.clone(),
+                                text: question.clone(),
+                            });
+                        }
+                    }
                     continue;
                 }
                 let cfg = cfg.clone();
@@ -2905,7 +2973,11 @@ async fn start_transcription(
         _ => crate::video::Backend::Svg,
     };
     let video = VideoTile::with_backend(backend);
-    video.spawn_renderer();
+    // Audio-only beings skip the renderer thread — no raster, no frames to
+    // encode — so the real-time audio path keeps its CPU on a constrained host.
+    if !cfg.no_video {
+        video.spawn_renderer();
+    }
 
     // Pair a Speaker (kept here) with a PushAudioSource (published by
     // the AvSession as the bot's broadcast). Enqueueing on the Speaker
@@ -2917,6 +2989,7 @@ async fn start_transcription(
         session_id: session_id.clone(),
         our_broadcast: broadcast_path(&session_id, &cfg.nick, &instance_id),
         my_nick: cfg.nick.clone(),
+        audio_only: cfg.no_video,
     };
 
     // Dispatcher task: own the AvSession and spawn one transcription
@@ -3542,6 +3615,33 @@ async fn transcribe_participant(
     let other_primed: Arc<std::sync::Mutex<Option<Instant>>> =
         Arc::new(std::sync::Mutex::new(None));
 
+    // Streaming STT (Deepgram): when configured, the server does
+    // endpointing + transcription on a persistent websocket, so finalised
+    // utterances arrive within a few hundred ms of speech end — far
+    // tighter than the local VAD + Groq round-trip below. Same downstream
+    // dispatch; we just produce `text` from the socket instead of Whisper.
+    if let Some(dg) = cfg.stt_streaming.clone() {
+        stream_participant_deepgram(
+            dg,
+            audio,
+            cfg.clone(),
+            nick.clone(),
+            channel.clone(),
+            handle.clone(),
+            active.clone(),
+            peer_level.clone(),
+            humans.clone(),
+            roster.clone(),
+            name_primed.clone(),
+            other_primed.clone(),
+            video.clone(),
+            video_taps.clone(),
+        )
+        .await;
+        tracing::info!(%nick, "participant audio stream ended (streaming)");
+        return;
+    }
+
     // VAD: turn the PCM stream into utterances, cut at natural pauses.
     let mut segmenter = VadSegmenter::new(VadConfig::default());
     let mut frames_seen: u64 = 0;
@@ -3634,6 +3734,54 @@ async fn transcribe_participant(
             );
             match stt_result {
                 Ok(text) => {
+                    dispatch_utterance(
+                        cfg,
+                        nick,
+                        channel,
+                        handle,
+                        active,
+                        humans,
+                        roster,
+                        name_primed,
+                        other_primed,
+                        asker_video,
+                        video_taps_for_screen,
+                        turn,
+                        t_flush,
+                        text,
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    tracing::warn!(%nick, error = ?e, "STT failed");
+                }
+            }
+        });
+    }
+    tracing::info!(%nick, "participant audio stream ended");
+}
+
+/// Run one finalised utterance through the full addressing + answer
+/// pipeline. Shared by the batched-Whisper tap (`transcribe_participant`)
+/// and the Deepgram streaming tap — both produce a `text` for one speaker
+/// turn and hand it here, so the addressing logic lives in exactly one place.
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_utterance(
+    cfg: Arc<SharedConfig>,
+    nick: String,
+    channel: String,
+    handle: Arc<ClientHandle>,
+    active: Arc<AsyncMutex<Option<ActiveCall>>>,
+    humans: Arc<std::sync::atomic::AtomicUsize>,
+    roster: CallRoster,
+    name_primed: Arc<std::sync::Mutex<Option<Instant>>>,
+    other_primed: Arc<std::sync::Mutex<Option<Instant>>>,
+    asker_video: VideoHandle,
+    video_taps_for_screen: CallVideoTaps,
+    turn: u64,
+    t_flush: Instant,
+    text: String,
+) {
                     if text.is_empty() || is_hallucination(&text) {
                         tracing::info!(%nick, %text, "dropped empty/hallucinated utterance");
                         return;
@@ -4029,14 +4177,174 @@ async fn transcribe_participant(
                             }
                         }
                     }
+}
+
+/// Stream one participant's audio to Deepgram and dispatch every
+/// finalised transcript through the shared [`dispatch_utterance`]
+/// pipeline. Persistent websocket per speaker; reconnects with a short
+/// backoff on a dropped socket, gives up after repeated connect
+/// failures (e.g. a bad key) so a dead key can't spin forever.
+#[allow(clippy::too_many_arguments)]
+async fn stream_participant_deepgram(
+    dg: Arc<crate::streaming_stt::StreamingSttConfig>,
+    mut audio: tokio::sync::mpsc::Receiver<freeq_av::PcmFrame>,
+    cfg: Arc<SharedConfig>,
+    nick: String,
+    channel: String,
+    handle: Arc<ClientHandle>,
+    active: Arc<AsyncMutex<Option<ActiveCall>>>,
+    peer_level: Arc<std::sync::atomic::AtomicU32>,
+    humans: Arc<std::sync::atomic::AtomicUsize>,
+    roster: CallRoster,
+    name_primed: Arc<std::sync::Mutex<Option<Instant>>>,
+    other_primed: Arc<std::sync::Mutex<Option<Instant>>>,
+    video: VideoHandle,
+    video_taps: CallVideoTaps,
+) {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+    const BACKOFF: Duration = Duration::from_millis(500);
+    // Automatic gain control. Real-world mics (phone capture, AGC'd
+    // headsets) often arrive far below full scale — a 0.03 peak sits at
+    // the noise floor and Deepgram mangles it. We track a smoothed
+    // loudness envelope and boost each frame toward AGC_TARGET, capped at
+    // AGC_MAX so we never blow up silence into noise. Loud input (already
+    // near full scale) is left alone or gently tamed. This makes the being
+    // transcribe a quiet/distant speaker without touching the client.
+    const AGC_TARGET: f32 = 0.3; // desired peak after gain
+    const AGC_FLOOR: f32 = 0.02; // envelope floor → caps max boost at TARGET/FLOOR
+    const AGC_MAX: f32 = 20.0; // hard ceiling on gain
+    let mut agc_env: f32 = 0.0; // smoothed loudness, fast attack / slow release
+    let mut frames_seen: u64 = 0;
+    let mut connect_fails: u32 = 0;
+
+    'reconnect: loop {
+        let (mut writer, mut reader) = match crate::streaming_stt::connect(&dg).await {
+            Ok(pair) => {
+                connect_fails = 0;
+                tracing::info!(%nick, model = %dg.model, "deepgram streaming connected");
+                pair
+            }
+            Err(e) => {
+                connect_fails += 1;
+                tracing::warn!(%nick, error = ?e, connect_fails, "deepgram connect failed");
+                if connect_fails > 5 {
+                    tracing::error!(%nick, "deepgram unreachable after retries — STT disabled for this tap");
+                    return;
                 }
-                Err(e) => {
-                    tracing::warn!(%nick, error = ?e, "STT failed");
+                tokio::time::sleep(BACKOFF).await;
+                continue 'reconnect;
+            }
+        };
+
+        // Reader: finalised transcripts → the full addressing/answer
+        // pipeline, one spawned task each so a slow answer never blocks
+        // reading the next utterance.
+        let reader_task = {
+            let cfg = cfg.clone();
+            let nick = nick.clone();
+            let channel = channel.clone();
+            let handle = handle.clone();
+            let active = active.clone();
+            let humans = humans.clone();
+            let roster = roster.clone();
+            let name_primed = name_primed.clone();
+            let other_primed = other_primed.clone();
+            let video = video.clone();
+            let video_taps = video_taps.clone();
+            tokio::spawn(async move {
+                while let Some(msg) = reader.next().await {
+                    let txt = match msg {
+                        Ok(Message::Text(t)) => t.to_string(),
+                        Ok(Message::Close(_)) => break,
+                        Ok(_) => continue,
+                        Err(e) => {
+                            tracing::warn!(%nick, error = ?e, "deepgram read error");
+                            break;
+                        }
+                    };
+                    let Some(text) = crate::streaming_stt::parse_final_transcript(&txt) else {
+                        continue;
+                    };
+                    let turn = next_turn_id();
+                    let t_flush = Instant::now();
+                    tracing::info!(turn, %nick, %text, "latency: deepgram final transcript");
+                    tokio::spawn(dispatch_utterance(
+                        cfg.clone(),
+                        nick.clone(),
+                        channel.clone(),
+                        handle.clone(),
+                        active.clone(),
+                        humans.clone(),
+                        roster.clone(),
+                        name_primed.clone(),
+                        other_primed.clone(),
+                        video.clone(),
+                        video_taps.clone(),
+                        turn,
+                        t_flush,
+                        text,
+                    ));
+                }
+            })
+        };
+
+        // Feed: resample to 16 kHz mono (shared conditioning with the
+        // Whisper path), pack to linear16, push to Deepgram.
+        loop {
+            match audio.recv().await {
+                Some(frame) => {
+                    frames_seen += 1;
+                    let pcm = to_whisper_pcm(&frame.samples, frame.format);
+                    if pcm.is_empty() {
+                        continue;
+                    }
+                    let peak = pcm.iter().fold(0.0f32, |m, &s| m.max(s.abs()));
+                    // Feed the video presence's "listening" mood — snap up,
+                    // ease down — off the RAW peak (true loudness).
+                    {
+                        use std::sync::atomic::Ordering;
+                        let prev = f32::from_bits(peer_level.load(Ordering::Relaxed));
+                        let smoothed = if peak > prev { peak } else { prev * 0.9 + peak * 0.1 };
+                        peer_level.store(smoothed.to_bits(), Ordering::Relaxed);
+                    }
+                    // AGC: fast attack (jump to a louder peak immediately),
+                    // slow release (decay between words), then derive the
+                    // boost from the smoothed envelope. The FLOOR caps the
+                    // gain so a near-silent frame can't be amplified to noise.
+                    agc_env = if peak > agc_env {
+                        peak
+                    } else {
+                        agc_env * 0.95 + peak * 0.05
+                    };
+                    let gain = (AGC_TARGET / agc_env.max(AGC_FLOOR)).clamp(1.0, AGC_MAX);
+                    let boosted: Vec<f32> = pcm.iter().map(|&s| (s * gain).clamp(-1.0, 1.0)).collect();
+                    if frames_seen == 1 || frames_seen.is_multiple_of(250) {
+                        tracing::info!(
+                            %nick, frames_seen, peak,
+                            gain = gain,
+                            out_peak = (peak * gain).min(1.0),
+                            "deepgram tap heartbeat"
+                        );
+                    }
+                    let bytes = crate::streaming_stt::f32_mono_to_i16le(&boosted);
+                    if let Err(e) = crate::streaming_stt::send_pcm(&mut writer, bytes).await {
+                        tracing::warn!(%nick, error = ?e, "deepgram send failed; reconnecting");
+                        reader_task.abort();
+                        tokio::time::sleep(BACKOFF).await;
+                        continue 'reconnect;
+                    }
+                }
+                None => {
+                    // Participant left / call ended — flush and let Deepgram
+                    // return any trailing finals before we drop the reader.
+                    let _ = crate::streaming_stt::close_stream(&mut writer).await;
+                    let _ = reader_task.await;
+                    return;
                 }
             }
-        });
+        }
     }
-    tracing::info!(%nick, "participant audio stream ended");
 }
 
 /// Derive the MoQ SFU URL from the IRC server URL. Same host, /av/moq

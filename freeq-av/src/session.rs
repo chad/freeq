@@ -76,6 +76,10 @@ pub struct AvConfig {
     /// The agent's nick. Any announced broadcast that resolves to this
     /// nick is skipped, regardless of its `~instance` suffix.
     pub my_nick: String,
+    /// Audio-only mode: don't publish a video tile (skip the H.264 encode).
+    /// Lets a being run a stable voice call on a CPU-constrained host where
+    /// the video codec would otherwise starve the real-time audio encoder.
+    pub audio_only: bool,
 }
 
 /// A remote participant whose media [`AvSession`] is tapping.
@@ -303,10 +307,14 @@ where
         .audio()
         .set(audio, AudioCodec::Opus, [AudioPreset::Hq])
         .context("setting agent broadcast audio source")?;
-    broadcast
-        .video()
-        .set_source(video, VideoCodec::H264, [VideoPreset::P360])
-        .context("setting agent broadcast video source")?;
+    // Audio-only beings skip the video tile entirely — no H.264 encode, which
+    // is what frees a 2-core host to hold a stable voice call.
+    if !config.audio_only {
+        broadcast
+            .video()
+            .set_source(video, VideoCodec::H264, [VideoPreset::P360])
+            .context("setting agent broadcast video source")?;
+    }
     let pub_origin = moq_lite::Origin::produce();
     pub_origin.publish_broadcast(config.our_broadcast.as_str(), broadcast.consume());
 
