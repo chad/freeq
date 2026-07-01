@@ -96,7 +96,6 @@ SLUG_MAP = {
     # Company privacy / E2E encrypted channels
     "company-encrypted-channels": ("site", "COMPANY-ENCRYPTED-CHANNELS.md"),
     "vc-e2e-channels": ("site", "VC-BOOTSTRAPPED-CHANNEL-E2EE.md"),
-    "company-security": ("site", "COMPANY-DEPLOYMENT-SECURITY-ANALYSIS.md"),
     "self-hosting-e2e": ("site", "SELF-HOSTING-END-TO-END.md"),
 }
 
