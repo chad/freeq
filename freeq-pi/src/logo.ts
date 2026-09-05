@@ -55,17 +55,23 @@ export function logoCompactLines(): string[] {
 }
 
 /**
- * The biggest mark this terminal has room for, or none.
+ * The mark this terminal has room for, or none.
+ *
+ * The compact mark is the default everywhere: the full 60×27 render fills
+ * most of a laptop screen, and a greeting that pushes the transcript off
+ * the glass stops being a greeting. The full mark is still available to a
+ * caller that asks for it explicitly (`{ full: true }`) on a terminal with
+ * room to spare.
  *
  * Height is the constraint, not width: pi caps a string-array widget at 10
  * lines (the caller uses a component factory to avoid that), and a mark taller
  * than the window is worse than no mark. Leave room for the editor and a few
  * lines of transcript.
  */
-export function markForTerminal(rows = process.stdout.rows ?? 24): string[] {
+export function markForTerminal(rows = process.stdout.rows ?? 24, opts?: { full?: boolean }): string[] {
   const full = logoLines();
   const compact = logoCompactLines();
-  if (full.length && rows >= full.length + 10) return full;
+  if (opts?.full && full.length && rows >= full.length + 10) return full;
   if (compact.length && rows >= compact.length + 8) return compact;
   return [];
 }

@@ -5,8 +5,8 @@
  *   - zero pi core changes; documented extension surfaces only
  *   - remote input never invokes local tools directly: it becomes a framed,
  *     tier-gated user message, and the local agent decides what to do
- *   - `sendUserMessage` is called in exactly ONE place (`deliver`), gated by
- *     `decideInbound` — no other code path may reach the model
+ *   - content reaches the model in exactly ONE place (`deliver`), gated by
+ *     `decideInbound` — no other code path may inject remote input
  *   - no filesystem paths in advertised presence
  *   - connection failure degrades to offline, never breaks the session
  *   - one installation identity; sessions are metadata
@@ -38,7 +38,14 @@ import { authorizeInstructions, creatorKeyPath, interpretProvenanceNotice } from
 import { McpStdioClient } from "../src/mcp-stdio.js";
 import { addressedUtterances, parseListenResult, toBridgeCall, type AvParams } from "../src/av.js";
 import { parseVerbositySteer } from "../src/steer.js";
-import { footerLine, offerCardLines, rosterLines } from "../src/ui.js";
+import {
+  footerLine,
+  inboundCardParts,
+  offerCardLines,
+  roomLineParts,
+  rosterLines,
+  type RoomLineInput,
+} from "../src/ui.js";
 import { markForTerminal, supportsTruecolor, WORDMARK } from "../src/logo.js";
 import { WithheldBuffer, senderKey, withheldSummary } from "../src/withheld.js";
 import { peerColor } from "../src/ui.js";
@@ -114,7 +121,6 @@ import {
   decideInbound,
   frameInbound,
   reachesModel,
-  summarize,
   type InboundEvent,
 } from "../src/inbound.js";
 
@@ -138,6 +144,109 @@ export default function (pi: ExtensionAPI): void {
    * Things this session owes a reply to, in arrival order: peer asks, and
    * channel messages that addressed us (Demo 2 — humans in the room).
    */
+  // ── inline rendering ──────────────────────────────────────────────────
+  //
+  // freeq traffic is first-class transcript content, not toasts: a message
+  // that reaches the model is a coloured card (who, where, at what
+  // authority), and room chatter is a live entry line coloured by speaker.
+  // The MODEL still receives the security frame as message content — the
+  // card is presentation only, so the tier gate and framing are untouched.
+
+  /** details payload carried on every injected freeq message. */
+  interface FreeqInboundDetails {
+    kind: "chat" | "ask";
+    channel: string;
+    from: string;
+    did: string | null;
+    tier: Tier;
+    text: string;
+    reason: string;
+    expectsReply: boolean;
+  }
+
+  pi.registerMessageRenderer("freeq-inbound", (message, { expanded, outputPad }, theme) => {
+    const d = message.details as FreeqInboundDetails | undefined;
+    if (!d) {
+      const raw = typeof message.content === "string" ? message.content : "";
+      return new Text(raw, outputPad, 0);
+    }
+    const p = inboundCardParts({
+      kind: d.kind,
+      channel: d.channel,
+      from: d.from,
+      tier: d.tier,
+      text: d.text,
+    });
+    const box = new Container();
+    box.addChild(
+      new Text(
+        theme.fg("accent", `${p.icon} ${p.venue}`) +
+          theme.fg("dim", " · ") +
+          theme.fg(peerColor(d.did ?? undefined), p.from) +
+          theme.fg("dim", ` · ${p.badge}`),
+        outputPad,
+        0,
+      ),
+    );
+    for (const line of p.body.split("\n")) box.addChild(new Text(line, outputPad, 0));
+    if (expanded) {
+      box.addChild(
+        new Text(
+          theme.fg("dim", `${d.reason}${d.expectsReply ? " · the next reply goes back over freeq" : ""}`),
+          outputPad,
+          0,
+        ),
+      );
+    }
+    return box;
+  });
+
+  /**
+   * Room entries: `{ type: "line", … }` per message, or a coalesced
+   * `{ type: "more", count }` when a burst overflowed. Never sent to the
+   * model — this is the transcript's view of the room, not its content.
+   */
+  type FreeqRoomData =
+    | ({ type: "line" } & RoomLineInput)
+    | { type: "more"; count: number };
+
+  pi.registerEntryRenderer("freeq-room", (entry, { expanded }, theme) => {
+    const d = entry.data as FreeqRoomData | undefined;
+    if (!d) return undefined;
+    if (d.type === "more") {
+      return new Text(
+        theme.fg("dim", `  … ${d.count} more room message${d.count === 1 ? "" : "s"}`),
+        1,
+        0,
+      );
+    }
+    const p = roomLineParts(d, expanded ? 1000 : 160);
+    const line =
+      theme.fg("dim", `${p.arrow} `) +
+      theme.fg("accent", p.venue) +
+      " " +
+      theme.fg(peerColor(d.did), `<${p.from}>`) +
+      " " +
+      p.text +
+      (p.note ? theme.fg("dim", `  (${p.note})`) : "");
+    return new Text(line, 1, 0);
+  });
+
+  /** Show something we posted to freeq in the transcript, as a receipt. */
+  function receipt(channel: string, text: string): void {
+    try {
+      pi.appendEntry("freeq-room", {
+        type: "line",
+        direction: "out",
+        channel,
+        from: conn?.nick ?? "me",
+        text,
+      } satisfies FreeqRoomData);
+    } catch {
+      /* best-effort */
+    }
+  }
+
   type PendingReply =
     | { kind: "ask"; ask: InboundAsk }
     | { kind: "channel"; channel: string; from: string };
@@ -146,29 +255,49 @@ export default function (pi: ExtensionAPI): void {
   let lastAssistantText = "";
 
   /**
-   * OBSERVE-tier traffic is surfaced, not injected — but one notification per
-   * message would drown the TUI in a busy channel, so they're batched.
+   * OBSERVE-tier traffic is surfaced, not injected — and now it is surfaced
+   * LIVE: each room message becomes one coloured entry line in the
+   * transcript the moment it arrives, rather than a toast batch every four
+   * seconds that scrolled away and was gone.
+   *
+   * The guard against a busy room is burst coalescing, not batching: more
+   * than BURST_MAX lines inside BURST_WINDOW collapses the overflow into a
+   * single "… and N more" entry once the burst settles, so a flood cannot
+   * bury the transcript (or bloat the session file — entries persist).
    */
-  const observed: string[] = [];
-  let observeTimer: NodeJS.Timeout | undefined;
-  function surface(ctx: ExtensionContext, line: string): void {
-    observed.push(line);
-    if (observeTimer) return;
-    observeTimer = setTimeout(() => {
-      observeTimer = undefined;
-      const batch = observed.splice(0, observed.length);
-      if (!batch.length) return;
-      const head = batch.slice(0, 8);
-      const more = batch.length - head.length;
-      notify(
-        ctx,
-        `freeq (${batch.length} message${batch.length === 1 ? "" : "s"}):\n` +
-          head.join("\n") +
-          (more > 0 ? `\n…and ${more} more` : ""),
-        "info",
-      );
-    }, 4000);
-    observeTimer.unref?.();
+  const BURST_WINDOW_MS = 3_000;
+  const BURST_MAX = 8;
+  let burstCount = 0;
+  let burstOverflow = 0;
+  let burstTimer: NodeJS.Timeout | undefined;
+  function surface(input: RoomLineInput): void {
+    try {
+      if (burstCount < BURST_MAX) {
+        burstCount++;
+        pi.appendEntry("freeq-room", { type: "line", ...input } satisfies FreeqRoomData);
+      } else {
+        burstOverflow++;
+      }
+    } catch {
+      /* best-effort */
+    }
+    if (burstTimer) {
+      clearTimeout(burstTimer);
+    }
+    burstTimer = setTimeout(() => {
+      burstTimer = undefined;
+      burstCount = 0;
+      if (burstOverflow > 0) {
+        const n = burstOverflow;
+        burstOverflow = 0;
+        try {
+          pi.appendEntry("freeq-room", { type: "more", count: n } satisfies FreeqRoomData);
+        } catch {
+          /* best-effort */
+        }
+      }
+    }, BURST_WINDOW_MS);
+    burstTimer.unref?.();
   }
 
   /** Channel replies are chat, not essays. */
@@ -245,6 +374,10 @@ export default function (pi: ExtensionAPI): void {
   pi.on("turn_start", async (_e, ctx) => {
     clearMark(ctx);
     clearPeers(ctx);
+    // Presence liveness: tool calls already push state, but a long thinking
+    // stretch makes none. A turn boundary is the other heartbeat — throttled
+    // inside pushStatus, so this costs at most one presence line per 2.5s.
+    pushStatus("executing", workLabel ?? "working", workTask);
   });
 
   // Messages addressed to us that the tier gate refused. Held so the agent
@@ -310,13 +443,15 @@ export default function (pi: ExtensionAPI): void {
     // Title: which agent this window is, so a row of terminals reads.
     if (online && conn?.nick) c.ui.setTitle(`pi · ${conn.nick}`);
 
-    // Offer card: the oldest waiting offer, until acted on.
+    // Offer card: the oldest waiting offer, until acted on. Rendered as a
+    // component factory rather than a string[] so it picks up theme colours
+    // — a plain monochrome box read as scaffolding, not as a thing to act on.
     const first = waiting[0];
     const rec = first && store ? store.get(first.taskId) : undefined;
     if (rec && config) {
-      c.ui.setWidget(
-        "freeq-offer",
-        offerCardLines({
+      const width = Math.min(100, Math.max(56, (process.stdout.columns ?? 80) - 4));
+      const cardLines = offerCardLines(
+        {
           taskId: rec.id,
           title: rec.title,
           from: rec.lastActor ?? rec.offerer.slice(0, 16),
@@ -324,8 +459,27 @@ export default function (pi: ExtensionAPI): void {
           queuedAt: first.queuedAt,
           deadline: rec.deadline,
           brief: rec.note,
-        }),
+        },
+        width,
       );
+      c.ui.setWidget("freeq-offer", (_tui, theme) => {
+        const box = new Container();
+        cardLines.forEach((line, i) => {
+          let t: Text;
+          if (i === 0 || i === cardLines.length - 1) {
+            // The frame: an offer demands a decision, so it is warning-toned.
+            t = new Text(theme.fg("warning", line), 1, 0);
+          } else if (i === 1) {
+            t = new Text(theme.fg("toolTitle", theme.bold(line)), 1, 0);
+          } else if (line.includes("/freeq accept")) {
+            t = new Text(theme.fg("accent", line), 1, 0);
+          } else {
+            t = new Text(theme.fg("muted", line), 1, 0);
+          }
+          box.addChild(t);
+        });
+        return box;
+      });
     } else {
       c.ui.setWidget("freeq-offer", undefined);
     }
@@ -617,7 +771,19 @@ export default function (pi: ExtensionAPI): void {
 
     if (!reachesModel(decision.action)) {
       if (decision.action === "surface") {
-        surface(ctx, summarize(ev, decision));
+        surface({
+          direction: "in",
+          channel: ev.channel,
+          from: ev.from,
+          did: ev.did ?? undefined,
+          text: ev.text,
+          // Someone waiting on an answer gets a marker; ordinary room
+          // chatter does not need a justification attached to every line.
+          note:
+            ev.addressed || ev.kind === "ask"
+              ? `withheld · tier ${ev.tier}`
+              : undefined,
+        });
         // Only messages meant for us. Room chatter we are merely not injecting
         // is not a message anyone is waiting on an answer to.
         if (ev.addressed || ev.kind === "ask") {
@@ -670,12 +836,30 @@ export default function (pi: ExtensionAPI): void {
     // Only for addressed input from `request` tier and up. Lower-tier chat
     // still waits; it should not interrupt work.
     const interrupts = ev.addressed && tierAtLeast(ev.tier, "request");
-    const deliveryOpts = ctx.isIdle()
-      ? undefined
-      : ({ deliverAs: interrupts ? "steer" : "followUp" } as const);
     try {
-      void pi.sendUserMessage(framed, deliveryOpts);
-      notify(ctx, summarize(ev, decision), "info");
+      // A custom message, not sendUserMessage: the model receives the same
+      // framed content as before, but the transcript renders it as a
+      // coloured freeq card (renderer above) instead of pretending the
+      // operator typed it. triggerTurn preserves the old semantics: idle →
+      // answer now; busy → steer/followUp exactly as before.
+      pi.sendMessage(
+        {
+          customType: "freeq-inbound",
+          content: framed,
+          display: true,
+          details: {
+            kind: ev.kind,
+            channel: ev.channel,
+            from: ev.from,
+            did: ev.did,
+            tier: ev.tier,
+            text: ev.text,
+            reason: decision.reason,
+            expectsReply,
+          } satisfies FreeqInboundDetails,
+        },
+        { deliverAs: interrupts ? "steer" : "followUp", triggerTurn: true },
+      );
     } catch (err) {
       if (ask && conn) conn.replyToAsk(ask, undefined, `local delivery failed`);
       notify(ctx, `freeq: could not deliver message: ${(err as Error).message}`, "error");
@@ -797,7 +981,13 @@ export default function (pi: ExtensionAPI): void {
             : { addressed: true, stripped: msg.text, cooling: false };
 
           if (mention.cooling) {
-            surface(ctx, `freeq [${channel}] <${msg.from}> (rate-limited, not answered)`);
+            surface({
+              direction: "in",
+              channel,
+              from: msg.from,
+              text: msg.text,
+              note: "rate-limited · not answered",
+            });
             return;
           }
 
@@ -1066,7 +1256,8 @@ export default function (pi: ExtensionAPI): void {
       if (item.kind === "ask") {
         if (lastAssistantText) {
           conn.replyToAsk(item.ask, lastAssistantText);
-          notify(ctx, `freeq: answered ${item.ask.from} (${lastAssistantText.length} chars)`, "info");
+          // A receipt in the transcript: what actually went back, and to whom.
+          receipt(item.ask.from, lastAssistantText);
         } else {
           // M0 finding: an empty answer is a real state — report it, never
           // leave the asker hanging until timeout.
@@ -1088,7 +1279,8 @@ export default function (pi: ExtensionAPI): void {
     for (const [channel, from] of channelReplies) {
       if (!conn) break;
       conn.send(channel, `${from}: ${lastAssistantText}`);
-      notify(ctx, `freeq: replied in ${channel} to ${from}`, "info");
+      // A receipt in the transcript: the room heard this, addressed so.
+      receipt(channel, `${from}: ${lastAssistantText}`);
     }
     lastAssistantText = "";
 

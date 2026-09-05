@@ -193,6 +193,90 @@ export function rosterLines(peers: RosterPeer[], now = Date.now()): string[] {
   return rows;
 }
 
+// ── Inline room lines ───────────────────────────────────────────────────
+//
+// Room traffic rendered into the transcript as custom entries. The extension
+// applies theme colours; this owns layout and truncation, so it stays pure
+// and testable.
+
+export interface RoomLineInput {
+  /** "in" — the room said it; "out" — we posted it. */
+  direction: "in" | "out";
+  channel: string;
+  from: string;
+  did?: string;
+  text: string;
+  /** Short dim suffix — "withheld · tier observe", "rate-limited". */
+  note?: string;
+}
+
+export interface RoomLineParts {
+  arrow: string;
+  venue: string;
+  from: string;
+  text: string;
+  note?: string;
+}
+
+/** Collapse to one line and cap the length — a transcript line, not a paste. */
+export function oneLine(s: string, max = 160): string {
+  const flat = s.replace(/\s+/g, " ").trim();
+  return flat.length <= max ? flat : `${flat.slice(0, Math.max(0, max - 1))}…`;
+}
+
+/** How a venue reads on a card: `#freeq-dev`, or `DM` for a direct message. */
+export function venueOf(channel: string): string {
+  return channel.startsWith("#") ? channel : "DM";
+}
+
+/**
+ * A room line as separately-colourable parts. The arrow carries direction:
+ * `⇐` arrived, `⇒` we posted — the difference between "the agent said" and
+ * "the room heard".
+ */
+export function roomLineParts(r: RoomLineInput, maxText = 160): RoomLineParts {
+  return {
+    arrow: r.direction === "out" ? "⇒" : "⇐",
+    venue: venueOf(r.channel),
+    from: r.from,
+    text: oneLine(r.text, maxText),
+    note: r.note,
+  };
+}
+
+// ── Inbound card ────────────────────────────────────────────────────────
+//
+// A message that reached the model renders as a card: who, where, at what
+// authority, then the text as they wrote it. The model still receives the
+// security frame as message content; the card is what the human sees.
+
+export interface InboundCardInput {
+  kind: "chat" | "ask";
+  channel: string;
+  from: string;
+  tier: string;
+  text: string;
+}
+
+export interface InboundCardParts {
+  icon: string;
+  venue: string;
+  from: string;
+  /** Authority badge, e.g. "control" — shown dim, or warning when a stranger. */
+  badge: string;
+  body: string;
+}
+
+export function inboundCardParts(i: InboundCardInput): InboundCardParts {
+  return {
+    icon: i.kind === "ask" ? "❓" : "⚡",
+    venue: venueOf(i.channel),
+    from: i.from,
+    badge: i.tier,
+    body: i.text.trim(),
+  };
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────
 
 export function formatAge(ms: number, future = false): string {

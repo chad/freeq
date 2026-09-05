@@ -34,11 +34,15 @@ describe("the mark", () => {
     expect(plain[0]!.length).toBeLessThanOrEqual(40);
   });
 
-  it("picks the biggest mark that fits, and none when nothing does", () => {
-    // pi caps string-array widgets at 10 lines, so a 27-row mark must go
-    // through a component factory; height is still the real constraint.
-    expect(markForTerminal(60)).toEqual(logoLines());
+  it("defaults to the compact mark; the full mark is by request only", () => {
+    // The 60×27 mark fills most of a screen — fine when someone asks for it,
+    // wrong as a greeting that shoves the transcript off the glass.
+    expect(markForTerminal(60)).toEqual(logoCompactLines());
+    expect(markForTerminal(60, { full: true })).toEqual(logoLines());
     expect(markForTerminal(24)).toEqual(logoCompactLines());
+    // A full request on a small terminal still degrades to compact, never to
+    // a mark taller than the window.
+    expect(markForTerminal(24, { full: true })).toEqual(logoCompactLines());
     expect(markForTerminal(12)).toEqual([]);
   });
 });

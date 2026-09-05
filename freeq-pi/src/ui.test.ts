@@ -4,10 +4,14 @@ import {
   PEER_PALETTE_SIZE,
   footerLine,
   formatAge,
+  inboundCardParts,
   offerCardLines,
+  oneLine,
   peerColor,
   peerColorIndex,
+  roomLineParts,
   rosterLines,
+  venueOf,
 } from "./ui.js";
 
 describe("footer", () => {
@@ -76,6 +80,44 @@ describe("roster", () => {
   });
   it("says why it is empty", () => {
     expect(rosterLines([])[0]).toMatch(/shared room/);
+  });
+});
+
+describe("room lines", () => {
+  it("carries direction in the arrow and venue in the channel", () => {
+    const inP = roomLineParts({ direction: "in", channel: "#freeq-dev", from: "chad", text: "hi" });
+    expect(inP.arrow).toBe("⇐");
+    expect(inP.venue).toBe("#freeq-dev");
+    const outP = roomLineParts({ direction: "out", channel: "chad-bot", from: "me", text: "done" });
+    expect(outP.arrow).toBe("⇒");
+    expect(outP.venue).toBe("DM");
+  });
+  it("collapses whitespace and caps length — a line, not a paste", () => {
+    expect(oneLine("a\nb\n  c")).toBe("a b c");
+    const long = roomLineParts({ direction: "in", channel: "#x", from: "y", text: "z".repeat(500) });
+    expect(long.text.length).toBeLessThanOrEqual(160);
+    expect(long.text.endsWith("…")).toBe(true);
+  });
+  it("passes a note through untouched", () => {
+    const p = roomLineParts({ direction: "in", channel: "#x", from: "y", text: "t", note: "withheld · tier observe" });
+    expect(p.note).toBe("withheld · tier observe");
+  });
+});
+
+describe("inbound card", () => {
+  it("names the venue, the speaker, and the authority — an ask reads differently", () => {
+    const chat = inboundCardParts({ kind: "chat", channel: "#freeq-dev", from: "chad", tier: "control", text: "  hi there  " });
+    expect(chat).toMatchObject({ icon: "⚡", venue: "#freeq-dev", from: "chad", badge: "control", body: "hi there" });
+    const ask = inboundCardParts({ kind: "ask", channel: "pi-mac", from: "pi-mac", tier: "request", text: "q?" });
+    expect(ask.icon).toBe("❓");
+    expect(ask.venue).toBe("DM");
+  });
+});
+
+describe("venueOf", () => {
+  it("is a channel when it is a channel, DM otherwise", () => {
+    expect(venueOf("#freeq-dev")).toBe("#freeq-dev");
+    expect(venueOf("chad-bot")).toBe("DM");
   });
 });
 
