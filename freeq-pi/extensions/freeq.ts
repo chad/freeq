@@ -38,6 +38,7 @@ import { authorizeInstructions, creatorKeyPath, interpretProvenanceNotice } from
 import { McpStdioClient } from "../src/mcp-stdio.js";
 import { addressedUtterances, parseListenResult, toBridgeCall, type AvParams } from "../src/av.js";
 import { parseVerbositySteer } from "../src/steer.js";
+import { gistOf, renderStatus, toolDetail } from "../src/status.js";
 import {
   footerLine,
   inboundCardParts,
@@ -310,10 +311,66 @@ export default function (pi: ExtensionAPI): void {
 
   /** What we're doing, for presence. Set by the turn lifecycle below. */
   let workLabel: string | undefined;
+  /**
+   * The richer form of workLabel: a human phrase, the current tool, and
+   * elapsed time — what a watcher needs to tell "thinking" from "stuck".
+   * Set by beginStep (prompts, freeq triggers, the model's own `status`),
+   * cleared at agent_settled. When present it wins over workLabel.
+   */
+  let step: { phrase: string; since: number; tool?: string } | undefined;
+  /** Keeps the elapsed part of the label honest during long, quiet steps. */
+  let stepTimer: NodeJS.Timeout | undefined;
   /** Task id we're working, if this turn came from a handoff. */
   let workTask: string | undefined;
   /** Coalesce rapid tool-call updates — presence is not a debug log. */
   let lastStatusPush = 0;
+
+  /** The label a watcher sees right now: the step, or the legacy fallback. */
+  function currentLabel(): string | undefined {
+    if (step) return renderStatus(step, Date.now());
+    return workLabel;
+  }
+
+  /**
+   * Begin a named step. The phrase is the watcher-facing truth of the
+   * moment, so it is force-pushed immediately (bypassing the coalescing
+   * throttle) and then kept fresh on a slow timer for the elapsed counter.
+   */
+  function beginStep(phrase: string): void {
+    // The phrase is advertised to the whole room in presence: run it
+    // through the same scrubber that keeps paths and secrets out of chat.
+    const clean = conn ? conn.scrubForWire(phrase, "presence") : phrase;
+    step = { phrase: clean, since: Date.now() };
+    pushStatus("executing", currentLabel(), workTask, true);
+    if (!stepTimer) {
+      stepTimer = setInterval(() => {
+        if (step) pushStatus("executing", currentLabel(), workTask);
+      }, 45_000);
+      stepTimer.unref?.();
+    }
+    // In a call, the tile is the room's window into this agent: the phrase
+    // belongs there too, not only in presence strings.
+    if (av && avChannel) {
+      try {
+        const call = toBridgeCall(
+          { action: "show", title: "⚙ working", bullets: [phrase] },
+          (t) => conn?.scrubForWire(t, avChannel!) ?? t,
+        );
+        void av.call(call.tool, call.args, 15_000).catch(() => {});
+      } catch {
+        /* the tile is decoration; never let it break a turn */
+      }
+    }
+  }
+
+  function endStep(): void {
+    step = undefined;
+    workLabel = undefined;
+    if (stepTimer) {
+      clearInterval(stepTimer);
+      stepTimer = undefined;
+    }
+  }
 
   /** Accumulates this turn's consequences for the provenance log. */
   const turn = new TurnRecorder();
@@ -377,7 +434,7 @@ export default function (pi: ExtensionAPI): void {
     // Presence liveness: tool calls already push state, but a long thinking
     // stretch makes none. A turn boundary is the other heartbeat — throttled
     // inside pushStatus, so this costs at most one presence line per 2.5s.
-    pushStatus("executing", workLabel ?? "working", workTask);
+    pushStatus("executing", currentLabel() ?? "working", workTask);
   });
 
   // Messages addressed to us that the tier gate refused. Held so the agent
@@ -435,7 +492,7 @@ export default function (pi: ExtensionAPI): void {
         dormant,
         peers: conn?.peers().length ?? 0,
         offersWaiting: waiting.length,
-        working: workLabel,
+        working: currentLabel(),
         inCall: avChannel,
       }),
     );
@@ -491,7 +548,9 @@ export default function (pi: ExtensionAPI): void {
     if (!force && now - lastStatusPush < 2500) return;
     lastStatusPush = now;
     refreshUi();
-    conn.setWorkState(state, label, task);
+    // The label is derived from prompts and message text, so it goes through
+    // the same secret redaction as everything else on the wire.
+    conn.setWorkState(state, label ? conn.scrubForWire(label, "presence") : label, task);
   }
 
   /** Durable view of handoffs. Loaded once per session. */
@@ -606,7 +665,7 @@ export default function (pi: ExtensionAPI): void {
         note: action.reason,
       });
       if (workTask === action.task.taskId) {
-        workLabel = undefined;
+        endStep();
         workTask = undefined;
         pushStatus("active", undefined, undefined, true);
       }
@@ -816,10 +875,13 @@ export default function (pi: ExtensionAPI): void {
     }
 
     // Attribute the coming turn to whoever caused it, so a watcher sees
-    // "answering chad" rather than an unexplained busy agent.
+    // "answering chad in #freeq-dev" rather than an unexplained busy agent.
+    // The phrase names who and where, never the message text: presence is
+    // visible to every room we share, and one room's words are another's
+    // metadata leak.
     if (expectsReply) {
-      workLabel = `answering ${ev.from}`;
-      pushStatus("executing", workLabel, workTask, true);
+      const venue = ev.channel.startsWith("#") ? ` in ${ev.channel}` : "";
+      beginStep(`answering ${ev.from}${venue}`);
     }
     const framed = frameInbound(ev, { expectsReply });
 
@@ -1202,7 +1264,31 @@ export default function (pi: ExtensionAPI): void {
   // A run also counts as life, which is what the stall timeout measures.
   pi.on("agent_start", async () => {
     watchdog?.touch();
-    pushStatus("executing", workLabel ?? "working", workTask, true);
+    pushStatus("executing", currentLabel() ?? "working", workTask, true);
+  });
+
+  // A typed prompt becomes the step phrase — this is where "bash" turns
+  // into "looking at why reconnect drops channels". Injected freeq input is
+  // role 'custom' and skips this (deliver already named that step); the
+  // '[freeq —' guard covers anything framed as a plain user message.
+  pi.on("message_start", async (event) => {
+    const m = (event as { message?: { role?: string; content?: unknown } }).message;
+    if (m?.role !== "user") return;
+    const text = Array.isArray(m.content)
+      ? m.content
+          .filter((c): c is { type: "text"; text: string } =>
+            !!c && typeof c === "object" && (c as { type?: string }).type === "text",
+          )
+          .map((c) => c.text)
+          .join("\n")
+      : typeof m.content === "string"
+        ? m.content
+        : "";
+    if (!text.trim() || text.startsWith("[freeq —")) return;
+    // The first prompt of a run names the step. A steer mid-run must not
+    // reset the phrase (and its elapsed clock) that the watcher follows —
+    // and a handoff brief must not overwrite the task title as the phrase.
+    if (!step) beginStep(gistOf(text));
   });
 
   // Name the current tool so a watcher sees movement, not just a spinner,
@@ -1214,7 +1300,14 @@ export default function (pi: ExtensionAPI): void {
     watchdog?.touch();
     const e = event as { toolName?: string; input?: Record<string, unknown> };
     if (!e.toolName) return;
-    pushStatus("executing", workLabel ? `${workLabel} · ${e.toolName}` : e.toolName, workTask);
+    // The tool is a suffix on the current phrase, never the headline —
+    // "bash" alone is exactly the contentless status this replaces.
+    if (step) step.tool = toolDetail(e.toolName, e.input);
+    pushStatus(
+      "executing",
+      currentLabel() ?? (workLabel ? `${workLabel} · ${e.toolName}` : e.toolName),
+      workTask,
+    );
     if (config?.provenance) {
       turn.record({ name: e.toolName, input: e.input }, config.provenance);
       if (config.provenance === "firehose") {
@@ -1291,9 +1384,9 @@ export default function (pi: ExtensionAPI): void {
 
     if (!conn || conn.state !== "online") return;
 
-    // Back to available. Clearing the label matters: a stale "working on X"
+    // Back to available. Clearing the step matters: a stale "working on X"
     // is worse than no status at all.
-    workLabel = undefined;
+    endStep();
     workTask = undefined;
     pushStatus("active", undefined, undefined, true);
 
@@ -1324,7 +1417,7 @@ export default function (pi: ExtensionAPI): void {
     // anything else, so a completed task can never be failed for stalling.
     if (rec.assignee === me && isTerminal(rec.kind, rec.state)) {
       if (watchdog?.finish(rec.id) && workTask === rec.id) {
-        workLabel = undefined;
+        endStep();
         workTask = undefined;
         pushStatus("active", undefined, undefined, true);
       }
@@ -1464,7 +1557,7 @@ export default function (pi: ExtensionAPI): void {
     // Tie presence to the task, so the room can see who is on what.
     workLabel = `handoff: ${rec.title}`.slice(0, 80);
     workTask = rec.id;
-    pushStatus("executing", workLabel, workTask, true);
+    beginStep(workLabel);
 
     // On a fresh start, note the brief. On a resume, read back what this
     // session had done and put it in front of the model - a resumed task that
@@ -1515,7 +1608,7 @@ export default function (pi: ExtensionAPI): void {
   ): void {
     const held = workTask === rec.id;
     if (held) {
-      workLabel = undefined;
+      endStep();
       workTask = undefined;
       pushStatus("active", undefined, undefined, true);
     }
@@ -1797,7 +1890,11 @@ export default function (pi: ExtensionAPI): void {
       "other agent may legitimately come back to later. " +
       "'decision' records WHY you chose something, for " +
       "the signed project log — use it when you make a call someone might " +
-      "question later, not for routine steps. Never send secrets, " +
+      "question later, not for routine steps. " +
+      "'status' publishes a short present-tense phrase describing what you are " +
+      "doing right now ('checking why reconnect drops channels') — watchers " +
+      "see it in presence and rosters; set it at the start of a run, keep it " +
+      "under ~6 words, never include paths or secrets. Never send secrets, " +
       "credentials, or absolute filesystem paths.",
     parameters: Type.Object({
       action: Type.Union(
@@ -1815,6 +1912,7 @@ export default function (pi: ExtensionAPI): void {
           Type.Literal("accept"),
           Type.Literal("decline"),
           Type.Literal("decision"),
+          Type.Literal("status"),
         ],
         { description: "What to do" },
       ),
@@ -1863,7 +1961,7 @@ export default function (pi: ExtensionAPI): void {
       const verb = String(a.action ?? "");
       const icon: Record<string, string> = {
         ask: "?", send: "→", say: "#", handoff: "⇢", post: "⇢", claim: "✓", complete: "✔",
-        cancel: "✗", peers: "⬡", handoffs: "≡", decision: "§",
+        cancel: "✗", peers: "⬡", handoffs: "≡", decision: "§", status: "⚙",
       };
       let line = theme.fg("toolTitle", theme.bold("freeq ")) + theme.fg("accent", `${icon[verb] ?? "·"} ${verb}`);
       // Colour the peer by their DID when we know it, so the same
@@ -2180,6 +2278,15 @@ export default function (pi: ExtensionAPI): void {
           // A human-readable companion, so the room sees prose too.
           conn.send(channel, formatDecision(record));
           return text(`Recorded the decision in ${channel}.`);
+        }
+
+        case "status": {
+          // The model writes its own watcher-facing phrase — the safest
+          // source there is, because it chooses what is safe to publish.
+          const phrase = gistOf(params.message ?? params.title ?? "");
+          if (!phrase) return text("status requires 'message' — a short present-tense phrase.");
+          beginStep(phrase);
+          return text(`Status published: ${phrase}`);
         }
 
         case "handoffs": {
@@ -2800,7 +2907,7 @@ export default function (pi: ExtensionAPI): void {
           resumed.delete(rec.id);
           const ok = await conn?.sendAct(rec.channel, "fail", rec.id, { note: reason });
           if (workTask === rec.id) {
-            workLabel = undefined;
+            endStep();
             workTask = undefined;
             pushStatus("active", undefined, undefined, true);
           }

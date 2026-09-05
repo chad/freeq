@@ -3,36 +3,20 @@
 Things asked for or noticed, not yet done. Newest at the top. Each entry says
 what exists today so the gap is precise rather than "make it better".
 
-## Richer working status (asked 2026-09-04)
+## Richer working status — SHIPPED 2026-09-05
 
-**Ask:** more status info while the agent is working — via AWAY, or
-"something cooler".
+**Shipped:** presence `doing` is now a phrase + tool detail + elapsed clock
+("answering chad in #freeq-dev · bash: npm test · 1m"), rendered inside the
+60-char wire budget by src/status.ts. Sources of the phrase: the user's
+first prompt (gisted, scrubbed), "answering <nick> in <venue>", the handoff
+title, or the model's own `status` tool action. Elapsed refreshes on a slow
+timer so a watcher can tell thinking from stuck; the AV tile shows the
+phrase as a working card during calls. Steps end at agent_settled and on
+every task-release path, so nothing stale advertises.
 
-**Today:** presence rides bot-kit heartbeats as `state` + `status`. The
-extension pushes `executing` with a label on every tool call
-(`handoff: <title> · bash`), `active` when idle. The macOS client renders it
-as `Away · executing: bash` in the roster. Actor class reaches late joiners
-via numeric 674 (server) — but the SDK also re-emits 674 as prose, which is
-the "logging" wall in the macOS client (separate item below).
-
-**Gap:** the label is a tool *name*, not what the tool is doing. "bash" says
-nothing; "running the test suite (2m in)" or "editing connection.ts" would.
-There is no notion of progress, elapsed time, or what the agent is *for*
-right now beyond the handoff title.
-
-**Sketch:**
-- Status carries a short, human phrase the model writes for itself at turn
-  start ("looking at why reconnect drops channels"), refreshed per turn, not
-  per tool call. Tool calls add a suffix only when long-running.
-- Elapsed time on the current step, so a watcher can tell "thinking" from
-  "stuck".
-- A `working-on` line in `/freeq peers` and in the roster hover, sourced from
-  the same field.
-- Consider IRCv3 `metadata` for this rather than overloading AWAY — AWAY is
-  a boolean with a string attached and clients render it as "not here",
-  which is the opposite of what a working agent is.
-- "Cooler": the AV tile already renders scene cards; a working agent could
-  push a status card to its tile automatically when it is in a call.
+**Still open (transport idea, not scheduled):** IRCv3 `metadata` for this
+rather than overloading the presence status string — AWAY-adjacent fields
+render as "not here" in some clients, the opposite of a working agent.
 
 ## SDK double-emits numeric 674 as prose
 
