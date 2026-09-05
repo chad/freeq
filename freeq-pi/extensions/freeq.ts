@@ -309,13 +309,11 @@ export default function (pi: ExtensionAPI): void {
   // this agent is idle, thinking, or grinding on a specific task. Without
   // this the member list says "available" while the console is clearly busy.
 
-  /** What we're doing, for presence. Set by the turn lifecycle below. */
-  let workLabel: string | undefined;
   /**
-   * The richer form of workLabel: a human phrase, the current tool, and
+   * What we're doing, for presence: a human phrase, the current tool, and
    * elapsed time — what a watcher needs to tell "thinking" from "stuck".
-   * Set by beginStep (prompts, freeq triggers, the model's own `status`),
-   * cleared at agent_settled. When present it wins over workLabel.
+   * Set by beginStep (typed prompts, freeq triggers, handoffs, the model's
+   * own `status` action), cleared at agent_settled.
    */
   let step: { phrase: string; since: number; tool?: string } | undefined;
   /** Keeps the elapsed part of the label honest during long, quiet steps. */
@@ -325,10 +323,9 @@ export default function (pi: ExtensionAPI): void {
   /** Coalesce rapid tool-call updates — presence is not a debug log. */
   let lastStatusPush = 0;
 
-  /** The label a watcher sees right now: the step, or the legacy fallback. */
+  /** The label a watcher sees right now, or undefined when idle. */
   function currentLabel(): string | undefined {
-    if (step) return renderStatus(step, Date.now());
-    return workLabel;
+    return step ? renderStatus(step, Date.now()) : undefined;
   }
 
   /**
@@ -365,7 +362,6 @@ export default function (pi: ExtensionAPI): void {
 
   function endStep(): void {
     step = undefined;
-    workLabel = undefined;
     if (stepTimer) {
       clearInterval(stepTimer);
       stepTimer = undefined;
@@ -1303,11 +1299,7 @@ export default function (pi: ExtensionAPI): void {
     // The tool is a suffix on the current phrase, never the headline —
     // "bash" alone is exactly the contentless status this replaces.
     if (step) step.tool = toolDetail(e.toolName, e.input);
-    pushStatus(
-      "executing",
-      currentLabel() ?? (workLabel ? `${workLabel} · ${e.toolName}` : e.toolName),
-      workTask,
-    );
+    pushStatus("executing", currentLabel() ?? e.toolName, workTask);
     if (config?.provenance) {
       turn.record({ name: e.toolName, input: e.input }, config.provenance);
       if (config.provenance === "firehose") {
@@ -1555,9 +1547,8 @@ export default function (pi: ExtensionAPI): void {
     resuming = false,
   ): void {
     // Tie presence to the task, so the room can see who is on what.
-    workLabel = `handoff: ${rec.title}`.slice(0, 80);
     workTask = rec.id;
-    beginStep(workLabel);
+    beginStep(gistOf(`handoff: ${rec.title}`));
 
     // On a fresh start, note the brief. On a resume, read back what this
     // session had done and put it in front of the model - a resumed task that
