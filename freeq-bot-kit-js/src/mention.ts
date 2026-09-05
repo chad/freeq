@@ -26,10 +26,14 @@ export function matchMention(nick: string, text: string): { stripped: string } |
   if (!nick || !text) return null;
   const escaped = escapeRegex(nick);
   // Two acceptable forms, both anchored at start-of-string or whitespace:
-  //   - @<nick>  followed by a word boundary
+  //   - @<nick>  followed by a boundary that is NOT a word char or a hyphen
   //   - <nick>   followed by : or ,
+  // The @ boundary must exclude '-' explicitly: nicks are hyphenated
+  // ("chad-bot-freeq"), and `\b` treats '-' as a boundary, so "@chad-bot"
+  // would match inside "@chad-bot-freeq" — every project instance answering
+  // a mention meant for one. (?![\w-]) is "complete nick", not "word boundary".
   const re = new RegExp(
-    `(?:^|\\s)(?:@${escaped}\\b|${escaped}[:,])\\s*`,
+    `(?:^|\\s)(?:@${escaped}(?![\\w-])|${escaped}[:,])\\s*`,
     "i",
   );
   const m = re.exec(text);

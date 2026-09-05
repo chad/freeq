@@ -32,6 +32,30 @@ describe("matchMention: @<nick> anywhere triggers", () => {
   });
 });
 
+describe("matchMention: hyphenated nicks are complete nicks, not word prefixes", () => {
+  // Regression: `@${nick}\b` treated '-' as a word boundary, so "@chad-bot"
+  // matched inside "@chad-bot-freeq". With one instance per project all
+  // sharing the base nick "chad-bot", every @-mention of any project nick
+  // was answered by every sibling instance in the room.
+  it("does not match a base nick inside a longer hyphenated nick", () => {
+    expect(matchMention("chad-bot", "@chad-bot-freeq what's next?")).toBeNull();
+    expect(matchMention("chad-bot", "hey @chad-bot-mdsnd deploy that")).toBeNull();
+  });
+
+  it("still matches the exact hyphenated nick itself", () => {
+    expect(matchMention("chad-bot-freeq", "@chad-bot-freeq hi")).toEqual({ stripped: "hi" });
+  });
+
+  it("still matches the base nick when it is addressed exactly", () => {
+    expect(matchMention("chad-bot", "@chad-bot ping")).toEqual({ stripped: "ping" });
+    expect(matchMention("chad-bot", "chad-bot: ping")).toEqual({ stripped: "ping" });
+  });
+
+  it("colon addressing was already safe (requires an immediate :/,)", () => {
+    expect(matchMention("chad-bot", "chad-bot-freeq: what's next?")).toBeNull();
+  });
+});
+
 describe("matchMention: <nick>:/, addressing", () => {
   it("matches <nick>: at start", () => {
     expect(matchMention("yokota", "yokota: help")).toEqual({ stripped: "help" });
