@@ -5473,7 +5473,13 @@ pub(crate) async fn process_s2s_message(
                     }
                     if ch.moderated {
                         let nick = from.split('!').next().unwrap_or(&from);
-                        let is_privileged = ch.remote_member(nick).is_some_and(|rm| rm.is_op);
+                        // By roster entry if the sender is still here, else by
+                        // the DID the message carries, checked against our own
+                        // founder and ops. Same rule as S2S Mode/Topic/Kick.
+                        let is_privileged = ch.remote_member(nick).is_some_and(|rm| rm.is_op)
+                            || account.as_deref().is_some_and(|d| {
+                                ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
+                            });
                         if !is_privileged {
                             tracing::debug!(channel = %target, from = %from, "S2S PRIVMSG blocked by +m");
                             return;
@@ -13517,6 +13523,76 @@ mod s2s_adversarial_tests {
             history_of(&state, "#fedopleft2").len(),
             1,
             "a DID that is not the founder or an op must not delete another user's message"
+        );
+    }
+
+    /// Same bug as S2S Mode/Topic/Kick, on the +m gate: privilege was looked
+    /// up by NICK in remote_members, so a founder whose session had already
+    /// left the roster had their message dropped on their own moderated
+    /// channel.
+    #[tokio::test]
+    async fn s2s_moderated_message_from_founder_who_has_already_left_is_accepted() {
+        let state = test_state_with_db();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        setup_channel(&state, "#modleft");
+        {
+            let mut channels = state.channels.lock();
+            let ch = channels.get_mut("#modleft").unwrap();
+            ch.moderated = true;
+            ch.founder_did = Some("did:plc:foundermod".to_string());
+        }
+        // Deliberately NO remote_member entry: the sender is gone.
+
+        relay_message_as(
+            &state,
+            &mgr,
+            "#modleft",
+            "id-1",
+            "announcement",
+            None,
+            "ghost!g@remote",
+            Some("did:plc:foundermod"),
+        )
+        .await;
+
+        assert_eq!(
+            history_of(&state, "#modleft").len(),
+            1,
+            "a founder's message must pass +m after their session leaves"
+        );
+    }
+
+    /// The DID is checked, not merely carried: a stranger who supplies one
+    /// gains nothing.
+    #[tokio::test]
+    async fn s2s_moderated_message_rejected_when_carried_did_is_not_an_authority() {
+        let state = test_state_with_db();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        setup_channel(&state, "#modleft2");
+        {
+            let mut channels = state.channels.lock();
+            let ch = channels.get_mut("#modleft2").unwrap();
+            ch.moderated = true;
+            ch.founder_did = Some("did:plc:therealfounder".to_string());
+        }
+
+        relay_message_as(
+            &state,
+            &mgr,
+            "#modleft2",
+            "id-1",
+            "shouting",
+            None,
+            "imposter!i@remote",
+            Some("did:plc:somebodyelse"),
+        )
+        .await;
+
+        assert!(
+            history_of(&state, "#modleft2").is_empty(),
+            "a DID that is not the founder or an op must not pass the +m gate"
         );
     }
 
