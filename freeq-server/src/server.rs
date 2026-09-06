@@ -3052,7 +3052,9 @@ fn federated_actor_is_author(
 /// Two ways in, mirroring what a local delete accepts:
 /// - **The author**, per [`federated_actor_is_author`].
 /// - **A channel op**, via the same roster check the federated Kick/Mode path
-///   uses. Channels only: a DM has no roster, so authorship is the only route.
+///   uses, or by the actor's DID against our own founder/ops when their session
+///   has already left the roster. Channels only: a DM has no roster, so
+///   authorship is the only route.
 ///
 /// A message we hold no row for is nothing to protect — let it through so the
 /// TAGMSG still reaches clients, exactly as an unpersisted local delete does.
@@ -3082,13 +3084,14 @@ fn federated_delete_authorized(
 
     let channels = state.channels.lock();
     channels.get(roster_key).is_some_and(|ch| {
-        ch.remote_member(actor_nick).is_some_and(|rm| {
-            rm.is_op
-                || rm
-                    .did
-                    .as_ref()
-                    .is_some_and(|d| ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d))
-        })
+        let did_is_authority =
+            |d: &str| ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d);
+        // By roster entry if the actor is still here, else by the DID the
+        // TAGMSG carries, checked against our own founder and ops. Same rule
+        // as S2S Mode/Topic/Kick.
+        ch.remote_member(actor_nick)
+            .is_some_and(|rm| rm.is_op || rm.did.as_deref().is_some_and(did_is_authority))
+            || actor_did.is_some_and(did_is_authority)
     })
 }
 
@@ -13447,6 +13450,73 @@ mod s2s_adversarial_tests {
         assert!(
             history_of(&state, "#fedop").is_empty(),
             "a federated op must be able to delete in the channel they moderate"
+        );
+    }
+
+    /// Same bug as S2S Mode/Topic/Kick: op-ness was looked up by NICK in
+    /// remote_members, so a founder whose session had already left the roster
+    /// could not moderate, and the delete was dropped.
+    #[tokio::test]
+    async fn s2s_delete_from_a_founder_who_has_already_left_is_accepted() {
+        let state = test_state_with_db();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        setup_channel(&state, "#fedopleft");
+        state
+            .channels
+            .lock()
+            .get_mut("#fedopleft")
+            .unwrap()
+            .founder_did = Some("did:plc:founderdel".to_string());
+        // Deliberately NO remote_member entry: the moderator is gone.
+
+        relay_message(&state, &mgr, "#fedopleft", "id-1", "spam", None).await;
+        relay_delete(
+            &state,
+            &mgr,
+            "#fedopleft",
+            "id-1",
+            "ghost!g@remote",
+            Some("did:plc:founderdel"),
+        )
+        .await;
+
+        assert!(
+            history_of(&state, "#fedopleft").is_empty(),
+            "a founder's delete must survive their session leaving before the event lands"
+        );
+    }
+
+    /// The DID is checked, not merely carried: a stranger who supplies one
+    /// gains nothing.
+    #[tokio::test]
+    async fn s2s_delete_rejected_when_carried_did_is_not_an_authority() {
+        let state = test_state_with_db();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+        setup_channel(&state, "#fedopleft2");
+        state
+            .channels
+            .lock()
+            .get_mut("#fedopleft2")
+            .unwrap()
+            .founder_did = Some("did:plc:therealfounder".to_string());
+
+        relay_message(&state, &mgr, "#fedopleft2", "id-1", "keep me", None).await;
+        relay_delete(
+            &state,
+            &mgr,
+            "#fedopleft2",
+            "id-1",
+            "imposter!i@remote",
+            Some("did:plc:somebodyelse"),
+        )
+        .await;
+
+        assert_eq!(
+            history_of(&state, "#fedopleft2").len(),
+            1,
+            "a DID that is not the founder or an op must not delete another user's message"
         );
     }
 
