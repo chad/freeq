@@ -7327,6 +7327,7 @@ pub(crate) async fn process_s2s_message(
             channel,
             mask,
             set_by,
+            set_by_did,
             adding,
             ..
         } => {
@@ -7336,12 +7337,14 @@ pub(crate) async fn process_s2s_message(
             {
                 let channels = state.channels.lock();
                 if let Some(ch) = channels.get(&channel_key) {
+                    let did_is_authority =
+                        |d: &str| ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d);
+                    // By roster entry if the setter is still here, else by the
+                    // DID the event carries, checked against our own founder
+                    // and ops. Same rule as S2S Mode/Topic/Kick.
                     let is_authorized = ch.remote_member(&set_by).is_some_and(|rm| {
-                        rm.is_op
-                            || rm.did.as_ref().is_some_and(|d| {
-                                ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
-                            })
-                    });
+                        rm.is_op || rm.did.as_deref().is_some_and(did_is_authority)
+                    }) || set_by_did.as_deref().is_some_and(did_is_authority);
                     if !is_authorized {
                         tracing::warn!(
                             channel = %channel_key, set_by = %set_by,
@@ -10621,6 +10624,88 @@ mod s2s_adversarial_tests {
     // S2S BAN: authorization check
     // ═══════════════════════════════════════════════════════════
 
+    /// The bug this guards: authority was looked up by NICK in remote_members,
+    /// so a founder whose session had already left the roster failed the check
+    /// and the ban was dropped, leaving the two servers with different ban
+    /// lists. Same shape as the S2S Mode/Topic/Kick bug.
+    #[tokio::test]
+    async fn s2s_ban_accepted_from_founder_who_has_already_left() {
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+
+        const FOUNDER_DID: &str = "did:key:zFounderBan";
+        {
+            let mut channels = state.channels.lock();
+            let ch = channels.entry("#banleft".to_string()).or_default();
+            ch.founder_did = Some(FOUNDER_DID.to_string());
+        }
+        // Deliberately NO remote_member entry: the setter is gone.
+
+        process_s2s_message(
+            &state,
+            &mgr,
+            PEER,
+            S2sMessage::Ban {
+                event_id: format!("{PEER}:departed-ban"),
+                channel: "#banleft".to_string(),
+                mask: "*!*@spam.example".to_string(),
+                set_by: "ghost".to_string(),
+                set_by_did: Some(FOUNDER_DID.to_string()),
+                adding: true,
+                origin: PEER.to_string(),
+            },
+        )
+        .await;
+
+        let channels = state.channels.lock();
+        let ch = channels.get("#banleft").unwrap();
+        assert_eq!(
+            ch.bans.iter().map(|b| b.mask.as_str()).collect::<Vec<_>>(),
+            vec!["*!*@spam.example"],
+            "a founder's ban must survive their session leaving before the event lands"
+        );
+    }
+
+    /// The DID is checked, not merely carried: a stranger who supplies one
+    /// gains nothing.
+    #[tokio::test]
+    async fn s2s_ban_rejected_when_carried_did_is_not_an_authority() {
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+
+        {
+            let mut channels = state.channels.lock();
+            let ch = channels.entry("#banleft2".to_string()).or_default();
+            ch.founder_did = Some("did:key:zTheRealFounder".to_string());
+        }
+
+        process_s2s_message(
+            &state,
+            &mgr,
+            PEER,
+            S2sMessage::Ban {
+                event_id: format!("{PEER}:imposter-ban"),
+                channel: "#banleft2".to_string(),
+                mask: "*!*@victim.example".to_string(),
+                set_by: "imposter".to_string(),
+                set_by_did: Some("did:key:zSomebodyElse".to_string()),
+                adding: true,
+                origin: PEER.to_string(),
+            },
+        )
+        .await;
+
+        let channels = state.channels.lock();
+        let ch = channels.get("#banleft2").unwrap();
+        assert!(
+            ch.bans.is_empty(),
+            "a DID that is not the founder or an op must not set a ban — {} ban(s) in list",
+            ch.bans.len()
+        );
+    }
+
     #[tokio::test]
     async fn s2s_ban_from_non_op_rejected() {
         let state = test_state();
@@ -10641,6 +10726,7 @@ mod s2s_adversarial_tests {
                 channel: "#bantest".to_string(),
                 mask: "*!*@*".to_string(),
                 set_by: "non_op_banner".to_string(),
+                set_by_did: None,
                 adding: true,
                 origin: PEER.to_string(),
             },

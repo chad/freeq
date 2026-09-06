@@ -1274,6 +1274,10 @@ pub(super) fn handle_mode(
                             channel: channel.to_string(),
                             mask: mask.to_string(),
                             set_by: nick.to_string(),
+                            // Carry the DID so the receiver can authorise the
+                            // ban against its own founder/did_ops even after
+                            // we are gone.
+                            set_by_did: conn.authenticated_did.clone(),
                             adding,
                             origin,
                         },

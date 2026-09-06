@@ -776,6 +776,12 @@ pub enum S2sMessage {
         mask: String,
         /// Who set/removed the ban.
         set_by: String,
+        /// The setter's DID, when authenticated. Same reasoning as `Mode`:
+        /// authority attaches to the DID, and a nick stops resolving the
+        /// moment the setter's session leaves the roster. Optional for peers
+        /// that predate it.
+        #[serde(default)]
+        set_by_did: Option<String>,
         /// true = ban added, false = ban removed.
         adding: bool,
         origin: String,
