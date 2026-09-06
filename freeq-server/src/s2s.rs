@@ -797,6 +797,9 @@ pub enum S2sMessage {
         mask: String,
         /// Who set/removed the entry.
         set_by: String,
+        /// The setter's DID, when authenticated. See `Ban::set_by_did`.
+        #[serde(default)]
+        set_by_did: Option<String>,
         /// true = entry added, false = entry removed.
         adding: bool,
         origin: String,
