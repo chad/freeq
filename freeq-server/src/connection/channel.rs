@@ -1792,6 +1792,9 @@ pub(super) fn handle_invite(
                     channel: channel.to_string(),
                     invitee: s2s_invitee,
                     invited_by: nick.to_string(),
+                    // Carry the DID so the receiver can authorise a +i invite
+                    // against its own founder/did_ops even after we are gone.
+                    invited_by_did: conn.authenticated_did.clone(),
                     origin: state.server_iroh_id.lock().clone().unwrap_or_default(),
                 },
             );
@@ -1824,6 +1827,9 @@ pub(super) fn handle_invite(
                     channel: channel.to_string(),
                     invitee: s2s_invitee,
                     invited_by: nick.to_string(),
+                    // Carry the DID so the receiver can authorise a +i invite
+                    // against its own founder/did_ops even after we are gone.
+                    invited_by_did: conn.authenticated_did.clone(),
                     origin: state.server_iroh_id.lock().clone().unwrap_or_default(),
                 },
             );

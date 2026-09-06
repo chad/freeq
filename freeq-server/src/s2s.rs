@@ -829,6 +829,11 @@ pub enum S2sMessage {
         invitee: String,
         /// Nick of the user who issued the invite.
         invited_by: String,
+        /// The inviter's DID, when authenticated. See `Ban::set_by_did`.
+        /// Only the +i op check can use it: membership of someone who has
+        /// left the roster cannot be confirmed by DID.
+        #[serde(default)]
+        invited_by_did: Option<String>,
         origin: String,
     },
 

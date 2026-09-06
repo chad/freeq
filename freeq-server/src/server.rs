@@ -7444,6 +7444,7 @@ pub(crate) async fn process_s2s_message(
             channel,
             invitee,
             invited_by,
+            invited_by_did,
             ..
         } => {
             let channel_key = channel.to_lowercase();
@@ -7452,22 +7453,16 @@ pub(crate) async fn process_s2s_message(
             {
                 let channels = state.channels.lock();
                 if let Some(ch) = channels.get(&channel_key) {
+                    let did_is_authority =
+                        |d: &str| ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d);
                     let rm = ch.remote_member(&invited_by);
-                    let is_member = rm.is_some();
-                    if !is_member {
-                        tracing::warn!(
-                            channel = %channel_key, invited_by = %invited_by,
-                            "S2S Invite rejected: inviter is not a member"
-                        );
-                        return;
-                    }
                     if ch.invite_only {
+                        // By roster entry if the inviter is still here, else by
+                        // the DID the event carries, checked against our own
+                        // founder and ops. Same rule as S2S Ban.
                         let is_op = rm.is_some_and(|rm| {
-                            rm.is_op
-                                || rm.did.as_ref().is_some_and(|d| {
-                                    ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
-                                })
-                        });
+                            rm.is_op || rm.did.as_deref().is_some_and(did_is_authority)
+                        }) || invited_by_did.as_deref().is_some_and(did_is_authority);
                         if !is_op {
                             tracing::warn!(
                                 channel = %channel_key, invited_by = %invited_by,
@@ -7475,6 +7470,16 @@ pub(crate) async fn process_s2s_message(
                             );
                             return;
                         }
+                    } else if rm.is_none() {
+                        // Roster only, deliberately: on a channel that is not
+                        // +i the question is membership, and membership of
+                        // someone who has left cannot be confirmed by DID —
+                        // op-ness can, because we hold our own founder/ops.
+                        tracing::warn!(
+                            channel = %channel_key, invited_by = %invited_by,
+                            "S2S Invite rejected: inviter is not a member"
+                        );
+                        return;
                     }
                 }
             }
@@ -10831,6 +10836,89 @@ mod s2s_adversarial_tests {
             ch.invite_exceptions.is_empty(),
             "a DID that is not the founder or an op must not set an invite exception — {} entry/entries in list",
             ch.invite_exceptions.len()
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // S2S INVITE: authorization check
+    // ═══════════════════════════════════════════════════════════
+
+    /// Same bug as S2S Ban, on the +i op path: authority was looked up by NICK
+    /// in remote_members, so a founder whose session had already left the
+    /// roster failed the check and the invite was dropped.
+    #[tokio::test]
+    async fn s2s_invite_accepted_from_founder_who_has_already_left() {
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+
+        const FOUNDER_DID: &str = "did:key:zFounderInvite";
+        {
+            let mut channels = state.channels.lock();
+            let ch = channels.entry("#invleft".to_string()).or_default();
+            ch.invite_only = true;
+            ch.founder_did = Some(FOUNDER_DID.to_string());
+        }
+        // Deliberately NO remote_member entry: the inviter is gone.
+
+        process_s2s_message(
+            &state,
+            &mgr,
+            PEER,
+            S2sMessage::Invite {
+                event_id: format!("{PEER}:departed-invite"),
+                channel: "#invleft".to_string(),
+                invitee: "did:plc:guest".to_string(),
+                invited_by: "ghost".to_string(),
+                invited_by_did: Some(FOUNDER_DID.to_string()),
+                origin: PEER.to_string(),
+            },
+        )
+        .await;
+
+        let channels = state.channels.lock();
+        let ch = channels.get("#invleft").unwrap();
+        assert!(
+            ch.invites.contains("did:plc:guest"),
+            "a founder's invite must survive their session leaving before the event lands"
+        );
+    }
+
+    /// The DID is checked, not merely carried: a stranger who supplies one
+    /// gains nothing.
+    #[tokio::test]
+    async fn s2s_invite_rejected_when_carried_did_is_not_an_authority() {
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+
+        {
+            let mut channels = state.channels.lock();
+            let ch = channels.entry("#invleft2".to_string()).or_default();
+            ch.invite_only = true;
+            ch.founder_did = Some("did:key:zTheRealFounder".to_string());
+        }
+
+        process_s2s_message(
+            &state,
+            &mgr,
+            PEER,
+            S2sMessage::Invite {
+                event_id: format!("{PEER}:imposter-invite"),
+                channel: "#invleft2".to_string(),
+                invitee: "did:plc:sneak".to_string(),
+                invited_by: "imposter".to_string(),
+                invited_by_did: Some("did:key:zSomebodyElse".to_string()),
+                origin: PEER.to_string(),
+            },
+        )
+        .await;
+
+        let channels = state.channels.lock();
+        let ch = channels.get("#invleft2").unwrap();
+        assert!(
+            ch.invites.is_empty(),
+            "a DID that is not the founder or an op must not pass the +i gate"
         );
     }
 
