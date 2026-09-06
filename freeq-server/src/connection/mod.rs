@@ -1169,6 +1169,10 @@ where
                                     channel: channel.clone(),
                                     msgid: msgid.to_string(),
                                     pinned_by: nick.to_string(),
+                                    // Carry the DID so the receiver can
+                                    // authorise the pin against its own
+                                    // founder/did_ops even after we are gone.
+                                    pinned_by_did: conn.authenticated_did.clone(),
                                     adding: true,
                                     origin: state.server_iroh_id.lock().clone().unwrap_or_default(),
                                 },
@@ -1197,6 +1201,10 @@ where
                                     channel: channel.clone(),
                                     msgid: msgid.to_string(),
                                     pinned_by: nick.to_string(),
+                                    // Carry the DID so the receiver can
+                                    // authorise the pin against its own
+                                    // founder/did_ops even after we are gone.
+                                    pinned_by_did: conn.authenticated_did.clone(),
                                     adding: false,
                                     origin: state.server_iroh_id.lock().clone().unwrap_or_default(),
                                 },

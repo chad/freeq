@@ -5799,6 +5799,7 @@ pub(crate) async fn process_s2s_message(
             channel,
             msgid,
             pinned_by,
+            pinned_by_did,
             adding,
             ..
         } => {
@@ -5814,12 +5815,15 @@ pub(crate) async fn process_s2s_message(
             {
                 let channels = state.channels.lock();
                 if let Some(ch) = channels.get(&channel) {
-                    let is_authorized = ch.remote_member(&pinned_by).is_some_and(|rm| {
-                        rm.is_op
-                            || rm.did.as_ref().is_some_and(|d| {
-                                ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d)
-                            })
-                    });
+                    let did_is_authority =
+                        |d: &str| ch.founder_did.as_deref() == Some(d) || ch.did_ops.contains(d);
+                    // By roster entry if the pinner is still here, else by the
+                    // DID the event carries, checked against our own founder
+                    // and ops. Same rule as S2S Ban.
+                    let is_authorized =
+                        ch.remote_member(&pinned_by).is_some_and(|rm| {
+                            rm.is_op || rm.did.as_deref().is_some_and(did_is_authority)
+                        }) || pinned_by_did.as_deref().is_some_and(did_is_authority);
                     if !is_authorized {
                         tracing::warn!(
                             channel = %channel, pinned_by = %pinned_by,
@@ -10940,6 +10944,7 @@ mod s2s_adversarial_tests {
                 channel: "#pintest".to_string(),
                 msgid: "01PINNED000000000000000000".to_string(),
                 pinned_by: "non_op_pinner".to_string(),
+                pinned_by_did: None,
                 adding: true,
                 origin: PEER.to_string(),
             },
@@ -10951,6 +10956,87 @@ mod s2s_adversarial_tests {
         assert!(
             ch.pins.is_empty(),
             "a non-op's relayed pin must not be stored — {} pin(s) in list",
+            ch.pins.len()
+        );
+    }
+
+    /// Same bug as S2S Ban: authority was looked up by NICK in remote_members,
+    /// so a founder whose session had already left the roster failed the check
+    /// and the pin was dropped.
+    #[tokio::test]
+    async fn s2s_pin_accepted_from_founder_who_has_already_left() {
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+
+        const FOUNDER_DID: &str = "did:key:zFounderPin";
+        {
+            let mut channels = state.channels.lock();
+            let ch = channels.entry("#pinleft".to_string()).or_default();
+            ch.founder_did = Some(FOUNDER_DID.to_string());
+        }
+        // Deliberately NO remote_member entry: the pinner is gone.
+
+        process_s2s_message(
+            &state,
+            &mgr,
+            PEER,
+            S2sMessage::Pin {
+                event_id: format!("{PEER}:departed-pin"),
+                channel: "#pinleft".to_string(),
+                msgid: "01PINNED000000000000000000".to_string(),
+                pinned_by: "ghost".to_string(),
+                pinned_by_did: Some(FOUNDER_DID.to_string()),
+                adding: true,
+                origin: PEER.to_string(),
+            },
+        )
+        .await;
+
+        let channels = state.channels.lock();
+        let ch = channels.get("#pinleft").unwrap();
+        assert_eq!(
+            ch.pins.len(),
+            1,
+            "a founder's pin must survive their session leaving before the event lands"
+        );
+    }
+
+    /// The DID is checked, not merely carried: a stranger who supplies one
+    /// gains nothing.
+    #[tokio::test]
+    async fn s2s_pin_rejected_when_carried_did_is_not_an_authority() {
+        let state = test_state();
+        let mgr = test_manager();
+        setup_authenticated_peer(&state, &mgr).await;
+
+        {
+            let mut channels = state.channels.lock();
+            let ch = channels.entry("#pinleft2".to_string()).or_default();
+            ch.founder_did = Some("did:key:zTheRealFounder".to_string());
+        }
+
+        process_s2s_message(
+            &state,
+            &mgr,
+            PEER,
+            S2sMessage::Pin {
+                event_id: format!("{PEER}:imposter-pin"),
+                channel: "#pinleft2".to_string(),
+                msgid: "01PINNED000000000000000000".to_string(),
+                pinned_by: "imposter".to_string(),
+                pinned_by_did: Some("did:key:zSomebodyElse".to_string()),
+                adding: true,
+                origin: PEER.to_string(),
+            },
+        )
+        .await;
+
+        let channels = state.channels.lock();
+        let ch = channels.get("#pinleft2").unwrap();
+        assert!(
+            ch.pins.is_empty(),
+            "a DID that is not the founder or an op must not store a pin — {} pin(s) in list",
             ch.pins.len()
         );
     }
@@ -10973,6 +11059,7 @@ mod s2s_adversarial_tests {
                 channel: "#pinok".to_string(),
                 msgid: "01PINNED000000000000000000".to_string(),
                 pinned_by: "op_pinner".to_string(),
+                pinned_by_did: None,
                 adding: true,
                 origin: PEER.to_string(),
             },

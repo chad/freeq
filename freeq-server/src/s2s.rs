@@ -517,6 +517,9 @@ pub enum S2sMessage {
         msgid: String,
         /// Who pinned/unpinned it.
         pinned_by: String,
+        /// The pinner's DID, when authenticated. See `Ban::set_by_did`.
+        #[serde(default)]
+        pinned_by_did: Option<String>,
         /// true = pin added, false = pin removed.
         #[serde(default)]
         adding: bool,
