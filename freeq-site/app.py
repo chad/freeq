@@ -116,9 +116,6 @@ SLUG_MAP = {
     "features": ("site", "Features.md"),
     "limitations": ("site", "KNOWN-LIMITATIONS.md"),
     "architecture": ("site", "architecture-decisions.md"),
-    "s2s": ("site", "s2s-audit.md"),
-    "future": ("site", "FutureDirection.md"),
-    "web-infra": ("site", "proposal-web-infra.md"),
     "whats-new": ("site", "WHATS-NEW.md"),
     "demo": ("site", "DEMO.md"),
     "encryption": ("site", "ENCRYPTION.md"),
@@ -135,7 +132,6 @@ SLUG_MAP = {
     "av-agents": ("site", "av-agents.md"),
     "av-protocol": ("site", "av-protocol.md"),
     "well-known-agent": ("site", "skills/well-known-agent.md"),
-    "av-quic-migration": ("site", "AV-QUIC-MIGRATION.md"),
     # Company privacy / E2E encrypted channels
     "company-encrypted-channels": ("site", "COMPANY-ENCRYPTED-CHANNELS.md"),
     "vc-e2e-channels": ("site", "VC-BOOTSTRAPPED-CHANNEL-E2EE.md"),

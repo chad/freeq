@@ -39,8 +39,8 @@
 </div>
 
 <div class="doc-section">
-<h2>For agents <span class="badge badge-agent">the good stuff</span></h2>
-<p class="blurb">Identity, observable work, governance, and voice for AI agents — as protocol, not framework.</p>
+<h2>For agents</h2>
+<p class="blurb">Identity, observable work, governance, and voice for software agents — specified at the protocol level.</p>
 <table>
 <tr><td><a href="/docs/agent-quickstart/">Agent quickstart</a> <span class="badge badge-new">new</span></td><td style="color:var(--fg3)">A did:key agent saying hello in #playground, in about 60 seconds</td></tr>
 <tr><td><a href="/docs/watch-your-agent/">Watch your coding agent</a> <span class="badge badge-new">new</span></td><td style="color:var(--fg3)">Wire Claude Code / pi into a channel you can read from irssi on your phone</td></tr>
@@ -76,7 +76,6 @@
 <tr><td><a href="/docs/policy-framework/">Policy framework</a></td><td style="color:var(--fg3)">Channel governance as verifiable credentials + transparency logs</td></tr>
 <tr><td><a href="/docs/verifiers/">Credential verifiers</a></td><td style="color:var(--fg3)">GitHub verifier, custom verifiers, decoupled architecture</td></tr>
 <tr><td><a href="/docs/api-reference/">REST API</a></td><td style="color:var(--fg3)">Health, channels, history, users, upload, policy, credentials</td></tr>
-<tr><td><a href="/docs/av-quic-migration/">AV QUIC migration</a> <span class="badge badge-deep">deep</span></td><td style="color:var(--fg3)">The move to QUIC/WebTransport — SFU, MoQ, deploys</td></tr>
 </table>
 </div>
 
@@ -89,19 +88,19 @@
 <tr><td><a href="/docs/teams/">freeq for teams</a> <span class="badge badge-new">new</span></td><td style="color:var(--fg3)">Private company chat: self-host + SSO-gated E2EE channels</td></tr>
 <tr><td><a href="/docs/moderation/">Moderation</a></td><td style="color:var(--fg3)">Halfops, moderator credentials, third-party moderation services</td></tr>
 <tr><td><a href="/docs/policy-system/">Policy system guide</a></td><td style="color:var(--fg3)">Channel policies, credential types, web UI, DID ops</td></tr>
-<tr><td><a href="/docs/demo/">Policy demo</a></td><td style="color:var(--fg3)">Interactive policy walkthrough</td></tr>
+<tr><td><a href="/docs/demo/">Policy walkthrough</a></td><td style="color:var(--fg3)">Step-by-step: credential-gated channels and the audit trail behind them</td></tr>
+<tr><td><a href="/docs/security/">Security hardening</a></td><td style="color:var(--fg3)">Operational guidance for running freeq in production</td></tr>
 </table>
 </div>
 
 <div class="doc-section">
 <h2>Trust &amp; security</h2>
-<p class="blurb">The honest pages. Read these before you trust us with anything.</p>
+<p class="blurb">What is protected, what is not, and how to verify it yourself.</p>
 <table>
 <tr><td><a href="/docs/encryption/">Encryption &amp; security</a></td><td style="color:var(--fg3)">Every data path mapped — what's encrypted, what's not, and the roadmap</td></tr>
 <tr><td><a href="/docs/company-encrypted-channels/">Company E2EE channels</a></td><td style="color:var(--fg3)">Private, SSO-gated, end-to-end encrypted channels — offboarding revokes access</td></tr>
 <tr><td><a href="/docs/vc-e2e-channels/">VC-bootstrapped E2EE</a> <span class="badge badge-deep">deep</span></td><td style="color:var(--fg3)">EG1/EGK1 wire formats, sealed group keys, epoch rotation</td></tr>
-<tr><td><a href="/docs/s2s/">S2S federation audit</a> <span class="badge badge-deep">deep</span></td><td style="color:var(--fg3)">Server-to-server correctness analysis</td></tr>
-<tr><td><a href="/docs/limitations/">Known limitations</a></td><td style="color:var(--fg3)">Explicit gaps, in public, on purpose</td></tr>
+<tr><td><a href="/docs/limitations/">Known limitations</a></td><td style="color:var(--fg3)">Current gaps and unsupported cases, stated explicitly</td></tr>
 </table>
 </div>
 
@@ -110,13 +109,12 @@
 <table>
 <tr><td><a href="/docs/features/">Feature catalog</a> <span class="badge badge-deep">deep</span></td><td style="color:var(--fg3)">Every implemented feature with status</td></tr>
 <tr><td><a href="/docs/architecture/">Architecture decisions</a> <span class="badge badge-deep">deep</span></td><td style="color:var(--fg3)">Design rationale and tradeoffs</td></tr>
-<tr><td><a href="/docs/future/">Future direction</a></td><td style="color:var(--fg3)">Planned features and long-term vision</td></tr>
 </table>
 </div>
 
 </div>
 
 <h2>Source</h2>
-<p>All documentation lives in the <a href="https://github.com/freeq-irc/freeq">GitHub repository</a>. Site docs are in <code>freeq-site/docs/</code>, technical docs in <code>docs/</code>.</p>
+<p>All documentation is maintained in the <a href="https://github.com/freeq-irc/freeq">GitHub repository</a> alongside the code. Corrections and additions are welcome as pull requests.</p>
 </div>
 {% endblock %}
