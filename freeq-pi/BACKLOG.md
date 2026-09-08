@@ -46,3 +46,5 @@ registration — probably an explicit opt-in on `FreeqBot.create`.
 Shipped server-side; the live agent's cert is unsigned until `/freeq
 authorize` is run once. Not a bug — the correct refusal — but the feature is
 invisible until that happens.
+- ~~Replies to rooms outside the project's configured channels vanish: the per-project nick never joined them and sends are dropped server-side~~ **SHIPPED 2026-09-08** — `flushReplies` JOINs the target unconditionally before the PRIVMSG (no-op when already a member; robust against sibling-session membership churn).
+

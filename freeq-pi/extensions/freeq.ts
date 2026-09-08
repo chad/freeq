@@ -1387,8 +1387,17 @@ export default function (pi: ExtensionAPI): void {
     // usually held the conclusion, after paying the tokens to produce it.
     for (const [channel, from] of channelReplies) {
       if (!conn) break;
+      // Membership first: a PRIVMSG to a channel we are not in is dropped
+      // server-side and the sender never finds out — the receipt below would
+      // be a lie. This exact failure hid hours of replies: a per-project
+      // session heard the operator in #chad-compute (inbound routes by DID)
+      // but its nick had never joined, so every answer vanished. JOIN is
+      // ordered before the PRIVMSG on the same socket and is a no-op when
+      // already a member — and membership can be lost without the client
+      // knowing (nick churn from sibling sessions), so join unconditionally.
+      conn.join(channel);
       conn.send(channel, `${from}: ${text}`);
-      // A receipt in the transcript: the room heard this, addressed so.
+      // A receipt in the transcript: what we handed the server, addressed so.
       receipt(channel, `${from}: ${text}`);
     }
   }
