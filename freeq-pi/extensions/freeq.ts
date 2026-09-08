@@ -1395,7 +1395,8 @@ export default function (pi: ExtensionAPI): void {
       // ordered before the PRIVMSG on the same socket and is a no-op when
       // already a member — and membership can be lost without the client
       // knowing (nick churn from sibling sessions), so join unconditionally.
-      conn.join(channel);
+      // Channels only: a DM target is a nick, and JOIN <nick> is nonsense.
+      if (channel.startsWith("#")) conn.join(channel);
       conn.send(channel, `${from}: ${text}`);
       // A receipt in the transcript: what we handed the server, addressed so.
       receipt(channel, `${from}: ${text}`);
