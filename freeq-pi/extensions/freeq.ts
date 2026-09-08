@@ -248,10 +248,18 @@ export default function (pi: ExtensionAPI): void {
     }
   }
 
+  /**
+   * `seq` is the turn counter when the message arrived. A reply is only
+   * flushed by a turn that STARTED after that — the text of a turn already in
+   * flight was written before the model saw the message, and is not its
+   * answer.
+   */
   type PendingReply =
-    | { kind: "ask"; ask: InboundAsk }
-    | { kind: "channel"; channel: string; from: string };
+    | { kind: "ask"; ask: InboundAsk; seq: number }
+    | { kind: "channel"; channel: string; from: string; seq: number };
   const pendingReplies: PendingReply[] = [];
+  /** Monotonic across runs; incremented at every turn_start. */
+  let turnSeq = 0;
   /** Text of the most recent assistant turn, used to form replies. */
   let lastAssistantText = "";
 
@@ -425,6 +433,7 @@ export default function (pi: ExtensionAPI): void {
     ctx.ui.setWidget("freeq-peers", undefined);
   }
   pi.on("turn_start", async (_e, ctx) => {
+    turnSeq++;
     clearMark(ctx);
     clearPeers(ctx);
     // Presence liveness: tool calls already push state, but a long thinking
@@ -865,9 +874,9 @@ export default function (pi: ExtensionAPI): void {
 
     const expectsReply = !!ask || !!opts?.replyToChannel;
     if (ask) {
-      pendingReplies.push({ kind: "ask", ask });
+      pendingReplies.push({ kind: "ask", ask, seq: turnSeq });
     } else if (opts?.replyToChannel) {
-      pendingReplies.push({ kind: "channel", channel: ev.channel, from: ev.from });
+      pendingReplies.push({ kind: "channel", channel: ev.channel, from: ev.from, seq: turnSeq });
     }
 
     // Attribute the coming turn to whoever caused it, so a watcher sees
@@ -1328,26 +1337,41 @@ export default function (pi: ExtensionAPI): void {
     // A turn taken while carrying a task is a step on that task. Journal the
     // gist so a restart resumes from here rather than from the title.
     if (text && workTask) journal("turn", workTask, summarizeTurn(text));
+    // Answer NOW, not when the run ends. A steered message reaches the model
+    // mid-task; the model answers it in its next text and carries on. If that
+    // answer waited for agent_settled it would (a) arrive after the task and
+    // (b) be overwritten by the task's wrap-up text. So the first turn that
+    // produces text after a message arrived is the reply to it.
+    if (text && pendingReplies.length) flushReplies(text, undefined, turnSeq);
   });
 
-  let lastModel: string | undefined;
-  pi.on("agent_settled", async (_event, ctx) => {
-    // Pay back whatever this run was triggered by.
+  /**
+   * Send `text` to everyone waiting on this run. Called from turn_end (the
+   * live path) and agent_settled (the sweep for anything left, including
+   * the "no answer produced" case that must never leave an asker hanging).
+   */
+  function flushReplies(text: string, ctx?: ExtensionContext, beforeSeq?: number): void {
     const channelReplies = new Map<string, string>(); // channel -> last asker
-    while (pendingReplies.length) {
-      const item = pendingReplies.shift()!;
+    // Take only what this text can legitimately answer; leave the rest queued.
+    const due = beforeSeq === undefined ? pendingReplies.splice(0) : [];
+    if (beforeSeq !== undefined) {
+      for (let i = pendingReplies.length - 1; i >= 0; i--) {
+        if (pendingReplies[i]!.seq < beforeSeq) due.unshift(pendingReplies.splice(i, 1)[0]!);
+      }
+    }
+    for (const item of due) {
       if (!conn) continue;
 
       if (item.kind === "ask") {
-        if (lastAssistantText) {
-          conn.replyToAsk(item.ask, lastAssistantText);
+        if (text) {
+          conn.replyToAsk(item.ask, text);
           // A receipt in the transcript: what actually went back, and to whom.
-          receipt(item.ask.from, lastAssistantText);
+          receipt(item.ask.from, text);
         } else {
           // M0 finding: an empty answer is a real state — report it, never
           // leave the asker hanging until timeout.
           conn.replyToAsk(item.ask, undefined, "no answer produced");
-          notify(ctx, `freeq: no answer produced for ${item.ask.from}`, "warning");
+          if (ctx) notify(ctx, `freeq: no answer produced for ${item.ask.from}`, "warning");
         }
         continue;
       }
@@ -1355,7 +1379,7 @@ export default function (pi: ExtensionAPI): void {
       // Channel replies are collected and sent once per channel below. A
       // turn produces ONE answer; if four messages queued while we worked,
       // that answer used to go out four times, once per queued item.
-      if (!lastAssistantText) continue;
+      if (!text) continue;
       channelReplies.set(item.channel, item.from);
     }
     // Sent whole: the SDK splits long text into a draft/multiline BATCH, so a
@@ -1363,10 +1387,18 @@ export default function (pi: ExtensionAPI): void {
     // usually held the conclusion, after paying the tokens to produce it.
     for (const [channel, from] of channelReplies) {
       if (!conn) break;
-      conn.send(channel, `${from}: ${lastAssistantText}`);
+      conn.send(channel, `${from}: ${text}`);
       // A receipt in the transcript: the room heard this, addressed so.
-      receipt(channel, `${from}: ${lastAssistantText}`);
+      receipt(channel, `${from}: ${text}`);
     }
+  }
+
+  let lastModel: string | undefined;
+  pi.on("agent_settled", async (_event, ctx) => {
+    // Pay back whatever this run was triggered by and hasn't been answered
+    // yet — normally nothing, since turn_end answers live. What is left here
+    // is a run that ended without ever producing text.
+    flushReplies(lastAssistantText, ctx);
     lastAssistantText = "";
 
     // Mirror what this turn actually changed. Before the offline early-return
