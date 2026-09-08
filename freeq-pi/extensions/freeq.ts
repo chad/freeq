@@ -1334,6 +1334,14 @@ export default function (pi: ExtensionAPI): void {
       .join("\n")
       .trim();
     if (text) lastAssistantText = text;
+    // A turn that made tool calls is narration ("fetching the forecast…"),
+    // not the answer — the answer comes after the tools return. Flushing the
+    // reply queue on it delivers the narration to the asker and the actual
+    // answer to nobody (this exact misfire shipped a "Fetching a real
+    // forecast" line to #chad-compute while the forecast stayed local).
+    const hasToolCalls = content.some(
+      (c) => !!c && typeof c === "object" && (c as { type?: string }).type === "toolCall",
+    );
     // A turn taken while carrying a task is a step on that task. Journal the
     // gist so a restart resumes from here rather than from the title.
     if (text && workTask) journal("turn", workTask, summarizeTurn(text));
@@ -1342,7 +1350,7 @@ export default function (pi: ExtensionAPI): void {
     // answer waited for agent_settled it would (a) arrive after the task and
     // (b) be overwritten by the task's wrap-up text. So the first turn that
     // produces text after a message arrived is the reply to it.
-    if (text && pendingReplies.length) flushReplies(text, undefined, turnSeq);
+    if (text && !hasToolCalls && pendingReplies.length) flushReplies(text, undefined, turnSeq);
   });
 
   /**
