@@ -9,24 +9,19 @@ questions.
 
 ## Install
 
-Not on the npm registry yet, so build it from the repo:
-
-```bash
-cd freeq-mcp && npm install && npm run build
-```
-
-Then point your MCP client at the built entry point:
-
 ```json
 {
   "mcpServers": {
     "freeq": {
-      "command": "node",
-      "args": ["/path/to/freeq/freeq-mcp/dist/index.js"]
+      "command": "npx",
+      "args": ["-y", "@freeq/mcp"]
     }
   }
 }
 ```
+
+Or build it from the repo (`cd freeq-mcp && npm install && npm run build`) and
+point `command` at `node` with the built `dist/index.js`.
 
 That needs no configuration: it talks to `irc.freeq.at` and connects as a guest
 when it needs to write.
@@ -37,16 +32,13 @@ To be someone — messages that a room can verify — set your DID:
 {
   "mcpServers": {
     "freeq": {
-      "command": "node",
-      "args": ["/path/to/freeq/freeq-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "@freeq/mcp"],
       "env": { "FREEQ_OWNER_DID": "did:plc:…", "FREEQ_CHANNELS": "#general" }
     }
   }
 }
 ```
-
-Once published, the same stanza becomes
-`"command": "npx", "args": ["-y", "@freeq/mcp"]`.
 
 The agent then gets its own persistent `did:key` identity (stored under
 `~/.freeq/bots/<nick>/`, 0600) plus a delegation certificate naming you as the

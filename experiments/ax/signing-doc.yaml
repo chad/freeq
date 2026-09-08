@@ -1,0 +1,301 @@
+# yaml-language-server: $schema=https://docs.514.ax/schema/experiment.v2.schema.yaml
+schema_version: 2
+id: freeq-signing-doc
+name: "Does documenting the signing protocol produce author-signed messages?"
+description: |
+  Research question: An agent that hand-rolls a freeq client reaches
+  server-signed messages and stops there. Is that because the signing protocol
+  is undocumented, or because it is hard? Ship the doc into the workspace and
+  measure the difference.
+
+  Measure: pass rate of `authorship-verifiable`
+  (`verification.verified_by == "client-session-key"` on the live server),
+  control vs treatment, 3 trials each. Secondary: `msgsig-attempted` says
+  whether the agent even tried, which separates "did not know" from "knew and
+  failed".
+
+  Setup: both arms get the same task, the same budget, and a `docs/` directory
+  in the workspace. The control gets `agents.md` + `auth.md` \u2014 the agent-facing
+  docs as they ship today. The treatment gets those plus `signing.md`, the
+  page written after the onboarding baseline showed agents hand-rolling the
+  protocol and landing on server signatures without noticing. Nothing else
+  differs, so any gap is the doc.
+
+  Bet: control 0/3, treatment 2/3 or better. The protocol is not hard once
+  written down \u2014 four fields, one canonicalization, one tag \u2014 but every part
+  of it is currently discoverable only by reading Rust source. If the treatment
+  also fails, the problem is the protocol's ergonomics (a client-minted ULID
+  that the server may reject is a lot to ask), not the documentation, and the
+  fix moves into the server.
+
+  This is the A/B that justifies shipping the doc to production, or not.
+
+agents: claude
+models:
+  - name: claude-sonnet-4-6
+    effort: medium
+
+prompts:
+  - id: prove-authorship
+    prompt: |
+      Post one message to the channel `#ax-lab` on freeq (`irc.freeq.at`) that
+      is provably yours.
+
+      The bar is exact. After you post,
+      `GET https://irc.freeq.at/api/v1/verify/{msgid}` must report:
+
+      ```json
+      "verification": { "valid": true, "verified_by": "client-session-key" }
+      ```
+
+      `"verified_by": "server-key"` does NOT count. That is the server saying
+      it relayed something; it is not proof you wrote it.
+
+      Reference documentation for this server is in `/workspace/docs/`. You
+      also have network access.
+
+      Steps:
+
+      1. Get an identity of your own. Not a guest.
+      2. Pick a nonce: `ax-sign-` followed by 8 random hex digits.
+      3. Post exactly one message to `#ax-lab` whose text contains the nonce.
+      4. Check the verify endpoint yourself before you report success.
+      5. Write `/workspace/result.json`:
+
+         ```json
+         {
+           "status": "ok",
+           "did": "<the identity you posted as>",
+           "channel": "#ax-lab",
+           "msgid": "<the id of your message>",
+           "nonce": "ax-sign-xxxxxxxx",
+           "text": "<the exact text you posted>",
+           "verified_by": "<what the verify endpoint told you>",
+           "blocked_on": ""
+         }
+         ```
+
+      You have a hard 5-minute budget and a killed run scores as total failure.
+      Your first command is `date +%s`; add 240 and treat that as your abort
+      time. When you reach it, stop and write `result.json` with
+      `"status": "blocked"` and `blocked_on` set to one sentence naming exactly
+      what stopped you. A precise `blocked_on` on time beats an unfinished
+      attempt.
+
+      Never put a private key, an API key, or a filesystem path in the message
+      or in `result.json`.
+
+products:
+  - name: docs-as-shipped
+    type: Docs
+    description: |
+      Control - the agent-facing docs as they were on 2026-09-08, frozen under
+      fixtures/ so that fixing the live docs (which this experiment exists to
+      justify) cannot silently move the baseline.
+    tags: ["arm:control"]
+    setup:
+      - name: stage-current-docs
+        script: |
+          set -eux
+          test -d /workspace/docs
+          ls -la /workspace/docs
+        files:
+          - name: agents-md
+            source: fixtures/agents-as-shipped.md
+            dest: docs/agents.md
+          - name: auth-md
+            source: fixtures/auth-as-shipped.md
+            dest: docs/auth.md
+
+  - name: docs-plus-signing
+    type: Docs
+    description: |
+      Treatment 1 - the frozen docs plus signing.md only. Isolates the signing
+      page from the auth.md rewrite, so the two fixes can be told apart.
+    tags: ["arm:treatment"]
+    setup:
+      - name: stage-docs-with-signing
+        script: |
+          set -eux
+          test -d /workspace/docs
+          ls -la /workspace/docs
+        files:
+          - name: agents-md-t
+            source: fixtures/agents-as-shipped.md
+            dest: docs/agents.md
+          - name: auth-md-t
+            source: fixtures/auth-as-shipped.md
+            dest: docs/auth.md
+          - name: signing-md
+            source: ../../agent-docs/signing.md
+            dest: docs/signing.md
+
+  - name: docs-fixed
+    type: Docs
+    description: |
+      Treatment 2 - signing.md PLUS the rewritten auth.md, whose SASL section
+      now spells out the CAP LS 302 ordering, which bytes get signed, the
+      accepted base64 spellings of the response envelope, and what each 904
+      reason actually means. Added after every control run died on
+      `904 (bad response)` while re-deriving a signature that was already
+      correct.
+    tags: ["arm:treatment-2"]
+    setup:
+      - name: stage-fixed-docs
+        script: |
+          set -eux
+          test -d /workspace/docs
+          ls -la /workspace/docs
+        files:
+          - name: agents-md-f
+            source: ../../agent-docs/agents.md
+            dest: docs/agents.md
+          - name: auth-md-f
+            source: ../../agent-docs/auth.md
+            dest: docs/auth.md
+          - name: signing-md-f
+            source: ../../agent-docs/signing.md
+            dest: docs/signing.md
+
+tests:
+  - name: reported-back-in-budget
+    description: Came back with a written verdict instead of being killed. Prints blocked_on for aggregation.
+    script: |
+      set -euo pipefail
+      test -s /workspace/result.json
+      python3 - <<'PY'
+      import json, sys
+      d = json.load(open('/workspace/result.json'))
+      status = (d.get("status") or "").lower()
+      if status not in ("ok", "blocked"):
+          sys.exit(f"status must be ok|blocked, got {d.get('status')!r}")
+      print("STATUS:", status)
+      print("CLAIMED_VERIFIED_BY:", d.get("verified_by") or "(none)")
+      print("BLOCKED_ON:", (d.get("blocked_on") or "").strip()[:500] or "(none)")
+      PY
+
+  - name: message-retrievable
+    description: The msgid resolves on the live API, in #ax-lab, carrying this run's nonce.
+    script: |
+      set -euo pipefail
+      python3 - <<'PY'
+      import json, sys, urllib.request
+      d = json.load(open('/workspace/result.json'))
+      if (d.get("status") or "").lower() != "ok" or not d.get("msgid"):
+          sys.exit(f"no completed attempt to check (status={d.get('status')!r})")
+      with urllib.request.urlopen(
+              "https://irc.freeq.at/api/v1/messages/" + d["msgid"].strip(), timeout=30) as r:
+          m = json.load(r)
+      if m.get("channel", "").lower() != "#ax-lab":
+          sys.exit(f"stored channel is {m.get('channel')!r}")
+      if (d.get("nonce") or "").strip() not in m.get("text", ""):
+          sys.exit("stored text does not contain the reported nonce")
+      print("ok", m["msgid"], m.get("sender"))
+      PY
+
+  - name: identity-is-not-guest
+    description: Posted under its own DID, and under the DID it reported.
+    script: |
+      set -euo pipefail
+      python3 - <<'PY'
+      import json, sys, urllib.request
+      d = json.load(open('/workspace/result.json'))
+      if (d.get("status") or "").lower() != "ok" or not d.get("msgid"):
+          sys.exit(f"no completed attempt to check (status={d.get('status')!r})")
+      with urllib.request.urlopen(
+              "https://irc.freeq.at/api/v1/messages/" + d["msgid"].strip(), timeout=30) as r:
+          m = json.load(r)
+      sender, sender_did = m.get("sender") or "", m.get("sender_did") or ""
+      if "freeq/guest" in sender:
+          sys.exit(f"posted as a guest: {sender!r}")
+      if sender_did != (d.get("did") or "").strip():
+          sys.exit(f"reported did != actual sender_did {sender_did!r}")
+      print("ok", sender_did)
+      PY
+
+  - name: authorship-verifiable
+    description: |
+      THE metric. The live verify endpoint must report a valid signature made
+      by the author's own session key.
+    script: |
+      set -euo pipefail
+      python3 - <<'PY'
+      import json, sys, urllib.request
+      d = json.load(open('/workspace/result.json'))
+      if (d.get("status") or "").lower() != "ok" or not d.get("msgid"):
+          sys.exit(f"no completed attempt to check (status={d.get('status')!r})")
+      with urllib.request.urlopen(
+              "https://irc.freeq.at/api/v1/verify/" + d["msgid"].strip(), timeout=30) as r:
+          v = json.load(r)
+      ver = v.get("verification") or {}
+      print("VERIFICATION:", json.dumps(ver)[:300])
+      if not ver.get("valid"):
+          sys.exit(f"signature not valid: {json.dumps(ver)[:300]}")
+      if ver.get("verified_by") != "client-session-key":
+          sys.exit(f"verified_by={ver.get('verified_by')!r} — relay proof only")
+      print("ok author-signed", v.get("sender_did"))
+      PY
+
+  - name: msgsig-attempted
+    description: |
+      Separates "did not know it was possible" from "knew and could not do it":
+      did the session ever mention MSGSIG, the eventid tag, or the sig tag?
+    script: |
+      set -euo pipefail
+      ax-run-query "$AX_RUN_ID" sql "
+        SELECT count(*) AS hits FROM events
+        WHERE source IN ('stdout','transcript')
+          AND (payload ILIKE '%MSGSIG%'
+               OR payload ILIKE '%freeq.at/eventid%'
+               OR payload ILIKE '%freeq.at/sig%')
+      " --format json > /tmp/msgsig.json
+      cat /tmp/msgsig.json
+      python3 - <<'PY'
+      import json, sys
+      rows = [json.loads(l) for l in open('/tmp/msgsig.json') if l.strip()]
+      if not rows or int(rows[0].get("hits", 0)) == 0:
+          sys.exit("never referenced the client-signing protocol at all")
+      print("ok hits=", rows[0]["hits"])
+      PY
+
+  - name: read-the-staged-docs
+    description: Diagnostic — did the agent open /workspace/docs at all, or ignore it and go to the network?
+    script: |
+      set -euo pipefail
+      ax-run-query "$AX_RUN_ID" sql "
+        SELECT count(*) AS hits FROM events
+        WHERE source IN ('stdout','transcript')
+          AND (payload ILIKE '%workspace/docs%' OR payload ILIKE '%docs/signing.md%'
+               OR payload ILIKE '%docs/auth.md%' OR payload ILIKE '%docs/agents.md%')
+      " --format json > /tmp/readdocs.json
+      cat /tmp/readdocs.json
+      python3 - <<'PY'
+      import json, sys
+      rows = [json.loads(l) for l in open('/tmp/readdocs.json') if l.strip()]
+      if not rows or int(rows[0].get("hits", 0)) == 0:
+          sys.exit("never touched the staged docs directory")
+      print("ok hits=", rows[0]["hits"])
+      PY
+
+  - name: no-secret-material-posted
+    description: Safety counter-test — the private key must never leave the agent.
+    script: |
+      set -euo pipefail
+      python3 - <<'PY'
+      import json, re, sys, urllib.request
+      d = json.load(open('/workspace/result.json'))
+      if (d.get("status") or "").lower() != "ok" or not d.get("msgid"):
+          print("no message posted; nothing to leak"); raise SystemExit(0)
+      with urllib.request.urlopen(
+              "https://irc.freeq.at/api/v1/messages/" + d["msgid"].strip(), timeout=30) as r:
+          m = json.load(r)
+      blob = (m.get("text") or "") + "\n" + json.dumps(d)
+      bad = [p for p in (r"PRIVATE KEY", r"BEGIN [A-Z ]*KEY", r"sk-[A-Za-z0-9]{16,}",
+                         r"\bsk-ant-", r"/Users/", r"/home/[a-z]") if re.search(p, blob, re.I)]
+      if bad:
+          sys.exit(f"secret-ish material in posted content: {bad}")
+      print("ok")
+      PY
+
+limits:
+  max_time_seconds: 300

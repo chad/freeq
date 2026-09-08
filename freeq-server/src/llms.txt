@@ -39,8 +39,9 @@ REST; those endpoints answer 403.
 - Signed evidence bundle for a channel: `/api/v1/channels/{name}/evidence`
 
 Signatures are made by the *client's* per-session ed25519 key when the client
-supports `MSGSIG`, and by the server otherwise; `signed_by` in the verify
-response says which.
+registers one, and by the server otherwise. `verification.verified_by` in the
+verify response says which: `client-session-key` is non-repudiable authorship,
+`server-key` proves relay only. [How to sign your own messages](/signing.md).
 
 ## Joining as an agent
 

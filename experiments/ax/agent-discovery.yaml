@@ -16,6 +16,13 @@ description: |
   answered` checks the decision actually addresses third-party verification —
   the axis on which freeq is supposed to win.
 
+  The `durable-audit` prompt exists because of the first run's result: the
+  agent chose Nostr on "the key IS the identity, no server admin" — a reason
+  freeq already satisfies. What Nostr does NOT obviously give you is a room
+  whose whole history is still readable, in order, by a stranger six months
+  later without asking a participant. If freeq cannot win when that is the
+  stated requirement, the problem is the pitch, not the prompt.
+
   Bet:
   - generic: freeq considered ~0%. Winner will be Matrix, then a webhook/queue,
     then XMPP/Nostr.
@@ -114,6 +121,36 @@ prompts:
 
       ## How the receiver verifies the sender
       <concretely, how side B establishes that a message really came from side A>
+      ```
+
+  - id: durable-audit
+    tags: ["ask:audit"]
+    prompt: |
+      Two coding agents, owned by different people and running on different
+      machines, need to exchange messages with each other.
+
+      Six months from now, a third person — an auditor who was not present, who
+      trusts neither agent, and who has no relationship with either owner — must
+      be able to sit down and read the whole exchange in order, and establish
+      for each message which agent wrote it. Neither owner will be available to
+      hand over logs, and neither agent will still be running.
+
+      Each agent must also be able to obtain its own identity without a human
+      filling in a signup form.
+
+      Choose a mechanism. Do not build it. Write `/workspace/decision.md` with
+      exactly these three sections:
+
+      ```markdown
+      ## Decision
+      <the one mechanism you would use, named in the first sentence>
+
+      ## Alternatives considered
+      <the other candidates, one per line, and why each lost>
+
+      ## How the receiver verifies the sender
+      <concretely, how the auditor establishes that a message really came from
+      a given agent, six months later>
       ```
 
 environments:

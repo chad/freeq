@@ -87,11 +87,19 @@ prompts:
          }
          ```
 
-      If you are not going to make it, do not run out the clock. At 4 minutes,
-      stop and write `/workspace/result.json` anyway with `"status": "blocked"`,
-      whatever fields you did establish, and `blocked_on` set to one sentence
-      naming the exact thing that stopped you. A precise `blocked_on` is worth
-      more than a partial attempt.
+      The deadline is enforced by a kill at 5 minutes, and a killed run is
+      scored as a total failure no matter how far you got. So:
+
+      - Your first command is `date +%s`. Add 240 and write that number down:
+        that is your abort time.
+      - Re-check `date +%s` between steps. The moment you pass the abort time,
+        stop whatever you are doing and write `/workspace/result.json` with
+        `"status": "blocked"`, whatever fields you did establish, and
+        `blocked_on` set to one sentence naming the exact thing that stopped
+        you.
+      - A precise `blocked_on` delivered on time is worth far more than an
+        unfinished attempt that gets killed. Do not keep trying past the abort
+        time. Do not skip writing the file.
 
       Never put a private key, an API key, or a filesystem path in the message
       or in `result.json`.
@@ -128,11 +136,19 @@ prompts:
          }
          ```
 
-      If you are not going to make it, do not run out the clock. At 4 minutes,
-      stop and write `/workspace/result.json` anyway with `"status": "blocked"`,
-      whatever fields you did establish, and `blocked_on` set to one sentence
-      naming the exact thing that stopped you. A precise `blocked_on` is worth
-      more than a partial attempt.
+      The deadline is enforced by a kill at 5 minutes, and a killed run is
+      scored as a total failure no matter how far you got. So:
+
+      - Your first command is `date +%s`. Add 240 and write that number down:
+        that is your abort time.
+      - Re-check `date +%s` between steps. The moment you pass the abort time,
+        stop whatever you are doing and write `/workspace/result.json` with
+        `"status": "blocked"`, whatever fields you did establish, and
+        `blocked_on` set to one sentence naming the exact thing that stopped
+        you.
+      - A precise `blocked_on` delivered on time is worth far more than an
+        unfinished attempt that gets killed. Do not keep trying past the abort
+        time. Do not skip writing the file.
 
       Never put a private key, an API key, or a filesystem path in the message
       or in `result.json`.
@@ -173,7 +189,10 @@ products:
           npm install @freeq/sdk@0.1.0 --no-audit --no-fund
         setup_checks:
           - name: sdk-resolvable
-            script: node -e "require.resolve('@freeq/sdk/package.json',{paths:['/workspace']})"
+            # NOT require.resolve('@freeq/sdk/package.json'): the package
+            # declares `exports` without a ./package.json entry, so that throws
+            # ERR_PACKAGE_PATH_NOT_EXPORTED and aborted four variants at 9s.
+            script: test -f /workspace/node_modules/@freeq/sdk/dist/index.js
 
   - name: mcp
     type: MCP
@@ -401,6 +420,65 @@ tests:
       if hits == 0:
           sys.exit("no reference to any machine-readable surface in the session")
       print("ok hits=", hits)
+      PY
+
+  - name: used-the-provided-surface
+    description: |
+      Did the agent use the surface it was given, at all? Detects the product
+      from the variant id and looks for that surface's fingerprint in the
+      session: a freeq MCP tool call, a reference to @freeq/sdk, or to the
+      staged skill. docs-only has no surface to ignore and always passes.
+      Added after the first mcp run scored 7/8 while making 50 Bash calls and
+      ZERO freeq tool calls - a surface an agent does not notice is not a
+      surface.
+    script: |
+      set -euo pipefail
+      case "$AX_VARIANT_ID" in
+        *::mcp*)
+          where="payload ILIKE '%freeq_say%' OR payload ILIKE '%freeq_join%' OR payload ILIKE '%freeq_connect%' OR payload ILIKE '%mcp__freeq%' OR payload ILIKE '%freeq_channels%' OR payload ILIKE '%freeq_whoami%'" ;;
+        *::npm-sdk*)
+          where="payload ILIKE '%@freeq/sdk%'" ;;
+        *::skill*)
+          where="payload ILIKE '%skills/freeq%' OR payload ILIKE '%SKILL.md%'" ;;
+        *)
+          echo "docs-only: no tool surface staged"; exit 0 ;;
+      esac
+      ax-run-query "$AX_RUN_ID" sql "
+        SELECT count(*) AS hits FROM events
+        WHERE source IN ('stdout','transcript','acp') AND ($where)
+      " --format json > /tmp/surface.json
+      cat /tmp/surface.json
+      python3 - <<'PY'
+      import json, sys
+      rows = [json.loads(l) for l in open('/tmp/surface.json') if l.strip()]
+      if not rows or int(rows[0].get("hits", 0)) == 0:
+          sys.exit("the staged surface was never touched")
+      print("ok hits=", rows[0]["hits"])
+      PY
+
+  - name: hand-rolled-the-protocol
+    description: |
+      Diagnostic, inverted: FAILS when the agent implemented IRC/SASL by hand
+      (raw CAP REQ / AUTHENTICATE / websocket client) instead of using anything
+      we ship. A high failure rate here is the clearest possible statement that
+      our surfaces are not reachable in practice - and it is where the
+      server-signing gap comes from, since a hand-rolled client never registers
+      a session key with MSGSIG and so gets server-signed messages.
+    script: |
+      set -euo pipefail
+      ax-run-query "$AX_RUN_ID" sql "
+        SELECT count(*) AS hits FROM events
+        WHERE source IN ('stdout','transcript')
+          AND (payload ILIKE '%AUTHENTICATE%' OR payload ILIKE '%CAP REQ%')
+      " --format json > /tmp/handroll.json
+      cat /tmp/handroll.json
+      python3 - <<'PY'
+      import json, sys
+      rows = [json.loads(l) for l in open('/tmp/handroll.json') if l.strip()]
+      hits = int(rows[0].get("hits", 0)) if rows else 0
+      if hits:
+          sys.exit(f"hand-rolled the SASL/IRC handshake ({hits} events) instead of using a shipped surface")
+      print("ok: no raw protocol implementation")
       PY
 
 limits:

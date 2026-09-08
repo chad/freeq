@@ -60,6 +60,11 @@ const AGENTS_MD: &str = include_str!("../../agent-docs/agents.md");
 /// Credential walkthrough, WorkOS auth.md format.
 const AUTH_MD: &str = include_str!("../../agent-docs/auth.md");
 
+/// How to sign messages so the *author* is provable rather than the relay.
+/// Written after six agent onboarding runs reached server-signed messages
+/// without noticing the difference — see `experiments/ax/FINDINGS.md`.
+const SIGNING_MD: &str = include_str!("../../agent-docs/signing.md");
+
 /// Self-service enrollment, welcome-mat layout.
 const WELCOME_MD: &str = include_str!("../../agent-docs/welcome.md");
 
@@ -237,6 +242,16 @@ pub async fn agents_md() -> Response {
 /// `GET /auth.md`
 pub async fn auth_md() -> Response {
     markdown(AUTH_MD)
+}
+
+/// The message-signing walkthrough as text (the MCP resource surface).
+pub fn signing_md_text() -> &'static str {
+    SIGNING_MD
+}
+
+/// `GET /signing.md`
+pub async fn signing_md() -> Response {
+    markdown(SIGNING_MD)
 }
 
 /// `GET /.well-known/welcome.md` — how an agent enrolls itself, in the layout

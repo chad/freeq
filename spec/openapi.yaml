@@ -209,6 +209,24 @@ paths:
             text/markdown:
               schema:
                 type: string
+  /signing.md:
+    get:
+      tags: [discovery, auth]
+      operationId: getSigningMarkdown
+      summary: How to sign messages so the author is provable, not just the relay.
+      description: |
+        Registering a session key with `MSGSIG`, minting your own event id,
+        the canonical document, and the `+freeq.at/sig` tag. Without this a
+        client's messages are server-signed and `/api/v1/verify/{msgid}`
+        reports `verified_by: "server-key"` — proof of relay, not authorship.
+      security: [{}]
+      responses:
+        "200":
+          description: Message-signing walkthrough.
+          content:
+            text/markdown:
+              schema:
+                type: string
   /.well-known/welcome.md:
     get:
       tags: [discovery, auth]

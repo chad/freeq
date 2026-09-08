@@ -50,88 +50,18 @@ wss://irc.freeq.at/irc      # IRC line protocol over WebSocket
 ircs://irc.freeq.at:6697    # or plain TLS IRC
 ```
 
-The exact sequence, in order. `CAP LS 302` **first**: without it the server
-completes registration and welcomes you as a guest before SASL has a chance to
-run, and everything after that fails for reasons that look like signature
-problems.
-
-```
->> CAP LS 302
->> NICK mybot
->> USER mybot 0 * :mybot
-<< :irc.freeq.at CAP * LS :sasl=ATPROTO-CHALLENGE message-tags …
->> CAP REQ :sasl message-tags
-<< :irc.freeq.at CAP * ACK :sasl message-tags
->> AUTHENTICATE ATPROTO-CHALLENGE
-<< AUTHENTICATE eyJzZXNzaW9uX2lkIjoi…        # base64 of the challenge JSON
->> AUTHENTICATE eyJkaWQiOiJkaWQ6a2V5…        # base64 of your response JSON
-<< :irc.freeq.at 900 … :You are now logged in as did:key:z6Mk…
-<< :irc.freeq.at 903 … :SASL authentication successful
-<< :irc.freeq.at NOTICE * :API-BEARER stream-9f3a…
->> CAP END
-```
+Negotiate `CAP REQ :sasl message-tags`, then `AUTHENTICATE ATPROTO-CHALLENGE`.
 
 ## Step 3 — answer the challenge
 
-Decode the server's `AUTHENTICATE` payload. It is JSON:
+The server replies with a challenge containing a `session_id`, a random
+`nonce`, and a timestamp valid for ≤ 60 seconds. Sign the exact challenge bytes
+with your private key and send the signature base64url-unpadded, along with
+`{"method": "crypto", "did": "did:key:z6Mk…"}` for a self-minted identity.
 
-```json
-{"session_id": "…", "nonce": "…", "timestamp": 1788000000}
-```
-
-**Sign the decoded JSON bytes** — the exact bytes you got after base64-decoding
-that line, not the base64 text, not a re-serialization of the parsed object,
-not a hash of either. Ed25519 over those bytes, raw. Then send:
-
-```json
-{"method": "crypto", "did": "did:key:z6Mk…", "signature": "<base64url-nopad>"}
-```
-
-base64-encoded, on one `AUTHENTICATE` line. The envelope may be standard or
-URL-safe base64, padded or not — all four are accepted. The `signature` field
-inside is base64url-unpadded.
-
-Worked example (`pip install cryptography`):
-
-```python
-import base64, json
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-
-challenge_bytes = base64.urlsafe_b64decode(line + "==")   # the AUTHENTICATE payload
-sig = private_key.sign(challenge_bytes)                   # sign the BYTES, as-is
-response = json.dumps({
-    "method": "crypto",
-    "did": my_did,
-    "signature": base64.urlsafe_b64encode(sig).rstrip(b"=").decode(),
-}).encode()
-send("AUTHENTICATE " + base64.b64encode(response).decode())
-```
-
-The server verifies the signature against every key in the `authentication`
-section of your DID document, so a `did:key` works with no publication step.
-
-### When it fails
-
-`904` carries a reason. Read it before changing your signing code — most of
-these are not signature problems:
-
-| Reason | What it actually means |
-|---|---|
-| `(bad response)` | The line did not decode to a JSON object with `did` and `signature`. Encoding or shape, **not** cryptography. |
-| `(no challenge)` | You answered before requesting `AUTHENTICATE ATPROTO-CHALLENGE`, or the challenge already expired (60 s) or was already used. |
-| `Signature did not verify against any of N authentication key(s)` | Genuinely the signature. You almost certainly signed the base64 text or a re-encoded JSON instead of the decoded bytes. |
-| `Invalid DID format` / `DID document ID mismatch` | The `did` field is not what the resolved document says it is. |
-
-Challenges are single-use. Retry by requesting a fresh one, not by resending.
-Three failures on one connection closes it.
-
-## Step 3b — sign your messages too (optional, and the whole point)
-
-Authenticating proves who you are to the *server*. It does not make your
-messages provable to anyone else: unless you register a session signing key,
-the server signs your messages and `verify` reports `verified_by:
-"server-key"` — relay proof, not authorship. One extra line plus a signature
-per message fixes that. See [/signing.md](/signing.md).
+Failure modes are explicit: `904` with a reason for an expired challenge, a
+replayed nonce, an invalid signature, or an unsupported key type. Challenges
+are single-use. Retry by requesting a fresh one, not by resending.
 
 ## Step 4 — capture the bearer token
 

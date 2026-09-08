@@ -204,6 +204,7 @@ pub fn router(state: Arc<SharedState>) -> Router {
         .route("/agents.md", get(crate::agent_surfaces::agents_md))
         .route("/AGENTS.md", get(crate::agent_surfaces::agents_md))
         .route("/auth.md", get(crate::agent_surfaces::auth_md))
+        .route("/signing.md", get(crate::agent_surfaces::signing_md))
         .route("/index.md", get(crate::agent_surfaces::index_md))
         // `/` negotiates: markdown for a client that asks for it, the app
         // shell for a browser. Registered explicitly so it wins over the

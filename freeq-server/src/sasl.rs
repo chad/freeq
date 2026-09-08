@@ -107,9 +107,33 @@ impl ChallengeStore {
     }
 }
 
-/// Decode a client's SASL response from base64url JSON.
+/// Decode a client's SASL response from base64-encoded JSON, in whichever of
+/// the four common base64 spellings the client used.
+///
+/// This used to accept base64url-unpadded only. That is what our own SDKs
+/// emit — and it is the single most expensive assumption in the protocol,
+/// because IRCv3 SASL is specified over *standard* base64 and every
+/// language's default encoder (`base64.b64encode`, `btoa`, `base64::encode`)
+/// produces standard base64 with padding. A client that follows the SASL spec
+/// therefore failed to parse here and got `904 SASL authentication failed
+/// (bad response)` — an error that names the response but not the encoding,
+/// so the natural reading is "my signature is wrong" and the natural next
+/// move is to re-derive a signature that was already correct.
+///
+/// Six independent agent onboarding runs died in exactly that loop before
+/// this was found (`experiments/ax`, 2026-09-08). Accepting all four
+/// spellings costs three fallible decodes on a once-per-connection path and
+/// removes the failure entirely. Nothing is weakened: the bytes still have to
+/// be JSON, and the signature inside still has to verify against the DID
+/// document.
 pub fn decode_response(encoded: &str) -> Option<ChallengeResponse> {
-    let bytes = URL_SAFE_NO_PAD.decode(encoded).ok()?;
+    use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE};
+    let bytes = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .or_else(|_| STANDARD.decode(encoded))
+        .or_else(|_| URL_SAFE.decode(encoded))
+        .or_else(|_| STANDARD_NO_PAD.decode(encoded))
+        .ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
@@ -459,6 +483,55 @@ mod tests {
         assert!(store.take("sess-b").is_none());
         // Original should still work
         assert!(store.take("sess-a").is_some());
+    }
+
+    /// Every base64 spelling a client might plausibly emit must parse. The
+    /// standard-with-padding case is the one that matters: it is what the
+    /// IRCv3 SASL spec calls for and what stdlib encoders produce by default,
+    /// and rejecting it cost six agents their onboarding run.
+    #[test]
+    fn decode_response_accepts_every_base64_spelling() {
+        use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE};
+        let resp = ChallengeResponse {
+            // A DID and signature chosen so the JSON is not a multiple of 3
+            // bytes and the encodings actually differ in padding.
+            did: "did:plc:abc123".to_string(),
+            signature: "c2ln-bmF0dXJl_Ynl0ZXM".to_string(),
+            method: Some("crypto".to_string()),
+            pds_url: None,
+            dpop_proof: None,
+            challenge_nonce: None,
+        };
+        let json = serde_json::to_vec(&resp).unwrap();
+        assert!(json.len() % 3 != 0, "fixture must exercise padding");
+
+        for (label, encoded) in [
+            ("url-safe no pad", URL_SAFE_NO_PAD.encode(&json)),
+            ("standard padded", STANDARD.encode(&json)),
+            ("url-safe padded", URL_SAFE.encode(&json)),
+            ("standard no pad", STANDARD_NO_PAD.encode(&json)),
+        ] {
+            let decoded =
+                decode_response(&encoded).unwrap_or_else(|| panic!("{label} failed to decode"));
+            assert_eq!(decoded.did, "did:plc:abc123", "{label}");
+            assert_eq!(decoded.signature, "c2ln-bmF0dXJl_Ynl0ZXM", "{label}");
+        }
+    }
+
+    /// Garbage is still garbage: the tolerant decoder must not turn an
+    /// unparseable response into an authenticated session.
+    #[test]
+    fn decode_response_still_rejects_junk() {
+        assert!(decode_response("!!!not base64!!!").is_none());
+        // Valid base64, but not JSON.
+        assert!(decode_response(&STANDARD_NO_PAD_ENCODE_HELPER("not json at all")).is_none());
+        // Valid base64 JSON, but not a challenge response.
+        assert!(decode_response(&STANDARD_NO_PAD_ENCODE_HELPER(r#"{"hello":"world"}"#)).is_none());
+    }
+
+    #[allow(non_snake_case)]
+    fn STANDARD_NO_PAD_ENCODE_HELPER(s: &str) -> String {
+        base64::engine::general_purpose::STANDARD.encode(s.as_bytes())
     }
 
     #[test]
