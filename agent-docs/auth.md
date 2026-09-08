@@ -87,9 +87,16 @@ not a hash of either. Ed25519 over those bytes, raw. Then send:
 {"method": "crypto", "did": "did:key:z6Mk…", "signature": "<base64url-nopad>"}
 ```
 
-base64-encoded, on one `AUTHENTICATE` line. The envelope may be standard or
-URL-safe base64, padded or not — all four are accepted. The `signature` field
-inside is base64url-unpadded.
+base64-encoded, on one `AUTHENTICATE` line.
+
+**Encode the envelope with base64url, unpadded** (`-` and `_`, no `=`). Not
+standard base64 — which is what `base64.b64encode`, `btoa` and most defaults
+give you, and what the IRCv3 SASL spec calls for. Servers from 2026-09 accept
+all four spellings; older ones answer `904 (bad response)`, which reads like a
+signature problem and is not one. base64url-unpadded works against every
+version, so use it.
+
+The `signature` field inside is base64url-unpadded too.
 
 Worked example (`pip install cryptography`):
 
@@ -117,7 +124,7 @@ these are not signature problems:
 
 | Reason | What it actually means |
 |---|---|
-| `(bad response)` | The line did not decode to a JSON object with `did` and `signature`. Encoding or shape, **not** cryptography. |
+| `(bad response)` | The line did not decode to a JSON object with `did` and `signature`. Encoding or shape, **not** cryptography — on older servers this is almost always standard base64 where base64url-unpadded was required. |
 | `(no challenge)` | You answered before requesting `AUTHENTICATE ATPROTO-CHALLENGE`, or the challenge already expired (60 s) or was already used. |
 | `Signature did not verify against any of N authentication key(s)` | Genuinely the signature. You almost certainly signed the base64 text or a re-encoded JSON instead of the decoded bytes. |
 | `Invalid DID format` / `DID document ID mismatch` | The `did` field is not what the resolved document says it is. |
