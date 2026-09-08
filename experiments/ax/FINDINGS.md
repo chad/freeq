@@ -229,3 +229,47 @@ a hypothesis, not a result — but it is the opposite of the bet.
 2. Does anything ever call an MCP tool, at n>1?
 3. Does `pointed` really underperform `cold`, or was that noise?
 4. Re-run with a codex model this org can reach.
+
+### F9 — the `docs-fixed` arm and the auth A/B are unrun: budget, not evidence
+
+All four `docs-fixed` runs were killed at the 300 s cap and produced no test
+rows. `freeq-auth-handshake` — a deliberately smaller experiment that measures
+only the handshake, at `effort: low`, precisely because the cap was eating
+whole runs — got one variant away before the org's $25 free credit ran out
+(balance: **-$0.29**). Nothing to read.
+
+So the state of the evidence is:
+
+| Claim | Evidence |
+|---|---|
+| SASL response envelope must be base64url-unpadded, and that is what agents get wrong | **Strong.** 5 independent runs, verbatim `blocked_on`, root-caused in `sasl.rs` |
+| `signing.md` gets an agent to an author-signed message | **Suggestive.** 1 run, 7/7, against a control that failed earlier in the flow |
+| The rewritten `auth.md` clears the 904 wall | **None.** 0 completed runs |
+| MCP tools get ignored in favour of hand-rolling | 1 run, unambiguous (50 Bash, 0 tool calls) |
+| freeq loses a shortlist it should win | 1 run, to Nostr |
+| Anything about codex, or the npm SDK arm | **None.** Model unavailable; setup check bug |
+
+The code fixes stand on their own — the base64 decoder was accepting one of
+four valid spellings, and that is a bug whether or not another run confirms it.
+The doc fixes are the ones that still need a number.
+
+### What it costs to run this properly
+
+Observed: ~$0.5 per onboarding run at `effort: medium`, ~$0.25 per discovery
+run, ~65% of onboarding runs killed at the 300 s cap for **zero** test rows.
+That last number is the one to fix first: at a 900-second cap most of the spend
+that produced nothing would have produced a result.
+
+In order of value per dollar:
+
+1. **Raise the run cap** (plan upgrade). The cap, not the model, is what is
+   destroying data.
+2. **Deploy the SASL fix** to `irc.freeq.at`, then re-run
+   `freeq-auth-handshake` — the server-side half of F6 cannot be measured
+   against a server that does not have it.
+3. `freeq-auth-handshake` at n=4 per arm (~$3) — the cheapest unanswered
+   question here.
+4. `signing-doc` at n=4 per arm (~$6) with a raised cap.
+5. `freeq-agent-discovery` `durable-audit` at n=5 (~$8) — the positioning
+   question, which is the only one whose answer might change the product
+   rather than the docs.

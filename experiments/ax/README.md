@@ -9,6 +9,12 @@ methodology these follow).
 |---|---|
 | `agent-onboarding.yaml` | Can a cold agent mint an identity and post a message whose **authorship** a third party can verify — and which surface (docs / npm SDK / MCP / Skill) gets it there? |
 | `agent-discovery.yaml` | When an agent picks a mechanism for verifiable agent-to-agent messaging, is freeq considered at all? Selected? Losing to what? |
+| `auth-handshake.yaml` | Can an agent complete the SASL handshake at all? A/B on the rewritten `auth.md`. Small on purpose — see the cap note below. |
+| `signing-doc.yaml` | Does documenting the signing protocol turn server-signed messages into author-signed ones? Three arms: shipped docs, +`signing.md`, +rewritten `auth.md`. |
+
+`fixtures/` holds the agent-facing docs frozen at their 2026-09-08 state.
+Control arms stage those, not the live files — otherwise fixing the docs (which
+is what these experiments exist to justify) silently moves the baseline.
 
 Both write their verdicts against **production** `irc.freeq.at` — that is the
 point, the surface under test is the one real agents meet.
@@ -66,12 +72,21 @@ ax run rerun <run-id> --tests --experiment agent-onboarding.yaml
 
 ## Constraints worth knowing before you edit these
 
-- **300 s per variant.** The current plan caps cloud runs at 5 minutes, and
-  there is no Docker on this machine for `--local` (which is uncapped). The
-  onboarding experiment therefore measures *time-to-verifiable-message under a
-  five-minute budget*; a timeout is scored as a failure on purpose. If the plan
-  is upgraded, raise `limits.max_time_seconds` and re-baseline before comparing
-  numbers across the change.
+- **300 s per variant, and this is the binding constraint.** The plan caps
+  cloud runs at 5 minutes and there is no Docker here for `--local` (which is
+  uncapped). Measured reality: **~65% of onboarding runs were killed at the
+  cap**, and a killed run is `errored` — *no tests run at all*, so it yields
+  spend and nothing else. The prompts ask the agent to abort at T+240 and write
+  a `blocked_on`; agents mostly do not comply. Until the cap is raised, prefer
+  experiments scoped to a single step (see `auth-handshake.yaml`) over
+  end-to-end ones, and use `effort: low`.
+- **Costs, observed:** ~$0.50 per onboarding run at medium effort, ~$0.25 per
+  discovery run, ~$0.20 for a run that dies in setup. The $25 free credit
+  bought roughly 35 runs, about half of which returned nothing because of the
+  cap.
+- **A codex model this org can reach.** `gpt-5.2-codex` 404s on the model
+  proxy, so all six codex variants died at 17 s. Every result so far is
+  claude-only.
 - **Shared external system.** Every variant writes to the same production
   channel, `#ax-lab`. That is safe because runs only ever *append* messages —
   no variant mutates state another needs. Do not add a test that depends on
@@ -82,6 +97,17 @@ ax run rerun <run-id> --tests --experiment agent-onboarding.yaml
 - **Tests never read prose.** Every verdict comes from the REST API or from
   `ax-run-query` over session events. Agent self-reports are claims, not
   evidence.
+
+## What this has produced so far
+
+Four code/doc fixes, each traceable to a run in [FINDINGS.md](FINDINGS.md):
+
+| Fix | Found by |
+|---|---|
+| `sasl::decode_response` accepts standard base64 (was base64url-only) | 5 runs dying on `904 (bad response)` with correct signatures |
+| `agent-docs/signing.md` — the signing protocol, previously undocumented | every hand-rolled client landing on server-signed messages |
+| `auth.md` rewrite: wire sequence, signed bytes, envelope encoding, 904 table | the same 5 runs, plus one agent that diagnosed `CAP LS 302` and ran out of time |
+| `freeq_verify` reading the live API shape | reading an MCP run's failure back into the code |
 
 ## Feeding results back into the product
 
