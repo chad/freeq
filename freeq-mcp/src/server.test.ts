@@ -210,7 +210,82 @@ describe("read tools", () => {
 });
 
 describe("freeq_verify", () => {
-  it("distinguishes author-signed from server-relayed", async () => {
+  // The shapes below are copied from live irc.freeq.at responses. The original
+  // fixtures invented a flat {verified, signed_by} envelope the server never
+  // emitted, so every real message read as unverifiable in production while
+  // the suite stayed green. Keep these anchored to what the server sends.
+  it("reads the live nested verification envelope", async () => {
+    h = await harness({
+      routes: {
+        "GET /api/v1/verify/01LIVEA": {
+          body: {
+            msgid: "01LIVEA",
+            channel: "#general",
+            sender_did: "did:plc:alice",
+            verification: {
+              valid: true,
+              verdict: "valid",
+              verified_by: "client-session-key",
+              client_public_key: "0S1SSAhawZGD9_J_zash98i3oZu6DWJsvdIiIN3gsxQ",
+            },
+          },
+        },
+      },
+    });
+    const authored = await h.json("freeq_verify", { msgid: "01LIVEA" });
+    expect(authored.reading).toMatch(/non-repudiable/);
+    expect(authored.reading).toMatch(/did:plc:alice/);
+
+    h = await harness({
+      routes: {
+        "GET /api/v1/verify/01LIVEB": {
+          body: {
+            msgid: "01LIVEB",
+            sender_did: "did:key:z6Mkbot",
+            verification: { valid: true, verdict: "valid", verified_by: "server-key" },
+          },
+        },
+      },
+    });
+    const relayed = await h.json("freeq_verify", { msgid: "01LIVEB" });
+    expect(relayed.reading).toMatch(/proves the server relayed it/);
+    expect(relayed.reading).not.toMatch(/non-repudiable/);
+
+    h = await harness({
+      routes: {
+        "GET /api/v1/verify/01LIVEC": {
+          body: {
+            msgid: "01LIVEC",
+            verification: {
+              valid: false,
+              verdict: "unverifiable",
+              verified_by: "unverifiable-unknown-key",
+            },
+          },
+        },
+      },
+    });
+    const unknown = await h.json("freeq_verify", { msgid: "01LIVEC" });
+    expect(unknown.reading).toMatch(/could not be checked/);
+    expect(unknown.reading).not.toMatch(/INVALID/);
+
+    h = await harness({
+      routes: {
+        "GET /api/v1/verify/01LIVED": {
+          body: {
+            msgid: "01LIVED",
+            sender_did: "did:plc:mallory",
+            verification: { valid: false, verdict: "invalid", verified_by: "client-session-key" },
+          },
+        },
+      },
+    });
+    const forged = await h.json("freeq_verify", { msgid: "01LIVED" });
+    expect(forged.reading).toMatch(/INVALID/);
+    expect(forged.reading).toMatch(/Do not quote/);
+  });
+
+  it("still understands the legacy flat envelope", async () => {
     h = await harness({
       routes: {
         "GET /api/v1/verify/01JA": {
@@ -242,7 +317,10 @@ describe("freeq_verify", () => {
       },
     });
     const out = await h.json("freeq_verify", { msgid: "01JC" });
-    expect(out.reading).toMatch(/does NOT verify/);
+    // "could not be checked", not "invalid": a key we do not hold is not
+    // evidence of forgery, and saying so would libel the sender.
+    expect(out.reading).toMatch(/could not be checked/);
+    expect(out.reading).toMatch(/do not quote it as someone's words/i);
     expect(out.reading).toMatch(/unknown key/);
   });
 });

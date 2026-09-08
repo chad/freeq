@@ -1,0 +1,407 @@
+# yaml-language-server: $schema=https://docs.514.ax/schema/experiment.v2.schema.yaml
+schema_version: 2
+id: freeq-agent-onboarding
+name: "freeq onboarding: cold start to a verifiable message"
+description: |
+  Research question: Can an agent that has never seen freeq get its own
+  identity and post one message whose authorship a third party can verify —
+  and which agent-facing surface (docs only, npm SDK, MCP server, Skill) gets
+  it there most reliably?
+
+  Measure: pass rate of the artifact tests, in order of increasing difficulty —
+  result-json-shape (understood the task) < message-retrievable (posted at all)
+  < identity-is-not-guest (minted an identity instead of falling back to guest)
+  < authorship-verifiable (the AUTHOR's key signed it, not just the server's).
+  Sliced by `product` (surface) and `promptId` (cold vs pointed at /llms.txt).
+  Secondary: cost and wall clock per surface, and the behavioral test
+  consulted-machine-readable-surface (did it read llms.txt / auth.md /
+  openapi.json / agent.json before flailing?).
+
+  Bet:
+  - docs-only + cold will mostly land on GUEST posting: the message exists but
+    authorship is server-signed only. That is the failure we care about most,
+    because agents.md advertises self-minted did:key as the headline feature.
+  - The gap between "posted something" and "posted something author-signed"
+    will be the widest gap in the whole experiment.
+  - mcp will beat skill will beat npm-sdk will beat docs-only on
+    authorship-verifiable, and pointing at /llms.txt will help docs-only more
+    than it helps any surface that ships tools.
+  - Nobody will find `@freeq/sdk` sitting in package.json without being told,
+    so npm-sdk ≈ docs-only unless the agent reads the manifest first.
+
+  Budget: each variant gets 300 seconds of wall clock (the cloud plan cap).
+  That is deliberate and part of the question — "can an agent get from cold to
+  a verifiable message inside five minutes" is the bar an agent-native product
+  has to clear. The surface comparison is largely a comparison of how much of
+  that budget each surface burns.
+
+  The prompt makes the deadline explicit and requires result.json to be written
+  either way, with `status: blocked` and a one-line `blocked_on`. This is not
+  politeness: a variant that runs past the cap is killed as `errored` and NO
+  tests run at all, which throws away the diagnosis. `blocked_on` across a full
+  matrix is the single most useful output of this experiment — it is agents
+  telling us, in their own words, exactly where freeq stopped them.
+
+  Known doc drift this should expose (do not fix before the baseline run):
+  - agents.md documents `GET /api/v1/verify/{msgid}` as returning
+    `verified: true` / `signed_by: "author"`. The server actually returns
+    `verification.valid` / `verification.verified_by: "client-session-key"`.
+  - freeq-mcp README and agents.md both say "not published to npm yet".
+    @freeq/sdk, @freeq/mcp and @freeq/pi are all on the registry.
+
+agents: [claude, codex]
+models:
+  - name: claude-sonnet-4-6
+    effort: medium
+  - name: gpt-5.2-codex
+    effort: medium
+
+prompts:
+  - id: cold
+    tags: ["entry:cold"]
+    prompt: |
+      Someone must be able to check, later and without trusting you, that you
+      personally said a specific thing in a specific room. Use freeq
+      (`irc.freeq.at`) to make that possible.
+
+      You have a hard budget of 5 minutes. Do all of this yourself, over the
+      network, without asking a human:
+
+      1. Get an identity of your own on freeq. Do not connect as a guest and
+         do not use anyone else's credentials.
+      2. Pick a nonce: the string `ax-onboard-` followed by 8 random hex
+         digits.
+      3. Post exactly one message to the channel `#ax-lab`. Its text must
+         contain your nonce. Say briefly who and what you are.
+      4. Write `/workspace/result.json`:
+
+         ```json
+         {
+           "status": "ok",
+           "did": "<the identity you posted as>",
+           "channel": "#ax-lab",
+           "msgid": "<the id freeq assigned to your message>",
+           "nonce": "ax-onboard-xxxxxxxx",
+           "text": "<the exact text you posted>",
+           "blocked_on": ""
+         }
+         ```
+
+      If you are not going to make it, do not run out the clock. At 4 minutes,
+      stop and write `/workspace/result.json` anyway with `"status": "blocked"`,
+      whatever fields you did establish, and `blocked_on` set to one sentence
+      naming the exact thing that stopped you. A precise `blocked_on` is worth
+      more than a partial attempt.
+
+      Never put a private key, an API key, or a filesystem path in the message
+      or in `result.json`.
+
+  - id: pointed
+    tags: ["entry:pointed"]
+    prompt: |
+      Someone must be able to check, later and without trusting you, that you
+      personally said a specific thing in a specific room. Use freeq
+      (`irc.freeq.at`) to make that possible.
+
+      Start from the machine-readable index at https://irc.freeq.at/llms.txt
+
+      You have a hard budget of 5 minutes. Do all of this yourself, over the
+      network, without asking a human:
+
+      1. Get an identity of your own on freeq. Do not connect as a guest and
+         do not use anyone else's credentials.
+      2. Pick a nonce: the string `ax-onboard-` followed by 8 random hex
+         digits.
+      3. Post exactly one message to the channel `#ax-lab`. Its text must
+         contain your nonce. Say briefly who and what you are.
+      4. Write `/workspace/result.json`:
+
+         ```json
+         {
+           "status": "ok",
+           "did": "<the identity you posted as>",
+           "channel": "#ax-lab",
+           "msgid": "<the id freeq assigned to your message>",
+           "nonce": "ax-onboard-xxxxxxxx",
+           "text": "<the exact text you posted>",
+           "blocked_on": ""
+         }
+         ```
+
+      If you are not going to make it, do not run out the clock. At 4 minutes,
+      stop and write `/workspace/result.json` anyway with `"status": "blocked"`,
+      whatever fields you did establish, and `blocked_on` set to one sentence
+      naming the exact thing that stopped you. A precise `blocked_on` is worth
+      more than a partial attempt.
+
+      Never put a private key, an API key, or a filesystem path in the message
+      or in `result.json`.
+
+products:
+  - name: docs-only
+    type: Docs
+    description: |
+      Control. Nothing freeq-specific is installed. The agent has curl, python3
+      and node, and whatever it can find on the public web. This is the surface
+      every agent meets first.
+    tags: ["surface:docs"]
+    setup:
+      - name: baseline-tools
+        script: |
+          set -eux
+          command -v curl
+          command -v python3 || command -v python
+          command -v node || true
+        setup_checks:
+          - name: curl-present
+            script: curl --version >/dev/null
+
+  - name: npm-sdk
+    type: SDK
+    version: "0.1.0"
+    description: |
+      `@freeq/sdk` is installed in the workspace but never mentioned. Tests
+      availability, not instruction: does an agent look at the manifest it was
+      handed before writing its own WebSocket client?
+    tags: ["surface:sdk"]
+    setup:
+      - name: install-freeq-sdk
+        script: |
+          set -eux
+          cd /workspace
+          [ -f package.json ] || npm init -y >/dev/null
+          npm install @freeq/sdk@0.1.0 --no-audit --no-fund
+        setup_checks:
+          - name: sdk-resolvable
+            script: node -e "require.resolve('@freeq/sdk/package.json',{paths:['/workspace']})"
+
+  - name: mcp
+    type: MCP
+    version: "0.1.0"
+    description: |
+      `@freeq/mcp` wired in over stdio as an MCP server. Guest by default;
+      FREEQ_OWNER_DID is deliberately NOT set, so reaching a self-minted
+      identity still requires the agent to understand the identity model.
+    tags: ["surface:mcp"]
+    setup:
+      - name: prefetch-freeq-mcp
+        script: |
+          set -eux
+          npm pack @freeq/mcp@0.1.0 --pack-destination /tmp >/dev/null
+        mcp_servers:
+          - name: freeq
+            type: stdio
+            command: npx
+            args: ["-y", "@freeq/mcp@0.1.0"]
+
+  - name: skill
+    type: Skill
+    description: |
+      The repo's `skills/freeq` bundle staged into the agent's native skill
+      discovery path. Prose competence, no tools.
+    tags: ["surface:skill"]
+    setup:
+      - name: stage-freeq-skill
+        script: "true"
+        skills:
+          - name: freeq
+            source: ../../skills/freeq
+
+tests:
+  - name: reported-back-in-budget
+    description: |
+      Did the agent come back at all inside the 5-minute budget? Passes for
+      status=blocked too — the point is a written verdict instead of a killed
+      run. Prints blocked_on so the reason lands in this test's stdout, where
+      SQL over test_analysis can aggregate it across the matrix.
+    script: |
+      set -euo pipefail
+      test -s /workspace/result.json
+      python3 - <<'PY'
+      import json, sys
+      d = json.load(open('/workspace/result.json'))
+      status = (d.get("status") or "").lower()
+      if status not in ("ok", "blocked"):
+          sys.exit(f"status must be ok|blocked, got {d.get('status')!r}")
+      print("STATUS:", status)
+      print("BLOCKED_ON:", (d.get("blocked_on") or "").strip()[:500] or "(none)")
+      PY
+
+  - name: result-json-shape
+    description: |
+      Did the agent get all the way there? result.json claims status ok and
+      carries a DID, the right channel, a well-formed nonce, and text
+      containing it. Fails by design for status=blocked.
+    script: |
+      set -euo pipefail
+      test -s /workspace/result.json
+      python3 - <<'PY'
+      import json, re, sys
+      d = json.load(open('/workspace/result.json'))
+      if (d.get("status") or "").lower() != "ok":
+          sys.exit(f"status={d.get('status')!r}: {(d.get('blocked_on') or '').strip()[:300]}")
+      missing = [k for k in ("did", "channel", "msgid", "nonce", "text") if not d.get(k)]
+      if missing:
+          sys.exit(f"missing/empty keys: {missing}")
+      if d["channel"].lower() != "#ax-lab":
+          sys.exit(f"wrong channel: {d['channel']!r}")
+      if not re.fullmatch(r"ax-onboard-[0-9a-f]{8}", d["nonce"].strip()):
+          sys.exit(f"malformed nonce: {d['nonce']!r}")
+      if not d["did"].startswith("did:"):
+          sys.exit(f"not a DID: {d['did']!r}")
+      if d["nonce"].strip() not in d["text"]:
+          sys.exit("nonce not present in the reported text")
+      print("ok", d["did"], d["msgid"])
+      PY
+
+  - name: message-retrievable
+    description: |
+      The msgid resolves on the public REST API, sits in #ax-lab, and its
+      stored text really contains this run's nonce. Proves a message was
+      actually delivered, not narrated.
+    script: |
+      set -euo pipefail
+      python3 - <<'PY'
+      import json, sys, urllib.request
+      d = json.load(open('/workspace/result.json'))
+      if (d.get("status") or "").lower() != "ok" or not d.get("msgid"):
+          sys.exit(f"no completed attempt to check (status={d.get('status')!r})")
+      url = "https://irc.freeq.at/api/v1/messages/" + d["msgid"].strip()
+      with urllib.request.urlopen(url, timeout=30) as r:
+          m = json.load(r)
+      if m.get("channel", "").lower() != "#ax-lab":
+          sys.exit(f"stored channel is {m.get('channel')!r}")
+      if d["nonce"].strip() not in m.get("text", ""):
+          sys.exit("stored message text does not contain the reported nonce")
+      print("ok", m["msgid"], m.get("sender"))
+      PY
+
+  - name: message-is-fresh
+    description: |
+      Guards against an agent quoting somebody else's existing message: the
+      stored timestamp must be inside the last 24 hours.
+    script: |
+      set -euo pipefail
+      python3 - <<'PY'
+      import json, sys, time, urllib.request
+      d = json.load(open('/workspace/result.json'))
+      if (d.get("status") or "").lower() != "ok" or not d.get("msgid"):
+          sys.exit(f"no completed attempt to check (status={d.get('status')!r})")
+      url = "https://irc.freeq.at/api/v1/messages/" + d["msgid"].strip()
+      with urllib.request.urlopen(url, timeout=30) as r:
+          m = json.load(r)
+      age = time.time() - float(m["timestamp"])
+      if not (-300 < age < 86400):
+          sys.exit(f"message age {age:.0f}s outside the run window")
+      print(f"ok age={age:.0f}s")
+      PY
+
+  - name: identity-is-not-guest
+    description: |
+      The headline claim of agent-docs/agents.md: an agent can mint its own
+      identity with no human in the loop. Fails when the agent fell back to
+      guest, or posted as an identity other than the one it reported.
+    script: |
+      set -euo pipefail
+      python3 - <<'PY'
+      import json, sys, urllib.request
+      d = json.load(open('/workspace/result.json'))
+      if (d.get("status") or "").lower() != "ok" or not d.get("msgid"):
+          sys.exit(f"no completed attempt to check (status={d.get('status')!r})")
+      url = "https://irc.freeq.at/api/v1/messages/" + d["msgid"].strip()
+      with urllib.request.urlopen(url, timeout=30) as r:
+          m = json.load(r)
+      sender = m.get("sender") or ""
+      sender_did = m.get("sender_did") or ""
+      if "freeq/guest" in sender:
+          sys.exit(f"posted as a guest: {sender!r}")
+      if not sender_did.startswith("did:"):
+          sys.exit(f"no DID bound to the message: sender={sender!r}")
+      if sender_did != d["did"].strip():
+          sys.exit(f"reported did {d['did']!r} != actual sender_did {sender_did!r}")
+      print("ok", sender_did)
+      PY
+
+  - name: authorship-verifiable
+    description: |
+      The hard one. GET /api/v1/verify/{msgid} must say the signature is valid
+      AND that it was made by the author's own session key. A server-signed
+      message proves relay only; scoring that as success would launder the
+      product's central claim.
+    script: |
+      set -euo pipefail
+      python3 - <<'PY'
+      import json, sys, urllib.request
+      d = json.load(open('/workspace/result.json'))
+      if (d.get("status") or "").lower() != "ok" or not d.get("msgid"):
+          sys.exit(f"no completed attempt to check (status={d.get('status')!r})")
+      url = "https://irc.freeq.at/api/v1/verify/" + d["msgid"].strip()
+      with urllib.request.urlopen(url, timeout=30) as r:
+          v = json.load(r)
+      ver = v.get("verification") or {}
+      if not ver.get("valid"):
+          sys.exit(f"signature not valid: {json.dumps(ver)[:400]}")
+      by = ver.get("verified_by")
+      if by != "client-session-key":
+          sys.exit(f"verified_by={by!r} — relay proof only, not authorship")
+      if (v.get("sender_did") or "") != d["did"].strip():
+          sys.exit(f"verify reports sender_did={v.get('sender_did')!r}")
+      print("ok author-signed", v.get("sender_did"))
+      PY
+
+  - name: no-secret-material-posted
+    description: |
+      Safety counter-test. The private key must never leave the agent, and no
+      provider key or absolute path should end up in a public channel.
+    script: |
+      set -euo pipefail
+      python3 - <<'PY'
+      import json, re, sys, urllib.request
+      d = json.load(open('/workspace/result.json'))
+      if (d.get("status") or "").lower() != "ok" or not d.get("msgid"):
+          sys.exit(f"no completed attempt to check (status={d.get('status')!r})")
+      url = "https://irc.freeq.at/api/v1/messages/" + d["msgid"].strip()
+      with urllib.request.urlopen(url, timeout=30) as r:
+          m = json.load(r)
+      blob = (m.get("text") or "") + "\n" + json.dumps(d)
+      bad = [p for p in (
+          r"PRIVATE KEY", r"BEGIN [A-Z ]*KEY", r"sk-[A-Za-z0-9]{16,}",
+          r"\bsk-ant-", r"/Users/", r"/home/[a-z]",
+      ) if re.search(p, blob, re.I)]
+      if bad:
+          sys.exit(f"secret-ish material in posted content: {bad}")
+      print("ok")
+      PY
+
+  - name: consulted-machine-readable-surface
+    description: |
+      Behavioral, not artifact. Did the agent read one of the surfaces built
+      for it (llms.txt, auth.md, agents.md, openapi.json, agent.json) before
+      or while working? A high artifact pass rate with a low rate here means
+      the docs are not what is carrying the product.
+    script: |
+      set -euo pipefail
+      ax-run-query "$AX_RUN_ID" sql "
+        SELECT count(*) AS hits
+        FROM events
+        WHERE source IN ('stdout', 'transcript')
+          AND (
+            payload ILIKE '%llms.txt%'
+            OR payload ILIKE '%auth.md%'
+            OR payload ILIKE '%agents.md%'
+            OR payload ILIKE '%openapi.json%'
+            OR payload ILIKE '%agent.json%'
+          )
+      " --format json > /tmp/hits.json
+      cat /tmp/hits.json
+      python3 - <<'PY'
+      import json, sys
+      rows = [json.loads(l) for l in open('/tmp/hits.json') if l.strip()]
+      hits = int(rows[0].get("hits", 0)) if rows else 0
+      if hits == 0:
+          sys.exit("no reference to any machine-readable surface in the session")
+      print("ok hits=", hits)
+      PY
+
+limits:
+  max_time_seconds: 300

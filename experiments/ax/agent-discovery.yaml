@@ -1,0 +1,236 @@
+# yaml-language-server: $schema=https://docs.514.ax/schema/experiment.v2.schema.yaml
+schema_version: 2
+id: freeq-agent-discovery
+name: "freeq discoverability: is it in the consideration set at all?"
+description: |
+  Research question: When an agent is asked to pick a mechanism for two
+  agents owned by different people to exchange verifiable, durable messages,
+  how often is freeq considered, and how often is it selected? What is it
+  losing to?
+
+  Measure: pass rate of freeq-considered (named anywhere in the session) and
+  freeq-selected (named in the `## Decision` section of decision.md), sliced by
+  promptId. `alternatives-named` and `freeq-docs-fetched` are diagnostic, not
+  goals: alternatives-named tells us the competitive set, freeq-docs-fetched
+  tells us whether a choice was research or memory. `verification-question-
+  answered` checks the decision actually addresses third-party verification —
+  the axis on which freeq is supposed to win.
+
+  Bet:
+  - generic: freeq considered ~0%. Winner will be Matrix, then a webhook/queue,
+    then XMPP/Nostr.
+  - verifiable: still near 0% unless the agent searches; signing requirements
+    push toward Matrix + manual signatures, or Nostr, not toward freeq.
+  - named-in-shortlist: high selection, because the requirement text is
+    basically freeq's abstract. If selection is NOT high here, the problem is
+    not discovery at all — it is that the pitch does not survive contact with
+    a skeptical reader, which is a much more expensive problem.
+  - Very few runs will fetch freeq's own docs before deciding. Selection, when
+    it happens, will be from the prompt, not from research.
+
+agents: [claude, codex]
+models:
+  - name: claude-sonnet-4-6
+    effort: medium
+  - name: gpt-5.2-codex
+    effort: medium
+
+prompts:
+  - id: generic
+    tags: ["ask:generic"]
+    prompt: |
+      Two coding agents, owned by different people and running on different
+      machines, need to exchange messages with each other.
+
+      Choose a mechanism. Do not build it. Write `/workspace/decision.md` with
+      exactly these three sections:
+
+      ```markdown
+      ## Decision
+      <the one mechanism you would use, named in the first sentence>
+
+      ## Alternatives considered
+      <the other candidates, one per line, and why each lost>
+
+      ## How the receiver verifies the sender
+      <concretely, how side B establishes that a message really came from side A>
+      ```
+
+  - id: verifiable
+    tags: ["ask:verifiable"]
+    prompt: |
+      Two coding agents, owned by different people and running on different
+      machines, need to exchange messages with each other.
+
+      Requirements:
+      - A third party who trusts neither agent must be able to verify, later,
+        who wrote a given message.
+      - The conversation must be durable and readable after the fact, by
+        someone who was not present when it happened.
+      - Each agent must be able to obtain its own identity without a human
+        filling in a signup form.
+
+      Choose a mechanism. Do not build it. Write `/workspace/decision.md` with
+      exactly these three sections:
+
+      ```markdown
+      ## Decision
+      <the one mechanism you would use, named in the first sentence>
+
+      ## Alternatives considered
+      <the other candidates, one per line, and why each lost>
+
+      ## How the receiver verifies the sender
+      <concretely, how side B establishes that a message really came from side A>
+      ```
+
+  - id: named-in-shortlist
+    tags: ["ask:named"]
+    prompt: |
+      Two coding agents, owned by different people and running on different
+      machines, need to exchange messages with each other.
+
+      Requirements:
+      - A third party who trusts neither agent must be able to verify, later,
+        who wrote a given message.
+      - The conversation must be durable and readable after the fact, by
+        someone who was not present when it happened.
+      - Each agent must be able to obtain its own identity without a human
+        filling in a signup form.
+
+      Candidates to evaluate, in no particular order: Matrix, XMPP, Nostr, a
+      shared webhook endpoint, freeq (`https://irc.freeq.at`, docs at
+      `https://freeq.at/llms.txt`).
+
+      Choose one. Do not build it. Write `/workspace/decision.md` with exactly
+      these three sections:
+
+      ```markdown
+      ## Decision
+      <the one mechanism you would use, named in the first sentence>
+
+      ## Alternatives considered
+      <the other candidates, one per line, and why each lost>
+
+      ## How the receiver verifies the sender
+      <concretely, how side B establishes that a message really came from side A>
+      ```
+
+environments:
+  - name: blank
+    description: Empty workspace, network available, no hints on disk.
+    setup: "true"
+
+tests:
+  - name: decision-file-shape
+    description: decision.md exists with all three required sections.
+    script: |
+      set -euo pipefail
+      test -s /workspace/decision.md
+      for h in '## Decision' '## Alternatives considered' '## How the receiver verifies the sender'; do
+        grep -qiF "$h" /workspace/decision.md || { echo "missing section: $h"; exit 1; }
+      done
+
+  - name: freeq-selected
+    description: |
+      freeq is named in the Decision section. This is the number that matters;
+      everything else in this experiment explains it.
+    script: |
+      set -euo pipefail
+      python3 - <<'PY'
+      import re, sys
+      md = open('/workspace/decision.md', encoding='utf-8', errors='replace').read()
+      m = re.search(r'^##\s*Decision\s*$(.*?)(?=^##\s|\Z)', md, re.M | re.S | re.I)
+      if not m:
+          sys.exit("no Decision section")
+      body = m.group(1)
+      if not re.search(r'\bfreeq\b', body, re.I):
+          sys.exit("Decision section does not name freeq:\n" + body.strip()[:400])
+      print("ok")
+      PY
+
+  - name: freeq-considered
+    description: |
+      freeq appears anywhere in the agent's session or its write-up. Consideration
+      without selection is a positioning problem; no consideration at all is a
+      distribution problem. They get fixed in different places.
+    script: |
+      set -euo pipefail
+      if grep -qi 'freeq' /workspace/decision.md; then echo "ok (in decision.md)"; exit 0; fi
+      ax-run-query "$AX_RUN_ID" sql "
+        SELECT count(*) AS hits
+        FROM events
+        WHERE source IN ('stdout', 'transcript') AND payload ILIKE '%freeq%'
+      " --format json > /tmp/hits.json
+      cat /tmp/hits.json
+      python3 - <<'PY'
+      import json, sys
+      rows = [json.loads(l) for l in open('/tmp/hits.json') if l.strip()]
+      if not rows or int(rows[0].get("hits", 0)) == 0:
+          sys.exit("freeq never mentioned")
+      print("ok hits=", rows[0]["hits"])
+      PY
+
+  - name: freeq-docs-fetched
+    description: |
+      Diagnostic: was the choice research or memory? Looks for a fetch of
+      freeq.at / irc.freeq.at / llms.txt in the session.
+    script: |
+      set -euo pipefail
+      ax-run-query "$AX_RUN_ID" sql "
+        SELECT count(*) AS hits
+        FROM events
+        WHERE source IN ('stdout', 'transcript')
+          AND (payload ILIKE '%irc.freeq.at%' OR payload ILIKE '%freeq.at/llms.txt%')
+      " --format json > /tmp/fetch.json
+      cat /tmp/fetch.json
+      python3 - <<'PY'
+      import json, sys
+      rows = [json.loads(l) for l in open('/tmp/fetch.json') if l.strip()]
+      if not rows or int(rows[0].get("hits", 0)) == 0:
+          sys.exit("no freeq endpoint referenced — decision came from memory or from the prompt")
+      print("ok hits=", rows[0]["hits"])
+      PY
+
+  - name: alternatives-named
+    description: |
+      Diagnostic: who is actually in the room. Requires at least two non-freeq
+      candidates from the known competitive set to be named.
+    script: |
+      set -euo pipefail
+      python3 - <<'PY'
+      import re, sys
+      md = open('/workspace/decision.md', encoding='utf-8', errors='replace').read().lower()
+      cands = ["matrix", "xmpp", "nostr", "webhook", "activitypub", "nats", "mqtt",
+               "redis", "rabbitmq", "kafka", "sqs", "slack", "discord", "irc",
+               "email", "smtp", "git", "s3", "grpc", "websocket", "libp2p", "iroh"]
+      found = sorted({c for c in cands if re.search(r'\b' + c + r'\b', md)})
+      print("competitive set:", found)
+      if len(found) < 2:
+          sys.exit(f"only {len(found)} alternatives named")
+      PY
+
+  - name: verification-question-answered
+    description: |
+      Does the write-up actually answer third-party verification, in the terms
+      the requirement was posed in? Keyword-level, deliberately generous.
+    script: |
+      set -euo pipefail
+      python3 - <<'PY'
+      import re, sys
+      md = open('/workspace/decision.md', encoding='utf-8', errors='replace').read()
+      m = re.search(r'^##\s*How the receiver verifies the sender\s*$(.*?)(?=^##\s|\Z)',
+                    md, re.M | re.S | re.I)
+      if not m or len(m.group(1).strip()) < 80:
+          sys.exit("verification section missing or trivially short")
+      body = m.group(1).lower()
+      terms = ["signature", "sign", "public key", "keypair", "ed25519", "did",
+               "certificate", "pgp", "gpg", "hmac", "mac", "attest"]
+      hit = [t for t in terms if t in body]
+      if not hit:
+          sys.exit("verification section names no cryptographic mechanism:\n" + body[:400])
+      print("ok", hit)
+      PY
+
+limits:
+  max_time_seconds: 300

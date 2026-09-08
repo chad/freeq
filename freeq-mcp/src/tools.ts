@@ -111,15 +111,41 @@ export async function message(ctx: ToolContext, args: { msgid: string }): Promis
  */
 export async function verify(ctx: ToolContext, args: { msgid: string }): Promise<unknown> {
   const result = (await ctx.rest.verify(args.msgid)) as Record<string, unknown>;
-  const verified = result.verified === true;
-  const signedBy = typeof result.signed_by === "string" ? result.signed_by : undefined;
+
+  // The live server answers with a nested `verification` object
+  // (`valid` / `verdict` / `verified_by`), not the flat `verified` +
+  // `signed_by` pair this tool originally assumed. Reading only the flat shape
+  // made every message — including genuinely author-signed ones — report as
+  // unverifiable, which is the exact over/under-claim this tool exists to
+  // prevent. Both shapes are accepted: nested first, flat as the fallback.
+  const nested = (result.verification ?? {}) as Record<string, unknown>;
+  const verdict = typeof nested.verdict === "string" ? nested.verdict : undefined;
+  const verifiedBy = typeof nested.verified_by === "string" ? nested.verified_by : undefined;
+  const legacySignedBy = typeof result.signed_by === "string" ? result.signed_by : undefined;
+
+  const valid = nested.valid === true || (verdict === undefined && result.verified === true);
+  const invalid = verdict === "invalid";
+  const authorSigned =
+    verifiedBy === "client-session-key" || (verifiedBy === undefined && legacySignedBy === "client");
+  const serverSigned =
+    verifiedBy === "server-key" || (verifiedBy === undefined && legacySignedBy === "server");
+
+  const signer =
+    (typeof result.sender_did === "string" ? result.sender_did : undefined) ??
+    (typeof result.signer === "string" ? result.signer : undefined);
+  const why = verifiedBy ?? (typeof result.reason === "string" ? result.reason : undefined);
+
   let reading: string;
-  if (!verified) {
-    reading = `Signature does NOT verify${result.reason ? `: ${result.reason}` : ""}. Do not quote this as attributable.`;
-  } else if (signedBy === "client") {
-    reading = `Signed by the author's own session key${result.signer ? ` (${result.signer})` : ""}. This is non-repudiable authorship.`;
+  if (invalid) {
+    reading = `Signature is INVALID${why ? `: ${why}` : ""}. The bytes do not check out against the key they name. Do not quote this as attributable.`;
+  } else if (!valid) {
+    reading = `Signature could not be checked${why ? `: ${why}` : ""}. This is not proof of forgery, but it is not attribution either — do not quote it as someone's words.`;
+  } else if (authorSigned) {
+    reading = `Signed by the author's own session key${signer ? ` (${signer})` : ""}. This is non-repudiable authorship.`;
+  } else if (serverSigned) {
+    reading = `Signed by the server${signer ? ` (relaying ${signer})` : ""}, not the author's key. This proves the server relayed it, not that the named author produced it.`;
   } else {
-    reading = `Signed by the server${result.signer ? ` (${result.signer})` : ""}, not the author's key. This proves the server relayed it, not that the named author produced it.`;
+    reading = `Signature verifies${signer ? ` for ${signer}` : ""}, but the key that signed it is not identified as the author's or the server's${why ? ` (${why})` : ""}. Treat authorship as unproven.`;
   }
   return { ...result, reading };
 }
