@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 /**
- * Chat markdown keeps the line breaks the sender typed.
+ * Chat markdown keeps the line breaks the sender typed, and renders
+ * @nick / #channel the way the plain-text path does.
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
@@ -38,5 +39,33 @@ describe('MarkdownMessage', () => {
     );
     expect(container.querySelector('table')).not.toBeNull();
     expect(container.querySelectorAll('td')).toHaveLength(2);
+  });
+
+  // @nick / #channel — same spans the plain-text path renders
+  // (MessageList's 'mention' and 'channel' segments: a
+  // `button.text-accent.hover:underline.font-medium` holding the token).
+  const entities = (c: HTMLElement) =>
+    [...c.querySelectorAll('button.text-accent.font-medium')].map((b) => b.textContent);
+
+  it('renders a mention and a channel link in markdown text', () => {
+    const { container } = render(<MarkdownMessage text="hello @alice and #general" />);
+    expect(entities(container)).toEqual(['@alice', '#general']);
+  });
+
+  it('leaves a mention inside a code span alone', () => {
+    const { container } = render(<MarkdownMessage text="try `@alice` here" />);
+    expect(entities(container)).toEqual([]);
+    expect(container.querySelector('code')?.textContent).toBe('@alice');
+  });
+
+  it('leaves a mention inside a fenced code block alone', () => {
+    const { container } = render(<MarkdownMessage text={'```sh\nping @alice\n```'} />);
+    expect(entities(container)).toEqual([]);
+    expect(container.querySelector('pre code')?.textContent).toBe('ping @alice\n');
+  });
+
+  it('does not treat an email address as a mention', () => {
+    const { container } = render(<MarkdownMessage text="write to me@example.com" />);
+    expect(entities(container)).toEqual([]);
   });
 });

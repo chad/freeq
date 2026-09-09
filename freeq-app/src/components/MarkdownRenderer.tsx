@@ -4,11 +4,12 @@
  * Uses react-markdown (remark AST → React elements, no innerHTML).
  * Only allows safe URL schemes. Raw HTML is disabled.
  */
-import { memo } from 'react';
+import { memo, useMemo, Children } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import type { Components } from 'react-markdown';
+import { splitEntities, MentionSpan, ChannelSpan, type RenderCtx } from './messageEntities';
 
 const ALLOWED_URL_SCHEMES = /^https?:\/\//i;
 
@@ -19,6 +20,53 @@ function sanitizeUrl(url: string | undefined): string | undefined {
   // Allow relative URLs and anchors
   if (url.startsWith('/') || url.startsWith('#')) return url;
   return undefined;
+}
+
+/** The mdast shape this plugin touches. */
+interface MdNode {
+  type: string;
+  value?: string;
+  children?: MdNode[];
+  data?: { hName?: string };
+}
+
+/**
+ * Split @nick / #channel out of text nodes so the markdown path renders them
+ * as the same interactive spans the plain-text path uses. Code carries its
+ * content as a value rather than text children, so code spans and fenced
+ * blocks are untouched; link children are skipped so markdown's own links
+ * stay whole.
+ */
+function remarkFreeqEntities() {
+  return (tree: MdNode) => splitEntityNodes(tree);
+}
+
+function splitEntityNodes(node: MdNode): void {
+  if (!node.children) return;
+  if (node.type === 'link' || node.type === 'linkReference') return;
+  const out: MdNode[] = [];
+  for (const child of node.children) {
+    if (child.type === 'text' && typeof child.value === 'string') {
+      for (const seg of splitEntities(child.value)) {
+        out.push(seg.type === 'text'
+          ? { type: 'text', value: seg.content }
+          : {
+              type: 'freeqEntity',
+              children: [{ type: 'text', value: seg.content }],
+              data: { hName: seg.type === 'mention' ? 'freeq-mention' : 'freeq-channel' },
+            });
+      }
+      continue;
+    }
+    splitEntityNodes(child);
+    out.push(child);
+  }
+  node.children = out;
+}
+
+/** The token an entity element wraps, e.g. "@alice". */
+function tokenOf(children: React.ReactNode): string {
+  return Children.toArray(children).map((c) => (typeof c === 'string' ? c : '')).join('');
 }
 
 const components: Components = {
@@ -110,14 +158,31 @@ const components: Components = {
 
 interface Props {
   text: string;
+  /** Channel the message is in — resolves a mention's DID from the roster. */
+  channel?: string;
+  onNickClick?: RenderCtx['onNickClick'];
 }
 
-export const MarkdownMessage = memo(function MarkdownMessage({ text }: Props) {
+export const MarkdownMessage = memo(function MarkdownMessage({ text, channel, onNickClick }: Props) {
+  const withEntities = useMemo(() => {
+    const ctx: RenderCtx = { channel, onNickClick };
+    return {
+      ...components,
+      'freeq-mention': ({ children }: { children?: React.ReactNode }) => {
+        const token = tokenOf(children);
+        return <MentionSpan display={token} nick={token.replace(/^@/, '')} ctx={ctx} />;
+      },
+      'freeq-channel': ({ children }: { children?: React.ReactNode }) => (
+        <ChannelSpan name={tokenOf(children)} />
+      ),
+    } as Components;
+  }, [channel, onNickClick]);
+
   return (
     <div className="text-[15px] leading-relaxed [&_pre]:my-1 [&_a]:break-all markdown-message">
       <Markdown
-        remarkPlugins={[remarkGfm, remarkBreaks]}
-        components={components}
+        remarkPlugins={[remarkGfm, remarkBreaks, remarkFreeqEntities]}
+        components={withEntities}
         // Disable raw HTML passthrough (XSS prevention)
         skipHtml
       >

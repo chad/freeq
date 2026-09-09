@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useState, useMemo, useLayoutEffect, mem
 import { createPortal } from 'react-dom';
 import { Virtualizer, type VirtualizerHandle } from 'virtua';
 import { useStore, uniqueMemberCount, MESSAGE_WINDOW, type Message, type PinnedMessage } from '../store';
-import { getNick, getClient, requestHistory, sendReaction, sendUnreact, joinChannel, type HistoryAnchor } from '../irc/client';
+import { getNick, getClient, requestHistory, sendReaction, sendUnreact, type HistoryAnchor } from '../irc/client';
 import { fetchProfile, getCachedProfile, type ATProfile } from '../lib/profiles';
 import { isDid, isPeerBlocked } from '../lib/identity';
 import { claimForMessage } from '@freeq/sdk';
@@ -15,6 +15,7 @@ import { BlueskyEmbed } from './BlueskyEmbed';
 import { LinkPreview } from './LinkPreview';
 import { MessageContextMenu } from './MessageContextMenu';
 import { MarkdownMessage } from './MarkdownRenderer';
+import { MENTION_RE, CHANNEL_RE, MentionSpan, ChannelSpan, type RenderCtx } from './messageEntities';
 import { CoordinationEventCard } from './CoordinationCards';
 import { ActEventCard, useActCompanion } from './ActCards';
 import { jumbomojiSize } from '../lib/jumbomoji';
@@ -120,8 +121,8 @@ function parseTextSegments(text: string): TextSegment[] {
     { re: /\*\*(.+?)\*\*/g, type: 'bold', group: 1 },
     { re: /(?<!\*)\*([^*]+)\*(?!\*)/g, type: 'italic', group: 1 },
     { re: /~~(.+?)~~/g, type: 'strike', group: 1 },
-    { re: /(?<![A-Za-z0-9])@([A-Za-z0-9][A-Za-z0-9._-]*)/g, type: 'mention', group: 1 },
-    { re: /(?<![\w/#])#([A-Za-z0-9][A-Za-z0-9._-]*)/g, type: 'channel', group: 1 },
+    { re: MENTION_RE, type: 'mention', group: 1 },
+    { re: CHANNEL_RE, type: 'channel', group: 1 },
   ];
 
   // Build a combined list of all matches with positions
@@ -204,12 +205,6 @@ function renderWithBreaks(text: string): React.ReactNode {
   ));
 }
 
-/** Context for making @nick / #channel spans interactive. */
-interface RenderCtx {
-  channel?: string;
-  onNickClick?: (nick: string, did: string | undefined, origin: string | undefined, e: React.MouseEvent, evidence?: RowEvidence) => void;
-}
-
 /** Render text segments as React elements (XSS-safe — no innerHTML). */
 function renderTextSafe(text: string, ctx?: RenderCtx): React.ReactElement {
   const segments = parseTextSegmentsCached(text);
@@ -228,31 +223,9 @@ function renderTextSafe(text: string, ctx?: RenderCtx): React.ReactElement {
             }
             return <a key={i} href={seg.href} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline break-all">{content}</a>;
           case 'mention':
-            return (
-              <button
-                key={i}
-                type="button"
-                className="text-accent hover:underline font-medium"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const nick = seg.value ?? content.replace(/^@/, '');
-                  // Resolve DID from the channel roster (impersonation-safe).
-                  const did = ctx?.channel
-                    ? useStore.getState().channels.get(ctx.channel.toLowerCase())?.members.get(nick.toLowerCase())?.did
-                    : undefined;
-                  ctx?.onNickClick?.(nick, did, undefined, e);
-                }}
-              >{content}</button>
-            );
+            return <MentionSpan key={i} display={content} nick={seg.value ?? content.replace(/^@/, '')} ctx={ctx} />;
           case 'channel':
-            return (
-              <button
-                key={i}
-                type="button"
-                className="text-accent hover:underline font-medium"
-                onClick={(e) => { e.stopPropagation(); joinChannel(seg.value ?? content); }}
-              >{content}</button>
-            );
+            return <ChannelSpan key={i} name={seg.value ?? content} />;
           case 'codeblock':
             return <pre key={i} className="bg-surface rounded px-2 py-1.5 my-1 text-[13px] font-mono overflow-x-auto whitespace-pre-wrap">{content.replace(/^\n|\n$/g, '')}</pre>;
           case 'code':
@@ -646,7 +619,7 @@ function MessageContentImpl({ msg, channel, onNickClick }: {
     return (
       <div className="mt-0.5">
         {msg.replyTo && <ReplyBadge msgId={msg.replyTo} />}
-        <MarkdownMessage text={msg.text} />
+        <MarkdownMessage text={msg.text} channel={channel} onNickClick={onNickClick} />
       </div>
     );
   }
