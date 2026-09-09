@@ -643,6 +643,14 @@ def register_agent_surfaces(app):
     def auth_md():
         return _repo_markdown("auth.md")
 
+    @app.route("/signing.md")
+    def signing_md():
+        # The page that turns a server-signed message into an author-signed
+        # one. Served here as well as on the IRC host because an agent that
+        # finds freeq through the site should not have to reach the server to
+        # learn the protocol its whole authorship claim rests on.
+        return _repo_markdown("signing.md")
+
     # Self-service enrollment, welcome-mat layout. Served from both hosts
     # because an agent that lands on the docs site should not have to guess
     # that enrollment happens on another hostname; the document itself uses

@@ -253,7 +253,7 @@ def test_the_sites_agent_docs_copy_has_not_drifted():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
-    for name in ("agents.md", "auth.md", "welcome.md", "tos.txt"):
+    for name in ("agents.md", "auth.md", "signing.md", "welcome.md", "tos.txt"):
         canonical = root / "agent-docs" / name
         shipped = root / "freeq-site" / "agent-docs" / name
         assert canonical.is_file(), f"missing canonical {name}"

@@ -287,7 +287,9 @@ async fn a_signing_key_offered_before_registration_is_still_filed() {
         let bytes =
             auth::decode_challenge_bytes(challenge_line.strip_prefix("AUTHENTICATE ").unwrap())
                 .unwrap();
-        let resp = KeySigner::new(DID_ALICE.to_string(), k).respond(&bytes).unwrap();
+        let resp = KeySigner::new(DID_ALICE.to_string(), k)
+            .respond(&bytes)
+            .unwrap();
         alice.tx(&format!("AUTHENTICATE {}", auth::encode_response(&resp)));
         alice.num("903");
         alice.tx(&format!("MSGSIG {pubkey}"));
