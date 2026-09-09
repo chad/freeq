@@ -162,6 +162,20 @@ export interface InboundAsk {
 const RECONNECT_INITIAL_MS = 2_000;
 const RECONNECT_MAX_MS = 60_000;
 
+/**
+ * How long to let the server's own auto-rejoin land before we re-JOIN.
+ *
+ * A DID-authenticated session gets its saved channel set restored at
+ * registration, and joining on top of that would be churn. But the saved set
+ * is not guaranteed - a PART (including our own "not this project's channel"
+ * PART), a kick, or a row that was never written leaves it empty, and then
+ * nobody joins anything and the agent is simply absent while every local
+ * surface still says online.
+ */
+const REJOIN_GRACE_MS = 3_000;
+/** One late sweep, for a server that restored slowly or not at all. */
+const REJOIN_SWEEP_MS = 15_000;
+
 export class FreeqConnection {
   #bot: BotLike | undefined;
   #state: ConnState = "offline";
@@ -188,6 +202,8 @@ export class FreeqConnection {
   #starting = false;
   #retry = RECONNECT_INITIAL_MS;
   #timer: NodeJS.Timeout | undefined;
+  /** Pending post-reconnect membership reconciliation timers. */
+  #rejoinTimers: NodeJS.Timeout[] = [];
   /** Notices are deduped: a flapping connection must not spam the TUI. */
   #noticed = new Set<string>();
   #asks = new AskRegistry((reason) => this.#opts.onNotice?.(`freeq ask: ${reason}`, "warning"));
@@ -374,10 +390,18 @@ export class FreeqConnection {
         if (s === "connected") {
           this.#goOnline();
           this.#noticed.delete("offline");
+          // Membership does not survive a socket. Whatever the server ends up
+          // restoring will re-announce itself through channelJoined; until
+          // then we are in nothing, and saying otherwise is how the footer
+          // kept listing channels an absent agent was not in.
+          this.#joined.clear();
+          this.#scheduleRejoin();
         } else if (s === "connecting") {
           if (this.#state === "online") this.#state = "connecting";
         } else if (s === "disconnected" && !this.#stopped) {
           this.#state = "connecting";
+          this.#joined.clear();
+          this.#clearRejoinTimers();
           this.#notice(
             "freeq: connection dropped — the transport is reconnecting; pi continues normally",
             "warning",
@@ -637,6 +661,59 @@ export class FreeqConnection {
     return this.#clean(text, target);
   }
 
+  /**
+   * After a reconnect, make sure we are actually in the channels we mean to
+   * be in.
+   *
+   * The transport recovers the socket and the server restores a
+   * DID-authenticated session's saved channel set, so for a long time this
+   * layer did nothing here on purpose. That holds right up until the saved set
+   * is empty — a PART, a kick, or a row that was never written — and then a
+   * server restart leaves the agent connected, authenticated, announced, and
+   * in no channels at all, which is indistinguishable from gone to everyone
+   * except the agent itself.
+   *
+   * So: wait for the server's own restore, then join whatever is still
+   * missing, then sweep once more. Both passes are no-ops when the restore
+   * worked, which is the common case.
+   */
+  #scheduleRejoin(): void {
+    this.#clearRejoinTimers();
+    for (const delay of [REJOIN_GRACE_MS, REJOIN_SWEEP_MS]) {
+      const t = setTimeout(() => this.#rejoinMissing(), delay);
+      t.unref?.();
+      this.#rejoinTimers.push(t);
+    }
+  }
+
+  #clearRejoinTimers(): void {
+    for (const t of this.#rejoinTimers) clearTimeout(t);
+    this.#rejoinTimers = [];
+  }
+
+  /** JOIN every wanted channel the server has not confirmed us into. */
+  #rejoinMissing(): void {
+    if (this.#stopped || !this.#bot || this.#state !== "online") return;
+    const missing = [...this.#wanted].filter(
+      // A refusal is a decision, not a gap: retrying a 477 in a loop would
+      // spam the server and never succeed without the operator's consent.
+      (c) => !this.#joined.has(c) && !this.#refused.has(c),
+    );
+    if (!missing.length) return;
+    for (const channel of missing) {
+      try {
+        this.#bot.client.join(channel);
+      } catch {
+        /* the socket went again; the next connect reschedules this */
+      }
+    }
+    this.#notice(
+      `freeq: rejoining after a reconnect — ${missing.join(", ")}`,
+      "info",
+      "rejoin",
+    );
+  }
+
   #clean(text: string, target: string): string {
     const { text: scrubbed, hits } = scrubOutbound(text);
     if (hits.length) this.#opts.onScrub?.(hits, target);
@@ -828,6 +905,7 @@ export class FreeqConnection {
   async stop(reason = "session end"): Promise<void> {
     this.#stopped = true;
     this.#asks.cancelAll("freeq connection closed");
+    this.#clearRejoinTimers();
     if (this.#timer) {
       clearTimeout(this.#timer);
       this.#timer = undefined;

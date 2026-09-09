@@ -167,6 +167,81 @@ describe("transport state handling (the churn regression)", () => {
     expect(conn.state).toBe("online");
   });
 
+  it("rejoins the channels it means to be in after a reconnect", async () => {
+    // The regression: the server restarted, every pi reconnected and
+    // authenticated in under a second — and joined nothing, because this
+    // layer trusted the server's saved-channel restore and the saved set was
+    // empty. Connected, announced, and absent from every room.
+    vi.useFakeTimers();
+    try {
+      const { conn, bot } = mk();
+      await conn.start();
+      bot.emit("channelJoined", "#work");
+      expect(conn.joinedChannels()).toEqual(["#work"]);
+
+      bot.emit("connectionStateChanged", "disconnected");
+      // Membership did not survive the socket, and claiming otherwise is what
+      // kept the footer listing rooms the agent was not in.
+      expect(conn.joinedChannels()).toEqual([]);
+
+      const before = bot.sent.filter((s) => s.kind === "join").length;
+      bot.emit("connectionStateChanged", "connected");
+      await vi.advanceTimersByTimeAsync(4_000);
+      const joins = bot.sent.filter((s) => s.kind === "join" && s.target === "#work");
+      expect(joins.length).toBe(before + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not rejoin what the server already restored", async () => {
+    vi.useFakeTimers();
+    try {
+      const { conn, bot } = mk();
+      await conn.start();
+      bot.emit("connectionStateChanged", "disconnected");
+      bot.emit("connectionStateChanged", "connected");
+      // The server's own auto-rejoin lands inside the grace window.
+      bot.emit("channelJoined", "#work");
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(bot.sent.filter((s) => s.kind === "join" && s.target === "#work")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry a channel the server refused", async () => {
+    // A 477 is a decision with a remedy the operator has to perform. Retrying
+    // it every reconnect is a loop that never succeeds.
+    vi.useFakeTimers();
+    try {
+      const { conn, bot } = mk();
+      await conn.start();
+      bot.emit("joinRejected", "#work", "477", "policy");
+      bot.emit("connectionStateChanged", "disconnected");
+      bot.emit("connectionStateChanged", "connected");
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(bot.sent.filter((s) => s.kind === "join" && s.target === "#work")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops rejoining once the session is stopped", async () => {
+    vi.useFakeTimers();
+    try {
+      const { conn, bot } = mk();
+      await conn.start();
+      bot.emit("connectionStateChanged", "disconnected");
+      bot.emit("connectionStateChanged", "connected");
+      await conn.stop("done");
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(bot.sent.filter((s) => s.kind === "join")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reports a drop once, not on every flap", async () => {
     const { conn, bot, notices } = mk();
     await conn.start();
