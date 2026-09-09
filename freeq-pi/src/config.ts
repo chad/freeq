@@ -100,6 +100,15 @@ export interface FreeqConfig {
   offerTtlSecs: number;
   /** How often an in-flight task emits a `progress` heartbeat. */
   progressIntervalSecs: number;
+  /**
+   * How often a turn that came from freeq posts a live progress line back
+   * into the channel that asked. 0 turns it off.
+   *
+   * Distinct from `progressIntervalSecs`, which is the heartbeat on a formal
+   * task. This one covers the ordinary case: somebody asked a question in a
+   * room and the answer takes ten minutes.
+   */
+  updateIntervalSecs: number;
   /** How long an in-flight task may go without model activity before it fails. */
   stallSecs: number;
   /** How many assigned tasks a restart re-enters at once. */
@@ -111,6 +120,8 @@ export const DEFAULT_SERVER = "wss://irc.freeq.at/irc";
 /** Resilience defaults, named so tests and help text quote one source. */
 export const DEFAULT_OFFER_TTL_SECS = 1800;
 export const DEFAULT_PROGRESS_INTERVAL_SECS = 120;
+/** Live progress into the asking channel. Chat tolerates less than presence. */
+export const DEFAULT_UPDATE_INTERVAL_SECS = 60;
 export const DEFAULT_STALL_SECS = 900;
 export const DEFAULT_MAX_RESUME = 3;
 
@@ -127,6 +138,7 @@ export function defaultConfig(): FreeqConfig {
     autoAcceptWhenIdle: true,
     offerTtlSecs: DEFAULT_OFFER_TTL_SECS,
     progressIntervalSecs: DEFAULT_PROGRESS_INTERVAL_SECS,
+    updateIntervalSecs: DEFAULT_UPDATE_INTERVAL_SECS,
     stallSecs: DEFAULT_STALL_SECS,
     maxResume: DEFAULT_MAX_RESUME,
   };
@@ -185,6 +197,11 @@ export function normalizeConfig(raw: unknown): FreeqConfig {
   // of 0 would fail every task the instant it started.
   base.offerTtlSecs = duration(o.offerTtlSecs, base.offerTtlSecs);
   base.progressIntervalSecs = duration(o.progressIntervalSecs, base.progressIntervalSecs);
+  // Zero is meaningful here (off), so it cannot go through `duration`, which
+  // treats a non-positive number as "keep the default".
+  if (typeof o.updateIntervalSecs === "number" && o.updateIntervalSecs >= 0) {
+    base.updateIntervalSecs = o.updateIntervalSecs;
+  }
   base.stallSecs = duration(o.stallSecs, base.stallSecs);
   base.maxResume = count(o.maxResume, base.maxResume);
   base.channels = normalizeChannels(o.channels);

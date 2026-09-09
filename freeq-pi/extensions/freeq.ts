@@ -38,6 +38,7 @@ import { authorizeInstructions, creatorKeyPath, interpretProvenanceNotice } from
 import { McpStdioClient } from "../src/mcp-stdio.js";
 import { addressedUtterances, parseListenResult, toBridgeCall, type AvParams } from "../src/av.js";
 import { parseVerbositySteer } from "../src/steer.js";
+import { nextUpdate, type ProgressState } from "../src/progress.js";
 import { gistOf, renderStatus, toolDetail } from "../src/status.js";
 import {
   footerLine,
@@ -328,6 +329,54 @@ export default function (pi: ExtensionAPI): void {
   let stepTimer: NodeJS.Timeout | undefined;
   /** Task id we're working, if this turn came from a handoff. */
   let workTask: string | undefined;
+  /**
+   * The channel that asked for what we are doing now, if a room asked at all.
+   *
+   * A turn started by someone typing in the terminal has no such channel and
+   * must stay silent: nobody in a room asked, so nobody in a room is owed a
+   * progress report.
+   */
+  let askingChannel: string | undefined;
+  /** Timer and memory for the live progress line. See src/progress.ts. */
+  let updateTimer: NodeJS.Timeout | undefined;
+  let updateState: ProgressState = {};
+
+  /**
+   * Post a progress line into the room that asked, if there is one and if
+   * there is anything new to say. Silence is the default; `nextUpdate` owns
+   * the rules.
+   */
+  function tickUpdate(cfg: FreeqConfig): void {
+    if (!askingChannel || !conn || conn.state !== "online") return;
+    if (cfg.muted || !cfg.enabled) return;
+    const intervalMs = (cfg.updateIntervalSecs ?? 0) * 1000;
+    if (intervalMs <= 0) return;
+    const out = nextUpdate(updateState, step, Date.now(), { intervalMs });
+    if (!out) return;
+    updateState = out.state;
+    try {
+      conn.send(askingChannel, out.text);
+    } catch {
+      /* a progress line is a courtesy; never let it disturb the turn */
+    }
+  }
+
+  function startUpdates(cfg: FreeqConfig, channel: string): void {
+    askingChannel = channel;
+    updateState = {};
+    const intervalMs = (cfg.updateIntervalSecs ?? 0) * 1000;
+    if (updateTimer || intervalMs <= 0) return;
+    updateTimer = setInterval(() => tickUpdate(cfg), intervalMs);
+    updateTimer.unref?.();
+  }
+
+  function stopUpdates(): void {
+    askingChannel = undefined;
+    updateState = {};
+    if (!updateTimer) return;
+    clearInterval(updateTimer);
+    updateTimer = undefined;
+  }
   /** Coalesce rapid tool-call updates — presence is not a debug log. */
   let lastStatusPush = 0;
 
@@ -887,6 +936,10 @@ export default function (pi: ExtensionAPI): void {
     if (expectsReply) {
       const venue = ev.channel.startsWith("#") ? ` in ${ev.channel}` : "";
       beginStep(`answering ${ev.from}${venue}`);
+      // Somebody in a room is now waiting. pi narrates every step of this in
+      // the terminal; without this the room gets one line, whenever the turn
+      // happens to end. A DM answers to the sender, a channel to the channel.
+      startUpdates(cfg, ev.channel);
     }
     const framed = frameInbound(ev, { expectsReply });
 
@@ -1429,6 +1482,7 @@ export default function (pi: ExtensionAPI): void {
     // Back to available. Clearing the step matters: a stale "working on X"
     // is worse than no status at all.
     endStep();
+    stopUpdates();
     workTask = undefined;
     pushStatus("active", undefined, undefined, true);
 
