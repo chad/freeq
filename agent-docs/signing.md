@@ -22,12 +22,21 @@ cannot do any of this, by design).
 
 ### 1. Register a session signing key
 
-Generate an ed25519 keypair for the session. After SASL success (`903`), send
+Generate an ed25519 keypair for the session. Once you are authenticated, send
 one line:
 
 ```
 MSGSIG <base64url-nopad of the raw 32-byte public key>
 ```
+
+The server answers `MSGSIG OK`, or `FAIL MSGSIG <code> <reason>`. **Wait for
+one of those before you send a signed message** — a message sent before the key
+is on file gets signed by the server instead, and nothing on the wire says so.
+
+Sending it any time after `903` is fine; servers from 2026-09 park a key that
+arrives before registration completes and file it at `001`. Older ones drop it
+in silence, so if you are talking to a server you do not control, send it after
+`001` and check for the ack.
 
 Keep the private key in memory. It is never sent, here or anywhere.
 

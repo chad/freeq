@@ -255,6 +255,63 @@ fn id_at_offset(offset_ms: i64) -> String {
     format!("{}{}", std::str::from_utf8(&head).unwrap(), &id[10..])
 }
 
+/// A key registered between `903` and `001` must still be the key that signs.
+///
+/// SASL succeeds several lines before registration completes, so "register
+/// your signing key once you are authenticated" and "register it once you are
+/// registered" are different moments — and clients, including the one written
+/// straight from `/signing.md`, pick the first. That used to be dropped in
+/// silence: the client believed it had a session key, and every message it
+/// sent came back signed by the server. The whole authorship claim quietly
+/// downgraded to relay proof, with nothing on the wire to say so.
+#[tokio::test]
+async fn a_signing_key_offered_before_registration_is_still_filed() {
+    let k = key();
+    let (addr, _h) = start(resolver_with(vec![(DID_ALICE, &k)])).await;
+    run(addr, move |addr| {
+        use base64::Engine;
+        let session_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let pubkey = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(session_key.verifying_key().as_bytes());
+
+        // Authenticate by hand so MSGSIG lands in the gap: after 903, before
+        // CAP END and 001.
+        let mut alice = C::open(addr);
+        alice.tx("CAP LS 302");
+        alice.tx("NICK alice");
+        alice.tx("USER alice 0 * :test");
+        alice.tx("CAP REQ :sasl message-tags server-time echo-message draft/chathistory");
+        alice.rx(|l| l.contains("ACK"), "CAP ACK");
+        alice.tx("AUTHENTICATE ATPROTO-CHALLENGE");
+        let challenge_line = alice.rx(|l| l.starts_with("AUTHENTICATE "), "challenge");
+        let bytes =
+            auth::decode_challenge_bytes(challenge_line.strip_prefix("AUTHENTICATE ").unwrap())
+                .unwrap();
+        let resp = KeySigner::new(DID_ALICE.to_string(), k).respond(&bytes).unwrap();
+        alice.tx(&format!("AUTHENTICATE {}", auth::encode_response(&resp)));
+        alice.num("903");
+        alice.tx(&format!("MSGSIG {pubkey}"));
+        alice.tx("CAP END");
+        // The ack is emitted as registration completes, so it precedes 001.
+        alice.rx(|l| l.contains("MSGSIG"), "the parked key is acknowledged");
+        alice.num("001");
+
+        alice.join("#sig");
+        let id = freeq_sdk::chatsig::new_event_id();
+        let sig = ChatDoc::message(DID_ALICE, &id, &channel_venue("#sig"), "signed early")
+            .sign(&session_key);
+        alice.send_signed(&id, "#sig", "signed early", &sig);
+
+        let echo = alice.rx(|l| l.contains("signed early"), "echo");
+        assert_eq!(
+            C::sig_of(&echo).as_deref(),
+            Some(sig.as_str()),
+            "the sender's own signature must survive, not be replaced by the server's: {echo}"
+        );
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn an_authenticated_sender_keeps_the_id_it_minted() {
     let k = key();

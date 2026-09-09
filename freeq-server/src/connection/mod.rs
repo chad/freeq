@@ -136,6 +136,59 @@ impl std::str::FromStr for ActorClass {
     }
 }
 
+/// File a client's session message-signing public key.
+///
+/// Shared by the `MSGSIG` command and by registration completion, which
+/// replays a key that arrived between `903` and `001`. Returns the FAIL code
+/// and message when the key is unusable, so the caller decides whether a reply
+/// is appropriate (a replay at registration has no command to answer).
+pub(crate) fn file_session_signing_key(
+    state: &Arc<SharedState>,
+    session_id: &str,
+    authenticated_did: Option<&str>,
+    pubkey_b64: &str,
+) -> Result<(), (&'static str, &'static str)> {
+    use base64::Engine;
+    let Some(did) = authenticated_did else {
+        return Err((
+            "NOT_AUTHENTICATED",
+            "Must be DID-authenticated to register a signing key",
+        ));
+    };
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(pubkey_b64)
+        .map_err(|_| {
+            (
+                "INVALID_KEY",
+                "Expected 32-byte base64url-encoded ed25519 public key",
+            )
+        })?;
+    if bytes.len() != 32 {
+        return Err((
+            "INVALID_KEY",
+            "Expected 32-byte base64url-encoded ed25519 public key",
+        ));
+    }
+    let vk = ed25519_dalek::VerifyingKey::from_bytes(bytes.as_slice().try_into().unwrap())
+        .map_err(|_| ("INVALID_KEY", "Invalid ed25519 public key"))?;
+
+    state
+        .session_msg_keys
+        .lock()
+        .insert(session_id.to_string(), vk);
+    state
+        .did_msg_keys
+        .lock()
+        .insert(did.to_string(), pubkey_b64.to_string());
+    let did_for_db = did.to_string();
+    state.with_db(|db| db.save_signing_key(&did_for_db, &bytes));
+    // Anything a peer relayed under this key was parked for want of it. It can
+    // be judged now.
+    crate::server::retry_deferred_task_events(state, did, &freeq_sdk::sigtag::derive_kid(&vk));
+    tracing::info!(session = %session_id, %did, "Client registered message signing key");
+    Ok(())
+}
+
 pub struct Connection {
     pub id: String,
     pub nick: Option<String>,
@@ -143,6 +196,17 @@ pub struct Connection {
     pub realname: Option<String>,
     pub authenticated_did: Option<String>,
     pub registered: bool,
+    /// A `MSGSIG` key offered before registration finished, parked until it
+    /// can be filed.
+    ///
+    /// SASL succeeds (`903`) several lines before registration completes
+    /// (`001`), so "register your signing key once you are authenticated" and
+    /// "register it once you are registered" are different moments, and the
+    /// first one is the one clients pick. This used to `continue` — the key
+    /// was dropped in silence, the client believed it had a session key, and
+    /// every message it sent came back server-signed. Parking it turns a
+    /// silent wrong answer into the right one.
+    pub(crate) pending_msg_key: Option<String>,
     /// Actor class: human (default), agent, or external_agent.
     pub(crate) actor_class: ActorClass,
 
@@ -201,6 +265,7 @@ impl Connection {
             realname: None,
             authenticated_did: None,
             registered: false,
+            pending_msg_key: None,
             actor_class: ActorClass::Human,
             iroh_endpoint_id: None,
             cap_negotiating: false,
@@ -1289,83 +1354,29 @@ where
                 // Client registers its session message-signing public key.
                 // Usage: MSGSIG <base64url-ed25519-pubkey>
                 if !conn.registered {
-                    continue;
-                }
-                if conn.authenticated_did.is_none() {
-                    let reply = irc::Message::from_server(
-                        &server_name,
-                        "FAIL",
-                        vec![
-                            "MSGSIG",
-                            "NOT_AUTHENTICATED",
-                            "Must be DID-authenticated to register a signing key",
-                        ],
-                    );
-                    send(&state, &session_id, format!("{reply}\r\n"));
+                    // Park it; `complete_registration` files it at 001.
+                    if let Some(pubkey_b64) = msg.params.first() {
+                        conn.pending_msg_key = Some(pubkey_b64.clone());
+                    }
                     continue;
                 }
                 if let Some(pubkey_b64) = msg.params.first() {
-                    use base64::Engine;
-                    match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(pubkey_b64) {
-                        Ok(bytes) if bytes.len() == 32 => {
-                            match ed25519_dalek::VerifyingKey::from_bytes(
-                                bytes.as_slice().try_into().unwrap(),
-                            ) {
-                                Ok(vk) => {
-                                    state.session_msg_keys.lock().insert(session_id.clone(), vk);
-                                    if let Some(ref did) = conn.authenticated_did {
-                                        state
-                                            .did_msg_keys
-                                            .lock()
-                                            .insert(did.clone(), pubkey_b64.clone());
-                                        // Persist to DB so the key survives server restarts
-                                        // and is available when the registering DID is offline
-                                        // (used by FreeqBotDelegation/v1 cert verification).
-                                        let did_for_db = did.clone();
-                                        let key_bytes = bytes.clone();
-                                        state.with_db(|db| {
-                                            db.save_signing_key(&did_for_db, &key_bytes)
-                                        });
-                                        // Anything a peer relayed under this
-                                        // key was parked for want of it. It
-                                        // can be judged now.
-                                        crate::server::retry_deferred_task_events(
-                                            &state,
-                                            did,
-                                            &freeq_sdk::sigtag::derive_kid(&vk),
-                                        );
-                                    }
-                                    tracing::info!(
-                                        session = %session_id,
-                                        did = ?conn.authenticated_did,
-                                        "Client registered message signing key"
-                                    );
-                                    let reply = irc::Message::from_server(
-                                        &server_name,
-                                        "MSGSIG",
-                                        vec!["OK"],
-                                    );
-                                    send(&state, &session_id, format!("{reply}\r\n"));
-                                }
-                                Err(_) => {
-                                    let reply = irc::Message::from_server(
-                                        &server_name,
-                                        "FAIL",
-                                        vec!["MSGSIG", "INVALID_KEY", "Invalid ed25519 public key"],
-                                    );
-                                    send(&state, &session_id, format!("{reply}\r\n"));
-                                }
-                            }
+                    match file_session_signing_key(
+                        &state,
+                        &session_id,
+                        conn.authenticated_did.as_deref(),
+                        pubkey_b64,
+                    ) {
+                        Ok(()) => {
+                            let reply =
+                                irc::Message::from_server(&server_name, "MSGSIG", vec!["OK"]);
+                            send(&state, &session_id, format!("{reply}\r\n"));
                         }
-                        _ => {
+                        Err((code, detail)) => {
                             let reply = irc::Message::from_server(
                                 &server_name,
                                 "FAIL",
-                                vec![
-                                    "MSGSIG",
-                                    "INVALID_KEY",
-                                    "Expected 32-byte base64url-encoded ed25519 public key",
-                                ],
+                                vec!["MSGSIG", code, detail],
                             );
                             send(&state, &session_id, format!("{reply}\r\n"));
                         }
